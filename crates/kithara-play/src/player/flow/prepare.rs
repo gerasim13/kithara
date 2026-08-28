@@ -62,7 +62,7 @@ impl PlayerRuntime {
 mod tests {
     use kithara_assets::AssetStore;
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -94,7 +94,7 @@ mod tests {
 
     fn worker() -> PlayWorker {
         PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         )
     }
 

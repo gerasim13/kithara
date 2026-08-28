@@ -75,7 +75,7 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -99,7 +99,7 @@ mod tests {
 
     fn player(session: Arc<dyn SessionDispatcher>) -> PlayerImpl {
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         );
         PlayerImpl::new(
             PlayerConfig::builder()

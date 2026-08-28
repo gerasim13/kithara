@@ -1,7 +1,7 @@
-#[cfg(any(test, feature = "mock"))]
-use kithara_decode::PcmChunk;
-use kithara_decode::PcmSpec;
 use kithara_platform::sync::Arc;
+#[cfg(any(test, feature = "mock"))]
+use kithara_signal::AudioChunk;
+use kithara_signal::AudioSpec;
 use kithara_stream::SeekObserve;
 
 use crate::{SourceEnd, TrackStep};
@@ -10,11 +10,11 @@ mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-/// Worker-independent source of decoded PCM chunks.
+/// Worker-independent source of decoded-audio chunks.
 ///
 /// Each step advances at most one source transition; scheduling belongs to the executor.
-#[kithara::mock(api = PcmSourceMock, type Chunk = PcmChunk;)]
-pub trait PcmSource: Send + 'static {
+#[kithara::mock(api = AudioSourceMock, type Chunk = AudioChunk;)]
+pub trait AudioSource: Send + 'static {
     type Chunk: Send + 'static;
 
     /// Decode epoch assigned to the most recent source work.
@@ -30,14 +30,14 @@ pub trait PcmSource: Send + 'static {
 
     /// Resolve the active output format before producer decorators are serviced.
     /// Sources without a split shell keep the default no-op phases.
-    fn prepare_deferred(&mut self) -> Option<PcmSpec> {
+    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
         None
     }
 
     /// Finish deferred source publication after decorators are serviced.
     fn finish_deferred(&mut self) {}
 
-    /// Commit the decoded-source boundary after rendered PCM is accepted by
+    /// Commit the decoded-source boundary after rendered audio is accepted by
     /// the final producer port.
     fn commit_source_end(&mut self, _source_end: SourceEnd, _epoch: u64) {}
 
@@ -58,7 +58,7 @@ pub trait PcmSource: Send + 'static {
 }
 
 #[cfg(test)]
-pub(crate) trait PcmSourceExt: PcmSource {
+pub(crate) trait AudioSourceExt: AudioSource {
     fn flush_deferred(&mut self) {
         let _ = self.prepare_deferred();
         self.finish_deferred();
@@ -66,8 +66,8 @@ pub(crate) trait PcmSourceExt: PcmSource {
 }
 
 #[cfg(test)]
-impl<S> PcmSourceExt for S where S: PcmSource + ?Sized {}
-/// Exact worker-side reset stamp for a decoded PCM lane.
+impl<S> AudioSourceExt for S where S: AudioSource + ?Sized {}
+/// Exact worker-side reset stamp for a decoded-audio lane.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy)]
 #[non_exhaustive]
@@ -75,13 +75,13 @@ pub struct SourceDiscontinuity {
     /// Monotonic lane-local reset revision.
     revision: u64,
     /// Output format active after the reset.
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl SourceDiscontinuity {
     /// Construct a reset stamp at the active decoded format.
     #[must_use]
-    pub const fn new(revision: u64, spec: PcmSpec) -> Self {
+    pub const fn new(revision: u64, spec: AudioSpec) -> Self {
         Self { revision, spec }
     }
 }

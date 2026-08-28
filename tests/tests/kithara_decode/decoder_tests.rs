@@ -3,7 +3,8 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderConfig, DecoderFactory},
+    signal::{AudioChunk, AudioSpec},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -13,7 +14,7 @@ use kithara_integration_tests::{
 fn test_config() -> DecoderConfig {
     DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
         .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .sample_pool(kithara::bufpool::SamplePool::default())
         .build()
 }
 
@@ -51,7 +52,7 @@ fn decode_with_probe(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
 
-    let chunk = PcmChunk::try_from(outcome).unwrap();
+    let chunk = AudioChunk::try_from(outcome).unwrap();
     assert!(!chunk.samples.is_empty());
 }
 
@@ -103,7 +104,7 @@ fn from_media_info(
 }
 
 /// Acceptable spec for a probed `test.{wav,mp3}` fixture.
-fn assert_spec(spec: &kithara::decode::PcmSpec, ext: &str) {
+fn assert_spec(spec: &AudioSpec, ext: &str) {
     match ext {
         "wav" => {
             assert_eq!(spec.sample_rate.get(), 44100);
@@ -165,7 +166,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
         DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
     let spec = decoder.spec();
 
-    let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
 
     for sample in chunk.samples.iter() {
         assert!(
@@ -230,8 +231,8 @@ fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let mut decoder =
         DecoderFactory::create_with_probe(reader, Some("wav"), test_config()).unwrap();
 
-    let first_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
-    let second_chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let first_chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let second_chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
 
     if first_chunk.samples.len() > 10 && second_chunk.samples.len() > 10 {
         let differs = first_chunk

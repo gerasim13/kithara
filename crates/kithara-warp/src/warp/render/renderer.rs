@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{PcmMeta, PcmSpec, duration_for_frames};
-use kithara_platform::sync::Arc;
+use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
 
 use crate::{ActiveRegion, RegionPlan, StretchControls};
@@ -20,24 +20,24 @@ pub struct WarpRenderer {
     /// drops it from `prepare`, outside `produce_tick_rt`.
     pub(super) retired_engine: Option<Box<dyn ElasticEngine>>,
     /// Most recent input meta, carried onto each output chunk.
-    pub(super) last_input_meta: Option<PcmMeta>,
+    pub(super) last_input_meta: Option<AudioChunkInfo>,
     /// Exact source coordinate at which the current output scratch begins.
-    pub(super) output_start_meta: Option<PcmMeta>,
+    pub(super) output_start_meta: Option<AudioChunkInfo>,
     /// Region plan cached from the controls; `Arc::ptr_eq` detects a live swap.
     pub(super) plan: Option<Arc<RegionPlan>>,
     /// Region covering the playhead - the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     pub(super) region: Option<ActiveRegion>,
-    pub(super) pool: PcmPool,
-    pub(super) spec: PcmSpec,
+    pub(super) sample_pool: SamplePool,
+    pub(super) spec: AudioSpec,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
     /// chunk takes this buffer; the consumed input becomes its replacement.
-    pub(super) scratch: Option<PcmBuf>,
+    pub(super) scratch: Option<SampleBuffer>,
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
-    pub(super) deferred_scratch: Option<PcmBuf>,
+    pub(super) deferred_scratch: Option<SampleBuffer>,
     /// Whether previous input ran through the backend. Drives a clean backend
     /// reset when the renderer returns to unity passthrough.
     pub(super) active: bool,
@@ -47,12 +47,12 @@ pub struct WarpRenderer {
     pub(super) output_remainder: f64,
     /// Source whose cumulative output is still below one representable frame.
     /// Capacity is reserved from the injected pool before the render loop.
-    pub(super) pending_source: Option<PcmBuf>,
+    pub(super) pending_source: Option<SampleBuffer>,
     /// Earliest metadata represented by `pending_source`.
-    pub(super) pending_meta: Option<PcmMeta>,
+    pub(super) pending_meta: Option<AudioChunkInfo>,
     /// Unity chunk retained while the active backend drains its tail.
     /// Its samples occupy `pending_source` without a copy.
-    pub(super) pending_unity_meta: Option<PcmMeta>,
+    pub(super) pending_unity_meta: Option<AudioChunkInfo>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
     pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
     /// Source frames admitted since the last renderer reset.
@@ -73,16 +73,20 @@ impl WarpRenderer {
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
-    pub(crate) fn new(controls: Arc<StretchControls>, spec: PcmSpec, pool: PcmPool) -> Self {
+    pub(crate) fn new(
+        controls: Arc<StretchControls>,
+        spec: AudioSpec,
+        sample_pool: SamplePool,
+    ) -> Self {
         let current_kind = controls.backend();
         let plan = controls.region_plan();
-        let target = Self::prepare_target(current_kind, spec, &pool, None, None);
+        let target = Self::prepare_target(current_kind, spec, &sample_pool, None, None);
         Self {
             engine: target.engine,
             retired_engine: None,
             current_kind,
             controls,
-            pool,
+            sample_pool,
             spec,
             applied_pitch: f64::NAN,
             active: false,
@@ -146,7 +150,7 @@ impl WarpRenderer {
         self.region = None;
     }
 
-    pub(super) fn defer_scratch(&mut self, replacement: Option<PcmBuf>) {
+    pub(super) fn defer_scratch(&mut self, replacement: Option<SampleBuffer>) {
         if let Some(replacement) = replacement {
             debug_assert!(self.deferred_scratch.is_none());
             self.deferred_scratch = Some(replacement);
@@ -196,7 +200,7 @@ impl WarpRenderer {
             .map_or(0, |source| source.len() / channels)
     }
 
-    /// Whether a live active-to-unity transition still owns queued PCM.
+    /// Whether a live active-to-unity transition still owns queued samples.
     #[doc(hidden)]
     #[must_use]
     pub const fn transition_pending(&self) -> bool {
@@ -231,7 +235,11 @@ impl WarpRenderer {
         pending.saturating_add(backend_held)
     }
 
-    pub(super) fn record_rendered_source_end(&mut self, meta: PcmMeta, held_source_frames: u64) {
+    pub(super) fn record_rendered_source_end(
+        &mut self,
+        meta: AudioChunkInfo,
+        held_source_frames: u64,
+    ) {
         let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
         self.rendered_source_end = Some((
             admitted.saturating_sub(held_source_frames),
@@ -239,20 +247,22 @@ impl WarpRenderer {
         ));
     }
 
-    /// Exact decoded-source boundary represented by the latest emitted PCM.
+    /// Exact decoded-source boundary represented by the latest emitted samples.
     #[doc(hidden)]
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
         self.rendered_source_end
     }
 
-    pub(super) fn meta_at_frame(meta: PcmMeta, frame_offset: u64) -> PcmMeta {
+    pub(super) fn meta_at_frame(meta: AudioChunkInfo, frame_offset: u64) -> AudioChunkInfo {
         let mut start = meta;
         let delta = frame_offset.saturating_sub(meta.frame_offset);
         start.frame_offset = frame_offset;
-        start.timestamp = meta
-            .timestamp
-            .saturating_add(duration_for_frames(meta.spec.sample_rate.get(), delta));
+        start.timestamp = meta.timestamp.saturating_add(
+            meta.spec
+                .duration_for(delta)
+                .unwrap_or(Duration::from_nanos(u64::MAX)),
+        );
         if delta > 0 {
             start.source_byte_offset = None;
             start.source_bytes = 0;

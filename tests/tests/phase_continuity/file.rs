@@ -2,7 +2,7 @@ use std::{io::Write, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     bufpool::Region,
     decode::{DecodeResult, DecoderBackend},
     file::{File, FileConfig, FileSrc},
@@ -41,8 +41,9 @@ async fn open_audio(
     config: AudioConfig<File>,
     region: &Region,
 ) -> DecodeResult<RegisteredAudio<Stream<File>>> {
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     worker.open(config).await
 }
 

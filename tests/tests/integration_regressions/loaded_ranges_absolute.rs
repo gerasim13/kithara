@@ -117,7 +117,7 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),

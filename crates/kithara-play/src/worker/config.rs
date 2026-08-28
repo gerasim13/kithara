@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use bon::Builder;
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_platform::CancelToken;
 
 const DEFAULT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
@@ -19,10 +19,10 @@ pub struct PlayWorkerConfig {
     #[builder(start_fn)]
     #[field(get)]
     pub(crate) byte_pool: BytePool,
-    /// PCM pool shared by every Player and resource registered with the worker.
+    /// Sample pool shared by every Player and resource registered with the worker.
     #[builder(start_fn)]
     #[field(get)]
-    pub(crate) pcm_pool: PcmPool,
+    pub(crate) sample_pool: SamplePool,
     /// Parent cancellation token for the worker lifetime.
     pub(crate) cancel: Option<CancelToken>,
     /// Maximum number of simultaneously registered track render chains.

@@ -5,7 +5,7 @@
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     host::testing::GraphSession,
     platform::{
         sync::{Arc, Mutex, mpsc},
@@ -99,7 +99,7 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl)) {
         PlayerConfig::builder()
             .max_slots(max_slots)
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+                PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
             ))
             .session(session)
             .build(),

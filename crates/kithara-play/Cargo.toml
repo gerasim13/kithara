@@ -96,6 +96,7 @@ kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }

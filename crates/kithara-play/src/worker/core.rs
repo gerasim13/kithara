@@ -3,8 +3,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_audio::{Audio, PcmSource, PreparedAudio, ResamplerBackend};
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_audio::{Audio, AudioSource, PreparedAudio, ResamplerBackend};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, sync::Arc};
@@ -14,7 +14,7 @@ use kithara_warp::Warp;
 use super::{
     DecoderNode, EngineLoad, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
     WarpSource,
-    scheduler::{AtomicServiceClass, PcmScheduler, PcmTask, PcmTaskId, ServiceClass},
+    scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, Task, TaskId},
 };
 use crate::effects::EffectDrain;
 
@@ -22,8 +22,8 @@ static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
 struct WorkerOwner {
     byte_pool: BytePool,
-    pcm_pool: PcmPool,
-    scheduler: PcmScheduler,
+    sample_pool: SamplePool,
+    scheduler: PlaybackScheduler,
 }
 
 /// Explicit owner of the shared playback scheduler.
@@ -40,10 +40,10 @@ impl PlayWorker {
         let cancel = CancelScope::new(config.cancel).token();
         let id = WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let scheduler =
-            PcmScheduler::start(format!("kithara-play-worker-{id}"), cancel, config.capacity);
+            PlaybackScheduler::start(format!("kithara-play-worker-{id}"), cancel, config.capacity);
         Self(Arc::new(WorkerOwner {
             byte_pool: config.byte_pool,
-            pcm_pool: config.pcm_pool,
+            sample_pool: config.sample_pool,
             scheduler,
         }))
     }
@@ -70,7 +70,7 @@ impl PlayWorker {
             audio,
             Arc::new(wake),
             self.byte_pool().clone(),
-            self.pcm_pool().clone(),
+            self.sample_pool().clone(),
         )
         .await?;
         let prepared = prepared.map(|audio, source| {
@@ -79,7 +79,7 @@ impl PlayWorker {
             let drain = EffectDrain::new(effects.len(), self.byte_pool());
             let source = WarpSource::new(
                 source,
-                warp.renderer(spec, self.pcm_pool().clone()),
+                warp.renderer(spec, self.sample_pool().clone()),
                 effects,
                 drain,
                 spec,
@@ -95,11 +95,11 @@ impl PlayWorker {
         engine_load: Option<Arc<EngineLoad>>,
     ) -> DecodeResult<RegisteredAudio<S>>
     where
-        P: PcmSource<Chunk = kithara_decode::PcmChunk>,
+        P: AudioSource<Chunk = kithara_signal::AudioChunk>,
     {
         let (audio, lane) = prepared.into();
         let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
-        let task = PcmTask::new(DecoderNode::new(
+        let task = Task::new(DecoderNode::new(
             lane,
             engine_load,
             Arc::clone(&service_class),
@@ -108,7 +108,7 @@ impl PlayWorker {
             .0
             .scheduler
             .register(task)
-            .map_err(|error| DecodeError::pcm_stream("play worker registration", error))?;
+            .map_err(|error| DecodeError::audio_stream("play worker registration", error))?;
         Ok(RegisteredAudio::new(
             audio,
             TrackLease::new(
@@ -120,7 +120,7 @@ impl PlayWorker {
         ))
     }
 
-    pub(super) fn unregister(&self, task_id: PcmTaskId) {
+    pub(super) fn unregister(&self, task_id: TaskId) {
         self.0.scheduler.unregister(task_id);
     }
 
@@ -130,10 +130,10 @@ impl PlayWorker {
             #[field(&byte_pool)]
             #[must_use]
             pub fn byte_pool(&self) -> &BytePool;
-            /// Shared PCM pool used by every registered Player/resource.
-            #[field(&pcm_pool)]
+            /// Shared sample pool used by every registered Player/resource.
+            #[field(&sample_pool)]
             #[must_use]
-            pub fn pcm_pool(&self) -> &PcmPool;
+            pub fn sample_pool(&self) -> &SamplePool;
         }
     }
 }
@@ -143,7 +143,7 @@ impl fmt::Debug for PlayWorker {
         formatter
             .debug_struct("PlayWorker")
             .field("byte_pool", self.byte_pool())
-            .field("pcm_pool", self.pcm_pool())
+            .field("sample_pool", self.sample_pool())
             .finish_non_exhaustive()
     }
 }

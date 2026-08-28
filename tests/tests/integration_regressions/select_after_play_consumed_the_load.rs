@@ -121,7 +121,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
             ))
             .session(session)
             .build(),

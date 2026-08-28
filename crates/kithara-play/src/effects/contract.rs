@@ -1,10 +1,10 @@
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_signal::{AudioChunk, AudioSpec};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-/// Audio processing effect in the chain (transforms PCM chunks).
+/// Audio processing effect in the chain (transforms decoded-audio chunks).
 #[kithara::mock(api = AudioEffectMock)]
 pub trait AudioEffect: Send + 'static {
     /// Service work deferred by the checked audio-production path.
@@ -13,7 +13,7 @@ pub trait AudioEffect: Send + 'static {
     /// `produce_tick_rt`, and before the next checked tick, using the active
     /// decoder specification. Effects without deferred work can keep the
     /// default no-op implementation.
-    fn service_deferred(&mut self, spec: PcmSpec) {
+    fn service_deferred(&mut self, spec: AudioSpec) {
         let _ = spec;
     }
 
@@ -24,7 +24,7 @@ pub trait AudioEffect: Send + 'static {
     /// [`reset`](Self::reset) starts a new effect lifecycle. Each call is a
     /// bounded real-time transition: it must not block, allocate, free, or
     /// rebuild backend state.
-    fn flush(&mut self) -> Option<PcmChunk>;
+    fn flush(&mut self) -> Option<AudioChunk>;
 
     /// Frames accepted by this effect but not yet represented in its output,
     /// counted on the decoded-source axis.
@@ -36,12 +36,12 @@ pub trait AudioEffect: Send + 'static {
     /// buffer there.
     fn held_source_frames(&self) -> u64;
 
-    /// Process a PCM chunk, returning transformed output.
+    /// Process an audio chunk, returning transformed output.
     ///
     /// Returns `None` if the effect is accumulating data (not enough for output
     /// yet). This is a bounded real-time transition and must not block,
     /// allocate, free, or rebuild backend state.
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk>;
+    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk>;
 
     /// Reset internal state after a seek using only bounded real-time work.
     /// Allocation, destruction, and backend rebuilding belong in

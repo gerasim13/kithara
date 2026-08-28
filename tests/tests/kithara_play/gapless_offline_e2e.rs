@@ -2,6 +2,22 @@
 
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara::{
+    audio::{AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome},
+    bufpool::SamplePool,
+    decode::{
+        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
+        SilenceTrimParams, TrackMetadata,
+    },
+    events::EventBus,
+    platform::{
+        sync::Arc,
+        time::{self, Duration, Instant},
+    },
+    play::{PlayerEvent, Resource, ResourceConfig, apply_mix},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    stream::AudioCodec,
+};
 #[cfg(all(
     feature = "apple-fused-src",
     any(target_os = "macos", target_os = "ios")
@@ -10,21 +26,6 @@ use kithara::{
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
     decode::DecoderBackend,
     play::PlaybackResamplerBackend,
-};
-use kithara::{
-    audio::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome},
-    bufpool::PcmPool,
-    decode::{
-        DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer, PcmChunk,
-        PcmMeta, PcmSpec, SilenceTrimParams, TrackMetadata,
-    },
-    events::EventBus,
-    platform::{
-        sync::Arc,
-        time::{self, Duration, Instant},
-    },
-    play::{PlayerEvent, Resource, ResourceConfig, apply_mix},
-    stream::AudioCodec,
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -970,14 +971,14 @@ fn synthetic_second_track_frames() -> Vec<f32> {
     (start..end).map(fused_seam_sample).collect()
 }
 
-fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
-    let spec = PcmSpec::new(
+fn synthetic_interleaved_chunk(frames: Vec<f32>) -> AudioChunk {
+    let spec = AudioSpec::new(
         GAPLESS_CHANNELS,
         NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
     );
     let frame_count = frames.len();
     let sample_count = frame_count * usize::from(GAPLESS_CHANNELS);
-    let mut samples = PcmPool::default().get();
+    let mut samples = SamplePool::default().get();
     samples
         .ensure_len(sample_count)
         .expect("synthetic chunk exceeds PCM pool budget");
@@ -985,8 +986,8 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
         let offset = frame * usize::from(GAPLESS_CHANNELS);
         samples[offset..offset + usize::from(GAPLESS_CHANNELS)].fill(sample);
     }
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             frames: u32::try_from(frame_count).expect("fixture frame count fits u32"),
             spec,
             ..Default::default()
@@ -995,7 +996,7 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> PcmChunk {
     )
 }
 
-fn left_frames_from_chunks(chunks: impl IntoIterator<Item = PcmChunk>) -> Vec<f32> {
+fn left_frames_from_chunks(chunks: impl IntoIterator<Item = AudioChunk>) -> Vec<f32> {
     chunks
         .into_iter()
         .flat_map(|chunk| {
@@ -1089,7 +1090,7 @@ struct SyntheticPcmReader {
     frames: Vec<f32>,
     metadata: TrackMetadata,
     position_frames: usize,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl SyntheticPcmReader {
@@ -1100,7 +1101,7 @@ impl SyntheticPcmReader {
             frames,
             metadata: TrackMetadata::default(),
             position_frames: 0,
-            spec: PcmSpec::new(
+            spec: AudioSpec::new(
                 GAPLESS_CHANNELS,
                 NonZeroU32::new(FUSED_FIXTURE_DEVICE_RATE).expect("test sample rate"),
             ),
@@ -1151,7 +1152,7 @@ impl SyntheticPcmReader {
     }
 }
 
-impl PcmSession for SyntheticPcmReader {
+impl AudioSession for SyntheticPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(duration_for_test_frames(self.duration_frames))
     }
@@ -1165,7 +1166,7 @@ impl PcmSession for SyntheticPcmReader {
     }
 }
 
-impl PcmRead for SyntheticPcmReader {
+impl AudioRead for SyntheticPcmReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         Ok(ChunkOutcome::Eof {
             position: self.position(),
@@ -1189,12 +1190,12 @@ impl PcmRead for SyntheticPcmReader {
         Ok(self.read_outcome(frames))
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for SyntheticPcmReader {
+impl AudioControl for SyntheticPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let frames = frames_for_test_duration(position);
         if frames >= self.frames.len() {

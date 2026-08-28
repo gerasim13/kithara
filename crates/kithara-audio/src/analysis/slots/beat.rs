@@ -1,6 +1,6 @@
-use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::{AudioChunk, AudioSpec};
 
 use crate::{
     analysis::{
@@ -29,13 +29,13 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(&self, spec: PcmSpec, pcm_pool: &PcmPool) -> Slot<B> {
+    pub(crate) fn build(&self, spec: AudioSpec, sample_pool: &SamplePool) -> Slot<B> {
         Slot(self.0.as_ref().map(|config| {
             let pass = BeatPassConfig::builder()
                 .source_rate(spec.sample_rate.get())
                 .params(config.params.clone())
                 .resampler(config.resampler.clone())
-                .pcm_pool(pcm_pool.clone())
+                .sample_pool(sample_pool.clone())
                 .build();
             BeatPass::new(pass)
         }))
@@ -116,7 +116,7 @@ where
         self.0.is_none()
     }
 
-    pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: Option<&mut Detector>) {
+    pub(crate) fn push(&mut self, chunk: &AudioChunk, detector: Option<&mut Detector>) {
         if let (Some(analyzer), Some(detector)) = (&mut self.0, detector) {
             analyzer.push(chunk, detector.as_mut());
         }

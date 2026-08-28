@@ -5,10 +5,8 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{
-    Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig, PcmChunk, PcmSpec,
-};
+use kithara_bufpool::{BytePool, SamplePool};
+use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
 use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
     CancelScope,
@@ -16,12 +14,13 @@ use kithara_platform::{
     tokio::{runtime::Handle as RuntimeHandle, task::spawn_blocking},
 };
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{MediaInfo, OpenedReader, PlayheadWrite, Stream, StreamType, WorkerWake};
 use tracing::{debug, info, warn};
 
 use super::{
-    AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecodeError, DecodeInit, PcmProducerPort,
-    PcmSession, PreparedPcmLane, RebuildRuntime, SharedStream, SourceParts, StreamAudioSource,
+    AudioConfig, AudioDecoderConfig, AudioSession, ConsumerWakeMode, DecodeError, DecodeInit,
+    PreparedAudioLane, ProducerPort, RebuildRuntime, SharedStream, SourceParts, StreamAudioSource,
     StreamDecoderFactory, ThreadWake,
     core::{Audio, AudioParts, AudioRuntime, Controls, PreparedAudio, Session},
     event::{
@@ -37,7 +36,7 @@ struct DecoderDeps<B> {
     host_sample_rate: Arc<AtomicU32>,
     decoder: AudioDecoderConfig<B>,
     byte_pool: BytePool,
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
 }
 
 impl<B> DecoderDeps<B>
@@ -46,14 +45,14 @@ where
 {
     fn new(
         decoder: AudioDecoderConfig<B>,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
         byte_pool: BytePool,
         host_sample_rate: &Arc<AtomicU32>,
     ) -> Self {
         Self {
             byte_pool,
             decoder,
-            pcm_pool,
+            sample_pool,
             host_sample_rate: Arc::clone(host_sample_rate),
         }
     }
@@ -81,7 +80,7 @@ where
             gapless_mode: self.decoder.gapless_mode(),
             host_sample_rate: Arc::clone(&self.host_sample_rate),
             media_info,
-            pcm_pool: self.pcm_pool.clone(),
+            sample_pool: self.sample_pool.clone(),
             playback_resampler_backend: self.playback_resampler_backend(),
             // A requested host rate always resolves to a resampler plan, so a
             // route change is decided by `ResumeCursor`'s rate guards alone.
@@ -100,7 +99,7 @@ where
         &self,
         bus: &EventBus,
         media_info: Option<&MediaInfo>,
-        spec: PcmSpec,
+        spec: AudioSpec,
         track_info: &kithara_decode::DecoderTrackInfo,
         duration: Option<kithara_platform::time::Duration>,
     ) {
@@ -170,13 +169,13 @@ where
 struct StreamSourceRegistration<S> {
     preload_gate: Arc<super::PreloadGate>,
     ring: RingParts,
-    lane: PreparedPcmLane<S>,
+    lane: PreparedAudioLane<S>,
 }
 
 struct PreparedStreamSource<S> {
     preload_gate: Arc<super::PreloadGate>,
     ring: RingParts,
-    lane: PreparedPcmLane<S>,
+    lane: PreparedAudioLane<S>,
 }
 
 impl<T> Audio<Stream<T>>
@@ -193,8 +192,8 @@ where
         config: AudioConfig<T, B>,
         wake: Arc<dyn WorkerWake>,
         byte_pool: BytePool,
-        pcm_pool: PcmPool,
-    ) -> Result<PreparedAudio<Self, impl crate::PcmSource<Chunk = PcmChunk>>, DecodeError>
+        sample_pool: SamplePool,
+    ) -> Result<PreparedAudio<Self, impl crate::AudioSource<Chunk = AudioChunk>>, DecodeError>
     where
         B: Default + ResamplerBackend,
     {
@@ -202,7 +201,7 @@ where
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
-            pcm_buffer_chunks,
+            audio_buffer_chunks,
             observer,
             decoder,
             preload_chunks,
@@ -227,15 +226,15 @@ where
         let variant_control = stream.variant_control();
         let shared_stream = SharedStream::new(stream);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
-        warm_pcm_pool(
-            &pcm_pool,
+        warm_sample_pool(
+            &sample_pool,
             warm_channels(initial_media_info.as_ref()),
-            pcm_buffer_chunks,
+            audio_buffer_chunks,
         );
 
         let deps = DecoderDeps::new(
             decoder,
-            pcm_pool.clone(),
+            sample_pool.clone(),
             byte_pool.clone(),
             &host_sample_rate,
         );
@@ -266,7 +265,7 @@ where
         let wake_stream = shared_stream.clone();
         let preload_gate = Arc::new(super::PreloadGate::default());
         let (port, ring) = prepare_pcm_ring(
-            pcm_buffer_chunks,
+            audio_buffer_chunks,
             &emit,
             &epoch,
             block_on_underrun,
@@ -290,7 +289,7 @@ where
             variant_control,
         );
         let source = StreamAudioSource::new(shared_stream, parts).with_emit(Arc::clone(&emit));
-        let lane = PreparedPcmLane {
+        let lane = PreparedAudioLane {
             source,
             port,
             preload_gate: Arc::clone(&preload_gate),
@@ -303,7 +302,7 @@ where
 
         let audio = Self::from(AudioParts {
             ring: RingConsumer::new(prepared.ring),
-            pcm_pool,
+            sample_pool,
             emit,
             runtime: AudioRuntime { cancel, wake },
             session: Session {
@@ -326,7 +325,7 @@ where
     #[must_use]
     /// Returns the unified event bus used by the stream and audio pipeline.
     pub fn event_bus(&self) -> &EventBus {
-        PcmSession::event_bus(self)
+        AudioSession::event_bus(self)
     }
 
     #[must_use]
@@ -345,28 +344,28 @@ fn current_runtime_handle() -> Result<RuntimeHandle, DecodeError> {
 }
 
 fn prepare_pcm_ring(
-    pcm_buffer_chunks: usize,
+    audio_buffer_chunks: usize,
     emit: &Arc<kithara_events::DeferredBus<Event>>,
     epoch: &Arc<AtomicU64>,
     block_on_underrun: bool,
     consumer_wake_mode: ConsumerWakeMode,
-) -> (PcmProducerPort, RingParts) {
+) -> (ProducerPort, RingParts) {
     let reader_wake = Arc::new(ThreadWake::default());
-    let (data_tx, data_rx) = create_channels(pcm_buffer_chunks, Arc::clone(emit), &reader_wake);
-    let (trash_tx, trash_inlet) = create_trash_channel(pcm_buffer_chunks);
+    let (data_tx, data_rx) = create_channels(audio_buffer_chunks, Arc::clone(emit), &reader_wake);
+    let (trash_tx, trash_inlet) = create_trash_channel(audio_buffer_chunks);
     let ring = RingParts {
         block_on_underrun,
         consumer_wake_mode,
-        pcm_rx: data_rx,
+        audio_rx: data_rx,
         trash_tx,
         reader_wake,
         epoch: Arc::clone(epoch),
     };
-    (PcmProducerPort::new(data_tx, trash_inlet), ring)
+    (ProducerPort::new(data_tx, trash_inlet), ring)
 }
 
 fn prepare_stream_source_registration<S>(
-    lane: PreparedPcmLane<S>,
+    lane: PreparedAudioLane<S>,
     ring: RingParts,
     preload_gate: Arc<super::PreloadGate>,
 ) -> StreamSourceRegistration<S> {
@@ -411,7 +410,7 @@ where
             let config = DecoderConfig::builder()
                 .backend(deps.decoder.decoder.backend())
                 .byte_len_handle(byte_len_handle)
-                .pcm_pool(deps.decoder.pcm_pool.clone())
+                .sample_pool(deps.decoder.sample_pool.clone())
                 .byte_pool(deps.decoder.byte_pool.clone())
                 .epoch(deps.epoch.load(Ordering::Acquire))
                 .maybe_byte_map(reader.byte_map())
@@ -452,7 +451,7 @@ where
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
         .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
-        .pcm_pool(deps.pcm_pool.clone())
+        .sample_pool(deps.sample_pool.clone())
         .byte_pool(deps.byte_pool.clone())
         .maybe_byte_map(reader.byte_map())
         .maybe_hooks(reader.take_event_sink())
@@ -537,7 +536,7 @@ fn warm_channels(info: Option<&MediaInfo>) -> usize {
     info.and_then(|info| info.channels).map_or(2, usize::from)
 }
 
-fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
+fn warm_sample_pool(pool: &SamplePool, channels: usize, chunks: usize) {
     if pool.allocated_bytes() != 0 {
         return;
     }
@@ -548,7 +547,7 @@ fn warm_pcm_pool(pool: &PcmPool, channels: usize, chunks: usize) {
     });
 }
 
-fn log_pipeline_ready(spec: PcmSpec, host_sample_rate: &Arc<AtomicU32>) {
+fn log_pipeline_ready(spec: AudioSpec, host_sample_rate: &Arc<AtomicU32>) {
     info!(
         ?spec,
         host_sr = host_sample_rate.load(Ordering::Relaxed),
@@ -591,14 +590,14 @@ const fn merge_user_and_stream_media_info(
 
 #[cfg(test)]
 mod tests {
-    use kithara_decode::PcmChunk;
     use kithara_events::DeferredBus;
+    use kithara_signal::AudioChunk;
     use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
     use unimock::Unimock;
 
     use super::*;
-    use crate::{ConsumerWakeMode, traits::PcmSource};
+    use crate::{ConsumerWakeMode, traits::AudioSource};
 
     #[kithara::test]
     fn prepares_source_registration_without_worker_activity() {
@@ -607,8 +606,8 @@ mod tests {
         let (port, ring) =
             prepare_pcm_ring(1, &emit, &epoch, false, ConsumerWakeMode::RealtimeDeferred);
         let preload_gate = Arc::new(super::super::PreloadGate::default());
-        let source: Box<dyn PcmSource<Chunk = PcmChunk>> = Box::new(Unimock::new(()));
-        let lane = PreparedPcmLane {
+        let source: Box<dyn AudioSource<Chunk = AudioChunk>> = Box::new(Unimock::new(()));
+        let lane = PreparedAudioLane {
             source,
             port,
             preload_gate: Arc::clone(&preload_gate),

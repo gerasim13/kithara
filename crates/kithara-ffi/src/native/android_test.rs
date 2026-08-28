@@ -12,8 +12,8 @@ use jni::{
     sys::{jint, jlong},
 };
 use kithara::{
-    audio::{AudioConfig, PcmControl, PcmRead, ReadOutcome},
-    bufpool::{BytePool, PcmPool},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    bufpool::{BytePool, SamplePool},
     file::{File as FileSource, FileConfig, FileSrc},
     play::{PlayWorker, PlayWorkerConfig},
 };
@@ -123,7 +123,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
     );
 
     let byte_pool = BytePool::default();
-    let pcm_pool = PcmPool::default();
+    let sample_pool = SamplePool::default();
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(byte_pool.clone())
@@ -132,7 +132,7 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         .store(store)
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), pcm_pool.clone())
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool.clone())
             .cancel(CancelToken::never())
             .build(),
     );

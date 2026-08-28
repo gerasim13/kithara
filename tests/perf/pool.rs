@@ -4,12 +4,12 @@ use std::{mem, thread};
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     platform::{sync::Arc, time::Instant},
 };
 
 #[hotpath::measure]
-fn pool_get_put_cycle(pool: &PcmPool) {
+fn pool_get_put_cycle(pool: &SamplePool) {
     let buf = pool.get_with(|b| {
         b.clear();
         b.resize(2048, 0.0);
@@ -18,7 +18,7 @@ fn pool_get_put_cycle(pool: &PcmPool) {
 }
 
 #[hotpath::measure]
-fn pool_thread_worker(pool: Arc<PcmPool>, thread_id: usize, iterations: usize) {
+fn pool_thread_worker(pool: Arc<SamplePool>, thread_id: usize, iterations: usize) {
     for i in 0..iterations {
         let buf = pool.get_with(|b| {
             b.clear();
@@ -31,7 +31,7 @@ fn pool_thread_worker(pool: Arc<PcmPool>, thread_id: usize, iterations: usize) {
     }
 }
 
-fn run_threaded(pool: Arc<PcmPool>, num_threads: usize, iterations_per_thread: usize) {
+fn run_threaded(pool: Arc<SamplePool>, num_threads: usize, iterations_per_thread: usize) {
     let handles: Vec<_> = (0..num_threads)
         .map(|thread_id| {
             let pool_clone = Arc::clone(&pool);
@@ -63,7 +63,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::SingleThreadGetPut => {
-            let pool = PcmPool::default();
+            let pool = SamplePool::default();
 
             for _ in 0..100 {
                 pool_get_put_cycle(&pool);
@@ -78,7 +78,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             println!("{:=<60}\n", "");
         }
         PerfScenario::MultiThreadContention => {
-            let pool = Arc::new(PcmPool::default().clone());
+            let pool = Arc::new(SamplePool::default().clone());
             let num_threads = 8;
             let iterations_per_thread = 1000;
             run_threaded(pool, num_threads, iterations_per_thread);
@@ -89,7 +89,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             println!("{:=<60}\n", "");
         }
         PerfScenario::AllocationRate => {
-            let pool = PcmPool::default();
+            let pool = SamplePool::default();
             hotpath::measure_block!("allocation_from_empty", {
                 for _ in 0..1000 {
                     let buf = pool.get_with(|b| {
@@ -113,7 +113,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
                 let scenario_label =
                     Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
                 let _guard = HotpathGuardBuilder::new(scenario_label).build();
-                let pool = Arc::new(PcmPool::default().clone());
+                let pool = Arc::new(SamplePool::default().clone());
                 let start = Instant::now();
 
                 run_threaded(pool, num_threads, iterations_per_thread);

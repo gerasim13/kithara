@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use bon::Builder;
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
@@ -20,7 +20,7 @@ where
     resampler: BeatAnalysisConfig<B>,
     #[builder(default)]
     params: GridParams,
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
     source_rate: u32,
 }
 
@@ -35,7 +35,7 @@ where
     params: GridParams,
     feed: MonoFeed,
     failure: Option<BeatDetectError>,
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
     resampler: Option<MonoStream<B>>,
     windows: WindowedBeats,
     source_rate: u32,
@@ -57,17 +57,17 @@ where
             source_rate,
             params,
             resampler: config,
-            pcm_pool,
+            sample_pool,
         } = config;
         let (feed, resampler) = if source_rate == config.target_rate() {
             (MonoFeed::Pass, None)
         } else {
-            build_mono_stream(source_rate, &config, &pcm_pool).map_or_else(
+            build_mono_stream(source_rate, &config, &sample_pool).map_or_else(
                 || (MonoFeed::Broken, None),
                 |r| (MonoFeed::Resample, Some(r)),
             )
         };
-        let windows = WindowedBeats::new(&config, &pcm_pool);
+        let windows = WindowedBeats::new(&config, &sample_pool);
 
         Self {
             params,
@@ -75,7 +75,7 @@ where
             resampler,
             source_rate,
             failure: None,
-            pcm_pool,
+            sample_pool,
             windows,
         }
     }
@@ -104,7 +104,7 @@ where
         })?;
 
         let raw = self.windows.finish(detector)?;
-        build_grid(&raw, self.source_rate, &self.params, &self.pcm_pool)
+        build_grid(&raw, self.source_rate, &self.params, &self.sample_pool)
             .map_err(|_| BeatDetectError::Buffer)
     }
 
@@ -153,7 +153,7 @@ where
 fn build_mono_stream<B>(
     source_rate: u32,
     config: &BeatAnalysisConfig<B>,
-    pcm_pool: &PcmPool,
+    sample_pool: &SamplePool,
 ) -> Option<MonoStream<B>>
 where
     B: ResamplerBackend,
@@ -171,7 +171,7 @@ where
                 .chunk_size(config.block_frames())
                 .build(),
         )
-        .pcm_pool(pcm_pool.clone())
+        .sample_pool(sample_pool.clone())
         .build();
     MonoStream::new(stream_config)
         .map_err(|e| {
@@ -193,7 +193,7 @@ where
 }
 
 struct WindowedBeats {
-    buffer: PcmBuf,
+    buffer: SampleBuffer,
     raw: RawBeats,
     sample_rate: u32,
     offset_frames: u64,
@@ -203,7 +203,7 @@ struct WindowedBeats {
 }
 
 impl WindowedBeats {
-    fn new<B>(config: &BeatAnalysisConfig<B>, pcm_pool: &PcmPool) -> Self
+    fn new<B>(config: &BeatAnalysisConfig<B>, sample_pool: &SamplePool) -> Self
     where
         B: ResamplerBackend,
     {
@@ -215,7 +215,7 @@ impl WindowedBeats {
             .min(config.detector_window_seconds().saturating_sub(1));
         let overlap_frames = frames_for_seconds(sample_rate, overlap_seconds);
         let ready_frames = window_frames.saturating_add(overlap_frames);
-        let mut buffer = pcm_pool.get();
+        let mut buffer = sample_pool.get();
         if buffer.ensure_len(ready_frames).is_ok() {
             buffer.clear();
         }
@@ -322,7 +322,7 @@ fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
 }
 
 fn append_iter(
-    dst: &mut PcmBuf,
+    dst: &mut SampleBuffer,
     samples: impl ExactSizeIterator<Item = f32>,
 ) -> Result<(), BeatDetectError> {
     let count = samples.len();
@@ -335,7 +335,7 @@ fn append_iter(
     Ok(())
 }
 
-fn append_slice(dst: &mut PcmBuf, src: &[f32]) -> Result<(), BeatDetectError> {
+fn append_slice(dst: &mut SampleBuffer, src: &[f32]) -> Result<(), BeatDetectError> {
     let old_len = dst.len();
     dst.ensure_len(old_len.saturating_add(src.len()))
         .map_err(|_| BeatDetectError::Buffer)?;
@@ -351,7 +351,7 @@ fn normalize_times(values: &mut Vec<f32>) {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_resampler::{ResamplerBackend, rubato::RubatoBackend};
     use kithara_test_utils::kithara;
@@ -378,8 +378,8 @@ mod tests {
         }
     }
 
-    fn pcm_pool() -> PcmPool {
-        PcmPool::default()
+    fn sample_pool() -> SamplePool {
+        SamplePool::default()
     }
 
     fn analyzer(
@@ -390,7 +390,7 @@ mod tests {
             BeatPassConfig::builder()
                 .source_rate(source_rate)
                 .resampler(config)
-                .pcm_pool(pcm_pool())
+                .sample_pool(sample_pool())
                 .build(),
         )
     }

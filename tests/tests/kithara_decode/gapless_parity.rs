@@ -28,7 +28,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
         &fixture,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .expect("create direct AAC fMP4 decoder");
@@ -50,7 +50,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
         "m4a",
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .hint("m4a")
             .build(),
     )
@@ -63,7 +63,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
         &fixture,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .backend(DecoderBackend::default())
             .build(),
     )
@@ -273,7 +273,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
             hint,
             DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
                 .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .sample_pool(kithara::bufpool::SamplePool::default())
                 .build(),
         )
         .expect("create default decoder"),
@@ -285,7 +285,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
             hint,
             DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
                 .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .sample_pool(kithara::bufpool::SamplePool::default())
                 .backend(DecoderBackend::default())
                 .build(),
         )

@@ -1,9 +1,9 @@
-use kithara_decode::{PcmChunk, PcmSpec};
-use kithara_events::{AudioEvent, AudioFormat, DeferredBus, Event};
+use kithara_events::{AudioEvent, DeferredBus, Event};
+use kithara_signal::{AudioChunk, AudioSpec};
 
 #[derive(Default)]
 pub(crate) struct DecodedOutput {
-    spec: Option<PcmSpec>,
+    spec: Option<AudioSpec>,
     chunks: u64,
     samples: u64,
 }
@@ -13,20 +13,12 @@ impl DecodedOutput {
         (self.chunks, self.samples)
     }
 
-    pub(crate) fn track(&mut self, chunk: &PcmChunk, emit: Option<&DeferredBus<Event>>) {
+    pub(crate) fn track(&mut self, chunk: &AudioChunk, emit: Option<&DeferredBus<Event>>) {
         self.chunks += 1;
         self.samples += chunk.samples.len() as u64;
         if self.chunks == 1 {
             if let Some(emit) = emit {
-                emit.enqueue(
-                    AudioEvent::FormatDetected {
-                        spec: AudioFormat::new(
-                            chunk.spec().channels,
-                            chunk.spec().sample_rate.get(),
-                        ),
-                    }
-                    .into(),
-                );
+                emit.enqueue(AudioEvent::FormatDetected { spec: chunk.spec() }.into());
             }
             self.spec = Some(chunk.spec());
         }
@@ -36,11 +28,8 @@ impl DecodedOutput {
             if let Some(emit) = emit {
                 emit.enqueue(
                     AudioEvent::FormatChanged {
-                        old: AudioFormat::new(old.channels, old.sample_rate.get()),
-                        new: AudioFormat::new(
-                            chunk.spec().channels,
-                            chunk.spec().sample_rate.get(),
-                        ),
+                        old,
+                        new: chunk.spec(),
                     }
                     .into(),
                 );

@@ -2,12 +2,12 @@ use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     bufpool::Region,
-    decode::PcmSpec,
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioSpec,
     stream::Stream,
 };
 use kithara_integration_tests::{TestTempDir, Xorshift64, wav::create_test_wav};
@@ -28,7 +28,7 @@ fn run_seek_iterations(
     audio: &mut RegisteredAudio<Stream<File>>,
     buf: &mut [f32],
     seek_positions: &[f64],
-    spec: PcmSpec,
+    spec: AudioSpec,
 ) -> SeekStats {
     let SeekStats {
         mut successful_reads,
@@ -186,7 +186,8 @@ async fn stress_random_seek_read_synthetic_wav() {
     let config = AudioConfig::<File>::for_stream(file_config)
         .hint("wav".to_string())
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker.open(config).await.expect("create audio pipeline");
 
     let total_duration = audio.duration().expect("WAV should report known duration");

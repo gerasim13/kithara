@@ -1,4 +1,4 @@
-use kithara_decode::PcmMeta;
+use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
 
@@ -36,7 +36,7 @@ impl WarpRenderer {
     fn append_pending_source(
         &mut self,
         source: &[f32],
-        meta: PcmMeta,
+        meta: AudioChunkInfo,
         frame_offset: u64,
     ) -> Result<(), ElasticError> {
         let channels = usize::from(self.spec.channels.max(1));
@@ -60,7 +60,7 @@ impl WarpRenderer {
         let pending = self
             .pending_source
             .as_mut()
-            .ok_or(ElasticError::PcmPoolBudgetExhausted)?;
+            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
         let start = pending.len();
         let end = start
             .checked_add(source.len())
@@ -73,7 +73,7 @@ impl WarpRenderer {
         }
         pending
             .ensure_len(end)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
         pending[start..end].copy_from_slice(source);
         self.pending_meta
             .get_or_insert_with(|| Self::meta_at_frame(meta, frame_offset));
@@ -126,13 +126,16 @@ impl WarpRenderer {
             return Ok(());
         }
 
-        let request = ElasticRequest::new(source_frames, output_frames)?;
+        let output_frames = FrameCount::new(output_frames);
+        let request = ElasticRequest::new(source_frames, output_frames.get())?;
         let output_samples = output_frames
+            .get()
             .checked_mul(channels)
+            .map(SampleCount::new)
             .ok_or(ElasticError::SampleCountOverflow)?;
         let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
         let end = start
-            .checked_add(output_samples)
+            .checked_add(output_samples.get())
             .ok_or(ElasticError::SampleCountOverflow)?;
         let scratch = self
             .scratch
@@ -148,11 +151,11 @@ impl WarpRenderer {
         }
         scratch
             .ensure_len(end)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
         let source = self
             .pending_source
             .as_deref()
-            .ok_or(ElasticError::PcmPoolBudgetExhausted)?;
+            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
         let engine = self
             .engine
             .as_mut()
@@ -164,7 +167,7 @@ impl WarpRenderer {
         self.output_start_meta = self.pending_meta;
         self.pending_source
             .as_mut()
-            .ok_or(ElasticError::PcmPoolBudgetExhausted)?
+            .ok_or(ElasticError::SamplePoolBudgetExhausted)?
             .clear();
         self.pending_meta = None;
         self.output_remainder = 0.0;
@@ -174,7 +177,7 @@ impl WarpRenderer {
 
     pub(super) fn render_active(
         &mut self,
-        meta: PcmMeta,
+        meta: AudioChunkInfo,
         samples: &[f32],
         speed: f32,
         channels: usize,
@@ -241,13 +244,16 @@ impl WarpRenderer {
             let source_frames = pending_frames
                 .checked_add(sub)
                 .ok_or(ElasticError::SampleCountOverflow)?;
-            let request = ElasticRequest::new(source_frames, output_frames)?;
+            let output_frames = FrameCount::new(output_frames);
+            let request = ElasticRequest::new(source_frames, output_frames.get())?;
             let output_samples = output_frames
+                .get()
                 .checked_mul(channels)
+                .map(SampleCount::new)
                 .ok_or(ElasticError::SampleCountOverflow)?;
             let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
             let end = start
-                .checked_add(output_samples)
+                .checked_add(output_samples.get())
                 .ok_or(ElasticError::SampleCountOverflow)?;
             if pending_frames > 0 {
                 self.append_pending_source(part, meta, frame)?;
@@ -273,7 +279,7 @@ impl WarpRenderer {
             }
             scratch
                 .ensure_len(end)
-                .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+                .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
             let source = self
                 .pending_source
                 .as_deref()

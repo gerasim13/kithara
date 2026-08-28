@@ -1,13 +1,13 @@
 use kithara_platform::sync::Arc;
 #[cfg(feature = "render")]
-use {kithara_bufpool::PcmPool, kithara_decode::PcmSpec};
+use {kithara_bufpool::SamplePool, kithara_signal::AudioSpec};
 
 use super::WarpConfig;
 #[cfg(feature = "render")]
 use super::WarpRenderer;
 use crate::StretchControls;
 
-/// Resident warp actuator around one PCM source.
+/// Resident warp actuator around one decoded-audio source.
 ///
 /// The wrapper remains present in identity and future synchronized modes. It
 /// owns the live temporal controls that the playback layer composes into its
@@ -35,8 +35,8 @@ impl<S> Warp<S> {
     /// Creates the worker-side renderer paired with this Warp facade.
     #[cfg(feature = "render")]
     #[must_use]
-    pub fn renderer(&self, spec: PcmSpec, pool: PcmPool) -> WarpRenderer {
-        WarpRenderer::new(Arc::clone(&self.stretch), spec, pool)
+    pub fn renderer(&self, spec: AudioSpec, sample_pool: SamplePool) -> WarpRenderer {
+        WarpRenderer::new(Arc::clone(&self.stretch), spec, sample_pool)
     }
 }
 

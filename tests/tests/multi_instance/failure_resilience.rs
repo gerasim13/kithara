@@ -4,7 +4,7 @@ use std::path::Path;
 use kithara::platform::thread;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -133,7 +133,8 @@ async fn create_hls_audio(
         .media_info(wav_info)
         .build();
 
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     worker
         .open(config)
         .await

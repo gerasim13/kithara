@@ -230,7 +230,7 @@ async fn build_resource(
     .worker(PlayWorker::new(
         PlayWorkerConfig::for_pools(
             kithara::bufpool::BytePool::default(),
-            kithara::bufpool::PcmPool::default(),
+            kithara::bufpool::SamplePool::default(),
         )
         .build(),
     ))

@@ -19,8 +19,8 @@ use bytes::Bytes;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead},
-    bufpool::{PcmPool, Region},
+    audio::{AudioConfig, AudioRead},
+    bufpool::{Region, SamplePool},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -101,7 +101,7 @@ fn build_resampler(source_rate: u32, target_rate: u32, frames: usize) -> Box<dyn
         })
         .quality(ResamplerQuality::High)
         .options(ResamplerOptions::builder().chunk_size(frames).build())
-        .pcm_pool(PcmPool::new(64, frames.saturating_mul(16)))
+        .sample_pool(SamplePool::new(64, frames.saturating_mul(16)))
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -333,7 +333,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
                         .hint(("mp3").to_string())
                         .build();
                     let worker = PlayWorker::new(
-                        PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                        PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
                     );
                     let mut audio = worker
                         .open(config)

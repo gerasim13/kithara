@@ -4,8 +4,7 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -15,6 +14,7 @@ use kithara::{
         bridge::{PlayerCmd, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
 use ringbuf::traits::Producer;
@@ -45,8 +45,8 @@ fn non_zero(value: u32, label: &str) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or_else(|| panic!("{label} must be non-zero"))
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(
+fn spec() -> AudioSpec {
+    AudioSpec::new(
         Consts::CHANNELS,
         non_zero(Consts::SAMPLE_RATE, "sample rate"),
     )
@@ -59,7 +59,7 @@ fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
         max_block_frames: non_zero(block_frames, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
         control,
     )
 }
@@ -75,7 +75,7 @@ fn load_tracks(
     control: &mut SlotControl,
     count: usize,
 ) -> f32 {
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let sources: Vec<Arc<str>> = (0..count)
         .map(|idx| Arc::from(format!("no-sync-deadline-track-{idx}").as_str()))
         .collect();

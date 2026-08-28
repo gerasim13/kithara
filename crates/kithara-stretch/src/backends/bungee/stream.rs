@@ -1,7 +1,8 @@
 use bungee_sys::Request;
+use kithara_signal::PlanarBuffer;
 
 use super::{
-    buffer::{InputBuffer, PooledPlanar},
+    buffer::{InputBuffer, planar_buffer},
     ffi::{NativeOutput, NativeStretcher},
 };
 use crate::{ElasticConfig, ElasticError, ElasticRateEnvelope};
@@ -15,7 +16,7 @@ pub(super) struct StreamCore {
     #[field(get, copy, vis = "pub(super)")]
     max_input_frames: usize,
     pub(super) native: NativeStretcher,
-    pub(super) output: PooledPlanar,
+    pub(super) output: PlanarBuffer,
     pub(super) output_chunk: Option<NativeOutput>,
     pub(super) output_consumed: usize,
     pub(super) request: Request,
@@ -43,7 +44,7 @@ impl StreamCore {
             input: InputBuffer::new(config, max_input_frames, max_source_frames)?,
             max_input_frames,
             native,
-            output: PooledPlanar::new(config.pool(), config.channels(), max_input_frames)?,
+            output: planar_buffer(config, max_input_frames)?,
             output_chunk: None,
             output_consumed: 0,
             request: Request {
@@ -89,7 +90,7 @@ impl StreamCore {
 mod tests {
     use std::f32::consts::TAU;
 
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
@@ -123,7 +124,7 @@ mod tests {
 
     fn anchored_core() -> StreamCore {
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(Fixture::SAMPLE_RATE)
             .channels(Fixture::CHANNELS)
             .max_source_frames(Fixture::CONTEXT_FRAMES)
@@ -156,7 +157,7 @@ mod tests {
         const FRAMES: usize = 8192;
 
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(FRAMES)
@@ -185,7 +186,7 @@ mod tests {
         const SLOW_SOURCE_FRAMES: usize = 400;
 
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(Fixture::SAMPLE_RATE)
             .channels(Fixture::CHANNELS)
             .max_source_frames(Fixture::CONTEXT_FRAMES)

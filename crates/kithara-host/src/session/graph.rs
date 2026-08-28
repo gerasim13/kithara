@@ -339,7 +339,7 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.pcm_pool.clone());
+        let player_node = PlayerNode::new(inputs, player.sample_pool.clone());
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -635,7 +635,7 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
@@ -809,7 +809,7 @@ mod tests {
                 grid_id,
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
-                pcm_pool: PcmPool::default(),
+                sample_pool: SamplePool::default(),
                 sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
             },
         ) {

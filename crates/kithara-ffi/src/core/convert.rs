@@ -154,13 +154,13 @@ impl TryFrom<&AudioEvent> for FfiItemEvent {
         match event {
             AudioEvent::FormatDetected { spec } => Ok(Self::AudioFormatDetected {
                 channels: spec.channels,
-                sample_rate: spec.sample_rate,
+                sample_rate: spec.sample_rate.get(),
             }),
             AudioEvent::FormatChanged { old, new } => Ok(Self::AudioFormatChanged {
                 old_channels: old.channels,
-                old_sample_rate: old.sample_rate,
+                old_sample_rate: old.sample_rate.get(),
                 new_channels: new.channels,
-                new_sample_rate: new.sample_rate,
+                new_sample_rate: new.sample_rate.get(),
             }),
             AudioEvent::SeekComplete {
                 position,

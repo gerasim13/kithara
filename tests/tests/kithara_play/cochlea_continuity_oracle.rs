@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
-use kithara::decode::PcmSpec;
+use kithara::signal::AudioSpec;
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
@@ -19,7 +19,7 @@ const SEGMENT_WINDOW_MS: f64 = 20.0;
 const SAMPLE_SILENCE_THRESHOLD: f32 = 1.0e-4;
 
 fn render_no_switch_control() -> Vec<f32> {
-    let spec = PcmSpec::new(
+    let spec = AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero"),
     );

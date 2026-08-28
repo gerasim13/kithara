@@ -196,7 +196,7 @@ impl NativeInner {
         let cancel = CancelToken::root();
         let region = store.region().clone();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
                 .cancel(cancel.child())
                 .build(),
         );

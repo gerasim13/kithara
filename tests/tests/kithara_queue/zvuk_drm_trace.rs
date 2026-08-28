@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -77,7 +77,7 @@ async fn shared_ctx() -> &'static Ctx {
             .layouts(baked::build_baked_asset_layouts())
             .build();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(byte_pool, PcmPool::default())
+            PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
                 .cancel(shutdown.child())
                 .build(),
         );

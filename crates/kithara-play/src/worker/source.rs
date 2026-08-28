@@ -1,6 +1,6 @@
-use kithara_audio::{Fetch, PcmSource, SourceDiscontinuity, SourceEnd, TrackStep};
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep};
 use kithara_platform::sync::Arc;
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::SeekObserve;
 
 use crate::effects::{
@@ -36,21 +36,21 @@ pub(crate) struct WarpSource<S> {
     drain: EffectDrain,
     seek: Arc<dyn SeekObserve>,
     discontinuity: Option<SourceDiscontinuity>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     drain_state: DrainState,
     reset_epoch: Option<u64>,
 }
 
 impl<S> WarpSource<S>
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
     pub(crate) fn new(
         source: S,
         warp: kithara_warp::WarpRenderer,
         effects: Vec<Box<dyn AudioEffect>>,
         drain: EffectDrain,
-        spec: PcmSpec,
+        spec: AudioSpec,
     ) -> Self {
         let discontinuity = source.discontinuity();
         let seek = source.seek_observe();
@@ -96,7 +96,7 @@ where
         reset_effects(&mut self.effects);
     }
 
-    fn prepare_renderers(&mut self, spec: PcmSpec) {
+    fn prepare_renderers(&mut self, spec: AudioSpec) {
         self.spec = spec;
         self.warp.prepare(spec);
         for effect in &mut self.effects {
@@ -124,7 +124,7 @@ where
         self.drain_state = DrainState::Warp(epoch);
     }
 
-    fn fetch(&self, data: PcmChunk, epoch: u64) -> Fetch<PcmChunk> {
+    fn fetch(&self, data: AudioChunk, epoch: u64) -> Fetch<AudioChunk> {
         let source_end = self.warp.rendered_source_end().map(|(frame, sample_rate)| {
             SourceEnd::new(
                 frame.saturating_sub(held_source_frames(&self.effects)),
@@ -137,7 +137,7 @@ where
         }
     }
 
-    fn render(&mut self, chunk: PcmChunk, epoch: u64) -> Option<Fetch<PcmChunk>> {
+    fn render(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
         let chunk = self.warp.render(chunk);
         if self.warp.transition_pending() {
             self.drain_state = DrainState::LiveWarp(epoch);
@@ -147,7 +147,7 @@ where
         Some(self.fetch(output, epoch))
     }
 
-    fn drain_step(&mut self) -> Option<TrackStep<PcmChunk>> {
+    fn drain_step(&mut self) -> Option<TrackStep<AudioChunk>> {
         if let DrainState::LiveWarp(epoch) = self.drain_state {
             let chunk = self.warp.flush();
             if !self.warp.transition_pending() {
@@ -188,17 +188,17 @@ where
     }
 }
 
-impl<S> PcmSource for WarpSource<S>
+impl<S> AudioSource for WarpSource<S>
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
-    type Chunk = PcmChunk;
+    type Chunk = AudioChunk;
 
     delegate::delegate! {
         to self.source {
             fn decode_epoch(&self) -> u64;
             fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64);
-            fn retire_chunk(&self, chunk: PcmChunk);
+            fn retire_chunk(&self, chunk: AudioChunk);
             fn finish_deferred(&mut self);
             fn warm_up(&mut self);
         }
@@ -212,7 +212,7 @@ where
         Arc::clone(&self.seek)
     }
 
-    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
         self.sync_discontinuity();
         if self.cancel_stale_drain() {
             return TrackStep::StateChanged;
@@ -246,7 +246,7 @@ where
         }
     }
 
-    fn prepare_deferred(&mut self) -> Option<PcmSpec> {
+    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
         let spec = self.source.prepare_deferred();
         self.sync_discontinuity();
         self.prepare_renderers(spec.unwrap_or(self.spec));
@@ -259,12 +259,12 @@ mod tests {
     use std::{collections::VecDeque, num::NonZeroU32};
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
-    use kithara_bufpool::{ByteBudget, BytePool, PcmPool};
-    use kithara_decode::{PcmMeta, duration_for_frames};
+    use kithara_bufpool::{ByteBudget, BytePool, SamplePool};
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     };
+    use kithara_signal::AudioChunkInfo;
     use kithara_stream::{SeekControl, SeekObserve, SeekState};
     use kithara_test_utils::kithara;
     use kithara_warp::{StretchControls, StretchKind};
@@ -273,7 +273,7 @@ mod tests {
 
     fn flush_deferred<S>(source: &mut S)
     where
-        S: PcmSource,
+        S: AudioSource,
     {
         let _ = source.prepare_deferred();
         source.finish_deferred();
@@ -283,31 +283,31 @@ mod tests {
         source: S,
         effects: Vec<Box<dyn AudioEffect>>,
         drain: EffectDrain,
-        spec: PcmSpec,
+        spec: AudioSpec,
     ) -> WarpSource<S>
     where
-        S: PcmSource<Chunk = PcmChunk>,
+        S: AudioSource<Chunk = AudioChunk>,
     {
         let config = kithara_warp::WarpConfig::builder().build();
         let warp = kithara_warp::Warp::new((), &config);
-        let renderer = warp.renderer(spec, PcmPool::default());
+        let renderer = warp.renderer(spec, SamplePool::default());
         WarpSource::new(source, renderer, effects, drain, spec)
     }
 
     struct RawSource {
-        chunks: VecDeque<PcmChunk>,
+        chunks: VecDeque<AudioChunk>,
         head: Arc<AtomicU64>,
         seek: Arc<SeekState>,
     }
 
-    impl PcmSource for RawSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for RawSource {
+        type Chunk = AudioChunk;
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             let Some(chunk) = self.chunks.pop_front() else {
                 return TrackStep::Eof;
             };
@@ -324,11 +324,11 @@ mod tests {
 
     #[derive(Default)]
     struct BufferThenHalveFrames {
-        buffered: Option<PcmChunk>,
+        buffered: Option<AudioChunk>,
     }
 
     impl AudioEffect for BufferThenHalveFrames {
-        fn flush(&mut self) -> Option<PcmChunk> {
+        fn flush(&mut self) -> Option<AudioChunk> {
             self.buffered.take().and_then(halve_frames)
         }
 
@@ -338,7 +338,7 @@ mod tests {
                 .map_or(0, |chunk| u64::from(chunk.meta.frames))
         }
 
-        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+        fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
             self.buffered.replace(chunk).and_then(halve_frames)
         }
 
@@ -347,30 +347,31 @@ mod tests {
         }
     }
 
-    fn halve_frames(mut chunk: PcmChunk) -> Option<PcmChunk> {
+    fn halve_frames(mut chunk: AudioChunk) -> Option<AudioChunk> {
         let frames = chunk.meta.frames / 2;
         let samples = usize::try_from(frames)
             .ok()?
             .checked_mul(usize::from(chunk.meta.spec.channels))?;
         chunk.samples.truncate(samples);
         chunk.meta.frames = frames;
-        chunk.meta.end_timestamp = duration_for_frames(
-            chunk.meta.spec.sample_rate.get(),
-            chunk.meta.frame_offset.saturating_add(u64::from(frames)),
-        );
+        chunk.meta.end_timestamp = chunk
+            .meta
+            .spec
+            .duration_for(chunk.meta.frame_offset.saturating_add(u64::from(frames)))
+            .expect("fixture timestamp fits");
         Some(chunk)
     }
 
     struct DeferredSource {
         log: Arc<Mutex<Vec<&'static str>>>,
         seek: Arc<SeekState>,
-        spec: PcmSpec,
+        spec: AudioSpec,
     }
 
-    impl PcmSource for DeferredSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for DeferredSource {
+        type Chunk = AudioChunk;
 
-        fn prepare_deferred(&mut self) -> Option<PcmSpec> {
+        fn prepare_deferred(&mut self) -> Option<AudioSpec> {
             self.log.lock().push("source.prepare");
             Some(self.spec)
         }
@@ -383,23 +384,23 @@ mod tests {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             TrackStep::Blocked(WaitingReason::Waiting)
         }
     }
 
     struct DeferredEffect {
         log: Arc<Mutex<Vec<&'static str>>>,
-        serviced: Arc<Mutex<Option<PcmSpec>>>,
+        serviced: Arc<Mutex<Option<AudioSpec>>>,
     }
 
     impl AudioEffect for DeferredEffect {
-        fn service_deferred(&mut self, spec: PcmSpec) {
+        fn service_deferred(&mut self, spec: AudioSpec) {
             self.log.lock().push("effect.service");
             *self.serviced.lock() = Some(spec);
         }
 
-        fn flush(&mut self) -> Option<PcmChunk> {
+        fn flush(&mut self) -> Option<AudioChunk> {
             None
         }
 
@@ -407,7 +408,7 @@ mod tests {
             0
         }
 
-        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+        fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
             Some(chunk)
         }
 
@@ -415,13 +416,13 @@ mod tests {
     }
 
     struct RevisionSource {
-        chunks: VecDeque<PcmChunk>,
+        chunks: VecDeque<AudioChunk>,
         discontinuity: Arc<Mutex<SourceDiscontinuity>>,
         seek: Arc<SeekState>,
     }
 
-    impl PcmSource for RevisionSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for RevisionSource {
+        type Chunk = AudioChunk;
 
         fn discontinuity(&self) -> Option<SourceDiscontinuity> {
             Some(*self.discontinuity.lock())
@@ -431,7 +432,7 @@ mod tests {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             self.chunks
                 .pop_front()
                 .map_or(TrackStep::Blocked(WaitingReason::Waiting), |chunk| {
@@ -445,7 +446,7 @@ mod tests {
     }
 
     impl AudioEffect for ResetCounter {
-        fn flush(&mut self) -> Option<PcmChunk> {
+        fn flush(&mut self) -> Option<AudioChunk> {
             None
         }
 
@@ -453,7 +454,7 @@ mod tests {
             0
         }
 
-        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+        fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
             Some(chunk)
         }
 
@@ -468,8 +469,8 @@ mod tests {
         seek: Arc<SeekState>,
     }
 
-    impl PcmSource for CountingEofSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for CountingEofSource {
+        type Chunk = AudioChunk;
 
         fn discontinuity(&self) -> Option<SourceDiscontinuity> {
             *self.discontinuity.lock()
@@ -479,7 +480,7 @@ mod tests {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             self.steps.fetch_add(1, Ordering::AcqRel);
             TrackStep::Eof
         }
@@ -491,7 +492,7 @@ mod tests {
     }
 
     impl AudioEffect for CountingEmptyTail {
-        fn flush(&mut self) -> Option<PcmChunk> {
+        fn flush(&mut self) -> Option<AudioChunk> {
             self.flushes.fetch_add(1, Ordering::AcqRel);
             None
         }
@@ -500,7 +501,7 @@ mod tests {
             0
         }
 
-        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+        fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
             Some(chunk)
         }
 
@@ -513,11 +514,11 @@ mod tests {
         decode_epoch: u64,
         revision: u64,
         seek: Arc<SeekState>,
-        spec: PcmSpec,
+        spec: AudioSpec,
     }
 
-    impl PcmSource for SeekApplyingSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for SeekApplyingSource {
+        type Chunk = AudioChunk;
 
         fn decode_epoch(&self) -> u64 {
             self.decode_epoch
@@ -531,7 +532,7 @@ mod tests {
             Arc::clone(&self.seek) as Arc<dyn SeekObserve>
         }
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             let live_epoch = self.seek.epoch();
             if live_epoch != self.decode_epoch {
                 self.decode_epoch = live_epoch;
@@ -545,11 +546,11 @@ mod tests {
 
     struct ResettingTail {
         resets: Arc<AtomicU64>,
-        tail: Option<PcmChunk>,
+        tail: Option<AudioChunk>,
     }
 
     impl AudioEffect for ResettingTail {
-        fn flush(&mut self) -> Option<PcmChunk> {
+        fn flush(&mut self) -> Option<AudioChunk> {
             self.tail.take()
         }
 
@@ -559,7 +560,7 @@ mod tests {
                 .map_or(0, |chunk| u64::from(chunk.meta.frames))
         }
 
-        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+        fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
             Some(chunk)
         }
 
@@ -569,7 +570,7 @@ mod tests {
         }
     }
 
-    fn chunk(pool: &PcmPool, spec: PcmSpec, frame_offset: u64) -> PcmChunk {
+    fn chunk(pool: &SamplePool, spec: AudioSpec, frame_offset: u64) -> AudioChunk {
         const FRAMES: usize = 128;
         chunk_with_frames(
             pool,
@@ -581,26 +582,27 @@ mod tests {
     }
 
     fn chunk_with_frames(
-        pool: &PcmPool,
-        spec: PcmSpec,
+        pool: &SamplePool,
+        spec: AudioSpec,
         frame_offset: u64,
         frames: u32,
         sample: f32,
-    ) -> PcmChunk {
+    ) -> AudioChunk {
         let samples = usize::try_from(frames)
             .expect("fixture frames fit usize")
             .checked_mul(usize::from(spec.channels))
             .expect("fixture sample count fits usize");
-        PcmChunk::new(
-            PcmMeta {
+        AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 frames,
                 frame_offset,
-                timestamp: duration_for_frames(spec.sample_rate.get(), frame_offset),
-                end_timestamp: duration_for_frames(
-                    spec.sample_rate.get(),
-                    frame_offset.saturating_add(u64::from(frames)),
-                ),
+                timestamp: spec
+                    .duration_for(frame_offset)
+                    .expect("fixture timestamp fits"),
+                end_timestamp: spec
+                    .duration_for(frame_offset.saturating_add(u64::from(frames)))
+                    .expect("fixture end timestamp fits"),
                 ..Default::default()
             },
             pool.attach(vec![sample; samples]),
@@ -609,8 +611,8 @@ mod tests {
 
     #[kithara::test]
     fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = PcmPool::default();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pool = SamplePool::default();
         let head = Arc::new(AtomicU64::new(0));
         let source = RawSource {
             chunks: VecDeque::from([
@@ -672,7 +674,7 @@ mod tests {
 
     #[kithara::test]
     fn deferred_shell_services_effects_between_source_phases() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let log = Arc::new(Mutex::new(Vec::new()));
         let serviced = Arc::new(Mutex::new(None));
         let source = DeferredSource {
@@ -698,8 +700,8 @@ mod tests {
 
     #[kithara::test]
     fn discontinuity_refreshes_spec_without_resetting_same_revision() {
-        let initial = PcmSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
-        let changed = PcmSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
+        let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
+        let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
         let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
         let resets = Arc::new(AtomicU64::new(0));
         let source = RevisionSource {
@@ -727,10 +729,10 @@ mod tests {
     }
 
     #[kithara::test]
-    fn unity_warp_preserves_pcm_and_meta_across_discontinuity() {
-        let initial = PcmSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
-        let changed = PcmSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
-        let pool = PcmPool::default();
+    fn unity_warp_preserves_samples_and_meta_across_discontinuity() {
+        let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
+        let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
+        let pool = SamplePool::default();
         let first = chunk(&pool, initial, 256);
         let first_meta = first.meta;
         let first_samples = first.samples.to_vec();
@@ -781,8 +783,8 @@ mod tests {
         const UNITY_FRAMES: u32 = 1024;
         const SENTINEL_FRAMES: u32 = 512;
 
-        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = PcmPool::default();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pool = SamplePool::default();
         let first_active_end = u64::from(ACTIVE_FRAMES);
         let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
         let second_active_end = first_unity_end.saturating_add(u64::from(ACTIVE_FRAMES));
@@ -857,7 +859,7 @@ mod tests {
                 continue;
             }
             let TrackStep::Produced(Fetch::Data { data, .. }) = step else {
-                panic!("the completed tail must release queued unity PCM");
+                panic!("the completed tail must release queued unity samples");
             };
             break data;
         };
@@ -906,10 +908,10 @@ mod tests {
     )]
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn unavailable_warp_target_fails_before_pulling_source(#[case] backend: StretchKind) {
-        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
-            chunks: VecDeque::from([chunk(&PcmPool::default(), spec, 0)]),
+            chunks: VecDeque::from([chunk(&SamplePool::default(), spec, 0)]),
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
         };
@@ -919,7 +921,7 @@ mod tests {
         let config = kithara_warp::WarpConfig::builder()
             .stretch(controls)
             .build();
-        let target_pool = PcmPool::with_byte_budget(8, 0, ByteBudget(0));
+        let target_pool = SamplePool::with_byte_budget(8, 0, ByteBudget(0));
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pool.clone());
         let failed_prepares = target_pool.stats().budget_overshoots;
         let effects = Vec::new();
@@ -940,8 +942,8 @@ mod tests {
 
     #[kithara::test]
     fn seek_cancels_stale_tail_and_resets_effects_once() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = PcmPool::default();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pool = SamplePool::default();
         let seek = Arc::new(SeekState::new());
         let resets = Arc::new(AtomicU64::new(0));
         let source = SeekApplyingSource {
@@ -977,8 +979,8 @@ mod tests {
 
     #[kithara::test]
     fn every_effect_tail_precedes_the_single_eof() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = PcmPool::default();
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pool = SamplePool::default();
         let source = RawSource {
             chunks: VecDeque::new(),
             head: Arc::new(AtomicU64::new(0)),
@@ -1013,7 +1015,7 @@ mod tests {
 
     #[kithara::test]
     fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let steps = Arc::new(AtomicU64::new(0));
         let flushes = Arc::new(AtomicU64::new(0));
         let resets = Arc::new(AtomicU64::new(0));

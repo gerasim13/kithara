@@ -331,16 +331,16 @@ mod tests {
         let source = r#"
 fn component() {
     let bytes = BytePool::new(32, 0);
-    let pcm = PcmPool::new(128, 200_000);
+    let samples = SamplePool::new(128, 200_000);
     let scratch = SharedPool::new(4, 65_536);
     let typed = SharedPool::<4, Vec<f32>>::new(4, 65_536);
-    let qualified = kithara_bufpool::PcmPool::new(128, 200_000);
+    let qualified = kithara_bufpool::SamplePool::new(128, 200_000);
 }
 
 #[cfg(test)]
 mod tests {
     fn fixture() {
-        let pool = PcmPool::new(4, 1024);
+        let pool = SamplePool::new(4, 1024);
     }
 }
 "#;

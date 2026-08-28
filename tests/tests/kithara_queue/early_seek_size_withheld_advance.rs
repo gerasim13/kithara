@@ -83,7 +83,7 @@ impl Harness {
         let session = Arc::new(OfflineSession::new_manual());
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)

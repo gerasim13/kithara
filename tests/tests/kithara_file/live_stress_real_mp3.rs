@@ -2,9 +2,8 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     bufpool::Region,
-    decode::PcmChunk,
     events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
     platform::{
@@ -14,6 +13,7 @@ use kithara::{
         tokio::task::{spawn, spawn_blocking},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioChunk,
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
@@ -86,9 +86,9 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
     stats.lock().expect("stats lock poisoned").snapshot()
 }
 
-fn next_chunk(audio: &mut RegisteredAudio<Stream<File>>, stage: &str) -> Option<PcmChunk> {
+fn next_chunk(audio: &mut RegisteredAudio<Stream<File>>, stage: &str) -> Option<AudioChunk> {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -269,7 +269,8 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         .store(store)
         .pool(byte_pool.clone())
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker
         .open(
             AudioConfig::<File>::for_stream(file_config)

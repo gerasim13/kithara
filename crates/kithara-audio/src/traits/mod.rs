@@ -5,14 +5,14 @@ mod source;
 
 pub use kithara_decode::{DecodeError, DecodeResult};
 #[cfg(any(test, feature = "mock"))]
-pub use observer::PcmObserverMock;
-pub use observer::{PcmObserveError, PcmObserver};
+pub use observer::AudioObserverMock;
+pub use observer::{AudioObserveError, AudioObserver};
 pub use outcome::{ChunkOutcome, PendingReason, ReadOutcome, SeekOutcome};
-pub use reader::{PcmControl, PcmRead, PcmReader, PcmSession, SeekBegin};
+pub use reader::{AudioControl, AudioRead, AudioReader, AudioSession, SeekBegin};
 #[cfg(any(test, feature = "mock"))]
-pub use reader::{PcmControlMock, PcmReadMock, PcmSessionMock};
+pub use reader::{AudioControlMock, AudioReadMock, AudioSessionMock};
 #[cfg(test)]
-pub(crate) use source::PcmSourceExt;
+pub(crate) use source::AudioSourceExt;
 #[cfg(any(test, feature = "mock"))]
-pub use source::PcmSourceMock;
-pub use source::{PcmSource, SourceDiscontinuity};
+pub use source::AudioSourceMock;
+pub use source::{AudioSource, SourceDiscontinuity};

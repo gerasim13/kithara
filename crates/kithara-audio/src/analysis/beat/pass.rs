@@ -1,5 +1,5 @@
-use kithara_decode::PcmChunk;
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::AudioChunk;
 use tracing::warn;
 
 use super::{
@@ -35,7 +35,7 @@ where
         }
     }
 
-    pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: &mut dyn BeatDetector) {
+    pub(crate) fn push(&mut self, chunk: &AudioChunk, detector: &mut dyn BeatDetector) {
         let channels = usize::from(chunk.spec().channels.max(1));
         self.analyzer
             .push_interleaved(&chunk.samples[..], channels, detector);

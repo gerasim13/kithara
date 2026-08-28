@@ -4,8 +4,8 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     play::{Cmd, PlayError, Resource, SessionDispatcher, SessionError},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
@@ -18,7 +18,7 @@ const BLOCKS: usize = 20;
 const ROOMY_CAPACITY: usize = 65_536;
 
 fn make_resource() -> Resource {
-    let spec = PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
+    let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
     resource_from_reader(kithara_integration_tests::audio_mock::TestPcmReader::new(
         spec, TRACK_SECS,
     ))

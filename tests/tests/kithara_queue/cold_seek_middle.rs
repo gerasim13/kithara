@@ -78,7 +78,7 @@ fn build_queue_with_tick(
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))
@@ -233,7 +233,7 @@ async fn run_seek_scenario(urls: &[&str], select_index: usize, temp: TestTempDir
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))

@@ -17,7 +17,7 @@ impl StreamCore {
         discarded_output: &mut [f32],
     ) -> Result<(), ElasticError> {
         self.discard()?;
-        let channels = self.output.channels();
+        let channels = usize::from(self.output.spec().channels);
         let history_frames = source_history
             .len()
             .checked_div(channels)
@@ -130,7 +130,7 @@ impl StreamCore {
             ));
         }
         let remaining = target_frames.saturating_sub(*discarded_frames);
-        let copied = self.consume(remaining.min(frames), Some(output), *discarded_frames);
+        let copied = self.consume(remaining.min(frames), Some(output), *discarded_frames)?;
         *discarded_frames = discarded_frames
             .checked_add(copied)
             .ok_or(ElasticError::SampleCountOverflow)?;

@@ -1,10 +1,10 @@
 pub use kithara::audio::analysis::TrackAnalysis;
 use kithara::{
     audio::{
-        PcmReader,
+        AudioReader,
         analysis::{AnalysisWorker, AnalyzerBuilder, BeatAnalysisConfig},
     },
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
 };
 use kithara_platform::{
@@ -53,10 +53,10 @@ impl TrackAnalysisRunner {
         master: &CancelToken,
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Self {
         let builder = AnalyzerBuilder::default()
-            .with_pcm_pool(pcm_pool)
+            .with_sample_pool(sample_pool)
             .with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
@@ -131,7 +131,7 @@ async fn run_analysis(
 async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,
-) -> Option<Box<dyn PcmReader>> {
+) -> Option<Box<dyn AudioReader>> {
     if cancel.is_cancelled() {
         return None;
     }

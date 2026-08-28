@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{decode::PcmSpec, events::PlayerEvent, play::Resource};
+use kithara::{events::PlayerEvent, play::Resource, signal::AudioSpec};
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
@@ -19,7 +19,7 @@ const FAST_RATE: f32 = 2.0;
 
 fn make_resource(duration_secs: f64) -> Resource {
     resource_from_reader(kithara_integration_tests::audio_mock::TestPcmReader::new(
-        PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+        AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
         duration_secs,
     ))
 }

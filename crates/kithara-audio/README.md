@@ -14,10 +14,10 @@
 
 # kithara-audio
 
-Decoded PCM source pipeline with decoder lifecycle, decoder-owned sample-rate
-conversion, source readiness, and source-signal analysis. `Audio<S>` is the PCM
-reader surface. `Audio::prepare` returns the concrete `PcmSource` and
-worker-neutral `PreparedPcmLane`; `kithara-play` owns `PlayWorker`, the
+Decoded-audio source pipeline with decoder lifecycle, decoder-owned sample-rate
+conversion, source readiness, and source-signal analysis. `Audio<S>` is the audio
+reader surface. `Audio::prepare` returns the concrete `AudioSource` and
+worker-neutral `PreparedAudioLane`; `kithara-play` owns `PlayWorker`, the
 per-track node, final output admission, playback effects, and engine-load
 measurement, while `kithara-warp` owns the resident Warp renderer.
 
@@ -59,12 +59,12 @@ measurement, while `kithara-warp` owns the resident Warp renderer.
 
 ## Key Types
 
-- `Audio<S>` — main PCM reader; the consumer reads frames from it and requests
+- `Audio<S>` — main audio reader; the consumer reads frames from it and requests
   seeks.
 - `AudioConfig<T>` — `bon` builder for stream config, decode backend,
   decoder-owned resampling, gapless mode, source readiness, and events.
-- `PcmSource` — worker-independent per-track decoded PCM source contract.
-- `PreparedAudio` / `PreparedPcmLane` — reader plus the still-concrete producer
+- `AudioSource` — worker-independent per-track decoded-audio source contract.
+- `PreparedAudio` / `PreparedAudioLane` — reader plus the still-concrete producer
   seam consumed by `kithara-play`.
 - `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
   threaded into the decoder-owned resampler plan.
@@ -99,7 +99,7 @@ let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
 
 let region = Region::default();
 let worker = PlayWorker::new(
-    PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+    PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
 );
 let mut audio = worker.open(audio_config).await?;
 ```
@@ -108,9 +108,12 @@ let mut audio = worker.open(audio_config).await?;
 
 `kithara-audio` sits between `kithara-decode` and playback consumers. The
 downloader lives in `kithara-stream`; audio consumes stream/storage contracts
-without reconstructing protocol policy. `kithara-play` composes the prepared
+without reconstructing protocol policy. `kithara-signal` owns `AudioSpec`,
+`AudioChunkInfo`, `AudioChunk`, and pure sample/time math, while
+`kithara-bufpool` owns their pooled sample storage. This crate owns the runtime
+`AudioReader` and `AudioSource` protocols around those values. `kithara-play` composes the prepared
 source with `kithara-warp` and `kithara-stretch`; none of those playback
-transforms are owned here. Analysis runs on decoded source PCM, not the
+transforms are owned here. Analysis runs on the decoded source signal, not the
 play-owned post-EQ or post-stretch output.
 
 See [CONTEXT.md](CONTEXT.md) for detailed threading, seek/recreate, analysis,

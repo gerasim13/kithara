@@ -57,7 +57,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     })
     .await;
     let byte_pool = kithara::bufpool::BytePool::default();
-    let pcm_pool = kithara::bufpool::PcmPool::default();
+    let sample_pool = kithara::bufpool::SamplePool::default();
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(byte_pool.clone())
@@ -66,7 +66,7 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         .build();
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, sample_pool).build());
     let mut player = OfflinePlayer::new(Consts::SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");

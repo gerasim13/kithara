@@ -12,7 +12,7 @@ use firewheel::{
 };
 use kithara::{
     self,
-    bufpool::{PcmPool, Region},
+    bufpool::{Region, SamplePool},
     events::EventBus,
     platform::sync::Arc,
     play::{
@@ -59,7 +59,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            pcm_pool: PcmPool::default(),
+            sample_pool: SamplePool::default(),
             sample_rate: SAMPLE_RATE,
         })
         .expect("register player command")
@@ -99,7 +99,7 @@ fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl {
     PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
             ))
             .sample_rate(session_rate())
             .crossfade_duration(0.0)

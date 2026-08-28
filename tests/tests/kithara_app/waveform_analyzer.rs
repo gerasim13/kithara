@@ -7,7 +7,7 @@
 
 use kithara::{
     audio::{Bucket, analysis::BeatAnalysisConfig},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
     prelude::ResourceConfig,
@@ -28,7 +28,7 @@ fn silence_wav_spec() -> SignalSpec {
 }
 
 fn worker() -> PlayWorker {
-    PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build())
+    PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build())
 }
 
 /// Run one analysis through the production runner and await its result.
@@ -41,7 +41,7 @@ async fn run_analysis(
         master,
         buckets,
         BeatAnalysisConfig::default(),
-        PcmPool::default(),
+        SamplePool::default(),
     );
     let mut rx = runner.analyze(config);
 

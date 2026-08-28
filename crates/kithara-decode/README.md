@@ -14,7 +14,7 @@
 
 # kithara-decode
 
-Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed PCM (`Vec<f32>`). No threading, no channels — just decoding.
+Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed decoded-audio chunks. No threading, no channels — just decoding.
 
 The public surface centres on one trait — `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and frame decoding are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C>` (internal) pairs them so backends can be mixed and matched. The factory hides this detail — callers only ever see `Box<dyn Decoder>`.
 
@@ -22,21 +22,21 @@ The public surface centres on one trait — `Decoder`. Concrete backends (Sympho
 
 ```rust
 use std::io::Cursor;
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
 let reader = Cursor::new(wav_bytes);
 let config = DecoderConfig::builder()
     .backend(DecoderBackend::Symphonia)
     .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .sample_pool(SamplePool::default())
     .build();
 let mut decoder = DecoderFactory::create_with_probe(reader, Some("wav"), config)?;
 
 let spec = decoder.spec(); // sample_rate, channels
 loop {
     match decoder.next_chunk()? {
-        kithara_decode::DecoderChunkOutcome::Chunk(chunk) => play(&chunk.pcm),
+        kithara_decode::DecoderChunkOutcome::Chunk(chunk) => play(&chunk.samples),
         kithara_decode::DecoderChunkOutcome::Pending(_) => continue,
         kithara_decode::DecoderChunkOutcome::Eof => break,
     }
@@ -64,6 +64,7 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 `kithara-play` owns the playback worker and effects. Decoder sample-rate conversion is configured
 through `kithara-audio` and implemented with `kithara-resampler`; this crate stays a synchronous
 decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File>`, `Stream<Hls>`,
-cursors, or plain files.
+cursors, or plain files. Shared `AudioSpec`, `AudioChunkInfo`, `AudioChunk`, frame/sample units, and
+pure sample/time math are owned by `kithara-signal`; decoder-specific profiles and errors remain here.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

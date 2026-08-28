@@ -6,7 +6,7 @@
 
 use kithara::{
     audio::{BeatGrid, analysis::BeatAnalysisConfig},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
     prelude::ResourceConfig,
@@ -54,7 +54,7 @@ fn records() -> Vec<(String, f64)> {
 
 async fn analyse(path: &str) -> TrackAnalysis {
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
     );
     let src = ResourceConfig::parse_src(path)
         .unwrap_or_else(|error| panic!("{path} must name a source: {error}"));
@@ -67,7 +67,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         &CancelToken::never(),
         Consts::BUCKETS,
         BeatAnalysisConfig::default(),
-        PcmPool::default(),
+        SamplePool::default(),
     );
     let mut rx = runner.analyze(config);
 

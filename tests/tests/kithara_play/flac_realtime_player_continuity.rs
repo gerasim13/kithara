@@ -137,7 +137,7 @@ async fn run_case(
     .worker(PlayWorker::new(
         PlayWorkerConfig::for_pools(
             kithara::bufpool::BytePool::default(),
-            kithara::bufpool::PcmPool::default(),
+            kithara::bufpool::SamplePool::default(),
         )
         .build(),
     ))

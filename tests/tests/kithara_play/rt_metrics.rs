@@ -9,14 +9,14 @@ use std::num::NonZeroU32;
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     platform::{sync::Arc, time::Duration},
     play::{
         Resource, SharedEq,
         bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{
     Fault, FaultyPcmReader, SeekSplitReader, TestPcmReader,
@@ -30,8 +30,8 @@ fn block_len() -> usize {
     usize::try_from(BLOCK_FRAMES).expect("block frames fit usize")
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
+fn spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
 
 fn processor() -> (PlayerNodeProcessor, SlotControl) {
@@ -41,7 +41,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
         control,
     )
 }
@@ -64,7 +64,7 @@ fn boxed(resource: Resource, src: &str) -> Box<PlayerResource> {
     Box::new(PlayerResource::new(
         resource,
         Arc::from(src),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ))
 }
 

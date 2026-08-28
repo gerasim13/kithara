@@ -60,9 +60,9 @@ fn main() -> AppResult {
     let shutdown = CancelToken::root();
     let region = Region::default();
     let byte_pool = region.byte_pool();
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), pcm_pool)
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
             .cancel(shutdown.child())
             .build(),
     );

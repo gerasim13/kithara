@@ -21,7 +21,7 @@ impl Consts {
 }
 
 /// Cleaned beat grid for one track. All positions are source frames
-/// (decoder/song time, `PcmMeta.frame_offset` space) — never output/stretched
+/// (decoder/song time, `AudioChunkInfo.frame_offset` space) - never output/stretched
 /// time.
 #[derive(Debug, Clone, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::SampleBuffer;
 use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
@@ -31,7 +31,7 @@ enum TerminalState {
 pub(crate) struct SignalsmithElastic {
     inner: Stretch,
     capabilities: ElasticCapabilities,
-    prime_input: PcmBuf,
+    prime_input: SampleBuffer,
     terminal: TerminalState,
 }
 
@@ -66,7 +66,7 @@ impl ElasticEngine for SignalsmithElastic {
         let mut prime_input = config.pool().get();
         prime_input
             .ensure_len(prime_samples)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
         Ok(Self {
             inner,
             capabilities,

@@ -1,5 +1,5 @@
-use kithara_decode::PcmChunk;
 use kithara_events::{AudioEvent, DecoderChangeCause, SeekLifecycleStage, SegmentLocation};
+use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::{debug, warn};
 
@@ -35,7 +35,7 @@ fn finish_route_change_after_recreate<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     recreate: &RecreateState,
     request: SeekRequest,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     let target = request.seek.target;
     match src
         .decode
@@ -80,7 +80,7 @@ fn finish_route_change_after_recreate<T: StreamType>(
 fn apply_recreate_next<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     recreate: &RecreateState,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     match &recreate.next {
         RecreateNext::Decode => {
             src.decode.reset();
@@ -145,7 +145,7 @@ pub(super) fn finish_recreate_outcome<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     recreate: RecreateState,
     outcome: RecreateOutcome,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     match outcome {
         RecreateOutcome::Done => apply_recreate_next(src, &recreate),
         RecreateOutcome::SoftFailed => {
@@ -165,7 +165,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     rebuild: RebuildState,
     complete: DecoderBuildComplete,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     if superseded(&src.shared_stream, src.seek_obs.as_ref(), &rebuild) {
         if let Ok(generation) = complete.result {
             src.retired.retire_generation(generation);
@@ -212,7 +212,7 @@ pub(super) fn finish_rebuild<T: StreamType>(
 fn transition_to_seek_request<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     request: SeekRequest,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     src.update_state(Track::<SeekRequested>::new(request).erase());
     src.decode.reset();
     src.decode.notify_seek(&src.retired);
@@ -222,7 +222,7 @@ fn transition_to_seek_request<T: StreamType>(
 fn transition_after_rebuild_superseded<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     rebuild: &RebuildState,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     let carried_seek = match &rebuild.recreate.next {
         RecreateNext::Seek(request) | RecreateNext::ApplySeek(request) => Some(*request),
         RecreateNext::Decode => None,
@@ -249,7 +249,7 @@ fn transition_after_rebuild_superseded<T: StreamType>(
 fn finish_apply_seek_after_recreate<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     request: SeekRequest,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     debug!(
         target = ?request.seek.target,
         epoch = request.seek.epoch,
@@ -317,7 +317,7 @@ fn finish_apply_seek_after_recreate<T: StreamType>(
 pub(super) fn wait_for_source_on_recreate<T: StreamType>(
     src: &mut StreamAudioSource<T>,
     recreate: RecreateState,
-) -> TrackStep<PcmChunk> {
+) -> TrackStep<AudioChunk> {
     let phase = recreate_phase(&src.shared_stream, &recreate);
     if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
         src.update_state(

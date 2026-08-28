@@ -1,7 +1,7 @@
 use kithara::{
     self,
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     events::EventBus,
     host::{Host, HostConfig, HostOwned, testing::HostProbe},
     platform::sync::Arc,
@@ -33,7 +33,7 @@ fn make_engine() -> EngineImpl {
         EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
             .session(Arc::new(FixtureSession))
-            .pcm_pool(PcmPool::default())
+            .sample_pool(SamplePool::default())
             .build(),
         EventBus::default(),
     )
@@ -43,7 +43,7 @@ fn insert_player(host: &mut Host) -> HostOwned<PlayerImpl> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+                PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
             ))
             .build(),
     );
@@ -83,7 +83,7 @@ fn engine_config_builder() {
         .sample_rate(48000)
         .channels(1)
         .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.max_slots(), 8);
@@ -138,7 +138,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
         .sample_rate(48000)
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);

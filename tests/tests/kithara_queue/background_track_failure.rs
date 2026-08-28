@@ -12,10 +12,10 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     events::{Event, PlayerEvent, TrackId, TrackStatus},
     platform::sync::Arc,
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -48,7 +48,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
 fn loaded_track(queue: &Queue, value: f32) -> (TrackId, Arc<str>) {
     let id = queue.register_for_test();
     let src: Arc<str> = Arc::from(format!("test://memory/{}", id.as_u64()));
-    let spec = PcmSpec {
+    let spec = AudioSpec {
         channels: CHANNELS,
         sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };

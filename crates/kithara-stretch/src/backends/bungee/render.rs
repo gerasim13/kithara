@@ -2,7 +2,7 @@
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::stream::StreamCore;
+use super::{buffer::signal_error, stream::StreamCore};
 use crate::{ElasticError, ElasticRequest};
 
 impl StreamCore {
@@ -105,7 +105,7 @@ impl StreamCore {
         for _ in 0..iteration_limit {
             #[cfg(test)]
             hang_tick!();
-            let consumed = self.consume(target - rendered, output.as_deref_mut(), rendered);
+            let consumed = self.consume(target - rendered, output.as_deref_mut(), rendered)?;
             rendered += consumed;
             self.unprimed_started |= consumed > 0;
             if rendered == target {
@@ -167,7 +167,7 @@ impl StreamCore {
             let output_consumed = self.output_consumed;
             self.discard_before(anchor)?;
             let discarded = self.output_consumed > output_consumed;
-            let consumed = self.consume(target - rendered, output.as_deref_mut(), rendered);
+            let consumed = self.consume(target - rendered, output.as_deref_mut(), rendered)?;
             rendered += consumed;
             if rendered == target {
                 #[cfg(test)]
@@ -274,9 +274,10 @@ impl StreamCore {
         }
         self.input.analyse(&mut self.native, valid, end_of_input)?;
         self.request_pending = false;
+        let output_stride = self.output.stride().get();
         self.output_chunk = Some(
             self.native
-                .synthesise(&mut self.output.samples, self.output.stride)?,
+                .synthesise(self.output.as_samples_mut(), output_stride)?,
         );
         self.output_consumed = 0;
         Ok(())
@@ -287,19 +288,35 @@ impl StreamCore {
         wanted: usize,
         output: Option<&mut [f32]>,
         output_frame: usize,
-    ) -> usize {
+    ) -> Result<usize, ElasticError> {
         let Some(chunk) = self.output_chunk.as_ref().filter(|chunk| chunk.valid) else {
-            return 0;
+            return Ok(0);
         };
         let frames = wanted.min(chunk.frames.saturating_sub(self.output_consumed));
         if let Some(output) = output {
-            self.output.copy_interleaved(
-                self.output_consumed..self.output_consumed + frames,
-                output,
-                output_frame,
-            );
+            let channels = usize::from(self.output.spec().channels);
+            let destination_begin = output_frame
+                .checked_mul(channels)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let destination_end = frames
+                .checked_mul(channels)
+                .and_then(|samples| destination_begin.checked_add(samples))
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let actual = output.len();
+            let destination = output.get_mut(destination_begin..destination_end).ok_or(
+                ElasticError::OutputSampleCount {
+                    actual,
+                    expected: destination_end,
+                },
+            )?;
+            self.output
+                .view()
+                .range(self.output_consumed..self.output_consumed + frames)
+                .map_err(signal_error)?
+                .interleave_into(destination)
+                .map_err(signal_error)?;
         }
         self.output_consumed += frames;
-        frames
+        Ok(frames)
     }
 }

@@ -5,7 +5,7 @@
 //! read loop, so the read contract (engine-aware blocking, finiteness checks,
 //! `Pending => re-park`) lives in exactly one place.
 
-use kithara::audio::{PcmRead, ReadOutcome};
+use kithara::audio::{AudioRead, ReadOutcome};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::platform::tokio::task::spawn_blocking;
 #[cfg(target_arch = "wasm32")]
@@ -42,7 +42,7 @@ where
 /// we re-park (`continue`) rather than guess EOF from elapsed time. The pump
 /// terminates on the real `ReadOutcome::Eof`; the caller's test `timeout(...)`
 /// is the only backstop against a genuinely wedged pipeline.
-pub fn read_to_eof<R: PcmRead + ?Sized>(audio: &mut R) -> u64 {
+pub fn read_to_eof<R: AudioRead + ?Sized>(audio: &mut R) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     loop {
@@ -67,7 +67,7 @@ pub fn read_to_eof<R: PcmRead + ?Sized>(audio: &mut R) -> u64 {
 /// State-driven warmup: gates on decoded-sample COUNT (real produced state),
 /// never on elapsed (virtual-under-flash) time. Same engine-aware blocking
 /// `Pending => continue` model as [`read_to_eof`].
-pub fn read_until_samples<R: PcmRead + ?Sized>(audio: &mut R, target: u64) -> u64 {
+pub fn read_until_samples<R: AudioRead + ?Sized>(audio: &mut R, target: u64) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     while total < target {
@@ -114,7 +114,7 @@ impl ReadLimit {
 /// Native targets collapse to [`read_to_eof`]; wasm targets use the limit to
 /// survive cooperative pipeline starvation in the browser runner.
 #[cfg(target_arch = "wasm32")]
-pub fn read_for_concurrency_check<R: PcmRead + ?Sized>(audio: &mut R, limit: ReadLimit) -> u64 {
+pub fn read_for_concurrency_check<R: AudioRead + ?Sized>(audio: &mut R, limit: ReadLimit) -> u64 {
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut total = 0u64;
     let mut zero_reads = 0usize;
@@ -150,6 +150,6 @@ pub fn read_for_concurrency_check<R: PcmRead + ?Sized>(audio: &mut R, limit: Rea
 /// Native variant: drain to natural EOF (the limit is a wasm-only starvation
 /// guard).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn read_for_concurrency_check<R: PcmRead + ?Sized>(audio: &mut R, _limit: ReadLimit) -> u64 {
+pub fn read_for_concurrency_check<R: AudioRead + ?Sized>(audio: &mut R, _limit: ReadLimit) -> u64 {
     read_to_eof(audio)
 }

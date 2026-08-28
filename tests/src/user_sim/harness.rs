@@ -141,7 +141,7 @@ impl SimHarness {
             .pool(byte_pool.clone())
             .build();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(byte_pool.clone(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool()).build(),
         );
         let player = PlayerImpl::new(
             PlayerConfig::builder()

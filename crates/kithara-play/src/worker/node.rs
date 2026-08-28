@@ -1,14 +1,14 @@
 use std::mem;
 
 use kithara_audio::{
-    Fetch, PcmProducerPort, PcmSource, PreloadGate, PreparedPcmLane, TrackStep, WaitingReason,
+    AudioSource, Fetch, PreloadGate, PreparedAudioLane, ProducerPort, TrackStep, WaitingReason,
 };
-use kithara_decode::PcmChunk;
 use kithara_events::{AudioEvent, DeferredBus, Event};
 use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use kithara_signal::AudioChunk;
 use kithara_stream::{PlayheadWrite, SeekObserve};
 
 use super::{
@@ -28,7 +28,7 @@ pub(super) struct DecoderRuntime {
     pub(super) chunks_sent: usize,
 }
 
-/// Play-owned node that drives one still-concrete PCM source.
+/// Play-owned node that drives one still-concrete audio source.
 pub(crate) struct DecoderNode<S> {
     emit: Arc<DeferredBus<Event>>,
     playhead: Arc<dyn PlayheadWrite>,
@@ -38,9 +38,9 @@ pub(crate) struct DecoderNode<S> {
     source: S,
     /// Chunk displaced by a seek inside the checked tick. The scheduler shell
     /// reclaims it in `recycle` before the next tick.
-    retired_chunk: Option<PcmChunk>,
+    retired_chunk: Option<AudioChunk>,
     runtime: DecoderRuntime,
-    port: PcmProducerPort,
+    port: ProducerPort,
     engine_load: Option<Arc<EngineLoad>>,
     preload_chunks: usize,
 }
@@ -122,7 +122,7 @@ impl<S> DecoderNode<S> {
         self.maybe_emit_engine_load(now);
     }
 
-    fn record_load(&self, busy: Duration, fetch: &Fetch<PcmChunk>) {
+    fn record_load(&self, busy: Duration, fetch: &Fetch<AudioChunk>) {
         if let (Some(load), Fetch::Data { data, .. }) = (self.engine_load.as_ref(), fetch) {
             load.record(busy, data.frames(), data.spec().sample_rate.get());
         }
@@ -131,7 +131,7 @@ impl<S> DecoderNode<S> {
 
 impl<S> DecoderNode<S>
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
     fn sync_seek_epoch(&mut self) {
         if !self.seek_obs.take_decoder_seek() {
@@ -160,10 +160,10 @@ where
 
 impl<S> DecoderNode<S>
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
     pub(super) fn new(
-        lane: PreparedPcmLane<S>,
+        lane: PreparedAudioLane<S>,
         engine_load: Option<Arc<EngineLoad>>,
         service_class: Arc<AtomicServiceClass>,
     ) -> Self {
@@ -190,7 +190,7 @@ where
 
 impl<S> Node for DecoderNode<S>
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
     fn on_cancel(&mut self) {
         self.complete_preload();

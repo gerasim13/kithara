@@ -9,7 +9,7 @@ use firewheel::{
     node::ProcBuffers,
     param::smoother::SmootherConfig,
 };
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
@@ -40,7 +40,7 @@ pub(crate) struct RenderTargets<'a> {
 }
 
 pub(crate) struct RenderPass {
-    scratch_bufs: [PcmBuf; Self::SCRATCH_BUF_COUNT],
+    scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
     capacity: usize,
     gate: MixDSP,
     priming: bool,
@@ -55,7 +55,7 @@ impl RenderPass {
 
     const SCRATCH_BUF_COUNT: usize = 6;
 
-    pub(crate) fn new(pool: &PcmPool, shape: StreamShape) -> Self {
+    pub(crate) fn new(pool: &SamplePool, shape: StreamShape) -> Self {
         let mut pass = Self {
             scratch_bufs: std::array::from_fn(|_| pool.get()),
             capacity: 0,
@@ -256,7 +256,7 @@ impl RenderPass {
                 warn!(
                     max_frames,
                     held = buf.len(),
-                    "PCM pool budget cannot afford the render scratch; blocks are clamped"
+                    "sample pool budget cannot afford the render scratch; blocks are clamped"
                 );
             }
             buf.fill(0.0);

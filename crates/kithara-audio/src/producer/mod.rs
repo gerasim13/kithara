@@ -5,4 +5,4 @@ mod lane;
 
 pub use gate::PreloadGate;
 #[doc(hidden)]
-pub use lane::{PcmProducerPort, PreparedPcmLane};
+pub use lane::{PreparedAudioLane, ProducerPort};

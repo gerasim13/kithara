@@ -1,10 +1,11 @@
 use std::num::NonZeroU32;
 
 use delegate::delegate;
-use kithara_audio::{ChunkOutcome, PcmReader, ReadOutcome, ResamplerBackend, SeekOutcome};
-use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
+use kithara_audio::{AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome};
+use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
 use kithara_warp::{StretchControls, WarpConfig};
 use tracing::warn;
@@ -16,9 +17,9 @@ use crate::{
     worker::{ServiceClass, TrackPriority},
 };
 
-/// Type-erased audio resource wrapping any `PcmReader`.
+/// Type-erased audio resource wrapping any `AudioReader`.
 ///
-/// Provides a unified interface for reading decoded PCM audio
+/// Provides a unified interface for reading decoded audio
 /// regardless of the underlying source (file, HLS, custom).
 ///
 /// # Example
@@ -30,7 +31,7 @@ use crate::{
 ///
 /// let region = Region::default();
 /// let worker = PlayWorker::new(
-///     PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+///     PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
 /// );
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
@@ -51,7 +52,7 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
-    pub(crate) inner: Box<dyn PcmReader>,
+    pub(crate) inner: Box<dyn AudioReader>,
     priority: Option<TrackPriority>,
     #[field(with)]
     playback_rate: PlaybackRate,
@@ -172,7 +173,7 @@ impl Resource {
         Ok(resource)
     }
 
-    /// Create a resource from any `PcmReader`.
+    /// Create a resource from any `AudioReader`.
     ///
     /// Custom sources are fixed-rate. Stream-backed resources reuse this
     /// construction path and attach their resident Warp controls before return.
@@ -183,9 +184,9 @@ impl Resource {
     /// the queue uses to tell which track ended. `None` defaults to
     /// `"unknown"`.
     #[must_use]
-    pub fn from_reader<R: PcmReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+    pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
         let bus = reader.event_bus().clone();
-        let mut inner: Box<dyn PcmReader> = Box::new(reader);
+        let mut inner: Box<dyn AudioReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
         if let Err(e) = inner.preload() {
             warn!(src = %src, error = %e, "resource preload failed");
@@ -213,7 +214,7 @@ impl Resource {
     where
         T: StreamType<Events = EventBus> + 'static,
         B: Default + ResamplerBackend,
-        crate::RegisteredAudio<Stream<T>>: PcmReader + 'static,
+        crate::RegisteredAudio<Stream<T>>: AudioReader + 'static,
     {
         let warp_controls = Arc::clone(config.warp().stretch());
         let audio = worker.open(config).await?;
@@ -244,7 +245,7 @@ impl Resource {
     /// Safe to call multiple times (no-op if already preloaded).
     ///
     /// # Errors
-    /// Propagated from the underlying [`kithara_audio::PcmControl::preload`] if the
+    /// Propagated from the underlying [`kithara_audio::AudioControl::preload`] if the
     /// producer channel closed or the initial fill hit a decoder
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
@@ -285,9 +286,9 @@ impl Resource {
             /// Get current playback position.
             #[must_use]
             pub fn position(&self) -> Duration;
-            /// Read interleaved PCM samples.
+            /// Read interleaved samples.
             pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
-            /// Read deinterleaved (planar) PCM samples.
+            /// Read deinterleaved (planar) samples.
             pub fn read_planar<'a>(
                 &mut self,
                 output: &'a mut [&'a mut [f32]],
@@ -304,9 +305,9 @@ impl Resource {
             pub fn sync_seek(&mut self);
             /// Set the target sample rate of the audio host.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Get current PCM specification.
+            /// Get the current decoded-audio specification.
             #[must_use]
-            pub fn spec(&self) -> PcmSpec;
+            pub fn spec(&self) -> AudioSpec;
         }
     }
 }
@@ -317,7 +318,7 @@ impl Resource {
 /// Disarms the per-track cancel before moving the reader out: the live reader
 /// outlives this wrapper, so freeing the wrapper must not tear down its fetch
 /// loops. Teardown then rides the analysis run-scope cancel.
-impl From<Resource> for Box<dyn PcmReader> {
+impl From<Resource> for Box<dyn AudioReader> {
     fn from(resource: Resource) -> Self {
         let Resource {
             inner, mut cancel, ..
@@ -345,10 +346,11 @@ mod tests {
             StreamStatus,
         },
     };
-    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmSpec, TrackMetadata};
+    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_bufpool::SamplePool;
+    use kithara_decode::TrackMetadata;
     use kithara_platform::{CancelToken, sync::Arc};
+    use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
     use ringbuf::traits::{Consumer, Producer};
 
@@ -367,7 +369,7 @@ mod tests {
 
     struct EofReader {
         bus: EventBus,
-        spec: PcmSpec,
+        spec: AudioSpec,
         meta: TrackMetadata,
         position_frames: usize,
         total_frames: usize,
@@ -378,7 +380,7 @@ mod tests {
             Self {
                 bus: EventBus::default(),
                 meta: TrackMetadata::default(),
-                spec: PcmSpec::new(
+                spec: AudioSpec::new(
                     2,
                     NonZeroU32::new(Consts::SAMPLE_RATE).expect("static rate"),
                 ),
@@ -414,7 +416,7 @@ mod tests {
         }
     }
 
-    impl PcmSession for EofReader {
+    impl AudioSession for EofReader {
         fn duration(&self) -> Option<Duration> {
             let frames = u32::try_from(self.total_frames).expect("test frame count fits u32");
             Some(Duration::from_secs_f64(
@@ -429,7 +431,7 @@ mod tests {
         }
     }
 
-    impl PcmRead for EofReader {
+    impl AudioRead for EofReader {
         fn position(&self) -> Duration {
             self.position_duration()
         }
@@ -461,12 +463,12 @@ mod tests {
             })
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
 
-    impl PcmControl for EofReader {
+    impl AudioControl for EofReader {
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
             Ok(SeekOutcome::Landed {
                 target: position,
@@ -482,7 +484,7 @@ mod tests {
         Box::new(PlayerResource::new(
             resource,
             Arc::from(src),
-            &PcmPool::default(),
+            &SamplePool::default(),
         ))
     }
 
@@ -561,7 +563,7 @@ mod tests {
             )
             .expect("static block size"),
         };
-        let mut processor = PlayerNodeProcessor::new(inputs, shape, &PcmPool::default());
+        let mut processor = PlayerNodeProcessor::new(inputs, shape, &SamplePool::default());
         let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
         let mut extra = ProcExtra {
             logger,

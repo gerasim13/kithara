@@ -23,20 +23,20 @@ pub struct NodeInputs {
 /// Producer for interleaved stereo mix samples and their drop count.
 #[non_exhaustive]
 pub struct MixTapWriter {
-    pub(crate) pcm: HeapProd<f32>,
+    pub(crate) samples: HeapProd<f32>,
     pub(crate) drops: Arc<AtomicU64>,
 }
 
 impl MixTapWriter {
     #[must_use]
-    pub fn new(pcm: HeapProd<f32>, drops: Arc<AtomicU64>) -> Self {
-        Self { pcm, drops }
+    pub fn new(samples: HeapProd<f32>, drops: Arc<AtomicU64>) -> Self {
+        Self { samples, drops }
     }
 }
 
 impl From<MixTapWriter> for (HeapProd<f32>, Arc<AtomicU64>) {
     fn from(writer: MixTapWriter) -> Self {
-        (writer.pcm, writer.drops)
+        (writer.samples, writer.drops)
     }
 }
 

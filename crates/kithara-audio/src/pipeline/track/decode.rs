@@ -1,4 +1,4 @@
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 
 use super::{
@@ -31,7 +31,10 @@ impl TrackPhase for Decoding {
 }
 
 impl Track<Decoding> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let () = self.into_inner();
         if !src.readiness.source_is_ready(&src.shared_stream) {
             if !src.seek_obs.is_pending()
@@ -97,7 +100,7 @@ impl Track<Decoding> {
 }
 
 pub(super) enum DecodeStep {
-    Produced(Fetch<PcmChunk>),
+    Produced(Fetch<AudioChunk>),
     Interrupted,
     TransitionPending,
     NotReady(WaitingReason),

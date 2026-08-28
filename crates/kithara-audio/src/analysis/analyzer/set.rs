@@ -1,6 +1,6 @@
-use kithara_bufpool::PcmPool;
-use kithara_decode::PcmSpec;
+use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::AudioSpec;
 
 use super::{config::BeatAnalysisConfig, session::TrackAnalyzers};
 use crate::analysis::slots::{
@@ -16,17 +16,17 @@ where
     beat: Config<B>,
     waveform: waveform::Config,
     beat_config: Option<BeatAnalysisConfig<B>>,
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
 }
 
 impl<B> AnalyzerBuilder<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(&self, spec: PcmSpec) -> TrackAnalyzers<B> {
+    pub(crate) fn build(&self, spec: AudioSpec) -> TrackAnalyzers<B> {
         TrackAnalyzers {
-            beat: Config::build(&self.beat, spec, &self.pcm_pool),
-            waveform: waveform::build(&self.waveform, spec, &self.pcm_pool),
+            beat: Config::build(&self.beat, spec, &self.sample_pool),
+            waveform: waveform::build(&self.waveform, spec, &self.sample_pool),
             source_frames: 0,
             source_sample_rate: spec.sample_rate,
         }
@@ -80,9 +80,9 @@ where
     }
 
     #[must_use]
-    pub fn with_pcm_pool(self, pool: PcmPool) -> Self {
+    pub fn with_sample_pool(self, pool: SamplePool) -> Self {
         Self {
-            pcm_pool: pool,
+            sample_pool: pool,
             ..self
         }
     }
@@ -100,10 +100,10 @@ where
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+    use kithara_bufpool::SamplePool;
     use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
+    use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
@@ -113,18 +113,18 @@ mod tests {
     };
     use crate::analysis::beat::{BeatDetector, BeatDetectorMock, GridParams, RawBeats};
 
-    fn chunk(frames: usize, channels: u16) -> PcmChunk {
+    fn chunk(frames: usize, channels: u16) -> AudioChunk {
         let samples = vec![0.0_f32; frames * usize::from(channels)];
-        PcmChunk::new(
-            PcmMeta {
-                spec: PcmSpec {
+        AudioChunk::new(
+            AudioChunkInfo {
+                spec: AudioSpec {
                     channels,
                     sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
                 },
                 frames: u32::try_from(frames).unwrap_or(0),
                 ..Default::default()
             },
-            PcmPool::default().attach(samples),
+            SamplePool::default().attach(samples),
         )
     }
 
@@ -160,7 +160,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn finish_staged_emits_once_without_a_beat_pass() {
-        let spec = PcmSpec {
+        let spec = AudioSpec {
             channels: 2,
             sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };
@@ -177,7 +177,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn finish_staged_emits_waveform_then_waveform_plus_beat() {
-        let spec = PcmSpec {
+        let spec = AudioSpec {
             channels: 2,
             sample_rate: NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
         };

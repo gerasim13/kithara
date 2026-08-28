@@ -1,5 +1,5 @@
 mod wire {
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_events::EventBus;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
@@ -63,7 +63,7 @@ mod wire {
             grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            pcm_pool: PcmPool,
+            sample_pool: SamplePool,
             sample_rate: u32,
         },
         UnregisterPlayer {
@@ -198,7 +198,7 @@ mod wire {
 
 mod handle {
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_events::EventBus;
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_warp::BeatGridId;
@@ -209,7 +209,7 @@ mod handle {
     pub trait SessionDispatcher: Send + Sync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
 
-        /// Describe how PCM consumers hosted by this session may wake workers.
+        /// Describe how audio consumers hosted by this session may wake workers.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
         fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
@@ -327,14 +327,14 @@ mod handle {
             grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            pcm_pool: PcmPool,
+            sample_pool: SamplePool,
             sample_rate: u32,
         ) -> Result<PlayerId, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
                 bus,
                 eq_layout,
-                pcm_pool,
+                sample_pool,
                 sample_rate,
             })? {
                 Reply::PlayerRegistered(id) => Ok(id),

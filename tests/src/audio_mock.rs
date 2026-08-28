@@ -15,18 +15,21 @@ use std::{
 };
 
 use kithara::{
-    audio::{PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome},
-    decode::{DecodeError, PcmSpec, TrackMetadata},
+    audio::{
+        AudioControl, AudioRead, AudioSession, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
+    },
+    decode::{DecodeError, TrackMetadata},
     events::EventBus,
     platform::time::Duration,
+    signal::AudioSpec,
 };
 
 use crate::signal_pcm::signal::SignalFn;
 
-/// A stateful fixed-rate `PcmReader` for testing playback facades.
+/// A stateful fixed-rate `AudioReader` for testing playback facades.
 pub struct TestPcmReader {
     bus: EventBus,
-    spec: PcmSpec,
+    spec: AudioSpec,
     metadata: TrackMetadata,
     position_frames: u64,
     total_frames: u64,
@@ -45,7 +48,7 @@ impl TestPcmReader {
     /// Create a new test reader with the given spec and duration.
     /// Emits [`TEST_PCM_DEFAULT_VALUE`] for every sample.
     #[must_use]
-    pub fn new(spec: PcmSpec, duration_secs: f64) -> Self {
+    pub fn new(spec: AudioSpec, duration_secs: f64) -> Self {
         Self::with_value(spec, duration_secs, TEST_PCM_DEFAULT_VALUE)
     }
 
@@ -53,16 +56,16 @@ impl TestPcmReader {
     /// sample. Distinguishable per-track values let integration tests
     /// verify which track a rendered PCM window belongs to.
     #[must_use]
-    pub fn with_value(spec: PcmSpec, duration_secs: f64, value: f32) -> Self {
+    pub fn with_value(spec: AudioSpec, duration_secs: f64, value: f32) -> Self {
         Self::with_source(spec, duration_secs, Source::Constant(value))
     }
 
     #[must_use]
-    pub fn with_signal<S: SignalFn>(spec: PcmSpec, duration_secs: f64, signal: S) -> Self {
+    pub fn with_signal<S: SignalFn>(spec: AudioSpec, duration_secs: f64, signal: S) -> Self {
         Self::with_source(spec, duration_secs, Source::Signal(Box::new(signal)))
     }
 
-    fn with_source(spec: PcmSpec, duration_secs: f64, source: Source) -> Self {
+    fn with_source(spec: AudioSpec, duration_secs: f64, source: Source) -> Self {
         let total_frames = (f64::from(spec.sample_rate.get()) * duration_secs) as u64;
         Self {
             spec,
@@ -123,7 +126,7 @@ impl TestPcmReader {
     }
 }
 
-impl PcmSession for TestPcmReader {
+impl AudioSession for TestPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(self.frames_to_duration(self.total_frames))
     }
@@ -137,7 +140,7 @@ impl PcmSession for TestPcmReader {
     }
 }
 
-impl PcmRead for TestPcmReader {
+impl AudioRead for TestPcmReader {
     fn position(&self) -> Duration {
         self.frames_to_duration(self.position_frames)
     }
@@ -218,12 +221,12 @@ impl PcmRead for TestPcmReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for TestPcmReader {
+impl AudioControl for TestPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let target = position;
         let frame = (position.as_secs_f64() * f64::from(self.spec.sample_rate.get())) as u64;
@@ -243,17 +246,17 @@ pub struct SampleRateTrackingReader {
     bus: EventBus,
     duration: Duration,
     metadata: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl SampleRateTrackingReader {
     #[must_use]
-    pub fn new(spec: PcmSpec) -> (Self, Arc<AtomicU32>) {
+    pub fn new(spec: AudioSpec) -> (Self, Arc<AtomicU32>) {
         Self::with_duration(spec, Duration::from_secs(60))
     }
 
     #[must_use]
-    pub fn with_duration(spec: PcmSpec, duration: Duration) -> (Self, Arc<AtomicU32>) {
+    pub fn with_duration(spec: AudioSpec, duration: Duration) -> (Self, Arc<AtomicU32>) {
         let recorded = Arc::new(AtomicU32::new(0));
         let reader = Self {
             bus: EventBus::default(),
@@ -266,7 +269,7 @@ impl SampleRateTrackingReader {
     }
 }
 
-impl PcmSession for SampleRateTrackingReader {
+impl AudioSession for SampleRateTrackingReader {
     fn duration(&self) -> Option<Duration> {
         Some(self.duration)
     }
@@ -280,7 +283,7 @@ impl PcmSession for SampleRateTrackingReader {
     }
 }
 
-impl PcmRead for SampleRateTrackingReader {
+impl AudioRead for SampleRateTrackingReader {
     fn decoded_frontier(&self) -> Duration {
         Duration::ZERO
     }
@@ -306,12 +309,12 @@ impl PcmRead for SampleRateTrackingReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for SampleRateTrackingReader {
+impl AudioControl for SampleRateTrackingReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -329,7 +332,7 @@ pub struct SeekTrackingReader {
     bus: EventBus,
     metadata: TrackMetadata,
     seek_log: Arc<Mutex<Vec<u64>>>,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl SeekTrackingReader {
@@ -342,12 +345,12 @@ impl SeekTrackingReader {
                 ..TrackMetadata::default()
             },
             seek_log,
-            spec: PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
+            spec: AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
         }
     }
 }
 
-impl PcmSession for SeekTrackingReader {
+impl AudioSession for SeekTrackingReader {
     fn duration(&self) -> Option<Duration> {
         None
     }
@@ -361,7 +364,7 @@ impl PcmSession for SeekTrackingReader {
     }
 }
 
-impl PcmRead for SeekTrackingReader {
+impl AudioRead for SeekTrackingReader {
     fn position(&self) -> Duration {
         Duration::ZERO
     }
@@ -383,12 +386,12 @@ impl PcmRead for SeekTrackingReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for SeekTrackingReader {
+impl AudioControl for SeekTrackingReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let ms = u64::try_from(position.as_millis()).expect("test seek fits in u64");
         self.seek_log
@@ -404,7 +407,7 @@ impl PcmControl for SeekTrackingReader {
 
 pub struct MisreportedDurationReader {
     bus: EventBus,
-    spec: PcmSpec,
+    spec: AudioSpec,
     metadata: TrackMetadata,
     position_frames: usize,
     remaining_frames: usize,
@@ -412,7 +415,7 @@ pub struct MisreportedDurationReader {
 
 impl MisreportedDurationReader {
     #[must_use]
-    pub fn new(spec: PcmSpec, actual_frames: usize) -> Self {
+    pub fn new(spec: AudioSpec, actual_frames: usize) -> Self {
         Self {
             bus: EventBus::default(),
             metadata: TrackMetadata::default(),
@@ -423,7 +426,7 @@ impl MisreportedDurationReader {
     }
 }
 
-impl PcmSession for MisreportedDurationReader {
+impl AudioSession for MisreportedDurationReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(10))
     }
@@ -437,7 +440,7 @@ impl PcmSession for MisreportedDurationReader {
     }
 }
 
-impl PcmRead for MisreportedDurationReader {
+impl AudioRead for MisreportedDurationReader {
     fn position(&self) -> Duration {
         let frames = u64::try_from(self.position_frames).expect("test mock position non-negative");
         Duration::from_micros(frames * 1_000_000 / u64::from(self.spec.sample_rate.get()))
@@ -487,12 +490,12 @@ impl PcmRead for MisreportedDurationReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for MisreportedDurationReader {
+impl AudioControl for MisreportedDurationReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -504,13 +507,13 @@ impl PcmControl for MisreportedDurationReader {
 pub struct LiveFrontierReader {
     frontier_ns: Arc<AtomicU64>,
     bus: EventBus,
-    spec: PcmSpec,
+    spec: AudioSpec,
     metadata: TrackMetadata,
 }
 
 impl LiveFrontierReader {
     #[must_use]
-    pub fn new(spec: PcmSpec, frontier_ns: Arc<AtomicU64>) -> Self {
+    pub fn new(spec: AudioSpec, frontier_ns: Arc<AtomicU64>) -> Self {
         Self {
             bus: EventBus::default(),
             metadata: TrackMetadata::default(),
@@ -520,7 +523,7 @@ impl LiveFrontierReader {
     }
 }
 
-impl PcmSession for LiveFrontierReader {
+impl AudioSession for LiveFrontierReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(180))
     }
@@ -534,7 +537,7 @@ impl PcmSession for LiveFrontierReader {
     }
 }
 
-impl PcmRead for LiveFrontierReader {
+impl AudioRead for LiveFrontierReader {
     fn decoded_frontier(&self) -> Duration {
         Duration::from_nanos(self.frontier_ns.load(Ordering::Relaxed))
     }
@@ -558,12 +561,12 @@ impl PcmRead for LiveFrontierReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for LiveFrontierReader {
+impl AudioControl for LiveFrontierReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -589,12 +592,12 @@ pub struct FaultyPcmReader {
     bus: EventBus,
     fault: Fault,
     metadata: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl FaultyPcmReader {
     #[must_use]
-    pub fn new(spec: PcmSpec, fault: Fault) -> Self {
+    pub fn new(spec: AudioSpec, fault: Fault) -> Self {
         Self {
             bus: EventBus::default(),
             fault,
@@ -616,7 +619,7 @@ impl FaultyPcmReader {
     }
 }
 
-impl PcmSession for FaultyPcmReader {
+impl AudioSession for FaultyPcmReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(60))
     }
@@ -630,7 +633,7 @@ impl PcmSession for FaultyPcmReader {
     }
 }
 
-impl PcmRead for FaultyPcmReader {
+impl AudioRead for FaultyPcmReader {
     fn position(&self) -> Duration {
         Duration::ZERO
     }
@@ -646,12 +649,12 @@ impl PcmRead for FaultyPcmReader {
         self.outcome()
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for FaultyPcmReader {
+impl AudioControl for FaultyPcmReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         if self.fault == Fault::RefuseSeek {
             return Err(DecodeError::Io {
@@ -708,12 +711,12 @@ pub struct SeekSplitReader {
     bus: EventBus,
     counts: SeekSplitCounts,
     metadata: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl SeekSplitReader {
     #[must_use]
-    pub fn new(spec: PcmSpec) -> (Self, SeekSplitCounts) {
+    pub fn new(spec: AudioSpec) -> (Self, SeekSplitCounts) {
         let counts = SeekSplitCounts::default();
         (
             Self {
@@ -727,7 +730,7 @@ impl SeekSplitReader {
     }
 }
 
-impl PcmSession for SeekSplitReader {
+impl AudioSession for SeekSplitReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(60))
     }
@@ -741,7 +744,7 @@ impl PcmSession for SeekSplitReader {
     }
 }
 
-impl PcmRead for SeekSplitReader {
+impl AudioRead for SeekSplitReader {
     fn position(&self) -> Duration {
         Duration::ZERO
     }
@@ -763,12 +766,12 @@ impl PcmRead for SeekSplitReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for SeekSplitReader {
+impl AudioControl for SeekSplitReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         self.counts.blocking_seeks.fetch_add(1, Ordering::Relaxed);
         Ok(SeekOutcome::Landed {

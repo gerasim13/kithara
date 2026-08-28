@@ -16,7 +16,7 @@
 
 A streaming audio engine for Rust. Point it at a URL and it plays: `.m3u8`
 streams adaptively over HLS, everything else downloads progressively. One
-`Resource` type gives you a unified PCM read/seek interface. The player engine
+`Resource` type gives you a unified decoded-audio read/seek interface. The player engine
 underneath adds multi-deck mixing, crossfade, and parametric EQ for DJ and
 pro-audio apps.
 
@@ -28,7 +28,7 @@ pro-audio apps.
 - **DRM** — AES-128 decryption for protected HLS.
 
 `kithara` is the facade crate: it aggregates the engine layers
-(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `stream`, `warp`, and the
+(`audio`, `bufpool`, `decode`, `events`, `platform`, `play`, `signal`, `stream`, `warp`, and the
 feature-gated `file`/`hls`/`assets`/`net`/`storage`/`queue` pipelines) behind one
 dependency and a single `Resource` entry point. The `abr` and `drm` modules are
 available when `hls` is enabled.
@@ -38,7 +38,7 @@ available when `hls` is enabled.
 ```rust
 use kithara::audio::ReadOutcome;
 use kithara::assets::AssetStore;
-use kithara::bufpool::{BytePool, PcmPool};
+use kithara::bufpool::{BytePool, SamplePool};
 use kithara::prelude::*;
 
 let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
@@ -46,7 +46,7 @@ let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
 )?)
     .store(AssetStore::builder().build())
     .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .sample_pool(SamplePool::default())
     .build();
 let mut resource = Resource::new(config).await?;
 resource.preload().await?;
@@ -61,7 +61,7 @@ loop {
 }
 ```
 
-`Resource` is a type-erased `Box<dyn PcmReader>`: the same `read()` / `seek()`
+`Resource` is a type-erased `Box<dyn AudioReader>`: the same `read()` / `seek()`
 interface whether the source is HLS, a remote file, or a local path. Build it
 from a `ResourceConfig`; `ReadOutcome` reports `Frames` / `Pending` / `Eof`.
 The optional `EventBus` (`resource.event_bus()`) is an observability

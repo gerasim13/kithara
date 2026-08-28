@@ -1,5 +1,5 @@
 use kithara_bufpool::{BytePool, PooledOwned};
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 
 use super::AudioEffect;
 
@@ -12,7 +12,7 @@ enum StageState {
 }
 
 pub(crate) enum EffectDrainStep {
-    Produced(PcmChunk),
+    Produced(AudioChunk),
     Progress,
     Exhausted,
 }

@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara::{
-    audio::PcmReader,
+    audio::AudioReader,
     platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
@@ -46,7 +46,7 @@ impl OfflinePlayer {
         let (inputs, control) = slot_channels(SharedEq::new(0));
         let playback = Arc::clone(&control.playback);
 
-        let player_node = PlayerNode::new(inputs, kithara::bufpool::PcmPool::default());
+        let player_node = PlayerNode::new(inputs, kithara::bufpool::SamplePool::default());
         let node_id = ctx.add_node(player_node, None);
         let graph_out = ctx.graph_out_node_id();
         ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
@@ -70,7 +70,7 @@ impl OfflinePlayer {
         let pr = PlayerResource::new(
             resource,
             Arc::clone(&src),
-            &kithara::bufpool::PcmPool::default(),
+            &kithara::bufpool::SamplePool::default(),
         );
         // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
         // does when a resource crosses to the audio thread. Without it a later `seek` would move
@@ -208,7 +208,7 @@ pub enum NotificationKind {
 /// Thin wrapper around [`Resource::from_reader`] for tests.
 pub fn resource_from_reader<R>(reader: R) -> Resource
 where
-    R: PcmReader + 'static,
+    R: AudioReader + 'static,
 {
     Resource::from_reader(reader, None)
 }
@@ -218,7 +218,7 @@ where
 /// on the bus.
 pub fn resource_from_reader_with_src<R, S>(reader: R, src: S) -> Resource
 where
-    R: PcmReader + 'static,
+    R: AudioReader + 'static,
     S: Into<Arc<str>>,
 {
     Resource::from_reader(reader, Some(src.into()))

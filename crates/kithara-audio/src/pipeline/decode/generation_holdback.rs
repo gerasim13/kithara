@@ -1,4 +1,4 @@
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_signal::{AudioChunk, AudioSpec};
 
 use super::{
     DecoderGeneration, Holdback, StageFailure, StageOutput, StageProgress, StageResult,
@@ -6,7 +6,7 @@ use super::{
 };
 
 impl DecoderGeneration {
-    pub(crate) fn prepare_holdback(&mut self, spec: PcmSpec, join_frames: u64) -> StageResult {
+    pub(crate) fn prepare_holdback(&mut self, spec: AudioSpec, join_frames: u64) -> StageResult {
         self.holdback = None;
         let Some(slots) = usize::try_from(join_frames)
             .ok()
@@ -23,24 +23,24 @@ impl DecoderGeneration {
             spec,
         };
         if let Some(failure) = self.validate_staged_holdback(holdback) {
-            return StageResult::Invalid(failure);
+            return StageResult::Invalid(Box::new(failure));
         }
         self.holdback = Some(holdback);
         self.drain_holdback()
     }
 
-    pub(crate) fn push_holdback(&mut self, chunk: PcmChunk) -> StageResult {
+    pub(crate) fn push_holdback(&mut self, chunk: AudioChunk) -> StageResult {
         if self.gapless.has_output() {
-            return StageResult::Invalid(stage_failure(
+            return StageResult::Invalid(Box::new(stage_failure(
                 chunk,
                 "transition holdback has undrained gapless output",
-            ));
+            )));
         }
         if matches!(self.holdback_progress(), StageProgress::Ready) {
-            return StageResult::Invalid(stage_failure(
+            return StageResult::Invalid(Box::new(stage_failure(
                 chunk,
                 "transition holdback is already ready",
-            ));
+            )));
         }
         self.gapless.push(chunk);
         self.drain_holdback()
@@ -50,7 +50,7 @@ impl DecoderGeneration {
         match self.pump_holdback() {
             StageResult::Ready => StageOutput::Output(self.staged.pop_front()),
             StageResult::NeedMore => StageOutput::Output(None),
-            StageResult::Invalid(failure) => StageOutput::Invalid(failure),
+            StageResult::Invalid(failure) => StageOutput::Invalid(*failure),
         }
     }
 
@@ -103,7 +103,7 @@ impl DecoderGeneration {
                 return StageResult::NeedMore;
             };
             if let Some(failure) = self.push_holdback_chunk(chunk) {
-                return StageResult::Invalid(failure);
+                return StageResult::Invalid(Box::new(failure));
             }
         }
     }
@@ -134,7 +134,7 @@ impl DecoderGeneration {
         }
     }
 
-    fn push_holdback_chunk(&mut self, chunk: PcmChunk) -> Option<StageFailure> {
+    fn push_holdback_chunk(&mut self, chunk: AudioChunk) -> Option<StageFailure> {
         let Some(holdback) = self.holdback else {
             return Some(stage_failure(chunk, "transition holdback was not prepared"));
         };

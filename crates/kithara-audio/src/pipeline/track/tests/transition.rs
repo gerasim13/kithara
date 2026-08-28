@@ -1,10 +1,8 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_decode::{
-    DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode, PcmChunk, duration_for_frames,
-    frames_for_duration,
-};
+use kithara_decode::{DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
 use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
+use kithara_signal::AudioChunk;
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, VariantPromotion,
     VariantReaderPlan, VariantTransition, VariantTransitionId,
@@ -22,7 +20,7 @@ use crate::{
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
         track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
     },
-    traits::{PcmSource, PcmSourceExt},
+    traits::{AudioSource, AudioSourceExt},
 };
 
 fn incoming_plan() -> VariantReaderPlan {
@@ -32,14 +30,21 @@ fn incoming_plan() -> VariantReaderPlan {
 
 fn incoming_plan_at(frame: u64) -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
-    request_incoming_plan_at(&abr, duration_for_frames(Consts::SAMPLE_RATE, frame))
+    request_incoming_plan_at(
+        &abr,
+        Consts::spec(Consts::SAMPLE_RATE)
+            .duration_for(frame)
+            .expect("incoming fixture landing fits Duration"),
+    )
 }
 
 fn abandoned_incoming_plan_at(frame: u64) -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     request_incoming_plan_with_disposition(
         &abr,
-        duration_for_frames(Consts::SAMPLE_RATE, frame),
+        Consts::spec(Consts::SAMPLE_RATE)
+            .duration_for(frame)
+            .expect("abandoned fixture landing fits Duration"),
         OutgoingDisposition::Abandoned,
     )
 }
@@ -81,7 +86,7 @@ fn request_incoming_plan_with_disposition(
     VariantReaderPlan::new(transition, media_info(1), landing)
 }
 
-fn assert_route_signal(chunk: &PcmChunk, expected_offset: u64) {
+fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
     assert_eq!(chunk.meta.frame_offset, expected_offset);
     for (frame, samples) in chunk.samples.chunks_exact(2).enumerate() {
         let absolute = expected_offset.saturating_add(u64::try_from(frame).unwrap_or(u64::MAX));
@@ -273,7 +278,11 @@ async fn raw_decode_head_is_independent_of_downstream_frame_shape() {
             frame: raw_head.0,
             rate: raw_head.1,
         }),
-        Some(duration_for_frames(Consts::SAMPLE_RATE, raw_frames))
+        Some(
+            Consts::spec(Consts::SAMPLE_RATE)
+                .duration_for(raw_frames)
+                .expect("raw fixture landing fits Duration"),
+        )
     );
 }
 
@@ -363,10 +372,12 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier() {
         .meta
         .frame_offset
         .saturating_add(u64::from(chunk.meta.frames));
-    let join_frames = u64::try_from(frames_for_duration(
-        Consts::SAMPLE_RATE,
-        Duration::from_millis(20),
-    ))
+    let join_frames = u64::try_from(
+        Consts::spec(Consts::SAMPLE_RATE)
+            .frames_for(Duration::from_millis(20))
+            .expect("join fixture duration fits frame count")
+            .get(),
+    )
     .unwrap_or(u64::MAX);
     let (retained_first, retained_end, retained_spec) = fixture
         .source
@@ -448,7 +459,11 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build() {
     assert!(fixture.source.decode.incoming_is_preparing(transition));
     assert_eq!(
         fixture.control.landing(),
-        Some(duration_for_frames(Consts::SAMPLE_RATE, cut))
+        Some(
+            Consts::spec(Consts::SAMPLE_RATE)
+                .duration_for(cut)
+                .expect("retained fixture landing fits Duration"),
+        )
     );
     assert_eq!(
         fixture.source.decode.incoming_frontier(),
@@ -477,10 +492,15 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
     assert!(fixture.source.decode.active().staged_span().is_none());
     let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
-    let incoming_first = u64::try_from(frames_for_duration(
-        Consts::SAMPLE_RATE,
-        duration_for_frames(Consts::SAMPLE_RATE, cut),
-    ))
+    let spec = Consts::spec(Consts::SAMPLE_RATE);
+    let incoming_first = u64::try_from(
+        spec.frames_for(
+            spec.duration_for(cut)
+                .expect("finite fixture cut fits Duration"),
+        )
+        .expect("finite fixture landing fits frame count")
+        .get(),
+    )
     .unwrap_or(u64::MAX);
     assert_eq!(incoming_first, 255);
     assert!(incoming_first < cut);
@@ -588,7 +608,9 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm() {
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
     assert!(fixture.source.decode.active().staged_span().is_none());
     let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
-    let landing = duration_for_frames(Consts::SAMPLE_RATE, cut);
+    let landing = Consts::spec(Consts::SAMPLE_RATE)
+        .duration_for(cut)
+        .expect("abandoned fixture landing fits Duration");
     let plan = abandoned_incoming_plan_at(cut);
     let transition = plan.transition();
     assert_eq!(

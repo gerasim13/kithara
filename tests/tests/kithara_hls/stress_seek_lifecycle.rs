@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
@@ -40,7 +40,7 @@ impl Consts {
 /// Both are permanent for this `Audio` instance, so the stress test treats
 /// them identically: end of this read loop. A terminal Err counts against
 /// the `dead_seeks` tolerance budget (1% of `STRESS_SEEK_ITERATIONS`).
-fn read_with_retry<R: PcmRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usize, bool) {
+fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usize, bool) {
     for retry in 0..Consts::MAX_ZERO_READS {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
@@ -165,7 +165,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

@@ -63,7 +63,8 @@ async fn spawn_file_instance(
     let config = AudioConfig::<File>::for_stream(file_config)
         .hint(("mp3").to_string())
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker.open(config).await.expect("create File audio");
 
     spawn_blocking(move || {
@@ -118,7 +119,8 @@ async fn spawn_hls_instance(
         .media_info(wav_info)
         .build();
 
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker.open(config).await.expect("create HLS audio");
 
     let handle = spawn_blocking(move || {

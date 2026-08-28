@@ -23,11 +23,11 @@ impl TrackIdGen {
     }
 }
 
-/// Opaque PCM producer task erased by `kithara-play` at registration.
+/// Opaque playback task erased by `kithara-play` at registration.
 #[doc(hidden)]
-pub(crate) struct PcmTask(Box<dyn Node>);
+pub(crate) struct Task(Box<dyn Node>);
 
-impl PcmTask {
+impl Task {
     /// Erase one concrete worker node at the scheduler registration boundary.
     #[must_use]
     pub(crate) fn new<N>(node: N) -> Self
@@ -38,21 +38,21 @@ impl PcmTask {
     }
 }
 
-/// Identifier of one registered PCM task.
+/// Identifier of one registered playback task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
-pub(crate) struct PcmTaskId(TrackId);
+pub(crate) struct TaskId(TrackId);
 
-/// Registration failure reported by the low-level PCM scheduler.
+/// Registration failure reported by the playback scheduler.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[doc(hidden)]
 #[non_exhaustive]
-pub(crate) enum PcmSchedulerError {
+pub(crate) enum SchedulerError {
     /// The configured task capacity has been reached.
-    #[error("PCM scheduler capacity {capacity} reached")]
+    #[error("playback scheduler capacity {capacity} reached")]
     Capacity { capacity: usize },
     /// The scheduler loop has already stopped.
-    #[error("PCM scheduler stopped")]
+    #[error("playback scheduler stopped")]
     Stopped,
 }
 
@@ -62,11 +62,11 @@ pub(crate) enum PcmSchedulerError {
 /// shut down the worker.
 #[derive(Clone)]
 #[doc(hidden)]
-pub(crate) struct PcmWake {
+pub(crate) struct Wake {
     inner: SchedulerHandle<Box<dyn Node>>,
 }
 
-impl PcmWake {
+impl Wake {
     delegate::delegate! {
         to self.inner {
             /// Wake immediately from an off-real-time thread.
@@ -78,7 +78,7 @@ impl PcmWake {
     }
 }
 
-impl kithara_stream::WorkerWake for PcmWake {
+impl kithara_stream::WorkerWake for Wake {
     fn wake(&self) {
         Self::wake(self);
     }
@@ -89,36 +89,36 @@ impl kithara_stream::WorkerWake for PcmWake {
 }
 
 /// Private scheduler state owned exclusively by [`super::super::PlayWorker`].
-pub(crate) struct PcmScheduler {
+pub(crate) struct PlaybackScheduler {
     active: AtomicUsize,
     capacity: NonZeroUsize,
     id_gen: TrackIdGen,
     inner: SchedulerHandle<Box<dyn Node>>,
 }
 
-impl PcmScheduler {
+impl PlaybackScheduler {
     /// Register one opaque task without exposing the generic runtime.
     ///
     /// # Errors
     ///
-    /// Returns [`PcmSchedulerError::Capacity`] when the configured task limit
-    /// has been reached, or [`PcmSchedulerError::Stopped`] after the scheduler
+    /// Returns [`SchedulerError::Capacity`] when the configured task limit
+    /// has been reached, or [`SchedulerError::Stopped`] after the scheduler
     /// loop has stopped.
-    pub(crate) fn register(&self, task: PcmTask) -> Result<PcmTaskId, PcmSchedulerError> {
+    pub(crate) fn register(&self, task: Task) -> Result<TaskId, SchedulerError> {
         self.active
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < self.capacity.get()).then_some(active + 1)
             })
-            .map_err(|_| PcmSchedulerError::Capacity {
+            .map_err(|_| SchedulerError::Capacity {
                 capacity: self.capacity.get(),
             })?;
 
         let id = self.id_gen.next();
         if !self.inner.register(id, task.0) {
             self.active.fetch_sub(1, Ordering::AcqRel);
-            return Err(PcmSchedulerError::Stopped);
+            return Err(SchedulerError::Stopped);
         }
-        Ok(PcmTaskId(id))
+        Ok(TaskId(id))
     }
 
     /// Start the existing scheduler loop for a play-owned worker.
@@ -140,20 +140,23 @@ impl PcmScheduler {
     }
 
     /// Remove one task without affecting any sibling registration.
-    pub(crate) fn unregister(&self, task_id: PcmTaskId) {
+    pub(crate) fn unregister(&self, task_id: TaskId) {
         self.inner.unregister(task_id.0);
         let decremented = self
             .active
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 active.checked_sub(1)
             });
-        debug_assert!(decremented.is_ok(), "PCM scheduler registration underflow");
+        debug_assert!(
+            decremented.is_ok(),
+            "playback scheduler registration underflow"
+        );
     }
 
     /// Create the restricted wake capability passed into audio preparation.
     #[must_use]
-    pub(crate) fn wake_handle(&self) -> PcmWake {
-        PcmWake {
+    pub(crate) fn wake_handle(&self) -> Wake {
+        Wake {
             inner: self.inner.clone(),
         }
     }
@@ -163,7 +166,7 @@ impl PcmScheduler {
     }
 }
 
-impl Drop for PcmScheduler {
+impl Drop for PlaybackScheduler {
     fn drop(&mut self) {
         self.shutdown();
     }
@@ -183,9 +186,9 @@ mod tests {
         }
     }
 
-    fn scheduler(capacity: usize) -> PcmScheduler {
-        PcmScheduler::start(
-            "kithara-pcm-scheduler-test".into(),
+    fn scheduler(capacity: usize) -> PlaybackScheduler {
+        PlaybackScheduler::start(
+            "kithara-playback-scheduler-test".into(),
             CancelToken::never(),
             NonZeroUsize::new(capacity).expect("test capacity is non-zero"),
         )
@@ -209,11 +212,11 @@ mod tests {
     fn registration_reports_capacity_exhaustion() {
         let scheduler = scheduler(1);
         let id = scheduler
-            .register(PcmTask::new(ParkedNode))
+            .register(Task::new(ParkedNode))
             .expect("first task must register");
-        let result = scheduler.register(PcmTask::new(ParkedNode));
+        let result = scheduler.register(Task::new(ParkedNode));
 
-        assert_eq!(result, Err(PcmSchedulerError::Capacity { capacity: 1 }));
+        assert_eq!(result, Err(SchedulerError::Capacity { capacity: 1 }));
         scheduler.unregister(id);
     }
 
@@ -222,21 +225,21 @@ mod tests {
         let scheduler = scheduler(1);
         scheduler.shutdown();
 
-        let result = scheduler.register(PcmTask::new(ParkedNode));
+        let result = scheduler.register(Task::new(ParkedNode));
 
-        assert_eq!(result, Err(PcmSchedulerError::Stopped));
+        assert_eq!(result, Err(SchedulerError::Stopped));
     }
 
     #[kithara::test]
     fn unregister_releases_capacity() {
         let scheduler = scheduler(1);
         let first = scheduler
-            .register(PcmTask::new(ParkedNode))
+            .register(Task::new(ParkedNode))
             .expect("first task must register");
         scheduler.unregister(first);
 
         let second = scheduler
-            .register(PcmTask::new(ParkedNode))
+            .register(Task::new(ParkedNode))
             .expect("unregister must release capacity");
         scheduler.unregister(second);
     }

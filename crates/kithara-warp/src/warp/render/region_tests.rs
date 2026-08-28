@@ -1,8 +1,8 @@
 use std::num::NonZero;
 
-use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_bufpool::SamplePool;
 use kithara_platform::sync::Arc;
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
@@ -38,26 +38,26 @@ fn seg(start: usize, end: usize, ratio: f64) -> GridSegment {
     GridSegment::new(u64_of(start), u64_of(end), ratio)
 }
 
-fn spec() -> PcmSpec {
+fn spec() -> AudioSpec {
     let Some(sample_rate) = NonZero::new(SR) else {
         panic!("test sample rate must be non-zero");
     };
-    PcmSpec {
+    AudioSpec {
         sample_rate,
         channels: u16::try_from(CH).unwrap_or(2),
     }
 }
 
-fn chunk(samples: &[f32], frame_offset: u64) -> PcmChunk {
+fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
     let frames = samples.len() / CH;
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec: spec(),
             frames: u32::try_from(frames).unwrap_or(0),
             frame_offset,
             ..Default::default()
         },
-        PcmPool::default().attach(samples.to_vec()),
+        SamplePool::default().attach(samples.to_vec()),
     )
 }
 
@@ -99,7 +99,7 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = WarpRenderer::new(controls, spec(), PcmPool::default());
+    let mut fx = WarpRenderer::new(controls, spec(), SamplePool::default());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {

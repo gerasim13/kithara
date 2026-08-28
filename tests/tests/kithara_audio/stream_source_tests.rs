@@ -4,14 +4,14 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{
-        AudioConfig, ChunkOutcome, ConsumerWakeMode, PcmControl, PcmRead, PcmSession, ReadOutcome,
-        RubatoBackend,
+        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
+        ReadOutcome, RubatoBackend,
     },
     bufpool::Region,
-    decode::PcmChunk,
     events::{AudioEvent, DecoderChangeCause, DecoderEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
+    signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     warp::{StretchControls, StretchKind, WarpConfig},
 };
@@ -62,7 +62,7 @@ async fn wait_for_frames(
 async fn wait_for_chunk(
     mut audio: RegisteredAudio<Stream<MemStream>>,
     budget: Duration,
-) -> (RegisteredAudio<Stream<MemStream>>, PcmChunk) {
+) -> (RegisteredAudio<Stream<MemStream>>, AudioChunk) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
         let (next_audio, outcome) = blocking_audio(audio, |audio| audio.next_chunk()).await;
@@ -121,8 +121,9 @@ async fn drain_to_eof(
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn basic_decode_to_eof() {
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let config = wav_stream(8_000);
     let audio = worker.open(config).await.expect("audio construction");
 
@@ -164,7 +165,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
                 .build(),
         )
         .preload_chunks(NonZeroUsize::new(PRELOAD_CHUNKS).expect("preload count is non-zero"))
-        .pcm_buffer_chunks(RING_CHUNKS)
+        .audio_buffer_chunks(RING_CHUNKS)
         .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .hint("wav".to_owned())
         .build();
@@ -175,8 +176,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
         .warp(WarpConfig::builder().stretch(controls).build())
         .build();
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
     let gate = audio
@@ -253,8 +255,9 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
 )]
 async fn seek_during_active_decode_completes_without_hang() {
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let config = wav_stream(44_100 * 3);
     let audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
@@ -320,8 +323,9 @@ async fn rapid_seeks_via_timeline_all_complete() {
     const SEEK_COUNT: usize = 6;
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let config = wav_stream(44_100 * 4);
     let mut audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
@@ -460,8 +464,9 @@ async fn rapid_seeks_via_timeline_all_complete() {
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn truncated_wav_surfaces_decode_error_or_eof() {
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let mut wav = create_test_wav(44_100, 44_100, 2);
     wav.truncate(wav.len() / 4);
     let source = MemorySource::new(wav);

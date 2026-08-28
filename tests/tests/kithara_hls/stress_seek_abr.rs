@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{
@@ -99,8 +99,9 @@ async fn stress_seek_during_abr_switch_real_decoder(
     info!(label, path, "Opening real stream");
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder()
@@ -201,8 +202,9 @@ async fn seek_sequence_from_log_real_stream(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder()

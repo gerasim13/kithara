@@ -1,4 +1,4 @@
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 
 use super::{EqBandConfig, GainDb, IsolatorEq};
 use crate::effects::AudioEffect;
@@ -58,7 +58,7 @@ impl EqEffect {
 }
 
 impl AudioEffect for EqEffect {
-    fn flush(&mut self) -> Option<PcmChunk> {
+    fn flush(&mut self) -> Option<AudioChunk> {
         None
     }
 
@@ -66,7 +66,7 @@ impl AudioEffect for EqEffect {
         0
     }
 
-    fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let channels = self.channels as usize;
         if channels == 0 {
             return Some(chunk);
@@ -94,8 +94,8 @@ impl AudioEffect for EqEffect {
 mod tests {
     use std::{f32::consts::PI, num::NonZeroU32};
 
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmMeta, PcmSpec};
+    use kithara_bufpool::SamplePool;
+    use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_test_utils::kithara;
 
     use super::{super::*, *};
@@ -103,18 +103,18 @@ mod tests {
     struct EqFixture;
 
     impl EqFixture {
-        fn spec(channels: u16, hz: u32) -> PcmSpec {
-            PcmSpec::new(channels, NonZeroU32::new(hz).expect("test rate"))
+        fn spec(channels: u16, hz: u32) -> AudioSpec {
+            AudioSpec::new(channels, NonZeroU32::new(hz).expect("test rate"))
         }
     }
 
-    fn test_chunk(spec: PcmSpec, pcm: Vec<f32>) -> PcmChunk {
-        PcmChunk::new(
-            PcmMeta {
+    fn test_chunk(spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+        AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            PcmPool::default().attach(pcm),
+            SamplePool::default().attach(samples),
         )
     }
 
@@ -128,14 +128,14 @@ mod tests {
         let _ = eq.process(test_chunk(spec, warmup));
 
         let num_frames: u16 = 44100;
-        let pcm: Vec<f32> = (0..num_frames)
+        let samples: Vec<f32> = (0..num_frames)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
 
         let input_rms: f32 =
-            (pcm.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
+            (samples.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(spec, pcm);
+        let chunk = test_chunk(spec, samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -183,8 +183,8 @@ mod tests {
 
         eq.set_gain(0, GainDb::MAX);
         let spec = EqFixture::spec(2, 44100);
-        let pcm = vec![0.5f32; 256];
-        let chunk = test_chunk(spec, pcm);
+        let samples = vec![0.5f32; 256];
+        let chunk = test_chunk(spec, samples);
         let _ = eq.process(chunk);
 
         eq.reset();
@@ -371,8 +371,8 @@ mod tests {
             eq.set_gain(band, GainDb::from(gain_db));
         }
 
-        let pcm = vec![0.5f32; sample_len];
-        let chunk = test_chunk(spec, pcm);
+        let samples = vec![0.5f32; sample_len];
+        let chunk = test_chunk(spec, samples);
         let result = eq.process(chunk);
         assert!(result.is_some());
         assert_eq!(result.unwrap().samples.len(), sample_len);
@@ -401,8 +401,8 @@ mod tests {
                 eq.set_gain(band, gain);
             }
 
-            let pcm: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
-            let chunk = test_chunk(spec, pcm);
+            let samples: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
+            let chunk = test_chunk(spec, samples);
             let output = eq.process(chunk).unwrap();
             for (i, &s) in output.samples.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
@@ -418,11 +418,11 @@ mod tests {
         eq.set_gain(0, GainDb::MAX);
         converge_smoother(&mut eq, spec);
 
-        let mut pcm = vec![0.5f32; 256];
-        pcm[10] = f32::NAN;
-        pcm[20] = f32::INFINITY;
-        pcm[30] = f32::NEG_INFINITY;
-        let chunk = test_chunk(spec, pcm);
+        let mut samples = vec![0.5f32; 256];
+        samples[10] = f32::NAN;
+        samples[20] = f32::INFINITY;
+        samples[30] = f32::NEG_INFINITY;
+        let chunk = test_chunk(spec, samples);
         let output = eq.process(chunk).unwrap();
 
         for (i, &s) in output.samples.iter().enumerate() {
@@ -449,8 +449,8 @@ mod tests {
             eq.set_gain(1, opposite);
             eq.set_gain(2, gain);
 
-            let pcm: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
-            let chunk = test_chunk(spec, pcm);
+            let samples: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
+            let chunk = test_chunk(spec, samples);
             let output = eq.process(chunk).unwrap();
             for &s in &output.samples[..] {
                 assert!(s.is_finite());
@@ -579,10 +579,10 @@ mod tests {
         );
     }
 
-    fn converge_smoother(eq: &mut EqEffect, spec: PcmSpec) {
+    fn converge_smoother(eq: &mut EqEffect, spec: AudioSpec) {
         let frames = (spec.sample_rate.get() as usize) / 5;
-        let pcm = vec![0.0f32; frames * spec.channels as usize];
-        let chunk = test_chunk(spec, pcm);
+        let samples = vec![0.0f32; frames * spec.channels as usize];
+        let chunk = test_chunk(spec, samples);
         let _ = eq.process(chunk);
     }
 
@@ -590,17 +590,18 @@ mod tests {
         clippy::cast_precision_loss,
         reason = "frame count and index are small integers"
     )]
-    fn measure_sine_gain(eq: &mut EqEffect, freq_hz: f32, spec: PcmSpec) -> f32 {
+    fn measure_sine_gain(eq: &mut EqEffect, freq_hz: f32, spec: AudioSpec) -> f32 {
         let num_frames = 44100;
-        let mut pcm = Vec::with_capacity(num_frames);
+        let mut samples = Vec::with_capacity(num_frames);
         for i in 0..num_frames {
             let sample = (2.0 * PI * freq_hz * i as f32 / spec.sample_rate.get() as f32).sin();
-            pcm.push(sample);
+            samples.push(sample);
         }
 
-        let input_rms: f32 = (pcm.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
+        let input_rms: f32 =
+            (samples.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
 
-        let chunk = test_chunk(spec, pcm);
+        let chunk = test_chunk(spec, samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 

@@ -209,6 +209,7 @@ kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-queue = { workspace = true, optional = true, default-features = false }
 kithara-resampler = { workspace = true, default-features = false }
+kithara-signal = { workspace = true }
 kithara-storage = { workspace = true, optional = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }

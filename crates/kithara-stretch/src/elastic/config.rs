@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 
 use bon::bon;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use num_traits::{Float, ToPrimitive};
 
 use super::{ElasticError, ElasticRateEnvelope};
@@ -70,16 +70,16 @@ pub struct ElasticConfig {
     /// Selected compiled implementation.
     #[field(get(copy))]
     backend: StretchKind,
-    /// Shared PCM pool used by engines that need planar scratch.
+    /// Shared sample pool used by engines that need planar scratch.
     #[field(get)]
-    pool: PcmPool,
+    pool: SamplePool,
     #[field(get(copy), vis = "pub(crate)")]
     shape: ElasticShape,
 }
 
 #[bon]
 impl ElasticConfig {
-    /// Builds a validated preparation config with its shared PCM pool.
+    /// Builds a validated preparation config with its shared sample pool.
     ///
     /// # Errors
     /// Returns [`ElasticError`] when a scalar is zero, the requested rate
@@ -92,7 +92,7 @@ impl ElasticConfig {
     )]
     fn new(
         #[builder(default)] backend: StretchKind,
-        pool: PcmPool,
+        pool: SamplePool,
         sample_rate: u32,
         channels: usize,
         max_source_frames: usize,
@@ -106,11 +106,7 @@ impl ElasticConfig {
         if sample_rate == 0 {
             return Err(ElasticError::InvalidSampleRate);
         }
-        let channels = frame_count(
-            channels,
-            ElasticError::InvalidChannelCount,
-            ElasticError::ChannelCountOutOfRange,
-        )?;
+        let channels = channel_count(channels)?;
         let max_source_frames = frame_count(
             max_source_frames,
             ElasticError::InvalidSourceFrameLimit,
@@ -307,7 +303,16 @@ fn simplest_fraction(
     ))
 }
 
-/// Backends address blocks and channels with `i32`, so every prepared count is
+/// [`kithara_signal::AudioSpec`] represents channel counts with `u16`.
+fn channel_count(value: usize) -> Result<usize, ElasticError> {
+    if value == 0 {
+        return Err(ElasticError::InvalidChannelCount);
+    }
+    u16::try_from(value).map_err(|_| ElasticError::ChannelCountOutOfRange(value))?;
+    Ok(value)
+}
+
+/// Backends address frame blocks with `i32`, so every prepared count is
 /// positive and representable there.
 fn frame_count(
     value: usize,
@@ -394,7 +399,7 @@ mod tests {
             ),
         ] {
             let actual = ElasticConfig::builder()
-                .pool(PcmPool::default())
+                .pool(SamplePool::default())
                 .sample_rate(sample_rate)
                 .channels(channels)
                 .max_source_frames(max_source_frames)
@@ -408,7 +413,7 @@ mod tests {
     #[kithara::test]
     fn config_defaults_to_the_common_practical_rate_envelope() {
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(960)
@@ -425,7 +430,7 @@ mod tests {
     #[kithara::test]
     fn config_intersects_the_rate_policy_with_common_and_prepared_limits() {
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(2)
@@ -442,7 +447,7 @@ mod tests {
     #[kithara::test]
     fn config_rejects_a_rate_envelope_without_a_representable_request() {
         let result = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(4)
@@ -459,7 +464,7 @@ mod tests {
     #[kithara::test]
     fn config_rejects_a_continuous_window_without_a_discrete_request() {
         let result = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(1)
@@ -479,7 +484,7 @@ mod tests {
     #[kithara::test]
     fn config_preserves_a_continuous_window_with_a_discrete_request() {
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(2)
@@ -499,7 +504,7 @@ mod tests {
     fn config_accepts_a_request_on_the_tolerated_ulp_boundary() {
         let boundary = 0.75_f64.next_up();
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(3)
@@ -514,7 +519,7 @@ mod tests {
     #[kithara::test]
     fn config_accounts_for_rounding_the_request_rate() {
         let config = ElasticConfig::builder()
-            .pool(PcmPool::default())
+            .pool(SamplePool::default())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(2)

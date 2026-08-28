@@ -1,7 +1,7 @@
 use std::fmt;
 
 use bon::Builder;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::BeatGridId;
 
@@ -24,8 +24,8 @@ pub struct EngineConfig {
     /// Optional pre-bound dispatcher for isolated harnesses. Production
     /// engines receive their session when the owning Player enters a Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
-    /// PCM buffer pool for audio-thread scratch buffers.
-    pub(crate) pcm_pool: PcmPool,
+    /// Sample pool for audio-thread scratch buffers.
+    pub(crate) sample_pool: SamplePool,
     /// EQ band layout per player. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
@@ -47,7 +47,7 @@ impl fmt::Debug for EngineConfig {
             .field("channels", &self.channels)
             .field("sample_rate", &self.sample_rate)
             .field("max_slots", &self.max_slots)
-            .field("pcm_pool", &self.pcm_pool)
+            .field("sample_pool", &self.sample_pool)
             .finish_non_exhaustive()
     }
 }

@@ -6,8 +6,9 @@ use kithara_apple::audio_toolbox::{
     AudioToolboxError, SingleAudioBufferList, audio_format_get_property,
     audio_format_get_property_info, pod_from_prefix,
 };
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
+use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
 use super::{
@@ -23,7 +24,7 @@ use crate::{
     codec::{CodecPriming, FrameCodec},
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::{DecoderTrackInfo, PcmSpec},
+    types::{DecoderTrackInfo, checked_audio_spec},
 };
 
 /// Frame-level codec wrapping Apple's `AudioConverter`.
@@ -38,7 +39,7 @@ pub(crate) struct AppleCodec {
     /// the post-first-chunk refresh changes from the init query (AAC
     /// reports priming only after consuming one input packet).
     last_prime_info: Option<kithara_apple::audio_toolbox::AudioConverterPrimeInfo>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     /// True once a source-rate-changing converter has reported no more
     /// SRC tail frames after true EOF.
     eof_drained: bool,
@@ -70,7 +71,7 @@ pub(crate) struct AppleCodec {
 impl AppleCodec {
     const SRC_OUTPUT_MARGIN_FRAMES: u32 = 1;
 
-    fn drain_eof(&mut self, out: &mut PcmBuf) -> DecodeResult<u32> {
+    fn drain_eof(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
         if !self.needs_src_eof_drain() || self.eof_drained {
             out.clear();
             return Ok(0);
@@ -93,7 +94,7 @@ impl AppleCodec {
         )
     }
 
-    fn fill_converter(&mut self, out: &mut PcmBuf, target_frames: u32) -> DecodeResult<u32> {
+    fn fill_converter(&mut self, out: &mut SampleBuffer, target_frames: u32) -> DecodeResult<u32> {
         if target_frames == 0 {
             out.clear();
             return Ok(0);
@@ -152,7 +153,7 @@ impl AppleCodec {
         } = build_input_format(track)?;
         let input_bytes_per_packet = input_format.bytes_per_packet;
         let output_sample_rate = resolve_output_sample_rate(track.sample_rate, target_output_rate);
-        let spec = PcmSpec::checked(track.channels, output_sample_rate, "apple.codec.output")?;
+        let spec = checked_audio_spec(track.channels, output_sample_rate, "apple.codec.output")?;
         let output_format =
             build_pcm_output_format(track.sample_rate, track.channels, target_output_rate);
 
@@ -285,7 +286,7 @@ impl FrameCodec for AppleCodec {
         frame_data: &[u8],
         _pts: Duration,
         packet_desc: &[u8],
-        out: &mut PcmBuf,
+        out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
             return self.drain_eof(out);
@@ -358,7 +359,7 @@ impl FrameCodec for AppleCodec {
         apple_codec_priming(codec)
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -954,7 +955,7 @@ mod output_rate_tests {
 
 #[cfg(test)]
 mod aac_lc_decode_tests {
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_platform::time::Duration;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
@@ -1005,7 +1006,7 @@ mod aac_lc_decode_tests {
 
     fn decode_frames(
         codec: &mut AppleCodec,
-        pool: &PcmPool,
+        pool: &SamplePool,
         seg: &[u8],
         frames: &[Fmp4Frame],
     ) -> u64 {
@@ -1025,7 +1026,7 @@ mod aac_lc_decode_tests {
         total
     }
 
-    fn drain_eof(codec: &mut AppleCodec, pool: &PcmPool) -> u64 {
+    fn drain_eof(codec: &mut AppleCodec, pool: &SamplePool) -> u64 {
         let mut total = 0_u64;
         for _ in 0..Consts::MAX_EOF_DRAIN_CALLS {
             let mut buf = pool.get();
@@ -1060,7 +1061,7 @@ mod aac_lc_decode_tests {
             .collect();
         assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
-        let pool = PcmPool::default();
+        let pool = SamplePool::default();
         let mut codec = AppleCodec::open_with_config(&track, false, None)
             .expect("BUG: open Apple AAC-LC codec");
         let mut pcm = Vec::new();
@@ -1103,7 +1104,7 @@ mod aac_lc_decode_tests {
             "segment yielded too few AAC frames for resampled decode"
         );
 
-        let pool = PcmPool::new(2, 8192);
+        let pool = SamplePool::new(2, 8192);
         let mut codec = AppleCodec::open_with_config(&track, false, Some(target_rate))
             .expect("BUG: open Apple AAC-LC codec with target rate");
         let mut total_output_frames = 0_u64;
@@ -1165,7 +1166,7 @@ mod aac_lc_decode_tests {
         let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
         assert!(!frames.is_empty(), "segment yielded no AAC frames");
 
-        let pool = PcmPool::new(2, 8192);
+        let pool = SamplePool::new(2, 8192);
         let mut source_codec =
             AppleCodec::open_with_config(&track, false, None).expect("BUG: open source-rate codec");
         let source_frames = decode_frames(&mut source_codec, &pool, &seg, &frames);
@@ -1209,7 +1210,7 @@ mod aac_lc_decode_tests {
         let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
         assert!(!frames.is_empty(), "segment yielded no AAC frames");
 
-        let pool = PcmPool::new(2, 8192);
+        let pool = SamplePool::new(2, 8192);
         let mut codec = AppleCodec::open_with_config(&track, false, None)
             .expect("BUG: open Apple AAC-LC codec");
         let before_drain = decode_frames(&mut codec, &pool, &seg, &frames);

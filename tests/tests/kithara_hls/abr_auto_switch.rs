@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmSession},
+    audio::{AudioConfig, AudioSession},
     bufpool::Region,
     events::EventBus,
     hls::{Hls, HlsConfig},
@@ -103,7 +103,7 @@ async fn abr_auto_switch_during_playback(
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

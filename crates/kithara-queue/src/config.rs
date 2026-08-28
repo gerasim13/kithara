@@ -84,7 +84,7 @@ mod tests {
     fn default_config_has_reasonable_loader_cap() {
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let player = PlayerImpl::new(
             PlayerConfig::builder()

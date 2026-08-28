@@ -4,7 +4,7 @@ use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     bufpool::Region,
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -30,7 +30,7 @@ impl Consts {
 async fn next_chunk_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &str) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
@@ -44,13 +44,13 @@ async fn next_chunk_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: 
 }
 
 async fn preload_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &str) {
-    if let Some(gate) = PcmSession::preload_gate(audio) {
+    if let Some(gate) = AudioSession::preload_gate(audio) {
         time::timeout(Duration::from_secs(3), gate.wait())
             .await
             .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
     }
 
-    PcmControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
+    AudioControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
 }
 
 async fn run_drm_seek_resume_cycle(
@@ -122,7 +122,7 @@ async fn red_leak_native_drm_seek_resume_thread_budget()
     let cancel = CancelToken::never();
     let region = Region::default();
     let shared_worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

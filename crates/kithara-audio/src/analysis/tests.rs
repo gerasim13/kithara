@@ -1,20 +1,23 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
-use kithara_bufpool::PcmPool;
-use kithara_decode::{DecodeError, PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_bufpool::SamplePool;
+use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use num_traits::cast::AsPrimitive;
 
 #[cfg(feature = "analysis-waveform")]
 use crate::traits::PendingReason;
-use crate::traits::{ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
+use crate::traits::{
+    AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
+};
 
 const SR: u32 = 44_100;
 const CH: u16 = 2;
 
-fn spec() -> PcmSpec {
-    PcmSpec {
+fn spec() -> AudioSpec {
+    AudioSpec {
         channels: CH,
         sample_rate: NonZeroU32::new(SR).unwrap(),
     }
@@ -35,20 +38,18 @@ fn sine(frames: usize) -> Vec<f32> {
     out
 }
 
-fn chunk(samples: &[f32]) -> PcmChunk {
+fn chunk(samples: &[f32]) -> AudioChunk {
     let frames = samples.len() / usize::from(CH);
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec: spec(),
             frames: u32::try_from(frames).unwrap_or(0),
             ..Default::default()
         },
-        PcmPool::default().attach(samples.to_vec()),
+        SamplePool::default().attach(samples.to_vec()),
     )
 }
 
-/// Scripted `PcmReader` for analysis tests: pops pre-built `next_chunk`
-/// outcomes; the playback-oriented methods are unreachable on this path.
 struct FakeReader {
     bus: EventBus,
     metadata: TrackMetadata,
@@ -113,7 +114,7 @@ fn pending() -> ChunkOutcome {
     }
 }
 
-impl PcmSession for FakeReader {
+impl AudioSession for FakeReader {
     fn duration(&self) -> Option<Duration> {
         None
     }
@@ -127,7 +128,7 @@ impl PcmSession for FakeReader {
     }
 }
 
-impl PcmRead for FakeReader {
+impl AudioRead for FakeReader {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.outcomes.pop_front().unwrap_or_else(|| Ok(eof()))
     }
@@ -147,12 +148,12 @@ impl PcmRead for FakeReader {
         unreachable!("analysis uses next_chunk")
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         spec()
     }
 }
 
-impl PcmControl for FakeReader {
+impl AudioControl for FakeReader {
     fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
         unreachable!("analysis never seeks")
     }
@@ -160,7 +161,7 @@ impl PcmControl for FakeReader {
 
 mod node {
     #[cfg(feature = "analysis-waveform")]
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     #[cfg(feature = "analysis-beat")]
     use kithara_platform::sync::Arc;
     use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
@@ -180,7 +181,7 @@ mod node {
         },
         FakeReader, SR, sine,
     };
-    use crate::traits::PcmReader;
+    use crate::traits::AudioReader;
     #[cfg(feature = "analysis-waveform")]
     use crate::waveform::{AnalysisParams, WaveformAnalyzer};
 
@@ -241,7 +242,7 @@ mod node {
     }
 
     fn stages<B>(
-        reader: Box<dyn PcmReader>,
+        reader: Box<dyn AudioReader>,
         builder: AnalyzerBuilder<B>,
         cancel: &CancelToken,
     ) -> Vec<TrackAnalysis>
@@ -282,7 +283,8 @@ mod node {
     #[kithara::test]
     fn matches_direct_waveform_analyzer_over_chunked_stream() {
         let samples = sine(usize::try_from(SR).unwrap());
-        let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &PcmPool::default());
+        let mut direct =
+            WaveformAnalyzer::new(SR, AnalysisParams::default(), &SamplePool::default());
         direct.push_interleaved(&samples, 2);
         let want = direct.finalize(BUCKETS);
 

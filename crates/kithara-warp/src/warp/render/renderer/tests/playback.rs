@@ -3,8 +3,8 @@ use std::{
     num::{NonZero, NonZeroU32},
 };
 
-use kithara_decode::{PcmSpec, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::AudioSpec;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
@@ -44,7 +44,7 @@ fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
     }
     while let Some(c) = flush_serviced(fx) {
         // A non-empty flush chunk carries real audio, so its spec must stay
-        // the source spec - never the `PcmMeta::default()` sentinel (0
+        // the source spec - never the `AudioChunkInfo::default()` sentinel (0
         // channels) that a `None` `last_input_meta` would otherwise yield.
         assert_eq!(c.spec().channels, Consts::CH, "flush preserves channels");
         assert_eq!(
@@ -142,11 +142,15 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
     let source = sine(SOURCE_FRAMES);
     let mut input = chunk(&source);
     input.meta.frame_offset = SOURCE_START;
-    input.meta.timestamp = duration_for_frames(Consts::SR, SOURCE_START);
+    input.meta.timestamp = spec()
+        .duration_for(SOURCE_START)
+        .expect("test source timestamp fits");
     let admitted = SOURCE_START
         .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
         .expect("source frontier fits u64");
-    input.meta.end_timestamp = duration_for_frames(Consts::SR, admitted);
+    input.meta.end_timestamp = spec()
+        .duration_for(admitted)
+        .expect("test source end timestamp fits");
     let source_latency = renderer
         .engine
         .as_ref()
@@ -156,7 +160,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
         .source_frames();
     assert!(source_latency > 0, "backend must declare source lookahead");
 
-    let output = render_serviced(&mut renderer, input).expect("half-speed render emits PCM");
+    let output = render_serviced(&mut renderer, input).expect("half-speed render emits samples");
     let held =
         u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
     let expected_frame = admitted.saturating_sub(held);
@@ -206,7 +210,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     let held =
         u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
 
-    render_serviced(&mut renderer, input).expect("minimum-speed render emits PCM");
+    render_serviced(&mut renderer, input).expect("minimum-speed render emits samples");
     assert_eq!(
         renderer.rendered_source_end(),
         Some((admitted - held, spec().sample_rate))
@@ -214,7 +218,7 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
 
     let mut frontiers = Vec::new();
     while let Some(tail) = flush_serviced(&mut renderer) {
-        assert!(tail.frames() > 0, "terminal chunk carries real PCM");
+        assert!(tail.frames() > 0, "terminal chunk carries real samples");
         frontiers.push(renderer.rendered_source_end());
         assert!(frontiers.len() < 64, "terminal drain must converge");
     }
@@ -267,7 +271,7 @@ fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
     for o in &emitted {
         assert_eq!(
             o.spec(),
-            PcmSpec {
+            AudioSpec {
                 channels: Consts::CH,
                 sample_rate: NonZero::new(Consts::SR).unwrap()
             },

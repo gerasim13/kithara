@@ -108,14 +108,6 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     panic!("the {rate}x track never reached end-of-stream within {DRAIN_BLOCK_BUDGET} blocks");
 }
 
-/// A rate change during playback must move media time, not just the
-/// reported rate.
-///
-/// The mock-reader trap next door drives `PcmReader::set_playback_rate` on a
-/// test reader that reimplements the speed itself, so it never exercised the
-/// production chain. This one runs a real decoded file through the real
-/// time-stretch slot and asks what the iOS surface asks: over equal
-/// rendered-output windows, does the reported position advance faster?
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
     let harness = OfflinePlayerHarness::with_sample_rate(

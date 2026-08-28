@@ -5,7 +5,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     events::{
@@ -561,7 +561,7 @@ async fn vod_manual_switch_affects_future_segments() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -721,7 +721,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -902,7 +902,7 @@ async fn multi_track_shared_abr_with_cache() {
     let temp_dir = TestTempDir::new();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(CancelToken::never())
             .build(),
     );
@@ -1084,7 +1084,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1192,7 +1192,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1330,7 +1330,7 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1449,7 +1449,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1598,7 +1598,7 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1741,7 +1741,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1932,7 +1932,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -2043,7 +2043,7 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -2183,7 +2183,7 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -2415,7 +2415,7 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

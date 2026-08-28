@@ -42,7 +42,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -129,7 +129,7 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

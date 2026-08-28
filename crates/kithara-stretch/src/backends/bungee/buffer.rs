@@ -1,83 +1,53 @@
-use std::ops::Range;
+use std::num::NonZeroU32;
 
 use bungee_sys::InputChunk;
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_signal::{AudioSpec, FrameCount, PlanarBuffer, SignalError};
 use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
 use crate::{ElasticConfig, ElasticError};
 
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in)]
-pub(super) struct PooledPlanar {
-    #[field(get, copy, vis = "pub(super)")]
-    channels: usize,
-    pub(super) samples: PcmBuf,
-    pub(super) stride: usize,
+pub(super) fn planar_buffer(
+    config: &ElasticConfig,
+    frames: usize,
+) -> Result<PlanarBuffer, ElasticError> {
+    let channels = u16::try_from(config.channels())
+        .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
+    let sample_rate =
+        NonZeroU32::new(config.sample_rate()).ok_or(ElasticError::InvalidSampleRate)?;
+    PlanarBuffer::new(
+        config.pool(),
+        AudioSpec::new(channels, sample_rate),
+        FrameCount::new(frames),
+    )
+    .map_err(signal_error)
 }
 
-impl PooledPlanar {
-    pub(super) fn new(
-        pool: &PcmPool,
-        channels: usize,
-        stride: usize,
-    ) -> Result<Self, ElasticError> {
-        let samples = channels
-            .checked_mul(stride)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut storage = pool.get();
-        storage
-            .ensure_len(samples)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        Ok(Self {
-            channels,
-            samples: storage,
-            stride,
-        })
-    }
-
-    fn channel(&self, channel: usize) -> &[f32] {
-        let begin = channel * self.stride;
-        &self.samples[begin..begin + self.stride]
-    }
-
-    fn channel_mut(&mut self, channel: usize) -> &mut [f32] {
-        let begin = channel * self.stride;
-        &mut self.samples[begin..begin + self.stride]
-    }
-
-    pub(super) fn copy_interleaved(
-        &self,
-        source: Range<usize>,
-        output: &mut [f32],
-        output_frame: usize,
-    ) {
-        for (relative_frame, frame) in source.enumerate() {
-            for channel in 0..self.channels {
-                output[(output_frame + relative_frame) * self.channels + channel] =
-                    self.channel(channel)[frame];
-            }
+pub(super) fn signal_error(error: SignalError) -> ElasticError {
+    match error {
+        SignalError::ChannelCountZero => ElasticError::InvalidChannelCount,
+        SignalError::SampleCountOverflow { .. } => ElasticError::SampleCountOverflow,
+        SignalError::PoolCapacity { .. } => ElasticError::SamplePoolBudgetExhausted,
+        SignalError::Shape { .. }
+        | SignalError::IncompleteFrame { .. }
+        | SignalError::FrameRange { .. }
+        | SignalError::ChannelRange { .. }
+        | SignalError::ChannelCount { .. }
+        | SignalError::ChannelFrames { .. }
+        | SignalError::Capacity { .. }
+        | SignalError::DurationOverflow { .. }
+        | SignalError::FrameCountOverflow { .. } => {
+            ElasticError::EnginePreparation("Bungee planar buffer invariant failed")
         }
-    }
-
-    fn prepare_stride(&mut self, stride: usize) -> Result<(), ElasticError> {
-        let samples = self
-            .channels
-            .checked_mul(stride)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.samples
-            .ensure_len(samples)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-        self.stride = stride;
-        Ok(())
+        _ => ElasticError::EnginePreparation("Bungee planar buffer invariant failed"),
     }
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct InputBuffer {
-    analysis: PooledPlanar,
-    audio: PooledPlanar,
+    analysis: PlanarBuffer,
+    audio: PlanarBuffer,
     begin: i32,
     #[field(get, copy, vis = "pub(super)")]
     end: i32,
@@ -95,8 +65,8 @@ impl InputBuffer {
             .checked_add(max_source_frames)
             .ok_or(ElasticError::SampleCountOverflow)?;
         Ok(Self {
-            analysis: PooledPlanar::new(config.pool(), config.channels(), max_input_frames)?,
-            audio: PooledPlanar::new(config.pool(), config.channels(), capacity)?,
+            analysis: planar_buffer(config, max_input_frames)?,
+            audio: planar_buffer(config, capacity)?,
             begin: 0,
             end: 0,
             requested: InputChunk { begin: 0, end: 0 },
@@ -117,9 +87,11 @@ impl InputBuffer {
                     .map_err(|_| ElasticError::SampleCountOverflow)?;
                 let retained = usize::try_from(self.end - self.begin)
                     .map_err(|_| ElasticError::SampleCountOverflow)?;
-                for channel in 0..self.audio.channels {
+                let channels = usize::from(self.audio.spec().channels);
+                for channel in 0..channels {
                     self.audio
                         .channel_mut(channel)
+                        .map_err(signal_error)?
                         .copy_within(shift..retained, 0);
                 }
                 self.begin = self.requested.begin;
@@ -142,15 +114,14 @@ impl InputBuffer {
         let required = buffered
             .checked_add(appended)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        if required > self.audio.stride {
-            return Err(ElasticError::InputStorage {
-                required,
-                capacity: self.audio.stride,
-            });
+        let capacity = self.audio.stride().get();
+        if required > capacity {
+            return Err(ElasticError::InputStorage { required, capacity });
         }
-        let channels = self.audio.channels;
+        let channels = usize::from(self.audio.spec().channels);
         for channel in 0..channels {
-            let destination = &mut self.audio.channel_mut(channel)[buffered..required];
+            let destination =
+                &mut self.audio.channel_mut(channel).map_err(signal_error)?[buffered..required];
             if let Some(source) = source {
                 for (destination, frame) in destination.iter_mut().zip(discard..input_frames) {
                     *destination = source[frame * channels + channel];
@@ -171,7 +142,9 @@ impl InputBuffer {
     }
 
     pub(super) fn prepare_source_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
-        self.audio.prepare_stride(capacity)
+        self.audio
+            .resize_frames(FrameCount::new(capacity))
+            .map_err(signal_error)
     }
 
     fn requested_frames(&self) -> Result<usize, ElasticError> {
@@ -212,18 +185,18 @@ impl InputBuffer {
         valid: bool,
         end_of_input: bool,
     ) -> Result<(), ElasticError> {
-        self.analysis.samples.fill(0.0);
+        self.analysis.as_samples_mut().fill(0.0);
         if !valid {
             return native.analyse(AnalysisInput {
-                samples: &self.analysis.samples,
-                channel_stride: self.analysis.stride,
+                samples: self.analysis.as_samples(),
+                channel_stride: self.analysis.stride().get(),
                 mute_head: 0,
                 mute_tail: 0,
             });
         }
 
         let requested_frames = self.requested_frames()?;
-        if requested_frames > self.analysis.stride {
+        if requested_frames > self.analysis.stride().get() {
             return Err(ElasticError::EnginePreparation(
                 "Bungee requested an oversized input grain",
             ));
@@ -249,9 +222,12 @@ impl InputBuffer {
                     .ok_or(ElasticError::SampleCountOverflow)?,
             )
             .map_err(|_| ElasticError::SampleCountOverflow)?;
-            for channel in 0..self.audio.channels {
-                let source = &self.audio.channel(channel)[source_begin..source_begin + copied];
-                self.analysis.channel_mut(channel)[destination_begin..destination_begin + copied]
+            let channels = usize::from(self.audio.spec().channels);
+            for channel in 0..channels {
+                let source = &self.audio.channel(channel).map_err(signal_error)?
+                    [source_begin..source_begin + copied];
+                self.analysis.channel_mut(channel).map_err(signal_error)?
+                    [destination_begin..destination_begin + copied]
                     .copy_from_slice(source);
             }
         }
@@ -269,8 +245,8 @@ impl InputBuffer {
             ));
         }
         native.analyse(AnalysisInput {
-            samples: &self.analysis.samples,
-            channel_stride: self.analysis.stride,
+            samples: self.analysis.as_samples(),
+            channel_stride: self.analysis.stride().get(),
             mute_head,
             mute_tail,
         })

@@ -71,7 +71,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker>,
-    /// Session-owned PCM consumer wake capability. This is populated by
+    /// Session-owned audio-consumer wake capability. This is populated by
     /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
     /// does not become a second public source of session policy.
     #[builder(skip)]
@@ -93,7 +93,7 @@ mod tests {
 
     use kithara_assets::AssetStore;
     use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_decode::DecodeError;
     use kithara_test_utils::kithara;
 
@@ -116,7 +116,7 @@ mod tests {
 
     fn worker() -> PlayWorker {
         PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         )
     }
 
@@ -328,7 +328,7 @@ mod tests {
                 .build();
         let configured = config.worker.as_ref().expect("worker must be configured");
         assert!(std::ptr::eq(configured.byte_pool(), worker.byte_pool()));
-        assert!(std::ptr::eq(configured.pcm_pool(), worker.pcm_pool()));
+        assert!(std::ptr::eq(configured.sample_pool(), worker.sample_pool()));
     }
 
     #[kithara::test]

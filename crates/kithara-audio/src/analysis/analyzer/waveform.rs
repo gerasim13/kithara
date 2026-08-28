@@ -1,5 +1,5 @@
-use kithara_bufpool::PcmPool;
-use kithara_decode::PcmChunk;
+use kithara_bufpool::SamplePool;
+use kithara_signal::AudioChunk;
 
 use super::track::Analyzer;
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
@@ -10,10 +10,10 @@ pub(crate) struct WaveformPass {
 }
 
 impl WaveformPass {
-    pub(crate) fn new(sample_rate: u32, buckets: usize, pcm_pool: &PcmPool) -> Self {
+    pub(crate) fn new(sample_rate: u32, buckets: usize, sample_pool: &SamplePool) -> Self {
         Self {
             buckets,
-            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default(), pcm_pool),
+            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default(), sample_pool),
         }
     }
 }
@@ -25,7 +25,7 @@ impl Analyzer for WaveformPass {
         self.inner.finalize(self.buckets)
     }
 
-    fn push(&mut self, chunk: &PcmChunk) {
+    fn push(&mut self, chunk: &AudioChunk) {
         let channels = usize::from(chunk.spec().channels.max(1));
         self.inner.push_interleaved(&chunk.samples[..], channels);
     }

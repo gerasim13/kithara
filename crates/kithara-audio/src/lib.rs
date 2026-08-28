@@ -1,9 +1,9 @@
 //! Audio pipeline library with decoding and resampling.
 //!
-//! - [`Audio`] — generic PCM reader prepared for an external playback scheduler
-//! - [`AudioConfig`] — pipeline configuration
+//! - [`Audio`] - decoded-audio reader prepared for an external playback scheduler
+//! - [`AudioConfig`] - pipeline configuration
 //! - [`ResamplerQuality`] - sample rate conversion quality
-//! - `Audio` implements [`PcmReader`] for pull-based PCM consumers
+//! - `Audio` implements [`AudioReader`] for pull-based audio consumers
 //!
 //! See the crate `README.md` for usage and `CONTEXT.md` for threading model and architecture.
 
@@ -37,11 +37,11 @@ pub use pipeline::{
 };
 pub use producer::PreloadGate;
 #[doc(hidden)]
-pub use producer::{PcmProducerPort, PreparedPcmLane};
+pub use producer::{PreparedAudioLane, ProducerPort};
 pub use traits::{
-    ChunkOutcome, DecodeError, DecodeResult, PcmControl, PcmObserveError, PcmObserver, PcmRead,
-    PcmReader, PcmSession, PcmSource, PendingReason, ReadOutcome, SeekBegin, SeekOutcome,
-    SourceDiscontinuity,
+    AudioControl, AudioObserveError, AudioObserver, AudioRead, AudioReader, AudioSession,
+    AudioSource, ChunkOutcome, DecodeError, DecodeResult, PendingReason, ReadOutcome, SeekBegin,
+    SeekOutcome, SourceDiscontinuity,
 };
 #[cfg(feature = "analysis-waveform")]
 pub use waveform::WaveformAnalyzer;

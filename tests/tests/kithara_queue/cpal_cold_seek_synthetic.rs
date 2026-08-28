@@ -59,7 +59,7 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))

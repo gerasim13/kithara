@@ -1,62 +1,62 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::kithara;
 
 use super::{Consts, GaplessTrimmer};
 use crate::{
-    DropChunks, GaplessInfo, GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec,
-    gapless::heuristic::SilenceTrimParams,
+    DropChunks, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
 };
 
-fn chunk(spec: PcmSpec, frame_offset: u64, frames: usize) -> PcmChunk {
+fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
     let pcm = (0..samples)
         .map(|idx| f32::from(u16::try_from(idx).expect("BUG: test sample fits in u16")))
         .collect::<Vec<_>>();
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec,
             frame_offset,
             ..Default::default()
         },
-        PcmPool::default().attach(pcm),
+        SamplePool::default().attach(pcm),
     )
 }
 
-fn silent_chunk(spec: PcmSpec, frame_offset: u64, frames: usize) -> PcmChunk {
+fn silent_chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec,
             frame_offset,
             ..Default::default()
         },
-        PcmPool::default().attach(vec![0.0; samples]),
+        SamplePool::default().attach(vec![0.0; samples]),
     )
 }
 
-fn custom_chunk(spec: PcmSpec, frame_offset: u64, pcm: Vec<f32>) -> PcmChunk {
-    PcmChunk::new(
-        PcmMeta {
+fn custom_chunk(spec: AudioSpec, frame_offset: u64, pcm: Vec<f32>) -> AudioChunk {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec,
             frame_offset,
             ..Default::default()
         },
-        PcmPool::default().attach(pcm),
+        SamplePool::default().attach(pcm),
     )
 }
 
-fn mono_spec() -> PcmSpec {
-    PcmSpec::new(1, NonZeroU32::new(48_000).expect("test rate"))
+fn mono_spec() -> AudioSpec {
+    AudioSpec::new(1, NonZeroU32::new(48_000).expect("test rate"))
 }
 
-fn stereo_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"))
+fn stereo_spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"))
 }
 
-fn fade_frames_for(spec: PcmSpec) -> usize {
+fn fade_frames_for(spec: AudioSpec) -> usize {
     let computed = (u64::from(spec.sample_rate.get()) * Consts::FADE_IN_DURATION_MS) / 1000;
     computed.max(1) as usize
 }
@@ -70,7 +70,7 @@ fn silence_params(threshold_db: f32, min_trim_frames: u64) -> SilenceTrimParams 
     }
 }
 
-fn collect_pcm(out: &[PcmChunk]) -> Vec<f32> {
+fn collect_pcm(out: &[AudioChunk]) -> Vec<f32> {
     out.iter().flat_map(|c| c.samples.to_vec()).collect()
 }
 
@@ -125,7 +125,7 @@ fn tail_compensation_reduces_fixed_trailing_trim_by_one_frame() {
     output.extend(trimmer.flush());
 
     assert_eq!(output.len(), 2);
-    assert_eq!(output.iter().map(PcmChunk::frames).sum::<usize>(), 3);
+    assert_eq!(output.iter().map(AudioChunk::frames).sum::<usize>(), 3);
     assert_eq!(collect_pcm(&output), vec![0.0, 1.0, 0.0]);
 }
 
@@ -144,7 +144,7 @@ fn tail_compensation_is_identity_without_deficit() {
     output.extend(trimmer.flush());
 
     assert_eq!(output.len(), 1);
-    assert_eq!(output.iter().map(PcmChunk::frames).sum::<usize>(), 2);
+    assert_eq!(output.iter().map(AudioChunk::frames).sum::<usize>(), 2);
     assert_eq!(collect_pcm(&output), vec![0.0, 1.0]);
 }
 

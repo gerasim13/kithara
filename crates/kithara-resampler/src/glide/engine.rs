@@ -1,4 +1,4 @@
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::SampleBuffer;
 
 use super::GlideConfig;
 use crate::ResamplerMode;
@@ -6,7 +6,7 @@ use crate::ResamplerMode;
 pub(in crate::glide) struct RenderRequest<'a, 'out, 'channel> {
     pub(in crate::glide) input: &'a [&'a [f32]],
     pub(in crate::glide) output: &'out mut [&'channel mut [f32]],
-    pub(in crate::glide) previous: &'a [PcmBuf],
+    pub(in crate::glide) previous: &'a [SampleBuffer],
     pub(in crate::glide) config: GlideConfig,
     pub(in crate::glide) mode: ResamplerMode,
     pub(in crate::glide) filter_ratio: f64,
@@ -23,7 +23,7 @@ mod imp {
     use kithara_apple::accelerate::{
         BiquadFilter, copy_f32, linear_interpolate_f32, quadratic_interpolate_f32,
     };
-    use kithara_bufpool::{PcmBuf, PcmPool};
+    use kithara_bufpool::{SampleBuffer, SamplePool};
     use num_traits::cast::ToPrimitive;
     use smallvec::SmallVec;
 
@@ -43,10 +43,10 @@ mod imp {
     #[derive(fieldwork::Fieldwork)]
     pub(in crate::glide) struct GlideEngine {
         filter_cutoff: Option<f64>,
-        positions: PcmBuf,
-        filtered: SmallVec<[PcmBuf; 8]>,
+        positions: SampleBuffer,
+        filtered: SmallVec<[SampleBuffer; 8]>,
         filters: SmallVec<[Option<BiquadFilter>; 8]>,
-        padded: SmallVec<[PcmBuf; 8]>,
+        padded: SmallVec<[SampleBuffer; 8]>,
         max_input_frames: usize,
         #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
         max_output_frames: usize,
@@ -54,7 +54,7 @@ mod imp {
 
     impl GlideEngine {
         pub(in crate::glide) fn new(
-            pool: &PcmPool,
+            pool: &SamplePool,
             channels: NonZeroUsize,
             max_input_frames: usize,
             max_ratio_adjustment: f64,
@@ -208,7 +208,7 @@ mod imp {
     }
 
     fn ensure_build_len(
-        buffer: &mut PcmBuf,
+        buffer: &mut SampleBuffer,
         frames: usize,
         backend: &'static str,
     ) -> Result<(), ResamplerBuildError> {
@@ -249,7 +249,7 @@ mod imp {
 mod imp {
     use std::num::NonZeroUsize;
 
-    use kithara_bufpool::{PcmBuf, PcmPool};
+    use kithara_bufpool::{SampleBuffer, SamplePool};
     use num_traits::cast::ToPrimitive;
     use smallvec::SmallVec;
 
@@ -269,10 +269,10 @@ mod imp {
     #[derive(fieldwork::Fieldwork)]
     pub(in crate::glide) struct GlideEngine {
         filter_cutoff: Option<f64>,
-        positions: PcmBuf,
-        filtered: SmallVec<[PcmBuf; 8]>,
+        positions: SampleBuffer,
+        filtered: SmallVec<[SampleBuffer; 8]>,
         filters: SmallVec<[Option<ScalarBiquad>; 8]>,
-        padded: SmallVec<[PcmBuf; 8]>,
+        padded: SmallVec<[SampleBuffer; 8]>,
         max_input_frames: usize,
         #[field(get(copy, name = position_capacity, vis = "pub(in crate::glide)"))]
         max_output_frames: usize,
@@ -280,7 +280,7 @@ mod imp {
 
     impl GlideEngine {
         pub(in crate::glide) fn new(
-            pool: &PcmPool,
+            pool: &SamplePool,
             channels: NonZeroUsize,
             max_input_frames: usize,
             max_ratio_adjustment: f64,
@@ -469,7 +469,7 @@ mod imp {
     }
 
     fn ensure_build_len(
-        buffer: &mut PcmBuf,
+        buffer: &mut SampleBuffer,
         frames: usize,
         backend: &'static str,
     ) -> Result<(), ResamplerBuildError> {

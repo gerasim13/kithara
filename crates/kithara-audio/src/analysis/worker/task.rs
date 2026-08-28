@@ -3,7 +3,7 @@ use kithara_resampler::ResamplerBackend;
 use tracing::{debug, warn};
 
 use crate::{
-    ChunkOutcome, PcmReader, Waveform,
+    AudioReader, ChunkOutcome, Waveform,
     analysis::analyzer::{AnalyzerBuilder, Detector, TrackAnalysis, TrackAnalyzers},
 };
 
@@ -17,7 +17,7 @@ pub(crate) enum AnalysisStep {
 }
 
 pub(crate) struct Job {
-    pub(crate) reader: Box<dyn PcmReader>,
+    pub(crate) reader: Box<dyn AudioReader>,
     pub(crate) cancel: CancelToken,
     pub(crate) tx: watch::Sender<Option<TrackAnalysis>>,
 }
@@ -34,7 +34,7 @@ pub(crate) struct AnalysisTask<B>
 where
     B: ResamplerBackend,
 {
-    reader: Box<dyn PcmReader>,
+    reader: Box<dyn AudioReader>,
     cancel: CancelToken,
     analyzers: Option<TrackAnalyzers<B>>,
     waveform: Option<Waveform>,

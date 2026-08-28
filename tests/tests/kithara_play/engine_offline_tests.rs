@@ -3,7 +3,7 @@
 //! rather than a lane.
 
 use kithara::{
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     events::EventBus,
     play::{EngineConfig, EngineImpl},
     warp::BeatGridId,
@@ -17,7 +17,7 @@ fn engine(max_slots: usize) -> EngineImpl {
         EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("offline engine grid id"))
             .max_slots(max_slots)
-            .pcm_pool(PcmPool::default())
+            .sample_pool(SamplePool::default())
             .session(OfflineSession::arc_auto())
             .build(),
         EventBus::default(),

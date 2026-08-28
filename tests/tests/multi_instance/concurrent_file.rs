@@ -33,7 +33,8 @@ async fn create_file_audio(url: url::Url, cache_dir: &Path) -> RegisteredAudio<S
     let config = AudioConfig::<File>::for_stream(file_config)
         .hint(("mp3").to_string())
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     worker
         .open(config)
         .await

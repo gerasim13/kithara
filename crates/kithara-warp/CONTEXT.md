@@ -17,7 +17,7 @@ crate the owner of the live Host, playback session, audio graph, or worker.
 ## Boundaries
 
 - `kithara-beat` owns beat-analysis algorithms and analyzed beat output data.
-- `kithara-audio` owns decoded PCM source lifecycle, decoder-side sample-rate
+- `kithara-audio` owns decoded-audio source lifecycle, decoder-side sample-rate
   conversion, readiness, and the prepared producer seam.
 - `kithara-stretch` owns backend DSP engines and their exact-span contract.
 - `kithara-play` owns `PlayWorker`, `DecoderNode`, final output admission,
@@ -42,11 +42,11 @@ contracts for the later actuator integration.
 the shared `StretchControls` owned by the resident identity `Warp<S>` and
 consumed by its native renderer. The identity renderer deliberately ignores
 temporal intent while preserving the same stage contract. Every renderer
-receives the caller's configured `PcmPool`; it never creates a pool. Source
+receives the caller's configured `SamplePool`; it never creates a pool. Source
 ownership, cancellation, and worker resources remain in their canonical
 configs and are not duplicated here.
 
 Fixed-ratio sample-rate conversion remains owned by `kithara-decode`; it is not
 a substitute Warp backend because resampling changes pitch. Targets without an
 elastic backend report playback-rate capability as unavailable and preserve
-PCM through the identity renderer.
+decoded samples through the identity renderer.

@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -37,8 +37,9 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     let url = server.asset("hls/master.m3u8");
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(worker.byte_pool().clone())
@@ -68,7 +69,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
         let mut chunks_read = 0usize;
         while chunks_read < Consts::WARMUP_CHUNKS {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
@@ -82,7 +83,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         let mut drained = 0usize;
         let mut reached_eof = false;
         while drained < Consts::DRAIN_CHUNKS && !reached_eof {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => {
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so

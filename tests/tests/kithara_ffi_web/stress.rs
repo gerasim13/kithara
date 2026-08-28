@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use gloo_timers::future::TimeoutFuture;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     events::{AudioEvent, Event, EventBus, SeekLifecycleStage},
     hls::{Hls, HlsConfig},
     // `Instant` is not imported: the test macro virtualises the clock inside
@@ -125,7 +125,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
     let byte_pool = kithara::bufpool::BytePool::default();
-    let pcm_pool = kithara::bufpool::PcmPool::default();
+    let sample_pool = kithara::bufpool::SamplePool::default();
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
@@ -145,7 +145,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, sample_pool).build());
     let mut audio = worker.open(config).await.unwrap();
     audio
         .preload()

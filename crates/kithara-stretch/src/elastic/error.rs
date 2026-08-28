@@ -67,9 +67,9 @@ pub enum ElasticError {
     /// A block sample count overflowed the platform index type.
     #[error("elastic block sample count overflow")]
     SampleCountOverflow,
-    /// The injected PCM pool could not reserve an engine scratch buffer.
-    #[error("elastic PCM pool budget exhausted")]
-    PcmPoolBudgetExhausted,
+    /// The injected sample pool could not reserve an engine scratch buffer.
+    #[error("elastic sample pool budget exhausted")]
+    SamplePoolBudgetExhausted,
     /// The resident input history exceeded its prepared rolling storage.
     #[error("elastic input history needs {required} frames; prepared capacity is {capacity}")]
     InputStorage { required: usize, capacity: usize },

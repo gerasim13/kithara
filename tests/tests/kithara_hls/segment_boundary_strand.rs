@@ -173,7 +173,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
         let byte_map = stream.byte_map();
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .backend(DecoderBackend::Symphonia)
             .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
             .maybe_byte_map(byte_map)

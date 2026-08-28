@@ -3,12 +3,12 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
-    bufpool::PcmPool,
-    decode::{PcmChunk, PcmMeta, PcmSpec},
+    bufpool::SamplePool,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 
@@ -16,24 +16,24 @@ use kithara::{
 #[global_allocator]
 static A: AllocDisabler = AllocDisabler;
 
-fn make_pool() -> PcmPool {
-    PcmPool::new(128, 200_000)
+fn make_pool() -> SamplePool {
+    SamplePool::new(128, 200_000)
 }
 
 fn warp_renderer(
     controls: kithara::platform::sync::Arc<StretchControls>,
-    spec: PcmSpec,
-    pool: PcmPool,
+    spec: AudioSpec,
+    pool: SamplePool,
 ) -> WarpRenderer {
     let config = WarpConfig::builder().stretch(controls).build();
     Warp::new((), &config).renderer(spec, pool)
 }
 
-fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {
+fn make_chunk(pool: &SamplePool, frames: usize, channels: u16) -> AudioChunk {
     make_chunk_at(pool, frames, channels, 44100)
 }
 
-fn make_chunk_at(pool: &PcmPool, frames: usize, channels: u16, sample_rate: u32) -> PcmChunk {
+fn make_chunk_at(pool: &SamplePool, frames: usize, channels: u16, sample_rate: u32) -> AudioChunk {
     let samples = frames * channels as usize;
     let mut pcm = pool.get_with(|v| v.resize(samples, 0.0));
     for (i, s) in pcm.iter_mut().enumerate() {
@@ -44,11 +44,11 @@ fn make_chunk_at(pool: &PcmPool, frames: usize, channels: u16, sample_rate: u32)
         let val = (i as f32) * 0.001;
         *s = val;
     }
-    let meta = PcmMeta {
-        spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
+    let meta = AudioChunkInfo {
+        spec: AudioSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
         ..Default::default()
     };
-    PcmChunk::new(meta, pcm)
+    AudioChunk::new(meta, pcm)
 }
 
 #[kithara::test]
@@ -90,7 +90,7 @@ fn test_pcm_chunk_access_allocation_free() {
     permit_alloc(|| drop(chunk));
 }
 
-fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl Resampler {
+fn build_resampler(pool: &SamplePool, source_rate: u32, target_rate: u32) -> impl Resampler {
     let settings = ResamplerSettings::builder()
         .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
         .mode(ResamplerMode::FixedRatio {
@@ -101,7 +101,7 @@ fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl R
         })
         .quality(ResamplerQuality::High)
         .options(ResamplerOptions::builder().chunk_size(4_096).build())
-        .pcm_pool(pool.clone())
+        .sample_pool(pool.clone())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -110,7 +110,7 @@ fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl R
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
-fn planar_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] {
+fn planar_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
     let mut left = pool.get();
     let mut right = pool.get();
     left.ensure_len(frames)
@@ -130,7 +130,7 @@ fn planar_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] 
     [left, right]
 }
 
-fn output_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] {
+fn output_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
     let mut left = pool.get();
     let mut right = pool.get();
     left.ensure_len(frames)
@@ -143,8 +143,8 @@ fn output_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] 
 
 fn process_planar(
     resampler: &mut dyn Resampler,
-    input: &[kithara::bufpool::PcmBuf; 2],
-    output: &mut [kithara::bufpool::PcmBuf; 2],
+    input: &[kithara::bufpool::SampleBuffer; 2],
+    output: &mut [kithara::bufpool::SampleBuffer; 2],
 ) -> usize {
     let input_refs = [&input[0][..], &input[1][..]];
     let (left, right) = output.split_at_mut(1);
@@ -263,7 +263,7 @@ fn test_resampler_passthrough_allocation_free() {
 fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kind: StretchKind) {
     const FRAMES: usize = 8_192;
     let pool = make_pool();
-    let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut effect, first, second) = permit_alloc(|| {
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
@@ -317,7 +317,7 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
 fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: StretchKind) {
     const FRAMES: usize = 8_192;
     let pool = make_pool();
-    let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut maximum, input) = permit_alloc(|| {
         let controls = StretchControls::new(0.05);
         controls.set_keylock(true);

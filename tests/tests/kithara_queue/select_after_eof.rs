@@ -4,11 +4,11 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -22,7 +22,7 @@ const BLOCK_FRAMES: usize = 512;
 const BLOCK_BUDGET: usize = 256;
 
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
-    let spec = PcmSpec {
+    let spec = AudioSpec {
         channels: CHANNELS,
         sample_rate: NonZero::new(SAMPLE_RATE).unwrap(),
     };

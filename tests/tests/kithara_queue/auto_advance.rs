@@ -4,11 +4,11 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     events::{AdvanceReason, Event, QueueEvent},
     platform::sync::Arc,
     play::Resource,
     queue::{Queue, QueueConfig, RepeatMode, Transition, test_utils::QueueProbe},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -26,7 +26,7 @@ fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig 
 }
 
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
-    let spec = PcmSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
+    let spec = AudioSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
     resource_from_reader_with_src(
         TestPcmReader::with_value(spec, secs, value),
         Arc::from(format!("memory://{label}")),

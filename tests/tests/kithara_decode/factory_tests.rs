@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicU64;
 use kithara::platform::sync::Arc;
 use kithara::{
     self,
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
     resampler::NoResamplerBackend,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -32,7 +32,7 @@ const TEST_MP3_BYTES: &[u8] =
 fn decoder_config_default_uses_symphonia_backend() {
     let config: DecoderConfig = DecoderConfig::<NoResamplerBackend>::builder()
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .build();
     assert_eq!(config.backend, DecoderBackend::Symphonia);
     assert!(config.byte_len_handle.is_none());
@@ -44,7 +44,7 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
     let handle = Arc::new(AtomicU64::new(1000));
     let mut config: DecoderConfig = DecoderConfig::<NoResamplerBackend>::builder()
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .build();
     config.backend = DecoderBackend::Apple;
     config.byte_len_handle = Some(Arc::clone(&handle));
@@ -61,7 +61,7 @@ fn create_with_probe_without_hint_fails_with_probe_failed() {
         None,
         DecoderConfig::<NoResamplerBackend>::builder()
             .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .sample_pool(SamplePool::default())
             .build(),
     );
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
@@ -74,7 +74,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
         Some("mp3"),
         DecoderConfig::<NoResamplerBackend>::builder()
             .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .sample_pool(SamplePool::default())
             .build(),
     )
     .expect("BUG: mp3 hint should produce a decoder");
@@ -96,7 +96,7 @@ fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
         &media_info,
         DecoderConfig::<NoResamplerBackend>::builder()
             .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .sample_pool(SamplePool::default())
             .build(),
     );
     assert!(
@@ -116,7 +116,7 @@ fn apple_mp3_decoder(
 ) -> DecodeResult<Box<dyn Decoder>> {
     let config = DecoderConfig::<NoResamplerBackend>::builder()
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .backend(DecoderBackend::Apple)
         .maybe_resampler(resampler)
         .build();

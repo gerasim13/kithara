@@ -19,12 +19,12 @@ Generic sharded buffer pool for zero-allocation hot paths. Provides thread-safe,
 ## Usage
 
 ```rust
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 
 // Use the default singleton — typically constructed once at the top of the
 // app and injected through your config structs. Library code should read
 // the pool from injected config rather than calling `default()` itself.
-let pool = PcmPool::default();
+let pool = SamplePool::default();
 let mut buf = pool.get();
 buf.resize(1024, 0.0);
 // `buf` returns to the pool on drop.
@@ -42,9 +42,9 @@ chunk.resize(4096, 0);
 
 <tr><td><code>BytePool</code></td><td>Sharded pool of <code>Vec&lt;u8&gt;</code> for I/O and segment buffers</td></tr>
 
-<tr><td><code>PcmPool</code></td><td>Sharded pool of <code>Vec&lt;f32&gt;</code> for decoded PCM frames</td></tr>
+<tr><td><code>SamplePool</code></td><td>Sharded pool of <code>Vec&lt;f32&gt;</code> for decoded samples</td></tr>
 
-<tr><td><code>PcmBuf</code></td><td>RAII handle for a pooled PCM buffer</td></tr>
+<tr><td><code>SampleBuffer</code></td><td>RAII handle for a pooled sample buffer</td></tr>
 
 <tr><td><code>ByteBudget</code></td><td>Soft cap on outstanding bytes; returns <code>BudgetExhausted</code> when exceeded</td></tr>
 
@@ -52,7 +52,7 @@ chunk.resize(4096, 0);
 
 </table>
 
-Advanced pool types are exported for workspace-internal integrations, but most callers use `BytePool`, `PcmPool`, and their RAII handles.
+Advanced pool types are exported for workspace-internal integrations, but most callers use `BytePool`, `SamplePool`, and their RAII handles.
 
 ## Role in the workspace
 

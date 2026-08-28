@@ -475,7 +475,7 @@ export_attrs = ["no_mangle", "export_name", "wasm_bindgen", "uniffi"]
 #   through a split field-borrow (self.tracks.get_mut inside a
 #   self.tracks_transitions.retain closure); a &mut self method cannot replace
 #   it without a borrow conflict. Relocating the tests in-crate would duplicate
-#   the integration crate's PcmReader mock.
+#   the integration crate's AudioReader mock.
 #   try_pop_notification: white-box drain of the processor->main notification
 #   channel; the processor is the producer side, so no production reader exists.
 #   Same relocation constraint as track_mut.

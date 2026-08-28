@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{
     AudioCodec, NotReadyCause, PendingReason, PrerollHint, StreamPending, StreamReadError,
     VariantChangeError,
@@ -15,7 +16,7 @@ mod kithara {
 
 use crate::{
     error::DecodeResult,
-    types::{BlenderProfile, GaplessProfile, PcmChunk, PcmSpec, TrackMetadata},
+    types::{BlenderProfile, GaplessProfile, TrackMetadata},
 };
 
 /// Outcome of a [`DecoderInput::try_read`] call.
@@ -86,7 +87,7 @@ pub enum DecoderSeekOutcome {
 #[derive(Debug)]
 pub enum DecoderChunkOutcome {
     /// Decoded PCM chunk.
-    Chunk(PcmChunk),
+    Chunk(AudioChunk),
     /// Decoder is alive but produced no chunk this call. See
     /// [`PendingReason`] for the precise cause.
     Pending(PendingReason),
@@ -94,7 +95,7 @@ pub enum DecoderChunkOutcome {
     Eof,
 }
 
-impl TryFrom<DecoderChunkOutcome> for PcmChunk {
+impl TryFrom<DecoderChunkOutcome> for AudioChunk {
     type Error = DecoderChunkOutcome;
 
     fn try_from(outcome: DecoderChunkOutcome) -> Result<Self, Self::Error> {
@@ -263,10 +264,10 @@ pub trait Decoder: Send + 'static {
     /// or the position is invalid for reasons other than past-EOF.
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome>;
 
-    /// Get the PCM output specification.
-    fn spec(&self) -> PcmSpec;
+    /// Get the decoded audio output specification.
+    fn spec(&self) -> AudioSpec;
 
-    /// Frames between a packet's timestamp and the PCM this decoder has
+    /// Number of frames between a packet's timestamp and the audio this decoder has
     /// actually produced for it. Live: it settles as the decoder works
     /// through its head strip, so a caller that cached it at construction
     /// would hold the pre-strip value forever.
@@ -276,7 +277,7 @@ pub trait Decoder: Send + 'static {
 
     /// Decoder-owned playback contract — currently the captured
     /// [`crate::GaplessInfo`] (encoder priming + trailing padding in
-    /// PCM frames) when `DecoderConfig.gapless = true` and the codec
+    /// decoded frames) when `DecoderConfig.gapless = true` and the codec
     /// reports it. Default implementation returns the empty contract,
     /// so most decoders inherit the no-trim behaviour.
     ///

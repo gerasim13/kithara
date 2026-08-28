@@ -1,9 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
-    audio::{AudioConfig, NoResamplerBackend, PcmControl, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
     bufpool::Region,
-    decode::PcmChunk,
     platform::{
         CancelToken,
         sync::{
@@ -14,6 +13,7 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig, effects::AudioEffect},
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    signal::AudioChunk,
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
@@ -100,7 +100,7 @@ impl BurstLoadEffect {
 }
 
 impl AudioEffect for BurstLoadEffect {
-    fn flush(&mut self) -> Option<PcmChunk> {
+    fn flush(&mut self) -> Option<AudioChunk> {
         None
     }
 
@@ -108,7 +108,7 @@ impl AudioEffect for BurstLoadEffect {
         0
     }
 
-    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {
             self.probe.observe_burst();
@@ -326,7 +326,7 @@ async fn render_passthrough(
     let load_probe = Arc::new(LoadProbe::new());
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(CancelToken::never())
             .build(),
     );

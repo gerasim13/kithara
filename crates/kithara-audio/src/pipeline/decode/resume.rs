@@ -1,7 +1,10 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
-use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::StreamType;
 
 use crate::pipeline::{
@@ -66,7 +69,7 @@ impl ResumeCursor {
         self.host_rate.load(Ordering::Acquire)
     }
 
-    pub(crate) fn record(&mut self, chunk: &PcmChunk, epoch: u64) {
+    pub(crate) fn record(&mut self, chunk: &AudioChunk, epoch: u64) {
         self.decode_head = Some((
             epoch,
             chunk
@@ -96,7 +99,13 @@ impl ResumeCursor {
     ) -> Duration {
         let head = self
             .rendered_source_head(epoch)
-            .map(|(frame, rate)| duration_for_frames(rate, frame))
+            .and_then(|(frame, rate)| {
+                NonZeroU32::new(rate).map(|sample_rate| {
+                    let spec = AudioSpec::new(1, sample_rate);
+                    spec.duration_for(frame)
+                        .unwrap_or(Duration::from_nanos(u64::MAX))
+                })
+            })
             .filter(|&position| position > committed)
             .unwrap_or(committed);
         match resume_target {

@@ -754,7 +754,7 @@ mod tests {
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
         let queue = Queue::new(QueueConfig::builder().player(player).build());

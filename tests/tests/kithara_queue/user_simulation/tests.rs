@@ -4,7 +4,7 @@
 use std::fmt::Write;
 
 use kithara::{
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -403,7 +403,7 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
     );
     let cfg = kithara::play::ResourceConfig::for_src(
         kithara::play::ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),

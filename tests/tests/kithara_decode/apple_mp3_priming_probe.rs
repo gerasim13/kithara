@@ -1,8 +1,9 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
 };
 use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
 use reqwest::Client;
@@ -62,7 +63,7 @@ fn measure_leading_silence(
 ) -> (usize, f32, usize) {
     let mut config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
         .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .sample_pool(kithara::bufpool::SamplePool::default())
         .build();
     config.backend = backend;
     config.gapless = gapless;
@@ -74,7 +75,7 @@ fn measure_leading_silence(
     let chan = usize::from(CHANNELS);
     for _ in 0..200 {
         let outcome = decoder.next_chunk().expect("decode chunk");
-        let Ok(chunk) = PcmChunk::try_from(outcome) else {
+        let Ok(chunk) = AudioChunk::try_from(outcome) else {
             break;
         };
         if chunk.samples.is_empty() {

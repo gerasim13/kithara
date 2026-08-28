@@ -50,7 +50,7 @@ fn build_session(cache_path: &Path) -> Session {
     // worker's debounce with a timer.
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let byte_pool = kithara::bufpool::BytePool::default();
-    let pcm_pool = kithara::bufpool::PcmPool::default();
+    let sample_pool = kithara::bufpool::SamplePool::default();
     let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: cache_path.to_path_buf(),
@@ -61,7 +61,7 @@ fn build_session(cache_path: &Path) -> Session {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(byte_pool.clone(), pcm_pool).build(),
+                PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),

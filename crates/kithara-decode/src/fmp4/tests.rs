@@ -7,8 +7,9 @@ use std::{
     },
 };
 
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::AudioChunk;
 use kithara_stream::{AudioCodec, ByteMap};
 use kithara_test_utils::kithara;
 
@@ -103,7 +104,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
 /// decoder, returning `None` on EOF or after exhausting the retry budget.
 fn pull_one_chunk(
     decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
-) -> Option<crate::types::PcmChunk> {
+) -> Option<AudioChunk> {
     for _ in 0..16 {
         match decoder.next_chunk().ok()? {
             DecoderChunkOutcome::Chunk(chunk) => return Some(chunk),
@@ -299,7 +300,7 @@ fn decode_all_aac(
     codec: &mut SymphoniaCodec,
     seg: &[u8],
     ranges: &[(usize, usize)],
-    pool: &PcmPool,
+    pool: &SamplePool,
 ) -> Vec<f32> {
     let mut out_pcm = Vec::new();
     for &(offset, size) in ranges {
@@ -320,7 +321,7 @@ fn decode_all_aac(
 /// pro-DJ zero tolerance for sample drift.
 #[kithara::test]
 fn symphonia_aac_decode_is_bit_identical_across_passes() {
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let (mut codec_a, seg, ranges) = aac_codec_and_frames();
     let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pool);
 
@@ -341,7 +342,7 @@ fn symphonia_aac_decode_is_bit_identical_across_passes() {
 /// oracle, this guards against any accidental per-call pool growth.
 #[kithara::test]
 fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
-    let pool = PcmPool::new(32, 8192);
+    let pool = SamplePool::new(32, 8192);
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
@@ -384,7 +385,7 @@ fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
 /// same figure.
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
     let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pool);

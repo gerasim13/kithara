@@ -10,9 +10,9 @@ use kithara::platform::time;
 use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     bufpool::Region,
-    decode::{DecoderBackend, PcmChunk},
+    decode::DecoderBackend,
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
     platform::{
@@ -22,6 +22,7 @@ use kithara::{
         tokio::{sync::broadcast::error::RecvError, task::spawn},
     },
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioChunk,
     stream::Stream,
 };
 use kithara_integration_tests::{
@@ -286,9 +287,9 @@ fn warmup_until_variant_switch(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
+fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<AudioChunk> {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -300,9 +301,9 @@ fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<P
 
 #[cfg(target_arch = "wasm32")]
 #[kithara::flash(true)]
-async fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<PcmChunk> {
+async fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<AudioChunk> {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -325,8 +326,9 @@ async fn live_real_drm_playback_smoke() {
     let url = server.asset("drm/master.m3u8");
     info!(%url, "starting real DRM playback smoke");
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(worker.byte_pool().clone())
@@ -420,8 +422,9 @@ async fn live_ephemeral_revisit_sequence_regression(
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(worker.byte_pool().clone())
@@ -654,8 +657,9 @@ async fn live_real_stream_fixed_seek_window_regression(
 ) {
     let server = TestServerHelper::new().await;
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let mut audio = build_live_audio(&worker, &server, path, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
@@ -709,8 +713,9 @@ async fn live_real_stream_random_seek_prefix_regression(
 ) {
     let server = TestServerHelper::new().await;
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let mut audio = build_live_audio(&worker, &server, path, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
@@ -759,8 +764,9 @@ async fn live_real_stream_seek_resume_native(#[case] path: &str, #[case] label: 
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(worker.byte_pool().clone())
@@ -863,7 +869,7 @@ async fn live_stress_real_stream_seek_read_cache(
         let url = server.asset(path);
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let store = if ephemeral {
             AssetStore::builder()
@@ -1196,8 +1202,9 @@ async fn live_ephemeral_small_cache_playback(#[case] path: &str, #[case] label: 
     let server = TestServerHelper::new().await;
     let url = server.asset(path);
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(worker.byte_pool().clone())
@@ -1298,7 +1305,7 @@ async fn live_ephemeral_small_cache_seek_stress(
         let url = server.asset(path);
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let store = AssetStore::builder()
             .backend(StorageBackend::Memory)

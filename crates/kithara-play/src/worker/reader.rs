@@ -1,27 +1,28 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{
-    Audio, ChunkOutcome, PcmControl, PcmRead, PcmSession, PreloadGate, ReadOutcome, SeekBegin,
-    SeekOutcome,
+    Audio, AudioControl, AudioRead, AudioSession, ChunkOutcome, PreloadGate, ReadOutcome,
+    SeekBegin, SeekOutcome,
 };
-use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
+use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
+use kithara_signal::AudioSpec;
 use kithara_warp::Warp;
 
 use super::{
     PlayWorker,
-    scheduler::{AtomicServiceClass, PcmTaskId, PcmWake, ServiceClass},
+    scheduler::{AtomicServiceClass, ServiceClass, TaskId, Wake},
 };
 
 #[derive(Clone)]
 pub(crate) struct TrackPriority {
     service_class: Arc<AtomicServiceClass>,
-    wake: PcmWake,
+    wake: Wake,
 }
 
 impl TrackPriority {
-    pub(super) const fn new(service_class: Arc<AtomicServiceClass>, wake: PcmWake) -> Self {
+    pub(super) const fn new(service_class: Arc<AtomicServiceClass>, wake: Wake) -> Self {
         Self {
             service_class,
             wake,
@@ -35,7 +36,7 @@ impl TrackPriority {
 }
 
 pub(crate) struct TrackLease {
-    task_id: Option<PcmTaskId>,
+    task_id: Option<TaskId>,
     worker: PlayWorker,
     priority: TrackPriority,
 }
@@ -43,9 +44,9 @@ pub(crate) struct TrackLease {
 impl TrackLease {
     pub(crate) const fn new(
         worker: PlayWorker,
-        task_id: PcmTaskId,
+        task_id: TaskId,
         service_class: Arc<AtomicServiceClass>,
-        wake: PcmWake,
+        wake: Wake,
     ) -> Self {
         Self {
             task_id: Some(task_id),
@@ -89,13 +90,13 @@ impl<S> RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> PcmRead for RegisteredAudio<S> {
+impl<S: MaybeSend> AudioRead for RegisteredAudio<S> {
     delegate::delegate! {
         to self.warp.source() {
             fn cached_span(&self) -> Duration;
             fn decoded_frontier(&self) -> Duration;
             fn position(&self) -> Duration;
-            fn spec(&self) -> PcmSpec;
+            fn spec(&self) -> AudioSpec;
         }
         to self.warp.source_mut() {
             fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError>;
@@ -108,7 +109,7 @@ impl<S: MaybeSend> PcmRead for RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> PcmSession for RegisteredAudio<S> {
+impl<S: MaybeSend> AudioSession for RegisteredAudio<S> {
     delegate::delegate! {
         to self.warp.source() {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -122,7 +123,7 @@ impl<S: MaybeSend> PcmSession for RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> PcmControl for RegisteredAudio<S> {
+impl<S: MaybeSend> AudioControl for RegisteredAudio<S> {
     delegate::delegate! {
         to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;
@@ -135,6 +136,6 @@ impl<S: MaybeSend> PcmControl for RegisteredAudio<S> {
     }
 
     fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        PcmControl::seek_handle(self.warp.source())
+        AudioControl::seek_handle(self.warp.source())
     }
 }

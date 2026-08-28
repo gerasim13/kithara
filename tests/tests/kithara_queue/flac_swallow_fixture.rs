@@ -2,7 +2,7 @@
 
 use kithara::{
     abr::AbrMode,
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
@@ -133,7 +133,7 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
             .build(),
     );
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
     );
 
     let cfg: ResourceConfig = ResourceConfig::for_src(

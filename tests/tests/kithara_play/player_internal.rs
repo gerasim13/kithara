@@ -12,13 +12,13 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     bufpool::Region,
-    decode::PcmSpec,
     events::{Event, EventBus, EventReceiver},
     platform::sync::Arc,
     play::{
         PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerEvent, PlayerImpl,
         PlayerStatus, Resource, SeekOutcome, SessionDispatcher,
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
 
@@ -35,8 +35,8 @@ enum RemoveAtScenario {
     ShiftCurrentIndex,
 }
 
-fn mock_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+fn mock_spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
@@ -65,7 +65,7 @@ fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSessi
         .bus(bus)
         .crossfade_duration(crossfade_duration)
         .worker(PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         ))
         .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
         .build();
@@ -77,7 +77,7 @@ fn default_player_config() -> PlayerConfig {
     let region = Region::default();
     PlayerConfig::builder()
         .worker(PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         ))
         .session(OfflineSession::arc_manual())
         .build()
@@ -297,7 +297,7 @@ async fn player_play_without_audio_hardware_logs_warning() {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),

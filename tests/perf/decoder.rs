@@ -4,16 +4,17 @@ use std::io::Cursor;
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::{BytePool, PcmPool},
-    decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
+    bufpool::{BytePool, SamplePool},
+    decode::{Decoder, DecoderConfig, DecoderFactory},
     platform::time::Instant,
+    signal::AudioChunk,
 };
 use kithara_integration_tests::create_test_wav;
 
 fn decoder_config() -> DecoderConfig {
     DecoderConfig::builder()
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .build()
 }
 
@@ -28,7 +29,7 @@ fn decoder_next_chunk_measured(decoder: &mut Box<dyn Decoder>) -> Option<()> {
     decoder
         .next_chunk()
         .ok()
-        .and_then(|o| PcmChunk::try_from(o).ok())
+        .and_then(|o| AudioChunk::try_from(o).ok())
         .map(|_| ())
 }
 
@@ -44,7 +45,7 @@ fn decoder_chunk_process(decoder: &mut Box<dyn Decoder>) -> Option<usize> {
     decoder
         .next_chunk()
         .ok()
-        .and_then(|o| PcmChunk::try_from(o).ok())
+        .and_then(|o| AudioChunk::try_from(o).ok())
         .map(|chunk| chunk.samples.len())
 }
 
@@ -106,7 +107,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             let mut total_samples = 0;
             hotpath::measure_block!("decode_all_chunks", {
                 while let Ok(outcome) = decoder.next_chunk() {
-                    let Ok(chunk) = PcmChunk::try_from(outcome) else {
+                    let Ok(chunk) = AudioChunk::try_from(outcome) else {
                         break;
                     };
                     total_samples += chunk.samples.len();

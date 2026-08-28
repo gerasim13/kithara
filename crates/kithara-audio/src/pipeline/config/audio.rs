@@ -6,7 +6,7 @@ use kithara_platform::CancelToken;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
 
-use crate::{pipeline::config::AudioDecoderConfig, traits::PcmObserver};
+use crate::{pipeline::config::AudioDecoderConfig, traits::AudioObserver};
 
 struct Consts;
 
@@ -66,9 +66,9 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Media info hint for format detection
     pub(crate) media_info: Option<MediaInfo>,
     /// Optional bounded, nonblocking observer of decoder-output PCM.
-    /// [`kithara_decode::PcmChunk::meta`] describes its post-conversion format;
+    /// [`kithara_signal::AudioChunk::meta`] describes its post-conversion format;
     /// it runs before playback effects and owns any asynchronous copy.
-    pub(crate) observer: Option<Box<dyn PcmObserver>>,
+    pub(crate) observer: Option<Box<dyn AudioObserver>>,
     /// Make a producer-ring underrun block (engine-aware park) instead of
     /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
     /// opt in so `read` / `next_chunk` wait for the decode worker instead of
@@ -89,7 +89,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = Consts::PCM_BUFFER_CHUNKS)]
     #[field(get)]
-    pub(crate) pcm_buffer_chunks: usize,
+    pub(crate) audio_buffer_chunks: usize,
 }
 
 impl<T, B> AudioConfig<T, B>

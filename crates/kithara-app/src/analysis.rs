@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use kithara::{
     audio::analysis::BeatAnalysisConfig,
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     decode::DecodeError,
     events::{Envelope, Event, EventReceiver, TrackId},
     prelude::{PlaybackResamplerBackend, ResourceConfig},
@@ -41,7 +41,7 @@ pub(crate) async fn listen(
     let mut driver = AnalysisController::new(
         &cancel,
         &config.beat_analysis,
-        config.worker.pcm_pool().clone(),
+        config.worker.sample_pool().clone(),
         config.waveform_max_buckets,
     );
 
@@ -110,7 +110,7 @@ impl AnalysisController {
     pub(crate) fn new(
         cancel: &CancelToken,
         beat_config: &AppBeatAnalysisConfig,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
         waveform_max_buckets: usize,
     ) -> Self {
         Self {
@@ -118,7 +118,7 @@ impl AnalysisController {
                 cancel,
                 waveform_max_buckets,
                 beat_config.clone(),
-                pcm_pool,
+                sample_pool,
             ),
             cache: TrackAnalysisCache::new(analysis_fingerprint(beat_config, waveform_max_buckets)),
             current: None,
@@ -420,7 +420,7 @@ mod tests {
             StorageBackend,
         },
         audio::{Waveform, analysis::BeatAnalysisConfig},
-        bufpool::{PcmPool, Region},
+        bufpool::{Region, SamplePool},
         events::TrackId,
         file::File,
         host::{Host, HostConfig},
@@ -479,7 +479,7 @@ mod tests {
     fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let mut host = Host::new(HostConfig::builder().build()).expect("test host");
         let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
@@ -505,7 +505,7 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            PcmPool::default(),
+            SamplePool::default(),
             MAX_BUCKETS,
         );
         let (tx, rx) = watch::channel(value);
@@ -691,7 +691,7 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            PcmPool::default(),
+            SamplePool::default(),
             MAX_BUCKETS,
         );
         controller.displayed = Some(target("previous"));

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
@@ -38,7 +38,7 @@ pub struct EngineImpl {
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
     #[field(get, vis = "pub(crate)")]
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
     session: SessionHandle,
 }
 
@@ -51,7 +51,7 @@ impl EngineImpl {
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
-        let resolved_pool = config.pcm_pool.clone();
+        let resolved_pool = config.sample_pool.clone();
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
             config,
@@ -59,7 +59,7 @@ impl EngineImpl {
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
-            pcm_pool: resolved_pool,
+            sample_pool: resolved_pool,
             player_id: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
@@ -119,7 +119,7 @@ impl EngineImpl {
             self.config.grid_id,
             self.bus.clone(),
             self.eq_layout.lock().clone(),
-            self.pcm_pool.clone(),
+            self.sample_pool.clone(),
             self.config.sample_rate,
         )?;
         *player_id = Some(id);

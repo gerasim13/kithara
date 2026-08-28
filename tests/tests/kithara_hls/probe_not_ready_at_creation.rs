@@ -175,7 +175,7 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -233,7 +233,7 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

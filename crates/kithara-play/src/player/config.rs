@@ -40,7 +40,7 @@ pub struct PlayerConfig {
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     pub(crate) worker: PlayWorker,
-    /// How resources created for this player trim leading/trailing PCM.
+    /// How resources created for this player trim leading/trailing audio.
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
     /// Shared ABR controller. When `None`, a default one is created.

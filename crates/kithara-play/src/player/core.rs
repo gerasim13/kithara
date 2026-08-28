@@ -2,7 +2,7 @@ mod lifecycle;
 mod player;
 
 use delegate::delegate;
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_decode::GaplessMode;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_warp::StretchControls;
@@ -113,9 +113,9 @@ impl PlayerRuntime {
             /// Byte pool used for resources created by this player.
             #[must_use]
             pub fn byte_pool(&self) -> &BytePool;
-            /// PCM pool used by this player's audio engine.
+            /// Sample pool used by this player's audio engine.
             #[must_use]
-            pub fn pcm_pool(&self) -> &PcmPool;
+            pub fn sample_pool(&self) -> &SamplePool;
         }
     }
 
@@ -162,7 +162,7 @@ impl PlayerRuntime {
         let item = self.core.items.take_for_load(
             index,
             self.core.engine.master_sample_rate(),
-            self.core.engine.pcm_pool(),
+            self.core.engine.sample_pool(),
         )?;
         self.phase.lock().set_abr_handle(item.abr_handle);
         let src = Arc::clone(item.player_resource.src());
@@ -224,7 +224,7 @@ mod tests {
     };
 
     use kithara_assets::AssetStore;
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
@@ -259,7 +259,7 @@ mod tests {
 
     fn worker() -> PlayWorker {
         PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         )
     }
 
@@ -669,7 +669,10 @@ mod tests {
             player.worker().byte_pool(),
             worker.byte_pool()
         ));
-        assert!(std::ptr::eq(player.worker().pcm_pool(), worker.pcm_pool()));
+        assert!(std::ptr::eq(
+            player.worker().sample_pool(),
+            worker.sample_pool()
+        ));
     }
 
     #[kithara::test]

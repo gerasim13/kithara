@@ -9,12 +9,12 @@ use kithara_test_utils::kithara;
 ///
 /// This struct is the kithara-stream-local mirror of the fields
 /// [`PlayheadWrite::advance`] needs from a decoder's per-chunk metadata.
-/// It exists because `PcmMeta` lives in `kithara-decode` (which depends on
-/// `kithara-stream`); a tiny mirror avoids the circular dep without forcing
-/// decoders to fragment their existing meta type.
+/// It keeps the transport-facing playhead independent from the decoded-signal
+/// layer owned by `kithara-signal`; playback converts the richer chunk metadata
+/// at the boundary.
 ///
 /// Decoder backends fill it from their own meta — see
-/// `From<&PcmMeta> for ChunkPosition` in `kithara-decode`.
+/// the playback-side conversion from `AudioChunkInfo` to `ChunkPosition`.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkPosition {
     /// Absolute byte offset of the chunk's source data when the

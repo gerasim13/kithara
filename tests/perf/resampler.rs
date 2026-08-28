@@ -4,18 +4,18 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::PcmPool,
-    decode::{PcmChunk, PcmMeta, PcmSpec},
+    bufpool::SamplePool,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 
 /// Create a test PCM chunk with specified sample count.
-fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
+fn create_test_chunk(frames: usize, spec: AudioSpec) -> AudioChunk {
     let samples = frames * spec.channels as usize;
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let pcm = pool.get_with(|b| {
         b.clear();
         b.resize(samples, 0.0);
@@ -24,8 +24,8 @@ fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
         }
     });
 
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec,
             ..Default::default()
         },
@@ -65,7 +65,7 @@ fn build_resampler(
         })
         .quality(quality)
         .options(ResamplerOptions::builder().chunk_size(chunk_size).build())
-        .pcm_pool(PcmPool::new(64, chunk_size.saturating_mul(16)))
+        .sample_pool(SamplePool::new(64, chunk_size.saturating_mul(16)))
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -134,7 +134,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::QualityComparison => {
-            let input_spec = PcmSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
+            let input_spec = AudioSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
             let output_rate = 44100;
             let test_frames = 2048;
             let qualities = [
@@ -164,7 +164,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             }
         }
         PerfScenario::PassthroughDetection => {
-            let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
+            let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
             let mut resampler = build_resampler(
                 spec.sample_rate,
                 spec.sample_rate,
@@ -187,7 +187,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             println!("{:=<60}\n", "");
         }
         PerfScenario::DeinterleaveOverhead => {
-            let input_spec = PcmSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
+            let input_spec = AudioSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
             let chunk = create_test_chunk(2048, input_spec);
 
             for _ in 0..1000 {
@@ -219,7 +219,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             println!("{:=<60}\n", "");
         }
         PerfScenario::DetailedBreakdown => {
-            let input_spec = PcmSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
+            let input_spec = AudioSpec::new(2, NonZeroU32::new(48000).expect("test rate"));
             let output_rate = 44100;
             let chunk_sizes = [512, 1024, 2048, 4096];
 

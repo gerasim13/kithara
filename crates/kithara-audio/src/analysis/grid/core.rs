@@ -1,5 +1,5 @@
 use bon::Builder;
-use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
+use kithara_bufpool::{BudgetExhausted, SampleBuffer, SamplePool};
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -87,7 +87,7 @@ pub(crate) fn build_grid(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,
-    pool: &PcmPool,
+    pool: &SamplePool,
 ) -> Result<BeatGrid, BudgetExhausted> {
     let mut buffers = GridBuffers::new(pool);
     build_grid_with(raw, sample_rate, params, &mut buffers)
@@ -180,9 +180,9 @@ fn clean_beats(
     secs: &[f32],
     downbeats: &[f32],
     params: &GridParams,
-    marks: &mut PcmBuf,
-    gaps: &mut PcmBuf,
-    sorted: &mut PcmBuf,
+    marks: &mut SampleBuffer,
+    gaps: &mut SampleBuffer,
+    sorted: &mut SampleBuffer,
 ) -> Result<(), BudgetExhausted> {
     fill(marks, secs.iter().copied())?;
     retain(marks, |time| time.is_finite() && time >= 0.0);
@@ -196,8 +196,8 @@ fn clean_beats(
 /// Estimates tempo by weighting each gap by the beat spans it covers.
 fn beats_bpm(
     beats: &[f32],
-    gaps: &mut PcmBuf,
-    sorted: &mut PcmBuf,
+    gaps: &mut SampleBuffer,
+    sorted: &mut SampleBuffer,
 ) -> Result<Option<f64>, BudgetExhausted> {
     bar_gaps(beats, gaps)?;
     retain(gaps, |gap| gap > 0.0);
@@ -250,7 +250,7 @@ fn bar_to_bpm(bar_seconds: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -272,13 +272,13 @@ mod tests {
     }
 
     fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
-        super::build_grid(raw, sample_rate, params, &PcmPool::default())
+        super::build_grid(raw, sample_rate, params, &SamplePool::default())
             .expect("grid scratch fits the PCM pool budget")
     }
 
     #[kithara::test(native, flash(false))]
-    fn injected_pcm_pool_reuses_grid_buffers() {
-        let pool = PcmPool::new(64, 200_000);
+    fn injected_sample_pool_reuses_grid_buffers() {
+        let pool = SamplePool::new(64, 200_000);
         let raw = RawBeats {
             beats: steady(0.0, 0.5, 128),
             downbeats: steady(0.0, 2.0, 64),

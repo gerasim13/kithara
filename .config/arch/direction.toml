@@ -16,7 +16,13 @@ crates = ["kithara-platform"]
 [[layer]]
 index = 2
 name = "infra"
-crates = ["kithara-bufpool", "kithara-drm", "kithara-events", "kithara-net"]
+crates = [
+  "kithara-bufpool",
+  "kithara-drm",
+  "kithara-events",
+  "kithara-net",
+  "kithara-signal",
+]
 
 [[layer]]
 index = 3

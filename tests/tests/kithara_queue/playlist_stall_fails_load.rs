@@ -103,7 +103,7 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))

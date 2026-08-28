@@ -11,7 +11,7 @@ mod runtime;
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     events::EventBus,
     hls::AbrMode,
     platform::{
@@ -772,7 +772,7 @@ async fn prepare_deck(
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+                PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
             ))
             .bus(bus)
             .sample_rate(

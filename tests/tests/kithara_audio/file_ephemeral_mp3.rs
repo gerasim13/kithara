@@ -3,7 +3,7 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     file::{File, FileConfig},
@@ -48,8 +48,9 @@ async fn audio_file_mp3_decodes_with_duration(
         None => handle.url(),
     };
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
             AssetStore::builder()
@@ -142,8 +143,9 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
     });
     let url = handle.url();
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
             AssetStore::builder()
@@ -185,8 +187,9 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
         delivery: Delivery::Range,
     });
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let file_config = FileConfig::for_src(handle.url().into())
         .store(
             AssetStore::builder()

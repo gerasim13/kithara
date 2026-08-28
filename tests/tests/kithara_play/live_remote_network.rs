@@ -13,7 +13,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ReadOutcome,
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
@@ -161,7 +161,7 @@ async fn live_remote_resource_decodes_with_duration(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let byte_pool = BytePool::default();
-    let pcm_pool = PcmPool::default();
+    let sample_pool = SamplePool::default();
     let store = asset_store(&temp_dir, true, byte_pool.clone());
     let net = NetOptions::builder()
         .byte_pool(byte_pool.clone())
@@ -173,7 +173,7 @@ async fn live_remote_resource_decodes_with_duration(
     let config: ResourceConfig =
         ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build(),
+                PlayWorkerConfig::for_pools(byte_pool, sample_pool).build(),
             ))
             .store(store)
             .downloader(downloader)
@@ -290,14 +290,14 @@ async fn player_mp3_duration_matches_app_flow(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let byte_pool = BytePool::default();
-    let pcm_pool = PcmPool::default();
+    let sample_pool = SamplePool::default();
     let store = asset_store(&temp_dir, true, byte_pool.clone());
 
     let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(byte_pool, pcm_pool).build(),
+                PlayWorkerConfig::for_pools(byte_pool, sample_pool).build(),
             ))
             .build(),
     );

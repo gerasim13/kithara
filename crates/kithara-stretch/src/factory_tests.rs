@@ -1,4 +1,4 @@
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
 
 use super::build_engine;
@@ -10,7 +10,7 @@ const FRAMES: usize = 4096;
 fn config(backend: StretchKind) -> ElasticConfig {
     ElasticConfig::builder()
         .backend(backend)
-        .pool(PcmPool::default())
+        .pool(SamplePool::default())
         .sample_rate(44_100)
         .channels(CHANNELS)
         .max_source_frames(FRAMES)

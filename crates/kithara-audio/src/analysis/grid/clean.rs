@@ -1,4 +1,4 @@
-use kithara_bufpool::{BudgetExhausted, PcmBuf};
+use kithara_bufpool::{BudgetExhausted, SampleBuffer};
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -6,12 +6,12 @@ use super::{
     scratch::{fill, retain},
 };
 
-pub(super) fn bar_gaps(db: &[f32], gaps: &mut PcmBuf) -> Result<(), BudgetExhausted> {
+pub(super) fn bar_gaps(db: &[f32], gaps: &mut SampleBuffer) -> Result<(), BudgetExhausted> {
     fill(gaps, db.windows(2).map(|window| window[1] - window[0]))
 }
 
 /// np-style median: mean of the two middle values for even lengths.
-pub(super) fn median(values: &[f32], sorted: &mut PcmBuf) -> Result<f64, BudgetExhausted> {
+pub(super) fn median(values: &[f32], sorted: &mut SampleBuffer) -> Result<f64, BudgetExhausted> {
     if values.is_empty() {
         return Ok(0.0);
     }
@@ -44,12 +44,12 @@ fn pop_std(values: &[f32]) -> f64 {
 }
 
 /// Drops detector marks closer than `min_gap` to the last retained mark.
-pub(super) fn filter_close(marks: &mut PcmBuf, min_gap: f64) {
+pub(super) fn filter_close(marks: &mut SampleBuffer, min_gap: f64) {
     filter_close_preferring(marks, &[], min_gap);
 }
 
 /// Drops close marks while preserving a preferred mark in each collision.
-pub(super) fn filter_close_preferring(marks: &mut PcmBuf, preferred: &[f32], min_gap: f64) {
+pub(super) fn filter_close_preferring(marks: &mut SampleBuffer, preferred: &[f32], min_gap: f64) {
     if marks.len() < 2 {
         return;
     }
@@ -83,8 +83,8 @@ pub(super) fn find_stable_window(
     db: &[f32],
     nominal_bar: f64,
     params: &GridParams,
-    gaps: &mut PcmBuf,
-    sorted: &mut PcmBuf,
+    gaps: &mut SampleBuffer,
+    sorted: &mut SampleBuffer,
 ) -> Result<Option<(usize, f64)>, BudgetExhausted> {
     let w = params.stable_window_bars;
     if w == 0 || db.len() < w + 1 {
@@ -115,9 +115,9 @@ pub(super) fn classify_outliers(
     db: &[f32],
     nominal_bar: f64,
     params: &GridParams,
-    outliers: &mut PcmBuf,
-    neighbors: &mut PcmBuf,
-    sorted: &mut PcmBuf,
+    outliers: &mut SampleBuffer,
+    neighbors: &mut SampleBuffer,
+    sorted: &mut SampleBuffer,
 ) -> Result<(), BudgetExhausted> {
     let n = db.len();
     fill(outliers, (0..n).map(|_| 0.0))?;

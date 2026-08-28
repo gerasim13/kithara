@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    audio::{AudioConfig, PcmControl},
+    audio::{AudioConfig, AudioControl},
     bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -48,7 +48,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(CancelToken::never())
             .build(),
     );
@@ -98,7 +98,8 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
         .initial_abr_mode(AbrMode::manual(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker.open(config).await.expect("create hls audio");
     audio.preload().expect("preload must succeed");
     // Spawn side: the named-thread increment is eager/synchronous at each
@@ -135,7 +136,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let region = Region::default();
     let shared_worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(CancelToken::never())
             .build(),
     );

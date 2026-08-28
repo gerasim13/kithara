@@ -1,7 +1,7 @@
 use std::mem;
 
-use kithara_bufpool::PcmBuf;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_bufpool::SampleBuffer;
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
 use tracing::warn;
@@ -12,19 +12,31 @@ impl WarpRenderer {
     /// Assemble an output chunk from `scratch`, preserving the exact source
     /// start and the latest decoder frontier. `replacement` is retained for
     /// shell-side preparation before the next checked tick.
-    fn emit(&mut self, replacement: Option<PcmBuf>, held_source_frames: u64) -> Option<PcmChunk> {
+    fn emit(
+        &mut self,
+        replacement: Option<SampleBuffer>,
+        held_source_frames: u64,
+    ) -> Option<AudioChunk> {
         let total = self.scratch.as_deref().map_or(0, <[f32]>::len);
         if total == 0 {
             self.defer_scratch(replacement);
             return None;
         }
-        let channels = usize::from(self.spec.channels.max(1));
+        let frames = match self.spec.frame_count(SampleCount::new(total)) {
+            Ok(frames) => frames,
+            Err(error) => {
+                warn!(?error, total, "discarding malformed Warp output shape");
+                self.scratch.take();
+                self.defer_scratch(replacement);
+                return None;
+            }
+        };
         let mut meta = self.last_input_meta.unwrap_or_default();
         self.record_rendered_source_end(meta, held_source_frames);
         // A non-empty output always carries the live source spec. The default
         // metadata sentinel has zero channels and cannot reach the resampler.
         meta.spec = self.spec;
-        meta.frames = u32::try_from(total / channels).unwrap_or(u32::MAX);
+        meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
         if let Some(start) = self.output_start_meta.take() {
             if start.frame_offset != meta.frame_offset {
                 meta.source_byte_offset = None;
@@ -33,9 +45,9 @@ impl WarpRenderer {
             meta.frame_offset = start.frame_offset;
             meta.timestamp = start.timestamp;
         }
-        let pcm = self.scratch.take()?;
+        let samples = self.scratch.take()?;
         self.defer_scratch(replacement);
-        Some(PcmChunk::new(meta, pcm))
+        Some(AudioChunk::new(meta, samples))
     }
 
     fn finish_transition_tail(&mut self) {
@@ -48,7 +60,7 @@ impl WarpRenderer {
         self.region = None;
     }
 
-    fn retire_transition_tail(&mut self, replacement: Option<PcmBuf>) {
+    fn retire_transition_tail(&mut self, replacement: Option<SampleBuffer>) {
         self.retire_engine();
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
@@ -64,11 +76,15 @@ impl WarpRenderer {
         self.region = None;
     }
 
-    fn queue_unity(&mut self, meta: PcmMeta, samples: &mut PcmBuf) -> Result<(), ElasticError> {
+    fn queue_unity(
+        &mut self,
+        meta: AudioChunkInfo,
+        samples: &mut SampleBuffer,
+    ) -> Result<(), ElasticError> {
         let pending = self
             .pending_source
             .as_mut()
-            .ok_or(ElasticError::PcmPoolBudgetExhausted)?;
+            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
         if !pending.is_empty() {
             return Err(ElasticError::EnginePreparation(
                 "time-stretch pending source was not committed before unity",
@@ -81,8 +97,8 @@ impl WarpRenderer {
 
     fn begin_unity_transition(
         &mut self,
-        meta: PcmMeta,
-        samples: &mut PcmBuf,
+        meta: AudioChunkInfo,
+        samples: &mut SampleBuffer,
         channels: usize,
     ) -> Result<(), ElasticError> {
         let tail_start_meta = self.last_input_meta;
@@ -109,7 +125,7 @@ impl WarpRenderer {
         self.queue_unity(meta, samples)
     }
 
-    fn emit_pending_unity(&mut self, replacement: Option<PcmBuf>) -> Option<PcmChunk> {
+    fn emit_pending_unity(&mut self, replacement: Option<SampleBuffer>) -> Option<AudioChunk> {
         let meta = self.pending_unity_meta?;
         let replacement = replacement
             .or_else(|| self.scratch.take())
@@ -130,7 +146,7 @@ impl WarpRenderer {
         self.last_input_meta = Some(meta);
         self.output_start_meta = None;
         self.record_rendered_source_end(meta, 0);
-        Some(PcmChunk::new(meta, samples))
+        Some(AudioChunk::new(meta, samples))
     }
 
     fn drain_tail(&mut self, channels: usize) -> Result<bool, ElasticError> {
@@ -143,9 +159,11 @@ impl WarpRenderer {
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
             .terminal_chunk_frames();
-        let tail_samples = tail_frames
-            .checked_mul(channels)
-            .ok_or(ElasticError::SampleCountOverflow)?;
+        let tail_samples = SampleCount::new(
+            tail_frames
+                .checked_mul(channels)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        );
         let scratch = self
             .scratch
             .as_mut()
@@ -154,7 +172,7 @@ impl WarpRenderer {
             ))?;
         let start = scratch.len();
         let end = start
-            .checked_add(tail_samples)
+            .checked_add(tail_samples.get())
             .ok_or(ElasticError::SampleCountOverflow)?;
         if end > scratch.capacity() {
             return Err(ElasticError::OutputFrameLimit {
@@ -164,24 +182,26 @@ impl WarpRenderer {
         }
         scratch
             .ensure_len(end)
-            .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
         let drain = self
             .engine
             .as_mut()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .flush(&mut scratch[start..end])?;
-        let rendered_frames = drain.frames();
-        if rendered_frames > tail_frames {
+        let rendered_frames = FrameCount::new(drain.frames());
+        if rendered_frames.get() > tail_frames {
             return Err(ElasticError::EngineOutputFrameCount {
-                actual: rendered_frames,
+                actual: rendered_frames.get(),
                 expected: tail_frames,
             });
         }
         let rendered_samples = rendered_frames
+            .get()
             .checked_mul(channels)
+            .map(SampleCount::new)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        scratch.truncate(start + rendered_samples);
-        if !drain.complete() && rendered_frames == 0 {
+        scratch.truncate(start + rendered_samples.get());
+        if !drain.complete() && rendered_frames.get() == 0 {
             return Err(ElasticError::EnginePreparation(
                 "time-stretch terminal drain stopped advancing",
             ));
@@ -189,14 +209,14 @@ impl WarpRenderer {
         Ok(drain.complete())
     }
 
-    fn process_unity(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    fn process_unity(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let channels = usize::from(self.spec.channels.max(1));
         if !self.active && self.pending_frames(channels) == 0 {
             self.record_rendered_source_end(chunk.meta, 0);
             return Some(chunk);
         }
 
-        let PcmChunk { meta, mut samples } = chunk;
+        let AudioChunk { meta, mut samples } = chunk;
         if let Err(error) = self.begin_unity_transition(meta, &mut samples, channels) {
             warn!(%error, "time-stretch transition to passthrough failed; dropping chunk");
             self.retire_engine();
@@ -211,8 +231,8 @@ impl WarpRenderer {
     fn advance_transition(
         &mut self,
         channels: usize,
-        replacement: Option<PcmBuf>,
-    ) -> Option<PcmChunk> {
+        replacement: Option<SampleBuffer>,
+    ) -> Option<AudioChunk> {
         if !self.active {
             return self.emit_pending_unity(replacement);
         }
@@ -248,14 +268,14 @@ impl WarpRenderer {
         None
     }
 
-    fn process_active(&mut self, chunk: PcmChunk, speed: f32) -> Option<PcmChunk> {
+    fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
         if self.engine.is_none() || self.scratch.is_none() {
             warn!("time-stretch target was not prepared before rendering");
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
 
-        let PcmChunk { meta, samples } = chunk;
+        let AudioChunk { meta, samples } = chunk;
         self.last_input_meta = Some(meta);
         self.output_start_meta = None;
         if let Some(scratch) = self.scratch.as_mut() {
@@ -288,12 +308,12 @@ impl WarpRenderer {
     }
 
     #[doc(hidden)]
-    pub fn prepare(&mut self, spec: PcmSpec) {
+    pub fn prepare(&mut self, spec: AudioSpec) {
         self.service_target(spec);
     }
 
     #[doc(hidden)]
-    pub fn flush(&mut self) -> Option<PcmChunk> {
+    pub fn flush(&mut self) -> Option<AudioChunk> {
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         } else {
@@ -326,7 +346,7 @@ impl WarpRenderer {
     }
 
     #[doc(hidden)]
-    pub fn render(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,

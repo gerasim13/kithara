@@ -7,8 +7,7 @@ use std::{
 
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, PcmPool},
-    decode::PcmSpec,
+    bufpool::{BytePool, SamplePool},
     platform::{
         sync::Arc,
         time::{self, Duration},
@@ -17,6 +16,7 @@ use kithara::{
         Cmd, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
         SelectTransition, SessionDispatcher, apply_mix,
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -97,7 +97,7 @@ impl MixHarness {
             .map(|_| {
                 let config = PlayerConfig::builder()
                     .worker(PlayWorker::new(
-                        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default())
+                        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default())
                             .build(),
                     ))
                     .sample_rate(
@@ -113,7 +113,7 @@ impl MixHarness {
     }
 
     fn play(&self, values: &[f32]) {
-        let spec = PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
         for (player, &value) in self.players.iter().zip(values) {
             player.insert(
                 resource_from_reader(TestPcmReader::with_value(spec, TRACK_SECS, value)),

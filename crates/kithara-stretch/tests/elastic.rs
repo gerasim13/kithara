@@ -7,7 +7,7 @@
 
 use std::{f32::consts::TAU, ops::RangeInclusive};
 
-use kithara_bufpool::{ByteBudget, PcmPool};
+use kithara_bufpool::{ByteBudget, SamplePool};
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
     ElasticSpanConfig, StretchKind, build_engine,
@@ -35,7 +35,7 @@ fn prepared_backend(
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
-        .pool(PcmPool::default())
+        .pool(SamplePool::default())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .max_source_frames(max_source_frames)
@@ -53,7 +53,7 @@ fn prepared_backend_with_rate_envelope(
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
-        .pool(PcmPool::default())
+        .pool(SamplePool::default())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .max_source_frames(max_source_frames)
@@ -83,7 +83,7 @@ fn drain_terminal(engine: &mut dyn ElasticEngine) -> Vec<f32> {
         chunk.fill(0.0);
         let step = engine.flush(&mut chunk).expect("terminal flush");
         let frames = step.frames();
-        assert!(frames > 0, "an active drain step carries real PCM");
+        assert!(frames > 0, "an active drain step carries real audio frames");
         drained.extend_from_slice(&chunk[..frames * CHANNELS]);
         if step.complete() {
             let completed = engine.flush(&mut chunk).expect("completed drain");
@@ -1061,7 +1061,7 @@ macro_rules! elastic_engine_conformance {
 
                 let config = ElasticConfig::builder()
                     .backend(backend)
-                    .pool(PcmPool::default())
+                    .pool(SamplePool::default())
                     .sample_rate(SAMPLE_RATE)
                     .channels(1)
                     .max_source_frames(SOURCE_FRAMES)
@@ -2073,10 +2073,10 @@ fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKi
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn prepare_uses_the_injected_pcm_pool_budget(#[case] backend: StretchKind) {
+fn prepare_uses_the_injected_sample_pool_budget(#[case] backend: StretchKind) {
     let config = ElasticConfig::builder()
         .backend(backend)
-        .pool(PcmPool::with_byte_budget(8, 8192, ByteBudget(0)))
+        .pool(SamplePool::with_byte_budget(8, 8192, ByteBudget(0)))
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .max_source_frames(8192)
@@ -2085,17 +2085,41 @@ fn prepare_uses_the_injected_pcm_pool_budget(#[case] backend: StretchKind) {
         .expect("the numeric preparation shape is valid");
 
     let Err(error) = build_engine(config) else {
-        panic!("zero pool budget cannot prepare resident PCM scratch");
+        panic!("zero pool budget cannot prepare resident sample scratch");
     };
 
-    assert_eq!(error, ElasticError::PcmPoolBudgetExhausted);
+    assert_eq!(error, ElasticError::SamplePoolBudgetExhausted);
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn config_rejects_channels_outside_audio_spec_range(#[case] backend: StretchKind) {
+    let channels = usize::from(u16::MAX) + 1;
+
+    let result = ElasticConfig::builder()
+        .backend(backend)
+        .pool(SamplePool::default())
+        .sample_rate(SAMPLE_RATE)
+        .channels(channels)
+        .max_source_frames(CONTROL_QUANTUM)
+        .max_output_frames(CONTROL_QUANTUM)
+        .build();
+
+    assert!(matches!(
+        result,
+        Err(ElasticError::ChannelCountOutOfRange(actual)) if actual == channels
+    ));
 }
 
 #[cfg(feature = "stretch-bungee")]
 #[kithara::test]
 fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
     fn allocated_bytes(max_source_frames: usize) -> usize {
-        let pool = PcmPool::with_byte_budget(8, 8192, ByteBudget(usize::MAX));
+        let pool = SamplePool::with_byte_budget(8, 8192, ByteBudget(usize::MAX));
         let config = ElasticConfig::builder()
             .backend(StretchKind::Bungee)
             .pool(pool.clone())

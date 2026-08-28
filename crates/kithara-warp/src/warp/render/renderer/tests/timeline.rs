@@ -1,5 +1,5 @@
-use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -12,8 +12,8 @@ use crate::{GridSegment, RegionPlan};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
-    first: PcmChunk,
-) -> (Vec<f32>, PcmChunk, Vec<usize>) {
+    first: AudioChunk,
+) -> (Vec<f32>, AudioChunk, Vec<usize>) {
     let mut tail = Vec::new();
     let mut quanta = Vec::new();
     let mut output = first;
@@ -21,14 +21,14 @@ fn finish_unity_transition(
         if !renderer.transition_pending() {
             return (tail, output, quanta);
         }
-        assert!(output.frames() > 0, "a tail quantum contains real PCM");
+        assert!(output.frames() > 0, "a tail quantum contains real samples");
         quanta.push(output.frames());
         tail.extend_from_slice(&output.samples);
         assert!(
             renderer.transition_pending(),
             "queued unity remains owned after a tail quantum"
         );
-        output = flush_serviced(renderer).expect("the next transition quantum emits PCM");
+        output = flush_serviced(renderer).expect("the next transition quantum emits samples");
     }
     panic!("active-to-unity transition must converge");
 }
@@ -179,7 +179,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
     assert_eq!(second_output.meta.frame_offset, 1);
     assert_eq!(
         second_output.meta.timestamp,
-        duration_for_frames(Consts::SR, 1)
+        spec().duration_for(1).expect("test timestamp fits")
     );
     assert_eq!(second_output.meta.end_timestamp, Duration::from_millis(30));
     assert_eq!(second_output.meta.segment_index, Some(2));
@@ -270,7 +270,7 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     );
     assert!(
         !tail.is_empty(),
-        "the pending frame and backend tail emit PCM"
+        "the pending frame and backend tail emit samples"
     );
     assert_eq!(
         &unity.samples[..],
@@ -305,8 +305,8 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     reference_controls.set_keylock(true);
     reference_controls.set_backend(backend);
     let mut reference = renderer(Arc::clone(&reference_controls));
-    let reference_active =
-        render_serviced(&mut reference, chunk(&source[..split])).expect("non-unity span emits PCM");
+    let reference_active = render_serviced(&mut reference, chunk(&source[..split]))
+        .expect("non-unity span emits samples");
     let held_frontier = reference
         .rendered_source_end()
         .expect("active render publishes its source frontier");
@@ -328,7 +328,7 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     );
     assert!(
         !reference_tail.is_empty(),
-        "active backend tail contains PCM"
+        "active backend tail contains samples"
     );
     assert_eq!(
         reference.rendered_source_end(),
@@ -351,7 +351,7 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     live_controls.set_backend(backend);
     let mut live = renderer(Arc::clone(&live_controls));
     let live_active =
-        render_serviced(&mut live, chunk(&source[..split])).expect("non-unity span emits PCM");
+        render_serviced(&mut live, chunk(&source[..split])).expect("non-unity span emits samples");
     assert_eq!(live_active.frames(), reference_active.frames());
     assert_eq!(live.rendered_source_end(), Some(held_frontier));
 
@@ -373,11 +373,11 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     );
     assert!(
         live_tail.iter().any(|sample| sample.abs() > f32::EPSILON),
-        "the retained backend tail contains audible PCM"
+        "the retained backend tail contains audible samples"
     );
     assert!(
         live_tail.iter().all(|sample| sample.is_finite()),
-        "the retained backend tail contains only finite PCM"
+        "the retained backend tail contains only finite samples"
     );
     assert_eq!(live_tail.len(), reference_tail.len());
     #[cfg(feature = "stretch-bungee")]
@@ -400,18 +400,18 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
         );
         assert!(
             peak <= 1.0,
-            "Signalsmith live tail remains within normalized PCM bounds: peak={peak}"
+            "Signalsmith live tail remains within normalized sample bounds: peak={peak}"
         );
     }
     assert_eq!(
         &live_unity.samples[..],
         &source[split..],
-        "unity PCM follows the retained tail byte-for-byte"
+        "unity samples follow the retained tail byte-for-byte"
     );
     assert_eq!(
         live_unity.samples.as_ptr(),
         unity_ptr,
-        "queued unity PCM returns without copying"
+        "queued unity samples return without copying"
     );
     assert_eq!(
         live.rendered_source_end(),
@@ -419,7 +419,7 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
             u64::try_from(ACTIVE_FRAMES + UNITY_FRAMES).expect("fixture fits u64"),
             spec().sample_rate,
         )),
-        "the source frontier advances only after tail and unity PCM are emitted"
+        "the source frontier advances only after tail and unity samples are emitted"
     );
     assert!(flush_serviced(&mut live).is_none());
 }
@@ -450,9 +450,9 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
         .expect("the no-debt transition starts its tail");
     let (reference_tail, reference_unity, _) =
         finish_unity_transition(&mut reference, reference_transition);
-    let mut reference_pcm = reference_first.samples.to_vec();
-    reference_pcm.extend_from_slice(&reference_tail);
-    reference_pcm.extend_from_slice(&reference_unity.samples);
+    let mut reference_samples = reference_first.samples.to_vec();
+    reference_samples.extend_from_slice(&reference_tail);
+    reference_samples.extend_from_slice(&reference_unity.samples);
 
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
@@ -478,17 +478,17 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
     unity.meta.frame_offset = 2;
     let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
     let (tail, unity, _) = finish_unity_transition(&mut fx, transition);
-    let mut actual_pcm = first.samples.to_vec();
-    actual_pcm.extend_from_slice(&tail);
-    actual_pcm.extend_from_slice(&unity.samples);
+    let mut actual_samples = first.samples.to_vec();
+    actual_samples.extend_from_slice(&tail);
+    actual_samples.extend_from_slice(&unity.samples);
     assert_eq!(
-        actual_pcm.len() / usize::from(Consts::CH),
-        reference_pcm.len() / usize::from(Consts::CH),
+        actual_samples.len() / usize::from(Consts::CH),
+        reference_samples.len() / usize::from(Consts::CH),
         "negative rounding debt adds no output frame"
     );
     assert_eq!(
-        actual_pcm, reference_pcm,
-        "negative rounding debt adds no PCM to the complete transition"
+        actual_samples, reference_samples,
+        "negative rounding debt adds no samples to the complete transition"
     );
 }
 

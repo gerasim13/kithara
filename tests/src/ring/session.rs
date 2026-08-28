@@ -3,7 +3,7 @@ use std::{any::Any, num::NonZeroU32};
 use firewheel::FirewheelCtx;
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     events::EventBus,
     host::testing::GraphSession,
     platform::{
@@ -378,7 +378,7 @@ fn bootstrap(
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
         eq_layout: Vec::new(),
-        pcm_pool: PcmPool::default(),
+        sample_pool: SamplePool::default(),
         sample_rate: session_rate.get(),
     }) {
         Reply::PlayerRegistered(player_id) => player_id,

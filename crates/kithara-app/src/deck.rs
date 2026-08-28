@@ -306,7 +306,9 @@ mod tests {
 
     fn worker() -> PlayWorker {
         let region = Region::default();
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build())
+        PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+        )
     }
 
     fn deck_set(count: usize) -> DeckSet {

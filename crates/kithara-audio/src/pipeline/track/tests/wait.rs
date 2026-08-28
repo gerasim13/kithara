@@ -12,7 +12,7 @@ use crate::{
             CurrentFsm, Track, TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason,
         },
     },
-    traits::{PcmSource, PcmSourceExt},
+    traits::{AudioSource, AudioSourceExt},
 };
 
 /// Park the track in `WaitingForSource(Playback)` the way a transient

@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
-use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::{AudioChunk, AudioSpec};
 
 use crate::{analysis::BeatAnalysisConfig, waveform::BeatGrid};
 
@@ -14,7 +14,7 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(_config: &Self, _spec: PcmSpec, _pcm_pool: &PcmPool) -> Slot<B> {
+    pub(crate) fn build(_config: &Self, _spec: AudioSpec, _sample_pool: &SamplePool) -> Slot<B> {
         Slot(PhantomData)
     }
 
@@ -57,5 +57,5 @@ where
         true
     }
 
-    pub(crate) fn push(_slot: &mut Self, _chunk: &PcmChunk, _detector: Option<&mut Detector>) {}
+    pub(crate) fn push(_slot: &mut Self, _chunk: &AudioChunk, _detector: Option<&mut Detector>) {}
 }

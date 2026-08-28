@@ -1,9 +1,10 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    bufpool::PcmPool,
-    decode::{GaplessInfo, GaplessTrimmer, PcmChunk, PcmMeta, PcmSpec},
+    bufpool::SamplePool,
+    decode::{GaplessInfo, GaplessTrimmer},
     platform::time::Duration,
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use kithara_integration_tests::signal_pcm::signal::{SignalFn, SineWave};
 
@@ -16,7 +17,7 @@ const SINE_FREQ_HZ: f64 = 1_000.0;
 
 #[kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
-    let spec = PcmSpec::new(
+    let spec = AudioSpec::new(
         GAPLESS_CHANNELS,
         NonZeroU32::new(GAPLESS_SAMPLE_RATE).expect("test rate"),
     );
@@ -68,7 +69,7 @@ fn padded_sine_track(
     visible_frames: usize,
     leading_frames: usize,
     trailing_frames: usize,
-    spec: PcmSpec,
+    spec: AudioSpec,
 ) -> Vec<f32> {
     let channels = usize::from(spec.channels);
     let mut samples = Vec::with_capacity(
@@ -90,7 +91,7 @@ fn padded_sine_track(
 
 fn trim_track(
     samples: Vec<f32>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     leading_frames: usize,
     trailing_frames: usize,
 ) -> Vec<f32> {
@@ -98,12 +99,12 @@ fn trim_track(
     gapless.leading_frames = u64::try_from(leading_frames).expect("leading frames fit u64");
     gapless.trailing_frames = u64::try_from(trailing_frames).expect("trailing frames fit u64");
     let mut trimmer = GaplessTrimmer::from(gapless);
-    let chunk = PcmChunk::new(
-        PcmMeta {
+    let chunk = AudioChunk::new(
+        AudioChunkInfo {
             spec,
             ..Default::default()
         },
-        PcmPool::default().attach(samples),
+        SamplePool::default().attach(samples),
     );
 
     let mut output = Vec::new();
@@ -116,7 +117,7 @@ fn trim_track(
     output
 }
 
-fn sine_samples(start_frame: usize, frames: usize, spec: PcmSpec) -> Vec<f32> {
+fn sine_samples(start_frame: usize, frames: usize, spec: AudioSpec) -> Vec<f32> {
     let channels = usize::from(spec.channels);
     let mut samples = Vec::with_capacity(frames.saturating_mul(channels));
     let signal = SineWave(SINE_FREQ_HZ);

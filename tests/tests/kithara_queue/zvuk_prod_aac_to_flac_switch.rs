@@ -3,7 +3,7 @@
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
     net::{HttpClient, NetOptions},
@@ -197,7 +197,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
         .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool, PcmPool::default())
+        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
             .cancel(shutdown.child())
             .build(),
     );

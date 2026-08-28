@@ -2,7 +2,7 @@
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ElasticDrain {
-    /// Interleaved PCM frames written by this step.
+    /// Interleaved audio frames written by this step.
     frames: usize,
     /// Whether this step released all source retained by the backend.
     complete: bool,
@@ -15,7 +15,7 @@ impl ElasticDrain {
         Self { frames, complete }
     }
 
-    /// Interleaved PCM frames written by this step.
+    /// Interleaved audio frames written by this step.
     #[must_use]
     pub const fn frames(self) -> usize {
         self.frames

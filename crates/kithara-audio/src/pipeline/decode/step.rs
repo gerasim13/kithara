@@ -1,5 +1,6 @@
-use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
+use kithara_signal::AudioChunk;
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
 
@@ -148,7 +149,7 @@ fn decode_failed<T: StreamType>(
 }
 
 pub(crate) fn produced<T: StreamType>(
-    chunk: PcmChunk,
+    chunk: AudioChunk,
     epoch: u64,
     ctx: &mut DecodeCtx<'_, T>,
 ) -> DecodeAction {

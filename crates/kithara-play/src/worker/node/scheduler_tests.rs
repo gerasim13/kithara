@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{Fetch, PcmProducerPort, PcmSource, PreloadGate, TrackStep, WaitingReason};
-use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta};
+use kithara_audio::{AudioSource, Fetch, PreloadGate, ProducerPort, TrackStep, WaitingReason};
+use kithara_bufpool::SamplePool;
 use kithara_events::{DeferredBus, Event, EventBus};
 use kithara_platform::{
     CancelToken,
@@ -10,16 +9,18 @@ use kithara_platform::{
     thread::{park_timeout, sleep as thread_sleep},
     time::{Duration, Instant, timeout as platform_timeout},
 };
+use kithara_signal::{AudioChunk, AudioChunkInfo};
 use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
 use kithara_test_utils::kithara;
 
 use super::*;
-use crate::worker::scheduler::{
-    AtomicServiceClass, PcmScheduler, PcmTask, PcmTaskId, ServiceClass,
-};
+use crate::worker::scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, Task, TaskId};
 
-fn empty_chunk() -> PcmChunk {
-    PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+fn empty_chunk() -> AudioChunk {
+    AudioChunk::new(
+        AudioChunkInfo::default(),
+        SamplePool::default().attach(Vec::new()),
+    )
 }
 
 struct MockSource {
@@ -61,14 +62,14 @@ impl MockSource {
     }
 }
 
-impl PcmSource for MockSource {
-    type Chunk = PcmChunk;
+impl AudioSource for MockSource {
+    type Chunk = AudioChunk;
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
         Arc::clone(&self.seek_obs)
     }
 
-    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
         if self.seek_obs.is_pending() || self.seek_obs.is_flushing() {
             let epoch = self.seek_obs.epoch();
             self.seek.complete(epoch);
@@ -101,14 +102,14 @@ impl Default for FailingSource {
     }
 }
 
-impl PcmSource for FailingSource {
-    type Chunk = PcmChunk;
+impl AudioSource for FailingSource {
+    type Chunk = AudioChunk;
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
         Arc::clone(&self.seek_obs)
     }
 
-    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
         TrackStep::Failed
     }
 }
@@ -119,13 +120,13 @@ fn make_node<S>(
     preload_chunks: usize,
 ) -> (
     DecoderNode<S>,
-    impl FnMut() -> Option<Fetch<PcmChunk>> + Send + 'static,
+    impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
     Arc<PreloadGate>,
 )
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
-    let (port, pop) = PcmProducerPort::probe(ringbuf_capacity);
+    let (port, pop) = ProducerPort::probe(ringbuf_capacity);
     let preload_gate = Arc::new(PreloadGate::default());
     let seek_obs = source.seek_observe();
     let seek_epoch = seek_obs.epoch();
@@ -149,7 +150,7 @@ where
 }
 
 fn wait_for_chunks(
-    pop: &mut impl FnMut() -> Option<Fetch<PcmChunk>>,
+    pop: &mut impl FnMut() -> Option<Fetch<AudioChunk>>,
     count: usize,
     timeout: Duration,
 ) -> usize {
@@ -165,29 +166,29 @@ fn wait_for_chunks(
     received
 }
 
-fn test_scheduler() -> PcmScheduler {
-    PcmScheduler::start(
+fn test_scheduler() -> PlaybackScheduler {
+    PlaybackScheduler::start(
         "kithara-play-worker-test".into(),
         CancelToken::never(),
         std::num::NonZeroUsize::new(8).expect("test capacity is non-zero"),
     )
 }
 
-fn scheduler_with_capacity(capacity: usize) -> PcmScheduler {
-    PcmScheduler::start(
+fn scheduler_with_capacity(capacity: usize) -> PlaybackScheduler {
+    PlaybackScheduler::start(
         "kithara-play-worker-capacity-test".into(),
         CancelToken::never(),
         std::num::NonZeroUsize::new(capacity).expect("test capacity is non-zero"),
     )
 }
 
-fn register<S>(handle: &PcmScheduler, node: DecoderNode<S>) -> PcmTaskId
+fn register<S>(handle: &PlaybackScheduler, node: DecoderNode<S>) -> TaskId
 where
-    S: PcmSource<Chunk = PcmChunk>,
+    S: AudioSource<Chunk = AudioChunk>,
 {
     handle
-        .register(PcmTask::new(node))
-        .expect("test PCM task must register")
+        .register(Task::new(node))
+        .expect("test playback task must register")
 }
 
 #[kithara::test]
@@ -355,7 +356,7 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     handle.unregister(id_a);
     let (node_c, _, _) = make_node(MockSource::new(1), 1, 1);
     let id_c = handle
-        .register(PcmTask::new(node_c))
+        .register(Task::new(node_c))
         .expect("unregister must release capacity");
 
     while pop_b().is_some() {}
@@ -377,10 +378,10 @@ fn shared_worker_blocking_track_does_not_starve_producing_track() {
         blocking: Arc<AtomicBool>,
     }
 
-    impl PcmSource for BlockingSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for BlockingSource {
+        type Chunk = AudioChunk;
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             if self.blocking.load(Ordering::Relaxed) {
                 thread_sleep(Duration::from_millis(10));
             }
@@ -428,10 +429,10 @@ fn shared_worker_sync_blocking_step_starves_other_tracks() {
         block_ms: u64,
     }
 
-    impl PcmSource for SlowDecodeSource {
-        type Chunk = PcmChunk;
+    impl AudioSource for SlowDecodeSource {
+        type Chunk = AudioChunk;
 
-        fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        fn step_track(&mut self) -> TrackStep<AudioChunk> {
             thread_sleep(Duration::from_millis(self.block_ms));
             TrackStep::Produced(Fetch::data(empty_chunk(), 0))
         }

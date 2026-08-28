@@ -50,7 +50,7 @@ also need playlist/segment headers keep the same immutable `Arc<DomainKeyPolicy>
 
 `PlayWorker::open` is the sole supported production composition path in this
 workspace. It asks
-`kithara-audio` for `PreparedAudio` plus a still-concrete `PcmSource`, wraps the
+`kithara-audio` for `PreparedAudio` plus a still-concrete `AudioSource`, wraps the
 reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
 `WarpRenderer`, builds the post-Warp track effects, and wraps the source in
 `WarpSource`.
@@ -58,7 +58,7 @@ reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
 frontier publication, terminal event publication, and per-track load
 measurement before the task is registered on the shared worker.
 
-The generic scheduler kernel and concrete PCM scheduler are private to
+The generic scheduler kernel and concrete playback scheduler are private to
 `kithara-play::PlayWorker`. `kithara-audio` exposes only the prepared source and
 wake contracts; its analysis worker uses a separate private single-node runner.
 No workspace production code can construct a second playback scheduler path.
@@ -83,9 +83,9 @@ multi-pull tails before
 signal: `PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`
 after the player fences the terminal marker against the live seek epoch. Seek
 or source-discontinuity revision changes reset the chain before new-generation
-PCM is admitted.
+decoded audio is admitted.
 
-`sanitize_sample` from `kithara-decode` runs at the input of play-owned DSP
+`sanitize_sample` from `kithara-signal` runs at the input of play-owned DSP
 stages that accept untrusted samples. `IsolatorEq` flushes denormal IIR state to
 exact zero only after both input and output fall below `f32::MIN_POSITIVE`;
 finite unity/bypass samples remain bit-exact.
@@ -119,7 +119,7 @@ With a backend compiled in, `WarpRenderer` runs at `ratio = 1/speed`, and:
 
 At speed 1.0 with no region plan the slot bypasses. Without a backend - including every wasm build -
 the same Warp slot remains in the producer chain as an exact identity renderer; no speed DSP is
-inserted and PCM output stays pinned to 1.0. With a native backend the controls are read each chunk,
+inserted and decoded-audio output stays pinned to 1.0. With a native backend the controls are read each chunk,
 so **speed, key-lock, and backend all apply live, mid-track - no reload.** Switching backend
 rebuilds the DSP backend; returning to unity passthrough resets buffered stretch state.
 
@@ -130,7 +130,7 @@ placement, other builds the standalone decode-adapter resampler.
 expressed in source-frame space; the renderer splits chunks at region
 boundaries and combines `1/speed` with each segment's finite positive ratio.
 A region boundary preserves backend history and is not a source
-discontinuity. Stretch changes output frame count, not `PcmSpec.sample_rate`,
+discontinuity. Stretch changes output frame count, not `AudioSpec.sample_rate`,
 and carries source-time metadata forward.
 
 ## Engine Load
@@ -138,7 +138,7 @@ and carries source-time metadata forward.
 `EngineLoad` and `EngineLoadSnapshot` are play-owned. `PlayerCore` creates one
 address-stable meter, `ResourceConfig` passes the same optional `Arc` through
 `TrackConfig`, and `PlayWorker` injects it directly into `DecoderNode`; neither
-`AudioConfig` nor `PreparedPcmLane` carries it. A producing node records its
+`AudioConfig` nor `PreparedAudioLane` carries it. A producing node records its
 `step_track` cost against emitted audio duration into lock-free EWMA atomics and
 publishes `AudioEvent::EngineLoad` at the existing telemetry interval.
 
@@ -299,7 +299,7 @@ calls the reader's lock-free `sync_seek`, which adopts that epoch and recycles s
 trash outlet. Nothing here can block or fail, so there is no seek-failure signal. The command still
 carries `seek_epoch`, so one minted before a newer seek is dropped rather than applied.
 
-`PcmControl::seek` remains the one-call form for consumers off the audio thread. A reader whose
+`AudioControl::seek` remains the one-call form for consumers off the audio thread. A reader whose
 `seek_handle` is `None` cannot be seeked from the callback at all.
 
 `PlayerResource::scratch_frames` is a per-channel **frame** count, and `write_len` / `write_pos` /

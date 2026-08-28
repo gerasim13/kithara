@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    audio::{PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioControl, AudioRead, AudioSession, ReadOutcome},
     events::EventBus,
     platform::{
         thread::paced_backoff,

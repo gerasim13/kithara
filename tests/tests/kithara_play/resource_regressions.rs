@@ -5,7 +5,7 @@ use std::{io::Read, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
@@ -54,12 +54,12 @@ impl Consts {
 }
 
 fn play_worker(region: &Region) -> PlayWorker {
-    PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build())
+    PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build())
 }
 
 fn play_worker_with_cancel(region: &Region, cancel: CancelToken) -> PlayWorker {
     PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel)
             .build(),
     )
@@ -824,11 +824,6 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
-/// Packaged HLS audio must stay continuous in both decode and player-output paths.
-///
-/// This is the single-variant continuity contract for the packaged mock-server path:
-/// `PcmMeta` stays contiguous, `PlaybackProgress` remains monotonic, and the offline
-/// player output does not produce sustained silence or over-budget render stalls.
 #[kithara::test(tokio, native, timeout(Duration::from_secs(25)), hang_timeout_secs(3))]
 #[case::aac_symphonia(AudioCodec::AacLc, DecoderBackend::Symphonia)]
 #[cfg_attr(

@@ -41,7 +41,7 @@ impl OfflinePlayerHarness {
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)

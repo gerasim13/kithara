@@ -14,7 +14,7 @@ use kithara::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
-    audio::{AudioConfig, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     play::{PlayWorker, PlayWorkerConfig},
@@ -139,7 +139,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

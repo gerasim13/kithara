@@ -15,10 +15,10 @@ use std::{
 use kithara::{
     self,
     audio::{
-        DecodeError, PcmControl, PcmRead, PcmSession, PendingReason, ReadOutcome, SeekOutcome,
+        AudioControl, AudioRead, AudioSession, DecodeError, PendingReason, ReadOutcome, SeekOutcome,
     },
-    bufpool::PcmPool,
-    decode::{PcmSpec, TrackMetadata},
+    bufpool::SamplePool,
+    decode::TrackMetadata,
     events::EventBus,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -26,23 +26,24 @@ use kithara::{
         bridge::RtMetrics,
         rt::track::{PlayerResource, ReadOutcome as BlockReadOutcome},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
 
-fn mock_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+fn mock_spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_player_resource(seconds: f64) -> PlayerResource {
     let reader = TestPcmReader::new(mock_spec(), seconds);
     let resource = Resource::from_reader(reader, None);
-    PlayerResource::new(resource, Arc::from("test.mp3"), &PcmPool::default())
+    PlayerResource::new(resource, Arc::from("test.mp3"), &SamplePool::default())
 }
 
 struct PendingReader {
     bus: EventBus,
     meta: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl PendingReader {
@@ -55,7 +56,7 @@ impl PendingReader {
     }
 }
 
-impl PcmRead for PendingReader {
+impl AudioRead for PendingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Ok(ReadOutcome::Pending {
             reason: PendingReason::Buffering,
@@ -73,7 +74,7 @@ impl PcmRead for PendingReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -82,7 +83,7 @@ impl PcmRead for PendingReader {
     }
 }
 
-impl PcmSession for PendingReader {
+impl AudioSession for PendingReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(1))
     }
@@ -96,7 +97,7 @@ impl PcmSession for PendingReader {
     }
 }
 
-impl PcmControl for PendingReader {
+impl AudioControl for PendingReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -109,7 +110,7 @@ struct ChunkReader {
     bus: EventBus,
     emitted: Arc<AtomicU64>,
     meta: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl ChunkReader {
@@ -133,7 +134,7 @@ impl ChunkReader {
     }
 }
 
-impl PcmRead for ChunkReader {
+impl AudioRead for ChunkReader {
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         let frames = Self::CHUNK_FRAMES.min(buf.len() / usize::from(self.spec.channels));
         buf[..frames * usize::from(self.spec.channels)].fill(0.5);
@@ -151,7 +152,7 @@ impl PcmRead for ChunkReader {
         Ok(self.emit(frames))
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -162,7 +163,7 @@ impl PcmRead for ChunkReader {
     }
 }
 
-impl PcmSession for ChunkReader {
+impl AudioSession for ChunkReader {
     fn duration(&self) -> Option<Duration> {
         None
     }
@@ -176,7 +177,7 @@ impl PcmSession for ChunkReader {
     }
 }
 
-impl PcmControl for ChunkReader {
+impl AudioControl for ChunkReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -190,7 +191,7 @@ impl PcmControl for ChunkReader {
 struct PositionReader {
     bus: EventBus,
     meta: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
     frame_idx: u64,
     total_frames: u64,
 }
@@ -209,7 +210,7 @@ impl PositionReader {
     }
 }
 
-impl PcmRead for PositionReader {
+impl AudioRead for PositionReader {
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         let channels = self.spec.channels as usize;
         let frames = buf.len() / channels;
@@ -256,7 +257,7 @@ impl PcmRead for PositionReader {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -265,7 +266,7 @@ impl PcmRead for PositionReader {
     }
 }
 
-impl PcmSession for PositionReader {
+impl AudioSession for PositionReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs_f64(
             self.total_frames as f64 / self.spec.sample_rate.get() as f64,
@@ -281,7 +282,7 @@ impl PcmSession for PositionReader {
     }
 }
 
-impl PcmControl for PositionReader {
+impl AudioControl for PositionReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         let frame = (position.as_secs_f64() * self.spec.sample_rate.get() as f64) as u64;
         self.frame_idx = frame.min(self.total_frames);
@@ -319,7 +320,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
     let emitted = Arc::new(AtomicU64::new(0));
     let reader = ChunkReader::new(Arc::clone(&emitted));
     let resource = Resource::from_reader(reader, None);
-    let mut player = PlayerResource::new(resource, Arc::from("chunked"), &PcmPool::default());
+    let mut player = PlayerResource::new(resource, Arc::from("chunked"), &SamplePool::default());
     let mut left = vec![0.0f32; 512];
     let mut right = vec![0.0f32; 512];
     let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
@@ -338,7 +339,7 @@ fn full_read_refills_before_the_next_callback_drains_scratch() {
 async fn reset_for_seek_drops_buffered_samples() {
     let reader = PositionReader::new(1.0);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("position.mp3"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("position.mp3"), &SamplePool::default());
 
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
@@ -366,7 +367,7 @@ async fn reset_for_seek_drops_buffered_samples() {
 async fn zero_read_without_eof_is_not_error() {
     let reader = PendingReader::new();
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("pending"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("pending"), &SamplePool::default());
 
     let mut left = vec![0.0f32; 128];
     let mut right = vec![0.0f32; 128];
@@ -383,7 +384,7 @@ async fn zero_read_without_eof_is_not_error() {
 async fn read_zeroes_output_when_no_data_available() {
     let reader = PendingReader::new();
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("pending"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("pending"), &SamplePool::default());
 
     let mut left = vec![0.999f32; 128];
     let mut right = vec![0.999f32; 128];
@@ -409,7 +410,7 @@ async fn read_zeroes_output_when_no_data_available() {
 async fn full_read_prefetches_buffered_eof() {
     let reader = TestPcmReader::new(mock_spec(), 900.0 / 44100.0);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &SamplePool::default());
 
     let mut left = vec![0.0f32; 512];
     let mut right = vec![0.0f32; 512];
@@ -428,7 +429,7 @@ async fn full_read_prefetches_buffered_eof() {
 async fn read_returns_partial_when_eof_inside_buffer() {
     let reader = TestPcmReader::new(mock_spec(), 0.01);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &SamplePool::default());
 
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
@@ -455,7 +456,7 @@ async fn read_returns_partial_when_eof_inside_buffer() {
 struct FailingReader {
     bus: EventBus,
     meta: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl FailingReader {
@@ -468,7 +469,7 @@ impl FailingReader {
     }
 }
 
-impl PcmRead for FailingReader {
+impl AudioRead for FailingReader {
     fn read(&mut self, _buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         Err(DecodeError::InvalidData {
             detail: "mock: decoder failed mid-stream",
@@ -482,7 +483,7 @@ impl PcmRead for FailingReader {
             detail: "mock: decoder failed mid-stream",
         })
     }
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
     fn position(&self) -> Duration {
@@ -490,7 +491,7 @@ impl PcmRead for FailingReader {
     }
 }
 
-impl PcmSession for FailingReader {
+impl AudioSession for FailingReader {
     fn duration(&self) -> Option<Duration> {
         Some(Duration::from_secs(169))
     }
@@ -502,7 +503,7 @@ impl PcmSession for FailingReader {
     }
 }
 
-impl PcmControl for FailingReader {
+impl AudioControl for FailingReader {
     fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
         Ok(SeekOutcome::Landed {
             target: position,
@@ -524,7 +525,7 @@ impl PcmControl for FailingReader {
 async fn read_returns_failed_not_eof_on_decoder_error() {
     let reader = FailingReader::new();
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("failing.mp3"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("failing.mp3"), &SamplePool::default());
 
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];
@@ -553,7 +554,7 @@ async fn read_returns_failed_not_eof_on_decoder_error() {
 async fn read_returns_eof_when_already_drained() {
     let reader = TestPcmReader::new(mock_spec(), 0.01);
     let resource = Resource::from_reader(reader, None);
-    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &PcmPool::default());
+    let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"), &SamplePool::default());
 
     let mut left = vec![0.0f32; 4096];
     let mut right = vec![0.0f32; 4096];

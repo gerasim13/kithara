@@ -104,7 +104,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
                     .expect("fixture sample rate must be non-zero"),
             )
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
             ))
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),

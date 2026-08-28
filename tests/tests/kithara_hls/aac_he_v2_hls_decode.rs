@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -115,8 +115,9 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
         .expect("create AAC HE v2 HLS fixture");
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(
             AssetStore::builder()

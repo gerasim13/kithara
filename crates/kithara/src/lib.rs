@@ -15,7 +15,7 @@
 //!
 //! let region = Region::default();
 //! let worker = PlayWorker::new(
-//!     PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+//!     PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
 //! );
 //! // Auto-detect from URL
 //! let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
@@ -66,6 +66,10 @@ pub mod play {
 
 pub mod resampler {
     pub use kithara_resampler::*;
+}
+
+pub mod signal {
+    pub use kithara_signal::*;
 }
 
 #[cfg(feature = "queue")]
@@ -142,11 +146,9 @@ pub mod prelude {
     #[cfg(feature = "hls")]
     pub use kithara_abr::AbrMode;
     pub use kithara_audio::{
-        Audio, AudioConfig, PcmControl, PcmRead, PcmReader, PcmSession, ResamplerQuality,
+        Audio, AudioConfig, AudioControl, AudioRead, AudioReader, AudioSession, ResamplerQuality,
     };
-    pub use kithara_decode::{
-        DecodeError, DecodeResult, DecoderTrackInfo, PcmMeta, PcmSpec, TrackMetadata,
-    };
+    pub use kithara_decode::{DecodeError, DecodeResult, DecoderTrackInfo, TrackMetadata};
     #[cfg(feature = "hls")]
     pub use kithara_events::HlsEvent;
     pub use kithara_events::{AudioEvent, BusScope, Event, EventBus, EventReceiver, FileEvent};
@@ -159,6 +161,7 @@ pub mod prelude {
         PlaybackResamplerBackend, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
         ServiceClass, SourceType,
     };
+    pub use kithara_signal::{AudioChunkInfo, AudioSpec};
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
     #[cfg(all(
         not(target_arch = "wasm32"),

@@ -122,7 +122,7 @@ fn build_queue_with_tick(
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))
@@ -168,7 +168,7 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Asset
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))

@@ -207,7 +207,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         .worker(PlayWorker::new(
             PlayWorkerConfig::for_pools(
                 kithara::bufpool::BytePool::default(),
-                kithara::bufpool::PcmPool::default(),
+                kithara::bufpool::SamplePool::default(),
             )
             .build(),
         ))

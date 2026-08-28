@@ -5,7 +5,7 @@ use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
     node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
 use kithara_play::{GroupState, player::PlayerMember};
@@ -42,7 +42,7 @@ pub(super) struct Deck {
     pub(super) master_eq_node_id: Option<NodeID>,
     pub(super) master_volume_memo: Option<Memo<VolumeNode>>,
     pub(super) master_volume_node_id: Option<NodeID>,
-    pub(super) pcm_pool: PcmPool,
+    pub(super) sample_pool: SamplePool,
     pub(super) player_id: PlayerId,
     pub(super) grid_id: BeatGridId,
     pub(super) shared_eq: SharedEq,
@@ -59,7 +59,7 @@ impl Deck {
         grid_id: BeatGridId,
         bus: EventBus,
         eq_layout: Vec<EqBandConfig>,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -68,7 +68,7 @@ impl Deck {
         Self {
             bus,
             eq_layout,
-            pcm_pool,
+            sample_pool,
             player_id,
             grid_id,
             master_eq_memo: None,
@@ -254,7 +254,7 @@ pub(super) fn register_player<B: AudioBackend>(
     grid_id: BeatGridId,
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
     sample_rate: u32,
 ) -> Result<PlayerId, SessionError> {
     NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
@@ -267,7 +267,7 @@ pub(super) fn register_player<B: AudioBackend>(
             "player must be attached to the host before graph registration".to_owned(),
         ));
     }
-    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pcm_pool);
+    let deck = Deck::new(player_id, grid_id, bus, eq_layout, sample_pool);
     state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(

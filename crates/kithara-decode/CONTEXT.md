@@ -56,14 +56,14 @@ cannot disagree.
 
 `ComposedDecoder<D: Demuxer, C: FrameCodec>` is the single decode loop; every
 backend is a `(demuxer, codec)` pair fed through it. `DecoderRuntime` carries the
-PCM pool, epoch, byte-length handle, and reader hooks; `pool` has no `Default` —
+sample pool, epoch, byte-length handle, and reader hooks; `pool` has no `Default` —
 the host threads its configured pool down, and test-only
 `DecoderRuntime::for_test` (`#[cfg(test)]`) is the only place the global pool is
 reachable.
 
 - **Frame offset is cumulative**, anchored to `landed_at` on seek and advanced by
   each emitted chunk (per-chunk `floor(pts * rate)` loses precision).
-  `frame_offset_for` rounds half-up to agree with `frames_to_trim`; a floor would
+  `AudioSpec::frame_at` rounds half-up to agree with `frames_to_trim`; a floor would
   disagree by one frame at a mid-playback recreate.
 - **Zero-frame budget.** After 32 consecutive zero-frame `decode_frame` calls the
   decoder returns `Pending(NotReady(SourcePending))` instead of consuming the
@@ -205,7 +205,7 @@ no engine trim (no metadata, or a backend path that already trimmed internally).
 `GaplessTrimmer::notify_seek(retire)` drops seek-sensitive state (leading trim,
 pending fade-in, buffered tail, tail compensation); trailing trim still applies
 at EOF. Its buffered chunks go to a `ChunkRetire` rather than being dropped —
-returning a pooled `PcmChunk` to a full shard deallocates, and the caller is the
+returning a pooled `AudioChunk` to a full shard deallocates, and the caller is the
 produce core. `DropChunks` is the sink for callers free to deallocate.
 
 `Decoder::gapless_profile(codec) -> GaplessProfile` bundles spec, gapless, tail
@@ -302,12 +302,13 @@ byte-copy wrappers) stays in `kithara-apple`; the standalone PCM-to-PCM Apple
 backend stays in `kithara-resampler`. `kithara-decode` owns codec planning,
 gapless policy, and the codec-embedded Apple decode path.
 
-`Frames` and `Samples` (`pcm/units.rs`) keep the two PCM lengths apart: planar
-buffers are sized in frames, interleaved ones in samples, both are `usize`, and a
-buffer sized in the wrong one is silently off by the channel count. Conversion
-takes that count explicitly (`Frames::samples`, `Samples::frames`). Applied where
-the two units meet — `ResampledDecoder::interleave`, `PlayerResource::scratch_frames`.
-`PcmMeta.frames` stays a plain `u32`.
+`kithara-signal::FrameCount` and `SampleCount` keep the two decoded-signal lengths
+apart: planar buffers are sized in frames, interleaved ones in samples, both are
+`usize`, and a buffer sized in the wrong one is silently off by the channel count.
+Conversion takes that count explicitly (`FrameCount::samples`,
+`SampleCount::frames`). Applied where the two units meet —
+`ResampledDecoder::interleave`, `PlayerResource::scratch_frames`.
+`AudioChunkInfo.frames` stays a plain `u32`.
 
 `sanitize_sample` is the workspace's one sample guard: `NaN`, infinities and
 denormals become silence. `ResampledDecoder::append_chunk` applies it while
@@ -367,9 +368,9 @@ is such a parked parent, so neither the codec nor the decode path may spawn the 
 only the main-thread bootstrap, whose event loop stays live, may. The host command
 loop uses `try_recv` plus a local timer; the synchronous per-decoder reply receiver
 uses the Atomics-backed `recv_timeout` path and needs no event loop. The singleton
-host receives the app's `PcmPool` at spawn and owns the decoder-ID → `AudioDecoder`
+host receives the app's `SamplePool` at spawn and owns the decoder-ID → `AudioDecoder`
 map, reply channel, pending input queue, and generation state; `Open` registers a
-codec, `Close` removes it. `HostOut::Pcm` carries a pooled `PcmBuf` that the codec
+codec, `Close` removes it. `HostOut::Pcm` carries a pooled `SampleBuffer` that the codec
 moves into the caller's output buffer. JavaScript values never cross the Rust
 thread boundary.
 
@@ -436,8 +437,9 @@ hardware backend cannot handle a codec/container.
   LAME, `skip_id3v2`). `mp4/` — streaming `moov` scanner (`scan_mp4`,
   `Mp4Visitor`, codec/fragmented sniffs). `fmp4/` — segment-by-segment demuxer,
   init parsing, source IO.
-- `pcm_time.rs`, `types.rs`, `error.rs` — timeline math; PCM/track/profile types;
-  `DecodeError` / `ErrorClass`. `mock.rs` re-exports `DecoderMock` under
+- `types.rs`, `error.rs`, `retire.rs` — decoder-only track/profile types,
+  `DecodeError` / `ErrorClass`, and chunk-retirement policy. Shared decoded-signal
+  values and pure sample/time math live in `kithara-signal`. `mock.rs` re-exports `DecoderMock` under
   `cfg(test)` or the `mock` feature.
 - `symphonia/` — `demuxer`, `codec`, `adapter` (`ReadSeekAdapter`: `Read+Seek` →
   `MediaSource`), `probe`, `registry`, `echain`, `aac_fdk` (feature `fdk-aac`).
@@ -446,13 +448,12 @@ hardware backend cannot handle a codec/container.
 
 ## Trait bridges
 
-- `From`: `&PcmMeta` → `kithara_stream::ChunkPosition`; `GaplessInfo` →
-  `GaplessTrimmer`; `GaplessProbe` → `Option<GaplessInfo>` (prefers `elst` over
+- `From`: `GaplessInfo` → `GaplessTrimmer`; `GaplessProbe` → `Option<GaplessInfo>` (prefers `elst` over
   `iTunSMPB`); `io::Error` / `TryFromIntError` / `BudgetExhausted` /
   `AndroidBackendError` → `DecodeError`.
-- `TryFrom`: `DecoderChunkOutcome` → `PcmChunk`; `&[u8]` /
+- `TryFrom`: `DecoderChunkOutcome` → `AudioChunk`; `&[u8]` /
   `&AudioCodecParameters` → `AacStreamConfig` (fdk-aac).
-- `Display`: `PcmSpec`, `DecoderBackend`.
+- `Display`: `AudioSpec`, `DecoderBackend`.
 
 ## Tests
 

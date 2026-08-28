@@ -2,9 +2,8 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
     bufpool::Region,
-    decode::{PcmChunk, PcmMeta},
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -18,6 +17,7 @@ use kithara::{
         time::{Duration, Instant, Instant as RealInstant, sleep},
     },
     play::{PlayWorker, PlayWorkerConfig},
+    signal::{AudioChunk, AudioChunkInfo},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -44,13 +44,13 @@ impl Consts {
     const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 }
 
-fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
+fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
     let channels = chunk.meta.spec.channels as usize;
     detect_direction(&chunk.samples, channels)
 }
 
 /// Format chunk metadata for diagnostic output.
-fn format_meta(meta: &PcmMeta, pcm_len: usize) -> String {
+fn format_meta(meta: &AudioChunkInfo, pcm_len: usize) -> String {
     format!(
         "frame_offset={}, samples={}, segment={:?}, variant={:?}, epoch={}",
         meta.frame_offset, pcm_len, meta.segment_index, meta.variant_index, meta.epoch
@@ -59,7 +59,7 @@ fn format_meta(meta: &PcmMeta, pcm_len: usize) -> String {
 
 /// Check saw-tooth continuity within a single chunk.
 /// Returns the number of breaks found.
-fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
+fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     let channels = chunk.meta.spec.channels as usize;
     let frames = chunk.frames();
     if frames < 2 {
@@ -79,14 +79,14 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     breaks
 }
 
-async fn next_chunk_with_timeout<R: PcmRead>(
+async fn next_chunk_with_timeout<R: AudioRead>(
     audio: &mut R,
     timeout: Duration,
     stage: &str,
-) -> Option<PcmChunk> {
+) -> Option<AudioChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -178,7 +178,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -395,7 +395,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         });
         audio.preload().expect("preload must succeed");
 
-        let mut prev_chunk_meta: Option<(PcmMeta, usize)> = None;
+        let mut prev_chunk_meta: Option<(AudioChunkInfo, usize)> = None;
         let mut prev_last_sample: Option<f32> = None;
 
         for c in 0..Consts::CHUNKS_PER_SEEK {

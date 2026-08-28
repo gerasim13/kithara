@@ -1,14 +1,15 @@
+use kithara_platform::time::Duration;
+use kithara_signal::AudioChunk;
 use num_traits::AsPrimitive;
 use smallvec::SmallVec;
 
 use crate::{
-    ChunkRetire, GaplessInfo, GaplessTailCompensation, PcmChunk, duration_for_frames,
-    gapless::heuristic::SilenceTrimParams,
+    ChunkRetire, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
 };
 
 /// Inline batch of chunks released by one `GaplessTrimmer` operation.
-pub type GaplessOutput = SmallVec<[PcmChunk; 2]>;
-type TailBuffer = SmallVec<[PcmChunk; 4]>;
+pub type GaplessOutput = SmallVec<[AudioChunk; 2]>;
+type TailBuffer = SmallVec<[AudioChunk; 4]>;
 
 struct Consts;
 impl Consts {
@@ -127,7 +128,7 @@ impl FadeInState {
     /// Apply the next slice of the fade to `chunk`, modifying samples
     /// in place. The chunk may be shorter or longer than the remaining
     /// fade window; we only touch the prefix that still needs shaping.
-    fn apply(&mut self, chunk: &mut PcmChunk) {
+    fn apply(&mut self, chunk: &mut AudioChunk) {
         if self.is_done() {
             return;
         }
@@ -274,7 +275,7 @@ impl GaplessTrimmer {
     }
 
     #[must_use]
-    pub fn push(&mut self, chunk: PcmChunk) -> GaplessOutput {
+    pub fn push(&mut self, chunk: AudioChunk) -> GaplessOutput {
         if matches!(self.mode, GaplessMode::Fixed { .. }) {
             self.input_frames_seen = self.input_frames_seen.saturating_add(chunk_frames(&chunk));
         }
@@ -358,7 +359,7 @@ struct TrimCtx<'a> {
     trailing_frames: u64,
 }
 
-fn push_heuristic(ctx: &mut TrimCtx, chunk: PcmChunk) -> GaplessOutput {
+fn push_heuristic(ctx: &mut TrimCtx, chunk: AudioChunk) -> GaplessOutput {
     if !ctx.state.leading_enabled {
         return forward_post_leading(ctx, chunk);
     }
@@ -389,7 +390,7 @@ fn push_heuristic(ctx: &mut TrimCtx, chunk: PcmChunk) -> GaplessOutput {
     GaplessOutput::new()
 }
 
-fn forward_post_leading(ctx: &mut TrimCtx, mut chunk: PcmChunk) -> GaplessOutput {
+fn forward_post_leading(ctx: &mut TrimCtx, mut chunk: AudioChunk) -> GaplessOutput {
     apply_fade_in(&mut ctx.state.fade_in, &mut chunk);
     buffer_tail(ctx.tail_buffer, ctx.tail_buffered_frames, chunk);
     release_ready_chunks(
@@ -489,7 +490,7 @@ fn arm_fade_in(state: &mut HeuristicState) {
     state.fade_in = Some(FadeInState::for_sample_rate(sample_rate));
 }
 
-fn apply_fade_in(fade: &mut Option<FadeInState>, chunk: &mut PcmChunk) {
+fn apply_fade_in(fade: &mut Option<FadeInState>, chunk: &mut AudioChunk) {
     let Some(state) = fade.as_mut() else {
         return;
     };
@@ -499,7 +500,7 @@ fn apply_fade_in(fade: &mut Option<FadeInState>, chunk: &mut PcmChunk) {
     }
 }
 
-fn trim_leading(mut chunk: PcmChunk, leading_remaining: &mut u64) -> Option<PcmChunk> {
+fn trim_leading(mut chunk: AudioChunk, leading_remaining: &mut u64) -> Option<AudioChunk> {
     if *leading_remaining > 0 {
         let chunk_frames = chunk_frames(&chunk);
         if chunk_frames <= *leading_remaining {
@@ -544,7 +545,7 @@ fn drain_leading_buffer(ctx: &mut TrimCtx, trim_frames: u64) -> GaplessOutput {
     )
 }
 
-fn buffer_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64, chunk: PcmChunk) {
+fn buffer_tail(tail_buffer: &mut TailBuffer, tail_buffered_frames: &mut u64, chunk: AudioChunk) {
     *tail_buffered_frames = (*tail_buffered_frames).saturating_add(chunk_frames(&chunk));
     tail_buffer.push(chunk);
 }
@@ -689,7 +690,7 @@ fn trailing_silent_frames(tail_buffer: &TailBuffer, threshold_amp: f32) -> u64 {
 ///   found but with too few preceding silent frames to be considered
 ///   trim-worthy.
 fn find_leading_trim_frames(
-    buffer: &[PcmChunk],
+    buffer: &[AudioChunk],
     params: &SilenceTrimParams,
     threshold_amp: f32,
 ) -> Option<u64> {
@@ -744,7 +745,7 @@ fn frame_is_silent(samples: &[f32], threshold_amp: f32) -> bool {
     samples.iter().all(|sample| sample.abs() <= threshold_amp)
 }
 
-fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
+fn trim_chunk_start(chunk: &mut AudioChunk, trim_frames: usize) {
     let spec = chunk.spec();
     let channels = usize::from(spec.channels.max(1));
     let trim_samples = trim_frames.saturating_mul(channels);
@@ -753,13 +754,13 @@ fn trim_chunk_start(chunk: &mut PcmChunk, trim_frames: usize) {
     chunk.samples.truncate(len.saturating_sub(trim_samples));
     chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(trim_frames as u64);
     chunk.meta.frames = u32::try_from(chunk.samples.len() / channels.max(1)).unwrap_or(u32::MAX);
-    chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(duration_for_frames(
-        spec.sample_rate.get(),
-        trim_frames as u64,
-    ));
+    let trim_duration = spec
+        .duration_for(trim_frames as u64)
+        .unwrap_or(Duration::from_nanos(u64::MAX));
+    chunk.meta.timestamp = chunk.meta.timestamp.saturating_add(trim_duration);
 }
 
-fn trim_chunk_end(chunk: &mut PcmChunk, trim_frames: u64) {
+fn trim_chunk_end(chunk: &mut AudioChunk, trim_frames: u64) {
     let channels = usize::from(chunk.spec().channels.max(1));
     let keep_frames = usize_from_u64_saturating(chunk_frames(chunk).saturating_sub(trim_frames));
     let keep_samples = keep_frames.saturating_mul(channels);
@@ -767,13 +768,13 @@ fn trim_chunk_end(chunk: &mut PcmChunk, trim_frames: u64) {
     chunk.meta.frames = u32::try_from(keep_frames).unwrap_or(u32::MAX);
 }
 
-fn output_with(chunk: PcmChunk) -> GaplessOutput {
+fn output_with(chunk: AudioChunk) -> GaplessOutput {
     let mut ready = GaplessOutput::new();
     ready.push(chunk);
     ready
 }
 
-fn chunk_frames(chunk: &PcmChunk) -> u64 {
+fn chunk_frames(chunk: &AudioChunk) -> u64 {
     u64::try_from(chunk.frames()).unwrap_or(u64::MAX)
 }
 

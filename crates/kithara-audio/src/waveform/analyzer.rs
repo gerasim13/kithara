@@ -1,6 +1,6 @@
 use std::array;
 
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
@@ -30,12 +30,12 @@ impl Consts {
 pub struct WaveformAnalyzer {
     params: AnalysisParams,
     fft: Arc<dyn RealToComplex<f32>>,
-    fft_input: PcmBuf,
+    fft_input: SampleBuffer,
     fft_output: Vec<Complex<f32>>,
     fft_scratch: Vec<Complex<f32>>,
-    fill: PcmBuf,
+    fill: SampleBuffer,
     fill_len: usize,
-    hann: PcmBuf,
+    hann: SampleBuffer,
     raw_bands: Vec<[f32; Band::COUNT]>,
     band_bin_inv: [f32; Band::COUNT],
     low_mid_bin: usize,
@@ -45,16 +45,16 @@ pub struct WaveformAnalyzer {
 
 impl WaveformAnalyzer {
     #[must_use]
-    pub fn new(sample_rate: u32, params: AnalysisParams, pcm_pool: &PcmPool) -> Self {
+    pub fn new(sample_rate: u32, params: AnalysisParams, sample_pool: &SamplePool) -> Self {
         let fft_size = params.fft_size().max(Consts::MIN_FFT_SIZE);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
-        let fft_input = pcm_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
+        let fft_input = sample_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
         let fft_output = fft.make_output_vec();
         let fft_scratch = fft.make_scratch_vec();
 
-        let hann = hann_window(fft_size, pcm_pool);
-        let fill = pcm_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
+        let hann = hann_window(fft_size, sample_pool);
+        let fill = sample_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
         let bins = fft_output.len();
         let rate = sample_rate.to_f32().unwrap_or(0.0);
         let size_f = fft_size.to_f32().unwrap_or(1.0);
@@ -206,8 +206,8 @@ impl WaveformAnalyzer {
     }
 }
 
-fn hann_window(size: usize, pcm_pool: &PcmPool) -> PcmBuf {
-    let mut hann = pcm_pool.get_with(|buffer| buffer.resize(size, 0.0));
+fn hann_window(size: usize, sample_pool: &SamplePool) -> SampleBuffer {
+    let mut hann = sample_pool.get_with(|buffer| buffer.resize(size, 0.0));
     if size <= 1 {
         hann.fill(1.0);
         return hann;
@@ -258,7 +258,7 @@ fn normalize_bands(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
@@ -282,7 +282,7 @@ mod tests {
     }
 
     fn analyzer(params: AnalysisParams) -> WaveformAnalyzer {
-        WaveformAnalyzer::new(Consts::SR, params, &PcmPool::default())
+        WaveformAnalyzer::new(Consts::SR, params, &SamplePool::default())
     }
 
     /// Unity gain so normalization/routing tests aren't coupled to the

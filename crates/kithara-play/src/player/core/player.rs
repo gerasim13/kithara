@@ -42,7 +42,7 @@ impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig) -> Self {
-        let resolved_pool = config.worker.pcm_pool().clone();
+        let resolved_pool = config.worker.sample_pool().clone();
         let sync = GroupState::unavailable(
             config.grid_id,
             config.sample_rate,
@@ -63,7 +63,7 @@ impl PlayerImpl {
             .grid_id(config.grid_id)
             .max_slots(config.max_slots)
             .sample_rate(config.sample_rate.get())
-            .pcm_pool(resolved_pool)
+            .sample_pool(resolved_pool)
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())
             .build();

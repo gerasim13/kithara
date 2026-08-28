@@ -29,9 +29,9 @@ impl BeatAlignment {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum AlignmentSource {
-    /// PCM has not become audible and may be positioned before playback.
+    /// Decoded audio has not become audible and may be positioned before playback.
     Prepared,
-    /// PCM is already audible at the stated exact presentation frontier.
+    /// Decoded audio is already audible at the stated exact presentation frontier.
     Audible(PresentationFrontier),
 }
 
@@ -64,7 +64,7 @@ pub enum SyncOperation<G: SyncGroup> {
         load: LoadGeneration,
         /// Exact committed session transport state.
         transport: TransportRevision,
-        /// Whether the affected PCM is prepared or already audible.
+        /// Whether the affected audio is prepared or already audible.
         source: AlignmentSource,
         /// Exact output frame at which the intent may take effect.
         activation: SessionFrame,
@@ -135,7 +135,7 @@ pub enum SyncMemberKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TransportOperation {
-    /// Prepare an exact source position before any affected PCM is audible.
+    /// Prepare an exact source position before any affected audio is audible.
     PrepareStart {
         /// Exact decoded source-frame destination.
         source_frame: u64,
@@ -205,7 +205,7 @@ pub enum SyncAdmission {
         /// Exact topology published by the transaction.
         topology: TopologyStamp,
     },
-    /// A validated SYNC-off transport command may enter the existing PCM path.
+    /// A validated SYNC-off transport command may enter the existing sample path.
     Accepted {
         /// Identity of the admitted operation.
         operation: SyncOperationId,

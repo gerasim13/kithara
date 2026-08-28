@@ -279,7 +279,7 @@ fn player_events_from_notification(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_events::{Envelope, Event, EventReceiver};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
@@ -294,7 +294,7 @@ mod tests {
     /// A started player holding one slot — the slot the phase calls current.
     fn player_with_slot() -> (PlayerImpl, SlotId) {
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         );
         let player = PlayerImpl::new(
             PlayerConfig::builder()

@@ -27,7 +27,7 @@ use kithara_play::{PlayWorker, PlayWorkerConfig, ResourceConfig};
 
 let region = Region::default();
 let worker = PlayWorker::new(
-    PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+    PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
 );
 let resource: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
     "https://example.com/track.m3u8",

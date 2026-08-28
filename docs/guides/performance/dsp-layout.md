@@ -235,13 +235,13 @@ fn prepare(&mut self) { LazyLock::force(&TABLE); self.scratch.resize(max, 0.0); 
 
 ```rust
 // bad: SmallVec everywhere; spill branch + fat inline storage on every move
-per_channel: SmallVec<[PcmBuf; 8]>,
+per_channel: SmallVec<[SampleBuffer; 8]>,
 // good: hard max -> ArrayVec (no data-ptr branch); reusable scratch -> Vec + clear()
-per_channel: ArrayVec<PcmBuf, 8>,        // channels <= 8 is a real bound
+per_channel: ArrayVec<SampleBuffer, 8>,  // channels <= 8 is a real bound
 scratch.clear(); scratch.extend(frame); // pooled/reused, not re-allocated
 ```
 
-kithara's `SmallVec<[PcmChunk;2]>` for transient 0-2 returns is deliberate; reach for SmallVec only on profiled churn, not by default.
+kithara's `SmallVec<[AudioChunk; 2]>` for transient 0-2 returns is deliberate; reach for SmallVec only on profiled churn, not by default.
 *tier: hot | detector: manual | present in kithara (deliberate uses)*
 
 **Runtime-length loop for a compile-time-fixed DSP kernel**

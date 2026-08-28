@@ -118,7 +118,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let worker = PlayWorker::new(
         PlayWorkerConfig::for_pools(
             kithara::bufpool::BytePool::default(),
-            kithara::bufpool::PcmPool::default(),
+            kithara::bufpool::SamplePool::default(),
         )
         .build(),
     );

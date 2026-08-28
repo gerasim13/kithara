@@ -2,6 +2,7 @@
 
 use std::{ffi::CString, num::NonZeroU32, ptr::NonNull};
 
+use kithara_signal::AudioSpec;
 use tracing::{debug, info};
 
 use super::{
@@ -12,8 +13,6 @@ use super::{
         PCM_ENCODING_16BIT, PCM_ENCODING_FLOAT,
     },
 };
-use crate::types::PcmSpec;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AndroidPcmEncoding {
     Pcm16,
@@ -22,7 +21,7 @@ pub(crate) enum AndroidPcmEncoding {
 
 pub(crate) struct OutputFormat {
     pub(crate) pcm_encoding: AndroidPcmEncoding,
-    pub(crate) spec: PcmSpec,
+    pub(crate) spec: AudioSpec,
 }
 
 pub(crate) struct InputBuffer {
@@ -355,7 +354,7 @@ fn load_output_format(codec: &OwnedCodec) -> Result<OutputFormat, AndroidBackend
         .ok_or_else(|| AndroidBackendError::operation("codec-output-format", "zero sample-rate"))?;
     Ok(OutputFormat {
         pcm_encoding,
-        spec: PcmSpec::new(channels, nz_rate),
+        spec: AudioSpec::new(channels, nz_rate),
     })
 }
 

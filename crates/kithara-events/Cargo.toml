@@ -16,7 +16,7 @@ app = []
 asset = []
 file = []
 hls = ["abr"]
-audio = []
+audio = ["dep:kithara-signal"]
 decoder = []
 drm = []
 player = []
@@ -32,6 +32,7 @@ tls-native = ["kithara-net?/tls-native"]
 [dependencies]
 kithara-net = { workspace = true, optional = true, default-features = false }
 kithara-platform = { workspace = true }
+kithara-signal = { workspace = true, optional = true }
 
 crossbeam-queue = { workspace = true }
 dashmap = { workspace = true }

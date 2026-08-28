@@ -357,7 +357,7 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -423,7 +423,7 @@ mod tests {
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         );
         let player = PlayerImpl::new(
             PlayerConfig::builder()

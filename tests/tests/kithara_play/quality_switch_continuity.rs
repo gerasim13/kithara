@@ -282,7 +282,7 @@ async fn prepare_player(
     .worker(PlayWorker::new(
         PlayWorkerConfig::for_pools(
             kithara::bufpool::BytePool::default(),
-            kithara::bufpool::PcmPool::default(),
+            kithara::bufpool::SamplePool::default(),
         )
         .build(),
     ))

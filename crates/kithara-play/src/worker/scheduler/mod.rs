@@ -13,5 +13,5 @@ pub(super) use node::{AtomicServiceClass, Node, RtPolicy, TickResult};
 pub(super) use observer::{
     PassOutcome, PassReport, PlaybackObserver, SchedulerEvent, SchedulerObserver,
 };
-pub(super) use playback::{PcmScheduler, PcmTask, PcmTaskId, PcmWake};
+pub(super) use playback::{PlaybackScheduler, Task, TaskId, Wake};
 pub(super) use wake::SchedulerWake;

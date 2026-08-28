@@ -15,14 +15,14 @@ use std::{
 use firewheel::node::ProcBuffers;
 use kithara::{
     self,
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, SharedEq, TrackState, TrackTransition,
         bridge::{PlayerCmd, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{
     SampleRateTrackingReader, SeekTrackingReader, TestPcmReader,
@@ -49,7 +49,7 @@ fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
     let processor =
-        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &PcmPool::default());
+        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &SamplePool::default());
     (processor, control)
 }
 
@@ -58,26 +58,26 @@ fn create_mock_player_resource(src: &str) -> Box<PlayerResource> {
 }
 
 fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> Box<PlayerResource> {
-    let spec = PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
+    let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let reader = TestPcmReader::new(spec, duration_secs);
     let resource = Resource::from_reader(reader, None);
     Box::new(PlayerResource::new(
         resource,
         Arc::from(src),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ))
 }
 
 fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
     let (reader, _recorded) = SampleRateTrackingReader::with_duration(
-        PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
+        AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate")),
         duration,
     );
     let resource = Resource::from_reader(reader, None);
     Box::new(PlayerResource::new(
         resource,
         Arc::from(src),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ))
 }
 
@@ -89,26 +89,28 @@ fn create_tracking_player_resource(
     Box::new(PlayerResource::new(
         resource,
         Arc::from(src),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ))
 }
 
 #[kithara::test(tokio)]
 async fn load_track_propagates_host_sample_rate() {
     let host_rate = 88_200u32;
-    let (reader, recorded) =
-        SampleRateTrackingReader::new(PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")));
+    let (reader, recorded) = SampleRateTrackingReader::new(AudioSpec::new(
+        2,
+        NonZeroU32::new(44100).expect("test rate"),
+    ));
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(PlayerResource::new(
         resource,
         Arc::from("track.mp3"),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ));
 
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
     let mut processor =
-        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &PcmPool::default());
+        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &SamplePool::default());
 
     control
         .cmd_tx
@@ -166,13 +168,15 @@ fn processor_set_paused_updates_playback() {
 
 #[kithara::test(tokio)]
 async fn processor_clear_unloads_tracks_and_resets_snapshot() {
-    let (reader, _recorded) =
-        SampleRateTrackingReader::new(PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate")));
+    let (reader, _recorded) = SampleRateTrackingReader::new(AudioSpec::new(
+        2,
+        NonZeroU32::new(44100).expect("test rate"),
+    ));
     let resource = Resource::from_reader(reader, None);
     let player_resource = Box::new(PlayerResource::new(
         resource,
         Arc::from("track.mp3"),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ));
 
     let (mut processor, mut control) = make_processor();

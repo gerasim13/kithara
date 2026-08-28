@@ -6,7 +6,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl},
+    audio::{AudioConfig, AudioControl},
     bufpool::Region,
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
@@ -61,8 +61,9 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder()
@@ -157,8 +158,9 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     let bus = EventBus::new(8192);
     let mut rx = bus.subscribe();
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder()

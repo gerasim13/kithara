@@ -1,12 +1,12 @@
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 
 use super::AudioEffect;
 
 /// Apply the effect chain to the chunk.
 pub(crate) fn apply_effects(
     effects: &mut [Box<dyn AudioEffect>],
-    mut chunk: PcmChunk,
-) -> Option<PcmChunk> {
+    mut chunk: AudioChunk,
+) -> Option<AudioChunk> {
     for effect in &mut *effects {
         chunk = effect.process(chunk)?;
     }

@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{self, decode::PcmSpec, play::Resource};
+use kithara::{self, play::Resource, signal::AudioSpec};
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
@@ -13,8 +13,8 @@ const BLOCK_FRAMES: usize = 512;
 const TARGET_SAMPLES: usize = 8_820;
 const MAX_RENDERED_FRAMES: usize = 9_000;
 
-fn mock_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"))
+fn mock_spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"))
 }
 
 fn make_resource(duration_secs: f64) -> Resource {

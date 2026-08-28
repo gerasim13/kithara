@@ -4,7 +4,7 @@ message: |
   through the pool injected by the owning subsystem:
 
     - `Vec<u8>` uses `BytePool`;
-    - `Vec<f32>` containing PCM uses `PcmPool`;
+    - `Vec<f32>` containing decoded samples uses `SamplePool`;
     - other primitive scratch is reshaped to reuse one of those injected pools.
 
   The rule covers empty and capacity-bearing constructors, `default`, `vec!`,

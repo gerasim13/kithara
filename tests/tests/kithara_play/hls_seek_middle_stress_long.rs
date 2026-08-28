@@ -3,7 +3,7 @@
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventReceiver, PlayerEvent},
     net::{HttpClient, NetOptions},
@@ -295,7 +295,7 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     )
     .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
     .worker(PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
     ))
     .build();
 
@@ -394,7 +394,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     let shutdown = CancelScope::new(None);
     let shutdown_token = shutdown.token();
     let byte_pool = BytePool::default();
-    let pcm_pool = PcmPool::default();
+    let sample_pool = SamplePool::default();
     let store = AssetStore::builder()
         .cancel(shutdown_token.child())
         .backend(StorageBackend::Disk {
@@ -403,7 +403,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
         .pool(byte_pool.clone())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), pcm_pool)
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
             .cancel(shutdown_token.child())
             .build(),
     );

@@ -1,6 +1,6 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_decode::sanitize_sample;
+use kithara_signal::sanitize_sample;
 use num_traits::ToPrimitive;
 
 /// Milliseconds per second: the release time arrives in ms, the coefficient

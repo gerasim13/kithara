@@ -15,14 +15,14 @@ use std::{
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     platform::{sync::Arc, time::Duration},
     play::{
         PlayerNotification, Resource, TrackPlaybackStopReason, TrackState,
         bridge::RtMetrics,
         rt::track::{PlayerResource, PlayerTrack, RtSink, TrackReadOutcome},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{
     LiveFrontierReader, MisreportedDurationReader, TestPcmReader,
@@ -45,8 +45,8 @@ enum TrackStateScenario {
     StopAfterPlay,
 }
 
-fn mock_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
+fn mock_spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"))
 }
 
 fn make_track_with(duration_secs: f64, item_id: Option<Arc<str>>) -> PlayerTrack {
@@ -60,7 +60,7 @@ fn make_track_from_resource(
     src: Arc<str>,
     item_id: Option<Arc<str>>,
 ) -> PlayerTrack {
-    let player_resource = PlayerResource::new(resource, src, &PcmPool::default());
+    let player_resource = PlayerResource::new(resource, src, &SamplePool::default());
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     PlayerTrack::builder()
         .sample_rate(sample_rate)

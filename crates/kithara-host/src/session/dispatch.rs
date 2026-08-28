@@ -97,9 +97,9 @@ pub(crate) fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) ->
             grid_id,
             bus,
             eq_layout,
-            pcm_pool,
+            sample_pool,
             sample_rate,
-        } => match register_player(state, grid_id, bus, eq_layout, pcm_pool, sample_rate) {
+        } => match register_player(state, grid_id, bus, eq_layout, sample_pool, sample_rate) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -400,7 +400,7 @@ mod tests {
     };
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_events::EventBus;
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
@@ -531,7 +531,7 @@ mod tests {
             grid_id,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            pcm_pool: PcmPool::default(),
+            sample_pool: SamplePool::default(),
             sample_rate,
         }
     }

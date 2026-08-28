@@ -7,9 +7,8 @@ use criterion::{
 };
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AnalysisParams, AudioConfig, PcmRead, ReadOutcome, WaveformAnalyzer},
-    bufpool::{PcmPool, Region},
-    decode::{PcmChunk, PcmMeta, PcmSpec},
+    audio::{AnalysisParams, AudioConfig, AudioRead, ReadOutcome, WaveformAnalyzer},
+    bufpool::{Region, SamplePool},
     file::{File, FileConfig},
     platform::{
         sync::Arc,
@@ -17,6 +16,7 @@ use kithara::{
         tokio::runtime::{Builder, Runtime},
     },
     play::{PlayWorker, PlayWorkerConfig},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     warp::{StretchControls, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
@@ -84,8 +84,8 @@ fn frame_throughput(frames: usize) -> Throughput {
     )
 }
 
-fn make_chunk(pool: &PcmPool, pcm: &[f32]) -> PcmChunk {
-    let spec = PcmSpec::new(
+fn make_chunk(pool: &SamplePool, pcm: &[f32]) -> AudioChunk {
+    let spec = AudioSpec::new(
         u16::try_from(Consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
         NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
     );
@@ -94,18 +94,18 @@ fn make_chunk(pool: &PcmPool, pcm: &[f32]) -> PcmChunk {
         .ensure_len(pcm.len())
         .unwrap_or_else(|error| panic!("bench PCM allocation failed: {error}"));
     samples.clone_from_slice(pcm);
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec,
             frames: u32::try_from(pcm.len() / Consts::CHANNELS)
                 .unwrap_or_else(|_| panic!("bench frame count")),
-            ..PcmMeta::default()
+            ..AudioChunkInfo::default()
         },
         samples,
     )
 }
 
-fn stretch_config(backend: StretchKind, pool: &PcmPool) -> ElasticConfig {
+fn stretch_config(backend: StretchKind, pool: &SamplePool) -> ElasticConfig {
     ElasticConfig::builder()
         .backend(backend)
         .pool(pool.clone())
@@ -117,7 +117,7 @@ fn stretch_config(backend: StretchKind, pool: &PcmPool) -> ElasticConfig {
         .unwrap_or_else(|error| panic!("invalid stretch benchmark config: {error}"))
 }
 
-fn stretch_engine(backend: StretchKind, pool: &PcmPool) -> Box<dyn ElasticEngine> {
+fn stretch_engine(backend: StretchKind, pool: &SamplePool) -> Box<dyn ElasticEngine> {
     build_engine(stretch_config(backend, pool))
         .unwrap_or_else(|error| panic!("failed to prepare {backend} benchmark engine: {error}"))
 }
@@ -178,7 +178,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
                     .hint("mp3".to_string())
                     .build();
                 let worker = PlayWorker::new(
-                    PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build(),
+                    PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
                 );
                 let mut audio = worker
                     .open(config)
@@ -212,7 +212,7 @@ fn bench_beat_analysis(c: &mut Criterion) {
         .unwrap_or_else(|_| panic!("bench sample rate exceeds usize"))
         * Consts::ANALYSIS_SECONDS;
     let pcm = make_pcm(frames);
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
 
     let mut group = c.benchmark_group("audit_beat_analysis");
     group.sampling_mode(SamplingMode::Flat);
@@ -233,7 +233,7 @@ fn bench_beat_analysis(c: &mut Criterion) {
 }
 
 fn bench_stretch_prepare(c: &mut Criterion) {
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let mut group = c.benchmark_group("audit_stretch_prepare");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(20);
@@ -262,7 +262,7 @@ fn bench_stretch_prepare(c: &mut Criterion) {
 }
 
 fn bench_stretch_backends(c: &mut Criterion) {
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let steady_request = ElasticRequest::new(Consts::STRETCH_FRAMES, Consts::STRETCH_FRAMES)
         .unwrap_or_else(|error| panic!("invalid steady stretch request: {error}"));
     let control_requests = [
@@ -355,8 +355,8 @@ fn bench_stretch_backends(c: &mut Criterion) {
 
 fn bench_stretch_process(c: &mut Criterion) {
     let pcm = make_pcm(Consts::STRETCH_FRAMES);
-    let pool = PcmPool::default();
-    let spec = PcmSpec::new(
+    let pool = SamplePool::default();
+    let spec = AudioSpec::new(
         u16::try_from(Consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
         NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
     );
@@ -380,7 +380,7 @@ fn bench_stretch_process(c: &mut Criterion) {
                     let chunk = make_chunk(&pool, &pcm);
                     (renderer, chunk)
                 },
-                |(mut renderer, chunk): (WarpRenderer, PcmChunk)| {
+                |(mut renderer, chunk): (WarpRenderer, AudioChunk)| {
                     black_box(renderer.render(chunk));
                 },
                 BatchSize::SmallInput,

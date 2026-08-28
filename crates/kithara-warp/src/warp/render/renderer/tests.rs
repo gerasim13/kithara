@@ -1,8 +1,8 @@
 use std::num::NonZero;
 
-use kithara_bufpool::PcmPool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_bufpool::SamplePool;
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer};
@@ -43,11 +43,11 @@ fn sine(frames: usize) -> Vec<f32> {
     out
 }
 
-fn chunk(samples: &[f32]) -> PcmChunk {
+fn chunk(samples: &[f32]) -> AudioChunk {
     let frames = samples.len() / usize::from(Consts::CH);
-    PcmChunk::new(
-        PcmMeta {
-            spec: PcmSpec {
+    AudioChunk::new(
+        AudioChunkInfo {
+            spec: AudioSpec {
                 channels: Consts::CH,
                 sample_rate: NonZero::new(Consts::SR).unwrap(),
             },
@@ -55,7 +55,7 @@ fn chunk(samples: &[f32]) -> PcmChunk {
             timestamp: Duration::ZERO,
             ..Default::default()
         },
-        PcmPool::default().attach(samples.to_vec()),
+        SamplePool::default().attach(samples.to_vec()),
     )
 }
 
@@ -82,25 +82,25 @@ fn expected_bin(freq: f64) -> usize {
     num_traits::cast((freq * f64_of(Consts::N) / f64::from(Consts::SR)).round()).unwrap_or(0)
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec {
+fn spec() -> AudioSpec {
+    AudioSpec {
         channels: Consts::CH,
         sample_rate: NonZero::new(Consts::SR).unwrap(),
     }
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(controls, spec(), PcmPool::default())
+    WarpRenderer::new(controls, spec(), SamplePool::default())
 }
 
-fn render_serviced(fx: &mut WarpRenderer, input: PcmChunk) -> Option<PcmChunk> {
+fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {
     fx.prepare(spec());
     let output = fx.render(input);
     fx.prepare(spec());
     output
 }
 
-fn flush_serviced(fx: &mut WarpRenderer) -> Option<PcmChunk> {
+fn flush_serviced(fx: &mut WarpRenderer) -> Option<AudioChunk> {
     fx.prepare(spec());
     let output = fx.flush();
     fx.prepare(spec());

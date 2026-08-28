@@ -12,12 +12,13 @@ flowchart LR
     TC --> PW[PlayWorker]
     PW -->|".m3u8"| AH["identity Warp‹Audio‹Stream‹Hls››› + DecoderNode‹WarpSource›"]
     PW -->|other| AF["identity Warp‹Audio‹Stream‹File››› + DecoderNode‹WarpSource›"]
-    AH --> PR["Box‹dyn PcmReader›"]
+    AH --> PR["Box‹dyn AudioReader›"]
     AF --> PR
     PR -->|"read / seek"| APP[Your audio callback]
 ```
 
-`kithara-audio` prepares the decoded PCM source and analysis input seam.
+`kithara-signal` owns decoded-audio values and checked layout/time conversion;
+`kithara-audio` prepares the decoded source and analysis input seam.
 `kithara-play` owns the Player/deck, `PlayWorker` scheduler, per-track node,
 ordinary post-Warp effects, and final output admission before `read()` reaches
 the callback. It composes the resident `Warp<S>` and synchronous
@@ -101,7 +102,7 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>Resource</code></td><td>Type-erased <code>Box&lt;dyn PcmReader&gt;</code> — the single entry point for PCM reads</td></tr>
+<tr><td><code>Resource</code></td><td>Type-erased <code>Box&lt;dyn AudioReader&gt;</code> — the single entry point for PCM reads</td></tr>
 
 <tr><td><code>ResourceConfig</code></td><td>Builder for source, network, ABR, decoder backend, and cache options</td></tr>
 

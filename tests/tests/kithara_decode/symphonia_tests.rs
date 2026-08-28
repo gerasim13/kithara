@@ -2,8 +2,9 @@ use std::io::Cursor;
 
 use kithara::{
     self,
-    decode::{DecodeError, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecodeError, DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
@@ -23,7 +24,7 @@ fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .hint("wav")
             .build(),
     );
@@ -47,7 +48,7 @@ fn test_next_chunk_returns_data() {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .expect("BUG: decoder");
@@ -55,7 +56,7 @@ fn test_next_chunk_returns_data() {
     let outcome = decoder.next_chunk().unwrap();
     assert!(outcome.is_chunk());
 
-    let chunk = PcmChunk::try_from(outcome).unwrap();
+    let chunk = AudioChunk::try_from(outcome).unwrap();
     assert_eq!(chunk.spec().sample_rate.get(), 44100);
     assert_eq!(chunk.spec().channels, 2);
     assert!(!chunk.samples.is_empty());
@@ -74,7 +75,7 @@ fn test_next_chunk_eof() {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .expect("BUG: decoder");
@@ -98,7 +99,7 @@ fn test_seek_to_beginning() {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .expect("BUG: decoder");
@@ -125,7 +126,7 @@ fn test_duration_available() {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .expect("BUG: decoder");
@@ -151,7 +152,7 @@ fn test_invalid_input_fails(#[case] data: Vec<u8>) {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     );
     assert!(result.is_err());
@@ -170,7 +171,7 @@ fn test_unsupported_container_returns_error() {
         &media_info,
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     );
     assert!(matches!(

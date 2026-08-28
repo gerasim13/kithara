@@ -43,7 +43,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioRead, AudioSession, ChunkOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -99,8 +99,9 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .master_url();
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
         .pool(worker.byte_pool().clone())
@@ -140,7 +141,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
         while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => break,

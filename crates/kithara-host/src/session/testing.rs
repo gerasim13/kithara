@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
@@ -117,7 +117,7 @@ pub(crate) fn attach_player<B: AudioBackend>(state: &mut SessionState<B>) -> Bea
 
 fn attach_player_with_id<B: AudioBackend>(state: &mut SessionState<B>, grid_id: BeatGridId) {
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
     );
     let player = PlayerImpl::new(
         PlayerConfig::builder()

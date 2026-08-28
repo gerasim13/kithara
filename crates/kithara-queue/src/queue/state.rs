@@ -400,7 +400,7 @@ pub(crate) mod tests {
     fn player() -> PlayerImpl {
         let region = Region::default();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build(),
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         );
         PlayerImpl::new(
             PlayerConfig::builder()

@@ -1,15 +1,15 @@
 id: perf.no-global-pool-accessor
 message: |
-  Constructing a default `BytePool` / `PcmPool` from a library crate.
+  Constructing a default `BytePool` / `SamplePool` from a library crate.
   Pools are an injected dependency: the top of the application builds
-  one `BytePool` and one `PcmPool` and passes them down through
+  one `BytePool` and one `SamplePool` and passes them down through
   config structs or constructor arguments. Library code must read
   the pool from `self`/`cfg`, not call `BytePool::default()` /
-  `PcmPool::default()` directly.
+  `SamplePool::default()` directly.
 
       // ❌  let buf = BytePool::default().get_with(...);
       // ✅  let buf = self.byte_pool.get_with(...);
-      // ✅  let buf = cfg.pcm_pool.get_with(...);
+      // ✅  let buf = cfg.sample_pool.get_with(...);
 
   `Default::default()` stays available for the very top layer (main /
   FFI entrypoint / test fixtures) where building the singleton is
@@ -34,6 +34,6 @@ ignores:
 rule:
   any:
     - pattern: "BytePool::default()"
-    - pattern: "PcmPool::default()"
+    - pattern: "SamplePool::default()"
     - pattern: "kithara_bufpool::BytePool::default()"
-    - pattern: "kithara_bufpool::PcmPool::default()"
+    - pattern: "kithara_bufpool::SamplePool::default()"

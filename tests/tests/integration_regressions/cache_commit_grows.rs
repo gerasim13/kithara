@@ -138,7 +138,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool.clone(), region.pcm_pool())
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool())
                     .build(),
             ))
             .session(OfflineSession::arc_auto())

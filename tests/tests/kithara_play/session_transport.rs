@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     events::{Event, EventBus, EventReceiver, TransportEvent},
     platform::tokio::sync::broadcast::error::TryRecvError,
     play::{Cmd, Reply, SessionBeat, SessionTransportSnapshot, Tempo},
@@ -38,7 +38,7 @@ fn register_transport_events(session: &ManualRingSession) -> EventReceiver {
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus,
             eq_layout: Vec::new(),
-            pcm_pool: PcmPool::default(),
+            sample_pool: SamplePool::default(),
             sample_rate: SAMPLE_RATE,
         })
         .expect("invariant: player registration reaches the session")

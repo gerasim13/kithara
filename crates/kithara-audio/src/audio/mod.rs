@@ -3,17 +3,19 @@ mod core;
 mod cursor;
 pub(crate) mod event;
 mod park;
+mod position;
 mod ring;
 mod seek;
 
 pub use core::{Audio, PreparedAudio};
 
+pub(crate) use position::chunk_position;
 pub use seek::SeekHandle;
 
 pub(crate) use crate::{
-    AudioConfig, AudioDecoderConfig, ChunkOutcome, ConsumerWakeMode, DecodeError, Fetch,
-    PcmControl, PcmRead, PcmSession, PendingReason, PreloadGate, PreparedPcmLane, ReadOutcome,
-    SeekOutcome,
+    AudioConfig, AudioControl, AudioDecoderConfig, AudioRead, AudioSession, ChunkOutcome,
+    ConsumerWakeMode, DecodeError, Fetch, PendingReason, PreloadGate, PreparedAudioLane,
+    ReadOutcome, SeekOutcome,
     pipeline::{
         consumer::{ConsumerPhase, FailureSource},
         fetch::EpochValidator,
@@ -23,6 +25,6 @@ pub(crate) use crate::{
             DecodeInit, DecoderFactory as StreamDecoderFactory, SharedStream, StreamAudioSource,
         },
     },
-    producer::PcmProducerPort,
+    producer::ProducerPort,
     runtime::{Inlet, Outlet, WakeSignal, connect, wake::ThreadWake},
 };

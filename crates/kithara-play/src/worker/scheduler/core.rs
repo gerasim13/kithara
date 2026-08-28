@@ -32,7 +32,7 @@ impl<N: Node, O: SchedulerObserver> Scheduler<N, O> {
     /// Park budget used after `PassOutcome::Waiting` /
     /// `PassOutcome::UpstreamPending` / `PassOutcome::Backpressured` —
     /// at least one slot is alive and likely to make progress shortly
-    /// (source becomes ready, consumer drains the PCM ring), so re-check
+    /// (source becomes ready, consumer drains the audio ring), so re-check
     /// more aggressively.
     const WAITING_TIMEOUT: Duration = Duration::from_millis(10);
 
@@ -981,12 +981,12 @@ mod tests {
     }
 
     /// A node that drains a spent-buffer inlet in `recycle` and pushes one
-    /// item per `tick` into a bounded PCM ring, recording the order of
+    /// item per `tick` into a bounded sample ring, recording the order of
     /// recycle/produce calls and the high-water mark of un-recycled items
     /// still queued in the trash inlet.
     struct RecyclingNode {
         trash: HeapCons<u32>,
-        pcm: HeapProd<usize>,
+        samples: HeapProd<usize>,
         last_call_recycle: bool,
         recycle_before_produce: bool,
         max_produce: usize,
@@ -1015,7 +1015,7 @@ mod tests {
             if self.produced >= self.max_produce {
                 return TickResult::Done;
             }
-            if self.pcm.try_push(self.produced).is_err() {
+            if self.samples.try_push(self.produced).is_err() {
                 return TickResult::Backpressured;
             }
             self.produced += 1;
@@ -1027,11 +1027,11 @@ mod tests {
     fn produce_pass_recycles_before_producing_and_never_backlogs_trash() {
         const CAP: usize = 4;
         let (mut trash_tx, trash_rx) = HeapRb::<u32>::new(CAP + 2).split();
-        let (pcm_tx, mut pcm_rx) = HeapRb::<usize>::new(CAP).split();
+        let (samples_tx, mut samples_rx) = HeapRb::<usize>::new(CAP).split();
 
         let node = RecyclingNode {
             trash: trash_rx,
-            pcm: pcm_tx,
+            samples: samples_tx,
             produced: 0,
             max_produce: 64,
             recycled: 0,
@@ -1058,7 +1058,7 @@ mod tests {
             }
             recycle_all(&mut slots);
             let _report = produce_pass(&mut slots, &mut observer);
-            while pcm_rx.try_pop().is_some() {}
+            while samples_rx.try_pop().is_some() {}
         }
 
         // Simulate a seek-drain: the audio thread returns a whole ring's

@@ -3,7 +3,6 @@ use std::num::NonZeroU32;
 use kithara::{
     self,
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
-    decode::PcmSpec,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope,
@@ -14,6 +13,7 @@ use kithara::{
         time::Duration,
     },
     play::{Cmd, MixTapWriter, Resource, SessionDispatcher},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -36,7 +36,7 @@ const PRIMING_SKIP_FRAMES: usize = 4_410;
 const MAX_BLOCKS: usize = 2_000;
 
 fn tone_resource() -> Resource {
-    let spec = PcmSpec::new(2, NonZeroU32::new(SESSION_RATE).expect("test rate"));
+    let spec = AudioSpec::new(2, NonZeroU32::new(SESSION_RATE).expect("test rate"));
     resource_from_reader(TestPcmReader::with_signal(
         spec,
         TRACK_SECS,

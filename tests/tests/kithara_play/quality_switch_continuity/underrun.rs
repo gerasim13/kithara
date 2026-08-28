@@ -1,6 +1,6 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
-    audio::{AudioConfig, ConsumerWakeMode, PcmSession},
+    audio::{AudioConfig, AudioSession, ConsumerWakeMode},
     hls::{Hls, HlsConfig},
     play::{PlayWorker, PlayWorkerConfig},
 };
@@ -80,7 +80,7 @@ async fn prepare_tiny_ring_player(
     let worker = PlayWorker::new(
         PlayWorkerConfig::for_pools(
             kithara::bufpool::BytePool::default(),
-            kithara::bufpool::PcmPool::default(),
+            kithara::bufpool::SamplePool::default(),
         )
         .build(),
     );
@@ -91,7 +91,7 @@ async fn prepare_tiny_ring_player(
                 .build(),
         )
         .events(bus)
-        .pcm_buffer_chunks(OUTPUT_RING_CHUNKS)
+        .audio_buffer_chunks(OUTPUT_RING_CHUNKS)
         .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .build();
     let audio = worker

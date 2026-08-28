@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_events::EventBus;
 use kithara_platform::sync::{Arc, Mutex};
 use tracing::debug;
@@ -115,7 +115,7 @@ impl ItemQueue {
         &self,
         index: usize,
         host_sample_rate: u32,
-        pool: &PcmPool,
+        pool: &SamplePool,
     ) -> Option<TakenItem> {
         let mut playlist = self.playlist.lock();
         if index >= playlist.len() {
@@ -148,17 +148,18 @@ impl ItemQueue {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{PcmControl, PcmRead, PcmSession, ReadOutcome, SeekOutcome};
-    use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
+    use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
+    use kithara_decode::{DecodeError, TrackMetadata};
     use kithara_events::{Envelope, Event, PlayerEvent};
     use kithara_platform::time::Duration;
+    use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::*;
 
     struct EofReader {
         bus: EventBus,
-        spec: PcmSpec,
+        spec: AudioSpec,
         metadata: TrackMetadata,
     }
 
@@ -166,13 +167,13 @@ mod tests {
         fn default() -> Self {
             Self {
                 bus: EventBus::default(),
-                spec: PcmSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
+                spec: AudioSpec::new(2, NonZeroU32::new(44_100).expect("static rate")),
                 metadata: TrackMetadata::default(),
             }
         }
     }
 
-    impl PcmSession for EofReader {
+    impl AudioSession for EofReader {
         fn duration(&self) -> Option<Duration> {
             None
         }
@@ -186,7 +187,7 @@ mod tests {
         }
     }
 
-    impl PcmRead for EofReader {
+    impl AudioRead for EofReader {
         fn position(&self) -> Duration {
             Duration::ZERO
         }
@@ -206,12 +207,12 @@ mod tests {
             })
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
 
-    impl PcmControl for EofReader {
+    impl AudioControl for EofReader {
         fn seek(&mut self, position: Duration) -> Result<SeekOutcome, DecodeError> {
             Ok(SeekOutcome::Landed {
                 target: position,

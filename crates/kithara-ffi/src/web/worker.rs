@@ -91,7 +91,7 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>, host_sender: wasm::
         let worker = kithara_play::PlayWorker::new(
             kithara_play::PlayWorkerConfig::for_pools(
                 state.region.byte_pool(),
-                state.region.pcm_pool(),
+                state.region.sample_pool(),
             )
             .build(),
         );

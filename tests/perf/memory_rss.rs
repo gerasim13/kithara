@@ -6,7 +6,7 @@
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead},
+    audio::{AudioConfig, AudioRead},
     bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -63,7 +63,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             .build();
         let config = AudioConfig::<Hls>::for_stream(hls_config).build();
         let worker =
-            PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+            PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
         let mut audio = worker.open(config).await.expect("audio creation");
 
         let samples = spawn_blocking(move || {
@@ -157,7 +157,8 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config).build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker.open(config).await.expect("audio creation");
 
     let (warmup_rss, final_rss) = spawn_blocking(move || {

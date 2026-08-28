@@ -12,7 +12,7 @@ use tracing::warn;
 
 use super::{AnalysisNode, AnalysisObserver, AnalysisStep, Job};
 use crate::{
-    PcmReader,
+    AudioReader,
     analysis::analyzer::{AnalyzerBuilder, TrackAnalysis},
     runtime::{WakeSignal, wake::ThreadWake},
 };
@@ -123,7 +123,7 @@ where
 
     pub fn analyze(
         &self,
-        reader: Box<dyn PcmReader>,
+        reader: Box<dyn AudioReader>,
         cancel: CancelToken,
     ) -> watch::Receiver<Option<TrackAnalysis>> {
         let (tx, rx) = watch::channel(None);

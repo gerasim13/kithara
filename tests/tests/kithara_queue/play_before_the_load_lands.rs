@@ -38,7 +38,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
             .worker(PlayWorker::new(
                 PlayWorkerConfig::for_pools(
                     kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::PcmPool::default(),
+                    kithara::bufpool::SamplePool::default(),
                 )
                 .build(),
             ))

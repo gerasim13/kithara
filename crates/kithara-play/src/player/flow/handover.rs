@@ -232,7 +232,7 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, PcmPool};
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_events::{EngineEvent, Envelope, Event, PlayerEvent};
     use kithara_test_utils::kithara;
 
@@ -241,7 +241,7 @@ mod tests {
 
     fn worker() -> PlayWorker {
         PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), PcmPool::default()).build(),
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
         )
     }
 

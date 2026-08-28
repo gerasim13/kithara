@@ -47,7 +47,7 @@ impl StreamCore {
                 .ok_or(ElasticError::SampleCountOverflow)?
         };
         let available = until_end.saturating_sub(self.output_consumed);
-        Ok(self.consume(available.min(capacity), output, output_frame))
+        self.consume(available.min(capacity), output, output_frame)
     }
 
     #[cfg_attr(test, kithara::hang_watchdog)]
@@ -169,8 +169,9 @@ impl StreamCore {
         }
         self.input.analyse(&mut self.native, false, true)?;
         self.request_pending = false;
+        let output_stride = self.output.stride().get();
         self.native
-            .synthesise(&mut self.output.samples, self.output.stride)?;
+            .synthesise(self.output.as_samples_mut(), output_stride)?;
         Ok(())
     }
 

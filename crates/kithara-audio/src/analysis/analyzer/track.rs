@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 #[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 
 use crate::waveform::{BeatGrid, bucket::Waveform};
 
@@ -15,7 +15,7 @@ pub(crate) trait Analyzer: Send {
     /// End of stream: produce the artifact.
     fn finish(self) -> Self::Output;
     /// Consume one decoded chunk (interleaved PCM with meta).
-    fn push(&mut self, chunk: &PcmChunk);
+    fn push(&mut self, chunk: &AudioChunk);
 }
 
 /// The output of one analysis pass.

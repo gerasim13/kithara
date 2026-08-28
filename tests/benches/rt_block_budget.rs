@@ -4,8 +4,7 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     platform::{
         sync::Arc,
         time::{Duration, Instant},
@@ -15,6 +14,7 @@ use kithara::{
         bridge::{PlayerCmd, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
 use ringbuf::traits::Producer;
@@ -50,8 +50,8 @@ fn block_budget() -> Duration {
     Duration::from_secs_f64(f64::from(Consts::BLOCK_FRAMES) / f64::from(Consts::SAMPLE_RATE))
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(
+fn spec() -> AudioSpec {
+    AudioSpec::new(
         Consts::CHANNELS,
         non_zero(Consts::SAMPLE_RATE, "sample rate"),
     )
@@ -64,7 +64,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         max_block_frames: non_zero(Consts::BLOCK_FRAMES, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
         control,
     )
 }
@@ -76,7 +76,7 @@ fn send(control: &mut SlotControl, cmd: PlayerCmd) {
 }
 
 fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, count: usize) {
-    let pool = PcmPool::default();
+    let pool = SamplePool::default();
     let sources: Vec<Arc<str>> = (0..count)
         .map(|idx| Arc::from(format!("bench-track-{idx}").as_str()))
         .collect();

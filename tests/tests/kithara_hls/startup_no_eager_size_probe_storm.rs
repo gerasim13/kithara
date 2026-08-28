@@ -1,6 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
@@ -89,7 +89,7 @@ async fn startup_issues_no_eager_size_probe_storm(#[case] fixture: StartupFixtur
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

@@ -13,7 +13,7 @@ use axum::{Router, body::Body, extract::State, http::header, response::Response,
 use bytes::Bytes;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, analysis::BeatAnalysisConfig},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome, analysis::BeatAnalysisConfig},
     bufpool::Region,
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
@@ -80,8 +80,9 @@ async fn waveform_and_player_share_one_get() {
         .backend(StorageBackend::Memory)
         .pool(byte_pool.clone())
         .build();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool.clone(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool()).build(),
+    );
 
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg =
@@ -108,7 +109,7 @@ async fn waveform_and_player_share_one_get() {
         &master,
         WAVEFORM_BUCKETS,
         BeatAnalysisConfig::default(),
-        region.pcm_pool(),
+        region.sample_pool(),
     );
     let mut analysis_rx = runner.analyze(waveform_cfg);
 

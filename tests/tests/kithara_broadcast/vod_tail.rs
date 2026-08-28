@@ -3,7 +3,7 @@ use std::num::NonZeroUsize;
 use kithara::{
     self,
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, PcmControl, PcmRead, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
@@ -46,7 +46,8 @@ async fn the_production_client_plays_the_stopped_broadcast() {
                 .build(),
         )
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
 
     let mut audio = worker
         .open(audio_config)

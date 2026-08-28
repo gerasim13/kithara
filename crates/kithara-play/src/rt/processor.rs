@@ -7,7 +7,7 @@ use firewheel::{
     event::ProcEvents,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 use num_traits::cast::AsPrimitive;
@@ -92,7 +92,7 @@ impl PlayerNodeProcessor {
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
-    pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &PcmPool) -> Self {
+    pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &SamplePool) -> Self {
         let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
         Self {
             cmd_rx: inputs.cmd_rx,
@@ -375,7 +375,7 @@ mod tests {
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
         (
-            PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+            PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
             control,
         )
     }

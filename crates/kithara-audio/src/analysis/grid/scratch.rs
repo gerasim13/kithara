@@ -1,16 +1,16 @@
-use kithara_bufpool::{BudgetExhausted, PcmBuf, PcmPool};
+use kithara_bufpool::{BudgetExhausted, SampleBuffer, SamplePool};
 
 pub(super) struct GridBuffers {
-    pub(super) gaps: PcmBuf,
-    pub(super) marks: PcmBuf,
-    pub(super) neighbors: PcmBuf,
-    pub(super) outliers: PcmBuf,
-    pub(super) positions: PcmBuf,
-    pub(super) sorted: PcmBuf,
+    pub(super) gaps: SampleBuffer,
+    pub(super) marks: SampleBuffer,
+    pub(super) neighbors: SampleBuffer,
+    pub(super) outliers: SampleBuffer,
+    pub(super) positions: SampleBuffer,
+    pub(super) sorted: SampleBuffer,
 }
 
 impl GridBuffers {
-    pub(super) fn new(pool: &PcmPool) -> Self {
+    pub(super) fn new(pool: &SamplePool) -> Self {
         Self {
             gaps: pool.get(),
             marks: pool.get(),
@@ -23,7 +23,7 @@ impl GridBuffers {
 }
 
 pub(super) fn fill(
-    buffer: &mut PcmBuf,
+    buffer: &mut SampleBuffer,
     values: impl ExactSizeIterator<Item = f32>,
 ) -> Result<(), BudgetExhausted> {
     buffer.clear();
@@ -34,7 +34,7 @@ pub(super) fn fill(
     Ok(())
 }
 
-pub(super) fn retain(buffer: &mut PcmBuf, mut keep: impl FnMut(f32) -> bool) {
+pub(super) fn retain(buffer: &mut SampleBuffer, mut keep: impl FnMut(f32) -> bool) {
     let mut write = 0;
     for read in 0..buffer.len() {
         let value = buffer[read];

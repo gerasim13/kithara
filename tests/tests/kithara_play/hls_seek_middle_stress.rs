@@ -82,7 +82,7 @@ async fn hls_seek_middle_repeated_seeks_stress(
     .worker(PlayWorker::new(
         PlayWorkerConfig::for_pools(
             kithara::bufpool::BytePool::default(),
-            kithara::bufpool::PcmPool::default(),
+            kithara::bufpool::SamplePool::default(),
         )
         .build(),
     ))

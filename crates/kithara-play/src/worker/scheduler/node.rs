@@ -69,7 +69,7 @@ pub(crate) enum TickResult {
     /// instead of an indefinite park.
     Waiting,
     /// Node is alive but its downstream consumer is not pulling
-    /// (PCM ring full / outlet overflow). The scheduler treats this
+    /// (audio ring full / outlet overflow). The scheduler treats this
     /// as a paused/idle player — progress is *not expected* until the
     /// consumer drains the ring, so the hang watchdog must NOT tick.
     /// Distinguishing this from `Waiting` is what keeps an idle

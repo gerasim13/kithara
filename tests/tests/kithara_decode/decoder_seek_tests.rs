@@ -1,6 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
@@ -47,7 +47,8 @@ async fn open_test_mp3(
         )
         .maybe_events(events)
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     worker.open(config).await.unwrap()
 }
 
@@ -60,7 +61,7 @@ async fn open_test_mp3(
 #[kithara::flash(true)]
 async fn next_chunk(audio: &mut RegisteredAudio<Stream<File>>, stage: &str) {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => return,
             Ok(ChunkOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for {stage}");

@@ -76,7 +76,8 @@ async fn create_hls_audio(
         .block_on_underrun(true)
         .build();
 
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.pcm_pool()).build());
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     worker
         .open(config)
         .await

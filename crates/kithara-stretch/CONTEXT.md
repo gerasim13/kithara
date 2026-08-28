@@ -6,9 +6,10 @@ Contracts and invariants for the kithara-stretch crate; the README is the overvi
 
 This crate owns pure time-stretch DSP engines only. `kithara-warp` owns the
 synchronous `WarpRenderer`, `StretchControls`, and `RegionPlan`, passing the
-play-configured `PcmPool` through `ElasticConfig`; `kithara-decode` owns
-`PcmChunk` and `PcmMeta`. Decoder sample-rate conversion remains in the
-decode/audio seam. This crate must not create a default or global pool.
+play-configured `SamplePool` through `ElasticConfig`; `kithara-signal` owns
+`AudioChunk`, `AudioChunkInfo`, `AudioSpec`, and the canonical sample views.
+Decoder sample-rate conversion remains in the decode/audio seam. This crate must
+not create a default or global pool.
 
 - `ElasticEngine` is the sole backend contract. Exact source/output frame counts control time;
   `set_pitch` remains independent, and `prime` / `flush` / `reset` define stream lifecycle.
@@ -18,7 +19,7 @@ decode/audio seam. This crate must not create a default or global pool.
   compiled-in backend, which is also `Default`.
 - `ElasticConfig` is the single fallible `#[non_exhaustive]` `bon` root config. It owns the
   `StretchKind` selection, sample rate, channel count, maximum source/output frame spans and the
-  practical playback-rate envelope, plus the injected `PcmPool`; the selector is not a second
+  practical playback-rate envelope, plus the injected `SamplePool`; the selector is not a second
   factory argument.
 - `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
 - Every backend must implement priming; callers may still render a fresh unprimed stream. Nothing
@@ -48,7 +49,7 @@ cannot preserve this ordering does not implement `ElasticEngine`.
 
 ## Engine contract
 
-Engines process interleaved `f32` PCM. `ElasticRequest` names exact non-empty source and output
+Engines process interleaved `f32` samples. `ElasticRequest` names exact non-empty source and output
 frame spans; their ratio is the only tempo control. `set_pitch(scale)` is independent (`1.0` keeps
 pitch locked), which preserves keylock without a second streaming API. Invalid preparation,
 requests, pitch or processing return `ElasticError`; the outer `WarpRenderer::render` maps failure
@@ -56,13 +57,14 @@ to "drop this chunk + warn", never a panic.
 
 The produce path must stay allocation-free. Callers provide fixed output slices from scratch
 reserved before the checked render call, and an engine that needs planar scratch checks it out from
-the `PcmPool` supplied in `ElasticConfig`; no engine owns a default or global pool.
+the `SamplePool` supplied in `ElasticConfig`; no engine owns a default or global pool. Bungee keeps
+that channel-major scratch in `kithara_signal::PlanarBuffer` instead of a backend-local buffer type.
 
 `flush(out)` writes the next buffered-tail portion into caller-owned storage sized from
 `terminal_chunk_frames` and returns its frame count together with whether that portion completed
 the drain. EOF repeats the call until completion; a completed drain stays empty until new input.
 An active drain reports completion on its final non-empty portion, so the caller can publish the
-released source frontier with that PCM. This streaming contract lets a
+released source frontier with those samples. This streaming contract lets a
 rate-dependent tail span several fixed-size chunks without loss. At a steady rate `r`, the complete
 terminal span is `ceil(H / r) + O` frames, where `H` and `O` are the declared source and output
 latencies. The same formula applies after a rate change has rendered `O` frames and reached its new
@@ -72,11 +74,11 @@ settled formula. Every backend must expose this real terminal-drain behavior; a 
 synthetic-silence flush is not conforming.
 A rate change between adjacent exact requests preserves history, moves monotonically, and reaches
 the requested mapping within one declared output-latency window. Pitch changes must affect audio
-within the same bound. A backend must not hide already-rendered PCM behind an additional software
+within the same bound. A backend must not hide already-rendered samples behind an additional software
 delay.
 `reset()` clears buffered state after seek; source-spec and backend changes are handled by the
 caller preparing a replacement outside its checked render core. The trait intentionally does not
-depend on `kithara-decode::PcmSpec`.
+expose `kithara_signal::AudioSpec`; native adapters use it only to shape canonical sample buffers.
 
 ## Backend limitations
 
@@ -94,7 +96,7 @@ depend on `kithara-decode::PcmSpec`.
   stretcher. Preroll discards only native output ending at or before the cue and stops before
   scheduling the cue grain. The next `process` applies its current rate and pitch when it schedules
   that grain; only the unconsumed remainder of one native output chunk may cross a render boundary.
-  There is no software post-cue PCM queue, and the render path allocates nothing.
+  There is no software post-cue sample queue, and the render path allocates nothing.
 - The private Bungee adapter clears and drains the resident native pipeline on `reset` without
   rebuilding it; its Rust-side input/output storage remains the buffers reserved from the injected
   pool at prepare.

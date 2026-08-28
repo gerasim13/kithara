@@ -4183,6 +4183,7 @@ dependencies = [
  "kithara-play",
  "kithara-queue",
  "kithara-resampler",
+ "kithara-signal",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-utils",
@@ -4316,7 +4317,6 @@ dependencies = [
  "crossbeam-queue",
  "delegate",
  "derive_more",
- "fast-interleave",
  "fieldwork",
  "hotpath",
  "js-sys",
@@ -4332,6 +4332,7 @@ dependencies = [
  "kithara-net",
  "kithara-platform",
  "kithara-resampler",
+ "kithara-signal",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-macros",
@@ -4424,6 +4425,7 @@ dependencies = [
  "kithara-mpa",
  "kithara-platform",
  "kithara-resampler",
+ "kithara-signal",
  "kithara-storage",
  "kithara-stream",
  "kithara-test-macros",
@@ -4512,6 +4514,7 @@ dependencies = [
  "kithara-events",
  "kithara-net",
  "kithara-platform",
+ "kithara-signal",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4838,6 +4841,7 @@ dependencies = [
  "kithara-net",
  "kithara-platform",
  "kithara-play",
+ "kithara-signal",
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
@@ -4895,6 +4899,18 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "kithara-signal"
+version = "0.0.1-alpha4"
+dependencies = [
+ "derive_more",
+ "fast-interleave",
+ "kithara-bufpool",
+ "kithara-platform",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
 ]
 
 [[package]]
@@ -4967,6 +4983,7 @@ dependencies = [
  "fieldwork",
  "kithara-bufpool",
  "kithara-platform",
+ "kithara-signal",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -5039,8 +5056,8 @@ dependencies = [
  "derive_more",
  "fieldwork",
  "kithara-bufpool",
- "kithara-decode",
  "kithara-platform",
+ "kithara-signal",
  "kithara-stretch",
  "kithara-test-utils",
  "kithara-workspace-hack",

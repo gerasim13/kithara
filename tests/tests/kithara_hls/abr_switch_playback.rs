@@ -1,6 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, ChunkOutcome, PcmControl, PcmRead, PcmSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
     bufpool::Region,
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
@@ -154,7 +154,7 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -212,13 +212,6 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
     .expect("read phase join");
 }
 
-/// Packaged ABR HLS must switch variants without losing continuity.
-///
-/// Acceptance is split deliberately:
-/// - direct `Audio::read()` proves the packaged fixture really switches and that
-///   `PlaybackProgress` stays monotonic through the switch;
-/// - post-switch `PcmChunk` reads give root-cause diagnostics;
-/// - `OfflinePlayer::render()` is the player-level continuity oracle.
 #[kithara::test(
     tokio,
     native,
@@ -230,8 +223,9 @@ async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let (_server, url) = create_packaged_abr_fixture().await;
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
@@ -478,7 +472,7 @@ async fn stream_continues_after_seek(
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -590,7 +584,7 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -664,7 +658,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
     let cancel = CancelToken::never();
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );
@@ -754,8 +748,9 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let url = server.asset("track.mp3");
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let file_config = FileConfig::for_src(url.into())
         .store(
             AssetStore::builder()
@@ -848,14 +843,15 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     tracing("kithara_audio=info,kithara_hls=info")
 )]
 async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
-    use kithara::{audio::PcmRead, decode::PcmChunk};
+    use kithara::{audio::AudioRead, signal::AudioChunk};
 
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
     let region = Region::default();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool()).build());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder()
@@ -875,10 +871,10 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("audio creation");
     let _ = audio.preload();
 
-    async fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>) -> Option<PcmChunk> {
+    async fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>) -> Option<AudioChunk> {
         loop {
             let _ = audio.preload();
-            match PcmRead::next_chunk(audio) {
+            match AudioRead::next_chunk(audio) {
                 Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
                 Ok(ChunkOutcome::Eof { .. }) => return None,
                 Ok(ChunkOutcome::Pending { .. }) => {}
@@ -1072,7 +1068,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     let bus = EventBus::new(8192);
     let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.pcm_pool())
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
             .cancel(cancel.clone())
             .build(),
     );

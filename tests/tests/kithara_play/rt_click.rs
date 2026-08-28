@@ -8,14 +8,14 @@ use std::{num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     platform::sync::Arc,
     play::{
         Resource, SharedEq,
         bridge::{PlayerCmd, SlotControl, TrackTransition, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
 use ringbuf::traits::Producer;
@@ -30,8 +30,8 @@ const SETTLE_BLOCKS: usize = 40;
 const MAX_STEP: f32 = 0.01;
 const EXACT: f32 = 1.0e-6;
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
+fn spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
 
 fn processor() -> (PlayerNodeProcessor, SlotControl) {
@@ -41,7 +41,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
         control,
     )
 }
@@ -50,7 +50,7 @@ fn track(src: &str, level: f32) -> Box<PlayerResource> {
     Box::new(PlayerResource::new(
         Resource::from_reader(TestPcmReader::with_value(spec(), TRACK_SECS, level), None),
         Arc::from(src),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ))
 }
 

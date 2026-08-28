@@ -1,4 +1,4 @@
-use kithara_decode::sanitize_sample;
+use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
 use super::{EqBandConfig, GainDb, filter::CrossoverFilters, gain::GainBank};

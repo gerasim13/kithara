@@ -28,7 +28,7 @@ pub enum TrackReadOutcome {
     Full {
         /// Playback position snapshot after the read (seconds).
         position: f64,
-        /// Real PCM frames copied from the underlying resource/scratch buffer.
+        /// Real audio frames copied from the underlying resource/scratch buffer.
         frames: usize,
         /// Visible duration snapshot in seconds.
         duration: f64,

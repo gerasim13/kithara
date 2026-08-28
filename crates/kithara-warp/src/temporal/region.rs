@@ -23,7 +23,7 @@ impl GridSegment {
 }
 
 /// Per-region stretch plan: sorted, non-overlapping `[start, end)` segments in
-/// source frames (`PcmMeta.frame_offset` space), each with a ratio correction.
+/// source frames (`AudioChunkInfo.frame_offset` space), each with a ratio correction.
 #[derive(Debug, Clone, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
 #[fieldwork(get)]

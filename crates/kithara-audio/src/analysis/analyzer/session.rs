@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
-use kithara_decode::PcmChunk;
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::AudioChunk;
 use num_traits::cast::AsPrimitive;
 
 use crate::{
@@ -43,7 +43,7 @@ where
         !Slot::is_empty(&self.beat)
     }
 
-    pub(crate) fn push(&mut self, chunk: &PcmChunk, detector: Option<&mut beat::Detector>) {
+    pub(crate) fn push(&mut self, chunk: &AudioChunk, detector: Option<&mut beat::Detector>) {
         let frames: u64 = chunk.frames().as_();
         self.source_frames = self.source_frames.saturating_add(frames);
 
