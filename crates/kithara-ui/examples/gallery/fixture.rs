@@ -2,7 +2,12 @@
 //! them. A measurement harness mounts the same pages from here without pulling
 //! in a toolkit main.
 
-use kithara_ui::{builtin, source::MemResolver};
+use std::path::{Path, PathBuf};
+
+use kithara_ui::{
+    builtin,
+    source::{FileResolver, MemResolver, OverlayResolver},
+};
 
 pub(crate) struct Consts;
 
@@ -415,10 +420,25 @@ const ASSETS: &[(&str, &str)] = &[
     ),
 ];
 
-pub(crate) fn resolver() -> MemResolver {
-    let mut resolver = builtin::resolver();
+/// The gallery's documents on disk, laid over the ones this build embeds.
+pub(crate) type Resolver = OverlayResolver<FileResolver, MemResolver>;
+
+/// Where the gallery's own documents live, so editing one and opening the
+/// gallery again shows the edit.
+pub(crate) fn package_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/gallery/assets")
+}
+
+/// The gallery reads its pages from the folder it ships them in, over the
+/// built-in library.
+///
+/// The folder is named at build time and is part of this checkout, so it
+/// being unreadable is a broken checkout rather than a runtime condition.
+pub(crate) fn resolver() -> Resolver {
+    let mut embedded = builtin::resolver();
     for (path, text) in ASSETS {
-        resolver.insert(path, text);
+        embedded.insert(path, text);
     }
-    resolver
+    let files = FileResolver::new(package_root()).expect("the gallery ships its own documents");
+    OverlayResolver::new(files, embedded)
 }

@@ -29,6 +29,12 @@ miss. A layer that holds the name and refuses it - led out of its root, or unope
 in the package that named it, and answering it from below would let a broken package quietly wear
 the base package's face.
 
+The gallery reads its own pages from `examples/gallery/assets`, laid over the built-in library, so
+editing a page and opening the gallery again shows the edit. The folder is named at build time and
+is part of this checkout, so it being unreadable is a broken checkout rather than a runtime
+condition. A test walks every tab and asserts the resolver answers with the file on disk, which is
+what keeps the embedded copy from quietly becoming the one that draws.
+
 ## Package Ownership
 
 A package is a folder with a manifest at its root, `PackageDoc`, parsed by `package::load_package`.

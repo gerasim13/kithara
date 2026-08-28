@@ -24,12 +24,11 @@ use kithara_ui::{
     compile::{CompiledUi, compile},
     render::{Clock, Skin, UiEvent, WindowCommand, custom::CustomKinds, fonts, tree},
     skin::SkinDoc,
-    source::MemResolver,
 };
 
 use self::{
     capture::{Capture, Shot},
-    fixture::{Consts, resolver},
+    fixture::{Consts, Resolver, resolver},
     mock::MockReads,
     sections::{ModuleDemo, Tab},
 };
@@ -317,7 +316,7 @@ fn window_size() -> Size {
 
 fn compiled(
     entry: &str,
-    resolver: &MemResolver,
+    resolver: &Resolver,
     endpoints: &dyn kithara_ui::registry::EndpointRegistry,
     skin: &SkinDoc,
 ) -> CompiledUi {
@@ -369,10 +368,32 @@ mod tests {
         module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
         registry::SECONDS,
         render::{ControlAction, ReadValue, Reads},
+        source::SourceResolver,
     };
     use num_traits::cast::AsPrimitive;
 
     use super::*;
+
+    /// Every page the gallery draws is the file on disk, so editing one and
+    /// opening the gallery again shows the edit rather than what this build
+    /// happened to embed.
+    #[kithara::test]
+    fn every_page_is_read_from_the_folder_it_ships_in() {
+        let resolver = resolver();
+        for tab in Tab::ALL {
+            let on_disk = std::fs::read_to_string(fixture::package_root().join(tab.entry()))
+                .expect("the gallery ships every page it names");
+            let answered = resolver
+                .load(None, tab.entry())
+                .expect("the gallery resolver answers for every page it names");
+            assert_eq!(
+                answered.text,
+                on_disk,
+                "{} must be answered from disk",
+                tab.entry()
+            );
+        }
+    }
 
     fn shot(tab: Tab) -> Shot {
         Shot { tab, module: None }
