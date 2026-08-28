@@ -72,6 +72,15 @@ impl SamplePool {
         SampleBuffer(self.0.get_with(init))
     }
 
+    /// Collect samples directly into a buffer owned by this pool.
+    #[must_use]
+    pub fn collect<I>(&self, samples: I) -> SampleBuffer
+    where
+        I: IntoIterator<Item = f32>,
+    {
+        SampleBuffer(self.0.collect(samples))
+    }
+
     /// Pre-warm the pool by creating and recycling `count` buffers.
     pub fn pre_warm<F>(&self, count: usize, init: F)
     where
@@ -127,6 +136,12 @@ impl SampleBuffer {
             /// Extract the sample vector without returning it to the pool.
             #[must_use]
             pub fn into_inner(self) -> Vec<f32>;
+            /// Remove consecutive duplicate samples without growing the buffer.
+            pub fn dedup(&mut self);
+            /// Retain only samples matching `keep` without growing the buffer.
+            pub fn retain<F>(&mut self, keep: F)
+            where
+                F: FnMut(&f32) -> bool;
             /// Shorten the buffer to `len` samples.
             pub fn truncate(&mut self, len: usize);
         }
@@ -247,5 +262,49 @@ mod tests {
         let buffer = pool.get_with(|buffer| buffer.clear());
 
         assert!(buffer.capacity() >= samples, "{}", buffer.capacity());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn collect_fills_sample_and_byte_buffers_without_intermediate_storage() {
+        let samples = SamplePool::new(8, 32).collect([0.25, -0.5, 1.0]);
+        assert_eq!(&*samples, &[0.25, -0.5, 1.0]);
+
+        let bytes = BytePool::new(8, 32).collect([1_u8, 2, 3]);
+        assert_eq!(&*bytes, &[1, 2, 3]);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn collect_returns_an_empty_pool_guard_for_an_empty_iterator() {
+        let samples = SamplePool::new(8, 32).collect(std::iter::empty());
+        assert!(samples.is_empty());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn collect_reuses_a_returned_sample_buffer() {
+        let pool = SamplePool::new(8, 32);
+        drop(pool.collect(std::iter::repeat_n(0.25, 16)));
+        let before = pool.stats();
+
+        let samples = pool.collect([1.0, -1.0]);
+        let after = pool.stats();
+
+        assert_eq!(&*samples, &[1.0, -1.0]);
+        assert_eq!(after.alloc_misses, before.alloc_misses);
+        assert!(
+            after.home_hits + after.steal_hits > before.home_hits + before.steal_hits,
+            "collect did not reuse a returned sample buffer"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn collect_returns_growth_and_records_a_budget_overshoot() {
+        let pool = SamplePool::with_byte_budget(8, 32, ByteBudget(0));
+
+        let samples = pool.collect([0.5]);
+        let stats = pool.stats();
+
+        assert_eq!(&*samples, &[0.5]);
+        assert_eq!(stats.budget_overshoots, 1);
+        assert!(stats.allocated_bytes > 0);
     }
 }

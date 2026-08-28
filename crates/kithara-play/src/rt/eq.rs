@@ -13,7 +13,7 @@ use firewheel::{
 };
 use kithara_test_utils::kithara;
 
-use crate::effects::eq::{EqBandConfig, GainDb, IsolatorEq};
+use crate::effects::eq::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
@@ -23,15 +23,17 @@ pub(crate) struct MasterEqBand {
     pub(crate) kind: u8,
 }
 
-#[derive(Diff, Patch, Debug, Clone, PartialEq)]
+#[derive(Diff, Patch, Debug, Clone)]
 pub struct MasterEqNode {
     pub(crate) bands: Vec<MasterEqBand>,
     pub(crate) enabled: bool,
+    #[diff(skip)]
+    config: EqConfig,
 }
 
 impl MasterEqNode {
     #[must_use]
-    pub fn new(layout: &[EqBandConfig]) -> Self {
+    pub fn new(config: EqConfig, layout: &[EqBandConfig]) -> Self {
         let bands = layout
             .iter()
             .map(|band| MasterEqBand {
@@ -44,6 +46,7 @@ impl MasterEqNode {
 
         Self {
             bands,
+            config,
             enabled: true,
         }
     }
@@ -91,8 +94,8 @@ struct MasterEqProcessor {
 impl MasterEqProcessor {
     fn new(params: MasterEqNode, sample_rate: NonZeroU32) -> Self {
         let bands = bands_from_params(&params);
-        let mut eq_l = IsolatorEq::new(&bands, sample_rate.get());
-        let mut eq_r = IsolatorEq::new(&bands, sample_rate.get());
+        let mut eq_l = IsolatorEq::new(&params.config, &bands, sample_rate.get());
+        let mut eq_r = IsolatorEq::new(&params.config, &bands, sample_rate.get());
 
         for (i, band) in params.bands.iter().enumerate() {
             eq_l.set_gain(i, GainDb::from(band.gain_db));

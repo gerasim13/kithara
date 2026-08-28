@@ -1,7 +1,7 @@
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
-use super::{EqBandConfig, GainDb, filter::CrossoverFilters, gain::GainBank};
+use super::{EqBandConfig, EqConfig, GainDb, filter::CrossoverFilters, gain::GainBank};
 
 /// Single-channel isolator crossover EQ.
 #[non_exhaustive]
@@ -13,14 +13,15 @@ pub struct IsolatorEq {
 
 impl IsolatorEq {
     #[must_use]
-    pub fn new(bands: &[EqBandConfig], sample_rate: u32) -> Self {
+    pub fn new(config: &EqConfig, bands: &[EqBandConfig], sample_rate: u32) -> Self {
         let sample_rate: f32 = sample_rate.as_();
-        let crossover_freqs = bands
-            .windows(2)
-            .map(|pair| (pair[0].frequency() * pair[1].frequency()).sqrt())
-            .collect();
+        let crossover_freqs = config.sample_pool().collect(
+            bands
+                .windows(2)
+                .map(|pair| (pair[0].frequency() * pair[1].frequency()).sqrt()),
+        );
         Self {
-            filters: CrossoverFilters::new(crossover_freqs, bands.len(), sample_rate),
+            filters: CrossoverFilters::new(config.sample_pool(), crossover_freqs, sample_rate),
             gains: GainBank::new(bands.iter().map(EqBandConfig::gain_db), sample_rate),
             was_in_fastpath: false,
         }
@@ -89,6 +90,7 @@ impl IsolatorEq {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -99,7 +101,8 @@ mod tests {
         const TAIL_SECONDS: u32 = 4;
 
         let bands = super::super::band::generate_log_spaced_bands(3);
-        let mut eq = IsolatorEq::new(&bands, SAMPLE_RATE);
+        let config = EqConfig::for_pool(SamplePool::default()).build();
+        let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE);
         for band in 0..bands.len() {
             eq.set_gain(band, GainDb::MAX);
         }
@@ -111,5 +114,23 @@ mod tests {
             .count();
 
         assert_eq!(denormals, 0, "impulse tail leaked {denormals} denormals");
+    }
+
+    #[kithara::test]
+    fn reusable_storage_returns_to_the_injected_pool() {
+        let pool = SamplePool::new(32, 200_000);
+        let bands = super::super::band::generate_log_spaced_bands(3);
+        let config = EqConfig::for_pool(pool.clone()).build();
+
+        let first = IsolatorEq::new(&config, &bands, 48_000);
+        let misses_after_first = pool.stats().alloc_misses;
+        drop(first);
+
+        let hits_before_second = pool.stats().home_hits + pool.stats().steal_hits;
+        let _second = IsolatorEq::new(&config, &bands, 48_000);
+        let stats = pool.stats();
+
+        assert_eq!(stats.alloc_misses, misses_after_first);
+        assert!(stats.home_hits + stats.steal_hits > hits_before_second);
     }
 }

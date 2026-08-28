@@ -1,9 +1,11 @@
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 
 struct Consts;
 
 impl Consts {
     const BUTTERWORTH_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
+    const HISTORY_LEN: usize = 128;
     const NYQUIST_FACTOR: f32 = 2.0;
     const PASSTHROUGH: Coefficients<f32> = Coefficients {
         a1: 0.0,
@@ -53,20 +55,21 @@ impl Lr4 {
 
 pub(crate) struct CrossoverFilters {
     allpass: Vec<Section>,
-    allpass_offsets: Vec<usize>,
-    crossover_freqs: Vec<f32>,
+    crossover_freqs: SampleBuffer,
     highpass: Vec<Lr4>,
-    history: Vec<f32>,
+    history: [f32; Consts::HISTORY_LEN],
     lowpass: Vec<Lr4>,
-    lowpass_scratch: Vec<f32>,
+    lowpass_scratch: SampleBuffer,
     sample_rate: f32,
     history_pos: usize,
 }
 
 impl CrossoverFilters {
-    const HISTORY_LEN: usize = 128;
-
-    pub(crate) fn new(crossover_freqs: Vec<f32>, band_count: usize, sample_rate: f32) -> Self {
+    pub(crate) fn new(
+        sample_pool: &SamplePool,
+        crossover_freqs: SampleBuffer,
+        sample_rate: f32,
+    ) -> Self {
         let lowpass = crossover_freqs
             .iter()
             .map(|&freq| Lr4::new(biquad_coeffs(Type::LowPass, freq, sample_rate)))
@@ -76,28 +79,22 @@ impl CrossoverFilters {
             .map(|&freq| Lr4::new(biquad_coeffs(Type::HighPass, freq, sample_rate)))
             .collect();
         let mut allpass = Vec::new();
-        let mut allpass_offsets = Vec::with_capacity(band_count + 1);
-        for band in 0..band_count {
-            allpass_offsets.push(allpass.len());
-            if band + 1 < crossover_freqs.len() {
-                allpass.extend(
-                    crossover_freqs[band + 1..]
-                        .iter()
-                        .map(|&freq| Section::new(biquad_coeffs(Type::AllPass, freq, sample_rate))),
-                );
-            }
+        for start in 1..crossover_freqs.len() {
+            allpass.extend(
+                crossover_freqs[start..]
+                    .iter()
+                    .map(|&freq| Section::new(biquad_coeffs(Type::AllPass, freq, sample_rate))),
+            );
         }
-        allpass_offsets.push(allpass.len());
-        let lowpass_scratch = vec![0.0; crossover_freqs.len()];
+        let lowpass_scratch = sample_pool.collect(std::iter::repeat_n(0.0, crossover_freqs.len()));
         Self {
             allpass,
-            allpass_offsets,
             crossover_freqs,
             highpass,
+            history: [0.0; Consts::HISTORY_LEN],
             lowpass,
             lowpass_scratch,
             sample_rate,
-            history: vec![0.0; Self::HISTORY_LEN],
             history_pos: 0,
         }
     }
@@ -109,13 +106,15 @@ impl CrossoverFilters {
             high = self.highpass[index].process(high);
         }
         let mut output = 0.0;
+        let mut allpass_start = 0;
         for index in 0..self.lowpass.len() {
             let mut band = self.lowpass_scratch[index];
-            for filter in
-                &mut self.allpass[self.allpass_offsets[index]..self.allpass_offsets[index + 1]]
-            {
+            let allpass_count = self.lowpass.len().saturating_sub(index + 1);
+            let allpass_end = allpass_start + allpass_count;
+            for filter in &mut self.allpass[allpass_start..allpass_end] {
                 band = filter.run(band);
             }
+            allpass_start = allpass_end;
             output = band.mul_add(gains(index), output);
         }
         high.mul_add(gains(self.lowpass.len()), output)
@@ -126,19 +125,24 @@ impl CrossoverFilters {
             self.lowpass[index] = Lr4::new(biquad_coeffs(Type::LowPass, freq, self.sample_rate));
             self.highpass[index] = Lr4::new(biquad_coeffs(Type::HighPass, freq, self.sample_rate));
         }
-        for band in 0..self.lowpass.len() + 1 {
-            let start = self.allpass_offsets[band];
-            let end = self.allpass_offsets[band + 1];
-            for (offset, filter) in self.allpass[start..end].iter_mut().enumerate() {
+        let mut allpass_start = 0;
+        for band in 0..self.lowpass.len() {
+            let allpass_count = self.lowpass.len().saturating_sub(band + 1);
+            let allpass_end = allpass_start + allpass_count;
+            for (offset, filter) in self.allpass[allpass_start..allpass_end]
+                .iter_mut()
+                .enumerate()
+            {
                 let freq = self.crossover_freqs[band + 1 + offset];
                 *filter = Section::new(biquad_coeffs(Type::AllPass, freq, self.sample_rate));
             }
+            allpass_start = allpass_end;
         }
     }
 
     pub(crate) fn record(&mut self, input: f32) {
         self.history[self.history_pos] = input;
-        self.history_pos = (self.history_pos + 1) % self.history.len();
+        self.history_pos = (self.history_pos + 1) & (Consts::HISTORY_LEN - 1);
     }
 
     pub(crate) fn rehydrate(&mut self) {
@@ -146,19 +150,21 @@ impl CrossoverFilters {
             return;
         }
         for offset in 0..self.history.len() {
-            let sample = self.history[(self.history_pos + offset) % self.history.len()];
+            let sample = self.history[(self.history_pos + offset) & (Consts::HISTORY_LEN - 1)];
             let mut high = sample;
             for index in 0..self.lowpass.len() {
                 self.lowpass_scratch[index] = self.lowpass[index].process(high);
                 high = self.highpass[index].process(high);
             }
+            let mut allpass_start = 0;
             for index in 0..self.lowpass.len() {
                 let mut band = self.lowpass_scratch[index];
-                for filter in
-                    &mut self.allpass[self.allpass_offsets[index]..self.allpass_offsets[index + 1]]
-                {
+                let allpass_count = self.lowpass.len().saturating_sub(index + 1);
+                let allpass_end = allpass_start + allpass_count;
+                for filter in &mut self.allpass[allpass_start..allpass_end] {
                     band = filter.run(band);
                 }
+                allpass_start = allpass_end;
             }
         }
     }

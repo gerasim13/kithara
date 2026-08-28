@@ -13,7 +13,7 @@ use super::{
 use crate::{
     api::{SessionDuckingMode, SlotId},
     bridge::{MixTapWriter, slot_channels},
-    effects::eq::{EqBandConfig, GainDb},
+    effects::eq::{EqBandConfig, EqConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
 pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
@@ -149,7 +149,8 @@ pub(super) mod lifecycle {
         if player.started {
             return Err(SessionError::AlreadyStarted(player_id));
         }
-        let mut master_eq = MasterEqNode::new(&player.eq_layout);
+        let eq_config = EqConfig::for_pool(player.sample_pool.clone()).build();
+        let mut master_eq = MasterEqNode::new(eq_config, &player.eq_layout);
         for (band, gain) in player.shared_eq.snapshot().into_iter().enumerate() {
             master_eq.set_gain(band, GainDb::from(gain));
         }
@@ -544,7 +545,7 @@ pub(super) mod controls {
             return Ok(());
         }
 
-        let (old_eq_id, master_volume_id, slot_volume_ids) = {
+        let (old_eq_id, master_volume_id, slot_volume_ids, sample_pool) = {
             let player = deck_at(state, idx)?;
             let old_eq_id = player
                 .master_eq_node_id
@@ -556,11 +557,17 @@ pub(super) mod controls {
                 .slots
                 .iter()
                 .map(|slot| slot.volume_node_id)
-                .collect::<Vec<_>>();
-            (old_eq_id, master_volume_id, slot_volume_ids)
+                .collect::<Vec<NodeID>>();
+            (
+                old_eq_id,
+                master_volume_id,
+                slot_volume_ids,
+                player.sample_pool.clone(),
+            )
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let master_eq = MasterEqNode::new(&eq_layout);
+        let eq_config = EqConfig::for_pool(sample_pool).build();
+        let master_eq = MasterEqNode::new(eq_config, &eq_layout);
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
 
