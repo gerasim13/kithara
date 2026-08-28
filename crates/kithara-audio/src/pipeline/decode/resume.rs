@@ -131,12 +131,16 @@ impl ResumeCursor {
         // A route change keeps the container, so the rebuilt demuxer must start
         // where the container starts — not at the byte the resume time maps to.
         // Seeking the anchor by time lands past the init and the demuxer never
-        let offset = anchor::recreate_offset(
-            ctx.stream,
-            media_info.container,
-            false,
-            ctx.active.base_offset(),
-        )?;
+        let offset = if ctx.stream.has_variant_surface() {
+            anchor::recreate_offset(
+                ctx.stream,
+                media_info.container,
+                false,
+                ctx.active.base_offset(),
+            )?
+        } else {
+            ctx.active.base_offset()
+        };
         let epoch = ctx.seek.epoch();
         let target = self.resume_position(epoch, ctx.committed, None);
         self.decoder_rate = host_rate;
