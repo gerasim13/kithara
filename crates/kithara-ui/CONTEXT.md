@@ -2,6 +2,33 @@
 
 Contracts and invariants for the kithara-ui crate; the README stays the overview.
 
+## Source Ownership
+
+Three resolvers implement `SourceResolver`, and nothing above them knows which one answered.
+`MemResolver` holds sources handed to it; `FileResolver` reads one directory; `OverlayResolver`
+reads an upper layer and falls through to a lower one.
+
+`FileResolver` makes its root real once, when it is built, and every later read compares against
+that path. This is what separates a name reaching outside the root from one staying inside it: a
+name spelling its way out with `..` is refused by the shared path resolution before any file is
+touched, while a name led out by a symlink can only be caught by comparing the real path. An io
+failure that is not an absence is reported as `UiDocError::Unreadable`, so a directory standing
+where a document should be does not read as a missing file.
+
+`FileResolver` keeps what it read, text and bytes in separate sets, under the uri it was asked for.
+Parsing is already deduplicated by uri in `resolve.rs`, but only after the source is read, so
+without this the read repeats for every reference: the application names 31 modules to open 17
+files, the gallery 243 to open 86. A name that was not there is not kept, so a package repaired
+while the resolver lives is still found.
+
+`OverlayResolver` falls through on `UiDocError::NotFound` and on nothing else. This is not the
+fallback chain `AGENTS.md` forbids: that rule is about masking a broken state contract with a
+second attempt, and here a miss in the upper layer is the declared, expected answer of a layered
+package - a skin that restates one module inherits the rest by construction. A refusal is not a
+miss. A layer that holds the name and refuses it - led out of its root, or unopenable - is a defect
+in the package that named it, and answering it from below would let a broken package quietly wear
+the base package's face.
+
 ## Compiled String Ownership
 
 Every string retained by the compiled tree is interned in one bounded `String` arena owned by
