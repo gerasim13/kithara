@@ -804,6 +804,7 @@ where
             path,
             plan: plan.as_ref(),
             read,
+            skin: self.skin.at(path),
         };
         let mut output = custom.map_or_else(
             || {
@@ -843,6 +844,7 @@ where
             spec,
             Wire {
                 host: &*self,
+                cx: &cx,
                 output: &mut output
             }
         );
@@ -920,16 +922,17 @@ where
 
 /// Asks whichever control the document named to attach whatever it still needs
 /// beyond its own leaf.
-struct Wire<'out, 'host, 'a, Action> {
+struct Wire<'out, 'host, 'cx, 'a, Action> {
     host: &'host MasonryHost<'a, Action>,
+    cx: &'cx Cx<'cx>,
     output: &'out mut MasonryNode<Action>,
 }
 
-impl<Action> Wire<'_, '_, '_, Action>
+impl<Action> Wire<'_, '_, '_, '_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
     fn apply<C: NodeControl>(self, control: &C) {
-        control.wire(self.host, self.output);
+        control.wire(self.host, self.cx, self.output);
     }
 }

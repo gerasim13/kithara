@@ -222,7 +222,10 @@ impl HostedControlPlan {
         scope: &str,
         cx: Resolving<'_>,
     ) -> Option<Self> {
+        // The numbers a plan keeps are the ones this instance is dressed in,
+        // so what answers the pointer is the shape that was painted.
         let Resolving { ctx, skin } = cx;
+        let skin = skin.at(path);
         match (spec, value) {
             (ControlSpec::Button { .. }, _)
             | (

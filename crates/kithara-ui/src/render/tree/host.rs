@@ -2122,6 +2122,59 @@ mod tests {
         );
     }
 
+    /// A skin that says one named fader moves in quarters, and says it about
+    /// that fader alone.
+    fn stepped_faders(path: &str) -> Skin {
+        let origin = crate::ids::SourceUri("stepped.kskin.ron".to_owned());
+        let text = format!(
+            r##"(
+                schema: "kithara.skin",
+                version: 1,
+                id: "kithara-stepped",
+                overrides: {{
+                    "{path}": (fader: (step: 0.25)),
+                }},
+            )"##
+        );
+        let document = crate::skin::parse_skin_over(builtin::skin_doc(), &text, &origin)
+            .expect("the stepped patch parses");
+        Skin::resolve(document, builtin::text_doc(), &origin, &builtin::resolver())
+            .expect("the stepped document resolves")
+    }
+
+    /// The step the first hosted fader was dressed with, under a skin that
+    /// dresses `path`.
+    fn hosted_fader_step(path: &str) -> Option<f64> {
+        let ui = compiled_gallery_faders();
+        let reads = FixtureReads::default();
+        let CompiledNode::Module { root, .. } = &ui.root else {
+            panic!("gallery faders fixture root must be a module");
+        };
+        let skin = stepped_faders(path);
+        let hosted = HostedLayout::new(root, ctx(&ui, &reads), &skin);
+        let descriptors = hosted.descriptors();
+        let [Descriptor::Fader { drag_step, .. }, ..] = descriptors.as_slice() else {
+            panic!("the faders page hosts a fader first");
+        };
+        *drag_step
+    }
+
+    /// An override has to reach the engine, not only the paint: the plan is
+    /// what the pointer is answered from, so a fader dressed to move in
+    /// quarters must drag in quarters.
+    #[kithara::test]
+    fn a_fader_the_skin_dresses_by_path_drags_by_the_step_it_was_dressed_with() {
+        assert_eq!(hosted_fader_step("faders/default"), Some(0.25));
+    }
+
+    #[kithara::test]
+    fn a_fader_the_skin_dressed_another_control_with_keeps_its_own_step() {
+        assert_eq!(
+            hosted_fader_step("faders/volume"),
+            Some(builtin::skin().fader.step)
+        );
+    }
+
     #[kithara::test]
     fn gallery_faders_host_their_exact_input_surfaces() {
         let ui = compiled_gallery_faders();

@@ -48,11 +48,11 @@ pub(super) trait NodeControl {
     /// Anything the host must still attach once the leaf exists: a window layer
     /// for the controls that move the window, a settings action for the one
     /// that opens it.
-    fn wire<A>(&self, host: &MasonryHost<'_, A>, output: &mut MasonryNode<A>)
+    fn wire<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>, output: &mut MasonryNode<A>)
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        let _ = (host, output);
+        let _ = (host, cx, output);
     }
 }
 
@@ -64,6 +64,9 @@ pub(super) struct Cx<'a> {
     pub(super) path: &'a str,
     pub(super) plan: Option<&'a HostedControlPlan>,
     pub(super) read: Option<&'a Binding>,
+    /// The skin this instance wears, which is the host's own unless the skin
+    /// names this path.
+    pub(super) skin: &'a Skin,
 }
 
 impl NodeControl for mount::Summary {
@@ -116,7 +119,7 @@ impl NodeControl for mount::Settings {
 }
 
 impl NodeControl for mount::Drag {
-    fn wire<A>(&self, host: &MasonryHost<'_, A>, output: &mut MasonryNode<A>)
+    fn wire<A>(&self, host: &MasonryHost<'_, A>, _cx: &Cx<'_>, output: &mut MasonryNode<A>)
     where
         A: std::fmt::Debug + Send + 'static,
     {
@@ -125,23 +128,23 @@ impl NodeControl for mount::Drag {
 }
 
 impl NodeControl for mount::TitleBar {
-    fn wire<A>(&self, host: &MasonryHost<'_, A>, output: &mut MasonryNode<A>)
+    fn wire<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>, output: &mut MasonryNode<A>)
     where
         A: std::fmt::Debug + Send + 'static,
     {
         host.add_window_layer(
             output,
-            TitleProgram::new(host.ctx.ui.resolve(self.label), host.skin),
+            TitleProgram::new(host.ctx.ui.resolve(self.label), cx.skin),
         );
     }
 }
 
 impl NodeControl for mount::Controls {
-    fn wire<A>(&self, host: &MasonryHost<'_, A>, output: &mut MasonryNode<A>)
+    fn wire<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>, output: &mut MasonryNode<A>)
     where
         A: std::fmt::Debug + Send + 'static,
     {
-        host.add_window_layer(output, ControlsProgram::new(self.style, host.skin));
+        host.add_window_layer(output, ControlsProgram::new(self.style, cx.skin));
     }
 }
 
@@ -265,7 +268,7 @@ impl NodeControl for mount::Range {
     }
 }
 impl NodeControl for mount::Table<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
     {
@@ -277,11 +280,11 @@ impl NodeControl for mount::Table<'_> {
             );
             return MasonryNode::empty(cx.declared);
         };
-        MasonryNode::control_leaf(TableLeaf::new((**plan).clone(), host.skin), cx.declared)
+        MasonryNode::control_leaf(TableLeaf::new((**plan).clone(), cx.skin), cx.declared)
     }
 }
 impl NodeControl for mount::Tree<'_> {
-    fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
+    fn leaf<A>(&self, _host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
     {
@@ -293,7 +296,7 @@ impl NodeControl for mount::Tree<'_> {
             );
             return MasonryNode::empty(cx.declared);
         };
-        MasonryNode::control_leaf(TreeLeaf::new((**plan).clone(), host.skin), cx.declared)
+        MasonryNode::control_leaf(TreeLeaf::new((**plan).clone(), cx.skin), cx.declared)
     }
 }
 impl NodeControl for mount::ContextBar<'_> {
@@ -822,20 +825,20 @@ where
     let reading = Reading {
         ctx: host.ctx,
         scope: host.ctx.scope(cx.read),
-        skin: host.skin,
+        skin: cx.skin,
         value: value.as_ref(),
     };
     let Some(data) = control.data(reading) else {
         return MasonryNode::empty(cx.declared);
     };
-    let grip = control.grip(host.skin, &data);
+    let grip = control.grip(cx.skin, &data);
     let index_event = control.index_event();
     let refresh = control.retained_refresh(reading, host.ctx.endpoint(cx.read));
     let refreshes = refresh.is_some();
     let leaf = Painted::pooled(
-        control.painter(host.skin),
+        control.painter(cx.skin),
         data,
-        host.skin,
+        cx.skin,
         host.ctx.ui.draw_pools(),
     );
     let leaf = if let Some(refresh) = refresh {

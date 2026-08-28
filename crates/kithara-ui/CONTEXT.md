@@ -52,6 +52,21 @@ blanket around it: the blanket is the ground the document is written on, not its
 itself is generated - `skin_section!` writes the `Frames` and `Roles` walks for every section it
 declares - so a field added to a section is reached by a blanket without anything else being touched.
 
+A skin's third layer is the instance. `overrides:` maps the path a document gave one control to a
+`SkinLayer` - the same blanket blocks and the same section patches a skin writes at the top level,
+without an identity of its own - and `Skin::resolve` applies each one to a copy of the resolved
+document, keeping the result beside the skin. `Skin::at(path)` answers that copy, and the skin itself
+for a path no override names, so asking is always safe and never copies. An override is restated
+whole: a skin written over one that already dresses a control says everything it means about that
+control rather than half of it and half of what it inherited.
+
+Both hosts narrow once, where they mount a control: the immediate host in `render_control`, the
+retained host in `MasonryHost::control`, and both through `HostedControlPlan::resolved`, so what
+answers the pointer is the shape that was painted. Everything below that point reads the skin it was
+handed and knows nothing about overrides. What an override does not reach is the room a control is
+given: the sizing walk sees an interned path and no interner, so `control_size` is answered from the
+skin itself, and a document that needs one instance sized differently says so with its own `size:`.
+
 `SkinDoc` owns every configurable rendering metric, including the intrinsic control sizes the
 toolkit-independent compiler reads. With `render`, `Skin::resolve` converts the document to iced
 colours and keeps it behind `Skin::document()` for layout sizing. Frequently read document sections,
@@ -67,7 +82,10 @@ raw doc a "reload"/"save skin" flow reads back). That is why `render/skin/neutra
 `field_passthrough.exempt_files` in `.config/arch/thresholds.toml` - the check's "duplicates a field
 already reachable through `self.document`" is structurally correct but the duplication is the design,
 not an oversight; collapsing it back to `self.document().button` would put the doc's indirection back
-on every render call.
+on every render call. The sections are the only thing an override skin carries of its own; the
+palette, the pictures, the text resources and the document all sit behind an `Arc` it shares with the
+skin it was dressed from, so a skin naming a dozen controls costs a dozen copies of its numbers and
+one copy of its fonts.
 
 A skin carries pictures as well as numbers and colours. `SkinDoc.pictures` maps the name a document
 asks for to the file that answers it and the grid it is cut on, and a patch restates one by name the

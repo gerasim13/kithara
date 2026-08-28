@@ -33,13 +33,14 @@ pub(super) fn render_control<'a>(
     placed: Placed,
 ) -> Rendered<'a> {
     let value = read.and_then(|binding| ctx.read(binding));
+    let path = ctx.ui.resolve(path);
     let cx = Cx {
         owner: placed.owner,
         transform: placed.transform,
-        path: ctx.ui.resolve(path),
+        path,
         ctx,
         scope: ctx.scope(read),
-        skin,
+        skin: skin.at(path),
         value: value.as_ref(),
     };
     mount::controls!(spec, Mount { cx: &cx })
@@ -75,6 +76,7 @@ impl HostedControl {
     }
 
     pub(super) fn mounted(plan: HostedControlPlan, skin: &Skin) -> Self {
+        let skin = skin.at(plan.path());
         let table = match &plan {
             HostedControlPlan::Table(plan) => Some(Box::new(TableHost::new(
                 &plan.path,

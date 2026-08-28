@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -97,7 +99,47 @@ macro_rules! define_skin_doc {
             pub pictures: PictureDoc,
             pub schema: String,
             pub version: u32,
+            /// What this skin restates for one control instance, by the path
+            /// the document gave it. A control the skin never names wears the
+            /// sections below unchanged.
+            #[serde(default)]
+            pub overrides: BTreeMap<String, SkinLayer>,
             $(pub $field: $section,)*
+        }
+
+        /// What a skin restates without saying whose skin it is: the blankets
+        /// and the sections, each optional. A patch is this plus an identity;
+        /// an override is this aimed at one control.
+        #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+        #[serde(deny_unknown_fields)]
+        #[non_exhaustive]
+        pub struct SkinLayer {
+            /// Restated over every frame the layer reaches, before its own
+            /// sections are applied.
+            #[serde(default)]
+            pub frames: Option<FramePatch>,
+            /// Restated over every typographic role, on the same terms.
+            #[serde(default)]
+            pub text_roles: Option<TextRolePatch>,
+            $(#[serde(default)] pub $field: Option<$patch>,)*
+        }
+
+        impl SkinLayer {
+            /// Takes everything this layer restates, keeping the rest.
+            ///
+            /// A blanket comes before the sections it reaches, so a skin that
+            /// rounds every frame and then names one square control gets both.
+            pub(crate) fn apply(self, doc: &mut SkinDoc) {
+                if let Some(frames) = self.frames {
+                    doc.each_frame(&mut |frame| frames.apply(frame));
+                }
+                if let Some(roles) = self.text_roles {
+                    doc.each_role(&mut |role| roles.apply(role));
+                }
+                $(if let Some(section) = self.$field {
+                    doc.$field.patch(section);
+                })*
+            }
         }
 
         /// What one skin restates of another: any section, any field, and
@@ -130,14 +172,16 @@ macro_rules! define_skin_doc {
             /// Restated over every typographic role, on the same terms.
             #[serde(default)]
             pub text_roles: Option<TextRolePatch>,
+            /// Control instances this skin dresses differently from the ones
+            /// it inherits. An entry is restated whole: it replaces whatever
+            /// the base said about that path rather than merging with it.
+            #[serde(default)]
+            pub overrides: Option<BTreeMap<String, SkinLayer>>,
             $(#[serde(default)] pub $field: Option<$patch>,)*
         }
 
         impl SkinDoc {
             /// Takes everything the patch restates, keeping the rest.
-            ///
-            /// A blanket comes before the sections it reaches, so a skin that
-            /// rounds every frame and then names one square control gets both.
             pub(crate) fn apply(&mut self, patch: SkinPatch) {
                 self.id = patch.id;
                 self.schema = patch.schema;
@@ -151,15 +195,15 @@ macro_rules! define_skin_doc {
                 if let Some(pictures) = patch.pictures {
                     self.pictures.patch(pictures);
                 }
-                if let Some(frames) = patch.frames {
-                    self.each_frame(&mut |frame| frames.apply(frame));
+                if let Some(overrides) = patch.overrides {
+                    self.overrides.extend(overrides);
                 }
-                if let Some(roles) = patch.text_roles {
-                    self.each_role(&mut |role| roles.apply(role));
+                SkinLayer {
+                    frames: patch.frames,
+                    text_roles: patch.text_roles,
+                    $($field: patch.$field,)*
                 }
-                $(if let Some(section) = patch.$field {
-                    self.$field.patch(section);
-                })*
+                .apply(self);
             }
         }
 
@@ -269,7 +313,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{builtin, source::MemResolver};
+    use crate::{builtin, skin::ColorRole, source::MemResolver};
 
     const GOLD: &str = r##"(
         schema: "kithara.skin",
@@ -319,6 +363,88 @@ mod tests {
     #[kithara::test]
     fn a_patch_carries_its_own_identity() {
         assert_eq!(gold().id, DocId("kithara-gold".to_owned()));
+    }
+
+    fn dressing(id: &str, body: &str) -> String {
+        format!(
+            r##"(
+                schema: "kithara.skin",
+                version: 1,
+                id: "kithara-{id}",
+                overrides: {body},
+            )"##
+        )
+    }
+
+    #[kithara::test]
+    fn a_skin_carries_the_override_it_names() {
+        let text = dressing(
+            "dressed",
+            r#"{"deck.gain": (fader: (rail_filled: Danger))}"#,
+        );
+
+        let document =
+            parse_skin_over(builtin::skin_doc(), &text, &origin()).expect("the patch parses");
+
+        assert_eq!(
+            document.overrides["deck.gain"]
+                .fader
+                .expect("the override names the fader section")
+                .rail_filled,
+            Some(ColorRole::Danger)
+        );
+    }
+
+    #[kithara::test]
+    fn a_skin_declares_no_overrides_by_default() {
+        assert!(builtin::skin_doc().overrides.is_empty());
+    }
+
+    /// An override is restated whole. A skin written over another that already
+    /// dresses a control says everything it means about that control, rather
+    /// than half of it and half of what it inherited.
+    #[kithara::test]
+    fn a_patch_replaces_the_override_it_restates() {
+        let base = parse_skin_over(
+            builtin::skin_doc(),
+            &dressing("base", r#"{"deck.gain": (fader: (rail_filled: Danger))}"#),
+            &origin(),
+        )
+        .expect("the base parses");
+
+        let document = parse_skin_over(
+            &base,
+            &dressing("over", r#"{"deck.gain": (frames: (radius: 0.0))}"#),
+            &origin(),
+        )
+        .expect("the patch over it parses");
+
+        assert_eq!(document.overrides["deck.gain"].fader, None);
+    }
+
+    #[kithara::test]
+    fn a_patch_keeps_the_overrides_it_does_not_name() {
+        let base = parse_skin_over(
+            builtin::skin_doc(),
+            &dressing("base", r#"{"deck.gain": (fader: (rail_filled: Danger))}"#),
+            &origin(),
+        )
+        .expect("the base parses");
+
+        let document = parse_skin_over(
+            &base,
+            &dressing("over", r#"{"deck.pitch": (frames: (radius: 0.0))}"#),
+            &origin(),
+        )
+        .expect("the patch over it parses");
+
+        assert_eq!(
+            document.overrides["deck.gain"]
+                .fader
+                .expect("the inherited override is still there")
+                .rail_filled,
+            Some(ColorRole::Danger)
+        );
     }
 
     fn chain(links: &[(&str, &str)]) -> MemResolver {
