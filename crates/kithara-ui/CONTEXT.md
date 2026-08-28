@@ -35,6 +35,11 @@ is part of this checkout, so it being unreadable is a broken checkout rather tha
 condition. A test walks every tab and asserts the resolver answers with the file on disk, which is
 what keeps the embedded copy from quietly becoming the one that draws.
 
+The gallery is itself a package: `examples/gallery/assets/package.kpackage.ron` names a role per
+page, and the example holds roles only, never file names. A census asserts every role the manifest
+declares is a page some tab turns to, so a document added to the folder and left unreachable is
+caught rather than going stale unseen.
+
 ## Package Ownership
 
 A package is a folder with a manifest at its root, `PackageDoc`, parsed by `package::load_package`.

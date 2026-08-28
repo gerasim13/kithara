@@ -395,6 +395,32 @@ mod tests {
         }
     }
 
+    /// Every page the gallery's package declares is one the gallery shows.
+    ///
+    /// The manifest is what turns a folder of documents into the gallery, so
+    /// a role it declares that no tab reaches is a page nobody would ever
+    /// look at, and it would go stale unseen.
+    #[kithara::test]
+    fn every_page_the_package_declares_is_one_the_gallery_shows() {
+        let shown: BTreeSet<&str> = Tab::ALL
+            .iter()
+            .map(|tab| tab.entry())
+            .chain(ModuleDemo::ALL.iter().map(|demo| demo.entry()))
+            .collect();
+
+        let unshown: Vec<&str> = fixture::pages()
+            .values()
+            .map(String::as_str)
+            .filter(|file| !shown.contains(file))
+            .collect();
+
+        assert_eq!(
+            unshown,
+            Vec::<&str>::new(),
+            "the gallery package declares pages no tab turns to"
+        );
+    }
+
     fn shot(tab: Tab) -> Shot {
         Shot { tab, module: None }
     }

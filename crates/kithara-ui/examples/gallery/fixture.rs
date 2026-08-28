@@ -2,10 +2,16 @@
 //! them. A measurement harness mounts the same pages from here without pulling
 //! in a toolkit main.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+};
 
 use kithara_ui::{
     builtin,
+    ids::ScreenRole,
+    package::load_package,
     source::{FileResolver, MemResolver, OverlayResolver},
 };
 
@@ -22,6 +28,10 @@ impl Consts {
 }
 
 const ASSETS: &[(&str, &str)] = &[
+    (
+        "package.kpackage.ron",
+        include_str!("assets/package.kpackage.ron"),
+    ),
     (
         "gallery-clock.klayout.ron",
         include_str!("assets/gallery-clock.klayout.ron"),
@@ -441,4 +451,47 @@ pub(crate) fn resolver() -> Resolver {
     }
     let files = FileResolver::new(package_root()).expect("the gallery ships its own documents");
     OverlayResolver::new(files, embedded)
+}
+
+/// The file the gallery's package puts behind `role`.
+///
+/// A page states which screen it is; the manifest states which file that
+/// screen lives in. Keeping the mapping in the package is what lets a page be
+/// renamed, or replaced by another file, without touching this example.
+///
+/// # Panics
+/// Panics when the package answers for no such role.
+pub(crate) fn document(role: &str) -> &'static str {
+    pages()
+        .get(&ScreenRole(role.to_owned()))
+        .unwrap_or_else(|| panic!("the gallery package answers for no screen {role}"))
+}
+
+/// Every role the gallery's package declares, and the file behind each.
+///
+/// Each file is read once here and checked against the role the manifest put
+/// it behind, so a manifest that names the wrong file is refused where it is
+/// read rather than drawn as the wrong page.
+///
+/// # Panics
+/// Panics when the shipped manifest is unreadable or disagrees with a
+/// document, which is a broken checkout rather than a runtime condition.
+pub(crate) fn pages() -> &'static BTreeMap<ScreenRole, String> {
+    static PAGES: LazyLock<BTreeMap<ScreenRole, String>> = LazyLock::new(|| {
+        let resolver = resolver();
+        let package = load_package(&resolver, "package.kpackage.ron")
+            .unwrap_or_else(|error| panic!("the gallery ships a package manifest: {error}"));
+        package
+            .screens
+            .keys()
+            .map(|role| {
+                let file = package.screen(&resolver, role).unwrap_or_else(|error| {
+                    panic!("the gallery package must answer for {role}: {error}")
+                });
+                (role.clone(), file)
+            })
+            .collect()
+    });
+
+    &PAGES
 }

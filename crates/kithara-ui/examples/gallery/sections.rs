@@ -1,3 +1,5 @@
+use super::fixture;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Tab {
     Atoms,
@@ -62,37 +64,40 @@ impl Tab {
         Self::Skins,
     ];
 
-    pub(super) const fn entry(self) -> &'static str {
-        match self {
-            Self::Atoms => "gallery-atoms.klayout.ron",
-            Self::Buttons => "gallery-buttons.klayout.ron",
-            Self::Faders => "gallery-faders.klayout.ron",
-            Self::Modules => "gallery-modules.klayout.ron",
-            Self::Typography => "gallery-typography.klayout.ron",
-            Self::Cells => "gallery-cells.klayout.ron",
-            Self::Sizes => "gallery-sizes.klayout.ron",
-            Self::Tokens => "gallery-tokens.klayout.ron",
-            Self::Micro => "gallery-micro.klayout.ron",
-            Self::Mixer => "gallery-mixer.klayout.ron",
-            Self::Vis => "gallery-vis.klayout.ron",
-            Self::Chrome => "gallery-chrome.klayout.ron",
-            Self::Titlebars => "gallery-titlebars.klayout.ron",
-            Self::Table => "gallery-table.klayout.ron",
-            Self::Tree => "gallery-tree.klayout.ron",
-            Self::Library2 => "gallery-library2.klayout.ron",
-            Self::Stress => "gallery-stress.klayout.ron",
-            Self::Menu => "gallery-menu.klayout.ron",
-            Self::Clock => "gallery-clock.klayout.ron",
-            Self::Pivot => "gallery-pivot.klayout.ron",
-            Self::Shader => "gallery-shader.klayout.ron",
-            Self::Objects => "gallery-objects.klayout.ron",
-            Self::Motion => "gallery-motion.klayout.ron",
-            Self::Sprites => "gallery-sprites.klayout.ron",
-            Self::Lottie => "gallery-lottie.klayout.ron",
-            Self::TableLong => "gallery-table-long.klayout.ron",
-            Self::Custom => "gallery-custom.klayout.ron",
-            Self::Skins => "gallery-skins.klayout.ron",
-        }
+    /// The page this tab shows, as the gallery's package names it: the role is
+    /// the id the document states, and which file that role lives in is the
+    /// manifest's to say.
+    pub(super) fn entry(self) -> &'static str {
+        fixture::document(match self {
+            Self::Atoms => "gallery-atoms",
+            Self::Buttons => "gallery-buttons",
+            Self::Faders => "gallery-faders",
+            Self::Modules => "gallery-modules",
+            Self::Typography => "gallery-typography",
+            Self::Cells => "gallery-cells",
+            Self::Sizes => "gallery-sizes",
+            Self::Tokens => "gallery-tokens",
+            Self::Micro => "gallery-micro",
+            Self::Mixer => "gallery-mixer",
+            Self::Vis => "gallery-vis",
+            Self::Chrome => "gallery-chrome",
+            Self::Titlebars => "gallery-titlebars",
+            Self::Table => "gallery-table",
+            Self::Tree => "gallery-tree",
+            Self::Library2 => "gallery-library2",
+            Self::Stress => "gallery-stress",
+            Self::Menu => "gallery-menu",
+            Self::Clock => "gallery-clock",
+            Self::Pivot => "gallery-pivot",
+            Self::Shader => "gallery-shader",
+            Self::Objects => "gallery-objects",
+            Self::Motion => "gallery-motion",
+            Self::Sprites => "gallery-sprites",
+            Self::Lottie => "gallery-lottie",
+            Self::TableLong => "gallery-table-long",
+            Self::Custom => "gallery-custom",
+            Self::Skins => "gallery-skins",
+        })
     }
 
     pub(super) const fn index(self) -> usize {
@@ -189,14 +194,14 @@ impl ModuleDemo {
         Self::Layout,
     ];
 
-    pub(super) const fn entry(self) -> &'static str {
-        match self {
-            Self::Deck => "gallery-modules.klayout.ron",
-            Self::DeckMicro => "gallery-modules-deck-micro.klayout.ron",
-            Self::GlobalBar => "gallery-modules-global-bar.klayout.ron",
-            Self::Telemetry => "gallery-modules-telemetry.klayout.ron",
-            Self::Layout => "gallery-modules-layout.klayout.ron",
-        }
+    pub(super) fn entry(self) -> &'static str {
+        fixture::document(match self {
+            Self::Deck => "gallery-modules",
+            Self::DeckMicro => "gallery-modules-deck-micro",
+            Self::GlobalBar => "gallery-modules-global-bar",
+            Self::Telemetry => "gallery-modules-telemetry",
+            Self::Layout => "gallery-modules-layout",
+        })
     }
 
     pub(super) const fn index(self) -> usize {
