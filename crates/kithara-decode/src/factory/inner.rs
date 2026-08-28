@@ -344,8 +344,9 @@ where
                 "fmp4_segment: dispatching to segment-aware WebCodecs path"
             );
             let gapless = config.gapless;
-            return build_fmp4_segment_decoder(source, layout, config, |track| {
-                WebCodecsCodec::open(track, gapless)
+            let byte_pool = config.byte_pool.clone();
+            return build_fmp4_segment_decoder(source, layout, config, move |track| {
+                WebCodecsCodec::open(track, gapless, byte_pool.clone())
             });
         }
         #[cfg(feature = "symphonia")]
@@ -411,7 +412,11 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let codec_impl = WebCodecsCodec::open(demuxer.track_info(), config.gapless)?;
+    let codec_impl = WebCodecsCodec::open(
+        demuxer.track_info(),
+        config.gapless,
+        config.byte_pool.clone(),
+    )?;
     let pool = config.sample_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(

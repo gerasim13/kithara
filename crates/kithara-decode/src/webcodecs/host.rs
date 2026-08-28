@@ -529,6 +529,7 @@ fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::BytePool;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
 
@@ -583,7 +584,8 @@ mod tests {
             crate::symphonia::SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
                 .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
-        let codec = WebCodecsCodec::open(&track, false).expect("BUG: WebCodecs open");
+        let codec =
+            WebCodecsCodec::open(&track, false, BytePool::default()).expect("BUG: WebCodecs open");
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
 
         let mut total_frames: u64 = 0;
@@ -644,7 +646,8 @@ mod tests {
         let mut demuxer = SymphoniaDemuxer::from_reader_with_layout(format_reader, None, None)
             .expect("BUG: MP3 demuxer should build");
         let track = demuxer.track_info().clone();
-        let mut codec = WebCodecsCodec::open(&track, false).expect("BUG: WebCodecs open");
+        let mut codec =
+            WebCodecsCodec::open(&track, false, BytePool::default()).expect("BUG: WebCodecs open");
         let pool = SamplePool::default();
         let mut buf = pool.get();
 

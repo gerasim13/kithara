@@ -372,7 +372,7 @@ impl FrameCodec for AppleCodec {
 /// estimate, optional magic cookie.
 struct AppleInputFormat {
     asbd: AudioStreamBasicDescription,
-    cookie: Option<Vec<u8>>,
+    cookie: Option<Box<[u8]>>,
     frames_per_packet: u32,
 }
 
@@ -387,14 +387,10 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             let max_block = u32::from(u16::from_be_bytes([streaminfo[2], streaminfo[3]]))
                 .max(Consts::AAC_FRAMES_PER_PACKET);
 
-            let mut cookie =
-                Vec::with_capacity(Consts::FLAC_COOKIE_PREFIX_LEN + Consts::FLAC_STREAMINFO_LEN);
-            cookie.extend_from_slice(b"fLaC");
-            cookie.push(0x80);
-            cookie.push(0x00);
-            cookie.push(0x00);
-            cookie.push(Consts::FLAC_STREAMINFO_LEN_U8);
-            cookie.extend_from_slice(streaminfo);
+            let mut cookie = [0; Consts::FLAC_COOKIE_PREFIX_LEN + Consts::FLAC_STREAMINFO_LEN];
+            cookie[..4].copy_from_slice(b"fLaC");
+            cookie[4..8].copy_from_slice(&[0x80, 0x00, 0x00, Consts::FLAC_STREAMINFO_LEN_U8]);
+            cookie[Consts::FLAC_COOKIE_PREFIX_LEN..].copy_from_slice(streaminfo);
 
             let asbd = AudioStreamBasicDescription {
                 sample_rate: f64::from(track.sample_rate),
@@ -406,7 +402,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             Ok(AppleInputFormat {
                 asbd,
                 frames_per_packet: max_block,
-                cookie: Some(cookie),
+                cookie: Some(Box::from(cookie)),
             })
         }
         AudioCodec::Pcm => {
@@ -446,7 +442,7 @@ fn build_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
             };
             Ok(AppleInputFormat {
                 asbd,
-                cookie: Some(track.extra_data.clone()),
+                cookie: Some(track.extra_data.clone().into_boxed_slice()),
                 frames_per_packet: 4096,
             })
         }
@@ -516,7 +512,7 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
     Ok(AppleInputFormat {
         asbd,
         frames_per_packet,
-        cookie: Some(esds),
+        cookie: Some(esds.into_boxed_slice()),
     })
 }
 

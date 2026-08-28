@@ -1,8 +1,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{BytePool, SampleBuffer};
 use kithara_platform::{
-    sync::mpsc::{self, RecvTimeoutError, TryRecvError},
+    sync::{
+        Arc,
+        mpsc::{self, RecvTimeoutError, TryRecvError},
+    },
     time::{Duration, Instant},
 };
 use kithara_signal::AudioSpec;
@@ -22,6 +25,7 @@ static NEXT_DECODER_ID: AtomicU64 = AtomicU64::new(1);
 
 impl Consts {
     const DRAIN_TIMEOUT: Duration = Duration::from_millis(250);
+    const FLAC_DESCRIPTION_LEN: usize = 42;
     const FLAC_STREAMINFO_LEN: u8 = 34;
     const OUTPUT_TIMEOUT: Duration = Duration::from_millis(10);
 }
@@ -48,7 +52,7 @@ enum WebCodecsError {
 
 struct CodecConfig {
     codec_string: &'static str,
-    description: Option<Vec<u8>>,
+    description: Option<Arc<[u8]>>,
     channels: u16,
     sample_rate: u32,
 }
@@ -63,6 +67,7 @@ struct PcmOut {
 }
 
 pub(crate) struct WebCodecsCodec {
+    byte_pool: BytePool,
     config: CodecConfig,
     track_info: DecoderTrackInfo,
     decoded_pts: Duration,
@@ -147,7 +152,11 @@ impl WebCodecsCodec {
         }
     }
 
-    pub(crate) fn open(track: &TrackInfo, gapless_enabled: bool) -> DecodeResult<Self> {
+    pub(crate) fn open(
+        track: &TrackInfo,
+        gapless_enabled: bool,
+        byte_pool: BytePool,
+    ) -> DecodeResult<Self> {
         let config = codec_config(track)?;
         let spec = checked_audio_spec(
             track.channels,
@@ -164,6 +173,7 @@ impl WebCodecsCodec {
         })
         .map_err(|_| channel_disconnected("command"))?;
         let codec = Self {
+            byte_pool,
             decoder_id,
             cmd,
             out,
@@ -341,7 +351,7 @@ impl FrameCodec for WebCodecsCodec {
         self.send(HostCmd::Decode {
             pts_us,
             decoder_id: self.decoder_id,
-            data: frame_data.to_vec(),
+            data: self.byte_pool.collect(frame_data.iter().copied()),
             key: true,
             generation: self.generation,
         })?;
@@ -416,7 +426,7 @@ impl WebCodecsCodec {
 fn codec_config(track: &TrackInfo) -> DecodeResult<CodecConfig> {
     let description = match track.codec {
         AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-            Some(track.extra_data.clone())
+            Some(Arc::from(track.extra_data.as_slice()))
         }
         AudioCodec::Mp3 => None,
         AudioCodec::Flac => Some(flac_description(&track.extra_data)?),
@@ -442,17 +452,17 @@ pub(super) const fn codec_string(codec: AudioCodec) -> Option<&'static str> {
     }
 }
 
-fn flac_description(streaminfo: &[u8]) -> DecodeResult<Vec<u8>> {
+fn flac_description(streaminfo: &[u8]) -> DecodeResult<Arc<[u8]>> {
     if streaminfo.len() != usize::from(Consts::FLAC_STREAMINFO_LEN) {
         return Err(DecodeError::InvalidData {
             detail: "WebCodecs FLAC description requires a 34-byte STREAMINFO payload",
         });
     }
-    let mut description = Vec::with_capacity(4 + 4 + streaminfo.len());
-    description.extend_from_slice(b"fLaC");
-    description.extend_from_slice(&[0x80, 0, 0, Consts::FLAC_STREAMINFO_LEN]);
-    description.extend_from_slice(streaminfo);
-    Ok(description)
+    let mut description = [0; Consts::FLAC_DESCRIPTION_LEN];
+    description[..4].copy_from_slice(b"fLaC");
+    description[4..8].copy_from_slice(&[0x80, 0, 0, Consts::FLAC_STREAMINFO_LEN]);
+    description[8..].copy_from_slice(streaminfo);
+    Ok(Arc::from(description))
 }
 
 fn channel_disconnected(channel: &'static str) -> DecodeError {
