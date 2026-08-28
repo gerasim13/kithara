@@ -74,6 +74,7 @@ crates/kithara-wasm/dist
 crates/kithara-ffi/dist
 
 # Local Claude artifacts
+/artifacts/
 .claude/*.md
 .claude-octopus
 .claude/debates
