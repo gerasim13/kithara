@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use iced::{Element, Size};
 use kithara_platform::time::Duration;
 use kithara_ui::{
@@ -7,7 +9,7 @@ use kithara_ui::{
     ids::{ScreenRole, SourceUri},
     package::load_package,
     render::{Clock, Walk, tree},
-    source::{MemResolver, SourceResolver, UiConfig},
+    source::{FileResolver, MemResolver, OverlayResolver, SourceResolver, UiConfig},
     text::{TextDoc, parse_text},
 };
 
@@ -144,12 +146,31 @@ pub(crate) struct AppUi {
 }
 
 impl AppUi {
-    pub(crate) fn new() -> Result<Self, UiDocError> {
-        let resolver = resolver();
-        let screens = Screens::new(&resolver)?;
+    /// Reads the UI package laid out at `package` and draws from it, falling
+    /// to the documents this build carries when nothing is laid out there.
+    ///
+    /// A path that does not exist means no package was laid out. Anything else
+    /// that stops the package being read - a permission, a broken manifest -
+    /// stops the application instead of quietly drawing the built-in one.
+    pub(crate) fn new(package: Option<&Path>) -> Result<Self, UiDocError> {
+        match package.filter(|root| root.exists()) {
+            Some(root) => {
+                let files = FileResolver::new(root).map_err(|error| UiDocError::Unreadable {
+                    origin: SourceUri(root.display().to_string()),
+                    rel: String::new(),
+                    source: error,
+                })?;
+                Self::build(&OverlayResolver::new(files, resolver()))
+            }
+            None => Self::build(&resolver()),
+        }
+    }
+
+    fn build<R: SourceResolver>(resolver: &R) -> Result<Self, UiDocError> {
+        let screens = Screens::new(resolver)?;
         Ok(Self {
-            single: compile_screen(&resolver, screens.document(DeckLayout::Single))?,
-            dual: compile_screen(&resolver, screens.document(DeckLayout::Dual))?,
+            single: compile_screen(resolver, screens.document(DeckLayout::Single))?,
+            dual: compile_screen(resolver, screens.document(DeckLayout::Dual))?,
             cache: ViewCache::default(),
             clock: Clock::default(),
             #[cfg(feature = "masonry")]
@@ -207,7 +228,7 @@ pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDoc
     compile_screen(&resolver, Screens::new(&resolver)?.document(layout))
 }
 
-fn compile_screen(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiDocError> {
+fn compile_screen<R: SourceResolver>(resolver: &R, entry: &str) -> Result<CompiledUi, UiDocError> {
     compile(
         entry,
         resolver,

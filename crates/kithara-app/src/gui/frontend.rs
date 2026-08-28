@@ -170,7 +170,7 @@ impl GuiFrontend {
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
-        let ui = AppUi::new()?;
+        let ui = AppUi::new(config.ui_package.as_deref())?;
 
         let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
         let _guard = rt.enter();

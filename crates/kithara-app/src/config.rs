@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, path::PathBuf};
 
 use bon::Builder;
 use kithara::{
@@ -110,6 +110,12 @@ pub struct AppConfig {
     /// Band count of the EQ layout every deck's player graph is built with.
     #[builder(default = 3)]
     pub eq_bands: usize,
+    /// Where this application reads its UI package from. What is found there
+    /// is laid over the documents this build carries, so the interface can be
+    /// changed without a rebuild. A path that does not exist means no package
+    /// was laid out and the build's own documents draw; `None` means this
+    /// configuration names no package at all.
+    pub ui_package: Option<PathBuf>,
 }
 
 fn default_tracks() -> Vec<String> {

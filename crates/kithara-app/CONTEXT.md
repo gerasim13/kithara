@@ -24,6 +24,28 @@ endpoint the documents may bind, `AppUi::new` compiles both layout documents aga
 condition. `compile_ui` merges `builtin::text_doc()` with `assets/ui/app-en.ktext.ron` before every compile;
 that catalog holds only the window-manager menu words canon has no key for.
 
+### Where the UI package is read from
+
+`AppConfig.ui_package` names the folder holding the UI package. `main` defaults it to `assets/ui` beside the
+executable, which is where a release lays its documents out, and `--ui-package` overrides it. `AppUi::new`
+reads that folder over what the build embeds, so changing a document on disk changes the interface at the next
+start without a rebuild.
+
+A path that does not exist means no package was laid out and the build's own documents draw; that is what a
+developer running from a build directory sees. Anything else that stops the folder being read - a permission,
+a manifest that fails the `kithara-ui` contract - stops the application rather than quietly drawing the
+built-in one. This is the one place the application accepts a missing input as an answer, and it is a
+user-facing default rather than a state-resolution fallback: the package is optional configuration, and its
+absence is not evidence of a broken contract.
+
+The application asks the package for `deck-single` and `deck-dual` by role; `Screens` resolves both once, when
+the package is read. `AppUi` keeps the resolved names only under `masonry`, because only the retained host has
+to name the document it draws.
+
+Reading the package from disk costs 1.7 ms once at start: 10.1 ms against 8.4 ms for the same documents
+embedded, 17 files and 62 KiB, measured on this laptop under `test-release`. Compilation dominates both, which
+is why the resolver caches what it read rather than indexing what it might read.
+
 ### Deck addressing
 
 A deck is addressed by channel letter, and the letter is its position in the session. The letter appears in two

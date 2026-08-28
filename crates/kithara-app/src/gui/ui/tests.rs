@@ -1,16 +1,22 @@
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{cell::RefCell, collections::BTreeSet, path::Path};
 
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compiled_min},
+    error::UiDocError,
     expand::{ControlSpec, ExpandedNode},
     module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, WaveStyle},
     render::{Clock, ReadValue, Reads, tree},
     size::{Dim, SizeSpec, control_size},
 };
 
-use super::{cache::DeckLayout, compile::compile_ui, events::route, scope::MICRO_DECK};
+use super::{
+    cache::DeckLayout,
+    compile::{AppUi, compile_ui},
+    events::route,
+    scope::MICRO_DECK,
+};
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
 
@@ -1398,4 +1404,48 @@ fn each_deck_picks_its_own_stream_quality() {
             }
         }
     }
+}
+
+/// The package this application ships is read from disk the way a release
+/// reads it, so drift between the documents on disk and what the build
+/// embeds cannot hide behind the embedded copy.
+#[kithara::test]
+fn the_shipped_package_compiles_from_disk() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
+    drop(AppUi::new(Some(&root)).expect("the shipped package must compile from disk"));
+}
+
+/// Nothing laid out is not a defect: the documents this build carries draw,
+/// which is what a developer running from a build directory sees.
+#[kithara::test]
+fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
+    drop(AppUi::new(Some(&root)).expect("a package nobody laid out must leave the build drawing"));
+}
+
+/// What the disk says about a role wins over what the build embeds: a manifest
+/// laid out beside the executable is the one that answers.
+#[kithara::test]
+fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    std::fs::write(
+        root.path().join("package.kpackage.ron"),
+        r#"(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    screens: {
+        "deck-dual": "app.klayout.ron",
+    },
+)"#,
+    )
+    .expect("the manifest must be written");
+    let Err(error) = AppUi::new(Some(root.path())) else {
+        panic!("the disk manifest names one role only, so this must not compile");
+    };
+    assert!(
+        matches!(&error, UiDocError::MissingRole { role, .. } if role == "deck-single"),
+        "the disk manifest must be the one asked for the missing role, got {error}"
+    );
 }
