@@ -7,21 +7,21 @@ message: |
 severity: error
 language: Rust
 files:
-  - crates/kithara-assets/src/**/*.rs
-  - crates/kithara-audio/src/**/*.rs
-  - crates/kithara-decode/src/**/*.rs
-  - crates/kithara-file/src/**/*.rs
-  - crates/kithara-hls/src/**/*.rs
-  - crates/kithara-play/src/**/*.rs
-  - crates/kithara-queue/src/**/*.rs
-  - crates/kithara-resampler/src/**/*.rs
-  - crates/kithara-stream/src/**/*.rs
+  - crates/kithara/src/**/*.rs
+  - crates/kithara-*/src/**/*.rs
 ignores:
+  - crates/kithara-bufpool/**
+  - crates/kithara-devtools/**
+  - crates/kithara-test-macros/**
+  - crates/kithara-test-utils/**
+  - crates/kithara-workspace-hack/**
   - "**/tests/**"
   - "**/test_*.rs"
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  - crates/kithara-host/src/session/testing.rs
+  - crates/kithara-play/src/session/testing.rs
   - "**/benches/**"
 rule:
   all:
@@ -64,6 +64,28 @@ rule:
             - follows:
                 kind: attribute_item
                 regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: impl_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'wasm_bindgen\(start\)'
                 stopBy:
                   not:
                     kind: attribute_item

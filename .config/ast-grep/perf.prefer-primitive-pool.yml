@@ -1,36 +1,45 @@
 id: perf.prefer-primitive-pool
 message: |
-  Allocating a primitive `Vec` directly in a hot-path crate. Reuse storage
+  Allocating a primitive `Vec` directly in a product crate. Reuse storage
   through the pool injected by the owning subsystem:
 
     - `Vec<u8>` uses `BytePool`;
     - `Vec<f32>` containing decoded samples uses `SamplePool`;
-    - other primitive scratch is reshaped to reuse one of those injected pools.
+    - fixed-size scratch uses arrays; transient structural data stays lazy when
+      it does not need owned storage.
 
   The rule covers empty and capacity-bearing constructors, `default`, `vec!`,
   `collect`, `to_vec`, and `repeat` when the primitive type is explicit. An
   empty `Vec` is included conservatively because its first `push`, `extend`,
-  `resize`, or `reserve` can allocate outside the injected pool. A bare
-  `Vec::new()` whose primitive type is inferred from a later `push`, `resize`,
-  or literal extension is covered too. An explicit `collect::<Vec<_>>()` and a
-  repeated primitive literal are also rejected conservatively in these crates.
-  Component-local pool construction is forbidden.
+  `resize`, or `reserve` can allocate outside the injected pool. An untyped
+  `Vec::new()`, `Vec::default()`, `Default::default()`, or
+  `Vec::with_capacity()` that later grows is rejected regardless of its
+  inferred element type: spell out `Vec<Item>` when the collection is
+  non-primitive. `collect::<Vec<_>>()` is rejected for the same reason. Bare
+  `collect()` returns are rejected when the function signature fixes a
+  primitive owned buffer. Repeated primitive literals are also rejected.
+  Component-local pool construction is forbidden. This is a reusable-storage
+  rule: a documented long-lived output that crosses an ownership boundary may
+  own its bytes directly and must not retain a pool lease merely to silence
+  this lint.
 severity: error
 language: Rust
 files:
-  - crates/kithara-audio/src/**/*.rs
-  - crates/kithara-decode/src/**/*.rs
-  - crates/kithara-file/src/**/*.rs
-  - crates/kithara-hls/src/**/*.rs
-  - crates/kithara-resampler/src/**/*.rs
-  - crates/kithara-stream/src/**/*.rs
-  - crates/kithara-stretch/src/**/*.rs
+  - crates/kithara/src/**/*.rs
+  - crates/kithara-*/src/**/*.rs
 ignores:
+  - crates/kithara-bufpool/**
+  - crates/kithara-devtools/**
+  - crates/kithara-test-macros/**
+  - crates/kithara-test-utils/**
+  - crates/kithara-workspace-hack/**
   - "**/tests/**"
   - "**/test_*.rs"
   - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
+  - crates/kithara-host/src/session/testing.rs
+  - crates/kithara-play/src/session/testing.rs
   - "**/benches/**"
 rule:
   all:
@@ -39,6 +48,11 @@ rule:
             - any:
                 - pattern: "let $NAME: Vec<$TYPE> = $ALLOC;"
                 - pattern: "let mut $NAME: Vec<$TYPE> = $ALLOC;"
+        - all:
+            - pattern: "$ITER.collect()"
+            - inside:
+                pattern: "fn $FUNC($$$ARGS) -> Vec<$TYPE> { $$$BODY }"
+                stopBy: end
         - pattern: "$ITER.collect::<Vec<_>>()"
         - pattern: "$ITER.collect::<Vec<$TYPE>>()"
         - pattern: "Vec::<$TYPE>::new()"
@@ -50,15 +64,18 @@ rule:
                 - pattern: "let mut $NAME = Vec::new();"
                 - pattern: "let mut $NAME = Vec::default();"
                 - pattern: "let mut $NAME = Default::default();"
+                - pattern: "let mut $NAME = Vec::with_capacity($CAPACITY);"
             - inside:
                 all:
                   - kind: function_item
                   - has:
                       any:
-                        - pattern: "$NAME.push($ELEMENT)"
-                        - pattern: "$NAME.resize($_, $ELEMENT)"
-                        - pattern: "$NAME.extend([$ELEMENT])"
-                        - pattern: "$NAME.extend_from_slice(&[$ELEMENT])"
+                        - pattern: "$NAME.push($VALUE)"
+                        - pattern: "$NAME.resize($$$ARGS)"
+                        - pattern: "$NAME.extend($$$ARGS)"
+                        - pattern: "$NAME.extend_from_slice($$$ARGS)"
+                        - pattern: "$NAME.reserve($$$ARGS)"
+                        - pattern: "$NAME.reserve_exact($$$ARGS)"
                       stopBy: end
                 stopBy: end
         - all:
@@ -87,6 +104,17 @@ rule:
             - follows:
                 kind: attribute_item
                 regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: impl_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
                 stopBy:
                   not:
                     kind: attribute_item
