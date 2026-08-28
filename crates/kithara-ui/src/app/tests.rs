@@ -1694,6 +1694,32 @@ fn a_press_on_a_control_reaches_the_application_and_redraws_the_new_document() {
     let _scene = scenario.scene();
 }
 
+/// The pools belong to the host, not to the document standing in it. A host
+/// that turns to another document draws it out of the buffers the last one
+/// gave back; a family per compiled document would hand every new document an
+/// empty one.
+#[kithara::test]
+fn a_host_that_swaps_documents_draws_the_new_one_from_the_filled_pools() {
+    let endpoints = Registry("fixture.lit", EndpointDesc::new(ValueKind::Bool));
+    let resolver = resolver();
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .text(builtin::text_doc())
+        .build();
+    let mut scenario = Scenario::mount(Swapper::default(), config, (240, 120), 1.0);
+    let _first = scenario.scene();
+
+    scenario.click("demo/swap");
+    let _second = scenario.scene();
+
+    let stats = scenario.draw_pool_stats();
+    assert!(
+        stats.home_hits + stats.steal_hits > 0,
+        "the swapped-in document must have taken buffers the first one returned, got {stats:?}"
+    );
+}
+
 /// One control a hand can drag: how the document declares it, and the gesture
 /// that must move it.
 struct Draggable {

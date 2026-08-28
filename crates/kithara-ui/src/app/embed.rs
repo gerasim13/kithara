@@ -59,6 +59,11 @@ pub struct Ui<'config, Application> {
     clock: Clock,
     commands: Vec<WindowCommand>,
     config: Config<'config>,
+    /// What every document of this host is compiled against, built once so
+    /// that the draw pools inside it outlive a redress. Compiling one per
+    /// rebuild would hand each new document an empty pool family and throw the
+    /// filled one away with the document it came from.
+    doc: UiConfig,
     pointer: PhysicalPosition<f64>,
     root: MasonryRoot<UiEvent>,
     scale: f64,
@@ -84,7 +89,10 @@ where
     ) -> Result<Self, RunError> {
         let size = PhysicalSize::new(size.0, size.1);
         let state = MasonryState::default();
-        let ui = compile_document(&app, &config)?;
+        let doc = UiConfig::builder()
+            .custom_kinds(config.kinds.map(CustomKinds::names).unwrap_or_default())
+            .build();
+        let ui = compile_document(&app, &config, &doc)?;
         let clock = Clock::default();
         let root = mount(&app, &config, &state, &ui, size, scale, clock)?;
         Ok(Self {
@@ -92,6 +100,7 @@ where
             clock,
             commands: Vec::new(),
             config,
+            doc,
             pointer: PhysicalPosition::new(0.0, 0.0),
             root,
             scale,
@@ -376,7 +385,7 @@ where
     /// application moved on, or because another skin measures it differently -
     /// reaches the screen only by being built again.
     fn remount(&mut self) -> Result<(), RunError> {
-        let ui = compile_document(&self.app, &self.config)?;
+        let ui = compile_document(&self.app, &self.config, &self.doc)?;
         self.root = mount(
             &self.app,
             &self.config,
@@ -397,20 +406,18 @@ where
 fn compile_document<Application>(
     app: &Application,
     config: &Config<'_>,
+    doc: &UiConfig,
 ) -> Result<CompiledUi, RunError>
 where
     Application: App,
 {
-    let doc = UiConfig::builder()
-        .custom_kinds(config.kinds.map(CustomKinds::names).unwrap_or_default())
-        .build();
     Ok(compile(
         app.document(),
         config.resolver,
         config.endpoints,
         app.skin().document(),
         config.text,
-        &doc,
+        doc,
     )?)
 }
 

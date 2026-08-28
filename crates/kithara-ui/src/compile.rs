@@ -264,7 +264,7 @@ pub fn compile(
         arena,
         resize_edges: document.resize_edges,
         #[cfg(feature = "render")]
-        draw_pools: DrawPools::new(config.draw_pools),
+        draw_pools: config.draw_pools.clone(),
     })
 }
 

@@ -2447,3 +2447,48 @@ fn a_layout_of_one_module_gives_it_every_window_corner() {
     };
     assert_eq!(*round, FrameCorners::ALL);
 }
+
+/// The pools live on the configuration, so the document a host compiles draws
+/// from the family the host handed it rather than from one of its own.
+#[kithara::test]
+fn a_document_draws_from_the_pools_its_configuration_carries() {
+    let config = UiConfig::default();
+    drop(config.draw_pools.text("held"));
+
+    let ui = compile(
+        "micro.klayout.ron",
+        &resolver(),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &config,
+    )
+    .unwrap();
+
+    assert_eq!(ui.draw_pool_stats(), config.draw_pools.stats());
+}
+
+/// A host compiles a second screen, and compiles the first one again whenever
+/// it is redressed. Every one of those joins the family already in use instead
+/// of starting an empty one.
+#[kithara::test]
+fn a_document_compiled_after_the_first_joins_the_same_family() {
+    let config = UiConfig::default();
+    let screen = |()| {
+        compile(
+            "micro.klayout.ron",
+            &resolver(),
+            &common::player_registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &config,
+        )
+        .unwrap()
+    };
+    let _first = screen(());
+    let second = screen(());
+
+    drop(config.draw_pools.text("held"));
+
+    assert_eq!(second.draw_pool_stats(), config.draw_pools.stats());
+}

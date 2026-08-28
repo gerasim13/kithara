@@ -76,9 +76,16 @@ Every string retained by the compiled tree is interned in one bounded `String` a
 an allocation failure returns `UiDocError::ArenaFull`.
 
 - The compiled string arena is not pooled: budget-charging `ensure_len` needs `Default + Clone`,
-  which `ExpandedNode` cannot provide. `CompiledUi` does carry the separately owned `DrawPools`
-  family configured by `UiConfig`; its short-lived command, path, and paint-text buffers are not
-  compiled document strings.
+  which `ExpandedNode` cannot provide. `CompiledUi` does carry a `DrawPools` family cloned from
+  `UiConfig.draw_pools`; its short-lived command, path, and paint-text buffers are not compiled
+  document strings.
+- The pool family belongs to the host, not to the document. `UiConfig` carries it and every
+  document compiled against that configuration shares it, because a `DrawPools` clone is an `Arc`
+  clone. A host builds its configuration once - `app::Ui` in `new`, `kithara-app`'s `AppUi` for both
+  deck layouts - and compiles every screen and every redress against that one value. Building a
+  configuration per compile is the defect this replaced: it gave each document an empty family and
+  threw the filled one away with the document it came from, so a buffer was never reused across a
+  skin change or a screen switch.
 - `InternId` is valid only within the `CompiledUi` that produced it; a recompile rebuilds the arena.
   Never persist one in application messages or state - host-facing paths stay owned `String`s.
 - `StrArena::resolve` is total: spans cover whole appended strings, so valid spans land on UTF-8

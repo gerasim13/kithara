@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 
 use bon::Builder;
 
+#[cfg(any(feature = "render", feature = "vello"))]
+use crate::draw::DrawPools;
+
 #[derive(Builder, Clone, Debug)]
 #[non_exhaustive]
 pub struct Limits {
@@ -58,8 +61,20 @@ pub struct UiConfig {
     pub limits: Limits,
     #[builder(default = 64 * 1024)]
     pub max_arena_bytes: usize,
+    /// The pools every document compiled against this configuration draws
+    /// from.
+    ///
+    /// Shared on purpose. A host compiles one screen per layout and compiles
+    /// them all again whenever the skin changes; a pool family per compiled
+    /// document would keep as many sets of retained buffers as there are
+    /// pages, and throw every one of them away at each redress. One family,
+    /// cloned into each compiled document, is what makes a retained buffer
+    /// retained. Build the configuration once and compile every screen against
+    /// it; the default builds a family of its own, which is one host drawing
+    /// one page.
+    #[cfg(any(feature = "render", feature = "vello"))]
     #[builder(default)]
-    pub draw_pools: DrawPoolLimits,
+    pub draw_pools: DrawPools,
 }
 
 impl Default for UiConfig {

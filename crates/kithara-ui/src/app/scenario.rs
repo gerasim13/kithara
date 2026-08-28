@@ -7,7 +7,7 @@ use masonry::vello::Scene;
 
 use super::{App, Config, Ui};
 use crate::{
-    draw::{Pt, Rect, Rgba},
+    draw::{PoolStats, Pt, Rect, Rgba},
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     render::{Reads, Skin, UiEvent},
 };
@@ -73,6 +73,9 @@ impl<'config, A: App> Scenario<'config, A> {
             /// Where a control stands, or nothing when nothing stands at that
             /// path.
             pub(super) fn rect_of(&self, path: &str) -> Option<Rect>;
+            /// Reuse counters for the pools this host draws every one of its
+            /// documents from.
+            pub(super) fn draw_pool_stats(&self) -> PoolStats;
         }
         to self.ui.app() {
             /// The application the scenario is driving.
