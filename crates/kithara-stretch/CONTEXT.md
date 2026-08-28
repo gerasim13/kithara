@@ -59,8 +59,10 @@ reserved before the checked render call, and an engine that needs planar scratch
 the `PcmPool` supplied in `ElasticConfig`; no engine owns a default or global pool.
 
 `flush(out)` writes the next buffered-tail portion into caller-owned storage sized from
-`terminal_chunk_frames` and returns the number of interleaved frames written. EOF repeats the call
-until zero; a completed drain stays empty until new input. This streaming contract lets a
+`terminal_chunk_frames` and returns its frame count together with whether that portion completed
+the drain. EOF repeats the call until completion; a completed drain stays empty until new input.
+An active drain reports completion on its final non-empty portion, so the caller can publish the
+released source frontier with that PCM. This streaming contract lets a
 rate-dependent tail span several fixed-size chunks without loss. At a steady rate `r`, the complete
 terminal span is `ceil(H / r) + O` frames, where `H` and `O` are the declared source and output
 latencies. The same formula applies after a rate change has rendered `O` frames and reached its new

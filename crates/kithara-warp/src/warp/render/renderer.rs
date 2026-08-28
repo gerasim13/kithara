@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmMeta, PcmSpec, duration_for_frames};
 use kithara_platform::sync::Arc;
@@ -48,6 +50,10 @@ pub struct WarpRenderer {
     pub(super) pending_source: Option<PcmBuf>,
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<PcmMeta>,
+    /// Exact decoded-source boundary represented by the latest emitted chunk.
+    pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
+    /// Source frames admitted since the last renderer reset.
+    pub(super) source_frames_admitted: u64,
     /// Reset requested by seek or a return to unity passthrough. The scheduler
     /// shell performs it outside the checked render core.
     pub(super) reset_pending: bool,
@@ -77,6 +83,8 @@ impl WarpRenderer {
             output_remainder: 0.0,
             pending_source: target.pending_source,
             pending_meta: None,
+            rendered_source_end: None,
+            source_frames_admitted: 0,
             reset_pending: false,
             last_input_meta: None,
             output_start_meta: None,
@@ -122,6 +130,8 @@ impl WarpRenderer {
         self.output_start_meta = None;
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
+        self.rendered_source_end = None;
+        self.source_frames_admitted = 0;
         self.active = false;
         self.region = None;
     }
@@ -171,6 +181,38 @@ impl WarpRenderer {
         self.pending_source
             .as_deref()
             .map_or(0, |source| source.len() / channels)
+    }
+
+    pub(super) fn held_source_frames(&self) -> u64 {
+        if !self.active {
+            return 0;
+        }
+        let pending = u64::try_from(self.pending_frames(usize::from(self.spec.channels.max(1))))
+            .unwrap_or(u64::MAX);
+        let backend_admitted = self.source_frames_admitted.saturating_sub(pending);
+        let latency = self
+            .engine
+            .as_ref()
+            .map_or(0, |engine| engine.capabilities().latency().source_frames());
+        let backend_held = u64::try_from(latency)
+            .unwrap_or(u64::MAX)
+            .min(backend_admitted);
+        pending.saturating_add(backend_held)
+    }
+
+    pub(super) fn record_rendered_source_end(&mut self, meta: PcmMeta, held_source_frames: u64) {
+        let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
+        self.rendered_source_end = Some((
+            admitted.saturating_sub(held_source_frames),
+            meta.spec.sample_rate,
+        ));
+    }
+
+    /// Exact decoded-source boundary represented by the latest emitted PCM.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
+        self.rendered_source_end
     }
 
     pub(super) fn meta_at_frame(meta: PcmMeta, frame_offset: u64) -> PcmMeta {

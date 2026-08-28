@@ -16,6 +16,7 @@ use crate::pipeline::{
 pub(crate) struct ResumeCursor {
     host_rate: Arc<AtomicU32>,
     decode_head: Option<(u64, u64, u32)>,
+    rendered_source_head: Option<(u64, u64, u32)>,
     #[field(get = recreates_on_route, vis = "pub(crate)")]
     recreate_on_route: bool,
     decoder_rate: u32,
@@ -40,11 +41,18 @@ impl ResumeCursor {
             recreate_on_route,
             decoder_rate,
             decode_head: None,
+            rendered_source_head: None,
         }
     }
 
     pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
         self.decode_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
+    }
+
+    pub(crate) fn rendered_source_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.rendered_source_head
             .filter(|&(head_epoch, _, _)| head_epoch == epoch)
             .map(|(_, frame, rate)| (frame, rate))
     }
@@ -69,6 +77,17 @@ impl ResumeCursor {
         ));
     }
 
+    pub(crate) fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
+        self.rendered_source_head =
+            Some((epoch, source_end.frame(), source_end.sample_rate().get()));
+    }
+
+    pub(crate) fn rebase_decode_to_rendered(&mut self, epoch: u64) {
+        self.decode_head = self
+            .rendered_source_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch);
+    }
+
     pub(crate) fn resume_position(
         &self,
         epoch: u64,
@@ -76,7 +95,7 @@ impl ResumeCursor {
         resume_target: Option<(u64, Duration)>,
     ) -> Duration {
         let head = self
-            .decode_head(epoch)
+            .rendered_source_head(epoch)
             .map(|(frame, rate)| duration_for_frames(rate, frame))
             .filter(|&position| position > committed)
             .unwrap_or(committed);

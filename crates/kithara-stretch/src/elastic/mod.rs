@@ -4,6 +4,9 @@ pub use capabilities::ElasticCapabilities;
 mod config;
 pub use config::{ElasticConfig, ElasticSpanConfig};
 
+mod drain;
+pub use drain::ElasticDrain;
+
 mod engine;
 pub use engine::ElasticEngine;
 pub(crate) use engine::PitchScale;

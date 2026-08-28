@@ -10,7 +10,7 @@ impl WarpRenderer {
     /// Assemble an output chunk from `scratch`, preserving the exact source
     /// start and the latest decoder frontier. `replacement` is retained for
     /// shell-side preparation before the next checked tick.
-    fn emit(&mut self, replacement: Option<PcmBuf>) -> Option<PcmChunk> {
+    fn emit(&mut self, replacement: Option<PcmBuf>, held_source_frames: u64) -> Option<PcmChunk> {
         let total = self.scratch.as_deref().map_or(0, <[f32]>::len);
         if total == 0 {
             self.defer_scratch(replacement);
@@ -18,6 +18,7 @@ impl WarpRenderer {
         }
         let channels = usize::from(self.spec.channels.max(1));
         let mut meta = self.last_input_meta.unwrap_or_default();
+        self.record_rendered_source_end(meta, held_source_frames);
         // A non-empty output always carries the live source spec. The default
         // metadata sentinel has zero channels and cannot reach the resampler.
         meta.spec = self.spec;
@@ -47,6 +48,7 @@ impl WarpRenderer {
         self.clear_pending_source();
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
+        self.source_frames_admitted = 0;
         self.active = false;
     }
 
@@ -54,6 +56,7 @@ impl WarpRenderer {
         let channels = usize::from(self.spec.channels.max(1));
         if self.pending_frames(channels) == 0 {
             self.reset_for_passthrough();
+            self.record_rendered_source_end(chunk.meta, 0);
             return Some(chunk);
         }
 
@@ -67,6 +70,7 @@ impl WarpRenderer {
         match rounded {
             Some(0) => {
                 self.reset_for_passthrough();
+                self.record_rendered_source_end(meta, 0);
                 Some(PcmChunk::new(meta, samples))
             }
             Some(1) => {
@@ -81,7 +85,7 @@ impl WarpRenderer {
                     return None;
                 }
                 self.reset_for_passthrough();
-                self.emit(Some(samples))
+                self.emit(Some(samples), 0)
             }
             Some(frames) => {
                 warn!(
@@ -119,60 +123,70 @@ impl WarpRenderer {
         self.output_start_meta = None;
         let channels = usize::from(self.spec.channels.max(1));
         let result = self.render_terminal_pending(channels).and_then(|()| {
-            if self.active {
-                let tail_frames = self
-                    .engine
-                    .as_ref()
-                    .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                    .capabilities()
-                    .terminal_chunk_frames();
-                let tail_samples = tail_frames
-                    .checked_mul(channels)
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                let scratch = self
-                    .scratch
-                    .as_mut()
-                    .ok_or(ElasticError::EnginePreparation(
-                        "output scratch is unavailable",
-                    ))?;
-                let start = scratch.len();
-                let end = start
-                    .checked_add(tail_samples)
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                if end > scratch.capacity() {
-                    return Err(ElasticError::OutputFrameLimit {
-                        frames: end / channels,
-                        limit: scratch.capacity() / channels,
-                    });
-                }
-                scratch
-                    .ensure_len(end)
-                    .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
-                let rendered_frames = self
-                    .engine
-                    .as_mut()
-                    .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-                    .flush(&mut scratch[start..end])?;
-                if rendered_frames > tail_frames {
-                    return Err(ElasticError::EngineOutputFrameCount {
-                        actual: rendered_frames,
-                        expected: tail_frames,
-                    });
-                }
-                let rendered_samples = rendered_frames
-                    .checked_mul(channels)
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                scratch.truncate(start + rendered_samples);
+            if !self.active {
+                return Ok(true);
             }
-            Ok(())
+            let tail_frames = self
+                .engine
+                .as_ref()
+                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+                .capabilities()
+                .terminal_chunk_frames();
+            let tail_samples = tail_frames
+                .checked_mul(channels)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            let scratch = self
+                .scratch
+                .as_mut()
+                .ok_or(ElasticError::EnginePreparation(
+                    "output scratch is unavailable",
+                ))?;
+            let start = scratch.len();
+            let end = start
+                .checked_add(tail_samples)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            if end > scratch.capacity() {
+                return Err(ElasticError::OutputFrameLimit {
+                    frames: end / channels,
+                    limit: scratch.capacity() / channels,
+                });
+            }
+            scratch
+                .ensure_len(end)
+                .map_err(|_| ElasticError::PcmPoolBudgetExhausted)?;
+            let drain = self
+                .engine
+                .as_mut()
+                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
+                .flush(&mut scratch[start..end])?;
+            let rendered_frames = drain.frames();
+            if rendered_frames > tail_frames {
+                return Err(ElasticError::EngineOutputFrameCount {
+                    actual: rendered_frames,
+                    expected: tail_frames,
+                });
+            }
+            let rendered_samples = rendered_frames
+                .checked_mul(channels)
+                .ok_or(ElasticError::SampleCountOverflow)?;
+            scratch.truncate(start + rendered_samples);
+            Ok(drain.complete())
         });
-        if let Err(error) = result {
-            warn!(%error, "time-stretch engine flush failed");
-            self.retire_engine();
-            self.clear_render_state();
-            return None;
-        }
-        self.emit(None)
+        let complete = match result {
+            Ok(complete) => complete,
+            Err(error) => {
+                warn!(%error, "time-stretch engine flush failed");
+                self.retire_engine();
+                self.clear_render_state();
+                return None;
+            }
+        };
+        let held_source_frames = if complete {
+            0
+        } else {
+            self.held_source_frames()
+        };
+        self.emit(None, held_source_frames)
     }
 
     #[doc(hidden)]
@@ -223,7 +237,11 @@ impl WarpRenderer {
             self.defer_scratch(Some(samples));
             return None;
         }
-        self.emit(Some(samples))
+        self.source_frames_admitted = self
+            .source_frames_admitted
+            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+        let held_source_frames = self.held_source_frames();
+        self.emit(Some(samples), held_source_frames)
     }
 
     #[doc(hidden)]

@@ -226,11 +226,21 @@ where
             TrackStep::Produced(fetch) => {
                 self.record_load(start.elapsed(), &fetch);
                 self.runtime.eof_sent = false;
-                let decoded_frontier = match &fetch {
-                    Fetch::Data { data, .. } => Some(data.meta.end_timestamp),
-                    _ => None,
+                let (decoded_frontier, source_end) = match &fetch {
+                    Fetch::Data {
+                        data,
+                        epoch,
+                        source_end,
+                    } => (
+                        Some(data.meta.end_timestamp),
+                        source_end.map(|source_end| (source_end, *epoch)),
+                    ),
+                    _ => (None, None),
                 };
                 if self.port.try_push(fetch) {
+                    if let Some((source_end, epoch)) = source_end {
+                        self.source.commit_source_end(source_end, epoch);
+                    }
                     if let Some(frontier) = decoded_frontier {
                         self.playhead.set_decoded_frontier(frontier);
                     }

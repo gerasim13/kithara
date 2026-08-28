@@ -32,7 +32,7 @@ pub use kithara_resampler::{
 };
 pub use pipeline::{
     config::{AudioConfig, AudioDecoderConfig, ConsumerWakeMode, DecoderResamplerSettings},
-    fetch::{EpochValidator, Fetch},
+    fetch::{EpochValidator, Fetch, SourceEnd},
     track::{TrackStep, WaitingReason},
 };
 pub use producer::PreloadGate;

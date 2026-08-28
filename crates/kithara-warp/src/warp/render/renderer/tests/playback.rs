@@ -1,13 +1,16 @@
-use std::{collections::HashSet, num::NonZero};
+use std::{
+    collections::HashSet,
+    num::{NonZero, NonZeroU32},
+};
 
-use kithara_decode::PcmSpec;
+use kithara_decode::{PcmSpec, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, dominant_bin, expected_bin, flush_serviced,
-    render_serviced, renderer, sine,
+    render_serviced, renderer, sine, spec,
 };
 
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
@@ -123,6 +126,114 @@ fn assert_unity_contract(kind: StretchKind) {
 fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
     assert_half_speed_contract(backend);
     assert_unity_contract(backend);
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchKind) {
+    const SOURCE_START: u64 = 10_000;
+    const SOURCE_FRAMES: usize = 4096;
+
+    let mut renderer = keylocked(backend, 0.5);
+    let source = sine(SOURCE_FRAMES);
+    let mut input = chunk(&source);
+    input.meta.frame_offset = SOURCE_START;
+    input.meta.timestamp = duration_for_frames(Consts::SR, SOURCE_START);
+    let admitted = SOURCE_START
+        .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
+        .expect("source frontier fits u64");
+    input.meta.end_timestamp = duration_for_frames(Consts::SR, admitted);
+    let source_latency = renderer
+        .engine
+        .as_ref()
+        .expect("compiled backend is available")
+        .capabilities()
+        .latency()
+        .source_frames();
+    assert!(source_latency > 0, "backend must declare source lookahead");
+
+    let output = render_serviced(&mut renderer, input).expect("half-speed render emits PCM");
+    let held =
+        u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
+    let expected_frame = admitted.saturating_sub(held);
+
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some((
+            expected_frame,
+            NonZeroU32::new(Consts::SR).expect("test sample rate is non-zero"),
+        )),
+        "rendered progress excludes source still retained by the backend"
+    );
+    assert_ne!(
+        output
+            .meta
+            .frame_offset
+            .saturating_add(u64::from(output.meta.frames)),
+        expected_frame,
+        "the oracle must distinguish transformed output frames from the source frontier"
+    );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend: StretchKind) {
+    const SOURCE_START: u64 = 10_000;
+    const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
+
+    let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let source = sine(SOURCE_FRAMES);
+    let mut input = chunk(&source);
+    input.meta.frame_offset = SOURCE_START;
+    let admitted = SOURCE_START
+        .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
+        .expect("source frontier fits u64");
+    let source_latency = renderer
+        .engine
+        .as_ref()
+        .expect("compiled backend is available")
+        .capabilities()
+        .latency()
+        .source_frames();
+    let held =
+        u64::try_from(source_latency.min(SOURCE_FRAMES)).expect("backend source latency fits u64");
+
+    render_serviced(&mut renderer, input).expect("minimum-speed render emits PCM");
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some((admitted - held, spec().sample_rate))
+    );
+
+    let mut frontiers = Vec::new();
+    while let Some(tail) = flush_serviced(&mut renderer) {
+        assert!(tail.frames() > 0, "terminal chunk carries real PCM");
+        frontiers.push(renderer.rendered_source_end());
+        assert!(frontiers.len() < 64, "terminal drain must converge");
+    }
+
+    assert!(
+        frontiers.len() > 1,
+        "fixture must exercise a multi-chunk terminal drain"
+    );
+    assert!(
+        frontiers[..frontiers.len() - 1]
+            .iter()
+            .all(|frontier| *frontier != Some((admitted, spec().sample_rate))),
+        "an incomplete tail chunk cannot publish the full source frontier"
+    );
+    assert_eq!(
+        frontiers.last().copied().flatten(),
+        Some((admitted, spec().sample_rate)),
+        "the completed tail releases the held source frontier"
+    );
 }
 
 #[kithara::test]

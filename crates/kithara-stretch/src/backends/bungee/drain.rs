@@ -2,8 +2,8 @@
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 
-use super::stream::{StreamCore, TerminalChunk};
-use crate::ElasticError;
+use super::stream::StreamCore;
+use crate::{ElasticDrain, ElasticError};
 
 impl StreamCore {
     pub(super) fn output_position(&self) -> Option<f64> {
@@ -55,7 +55,7 @@ impl StreamCore {
         &mut self,
         output: &mut [f32],
         capacity: usize,
-    ) -> Result<TerminalChunk, ElasticError> {
+    ) -> Result<ElasticDrain, ElasticError> {
         let source_end = f64::from(self.input.end());
         let mut drained = 0usize;
         let mut stalled = 0usize;
@@ -87,10 +87,10 @@ impl StreamCore {
                 }
                 self.flush_invalid()?;
                 self.clear();
-                return Ok(TerminalChunk::new(drained, true));
+                return Ok(ElasticDrain::new(drained, true));
             }
             if drained == capacity {
-                return Ok(TerminalChunk::new(drained, false));
+                return Ok(ElasticDrain::new(drained, false));
             }
             if grain == Self::TERMINAL_GRAIN_LIMIT {
                 break;

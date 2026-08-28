@@ -4,7 +4,7 @@ mod drain;
 pub mod eq;
 mod limiter;
 
-pub(crate) use chain::{apply_effects, reset_effects};
+pub(crate) use chain::{apply_effects, held_source_frames, reset_effects};
 pub use contract::AudioEffect;
 #[cfg(any(test, feature = "mock"))]
 pub use contract::AudioEffectMock;

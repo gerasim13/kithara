@@ -5,7 +5,7 @@ use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
 use crate::{
-    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine, ElasticError, ElasticLatency,
     ElasticRequest, elastic::PitchScale,
 };
 
@@ -135,9 +135,9 @@ impl ElasticEngine for SignalsmithElastic {
         Ok(())
     }
 
-    fn flush(&mut self, output: &mut [f32]) -> Result<usize, ElasticError> {
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
         if matches!(self.terminal, TerminalState::Idle) {
-            return Ok(0);
+            return Ok(ElasticDrain::new(0, true));
         }
         let chunk_frames = self.capabilities.terminal_chunk_frames();
         let expected = self.capabilities.samples(chunk_frames)?;
@@ -163,16 +163,16 @@ impl ElasticEngine for SignalsmithElastic {
                     &mut output[..output_samples],
                 );
                 self.terminal = TerminalState::Flush;
-                Ok(output_frames)
+                Ok(ElasticDrain::new(output_frames, false))
             }
             TerminalState::Flush => {
                 let output_frames = self.capabilities.latency().output_frames();
                 let output_samples = self.capabilities.samples(output_frames)?;
                 self.inner.flush(&mut output[..output_samples]);
                 self.terminal = TerminalState::Idle;
-                Ok(output_frames)
+                Ok(ElasticDrain::new(output_frames, true))
             }
-            TerminalState::Idle => Ok(0),
+            TerminalState::Idle => Ok(ElasticDrain::new(0, true)),
         }
     }
 

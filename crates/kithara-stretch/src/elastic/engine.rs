@@ -1,6 +1,6 @@
 use kithara_platform::ranged;
 
-use super::{ElasticCapabilities, ElasticConfig, ElasticError, ElasticRequest};
+use super::{ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticError, ElasticRequest};
 
 ranged!(
     /// Valid native pitch factor shared by every elastic backend.
@@ -81,17 +81,18 @@ pub trait ElasticEngine: Send + 'static {
     ///
     /// The caller supplies storage for
     /// `capabilities().terminal_chunk_frames() * channels` samples and repeats
-    /// until this method returns zero. Each non-zero result is the next
-    /// contiguous tail portion; active engines must expose their real tail and
-    /// converge to zero. Fresh and reset engines return zero, and a completed
-    /// drain stays idempotently empty until [`prime`](Self::prime) or
-    /// [`process`](Self::process).
+    /// until the returned [`ElasticDrain`] is complete. Every incomplete step
+    /// writes a non-empty contiguous tail portion; an active drain reports
+    /// completion together with its final non-empty portion. Fresh, reset and
+    /// already-completed engines return an empty completed step until
+    /// [`prime`](Self::prime) or [`process`](Self::process).
     ///
     /// # Errors
     /// While a drain is active, returns [`ElasticError`] when `output` does not
     /// match the engine's declared terminal span or when sizing that span
-    /// overflows. An inactive drain returns zero without accessing `output`.
-    fn flush(&mut self, output: &mut [f32]) -> Result<usize, ElasticError>;
+    /// overflows. An inactive drain returns an empty completed step without
+    /// accessing `output`.
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError>;
 
     /// Clears stream history while retaining the prepared shape and latency.
     ///

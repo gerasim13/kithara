@@ -4,7 +4,7 @@ use num_traits::ToPrimitive;
 
 use super::stream::StreamCore;
 use crate::{
-    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticLatency,
+    ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticEngine, ElasticError, ElasticLatency,
     ElasticRequest, elastic::PitchScale,
 };
 
@@ -146,9 +146,9 @@ impl ElasticEngine for BungeeElastic {
         Ok(())
     }
 
-    fn flush(&mut self, output: &mut [f32]) -> Result<usize, ElasticError> {
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
         if !self.tail_armed {
-            return Ok(0);
+            return Ok(ElasticDrain::new(0, true));
         }
         let tail_frames = self.capabilities.terminal_chunk_frames();
         let expected = self.capabilities.samples(tail_frames)?;
@@ -160,7 +160,7 @@ impl ElasticEngine for BungeeElastic {
         }
         let chunk = self.core.terminal_tail(output, tail_frames)?;
         self.tail_armed = !chunk.complete();
-        Ok(chunk.frames())
+        Ok(chunk)
     }
 
     fn reset(&mut self) -> Result<(), ElasticError> {

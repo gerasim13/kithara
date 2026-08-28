@@ -594,6 +594,10 @@ impl<T: StreamType> PcmSource for StreamAudioSource<T> {
         Some(self.decode.active().blender_profile().spec())
     }
 
+    fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
+        self.resume.commit_source_end(source_end, epoch);
+    }
+
     fn finish_deferred(&mut self) {
         self.retired.drain();
         self.rebuild.submit();

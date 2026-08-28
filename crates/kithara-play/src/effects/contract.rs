@@ -26,6 +26,16 @@ pub trait AudioEffect: Send + 'static {
     /// rebuild backend state.
     fn flush(&mut self) -> Option<PcmChunk>;
 
+    /// Frames accepted by this effect but not yet represented in its output,
+    /// counted on the decoded-source axis.
+    ///
+    /// There is no default: an effect that buffers must expose its hold so a
+    /// decoder recreation cannot resume past audio that has not been emitted.
+    /// Behind a duration-changing Warp stage this value must remain on the
+    /// decoded-source axis; an effect that cannot report that hold must not
+    /// buffer there.
+    fn held_source_frames(&self) -> u64;
+
     /// Process a PCM chunk, returning transformed output.
     ///
     /// Returns `None` if the effect is accumulating data (not enough for output

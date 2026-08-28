@@ -4,7 +4,7 @@ use kithara_decode::PcmSpec;
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
-use crate::TrackStep;
+use crate::{SourceEnd, TrackStep};
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
@@ -36,6 +36,10 @@ pub trait PcmSource: Send + 'static {
 
     /// Finish deferred source publication after decorators are serviced.
     fn finish_deferred(&mut self) {}
+
+    /// Commit the decoded-source boundary after rendered PCM is accepted by
+    /// the final producer port.
+    fn commit_source_end(&mut self, _source_end: SourceEnd, _epoch: u64) {}
 
     /// Reclaim a discarded chunk from scheduler `recycle`, outside the checked
     /// producer tick.

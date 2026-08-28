@@ -163,6 +163,51 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind) {
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let mut fx = renderer(Arc::clone(&controls));
+    let source_latency = fx
+        .engine
+        .as_ref()
+        .expect("compiled backend is available")
+        .capabilities()
+        .latency()
+        .source_frames();
+    assert!(source_latency <= WarpRenderer::MAX_SOURCE_FRAMES);
+    controls.set_region_plan(Some(Arc::new(
+        RegionPlan::new(vec![GridSegment::new(
+            u64::try_from(source_latency).expect("source latency fits u64") + 1,
+            u64::try_from(source_latency).expect("source latency fits u64") + 2,
+            0.25,
+        )])
+        .expect("fixture region is valid"),
+    )));
+
+    let source = sine(source_latency + 2);
+    let split = source_latency * usize::from(Consts::CH);
+    render_serviced(&mut fx, chunk(&source[..split])).expect("latency-sized span renders");
+
+    let mut input = chunk(&source[split..]);
+    input.meta.frame_offset = u64::try_from(source_latency).expect("source latency fits u64");
+    let output = render_serviced(&mut fx, input).expect("the unity source frame renders");
+
+    assert_eq!(output.frames(), 1);
+    assert_eq!(fx.pending_frames(usize::from(Consts::CH)), 1);
+    assert_eq!(
+        fx.rendered_source_end(),
+        Some((1, spec().sample_rate)),
+        "frontier excludes the source frame not yet submitted to the backend"
+    );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: StretchKind) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);

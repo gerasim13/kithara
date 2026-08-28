@@ -81,12 +81,16 @@ fn drain_terminal(engine: &mut dyn ElasticEngine) -> Vec<f32> {
     let mut drained = Vec::new();
     for _ in 0..MAX_CHUNKS {
         chunk.fill(0.0);
-        let frames = engine.flush(&mut chunk).expect("terminal flush");
-        if frames == 0 {
-            assert_eq!(engine.flush(&mut chunk).expect("completed drain"), 0);
+        let step = engine.flush(&mut chunk).expect("terminal flush");
+        let frames = step.frames();
+        assert!(frames > 0, "an active drain step carries real PCM");
+        drained.extend_from_slice(&chunk[..frames * CHANNELS]);
+        if step.complete() {
+            let completed = engine.flush(&mut chunk).expect("completed drain");
+            assert_eq!(completed.frames(), 0);
+            assert!(completed.complete());
             return drained;
         }
-        drained.extend_from_slice(&chunk[..frames * CHANNELS]);
     }
     panic!("terminal drain must converge to an empty flush");
 }
@@ -954,8 +958,8 @@ macro_rules! elastic_engine_conformance {
                 let drained = engine
                     .flush(&mut terminal)
                     .expect("the rejected call keeps the tail armed");
-                assert!(drained > 0);
-                assert!(drained <= tail_frames);
+                assert!(drained.frames() > 0);
+                assert!(drained.frames() <= tail_frames);
             }
 
             #[kithara::test]
@@ -970,9 +974,10 @@ macro_rules! elastic_engine_conformance {
                     engine.capabilities().terminal_chunk_frames() * CHANNELS;
                 let mut terminal = vec![0.0; terminal_samples];
 
-                let frames = engine.flush(&mut terminal).expect("fresh terminal drain");
+                let step = engine.flush(&mut terminal).expect("fresh terminal drain");
 
-                assert_eq!(frames, 0);
+                assert_eq!(step.frames(), 0);
+                assert!(step.complete());
             }
 
             #[kithara::test]
@@ -996,9 +1001,10 @@ macro_rules! elastic_engine_conformance {
                     engine.capabilities().terminal_chunk_frames() * CHANNELS;
                 let mut terminal = vec![0.0; terminal_samples];
 
-                let frames = engine.flush(&mut terminal).expect("reset terminal drain");
+                let step = engine.flush(&mut terminal).expect("reset terminal drain");
 
-                assert_eq!(frames, 0);
+                assert_eq!(step.frames(), 0);
+                assert!(step.complete());
             }
 
             #[kithara::test]

@@ -38,7 +38,7 @@ use crate::{
             core::{DecodeInit, DecoderFactory},
             transition::OutgoingFrontier,
         },
-        fetch::Fetch,
+        fetch::{Fetch, SourceEnd},
         parts::SourceParts,
         rebuild::{
             DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause, RecreateNext,
@@ -1187,6 +1187,24 @@ fn next_test_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
 ) -> PcmChunk {
+    let chunk = next_decoded_chunk(source, route_recreated);
+    source.commit_source_end(
+        SourceEnd::new(
+            chunk
+                .meta
+                .frame_offset
+                .saturating_add(u64::from(chunk.meta.frames)),
+            chunk.meta.spec.sample_rate,
+        ),
+        source.seek_engine.epoch(),
+    );
+    chunk
+}
+
+fn next_decoded_chunk(
+    source: &mut StreamAudioSource<TestStream>,
+    route_recreated: &mut bool,
+) -> PcmChunk {
     loop {
         run_pending_rebuild_inline(source);
         match source.step_track() {
@@ -1572,6 +1590,55 @@ async fn rebuilding_decoder_completion_installs_once() {
 }
 
 #[kithara::test(tokio)]
+async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source() {
+    let RouteFixture {
+        control,
+        drops,
+        mut source,
+        ..
+    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    let mut route_recreated = false;
+    let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
+    let epoch = source.seek_obs.epoch();
+    let raw = source
+        .resume
+        .decode_head(epoch)
+        .expect("decoded chunk must advance the raw head");
+    let rendered_frame = chunk
+        .meta
+        .frame_offset
+        .saturating_add(u64::from(chunk.meta.frames / 2));
+    let rendered = (rendered_frame, chunk.meta.spec.sample_rate.get());
+    source.commit_source_end(
+        SourceEnd::new(rendered_frame, chunk.meta.spec.sample_rate),
+        epoch,
+    );
+    assert!(
+        raw.0 > rendered.0,
+        "fixture requires raw PCM ahead of output"
+    );
+
+    let build = BuildId::fixture(7);
+    control.set_media_info(media_info(1));
+    enter_rebuilding(&mut source, 7, recreate_state(1));
+    push_route_completion(&source, build, DecoderBuildPurpose::Replacement, 2, drops);
+    source.flush_deferred();
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+    assert_eq!(source.resume.rendered_source_head(epoch), Some(rendered));
+    assert_eq!(source.resume.decode_head(epoch), Some(rendered));
+
+    control.set_exact_plan(exact_incoming_plan());
+    source.flush_deferred();
+    assert_eq!(
+        control.landing(),
+        Some(duration_for_frames(rendered.1, rendered.0)),
+        "the next ABR plan must start from the rebuilt rendered frontier"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let RebuildFixture {
         drops, mut source, ..
@@ -1660,6 +1727,54 @@ async fn route_change_host_rate_delta_starts_decoder_recreate() {
         }
         _ => panic!("expected route-change recreate"),
     }
+}
+
+#[kithara::test(tokio)]
+async fn route_change_resumes_from_the_rendered_source_frontier() {
+    let RouteFixture {
+        host_sample_rate,
+        mut source,
+        ..
+    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    let mut route_recreated = false;
+    let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
+    let epoch = source.seek_engine.epoch();
+    let rendered_frame =
+        u64::try_from(Consts::ROUTE_CHUNK_FRAMES / 2).expect("rendered fixture frame fits u64");
+    let rendered = duration_for_frames(Consts::SAMPLE_RATE, rendered_frame);
+
+    assert_ne!(
+        source.resume.decode_head(epoch),
+        Some((rendered_frame, Consts::SAMPLE_RATE)),
+        "the fixture must distinguish raw decode progress from rendered progress"
+    );
+    assert_eq!(
+        chunk.meta.end_timestamp,
+        duration_for_frames(
+            Consts::SAMPLE_RATE,
+            u64::try_from(Consts::ROUTE_CHUNK_FRAMES).expect("route chunk frames fit u64")
+        )
+    );
+    source.commit_source_end(
+        SourceEnd::new(
+            rendered_frame,
+            NonZeroU32::new(Consts::SAMPLE_RATE).expect("test sample rate is non-zero"),
+        ),
+        epoch,
+    );
+
+    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    let CurrentFsm::RecreatingDecoder(handle) = &source.state else {
+        panic!("expected route-change recreate");
+    };
+    let RecreateNext::ApplySeek(request) = &handle.data().next else {
+        panic!("route change must apply a seek");
+    };
+    assert_eq!(
+        request.seek.target, rendered,
+        "route recreation must resume at final rendered source progress"
+    );
 }
 
 #[kithara::test(tokio)]

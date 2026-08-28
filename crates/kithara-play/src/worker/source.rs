@@ -1,9 +1,11 @@
-use kithara_audio::{Fetch, PcmSource, SourceDiscontinuity, TrackStep};
+use kithara_audio::{Fetch, PcmSource, SourceDiscontinuity, SourceEnd, TrackStep};
 use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::sync::Arc;
 use kithara_stream::SeekObserve;
 
-use crate::effects::{AudioEffect, EffectDrain, EffectDrainStep, apply_effects, reset_effects};
+use crate::effects::{
+    AudioEffect, EffectDrain, EffectDrainStep, apply_effects, held_source_frames, reset_effects,
+};
 
 #[derive(Clone, Copy)]
 enum DrainState {
@@ -118,9 +120,23 @@ where
         self.drain_state = DrainState::Warp(epoch);
     }
 
-    fn render(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+    fn fetch(&self, data: PcmChunk, epoch: u64) -> Fetch<PcmChunk> {
+        let source_end = self.warp.rendered_source_end().map(|(frame, sample_rate)| {
+            SourceEnd::new(
+                frame.saturating_sub(held_source_frames(&self.effects)),
+                sample_rate,
+            )
+        });
+        match source_end {
+            Some(source_end) => Fetch::rendered(data, epoch, source_end),
+            None => Fetch::data(data, epoch),
+        }
+    }
+
+    fn render(&mut self, chunk: PcmChunk, epoch: u64) -> Option<Fetch<PcmChunk>> {
         let chunk = self.warp.render(chunk)?;
-        apply_effects(&mut self.effects, chunk)
+        let output = apply_effects(&mut self.effects, chunk)?;
+        Some(self.fetch(output, epoch))
     }
 
     fn drain_step(&mut self) -> Option<TrackStep<PcmChunk>> {
@@ -129,7 +145,7 @@ where
                 return Some(
                     apply_effects(&mut self.effects, chunk)
                         .map_or(TrackStep::StateChanged, |output| {
-                            TrackStep::Produced(Fetch::data(output, epoch))
+                            TrackStep::Produced(self.fetch(output, epoch))
                         }),
                 );
             }
@@ -140,7 +156,7 @@ where
             return None;
         };
         Some(match self.drain.step(&mut self.effects) {
-            EffectDrainStep::Produced(chunk) => TrackStep::Produced(Fetch::data(chunk, epoch)),
+            EffectDrainStep::Produced(chunk) => TrackStep::Produced(self.fetch(chunk, epoch)),
             EffectDrainStep::Progress => TrackStep::StateChanged,
             EffectDrainStep::Exhausted => {
                 self.drain_state = DrainState::Exhausted(epoch);
@@ -159,6 +175,7 @@ where
     delegate::delegate! {
         to self.source {
             fn decode_epoch(&self) -> u64;
+            fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64);
             fn retire_chunk(&self, chunk: PcmChunk);
             fn finish_deferred(&mut self);
             fn warm_up(&mut self);
@@ -187,11 +204,9 @@ where
         }
 
         match self.source.step_track() {
-            TrackStep::Produced(Fetch::Data { data, epoch }) => {
-                self.render(data).map_or(TrackStep::StateChanged, |output| {
-                    TrackStep::Produced(Fetch::data(output, epoch))
-                })
-            }
+            TrackStep::Produced(Fetch::Data { data, epoch, .. }) => self
+                .render(data, epoch)
+                .map_or(TrackStep::StateChanged, TrackStep::Produced),
             TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
             TrackStep::Eof => {
                 self.begin_drain(self.source.decode_epoch());
@@ -281,36 +296,43 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct BufferThenHalveFrames {
-        buffered: bool,
+        buffered: Option<PcmChunk>,
     }
 
     impl AudioEffect for BufferThenHalveFrames {
         fn flush(&mut self) -> Option<PcmChunk> {
-            None
+            self.buffered.take().and_then(halve_frames)
         }
 
-        fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
-            if !self.buffered {
-                self.buffered = true;
-                return None;
-            }
-            let frames = chunk.meta.frames / 2;
-            let samples = usize::try_from(frames)
-                .ok()?
-                .checked_mul(usize::from(chunk.meta.spec.channels))?;
-            chunk.samples.truncate(samples);
-            chunk.meta.frames = frames;
-            chunk.meta.end_timestamp = duration_for_frames(
-                chunk.meta.spec.sample_rate.get(),
-                chunk.meta.frame_offset.saturating_add(u64::from(frames)),
-            );
-            Some(chunk)
+        fn held_source_frames(&self) -> u64 {
+            self.buffered
+                .as_ref()
+                .map_or(0, |chunk| u64::from(chunk.meta.frames))
+        }
+
+        fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
+            self.buffered.replace(chunk).and_then(halve_frames)
         }
 
         fn reset(&mut self) {
-            self.buffered = false;
+            self.buffered = None;
         }
+    }
+
+    fn halve_frames(mut chunk: PcmChunk) -> Option<PcmChunk> {
+        let frames = chunk.meta.frames / 2;
+        let samples = usize::try_from(frames)
+            .ok()?
+            .checked_mul(usize::from(chunk.meta.spec.channels))?;
+        chunk.samples.truncate(samples);
+        chunk.meta.frames = frames;
+        chunk.meta.end_timestamp = duration_for_frames(
+            chunk.meta.spec.sample_rate.get(),
+            chunk.meta.frame_offset.saturating_add(u64::from(frames)),
+        );
+        Some(chunk)
     }
 
     struct DeferredSource {
@@ -355,6 +377,10 @@ mod tests {
             None
         }
 
+        fn held_source_frames(&self) -> u64 {
+            0
+        }
+
         fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
             Some(chunk)
         }
@@ -363,6 +389,7 @@ mod tests {
     }
 
     struct RevisionSource {
+        chunks: VecDeque<PcmChunk>,
         discontinuity: Arc<Mutex<SourceDiscontinuity>>,
         seek: Arc<SeekState>,
     }
@@ -379,7 +406,11 @@ mod tests {
         }
 
         fn step_track(&mut self) -> TrackStep<PcmChunk> {
-            TrackStep::Blocked(WaitingReason::Waiting)
+            self.chunks
+                .pop_front()
+                .map_or(TrackStep::Blocked(WaitingReason::Waiting), |chunk| {
+                    TrackStep::Produced(Fetch::data(chunk, 0))
+                })
         }
     }
 
@@ -390,6 +421,10 @@ mod tests {
     impl AudioEffect for ResetCounter {
         fn flush(&mut self) -> Option<PcmChunk> {
             None
+        }
+
+        fn held_source_frames(&self) -> u64 {
+            0
         }
 
         fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
@@ -433,6 +468,10 @@ mod tests {
         fn flush(&mut self) -> Option<PcmChunk> {
             self.flushes.fetch_add(1, Ordering::AcqRel);
             None
+        }
+
+        fn held_source_frames(&self) -> u64 {
+            0
         }
 
         fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
@@ -488,6 +527,12 @@ mod tests {
             self.tail.take()
         }
 
+        fn held_source_frames(&self) -> u64 {
+            self.tail
+                .as_ref()
+                .map_or(0, |chunk| u64::from(chunk.meta.frames))
+        }
+
         fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
             Some(chunk)
         }
@@ -517,7 +562,7 @@ mod tests {
     }
 
     #[kithara::test]
-    fn buffering_effect_yields_after_each_source_transition() {
+    fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
         let spec = PcmSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
         let pool = PcmPool::default();
         let head = Arc::new(AtomicU64::new(0));
@@ -529,8 +574,7 @@ mod tests {
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
         };
-        let effects: Vec<Box<dyn AudioEffect>> =
-            vec![Box::new(BufferThenHalveFrames { buffered: false })];
+        let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
         let drain = EffectDrain::new(effects.len(), &BytePool::default());
         let mut source = source_stage(source, effects, drain, spec);
 
@@ -541,13 +585,43 @@ mod tests {
             "one worker pass advances exactly one source transition"
         );
 
-        let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
-            panic!("the second raw chunk must pass the buffering effect");
+        let TrackStep::Produced(Fetch::Data {
+            data, source_end, ..
+        }) = source.step_track()
+        else {
+            panic!("the second raw chunk must release the first buffered span");
         };
 
         assert_eq!(head.load(Ordering::Acquire), 256);
+        assert_eq!(data.meta.frame_offset, 0);
+        assert_eq!(data.meta.frames, 64);
+        assert_eq!(
+            source_end,
+            Some(SourceEnd::new(
+                128,
+                NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+            )),
+            "the buffered second span remains outside the live source frontier"
+        );
+
+        assert!(matches!(source.step_track(), TrackStep::StateChanged));
+        let TrackStep::Produced(Fetch::Data {
+            data, source_end, ..
+        }) = source.step_track()
+        else {
+            panic!("EOF drain must release the second buffered span");
+        };
+
         assert_eq!(data.meta.frame_offset, 128);
         assert_eq!(data.meta.frames, 64);
+        assert_eq!(
+            source_end,
+            Some(SourceEnd::new(
+                256,
+                NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+            )),
+            "terminal output releases the held source frontier"
+        );
     }
 
     #[kithara::test]
@@ -583,6 +657,7 @@ mod tests {
         let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
         let resets = Arc::new(AtomicU64::new(0));
         let source = RevisionSource {
+            chunks: VecDeque::new(),
             discontinuity: Arc::clone(&discontinuity),
             seek: Arc::new(SeekState::new()),
         };
@@ -603,6 +678,48 @@ mod tests {
         *discontinuity.lock() = SourceDiscontinuity::new(8, changed);
         flush_deferred(&mut source);
         assert_eq!(resets.load(Ordering::Acquire), 1);
+    }
+
+    #[kithara::test]
+    fn unity_warp_preserves_pcm_and_meta_across_discontinuity() {
+        let initial = PcmSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
+        let changed = PcmSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
+        let pool = PcmPool::default();
+        let first = chunk(&pool, initial, 256);
+        let first_meta = first.meta;
+        let first_samples = first.samples.to_vec();
+        let mut second = chunk(&pool, changed, 512);
+        second.meta.segment_index = Some(3);
+        second.meta.variant_index = Some(2);
+        second.meta.epoch = 9;
+        second.meta.source_byte_offset = Some(4096);
+        second.meta.source_bytes = 1024;
+        second.samples.fill(-0.25);
+        let second_meta = second.meta;
+        let second_samples = second.samples.to_vec();
+        let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
+        let source = RevisionSource {
+            chunks: VecDeque::from([first, second]),
+            discontinuity: Arc::clone(&discontinuity),
+            seek: Arc::new(SeekState::new()),
+        };
+        let effects = Vec::new();
+        let drain = EffectDrain::new(effects.len(), &BytePool::default());
+        let mut source = source_stage(source, effects, drain, initial);
+
+        let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
+            panic!("initial unity span must pass through");
+        };
+        assert_eq!(data.meta, first_meta);
+        assert_eq!(&data.samples[..], &first_samples);
+
+        *discontinuity.lock() = SourceDiscontinuity::new(8, changed);
+        flush_deferred(&mut source);
+        let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
+            panic!("post-discontinuity unity span must pass through");
+        };
+        assert_eq!(data.meta, second_meta);
+        assert_eq!(&data.samples[..], &second_samples);
     }
 
     #[kithara::test]
@@ -666,10 +783,14 @@ mod tests {
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         for expected in [128, 256] {
-            let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
+            let TrackStep::Produced(Fetch::Data {
+                data, source_end, ..
+            }) = source.step_track()
+            else {
                 panic!("effect tail must be emitted before EOF");
             };
             assert_eq!(data.meta.frame_offset, expected);
+            assert_eq!(source_end, None, "effect-only tails do not advance source");
         }
         assert!(matches!(source.step_track(), TrackStep::Eof));
     }

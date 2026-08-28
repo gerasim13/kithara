@@ -7,19 +7,6 @@ use super::{
 use crate::{ElasticConfig, ElasticError, ElasticRateEnvelope};
 
 #[derive(fieldwork::Fieldwork)]
-#[fieldwork(get, copy, vis = "pub(super)")]
-pub(super) struct TerminalChunk {
-    frames: usize,
-    complete: bool,
-}
-
-impl TerminalChunk {
-    pub(super) fn new(frames: usize, complete: bool) -> Self {
-        Self { frames, complete }
-    }
-}
-
-#[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct StreamCore {
     pub(super) anchor: Option<f64>,

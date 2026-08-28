@@ -15,7 +15,7 @@ mod backends;
 
 mod elastic;
 pub use elastic::{
-    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig, ElasticSpanPlan,
-    ElasticSpanRequest,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticDrain, ElasticEngine, ElasticError,
+    ElasticLatency, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
+    ElasticSpanPlan, ElasticSpanRequest,
 };

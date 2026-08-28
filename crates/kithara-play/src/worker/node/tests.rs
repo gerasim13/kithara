@@ -4,12 +4,16 @@ use std::{
 };
 
 use kithara_audio::{
-    Fetch, PcmProducerPort, PcmSource, PreloadGate, TrackStep, WaitingReason, mock::PcmSourceMock,
+    Fetch, PcmProducerPort, PcmSource, PreloadGate, SourceEnd, TrackStep, WaitingReason,
+    mock::PcmSourceMock,
 };
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use kithara_events::{AudioEvent, DeferredBus, Event, EventBus};
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use kithara_stream::{
     PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
 };
@@ -58,6 +62,31 @@ struct RetiringSource {
     seek: Arc<SeekState>,
     retired: Arc<AtomicUsize>,
     chunks_left: usize,
+}
+
+struct CommitSource {
+    chunk: Option<PcmChunk>,
+    commits: Arc<Mutex<Vec<(SourceEnd, u64)>>>,
+    seek: Arc<SeekState>,
+    source_end: SourceEnd,
+}
+
+impl PcmSource for CommitSource {
+    type Chunk = PcmChunk;
+
+    fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64) {
+        self.commits.lock().push((source_end, epoch));
+    }
+
+    fn seek_observe(&self) -> Arc<dyn SeekObserve> {
+        Arc::clone(&self.seek) as Arc<dyn SeekObserve>
+    }
+
+    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+        self.chunk.take().map_or(TrackStep::Eof, |chunk| {
+            TrackStep::Produced(Fetch::rendered(chunk, 7, self.source_end))
+        })
+    }
 }
 
 impl PcmSource for RetiringSource {
@@ -403,6 +432,37 @@ fn decoded_frontier_advances_only_after_final_port_admission() {
     let _ = node.port.take_pending();
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(playhead.decoded_frontier(), end);
+}
+
+#[kithara::test]
+fn source_end_commits_only_after_final_port_admission() {
+    let (mut port, _pop) = PcmProducerPort::probe(1);
+    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
+    let source_end = SourceEnd::new(
+        12_345,
+        NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+    );
+    let commits = Arc::new(Mutex::new(Vec::new()));
+    let source = CommitSource {
+        chunk: Some(empty_chunk()),
+        commits: Arc::clone(&commits),
+        seek: Arc::new(SeekState::new()),
+        source_end,
+    };
+    let mut node = test_node(
+        source,
+        port,
+        Arc::new(PreloadGate::default()),
+        Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
+    );
+
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert!(commits.lock().is_empty());
+
+    let _ = node.port.take_pending();
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert_eq!(commits.lock().as_slice(), &[(source_end, 7)]);
 }
 
 #[kithara::test]

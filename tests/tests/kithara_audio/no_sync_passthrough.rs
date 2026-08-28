@@ -104,6 +104,10 @@ impl AudioEffect for BurstLoadEffect {
         None
     }
 
+    fn held_source_frames(&self) -> u64 {
+        0
+    }
+
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         self.blocks = self.blocks.saturating_add(1);
         if self.blocks.is_multiple_of(LOAD_INTERVAL_BLOCKS) {

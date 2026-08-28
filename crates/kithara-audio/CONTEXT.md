@@ -128,8 +128,10 @@ mutator of track state through `update_state`. Sub-owners never take
 - `ReadinessGate` — the only owner of byte-range readiness calculations; gate and
   wait paths must resolve the same range for the same phase.
 - `SeekEngine` — `resume_target`, and the only writer of the producer decode
-  epoch (`commit_decode_epoch`). `ResumeCursor` — `decode_head` plus host/decoder
-  sample rates; resolves recreate resume positions and detects route changes.
+  epoch (`commit_decode_epoch`). `ResumeCursor` — separate raw-decode and
+  rendered-source heads plus host/decoder sample rates; the raw head owns ABR
+  cuts, while the rendered head resolves recreate positions after final output
+  admission. The same owner detects route changes.
 - `RebuildPort<T>` — the two-phase rebuild boundary: `prepare` produces a pending
   job, `submit` (from `finish_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
@@ -246,15 +248,17 @@ factory panic becomes
   `RecreateNext::Seek`/`ApplySeek` returns to `SeekRequested`. Only a decode-only
   rebuild may continue into a fresh `FormatBoundary` recreate; dropping the
   carried request permanently starves the producer.
-- **Mid-playback recreate resumes at the decode head, not `committed`.** A
-  `FormatBoundary` + `RecreateNext::Decode` rebuild bumps no seek epoch and
-  flushes no outlet ring, so resuming at the lagging `committed_position` would
-  replay already-queued chunks backwards, so `ResumeCursor::resume_position`
-  resumes at the decode head and `resume_target` wins only while
-  `target > decode_head`. The decode head is an exact frame plus its rate,
-  converted with `duration_for_frames`; the demuxer quantizes the landing to a
-  sample and the decoder relabels its first chunk by rounding to the nearest
-  frame, consistent with head trimming.
+- **Mid-playback recreate resumes at the rendered source head, not raw decode
+  progress or `committed`.** A `FormatBoundary` + `RecreateNext::Decode`
+  rebuild bumps no seek epoch and flushes no outlet ring, so resuming at the
+  lagging `committed_position` would replay already-queued chunks, while raw
+  decode progress may skip source retained by Warp or a buffering effect.
+  `Fetch::source_end` carries the decoded-source endpoint represented by
+  rendered PCM; the play worker commits it only after final producer-port
+  admission, and `ResumeCursor::resume_position` reads that epoch-scoped frame
+  plus sample rate. `resume_target` wins only while
+  `target > rendered_source_head`. Raw decode progress remains the ABR
+  splice/promotion coordinate.
 - A **route change** keeps its container and resolves its origin through
   `anchor::recreate_offset` seeded with the running generation's `base_offset` —
   never a seek anchor, which would root an init-bearing demuxer on a media byte.
