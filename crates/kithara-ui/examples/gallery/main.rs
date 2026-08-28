@@ -86,6 +86,19 @@ impl Gallery {
         }
     }
 
+    /// Whether the page the gallery is showing reads differently next frame,
+    /// which is the window's whole reason to come back for one.
+    ///
+    /// Two things move a page and only one of them is written down. The
+    /// document declares its own motion, and the compiled page carries that
+    /// declaration; the application also hands over readings it moved itself,
+    /// which no document can declare because the application decides them one
+    /// frame at a time. A window that honoured the declaration alone froze the
+    /// second kind between unrelated events.
+    fn moves(&self) -> bool {
+        self.compiled().animates || self.reads.feeds()
+    }
+
     /// One frame of the gallery's own time: the clock a document binds to,
     /// and the application's own reading of how far along it is.
     fn tick(&mut self) {
@@ -275,18 +288,18 @@ fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message> {
     .map(Message::Ui)
 }
 
-/// Time runs on the pages that say they move, which the document answers for
-/// itself. Naming the pages here instead is a second account of the same fact,
-/// and it drifts: a page that gained something moving kept its picture frozen
-/// until an unrelated event redrew it, and one that lost it went on waking the
-/// host every tick for nothing.
+/// Time runs on the pages that move, which the gallery answers for itself.
+/// Naming the pages here instead is a second account of the same fact, and it
+/// drifts: a page that gained something moving kept its picture frozen until an
+/// unrelated event redrew it, and one that lost it went on waking the host
+/// every tick for nothing.
 ///
 /// A capture never ticks: the offscreen host photographs one frame of a freshly
 /// mounted page, so a clock running here would put the two hosts at different
 /// moments and the comparison would measure the difference between them.
 fn subscription(state: &Gallery) -> Subscription<Message> {
     let close = window::close_requests().map(Message::Close);
-    if state.capture.is_none() && state.compiled().animates {
+    if state.capture.is_none() && state.moves() {
         Subscription::batch([
             close,
             iced_time::every(Duration::from_millis(Consts::STRESS_TICK_MS)).map(|_| Message::Tick),

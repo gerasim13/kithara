@@ -130,11 +130,11 @@ mod immediate {
         let mut cache = Cache::default();
         let mut asking = true;
         for _ in 0..FRAMES {
-            // The window ticks only the pages whose document says they move,
-            // which is what the gallery's subscription does. A page ticked
-            // regardless would be measured moving on the strength of the
-            // harness rather than of its own document.
-            if animates {
+            // The window ticks only the pages that move, which is what the
+            // gallery's subscription does. A page ticked regardless would be
+            // measured moving on the strength of the harness rather than of
+            // the page.
+            if gallery.moves() {
                 drop(super::super::update(&mut gallery, Message::Tick));
             }
             let mut interface = UserInterface::build(

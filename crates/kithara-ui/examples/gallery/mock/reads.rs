@@ -21,6 +21,37 @@ use super::{
 };
 use crate::sections::{ModuleDemo, Tab};
 
+/// What this application moves on the page it is showing.
+///
+/// A document declares its own motion and a host reads that declaration off
+/// the compiled page. This is the other kind, which no document can declare: a
+/// reading the application hands over afresh every frame. The window has to
+/// know before it ticks, and the tick has to know what to move, so both read
+/// this one answer rather than each keeping a list of pages.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Feed {
+    /// The numbers the stress page reports about drawing itself.
+    Bench,
+    /// The levels and spectra the visualiser page draws.
+    Vis,
+    /// How far along each object on the objects page is.
+    Phase,
+    /// Plain seconds, which is all the pages that place their own objects get.
+    Clock,
+}
+
+impl Feed {
+    const fn of(tab: Tab) -> Option<Self> {
+        match tab {
+            Tab::Stress => Some(Self::Bench),
+            Tab::Vis => Some(Self::Vis),
+            Tab::Objects => Some(Self::Phase),
+            Tab::Motion | Tab::Sprites | Tab::Lottie => Some(Self::Clock),
+            _ => None,
+        }
+    }
+}
+
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct MockReads {
@@ -434,13 +465,18 @@ impl MockReads {
         Some(ReadValue::Bool(value))
     }
 
+    /// Whether the application moves a reading on the page it is showing.
+    pub(crate) const fn feeds(&self) -> bool {
+        Feed::of(self.active_tab).is_some()
+    }
+
     pub(crate) fn tick(&mut self) {
-        match self.active_tab {
-            Tab::Stress => self.stress.tick(),
-            Tab::Vis => self.tick_vis(),
-            Tab::Objects => self.tick_phase(),
-            Tab::Motion | Tab::Sprites | Tab::Lottie => self.tick_clock(),
-            _ => {}
+        match Feed::of(self.active_tab) {
+            Some(Feed::Bench) => self.stress.tick(),
+            Some(Feed::Vis) => self.tick_vis(),
+            Some(Feed::Phase) => self.tick_phase(),
+            Some(Feed::Clock) => self.tick_clock(),
+            None => {}
         }
     }
 

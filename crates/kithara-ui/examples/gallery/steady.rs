@@ -162,12 +162,16 @@ fn whole_f32(value: f32) -> u32 {
     num_traits::cast::AsPrimitive::as_(value)
 }
 
-/// Whether this page's document says something on it draws a different picture
-/// later. Read from the document rather than assumed from the page's name.
-fn animates(page: Shot) -> bool {
+/// Whether something on this page draws a different picture later, taken from
+/// the two that know: the page's own document, and the application that hands
+/// it readings. Deliberately not the window's own answer to that question —
+/// the window's answer is what drives the census, so reading it here too would
+/// leave the two sides of the comparison saying the same thing and a page the
+/// window wrongly left still would read as a page that was never moving.
+fn moves(page: Shot) -> bool {
     let mut gallery = super::Gallery::mounted();
     gallery.select(page);
-    gallery.compiled().animates
+    gallery.compiled().animates || gallery.reads.feeds()
 }
 
 /// The immediate host, which is the one the gallery's own window runs.
@@ -252,9 +256,14 @@ mod immediate {
             .collect()
     }
 
-    /// The gallery's own clock is run by the message its subscription sends for
-    /// the pages whose document declares motion, so that is what runs it here.
+    /// The gallery's own clock is run by the message its subscription sends,
+    /// and it subscribes for the pages that move, so a page it would leave
+    /// still is left still here too. Ticking every page regardless would
+    /// measure motion on the strength of the harness rather than of the window.
     fn run(gallery: &mut super::super::Gallery, between: Between) {
+        if !gallery.moves() {
+            return;
+        }
         for _ in 0..between.ticks() {
             drop(super::super::update(gallery, Message::Tick));
         }
@@ -400,12 +409,12 @@ fn a_page_held_at_one_moment_rasterises_the_same_twice() {
 /// animating is a tree that has stopped asking the window for frames — which
 /// is the same claim asked of the loop rather than of the picture.
 #[kithara::test]
-fn a_page_that_declares_motion_draws_a_different_picture_once_its_clock_has_run() {
+fn a_page_that_moves_draws_a_different_picture_once_its_clock_has_run() {
     let host = Host::Immediate;
 
     let frozen: Vec<String> = Shot::all()
         .into_iter()
-        .filter(|page| animates(*page))
+        .filter(|page| moves(*page))
         .filter_map(|page| {
             let shots = host.pictures(page, 2, Between::Ticked);
             shots[0]
@@ -417,8 +426,8 @@ fn a_page_that_declares_motion_draws_a_different_picture_once_its_clock_has_run(
 
     assert!(
         frozen.is_empty(),
-        "these pages say something on them moves and then draw the same picture after {:?} of \
-         their host's own clock, so nothing on them is animating: {frozen:#?}",
+        "something on these pages moves and they then draw the same picture after {:?} of their \
+         host's own clock, so nothing on them is animating: {frozen:#?}",
         Between::Ticked.elapsed(),
     );
 }

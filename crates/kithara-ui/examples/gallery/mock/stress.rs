@@ -27,6 +27,11 @@ pub(super) struct StressState {
     waveforms: [Vec<WaveBucket>; 4],
     phase: f32,
     fader: f64,
+    /// What the application calls the buckets it is handing over. A host holds
+    /// the last copy it took and reads this name to tell a waveform it already
+    /// has from one it has to take again, so buckets that moved under a name
+    /// that did not are buckets the page never redraws.
+    revision: u64,
 }
 
 impl Default for StressState {
@@ -52,6 +57,7 @@ impl StressState {
             last_tick: None,
             levels: [StereoLevels::default(); 8],
             phase: 0.0,
+            revision: 0,
             waveforms: std::array::from_fn(|index| stress_waveform(index, buckets)),
         }
     }
@@ -62,10 +68,10 @@ impl StressState {
             "bench.frame_ms_avg" => ReadValue::Text(&self.frame_ms_avg),
             "bench.frame_ms_p99" => ReadValue::Text(&self.frame_ms_p99),
             "bench.fader" => ReadValue::Scalar(self.fader),
-            "bench.wave.0" => waveform_value(&self.waveforms[0]),
-            "bench.wave.1" => waveform_value(&self.waveforms[1]),
-            "bench.wave.2" => waveform_value(&self.waveforms[2]),
-            "bench.wave.3" => waveform_value(&self.waveforms[3]),
+            "bench.wave.0" => waveform_value(&self.waveforms[0], self.revision),
+            "bench.wave.1" => waveform_value(&self.waveforms[1], self.revision),
+            "bench.wave.2" => waveform_value(&self.waveforms[2], self.revision),
+            "bench.wave.3" => waveform_value(&self.waveforms[3], self.revision),
             "bench.level.0" => ReadValue::Stereo(self.levels[0]),
             "bench.level.1" => ReadValue::Stereo(self.levels[1]),
             "bench.level.2" => ReadValue::Stereo(self.levels[2]),
@@ -81,6 +87,7 @@ impl StressState {
 
     fn push_data(&mut self) {
         self.phase += 0.037;
+        self.revision = self.revision.wrapping_add(1);
         for (index, waveform) in self.waveforms.iter_mut().enumerate() {
             waveform.rotate_left(1);
             let offset = u16::try_from(index).map_or(0.0, f32::from);
@@ -187,14 +194,44 @@ fn stress_waveform(index: usize, buckets: u16) -> Vec<WaveBucket> {
         .collect()
 }
 
-const fn waveform_value(waveform: &[WaveBucket]) -> ReadValue<'_> {
+const fn waveform_value(waveform: &[WaveBucket], revision: u64) -> ReadValue<'_> {
     ReadValue::Waveform(WaveformView {
         buckets: waveform,
-        revision: 0,
+        revision,
         beats: &[],
         downbeats: &[],
         bpm: None,
         r#loop: None,
         cues: &[],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+    use kithara_ui::render::ReadValue;
+
+    use super::StressState;
+
+    fn revision(state: &StressState) -> u64 {
+        match state.get("bench.wave.0") {
+            Some(ReadValue::Waveform(view)) => view.revision,
+            other => panic!("the stress page must hand over a waveform, not {other:?}"),
+        }
+    }
+
+    #[kithara::test]
+    fn moving_the_buckets_gives_them_a_name_they_did_not_have() {
+        let mut stress = StressState::default();
+        let first = revision(&stress);
+
+        stress.tick();
+
+        assert_ne!(
+            revision(&stress),
+            first,
+            "the buckets moved under the name they already had, so a host holding the last copy \
+             keeps drawing it"
+        );
+    }
 }
