@@ -253,8 +253,18 @@ pub(super) mod tests {
 
     use super::*;
 
+    /// No queue test ever streams bytes, so the store is here to be wired, not
+    /// to hold anything. The default backend would map a file under the shared
+    /// temp root, which every parallel test process also owns and which Miri
+    /// cannot map at all.
+    pub(in crate::queue) fn make_store() -> AssetStore {
+        AssetStore::builder()
+            .backend(StorageBackend::Memory)
+            .build()
+    }
+
     pub(in crate::queue) fn make_queue() -> Queue {
-        Queue::new(QueueConfig::default())
+        Queue::new(QueueConfig::builder().store(make_store()).build())
     }
 
     pub(in crate::queue) async fn wait_for_queue_event<F>(
@@ -292,7 +302,12 @@ pub(super) mod tests {
     /// the player it drives runs with.
     #[kithara::test]
     fn the_configured_prefetch_lead_reaches_the_player() {
-        let queue = Queue::new(QueueConfig::builder().prefetch_duration(8.0).build());
+        let queue = Queue::new(
+            QueueConfig::builder()
+                .store(make_store())
+                .prefetch_duration(8.0)
+                .build(),
+        );
 
         assert!((queue.player.prefetch_duration() - 8.0).abs() < f32::EPSILON);
     }
