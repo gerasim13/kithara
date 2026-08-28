@@ -30,7 +30,7 @@ pub mod size;
 pub(crate) mod solve;
 pub mod source;
 
-pub use doc::{envelope, layout, module, param, skin, text};
+pub use doc::{envelope, layout, module, package, param, skin, text};
 
 mod doc;
 mod resolve;

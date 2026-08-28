@@ -104,6 +104,7 @@ impl Geometry {
 struct Fixture {
     layout: DeckLayout,
     rows: Vec<TableRow<'static>>,
+    screens: ui::Screens,
 }
 
 impl Fixture {
@@ -127,9 +128,10 @@ impl Fixture {
         }
     }
 
-    fn new(layout: DeckLayout) -> Self {
+    fn new(layout: DeckLayout, screens: ui::Screens) -> Self {
         Self {
             layout,
+            screens,
             rows: vec![
                 TableRow::new(
                     vec![
@@ -294,7 +296,7 @@ impl App for Fixture {
     }
 
     fn document(&self) -> &str {
-        ui::entry(self.layout)
+        self.screens.document(self.layout)
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -455,9 +457,11 @@ fn iced(
     renderer: &mut iced::Renderer,
     geometry: Geometry,
 ) -> Result<(Vec<u8>, PoolSample), String> {
+    let resolver = ui::resolver();
+    let screens = ui::Screens::new(&resolver).map_err(|error| format!("package: {error}"))?;
     let compiled = ui::compile_ui(layout)
-        .map_err(|error| format!("compile {}: {error}", ui::entry(layout)))?;
-    let reads = Fixture::new(layout);
+        .map_err(|error| format!("compile {}: {error}", screens.document(layout)))?;
+    let reads = Fixture::new(layout, screens);
     let skin = builtin::skin();
     let theme = theme::kithara_theme(&Palette::default().into());
     let mut ui = UserInterface::build(
@@ -518,10 +522,12 @@ fn masonry(
     geometry: Geometry,
 ) -> Result<(Vec<u8>, PoolSample), String> {
     let resolver = ui::resolver();
+    let screens = ui::Screens::new(&resolver).map_err(|error| format!("package: {error}"))?;
+    let entry = screens.document(layout).to_owned();
     let endpoints = Registry::default();
     let text = ui::text().map_err(|error| format!("catalog: {error}"))?;
     let mut ui = Ui::new(
-        Fixture::new(layout),
+        Fixture::new(layout, screens),
         Config::builder()
             .endpoints(&endpoints)
             .resolver(&resolver)
@@ -530,15 +536,15 @@ fn masonry(
         (geometry.width, geometry.height),
         f64::from(geometry.scale),
     )
-    .map_err(|error| format!("mount {}: {error}", ui::entry(layout)))?;
+    .map_err(|error| format!("mount {entry}: {error}"))?;
     let frame = ui
         .render()
-        .map_err(|error| format!("draw {}: {error}", ui::entry(layout)))?;
+        .map_err(|error| format!("draw {entry}: {error}"))?;
     let rgba = offscreen.rasterise(&frame, ui.background().into())?;
     let first = ui.draw_pool_stats();
     drop(
         ui.render()
-            .map_err(|error| format!("second draw {}: {error}", ui::entry(layout)))?,
+            .map_err(|error| format!("second draw {entry}: {error}"))?,
     );
     Ok((
         rgba,

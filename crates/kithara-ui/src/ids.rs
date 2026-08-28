@@ -19,6 +19,14 @@ pub struct InstanceId(pub String);
 #[serde(transparent)]
 pub struct EndpointId(pub String);
 
+/// What a screen is for, as the application asks for it and a package answers.
+///
+/// A package names the file behind each role, so renaming a file inside a
+/// package changes nothing the application relies on.
+#[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ScreenRole(pub String);
+
 #[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct SourceUri(pub String);
 

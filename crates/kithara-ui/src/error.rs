@@ -139,6 +139,24 @@ pub enum UiDocError {
     ArenaFull { origin: SourceUri, max: usize },
     #[error("{origin}: source not found: {rel:?}")]
     NotFound { origin: SourceUri, rel: String },
+    #[error("{origin}: package needs ui contract {needs}, this build offers {offers}")]
+    ContractMismatch {
+        needs: u32,
+        offers: u32,
+        origin: SourceUri,
+    },
+    #[error("{origin}: package puts this file behind role {role:?}, it names screen {found:?}")]
+    RoleMismatch {
+        found: String,
+        origin: SourceUri,
+        role: String,
+    },
+    #[error("package {package:?} answers for no screen role {role:?}")]
+    MissingRole { package: String, role: String },
+    #[error("{origin}: package declares no screens")]
+    EmptyPackage { origin: SourceUri },
+    #[error("{origin}: package role {role:?} names no file")]
+    RoleWithoutFile { origin: SourceUri, role: String },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
     #[error("{origin}: source {rel:?} could not be read: {source}")]

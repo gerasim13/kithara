@@ -10,9 +10,9 @@ mod tests;
 pub(super) mod window;
 
 #[cfg(all(test, feature = "masonry"))]
-pub(in crate::gui) use self::compile::compile_ui;
+pub(in crate::gui) use self::compile::{Screens, compile_ui};
 #[cfg(feature = "masonry")]
-pub(crate) use self::compile::{entry, resolver, text};
+pub(crate) use self::compile::{resolver, text};
 pub(crate) use self::{
     compile::{AppUi, view},
     events::translate,

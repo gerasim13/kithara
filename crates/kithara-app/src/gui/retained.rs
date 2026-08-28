@@ -53,7 +53,7 @@ impl App for Studio {
     }
 
     fn document(&self) -> &str {
-        ui::entry(self.state.ui.cache.layout())
+        self.state.ui.screens.document(self.state.ui.cache.layout())
     }
 
     /// The studio answers its endpoints by walking its own state, so the walk
@@ -116,7 +116,9 @@ mod tests {
     /// A studio with nothing loaded: every control falls back to what the
     /// document and the skin say, which is the hardest case for a host that
     /// only draws what it was told.
-    struct Empty;
+    struct Empty {
+        screens: ui::Screens,
+    }
 
     impl Reads for Empty {
         fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
@@ -130,7 +132,7 @@ mod tests {
         }
 
         fn document(&self) -> &str {
-            ui::entry(ui::cache::DeckLayout::Dual)
+            self.screens.document(ui::cache::DeckLayout::Dual)
         }
 
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -148,8 +150,10 @@ mod tests {
         let resolver = ui::resolver();
         let endpoints = endpoints::Registry::default();
         let text = ui::text().expect("the app catalog must merge with the canon one");
+        let screens =
+            ui::Screens::new(&resolver).expect("the app package must answer for both decks");
         let mut ui = Ui::new(
-            Empty,
+            Empty { screens },
             Config::builder()
                 .endpoints(&endpoints)
                 .resolver(&resolver)

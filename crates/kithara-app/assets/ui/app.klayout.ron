@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "app",
+    id: "deck-dual",
     resize_edges: true,
     dragged: Some(Model(id: "ui.drag.track")),
     root: Split(

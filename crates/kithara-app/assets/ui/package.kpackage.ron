@@ -1,0 +1,10 @@
+(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    screens: {
+        "deck-dual": "app.klayout.ron",
+        "deck-single": "app-single.klayout.ron",
+    },
+)

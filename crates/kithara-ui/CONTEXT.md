@@ -29,6 +29,28 @@ miss. A layer that holds the name and refuses it - led out of its root, or unope
 in the package that named it, and answering it from below would let a broken package quietly wear
 the base package's face.
 
+## Package Ownership
+
+A package is a folder with a manifest at its root, `PackageDoc`, parsed by `package::load_package`.
+The manifest is the only file an application needs to know the name of; every other document in the
+package is reached through it.
+
+- `PackageDoc.screens` maps a `ScreenRole` to the file that answers for it. The application names
+  roles, never files, so a package may rename its own documents freely. `PackageDoc.screen` reads
+  the named file, probes its envelope, and refuses with `RoleMismatch` when the document names a
+  different screen than the role it was filed under - a package cannot silently serve the wrong
+  page for a role.
+- `PackageDoc.contract` is the UI contract the package was written against, checked against
+  `package::UI_CONTRACT` before anything else about the package is read. A package for another
+  contract is refused with `ContractMismatch`, not partially loaded. `PackageDoc.version` is the
+  package author's own number and this crate never interprets it.
+- `PackageDoc.inherits` marks a package that answers for only part of the UI. Such a package is
+  meant to be laid over another with `OverlayResolver`; a package with `inherits: false` is expected
+  to answer for every role on its own. This crate reads the flag and leaves the layering to the
+  host, which is the only place that knows what the base package is.
+- An empty `screens` map is `EmptyPackage` and a role naming an empty file is `RoleWithoutFile`.
+  Both are refused at load, so a package that reaches a host answers for at least one role.
+
 ## Compiled String Ownership
 
 Every string retained by the compiled tree is interned in one bounded `String` arena owned by
