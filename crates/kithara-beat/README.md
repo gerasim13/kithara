@@ -29,13 +29,13 @@ grid cleanup.
 ## Key types
 
 - `BeatThis::builder()` — load models from bytes (caller chooses embed vs file
-  vs download) and pick the decoding policy.
+  vs download), inject the shared sample pool, and pick the decoding policy.
 - `BeatThis::analyze(&mono_22050)` — run the mel → inference → peak-pick pipeline.
 - `BeatConfig` — peak threshold, max-pool half-width, dedup width. The defaults
   are the values the golden fixtures are held to; see CONTEXT.md before moving
   them.
-- `RawBeats { beats, downbeats }` — output positions in seconds, sorted and
-  deduplicated.
+- `RawBeats { beats, downbeats }` — pooled output positions in seconds, sorted
+  and deduplicated.
 
 ## Usage
 
@@ -45,6 +45,7 @@ use kithara_beat::{BeatThis, RawBeats};
 let mut bt = BeatThis::builder()
     .mel_model(mel_bytes)
     .beat_model(beat_bytes)
+    .sample_pool(sample_pool.clone())
     .build()?;
 let raw: RawBeats = bt.analyze(&mono_22050)?;
 ```

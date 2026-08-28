@@ -1,4 +1,5 @@
 use bon::bon;
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use thiserror::Error;
 
 use crate::{
@@ -15,11 +16,11 @@ pub enum BeatError {
 }
 
 /// Beat / downbeat positions in seconds, whole-track.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct RawBeats {
-    pub beats: Vec<f32>,
-    pub downbeats: Vec<f32>,
+    pub beats: SampleBuffer,
+    pub downbeats: SampleBuffer,
 }
 
 /// `beat_this` NN detector: mel → chunked inference → peak picking.
@@ -27,6 +28,7 @@ pub struct BeatThis {
     predictor: BeatPredictor,
     mel: MelExtractor,
     picker: PeakPicker,
+    sample_pool: SamplePool,
 }
 
 #[bon]
@@ -39,12 +41,14 @@ impl BeatThis {
     pub fn new(
         mel_model: &[u8],
         beat_model: &[u8],
+        sample_pool: SamplePool,
         #[builder(default)] config: BeatConfig,
     ) -> Result<Self, BeatError> {
         Ok(Self {
             mel: MelExtractor::try_from(mel_model)?,
             predictor: BeatPredictor::try_from(beat_model)?,
             picker: PeakPicker::new(config),
+            sample_pool,
         })
     }
 
@@ -54,9 +58,11 @@ impl BeatThis {
     /// [`BeatError::Inference`] when a model run fails or emits an
     /// unexpected output shape.
     pub fn analyze(&mut self, mono_22050: &[f32]) -> Result<RawBeats, BeatError> {
-        let mel = self.mel.extract(mono_22050)?;
-        let (beat_logits, downbeat_logits) = self.predictor.predict(&mel)?;
-        let (beats, downbeats) = self.picker.decode(&beat_logits, &downbeat_logits)?;
+        let mel = self.mel.extract(mono_22050, &self.sample_pool)?;
+        let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.sample_pool)?;
+        let (beats, downbeats) =
+            self.picker
+                .decode(&beat_logits, &downbeat_logits, &self.sample_pool)?;
         Ok(RawBeats { beats, downbeats })
     }
 }

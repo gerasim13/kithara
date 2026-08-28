@@ -18,7 +18,13 @@ where
 {
     resampler: BeatAnalysisConfig<B>,
     params: GridParams,
-    detector: Option<Detector>,
+    detector: Option<DetectorConfig>,
+}
+
+enum DetectorConfig {
+    Default,
+    #[cfg(test)]
+    Custom(Detector),
 }
 
 pub(crate) struct Config<B>(Option<BeatConfig<B>>)
@@ -45,10 +51,20 @@ where
         to self.0 {
             #[call(is_none)]
             pub(crate) const fn is_empty(&self) -> bool;
-            #[expr($.and_then(|config| config.detector.take()))]
-            #[call(as_mut)]
-            pub(crate) fn take_detector(&mut self) -> Option<Detector>;
         }
+    }
+
+    pub(crate) fn take_detector(&mut self, sample_pool: &SamplePool) -> Option<Detector> {
+        let source = self.0.as_mut()?.detector.take()?;
+        let detector = match source {
+            DetectorConfig::Default => default_beat_detector(sample_pool),
+            #[cfg(test)]
+            DetectorConfig::Custom(detector) => Some(detector),
+        };
+        if detector.is_none() {
+            self.0 = None;
+        }
+        detector
     }
 
     pub(crate) fn set_resampler(&mut self, resampler: BeatAnalysisConfig<B>) {
@@ -58,9 +74,9 @@ where
     }
 
     pub(crate) fn with_default(&mut self, resampler: BeatAnalysisConfig<B>) {
-        self.0 = default_beat_detector().map(|detector| BeatConfig {
+        self.0 = Some(BeatConfig {
             resampler,
-            detector: Some(detector),
+            detector: Some(DetectorConfig::Default),
             params: GridParams::default(),
         });
     }
@@ -75,7 +91,7 @@ where
         self.0 = Some(BeatConfig {
             params,
             resampler,
-            detector: Some(detector),
+            detector: Some(DetectorConfig::Custom(detector)),
         });
     }
 }

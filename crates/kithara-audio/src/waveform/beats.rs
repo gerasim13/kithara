@@ -1,5 +1,6 @@
 use std::mem::size_of;
 
+use kithara_platform::sync::Arc;
 use kithara_warp::GridSegment;
 
 use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
@@ -27,10 +28,10 @@ impl Consts {
 #[non_exhaustive]
 #[fieldwork(get)]
 pub struct BeatGrid {
-    /// Beat positions in source frames, ascending.
-    beats: Vec<u64>,
-    /// Downbeat (bar start) positions in source frames, ascending.
-    downbeats: Vec<u64>,
+    /// Immutable beat positions in source frames, ascending.
+    beats: Arc<[u64]>,
+    /// Immutable downbeat (bar start) positions in source frames, ascending.
+    downbeats: Arc<[u64]>,
     /// Piecewise-constant stretch segments, sorted and non-overlapping.
     segments: Vec<GridSegment>,
     /// Tempo estimated from cleaned beat marks, with a downbeat fallback.
@@ -40,15 +41,14 @@ pub struct BeatGrid {
 impl BeatGrid {
     /// Construct from already-cleaned parts.
     #[must_use]
-    pub const fn new(
-        bpm: f64,
-        beats: Vec<u64>,
-        downbeats: Vec<u64>,
-        segments: Vec<GridSegment>,
-    ) -> Self {
+    pub fn new<B, D>(bpm: f64, beats: B, downbeats: D, segments: Vec<GridSegment>) -> Self
+    where
+        B: Into<Arc<[u64]>>,
+        D: Into<Arc<[u64]>>,
+    {
         Self {
-            beats,
-            downbeats,
+            beats: beats.into(),
+            downbeats: downbeats.into(),
             segments,
             bpm,
         }
@@ -125,6 +125,7 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
 
 #[cfg(test)]
 mod bytes_tests {
+    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use kithara_warp::GridSegment;
 
@@ -140,6 +141,15 @@ mod bytes_tests {
                 GridSegment::new(88_200, 176_400, 0.98),
             ],
         )
+    }
+
+    #[kithara::test]
+    fn clone_shares_immutable_frame_maps() {
+        let grid = sample();
+        let cloned = grid.clone();
+
+        assert!(Arc::ptr_eq(&grid.beats, &cloned.beats));
+        assert!(Arc::ptr_eq(&grid.downbeats, &cloned.downbeats));
     }
 
     #[kithara::test]

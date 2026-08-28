@@ -1,9 +1,12 @@
+use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
 
 use crate::analysis::BeatAnalysisConfig;
 
 #[cfg(feature = "analysis-beat")]
-pub(crate) fn detector() -> Option<Box<dyn crate::analysis::beat::BeatDetector>> {
+pub(crate) fn detector(
+    _sample_pool: &SamplePool,
+) -> Option<Box<dyn crate::analysis::beat::BeatDetector>> {
     None
 }
 

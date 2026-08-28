@@ -1,4 +1,5 @@
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
+use kithara_bufpool::SamplePool;
 
 use super::{BeatDetectError, BeatDetector, RawBeats};
 
@@ -32,9 +33,10 @@ impl Default for BeatDetectorKind {
 /// [`BeatDetectError::Init`] when the backend cannot load its models.
 pub(crate) fn build_detector(
     kind: BeatDetectorKind,
+    sample_pool: &SamplePool,
 ) -> Result<Box<dyn BeatDetector>, BeatDetectError> {
     match kind {
-        BeatDetectorKind::NnBeatThis => Ok(Box::new(NnDetector::new()?)),
+        BeatDetectorKind::NnBeatThis => Ok(Box::new(NnDetector::new(sample_pool)?)),
     }
 }
 
@@ -45,10 +47,11 @@ struct NnDetector {
 }
 
 impl NnDetector {
-    fn new() -> Result<Self, BeatDetectError> {
+    fn new(sample_pool: &SamplePool) -> Result<Self, BeatDetectError> {
         let inner = BeatThis::builder()
             .mel_model(MEL_MODEL_BYTES)
             .beat_model(BEAT_MODEL_BYTES)
+            .sample_pool(sample_pool.clone())
             .build()
             .map_err(|e| BeatDetectError::Init {
                 reason: e.to_string(),

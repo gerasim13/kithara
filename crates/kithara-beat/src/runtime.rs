@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use rten::{Model as RtenGraph, NodeId, ValueOrView, ValueView};
 use rten_tensor::{AsView, Layout};
+use smallvec::SmallVec;
 
 use crate::api::BeatError;
 
 /// Simple f32 tensor with shape (row-major / C-order).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Tensor {
-    pub(crate) data: Vec<f32>,
-    pub(crate) shape: Vec<usize>,
+    pub(crate) data: SampleBuffer,
+    pub(crate) shape: SmallVec<[usize; 4]>,
 }
 
 /// ONNX model loaded from bytes, run via the pure-Rust rten runtime.
@@ -66,6 +68,7 @@ impl RtenModel {
     pub(crate) fn run(
         &mut self,
         inputs: &[(&str, &Tensor)],
+        sample_pool: &SamplePool,
     ) -> Result<HashMap<String, Tensor>, BeatError> {
         let rten_inputs: Vec<(NodeId, ValueOrView<'_>)> = inputs
             .iter()
@@ -76,7 +79,7 @@ impl RtenModel {
                     .ok_or_else(|| BeatError::Inference {
                         reason: format!("rten: unknown input name '{name}'"),
                     })?;
-                let value = ValueView::from_shape(tensor.shape.as_slice(), tensor.data.as_slice())
+                let value = ValueView::from_shape(tensor.shape.as_slice(), &tensor.data[..])
                     .map_err(|e| BeatError::Inference {
                         reason: format!("rten: failed to create input tensor '{name}': {e}"),
                     })?;
@@ -103,8 +106,8 @@ impl RtenModel {
                 .ok_or_else(|| BeatError::Inference {
                     reason: format!("rten: output '{name}' is not f32"),
                 })?;
-            let shape: Vec<usize> = rten_tensor.shape().to_vec();
-            let data: Vec<f32> = rten_tensor.to_vec();
+            let shape = SmallVec::from_slice(rten_tensor.shape());
+            let data = sample_pool.collect(rten_tensor.iter().copied());
 
             result.insert(name, Tensor { data, shape });
         }

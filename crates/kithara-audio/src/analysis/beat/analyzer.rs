@@ -225,8 +225,8 @@ impl WindowedBeats {
             offset_frames: 0,
             ready_frames,
             raw: RawBeats {
-                beats: Vec::new(),
-                downbeats: Vec::new(),
+                beats: sample_pool.collect(std::iter::empty()),
+                downbeats: sample_pool.collect(std::iter::empty()),
             },
             sample_rate,
             window_frames,
@@ -263,13 +263,18 @@ impl WindowedBeats {
         let sample_rate = self.sample_rate.to_f32().unwrap_or(1.0);
         let offset_seconds = self.offset_frames.to_f32().unwrap_or(f32::MAX) / sample_rate;
         let keep_seconds = keep_frames.to_f32().unwrap_or(f32::MAX) / sample_rate;
-        append_window_times(&mut self.raw.beats, raw.beats, offset_seconds, keep_seconds);
         append_window_times(
-            &mut self.raw.downbeats,
-            raw.downbeats,
+            &mut self.raw.beats,
+            &raw.beats,
             offset_seconds,
             keep_seconds,
-        );
+        )?;
+        append_window_times(
+            &mut self.raw.downbeats,
+            &raw.downbeats,
+            offset_seconds,
+            keep_seconds,
+        )?;
 
         if final_window {
             self.buffer.clear();
@@ -308,13 +313,25 @@ impl WindowedBeats {
     }
 }
 
-fn append_window_times(target: &mut Vec<f32>, values: Vec<f32>, offset: f32, keep_until: f32) {
-    target.extend(
-        values
-            .into_iter()
-            .filter(|t| t.is_finite() && *t >= 0.0 && *t < keep_until)
-            .map(|t| offset + t),
-    );
+fn append_window_times(
+    target: &mut SampleBuffer,
+    values: &SampleBuffer,
+    offset: f32,
+    keep_until: f32,
+) -> Result<(), BeatDetectError> {
+    let keep = |t: &f32| t.is_finite() && *t >= 0.0 && *t < keep_until;
+    let count = values.iter().filter(|t| keep(t)).count();
+    let start = target.len();
+    target
+        .ensure_len(start.saturating_add(count))
+        .map_err(|_| BeatDetectError::Buffer)?;
+    for (slot, value) in target[start..]
+        .iter_mut()
+        .zip(values.iter().filter(|t| keep(t)))
+    {
+        *slot = offset + *value;
+    }
+    Ok(())
 }
 
 fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
@@ -343,10 +360,10 @@ fn append_slice(dst: &mut SampleBuffer, src: &[f32]) -> Result<(), BeatDetectErr
     Ok(())
 }
 
-fn normalize_times(values: &mut Vec<f32>) {
-    values.retain(|t| t.is_finite() && *t >= 0.0);
+fn normalize_times(values: &mut SampleBuffer) {
+    values.retain(|time| time.is_finite() && *time >= 0.0);
     values.sort_by(f32::total_cmp);
-    values.dedup_by(|a, b| *a == *b);
+    values.dedup();
 }
 
 #[cfg(test)]
@@ -372,9 +389,10 @@ mod tests {
     }
 
     fn empty_raw() -> RawBeats {
+        let pool = sample_pool();
         RawBeats {
-            beats: Vec::new(),
-            downbeats: Vec::new(),
+            beats: pool.collect(std::iter::empty()),
+            downbeats: pool.collect(std::iter::empty()),
         }
     }
 
@@ -595,22 +613,18 @@ mod tests {
     fn finalize_builds_grid_in_source_frames() {
         // 9 downbeats every 2.0 s -> 120 bpm, positions converted at the
         // SOURCE rate (48 kHz here), not the detector's 22 050 Hz.
-        let raw = RawBeats {
-            beats: (0..33)
-                .map(|n| {
-                    let t: f32 = n.as_();
-                    t * 0.5
-                })
-                .collect(),
-            downbeats: (0..9)
-                .map(|n| {
-                    let t: f32 = n.as_();
-                    t * 2.0
-                })
-                .collect(),
-        };
+        let pool = sample_pool();
         let mut analyzer = analyzer(48_000, BeatAnalysisConfig::<RubatoBackend>::default());
-        let mut detector = detector(move |_| raw.clone());
+        let mut detector = detector(move |_| RawBeats {
+            beats: pool.collect((0..33).map(|n| {
+                let t: f32 = n.as_();
+                t * 0.5
+            })),
+            downbeats: pool.collect((0..9).map(|n| {
+                let t: f32 = n.as_();
+                t * 2.0
+            })),
+        });
         analyzer.push_interleaved(&stereo(17 * 48_000, |_| 0.1), 2, &mut detector);
         let grid = analyzer.finalize(&mut detector).expect("mock detects");
 

@@ -1,3 +1,4 @@
+use kithara_bufpool::SampleBuffer;
 use thiserror::Error;
 
 #[cfg(feature = "beat-nn")]
@@ -6,10 +7,10 @@ pub(super) mod backend;
 
 /// Raw detector output: beat / downbeat positions in seconds from track
 /// start.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub(crate) struct RawBeats {
-    pub(crate) beats: Vec<f32>,
-    pub(crate) downbeats: Vec<f32>,
+    pub(crate) beats: SampleBuffer,
+    pub(crate) downbeats: SampleBuffer,
 }
 
 /// Failure of a beat detector backend.

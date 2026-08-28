@@ -6,12 +6,13 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
 
 - Input: **whole-track mono f32 PCM at 22 050 Hz**. Decode, downmix, and resample are the
   caller's job — this crate has no decoder or resampler dependency and does no I/O.
-- Output: `RawBeats { beats, downbeats }` — positions in **seconds**, sorted, deduplicated,
-  every downbeat snapped to the nearest beat. Grid cleanup and source-frame conversion belong to
-  the consumer (`kithara-audio`).
+- Output: `RawBeats { beats, downbeats }` — pooled positions in **seconds**, sorted,
+  deduplicated, every downbeat snapped to the nearest beat. Grid cleanup and source-frame
+  conversion belong to the consumer (`kithara-audio`).
 - Models load from `(mel, beat)` ONNX bytes via `BeatThis::builder()` — the caller decides embed
   vs file vs download; `embed-small-model` exposes the bundled bytes. The same builder takes the
-  `BeatConfig` the peak picker runs with.
+  `BeatConfig` the peak picker runs with and the caller-owned `SamplePool`. Tensor inputs, copied
+  runtime outputs, inference scratch, and returned marks all reuse that injected pool.
 
 ## Pipeline
 

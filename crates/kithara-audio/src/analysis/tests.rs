@@ -330,14 +330,16 @@ mod node {
     #[cfg(feature = "analysis-beat")]
     #[kithara::test]
     fn beat_slot_fills_the_beat_grid() {
-        let raw = RawBeats {
-            beats: Vec::new(),
-            downbeats: (0..9u8).map(|n| f32::from(n) * 2.0).collect(),
-        };
+        let pool = SamplePool::default();
         let mock = Unimock::new(
             BeatDetectorMock
                 .next_call(matching!(_))
-                .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
+                .answers_arc(Arc::new(move |_, _| {
+                    Ok(RawBeats {
+                        beats: pool.collect(std::iter::empty()),
+                        downbeats: pool.collect((0..9u8).map(|n| f32::from(n) * 2.0)),
+                    })
+                })),
         );
         let detector = Box::new(mock) as Box<dyn BeatDetector>;
         let builder = AnalyzerBuilder::<RubatoBackend>::default()

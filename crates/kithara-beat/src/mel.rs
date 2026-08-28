@@ -1,3 +1,6 @@
+use kithara_bufpool::SamplePool;
+use smallvec::smallvec;
+
 use crate::{
     api::BeatError,
     runtime::{RtenModel, Tensor},
@@ -24,13 +27,17 @@ impl MelExtractor {
     /// Extract a mel spectrogram from mono PCM samples at 22 050 Hz.
     ///
     /// Output shape `[1, T, 128]`, `T ≈ samples.len() / 441` (hop 441 = 50 fps).
-    pub(crate) fn extract(&mut self, samples: &[f32]) -> Result<Tensor, BeatError> {
+    pub(crate) fn extract(
+        &mut self,
+        samples: &[f32],
+        sample_pool: &SamplePool,
+    ) -> Result<Tensor, BeatError> {
         let input = Tensor {
-            shape: vec![1, samples.len()],
-            data: samples.to_vec(),
+            shape: smallvec![1, samples.len()],
+            data: sample_pool.collect(samples.iter().copied()),
         };
 
-        let mut outputs = self.model.run(&[("audio_pcm", &input)])?;
+        let mut outputs = self.model.run(&[("audio_pcm", &input)], sample_pool)?;
 
         let mel = outputs
             .remove("mel_spectrogram")

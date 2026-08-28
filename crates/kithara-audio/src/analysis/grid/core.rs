@@ -1,5 +1,6 @@
 use bon::Builder;
 use kithara_bufpool::{BudgetExhausted, SampleBuffer, SamplePool};
+use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -228,11 +229,12 @@ fn beats_bpm(
     Ok((beat > 0.0).then(|| Consts::SECS_PER_MIN / beat))
 }
 
-fn positions_to_frames(positions: &[f32], sample_rate: f64) -> Vec<u64> {
-    positions
-        .iter()
-        .filter_map(|&position| position_to_frame(position, sample_rate))
-        .collect()
+fn positions_to_frames(positions: &[f32], sample_rate: f64) -> Arc<[u64]> {
+    Arc::from_iter(
+        positions
+            .iter()
+            .filter_map(|&position| position_to_frame(position, sample_rate)),
+    )
 }
 
 fn position_to_frame(position: f32, sample_rate: f64) -> Option<u64> {
@@ -264,10 +266,14 @@ mod tests {
         const TOL_20MS: u64 = 882;
     }
 
-    fn raw(downbeats: Vec<f32>) -> RawBeats {
+    fn raw(
+        beats: impl IntoIterator<Item = f32>,
+        downbeats: impl IntoIterator<Item = f32>,
+    ) -> RawBeats {
+        let pool = SamplePool::default();
         RawBeats {
-            downbeats,
-            beats: Vec::new(),
+            beats: pool.collect(beats),
+            downbeats: pool.collect(downbeats),
         }
     }
 
@@ -279,10 +285,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn injected_sample_pool_reuses_grid_buffers() {
         let pool = SamplePool::new(64, 200_000);
-        let raw = RawBeats {
-            beats: steady(0.0, 0.5, 128),
-            downbeats: steady(0.0, 2.0, 64),
-        };
+        let raw = raw(steady(0.0, 0.5, 128), steady(0.0, 2.0, 64));
 
         super::build_grid(&raw, Consts::SR, &GridParams::default(), &pool)
             .expect("first grid fits the PCM pool budget");
@@ -303,10 +306,7 @@ mod tests {
         beats.sort_by(f32::total_cmp);
 
         let grid = build_grid(
-            &RawBeats {
-                downbeats: steady(0.0, 2.0, 16),
-                beats,
-            },
+            &raw(beats, steady(0.0, 2.0, 16)),
             Consts::SR,
             &GridParams::default(),
         );
@@ -326,11 +326,7 @@ mod tests {
         let mut downbeats = steady(0.0, 2.0, 16);
         downbeats[0] = beat * 0.1;
 
-        let grid = build_grid(
-            &RawBeats { beats, downbeats },
-            Consts::SR,
-            &GridParams::default(),
-        );
+        let grid = build_grid(&raw(beats, downbeats), Consts::SR, &GridParams::default());
 
         assert_eq!(grid.downbeats().first(), grid.beats().first());
         assert!(
@@ -348,10 +344,7 @@ mod tests {
         beats.sort_by(f32::total_cmp);
 
         let grid = build_grid(
-            &RawBeats {
-                beats,
-                downbeats: vec![0.0, 2.0, 4.0, 6.0],
-            },
+            &raw(beats, [0.0, 2.0, 4.0, 6.0]),
             100,
             &GridParams::default(),
         );
@@ -363,10 +356,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn unmatched_downbeat_is_omitted_from_a_map_capable_grid() {
         let grid = build_grid(
-            &RawBeats {
-                beats: steady(0.0, 0.5, 12),
-                downbeats: vec![0.0, 2.25, 4.0, 6.0],
-            },
+            &raw(steady(0.0, 0.5, 12), [0.0, 2.25, 4.0, 6.0]),
             100,
             &GridParams::default(),
         );
@@ -383,10 +373,7 @@ mod tests {
     fn an_evenly_spaced_beat_track_survives_the_filter_whole() {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.5).collect();
         let grid = build_grid(
-            &RawBeats {
-                downbeats: steady(0.0, 2.0, 16),
-                beats,
-            },
+            &raw(beats, steady(0.0, 2.0, 16)),
             Consts::SR,
             &GridParams::default(),
         );
@@ -405,14 +392,7 @@ mod tests {
             beats.push(t);
         }
 
-        let grid = build_grid(
-            &RawBeats {
-                downbeats: Vec::new(),
-                beats,
-            },
-            Consts::SR,
-            &GridParams::default(),
-        );
+        let grid = build_grid(&raw(beats, []), Consts::SR, &GridParams::default());
 
         assert!(
             (grid.bpm() - 127.136).abs() < 0.1,
@@ -433,14 +413,7 @@ mod tests {
             .map(|i| f32::from(i) * 0.5)
             .collect();
 
-        let grid = build_grid(
-            &RawBeats {
-                downbeats: Vec::new(),
-                beats,
-            },
-            Consts::SR,
-            &GridParams::default(),
-        );
+        let grid = build_grid(&raw(beats, []), Consts::SR, &GridParams::default());
 
         assert!(
             (grid.bpm() - 120.0).abs() < 0.1,
@@ -458,14 +431,8 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn marks_out_vote_downbeats_that_strike_every_beat() {
         let beats: Vec<f32> = (0..64u16).map(|i| f32::from(i) * 0.4).collect();
-        let grid = build_grid(
-            &RawBeats {
-                downbeats: beats.clone(),
-                beats,
-            },
-            Consts::SR,
-            &GridParams::default(),
-        );
+        let downbeats = beats.clone();
+        let grid = build_grid(&raw(beats, downbeats), Consts::SR, &GridParams::default());
 
         assert!(
             (grid.bpm() - 150.0).abs() < 0.2,
@@ -506,7 +473,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn clean_track_is_one_on_grid_segment() {
         let grid = build_grid(
-            &raw(steady(1.0, 2.0, 64)),
+            &raw([], steady(1.0, 2.0, 64)),
             Consts::SR,
             &GridParams::default(),
         );
@@ -545,7 +512,7 @@ mod tests {
             t += 2.06;
         }
         db.push(t);
-        let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
+        let grid = build_grid(&raw([], db), Consts::SR, &GridParams::default());
 
         assert!(
             grid.segments().len() >= 2,
@@ -595,7 +562,7 @@ mod tests {
         let extras: Vec<f32> = [10usize, 20, 30].iter().map(|&i| db[i] + 1.0).collect();
         db.extend(extras);
         db.sort_by(f32::total_cmp);
-        let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
+        let grid = build_grid(&raw([], db), Consts::SR, &GridParams::default());
 
         assert_eq!(
             grid.downbeats().len(),
@@ -614,7 +581,7 @@ mod tests {
         for t in [132.2f32, 135.0, 138.4, 141.0] {
             db.push(t);
         }
-        let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
+        let grid = build_grid(&raw([], db), Consts::SR, &GridParams::default());
 
         assert!((grid.bpm() - 120.0).abs() < 0.5, "bpm {}", grid.bpm());
         for seg in grid.segments() {
@@ -631,10 +598,7 @@ mod tests {
     fn short_track_yields_tempo_without_segments() {
         let beats = vec![0.5f32, 1.0, 1.5];
         let grid = build_grid(
-            &RawBeats {
-                beats,
-                downbeats: steady(1.0, 2.0, 8),
-            },
+            &raw(beats, steady(1.0, 2.0, 8)),
             Consts::SR,
             &GridParams::default(),
         );
@@ -656,7 +620,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn downbeat_only_short_track_remains_a_degraded_tempo_grid() {
         let grid = build_grid(
-            &raw(steady(1.0, 2.0, 8)),
+            &raw([], steady(1.0, 2.0, 8)),
             Consts::SR,
             &GridParams::default(),
         );

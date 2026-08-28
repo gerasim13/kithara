@@ -4359,6 +4359,7 @@ name = "kithara-beat"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "kithara-bufpool",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
@@ -4366,6 +4367,7 @@ dependencies = [
  "rten-tensor",
  "serde",
  "serde_json",
+ "smallvec",
  "thiserror 2.0.18",
 ]
 

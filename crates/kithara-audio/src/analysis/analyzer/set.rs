@@ -38,7 +38,7 @@ where
     }
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
-        Config::take_detector(&mut self.beat)
+        Config::take_detector(&mut self.beat, &self.sample_pool)
     }
 
     #[must_use]
@@ -146,14 +146,16 @@ mod tests {
     }
 
     fn beat_detector() -> Box<dyn BeatDetector> {
-        let raw = RawBeats {
-            beats: Vec::new(),
-            downbeats: (0..9u8).map(|n| f32::from(n) * 2.0).collect(),
-        };
+        let pool = SamplePool::default();
         let mock = Unimock::new(
             BeatDetectorMock
                 .next_call(matching!(_))
-                .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
+                .answers_arc(Arc::new(move |_, _| {
+                    Ok(RawBeats {
+                        beats: pool.collect(std::iter::empty()),
+                        downbeats: pool.collect((0..9u8).map(|n| f32::from(n) * 2.0)),
+                    })
+                })),
         );
         Box::new(mock)
     }
