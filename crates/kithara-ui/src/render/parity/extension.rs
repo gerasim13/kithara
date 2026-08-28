@@ -15,7 +15,7 @@ use crate::{
     compile::{CompiledUi, compile},
     draw::{DrawListBuilder, Rect},
     render::{
-        Clock, ReadValue, Reads, Skin, UiEvent,
+        Clock, CustomSkin, ReadValue, Reads, Skin, UiEvent,
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
         tree,
     },
@@ -183,7 +183,14 @@ impl CustomWidget for Caption {
         )
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
 }
 
 /// An extension asks both hosts for the same box.

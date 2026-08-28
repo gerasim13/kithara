@@ -7,6 +7,7 @@ use crate::{
     module::TextStyle,
     render::{
         picture::{Pictures, Sheet},
+        skin::{CustomSkin, CustomSkins},
         theme::RenderPalette,
     },
     shaping::{FontPolicy, TextResources},
@@ -46,6 +47,11 @@ macro_rules! define_skin {
             pub table_footer_rows: String,
             pub tree_search_placeholder: String,
             $(pub $field: $section,)*
+            /// What this skin dresses each extension in, resolved. An
+            /// extension reads its own kind out of it and decides what to do
+            /// with what it finds, which is all a skin can say about content
+            /// the toolkit does not draw.
+            custom: CustomSkins,
             /// The pictures this skin carries, cut into frames while it
             /// resolved. A document names a picture; the skin is what answers
             /// the name, so switching skins switches the drawings.
@@ -76,9 +82,11 @@ macro_rules! define_skin {
                 resolver: &dyn SourceResolver,
                 font_policy: FontPolicy,
             ) -> Result<Self, UiDocError> {
+                let palette = RenderPalette::resolve(&document.palette, origin)?;
                 Ok(Self {
+                    custom: CustomSkins::resolve(&document.custom, &palette, origin)?,
                     pictures: Pictures::load(&document.pictures, resolver)?,
-                    palette: RenderPalette::resolve(&document.palette, origin)?,
+                    palette,
                     crossfader_labels: CrossfaderLabels {
                         left: text_field(catalog, "crossfader.left_label", origin)?,
                         center: text_field(catalog, "crossfader.center_label", origin)?,
@@ -175,7 +183,22 @@ impl Skin {
     pub fn sheet(&self, name: &str) -> Option<&Arc<Sheet>> {
         self.pictures.sheet(name)
     }
+
+    /// What this skin dresses one extension kind in.
+    ///
+    /// A kind this skin never names is dressed in nothing rather than refused:
+    /// an extension is registered by the application, and a skin is written
+    /// without knowing which build will wear it. What an extension draws when
+    /// it is dressed in nothing is its own business.
+    #[must_use]
+    pub fn custom(&self, kind: &str) -> &CustomSkin {
+        self.custom.kind(kind).unwrap_or(&EMPTY_DRESS)
+    }
 }
+
+/// What a kind this skin never names is dressed in, which is nothing. It is a
+/// static rather than a fresh empty one so the answer can be borrowed.
+static EMPTY_DRESS: CustomSkin = CustomSkin::EMPTY;
 
 fn text_field(catalog: &TextDoc, key: &str, origin: &SourceUri) -> Result<String, UiDocError> {
     catalog

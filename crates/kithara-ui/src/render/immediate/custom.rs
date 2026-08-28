@@ -106,7 +106,12 @@ impl Custom<'_> {
         let mut list = DrawListBuilder::default();
         state.paint.shaped(self.skin.text_resources(), |text| {
             if let Some(widget) = state.widget.borrow_mut().as_mut() {
-                widget.paint(&mut list, &mut TextMeasurer::new(text), bounds);
+                widget.paint(
+                    &mut list,
+                    &mut TextMeasurer::new(text),
+                    bounds,
+                    self.skin.custom(&state.kind),
+                );
             }
         });
         list.finish()
@@ -270,8 +275,10 @@ mod tests {
     use crate::{
         builtin,
         draw::Rgba,
+        ids::SourceUri,
         interact::{Hit, Input, Outcome, PointerOwnership, PointerPhase},
-        render::{custom::CustomWidget, fonts::SANS},
+        render::{CustomSkin, custom::CustomWidget, fonts::SANS},
+        skin::parse_skin_over,
     };
 
     struct Consts;
@@ -310,15 +317,16 @@ mod tests {
             list: &mut DrawListBuilder,
             _text: &mut TextMeasurer<'_>,
             bounds: Rect,
+            skin: &CustomSkin,
         ) {
             list.fill_rect(
                 bounds,
-                Rgba {
+                skin.color("ink").unwrap_or(Rgba {
                     a: 1.0,
                     b: 1.0,
                     g: 1.0,
                     r: 1.0,
-                },
+                }),
             );
         }
 
@@ -337,6 +345,47 @@ mod tests {
 
     fn renderer() -> Renderer {
         FallbackRenderer::Secondary(TinySkiaRenderer::new(SANS, Pixels(14.0)))
+    }
+
+    /// A skin dressing the extension this host mounts in one named colour.
+    fn dressed(ink: &str) -> Skin {
+        let origin = SourceUri("skins/dressed.kskin.ron".to_owned());
+        let text = format!(
+            r#"(schema: "kithara.skin", version: 1, id: "dressed",
+                custom: {{ "{kind}": {{ "ink": Color("{ink}") }} }})"#,
+            kind = Consts::KIND,
+        );
+        let document =
+            parse_skin_over(builtin::skin_doc(), &text, &origin).expect("the patch parses");
+        Skin::resolve(document, builtin::text_doc(), &origin, &builtin::resolver())
+            .expect("the dressed document resolves")
+    }
+
+    /// What the mounted extension draws under one skin.
+    fn drawn(skin: &Skin) -> DrawList {
+        let kinds = kinds(Repaint::None);
+        let custom = Custom::new(Consts::KIND, Some(&kinds), skin);
+        let state = CustomState::new(Consts::KIND, Some(&kinds));
+        custom.list(
+            &state,
+            Rect {
+                h: Consts::VIEWPORT.height,
+                w: Consts::VIEWPORT.width,
+                x: 0.0,
+                y: 0.0,
+            },
+        )
+    }
+
+    /// The skin reaches the extension every frame rather than at its making,
+    /// so a host that changed skins draws the extension in the new one.
+    #[kithara::test]
+    fn the_extension_is_drawn_in_what_the_skin_dresses_its_kind_in() {
+        assert_ne!(
+            drawn(&dressed("#ff0000")),
+            drawn(&dressed("#0000ff")),
+            "the two skins dress this kind in two colours, so an extension drawing the same list              under both is reading neither"
+        );
     }
 
     /// One press delivered to a mounted extension, with what the host published

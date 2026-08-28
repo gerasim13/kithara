@@ -31,7 +31,8 @@ use crate::{
     module::{ChromeStyle, MeasureAxis, TextAlign, TextStyle},
     mount,
     render::{
-        ControlAction, DragGhost, HostedControlPlan, InputOwner, ReadValue, Skin, UiEvent,
+        ControlAction, CustomSkin, DragGhost, HostedControlPlan, InputOwner, ReadValue, Skin,
+        UiEvent,
         document::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount},
         hosted_control_plan,
         scroll::Bar,
@@ -180,14 +181,23 @@ where
         )
     }
 
+    /// A leaf drawing content this toolkit does not own.
+    ///
+    /// The dressing is taken here rather than at paint because the leaf
+    /// outlives the skin it was mounted from: this host rebuilds its tree when
+    /// the skin changes, which is the same moment every other leaf takes its
+    /// colours at. A widget installed at a path has no kind for the skin to
+    /// dress and is dressed in nothing.
     pub(super) fn custom_leaf(
         &self,
         widget: Box<dyn MountedCustom<HostAction>>,
+        kind: Option<&str>,
         declared: solve::Size<solve::Length>,
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Custom {
                 widget,
+                skin: kind.map_or_else(CustomSkin::default, |kind| self.skin.custom(kind).clone()),
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
             declared,
@@ -805,7 +815,7 @@ where
                     }
                 )
             },
-            |widget| self.custom_leaf(widget, declared),
+            |widget| self.custom_leaf(widget, None, declared),
         );
         output.place(transform);
         // A document that places nothing off an endpoint can never move this

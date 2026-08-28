@@ -5,7 +5,10 @@ pub(crate) use crate::render::custom::{MappedCustom, MountedCustom, Repaint};
 use crate::{
     draw::{DrawListBuilder, Rect},
     interact::{Hit, Input, Outcome},
-    render::custom::{Size2, SizeLimits, TextMeasurer},
+    render::{
+        CustomSkin,
+        custom::{Size2, SizeLimits, TextMeasurer},
+    },
 };
 
 /// One action on its way out of this host, still typed but no longer named.
@@ -64,7 +67,13 @@ where
             fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<To>;
             #[expr($.map(&self.map))]
             fn frame(&mut self, elapsed: Duration) -> Option<To>;
-            fn paint(&mut self, list: &mut DrawListBuilder, text: &mut TextMeasurer<'_>, bounds: Rect);
+            fn paint(
+                &mut self,
+                list: &mut DrawListBuilder,
+                text: &mut TextMeasurer<'_>,
+                bounds: Rect,
+                skin: &CustomSkin,
+            );
             fn repaint(&self) -> Repaint;
         }
     }

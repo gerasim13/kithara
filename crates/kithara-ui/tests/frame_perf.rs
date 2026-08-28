@@ -44,8 +44,8 @@ use kithara_ui::{
     interact::{Input, MOUSE, PointerInput, PointerPhase},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        Clock, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin, StereoLevels,
-        TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
+        Clock, CustomSkin, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
+        StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
         custom::{CustomKinds, CustomWidget, Size2, SizeLimits, TextMeasurer},
         fonts::{FONT_BYTES, SANS},
         tree,
@@ -618,7 +618,13 @@ impl CustomWidget for CensusExtension {
         Size2::new(40.0, 40.0)
     }
 
-    fn paint(&mut self, list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, bounds: Rect) {
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
         list.fill_rect(
             bounds,
             Rgba {

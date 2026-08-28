@@ -4,6 +4,7 @@ use super::{Repaint, Size2, SizeLimits, TextMeasurer, widget::CustomWidget};
 use crate::{
     draw::{DrawListBuilder, Rect},
     interact::{Hit, Input, Outcome},
+    render::skin::CustomSkin,
 };
 
 /// One mounted custom widget, with its own action vocabulary already mapped to
@@ -18,7 +19,13 @@ pub(crate) trait MountedCustom<Action> {
 
     fn frame(&mut self, elapsed: Duration) -> Option<Action>;
 
-    fn paint(&mut self, list: &mut DrawListBuilder, text: &mut TextMeasurer<'_>, bounds: Rect);
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        skin: &CustomSkin,
+    );
 
     fn repaint(&self) -> Repaint;
 }
@@ -48,7 +55,13 @@ where
             fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
             #[expr($.map(&self.map))]
             fn frame(&mut self, elapsed: Duration) -> Option<Action>;
-            fn paint(&mut self, list: &mut DrawListBuilder, text: &mut TextMeasurer<'_>, bounds: Rect);
+            fn paint(
+                &mut self,
+                list: &mut DrawListBuilder,
+                text: &mut TextMeasurer<'_>,
+                bounds: Rect,
+                skin: &CustomSkin,
+            );
             fn repaint(&self) -> Repaint;
         }
     }
@@ -62,7 +75,13 @@ impl<Action> MountedCustom<Action> for Box<dyn MountedCustom<Action>> {
             fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
             fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
             fn frame(&mut self, elapsed: Duration) -> Option<Action>;
-            fn paint(&mut self, list: &mut DrawListBuilder, text: &mut TextMeasurer<'_>, bounds: Rect);
+            fn paint(
+                &mut self,
+                list: &mut DrawListBuilder,
+                text: &mut TextMeasurer<'_>,
+                bounds: Rect,
+                skin: &CustomSkin,
+            );
             fn repaint(&self) -> Repaint;
         }
     }

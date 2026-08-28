@@ -88,6 +88,27 @@ frame once and every later frame of an animation is a lookup. `Reading` carries 
 reason it carries the document's values - what a control draws can come from the skin, not only how
 it is drawn.
 
+A skin also dresses content the toolkit does not draw. `SkinDoc.custom` is a table per extension
+kind, and under each kind a table of named settings: a colour written as digits, a colour written as
+a palette role, or a number. It is the one dynamic route in the skin document, and it is dynamic
+because it has to be - the toolkit owns a section for every control it draws, and it can own none for
+a widget an application registered. A patch restates a setting at a time rather than a kind at a
+time, so a skin renaming one colour of one extension keeps the rest of that extension's dressing, the
+way a restated palette role keeps the other roles.
+
+`Skin::custom(kind)` answers a `CustomSkin`, and a kind no skin names is dressed in nothing rather
+than refused: a skin is authored apart from the build that registers extensions, so it may dress a
+kind this build never mounts and may say nothing about one it does. What to draw when a setting is
+absent is the widget's own last word - the toolkit has no opinion about what "ink" means. Roles
+resolve through the palette of the skin that answers, so an extension dressed in `Role(Accent)`
+follows every skin written over that one without restating anything.
+
+Which host hands the dressing over, and when, follows what each host already does with the rest of
+the skin. The immediate host reads it out of the skin on every frame, so changing skins under a
+mounted extension redraws it in the new one. The retained host takes it at mount, beside every other
+colour a leaf bakes in, because that host rebuilds its tree when the skin changes. A widget installed
+by path rather than named by kind has no name for a skin to dress and is dressed in nothing.
+
 The palette is the single colour vocabulary: a skin section names a `ColorRole`, never a hex, and
 only `PaletteDoc::validate` parses one. Alpha stays a skin field beside the role it applies to. A
 `ColorRole` is an alias for a value, and several role names do not carry the design token they sound

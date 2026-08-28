@@ -11,6 +11,7 @@ use super::{
         TabLargeSkin, TextPatch, TextSkin, TogglePatch, ToggleSkin, VisPatch, VisSkin,
         VuStereoPatch, VuStereoSkin, VuVerticalPatch, VuVerticalSkin,
     },
+    custom::{CustomDoc, CustomPatch},
     palette::{PaletteDoc, PalettePatch},
     panels::{
         DeckPatch, DeckSkin, DividerPatch, DividerSkin, DragPatch, DragSkin, GlobalBarPatch,
@@ -85,6 +86,10 @@ macro_rules! define_skin_doc {
         #[serde(deny_unknown_fields)]
         #[non_exhaustive]
         pub struct SkinDoc {
+            /// What this skin dresses the extensions a document places in, by
+            /// kind. The toolkit owns no section for content it does not draw,
+            /// so this is the only thing a skin can say about one.
+            pub custom: CustomDoc,
             pub id: DocId,
             pub palette: PaletteDoc,
             /// The pictures this skin carries, which is the whole set a
@@ -108,6 +113,10 @@ macro_rules! define_skin_doc {
             pub id: DocId,
             pub schema: String,
             pub version: u32,
+            /// Extensions this skin dresses differently from the ones it
+            /// inherits, setting by setting.
+            #[serde(default)]
+            pub custom: Option<CustomPatch>,
             #[serde(default)]
             pub palette: Option<PalettePatch>,
             /// Pictures this skin draws instead of the ones it inherits, by
@@ -135,6 +144,9 @@ macro_rules! define_skin_doc {
                 self.version = patch.version;
                 if let Some(palette) = patch.palette {
                     self.palette.patch(palette);
+                }
+                if let Some(custom) = patch.custom {
+                    self.custom.patch(custom);
                 }
                 if let Some(pictures) = patch.pictures {
                     self.pictures.patch(pictures);
@@ -207,6 +219,7 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
                 source: Box::new(source),
             })?;
     document.palette.validate(origin)?;
+    document.custom.validate(origin)?;
     document.pictures.rebase(origin)?;
     Ok(document)
 }
@@ -247,6 +260,7 @@ pub fn parse_skin_over(
     let mut document = base.clone();
     document.apply(patch);
     document.palette.validate(origin)?;
+    document.custom.validate(origin)?;
     Ok(document)
 }
 

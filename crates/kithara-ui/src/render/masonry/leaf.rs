@@ -30,8 +30,8 @@ use crate::{
     },
     module::TextAlign,
     render::{
-        HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram, document::Ctx,
-        shader::ShaderDeclaration,
+        CustomSkin, HostLayer, ReadValue, UiEvent, WindowCommand, WindowLayerProgram,
+        document::Ctx, shader::ShaderDeclaration,
     },
     shaping::{TextContext, TextResources},
     skin::TextRoleSkin,
@@ -51,6 +51,8 @@ pub(super) enum Leaf {
     },
     Custom {
         widget: Box<dyn MountedCustom<HostAction>>,
+        /// What the skin this leaf was mounted under dresses its kind in.
+        skin: CustomSkin,
         text: Box<TextContext>,
     },
     Shader(ShaderLeaf),
@@ -109,7 +111,7 @@ impl Leaf {
                 let run = text.shape(content, *role, None);
                 Size::new(run.width() + *padding_x * 2.0, run.height())
             }
-            Self::Custom { widget, text } => {
+            Self::Custom { widget, text, .. } => {
                 let mut text = TextMeasurer::new(text);
                 let size = widget.measure(
                     &mut text,
@@ -160,8 +162,8 @@ impl Leaf {
                     );
                 }
             }
-            Self::Custom { widget, text } => {
-                widget.paint(list, &mut TextMeasurer::new(text), bounds);
+            Self::Custom { widget, skin, text } => {
+                widget.paint(list, &mut TextMeasurer::new(text), bounds, skin);
             }
         });
         replay(&list.finish(), &mut VelloBackend::new(scene));

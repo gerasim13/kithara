@@ -48,7 +48,7 @@ macro_rules! define_render_palette {
 
 color_roles!(define_render_palette);
 
-fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {
+pub(crate) fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {
     let [red, green, blue, alpha] = parse_color(value, origin)?;
     Ok(Rgba {
         r: f32::from(red) / CHANNEL_MAX,

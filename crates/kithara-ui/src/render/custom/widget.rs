@@ -4,6 +4,7 @@ use super::{Size2, SizeLimits, TextMeasurer};
 use crate::{
     draw::{DrawListBuilder, Rect},
     interact::{Hit, Input, Outcome},
+    render::skin::CustomSkin,
 };
 
 /// Frame scheduling requested by custom content.
@@ -56,7 +57,17 @@ pub trait CustomWidget: 'static {
     }
 
     /// Appends drawing commands for the resolved local rectangle.
-    fn paint(&mut self, list: &mut DrawListBuilder, text: &mut TextMeasurer<'_>, bounds: Rect);
+    ///
+    /// The dressing comes in with the drawing rather than at the widget's own
+    /// making, so an extension holds no copy of it and cannot go on drawing
+    /// itself in a skin the host has stopped wearing.
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        skin: &CustomSkin,
+    );
 
     /// Declares whether the host should schedule animation frames.
     fn repaint(&self) -> Repaint {

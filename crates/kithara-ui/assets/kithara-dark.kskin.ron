@@ -33,6 +33,18 @@
     pictures: {
         "spinner": (source: "sprites/spinner.png", columns: 8, rows: 1),
     },
+    // What the skin says about content it does not draw itself. A role is a
+    // colour this skin already names, so an extension dressed in one follows
+    // every skin written over this one without restating anything.
+    custom: {
+        "level-ladder": {
+            "ground": Role(BgInset),
+            "ink": Role(TextDim),
+            "bar_low": Role(WaveLow),
+            "bar_high": Role(WaveHigh),
+            "bars": Number(12),
+        },
+    },
     layout: (
         page_background: Bg,
         grid_gap: 1.0,

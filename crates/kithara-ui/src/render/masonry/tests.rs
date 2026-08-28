@@ -38,15 +38,16 @@ use crate::{
     interact::{Hit, Input, Key as NeutralKey, Outcome, PointerOwnership, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
     render::{
-        ControlAction, DragPhase, PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, Skin,
-        StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent, WaveBucket, WaveformView,
-        WindowCommand, WindowEdge, WindowLayerProgram,
+        ControlAction, CustomSkin, DragPhase, PortalMapView, PortalTarget, ReadValue, Reads,
+        ScalarRange, Skin, StereoLevels, TableCell, TableRow, TreeIcon, TreeRow, UiEvent,
+        WaveBucket, WaveformView, WindowCommand, WindowEdge, WindowLayerProgram,
         custom::CustomKinds,
         document,
         document::{Clock, Ctx},
         picker_hits,
     },
     shaping::{FontPolicy, TextContext},
+    skin::parse_skin_over,
     source::{MemResolver, UiConfig},
 };
 
@@ -452,7 +453,14 @@ impl CustomWidget for WheelEmitter {
         .flatten()
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
 
     fn repaint(&self) -> Repaint {
         if self.pressed && !self.long_pressed {
@@ -498,7 +506,14 @@ impl CustomWidget for MeasureProbe {
         Size2::new(40.0, 40.0)
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
 }
 
 impl CustomWidget for KeyProbe {
@@ -521,7 +536,14 @@ impl CustomWidget for KeyProbe {
         Outcome::captured()
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
 }
 
 impl CustomWidget for FrameProbe {
@@ -536,7 +558,13 @@ impl CustomWidget for FrameProbe {
         None
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
         self.paints.set(self.paints.get() + 1);
     }
 
@@ -564,7 +592,14 @@ impl CustomWidget for ScrollProbe {
         Outcome::captured()
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
 }
 
 impl CustomWidget for CaptureProbe {
@@ -590,7 +625,14 @@ impl CustomWidget for CaptureProbe {
         Outcome::IGNORED
     }
 
-    fn paint(&mut self, _list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, _bounds: Rect) {}
+    fn paint(
+        &mut self,
+        _list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        _bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
+    }
 }
 
 #[kithara::test]
@@ -2407,8 +2449,14 @@ impl CustomWidget for CensusExtension {
         Size2::new(40.0, 40.0)
     }
 
-    fn paint(&mut self, list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, bounds: Rect) {
-        list.fill_rect(bounds, CENSUS_INK);
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        skin: &CustomSkin,
+    ) {
+        list.fill_rect(bounds, skin.color("ink").unwrap_or(CENSUS_INK));
     }
 }
 
@@ -2441,7 +2489,13 @@ impl CustomWidget for PressExtension {
         Outcome::IGNORED
     }
 
-    fn paint(&mut self, list: &mut DrawListBuilder, _text: &mut TextMeasurer<'_>, bounds: Rect) {
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        _text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
         list.fill_rect(bounds, CENSUS_INK);
     }
 }
@@ -2520,6 +2574,60 @@ fn masonry_draws_every_control_the_census_claims_it_draws() {
         observed, expected,
         "the census is stale — move a row when its painter lands, and never leave the census \
          describing a host it no longer matches"
+    );
+}
+
+/// A skin dressing the census extension in one named colour, so what an
+/// extension is drawn in can be changed without changing the extension.
+fn dressed(ink: &str) -> Skin {
+    let origin = SourceUri("fixture:masonry-dressed-extension".to_owned());
+    let text = format!(
+        r#"(schema: "kithara.skin", version: 1, id: "dressed",
+            custom: {{ "{CENSUS_KIND}": {{ "ink": Color("{ink}") }} }})"#
+    );
+    let document = parse_skin_over(builtin::skin_doc(), &text, &origin)
+        .unwrap_or_else(|error| panic!("the dressing patch must parse: {error}"));
+    Skin::resolve_with_font_policy(
+        document,
+        builtin::text_doc(),
+        &origin,
+        &builtin::resolver(),
+        FontPolicy::Embedded,
+    )
+    .unwrap_or_else(|error| panic!("the dressed skin must resolve: {error}"))
+}
+
+/// What this host draws for a mounted extension under one skin.
+fn extension_paint(skin: &Skin) -> Vec<u32> {
+    let registry = fixture_registry();
+    let reads = FixtureReads;
+    let kinds = census_kinds();
+    let ui = fixture_ui(
+        "dressed",
+        &format!(
+            r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Custom(id: "drawn", kind: "{CENSUS_KIND}")])"#
+        ),
+        &registry,
+    );
+    let frame = ctx(&ui, &reads).with_kinds(&kinds);
+    let output = document::render(&ui.root, frame, MasonryHost::new(frame, skin));
+    let mut root = masonry_root(output, 240, 120);
+    let (scene, _) = root
+        .redraw()
+        .unwrap_or_else(|error| panic!("the dressed extension must be drawn: {error}"));
+    scene.encoding().draw_data.clone()
+}
+
+/// The dressing is taken from the skin the leaf was mounted under, so two
+/// skins draw one extension two ways without the extension knowing either.
+#[kithara::test]
+fn a_mounted_extension_is_drawn_in_what_the_skin_dresses_its_kind_in() {
+    assert_ne!(
+        extension_paint(&dressed("#ff0000")),
+        extension_paint(&dressed("#0000ff")),
+        "the two skins dress this kind in two colours, so an extension painting the same under \
+         both is reading neither"
     );
 }
 

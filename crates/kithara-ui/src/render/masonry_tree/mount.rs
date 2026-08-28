@@ -224,6 +224,7 @@ impl NodeControl for mount::Custom {
         let map = Rc::clone(&host.map_event);
         host.custom_leaf(
             Box::new(Respoken::new(widget, move |event| map(event))),
+            Some(kind),
             cx.declared,
         )
     }

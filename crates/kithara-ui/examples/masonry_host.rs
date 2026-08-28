@@ -8,7 +8,7 @@ use kithara_ui::{
     ids::{EndpointId, SourceUri},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
     render::{
-        ReadValue, Reads, Skin, document,
+        CustomSkin, ReadValue, Reads, Skin, document,
         document::{Clock, Ctx},
         masonry::{
             CustomWidget, MasonryHost, MasonryRoot, MasonryState, Repaint, Size2, SizeLimits,
@@ -53,7 +53,13 @@ impl CustomWidget for LetterboxedBadge {
         Size2::new(label.w.max(160.0), 90.0)
     }
 
-    fn paint(&mut self, list: &mut DrawListBuilder, text: &mut TextMeasurer<'_>, bounds: Rect) {
+    fn paint(
+        &mut self,
+        list: &mut DrawListBuilder,
+        text: &mut TextMeasurer<'_>,
+        bounds: Rect,
+        _skin: &CustomSkin,
+    ) {
         let authored = Size2::new(160.0, 90.0);
         let scale = (bounds.w / authored.w).min(bounds.h / authored.h);
         let fitted = Size2::new(authored.w * scale, authored.h * scale);
