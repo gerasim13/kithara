@@ -75,7 +75,6 @@ pub struct Host {
     owns_session: bool,
     root_view: RootView,
     dispatcher: Arc<dyn HostDispatcher>,
-    player_dispatcher: Arc<dyn SessionDispatcher>,
     #[cfg(target_arch = "wasm32")]
     remote_routes: Mutex<Vec<Arc<crate::wasm::HostRoute>>>,
 }
@@ -96,17 +95,14 @@ impl Host {
         );
         let root_view = RootView::new(&root);
         #[cfg(not(target_arch = "wasm32"))]
-        let (dispatcher, player_dispatcher) =
-            crate::session::native::spawn(root, root_view.clone(), sample_rate);
+        let dispatcher = crate::session::native::spawn(root, root_view.clone(), sample_rate);
         #[cfg(target_arch = "wasm32")]
-        let (dispatcher, player_dispatcher) =
-            crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
+        let dispatcher = crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
         Ok(Self {
             id: grid_id,
             owns_session: true,
             root_view,
             dispatcher,
-            player_dispatcher,
             #[cfg(target_arch = "wasm32")]
             remote_routes: Mutex::default(),
         })
@@ -117,14 +113,12 @@ impl Host {
         id: BeatGridId,
         root_view: RootView,
         dispatcher: Arc<dyn HostDispatcher>,
-        player_dispatcher: Arc<dyn SessionDispatcher>,
     ) -> Self {
         Self {
             id,
             owns_session: false,
             root_view,
             dispatcher,
-            player_dispatcher,
             remote_routes: Mutex::default(),
         }
     }
@@ -149,7 +143,8 @@ impl Host {
         P: PlayerControlSource,
     {
         let grid_id = player.id();
-        player.attach_session(SessionBinding::new(Arc::clone(&self.player_dispatcher)))?;
+        let dispatcher: Arc<dyn SessionDispatcher> = self.dispatcher.clone();
+        player.attach_session(SessionBinding::new(dispatcher))?;
         let control = player.control();
         let operations = Box::new([TopologyOperation::Attach {
             member: SyncMember::Group {
@@ -225,7 +220,7 @@ impl Host {
     /// # Errors
     /// Returns an error when the canonical session cannot answer the query.
     pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.player_dispatcher.exec(Cmd::QuerySampleRate)? {
+        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
             Reply::SampleRate(sample_rate) => Ok(sample_rate),
             Reply::Err(error) => Err(error.into()),
             _ => Err(PlayError::Internal(
@@ -265,7 +260,7 @@ impl Host {
     /// Returns an error when the canonical session cannot answer the query.
     #[cfg(any(test, feature = "probe"))]
     pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.player_dispatcher.exec(Cmd::SessionDucking)? {
+        match self.dispatcher.exec(Cmd::SessionDucking)? {
             Reply::SessionDucking(mode) => Ok(mode),
             Reply::Err(error) => Err(error.into()),
             _ => Err(PlayError::Internal(
@@ -275,7 +270,7 @@ impl Host {
     }
 
     fn exec_play_ok(&self, cmd: Cmd) -> Result<(), PlayError> {
-        match self.player_dispatcher.exec(cmd)? {
+        match self.dispatcher.exec(cmd)? {
             Reply::Ok => Ok(()),
             Reply::Err(error) => Err(error.into()),
             _ => Err(PlayError::Internal(

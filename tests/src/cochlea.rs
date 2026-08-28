@@ -3,6 +3,15 @@ use serde::Serialize;
 
 const WINDOW_MS: f64 = 5.0;
 
+/// Select a percentile from test-oracle samples after sorting them in place.
+#[must_use]
+pub fn percentile_f32(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
+    assert!(!values.is_empty(), "percentile input must not be empty");
+    values.sort_by(f32::total_cmp);
+    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
+    values[index]
+}
+
 /// Cochlea measurements used by final-PCM acceptance tests and manifests.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]

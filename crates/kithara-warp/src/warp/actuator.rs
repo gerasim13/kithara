@@ -40,18 +40,6 @@ impl<S> Warp<S> {
     }
 }
 
-impl<S> AsRef<S> for Warp<S> {
-    fn as_ref(&self) -> &S {
-        &self.source
-    }
-}
-
-impl<S> AsMut<S> for Warp<S> {
-    fn as_mut(&mut self) -> &mut S {
-        &mut self.source
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;

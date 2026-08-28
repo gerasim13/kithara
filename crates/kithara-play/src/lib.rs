@@ -24,11 +24,10 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
-    PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat,
-    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision,
-    WaitingReason, crossfader_gain,
+    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
+    PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionDuckingMode, SessionEvent,
+    SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo, TempoError, TimeControlStatus,
+    TimeRange, TrackBinding, TransportEvent, TransportRevision, WaitingReason,
 };
 pub use bridge::{
     AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,

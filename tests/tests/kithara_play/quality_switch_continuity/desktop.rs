@@ -11,6 +11,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper,
+    cochlea::percentile_f32,
     fixture_protocol::DelayRule,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
 };
@@ -372,13 +373,6 @@ fn desktop_silent_buckets(samples: &[f32]) -> usize {
     .count()
 }
 
-fn percentile(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
-    assert!(!values.is_empty(), "percentile input must not be empty");
-    values.sort_by(f32::total_cmp);
-    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
-    values[index]
-}
-
 fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     assert_eq!(
         switched.len(),
@@ -424,9 +418,9 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
             }
         }
         let step_limit =
-            percentile(&mut excess_steps, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
+            percentile_f32(&mut excess_steps, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
         let residual_limit =
-            percentile(&mut excess_residuals, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
+            percentile_f32(&mut excess_residuals, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
         assert!(
             peak_step.0 <= step_limit,
             "Kithara App AAC-to-FLAC switch inserted a click on channel {channel}: excess_step={:.6} at host frame {}, limit={step_limit:.6}",

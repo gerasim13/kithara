@@ -14,7 +14,7 @@ use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, See
 use kithara_test_utils::kithara;
 
 use super::*;
-use crate::worker::scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, Task, TaskId};
+use crate::worker::scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, TaskId};
 
 fn empty_chunk() -> AudioChunk {
     AudioChunk::new(
@@ -187,7 +187,7 @@ where
     S: AudioSource<Chunk = AudioChunk>,
 {
     handle
-        .register(Task::new(node))
+        .register(node)
         .expect("test playback task must register")
 }
 
@@ -356,7 +356,7 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     handle.unregister(id_a);
     let (node_c, _, _) = make_node(MockSource::new(1), 1, 1);
     let id_c = handle
-        .register(Task::new(node_c))
+        .register(node_c)
         .expect("unregister must release capacity");
 
     while pop_b().is_some() {}

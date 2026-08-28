@@ -153,13 +153,12 @@ pub(crate) fn spawn(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
-) -> (Arc<dyn HostDispatcher>, Arc<dyn SessionDispatcher>) {
-    let client = spawn_session_client::<firewheel::cpal::CpalBackend>(
+) -> Arc<dyn HostDispatcher> {
+    spawn_session_client::<firewheel::cpal::CpalBackend>(
         "kithara-engine",
         root,
         root_view,
         sample_rate,
         start_stream_cpal,
-    );
-    (client.clone(), client)
+    )
 }

@@ -14,7 +14,7 @@ use kithara_warp::Warp;
 use super::{
     DecoderNode, EngineLoad, PlayWorkerConfig, RegisteredAudio, TrackConfig, TrackLease,
     WarpSource,
-    scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, Task, TaskId},
+    scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, TaskId},
 };
 use crate::effects::EffectDrain;
 
@@ -99,15 +99,14 @@ impl PlayWorker {
     {
         let (audio, lane) = prepared.into();
         let service_class = Arc::new(AtomicServiceClass::new(ServiceClass::default()));
-        let task = Task::new(DecoderNode::new(
-            lane,
-            engine_load,
-            Arc::clone(&service_class),
-        ));
         let task_id = self
             .0
             .scheduler
-            .register(task)
+            .register(DecoderNode::new(
+                lane,
+                engine_load,
+                Arc::clone(&service_class),
+            ))
             .map_err(|error| DecodeError::audio_stream("play worker registration", error))?;
         Ok(RegisteredAudio::new(
             audio,

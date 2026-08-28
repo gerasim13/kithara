@@ -24,21 +24,6 @@ impl TrackIdGen {
     }
 }
 
-/// Opaque playback task erased by `kithara-play` at registration.
-#[doc(hidden)]
-pub(crate) struct Task(Box<dyn Node>);
-
-impl Task {
-    /// Erase one concrete worker node at the scheduler registration boundary.
-    #[must_use]
-    pub(crate) fn new<N>(node: N) -> Self
-    where
-        N: Node,
-    {
-        Self(Box::new(node))
-    }
-}
-
 /// Identifier of one registered playback task.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[doc(hidden)]
@@ -105,7 +90,10 @@ impl PlaybackScheduler {
     /// Returns [`SchedulerError::Capacity`] when the configured task limit
     /// has been reached, or [`SchedulerError::Stopped`] after the scheduler
     /// loop has stopped.
-    pub(crate) fn register(&self, task: Task) -> Result<TaskId, SchedulerError> {
+    pub(crate) fn register<N>(&self, node: N) -> Result<TaskId, SchedulerError>
+    where
+        N: Node,
+    {
         self.active
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < self.capacity.get()).then_some(active + 1)
@@ -115,7 +103,7 @@ impl PlaybackScheduler {
             })?;
 
         let id = self.id_gen.next();
-        if !self.inner.register(id, task.0) {
+        if !self.inner.register(id, Box::new(node)) {
             self.active.fetch_sub(1, Ordering::AcqRel);
             return Err(SchedulerError::Stopped);
         }
@@ -213,9 +201,9 @@ mod tests {
     fn registration_reports_capacity_exhaustion() {
         let scheduler = scheduler(1);
         let id = scheduler
-            .register(Task::new(ParkedNode))
+            .register(ParkedNode)
             .expect("first task must register");
-        let result = scheduler.register(Task::new(ParkedNode));
+        let result = scheduler.register(ParkedNode);
 
         assert_eq!(result, Err(SchedulerError::Capacity { capacity: 1 }));
         scheduler.unregister(id);
@@ -226,7 +214,7 @@ mod tests {
         let scheduler = scheduler(1);
         scheduler.shutdown();
 
-        let result = scheduler.register(Task::new(ParkedNode));
+        let result = scheduler.register(ParkedNode);
 
         assert_eq!(result, Err(SchedulerError::Stopped));
     }
@@ -235,12 +223,12 @@ mod tests {
     fn unregister_releases_capacity() {
         let scheduler = scheduler(1);
         let first = scheduler
-            .register(Task::new(ParkedNode))
+            .register(ParkedNode)
             .expect("first task must register");
         scheduler.unregister(first);
 
         let second = scheduler
-            .register(Task::new(ParkedNode))
+            .register(ParkedNode)
             .expect("unregister must release capacity");
         scheduler.unregister(second);
     }

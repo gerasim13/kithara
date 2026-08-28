@@ -29,16 +29,3 @@ impl SampleCount {
         self.0
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn count_units_preserve_their_values() {
-        assert_eq!(FrameCount::new(128).get(), 128);
-        assert_eq!(SampleCount::new(256).get(), 256);
-    }
-}

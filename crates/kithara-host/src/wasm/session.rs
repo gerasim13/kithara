@@ -52,8 +52,8 @@ pub fn worker_host_channel(host: &Host) -> (HostSender, HostReceiver) {
 /// Connects a Worker facade to the main thread's canonical Host owner.
 #[must_use]
 pub fn remote_host(sender: HostSender) -> Host {
-    let (dispatcher, player_dispatcher) = host_session::remote(sender.tx);
-    Host::remote(sender.id, sender.root_view, dispatcher, player_dispatcher)
+    let dispatcher = host_session::remote(sender.tx);
+    Host::remote(sender.id, sender.root_view, dispatcher)
 }
 
 /// Pre-initialise the audio context and AudioWorklet eagerly.

@@ -1,4 +1,4 @@
-use std::{any::Any, fmt};
+use std::fmt;
 
 use kithara_audio::SeekOutcome;
 use kithara_warp::{
@@ -15,9 +15,7 @@ use crate::{PlayError, SessionBinding};
 /// Queue-specific item, EQ, volume, and event APIs remain on their concrete
 /// facade. This contract contains only playback operations shared by every
 /// host member plus the synchronization-group protocol.
-pub trait Player:
-    BeatGrid + SyncGroup<NestedGroup = PlayerMember> + Any + Send + Sync + 'static
-{
+pub trait Player: BeatGrid + SyncGroup<NestedGroup = PlayerMember> + Send + Sync + 'static {
     /// Start or resume playback.
     fn play(&self);
 
@@ -56,32 +54,12 @@ pub trait PlayerControlSource: Player {
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
 }
 
-trait ErasedPlayer: Player {
-    fn as_any(&self) -> &dyn Any;
-    fn as_player(&self) -> &dyn Player;
-    fn as_player_mut(&mut self) -> &mut dyn Player;
-}
-
-impl<P: Player> ErasedPlayer for P {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_player(&self) -> &dyn Player {
-        self
-    }
-
-    fn as_player_mut(&mut self) -> &mut dyn Player {
-        self
-    }
-}
-
 /// Exclusively owned, sized erasure of one concrete [`Player`].
 ///
 /// Host dispatch uses closure-based access so a reference to the resident
 /// player cannot escape the owner's command/lock boundary.
 pub struct PlayerMember {
-    inner: Box<dyn ErasedPlayer>,
+    inner: Box<dyn Player>,
 }
 
 impl PlayerMember {
@@ -100,17 +78,7 @@ impl PlayerMember {
         R: 'static,
         F: for<'a> FnOnce(&'a dyn Player) -> R,
     {
-        dispatch(self.inner.as_player())
-    }
-
-    /// Runs a typed command when the resident concrete player is `P`.
-    pub fn with<P, R, F>(&self, dispatch: F) -> Option<R>
-    where
-        P: Player,
-        R: 'static,
-        F: for<'a> FnOnce(&'a P) -> R,
-    {
-        self.inner.as_any().downcast_ref::<P>().map(dispatch)
+        dispatch(self.inner.as_ref())
     }
 }
 
@@ -125,7 +93,7 @@ impl fmt::Debug for PlayerMember {
 
 impl BeatGrid for PlayerMember {
     delegate::delegate! {
-        to self.inner.as_player() {
+        to self.inner.as_ref() {
             fn id(&self) -> BeatGridId;
             fn snapshot(&self) -> BeatGridSnapshot;
         }
@@ -136,7 +104,7 @@ impl SyncGroup for PlayerMember {
     type NestedGroup = Self;
 
     delegate::delegate! {
-        to self.inner.as_player_mut() {
+        to self.inner.as_mut() {
             fn transact(
                 &mut self,
                 operation: SyncOperation<Self>,
@@ -146,11 +114,11 @@ impl SyncGroup for PlayerMember {
     }
 
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.inner.as_player().topology()
+        self.inner.topology()
     }
 
     fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(self.inner.as_player())
+        SyncGroup::status(self.inner.as_ref())
     }
 }
 

@@ -20,7 +20,8 @@ use kithara::{
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
     cochlea::{
-        CochleaReport, assert_oracle_load_bearing, continuity_failures, time_stretch_failures,
+        CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
+        time_stretch_failures,
     },
     goertzel::goertzel_magnitude,
     kithara,
@@ -602,13 +603,6 @@ fn marker_timing_failures(label: &str, timing: &MarkerTiming) -> Vec<String> {
     failures
 }
 
-fn percentile(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
-    assert!(!values.is_empty(), "percentile input must not be empty");
-    values.sort_by(f32::total_cmp);
-    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
-    values[index]
-}
-
 fn frame_continuity(samples: &[f32]) -> (Vec<ChannelContinuity>, Vec<String>) {
     let channels = usize::from(CHANNELS);
     let frames = samples.len() / channels;
@@ -636,8 +630,8 @@ fn frame_continuity(samples: &[f32]) -> (Vec<ChannelContinuity>, Vec<String>) {
                 residuals.push(residual);
             }
         }
-        let background_step = percentile(&mut steps, 99, 100);
-        let background_residual = percentile(&mut residuals, 99, 100);
+        let background_step = percentile_f32(&mut steps, 99, 100);
+        let background_residual = percentile_f32(&mut residuals, 99, 100);
         let step_limit = background_step.mul_add(CONTINUITY_RATIO, CONTINUITY_SLACK);
         let residual_limit = background_residual.mul_add(CONTINUITY_RATIO, CONTINUITY_SLACK);
         if peak_step > step_limit {

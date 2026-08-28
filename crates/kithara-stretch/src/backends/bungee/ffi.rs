@@ -88,22 +88,13 @@ impl NativeStretcher {
         stretcher::next(self.inner.as_ptr(), request);
     }
 
-    #[cfg(not(test))]
     pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
-        self.analyse_native(input)
-    }
-
-    #[cfg(test)]
-    pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
+        #[cfg(test)]
         if self.take_fault(NativeFault::Analyse) {
             return Err(ElasticError::EnginePreparation(
                 "injected Bungee analysis failure",
             ));
         }
-        self.analyse_native(input)
-    }
-
-    fn analyse_native(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
         let required = planar_len(self.channels, input.channel_stride)?;
         if input.samples.len() < required {
             return Err(ElasticError::EnginePreparation(
@@ -129,23 +120,13 @@ impl NativeStretcher {
         Ok(())
     }
 
-    #[cfg(not(test))]
     pub(super) fn synthesise(
         &mut self,
         destination: &mut [f32],
         destination_stride: usize,
     ) -> Result<NativeOutput, ElasticError> {
         let output = self.synthesise_native();
-        self.copy_native_output(&output, destination, destination_stride)
-    }
-
-    #[cfg(test)]
-    pub(super) fn synthesise(
-        &mut self,
-        destination: &mut [f32],
-        destination_stride: usize,
-    ) -> Result<NativeOutput, ElasticError> {
-        let output = self.synthesise_native();
+        #[cfg(test)]
         if self.take_fault(NativeFault::Synthesise) {
             return Err(ElasticError::EnginePreparation(
                 "injected Bungee synthesis failure",

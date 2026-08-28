@@ -343,7 +343,6 @@ mod tests {
         let member = PlayerMember::new(player);
 
         assert_eq!(member.dispatch(BeatGrid::id), grid_id);
-        assert_eq!(member.with::<PlayerImpl, _, _>(BeatGrid::id), Some(grid_id));
     }
 
     #[kithara::test]

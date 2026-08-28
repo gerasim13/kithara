@@ -94,7 +94,7 @@ pub(crate) fn spawn(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
-) -> Result<(Arc<dyn HostDispatcher>, Arc<dyn SessionDispatcher>), PlayError> {
+) -> Result<Arc<dyn HostDispatcher>, PlayError> {
     WASM_SESSION_STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state.is_some() {
@@ -112,16 +112,14 @@ pub(crate) fn spawn(
     let client = Arc::new(SessionClient {
         host: SessionHost::Local,
     });
-    Ok((client.clone(), client))
+    Ok(client)
 }
 
-pub(crate) fn remote(
-    tx: mpsc::Sender<HostCmdMsg>,
-) -> (Arc<dyn HostDispatcher>, Arc<dyn SessionDispatcher>) {
+pub(crate) fn remote(tx: mpsc::Sender<HostCmdMsg>) -> Arc<dyn HostDispatcher> {
     let client = Arc::new(SessionClient {
         host: SessionHost::Remote { tx },
     });
-    (client.clone(), client)
+    client
 }
 
 pub(crate) fn worker_channel() -> (mpsc::Sender<HostCmdMsg>, mpsc::Receiver<HostCmdMsg>) {

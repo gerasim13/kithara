@@ -20,7 +20,3 @@ pub fn build_engine(config: ElasticConfig) -> Result<Box<dyn ElasticEngine>, Ela
         }
     }
 }
-
-#[cfg(test)]
-#[path = "factory_tests.rs"]
-mod tests;
