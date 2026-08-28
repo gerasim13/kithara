@@ -12,6 +12,8 @@ struct Consts;
 impl Consts {
     const ACCESS_UNIT_CAPACITY: usize = 8 * 1024;
     const I16_SCALE: f32 = 32_768.0;
+    const MAX_CHANNELS: usize = 6;
+    const MAX_FRAME_INPUT_SAMPLES: usize = StreamEncoder::FRAME_SAMPLES * Self::MAX_CHANNELS;
     const MAX_SAMPLE_RATE: u32 = 96_000;
     const MIN_SAMPLE_RATE: u32 = 8_000;
 }
@@ -20,25 +22,44 @@ pub(crate) struct FdkStream {
     encoder: Encoder,
     channels: usize,
     frame_samples: usize,
-    pending: Vec<i16>,
-    taken: usize,
-    output: Vec<u8>,
+    pending: [i16; Consts::MAX_FRAME_INPUT_SAMPLES],
+    pending_len: usize,
+    output: [u8; Consts::ACCESS_UNIT_CAPACITY],
     emitted: u64,
     sample_rate: u32,
     timescale: u32,
 }
 
 impl AacStream for FdkStream {
-    fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        self.pending.extend(samples.iter().copied().map(to_i16));
-        self.drain_full_frames()
+    fn push(&mut self, mut samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        let frame_input = self.frame_input();
+        let mut units: Vec<EncodedAccessUnit> = Vec::new();
+        while !samples.is_empty() {
+            let count = (frame_input - self.pending_len).min(samples.len());
+            let pending_end = self.pending_len + count;
+            for (pending, &sample) in self.pending[self.pending_len..pending_end]
+                .iter_mut()
+                .zip(&samples[..count])
+            {
+                *pending = to_i16(sample);
+            }
+            self.pending_len = pending_end;
+            samples = &samples[count..];
+
+            if self.pending_len == frame_input {
+                self.encode_pending(&mut units)?;
+            }
+        }
+        Ok(units)
     }
 
     fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        let mut units = self.drain_full_frames()?;
-        if !self.pending.is_empty() {
-            self.pending.resize(self.frame_samples * self.channels, 0);
-            units.extend(self.drain_full_frames()?);
+        let mut units: Vec<EncodedAccessUnit> = Vec::new();
+        if self.pending_len > 0 {
+            let frame_input = self.frame_input();
+            self.pending[self.pending_len..frame_input].fill(0);
+            self.pending_len = frame_input;
+            self.encode_pending(&mut units)?;
         }
 
         while let Some(encoded) = self.encoder.flush(&mut self.output)? {
@@ -58,6 +79,11 @@ impl FdkStream {
             bit_rate,
             timescale,
         } = *params;
+        if usize::from(channels) > Consts::MAX_CHANNELS {
+            return Err(EncodeError::InvalidInput(format!(
+                "fdk-aac carries no channel mode for {channels} channels"
+            )));
+        }
         if !(Consts::MIN_SAMPLE_RATE..=Consts::MAX_SAMPLE_RATE).contains(&sample_rate) {
             return Err(EncodeError::InvalidInput(format!(
                 "fdk-aac encodes {} Hz to {} Hz audio, got {sample_rate}",
@@ -89,37 +115,35 @@ impl FdkStream {
             encoder,
             channels,
             frame_samples,
-            pending: Vec::with_capacity(frame_samples * channels),
-            taken: 0,
-            output: vec![0; Consts::ACCESS_UNIT_CAPACITY],
+            pending: [0; Consts::MAX_FRAME_INPUT_SAMPLES],
+            pending_len: 0,
+            output: [0; Consts::ACCESS_UNIT_CAPACITY],
             emitted: 0,
             sample_rate,
             timescale,
         })
     }
 
-    fn drain_full_frames(&mut self) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        let frame_input = self.frame_samples * self.channels;
-        let mut units = Vec::new();
-        while self.pending.len() - self.taken >= frame_input {
-            let frame_end = self.taken + frame_input;
-            let encoded = self
-                .encoder
-                .encode(&self.pending[self.taken..frame_end], &mut self.output)?;
-            if encoded.input_consumed != frame_input {
-                return Err(EncodeError::backend_message(format!(
-                    "fdk-aac took {} samples of a {frame_input} sample frame",
-                    encoded.input_consumed
-                )));
-            }
-            self.taken = frame_end;
-            if encoded.output_size > 0 {
-                units.push(self.access_unit(encoded.output_size)?);
-            }
+    fn encode_pending(&mut self, units: &mut Vec<EncodedAccessUnit>) -> EncodeResult<()> {
+        let frame_input = self.frame_input();
+        let encoded = self
+            .encoder
+            .encode(&self.pending[..frame_input], &mut self.output)?;
+        if encoded.input_consumed != frame_input {
+            return Err(EncodeError::backend_message(format!(
+                "fdk-aac took {} samples of a {frame_input} sample frame",
+                encoded.input_consumed
+            )));
         }
-        self.pending.drain(..self.taken);
-        self.taken = 0;
-        Ok(units)
+        self.pending_len = 0;
+        if encoded.output_size > 0 {
+            units.push(self.access_unit(encoded.output_size)?);
+        }
+        Ok(())
+    }
+
+    const fn frame_input(&self) -> usize {
+        self.frame_samples * self.channels
     }
 
     fn access_unit(&mut self, size: usize) -> EncodeResult<EncodedAccessUnit> {

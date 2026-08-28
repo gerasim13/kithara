@@ -4496,6 +4496,7 @@ dependencies = [
  "bon",
  "fdk-aac-sys",
  "ffmpeg-next",
+ "kithara-bufpool",
  "kithara-stream",
  "kithara-workspace-hack",
  "num-traits",

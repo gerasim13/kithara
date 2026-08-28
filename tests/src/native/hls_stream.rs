@@ -5,7 +5,11 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::{platform::sync::Arc, stream::MediaInfo};
+use kithara::{
+    bufpool::{BytePool, SamplePool},
+    platform::sync::Arc,
+    stream::MediaInfo,
+};
 use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
 use num_traits::AsPrimitive;
 
@@ -526,15 +530,17 @@ fn encode_packaged_variant(
     let content_length = Finite::new(content_frames);
 
     let encode = |pcm: &dyn PcmSource| {
-        encoder.encode_packaged(PackagedEncodeRequest {
-            pcm,
-            packets_per_segment,
-            media_info: media_info.clone(),
-            timescale: packaged.timescale,
-            bit_rate: variant.bit_rate,
-            encoder_delay: packaged.encoder_delay,
-            trailing_delay: aligned_trailing_delay,
-        })
+        encoder.encode_packaged(
+            PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+                .pcm(pcm)
+                .packets_per_segment(packets_per_segment)
+                .media_info(media_info.clone())
+                .timescale(packaged.timescale)
+                .bit_rate(variant.bit_rate)
+                .encoder_delay(packaged.encoder_delay)
+                .trailing_delay(aligned_trailing_delay)
+                .build(),
+        )
     };
 
     let encode_signal = |pcm: &dyn PcmSource| {
