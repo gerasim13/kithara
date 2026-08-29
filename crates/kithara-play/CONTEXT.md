@@ -418,9 +418,10 @@ another snapshot.
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
 (`master_volume`, read by `start`). The session `SessionState` owns the *applied* graph gain (each
-`PlayerState.master_volume` and its `VolumeNode` memo). The only transition between them is one
-batch command, `Cmd::SetPlayerMasterVolumes`, which validates the whole vector - every level finite
-and in `0.0..=1.0`, every player present, no player repeated, graph initialised for started players
+`PlayerState.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
+through `Host::apply_mix` / `HostCmd::ApplyMix`, which validates the whole vector - every level
+finite and in `0.0..=1.0`, every member owned by the Host, no member repeated, graph initialised for
+started players
 
 - before mutating any stored volume or memo. Omitted players are unchanged; an invalid entry leaves
   the whole batch untouched. This is the single session gain path; there is no singular per-player
@@ -436,9 +437,12 @@ Slot/content volume and session ducking keep their own taper; they are separate 
 
 `Host::apply_mix` actuates the final levels of Host-owned players in one batch.
 The Host validates every canonical grid identity, level, and duplicate before
-mutating the graph. Desired Player levels are committed only after dispatch
-succeeds; the probe-only `engine/mix.rs` seam remains solely for deterministic
-lower-level tests and is not a second production path.
+mutating the graph. Desired Player levels are committed only after dispatch succeeds.
+`engine/mix.rs`, `Cmd::SetPlayerMasterVolumes`, and the matching session-handle method compile only
+for tests or the `probe` feature. They keep deterministic offline render tests on their existing
+lower `SessionDispatcher`; they are not a second production path. Removing that probe seam first
+requires the existing offline harness to exercise canonical Host ownership while preserving its
+explicit `render` API; that test migration is separate from the production cutover.
 
 The crossfader is pure Host policy (`kithara-host::crossfader_gain`), not state: consumers fold
 `trim * mute * crossfader_gain * group_master` into each member level before calling `Host::apply_mix`.

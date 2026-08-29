@@ -126,6 +126,7 @@ pub(crate) fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) ->
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
+        #[cfg(feature = "probe")]
         Cmd::SetPlayerMasterVolumes { levels } => {
             match controls::set_player_master_volumes(state, &levels) {
                 Ok(()) => Reply::Ok,
@@ -411,7 +412,7 @@ mod tests {
     use crate::{
         bridge::MixTapWriter,
         session::{
-            protocol::{Cmd, PlayerLevel, Reply, SessionError},
+            protocol::{Cmd, Reply, SessionError},
             state::{Deck, MixTap, SessionState},
             testing::{attach_player, state as test_state},
         },
@@ -1118,8 +1119,21 @@ mod tests {
             .master_volume
     }
 
+    fn apply_player_mix(
+        state: &mut SessionState<RouteLossBackend>,
+        levels: impl IntoIterator<Item = (u64, f32)>,
+    ) -> HostReply {
+        let levels = levels
+            .into_iter()
+            .map(|(player_id, level)| {
+                HostLevel::new(deck_by_player_id(state, player_id).grid_id, level)
+            })
+            .collect();
+        run_host_cmd(state, HostCmd::ApplyMix { levels })
+    }
+
     #[kithara::test]
-    fn batch_master_volume_updates_one_two_and_four_together() {
+    fn host_mix_updates_one_two_and_four_players_together() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1129,49 +1143,32 @@ mod tests {
         }
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetPlayerMasterVolumes {
-                    levels: vec![PlayerLevel::new(ids[0], 0.1)],
-                },
-            ),
-            Reply::Ok
+            apply_player_mix(&mut state, [(ids[0], 0.1)]),
+            HostReply::Ok
         ));
         assert_eq!(master_volume_of(&state, ids[0]), 0.1);
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetPlayerMasterVolumes {
-                    levels: vec![PlayerLevel::new(ids[1], 0.2), PlayerLevel::new(ids[2], 0.3)],
-                },
-            ),
-            Reply::Ok
+            apply_player_mix(&mut state, [(ids[1], 0.2), (ids[2], 0.3)]),
+            HostReply::Ok
         ));
         assert_eq!(master_volume_of(&state, ids[1]), 0.2);
         assert_eq!(master_volume_of(&state, ids[2]), 0.3);
         assert_eq!(master_volume_of(&state, ids[3]), 1.0);
 
         assert!(matches!(
-            run_cmd(
+            apply_player_mix(
                 &mut state,
-                Cmd::SetPlayerMasterVolumes {
-                    levels: vec![
-                        PlayerLevel::new(ids[0], 0.4),
-                        PlayerLevel::new(ids[1], 0.5),
-                        PlayerLevel::new(ids[2], 0.6),
-                        PlayerLevel::new(ids[3], 0.7)
-                    ],
-                },
+                [(ids[0], 0.4), (ids[1], 0.5), (ids[2], 0.6), (ids[3], 0.7),],
             ),
-            Reply::Ok
+            HostReply::Ok
         ));
         assert_eq!(master_volume_of(&state, ids[0]), 0.4);
         assert_eq!(master_volume_of(&state, ids[3]), 0.7);
     }
 
     #[kithara::test]
-    fn batch_rejects_duplicate_player_without_mutation() {
+    fn host_mix_rejects_duplicate_player_without_mutation() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1179,19 +1176,14 @@ mod tests {
         start_player_cmd(&mut state, id);
 
         assert!(matches!(
-            run_cmd(
-                &mut state,
-                Cmd::SetPlayerMasterVolumes {
-                    levels: vec![PlayerLevel::new(id, 0.3), PlayerLevel::new(id, 0.4)],
-                },
-            ),
-            Reply::Err(SessionError::DuplicatePlayer(_))
+            apply_player_mix(&mut state, [(id, 0.3), (id, 0.4)]),
+            HostReply::Err(PlayError::MixDuplicatePlayer)
         ));
         assert_eq!(master_volume_of(&state, id), 1.0);
     }
 
     #[kithara::test]
-    fn batch_rejects_invalid_level_without_mutation() {
+    fn host_mix_rejects_invalid_level_without_mutation() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
@@ -1202,13 +1194,8 @@ mod tests {
 
         for bad in [f32::NAN, f32::INFINITY, 1.5, -0.1] {
             assert!(matches!(
-                run_cmd(
-                    &mut state,
-                    Cmd::SetPlayerMasterVolumes {
-                        levels: vec![PlayerLevel::new(a, 0.5), PlayerLevel::new(b, bad)],
-                    },
-                ),
-                Reply::Err(SessionError::MasterVolumeOutOfRange { .. })
+                apply_player_mix(&mut state, [(a, 0.5), (b, bad)]),
+                HostReply::Err(PlayError::MixLevel { .. })
             ));
             assert_eq!(
                 master_volume_of(&state, a),
@@ -1220,22 +1207,26 @@ mod tests {
     }
 
     #[kithara::test]
-    fn batch_rejects_unknown_player_leaving_known_unchanged() {
+    fn host_mix_rejects_foreign_member_leaving_known_unchanged() {
         route_loss(RouteLossProbe::reset);
 
         let mut state = test_state(start_route_loss_stream);
         let known = register_player(&mut state);
         start_player_cmd(&mut state, known);
-        let unknown = known + 9_999;
+        let known_grid = deck_by_player_id(&state, known).grid_id;
+        let unknown_grid = kithara_warp::BeatGridId::allocate().expect("foreign fixture grid id");
 
         assert!(matches!(
-            run_cmd(
+            run_host_cmd(
                 &mut state,
-                Cmd::SetPlayerMasterVolumes {
-                    levels: vec![PlayerLevel::new(known, 0.2), PlayerLevel::new(unknown, 0.3)],
+                HostCmd::ApplyMix {
+                    levels: Box::new([
+                        HostLevel::new(known_grid, 0.2),
+                        HostLevel::new(unknown_grid, 0.3),
+                    ]),
                 },
             ),
-            Reply::Err(SessionError::PlayerNotFound(_))
+            HostReply::Err(PlayError::MixForeignSession)
         ));
         assert_eq!(master_volume_of(&state, known), 1.0);
     }
