@@ -4908,7 +4908,6 @@ dependencies = [
  "bon",
  "criterion",
  "delegate",
- "derive_more",
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
