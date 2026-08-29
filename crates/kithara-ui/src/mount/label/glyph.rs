@@ -47,11 +47,10 @@ mod host {
     use crate::{
         atoms::icon::glyph::{Glyph as Face, GlyphData},
         draw::Rgba,
-        module::GlyphStyle,
+        module::{GlyphStyle, IconName},
         render::{
-            Icon, ReadValue, Skin,
+            ReadValue, Skin,
             controls::{Draws, Reading},
-            document_icon,
         },
     };
 
@@ -79,8 +78,8 @@ mod host {
                 active: self.active.is_some_and(|binding| {
                     matches!(read.ctx.read(binding), Some(ReadValue::Bool(true)))
                 }),
-                active_mark: self.active_icon.map(document_icon).and_then(Icon::mark),
-                mark: document_icon(self.icon).mark()?,
+                active_mark: self.active_icon.and_then(IconName::mark),
+                mark: self.icon.mark()?,
             })
         }
     }
@@ -117,7 +116,7 @@ mod host {
             builtin,
             draw::{DrawList, DrawListBuilder, Rect},
             module::IconName,
-            render::{Icon, Skin, controls::Draws},
+            render::{Skin, controls::Draws},
             shaping::TextContext,
             skin::ColorRole,
         };
@@ -213,7 +212,7 @@ mod host {
                 &GlyphData {
                     active,
                     active_mark: None,
-                    mark: Icon::Play
+                    mark: IconName::Play
                         .mark()
                         .unwrap_or_else(|| panic!("the play icon must have a mark")),
                 },

@@ -1,6 +1,9 @@
 use std::sync::LazyLock;
 
-use kithara_ui::render::{TableCell, TableRow, TreeIcon, TreeRow};
+use kithara_ui::{
+    module::IconName,
+    render::{TableCell, TableRow, TreeRow},
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -31,7 +34,7 @@ pub(crate) struct PivotCopy {
 
 #[derive(Deserialize)]
 struct MockTreeRow {
-    icon: MockTreeIcon,
+    icon: IconName,
     #[serde(default)]
     count: Option<u32>,
     #[serde(default)]
@@ -43,43 +46,6 @@ struct MockTreeRow {
     selected: bool,
     #[serde(default)]
     depth: u8,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-enum MockTreeIcon {
-    Collection,
-    Playlist,
-    Folder,
-    Plus,
-    Zvuk,
-    Search,
-    Charts,
-    Monitor,
-    Home,
-    Usb,
-    Instrument,
-    Waveform,
-    Clock,
-}
-
-impl From<MockTreeIcon> for TreeIcon {
-    fn from(value: MockTreeIcon) -> Self {
-        match value {
-            MockTreeIcon::Collection => Self::Collection,
-            MockTreeIcon::Playlist => Self::Playlist,
-            MockTreeIcon::Folder => Self::Folder,
-            MockTreeIcon::Plus => Self::Plus,
-            MockTreeIcon::Zvuk => Self::Zvuk,
-            MockTreeIcon::Search => Self::Search,
-            MockTreeIcon::Charts => Self::Charts,
-            MockTreeIcon::Monitor => Self::Monitor,
-            MockTreeIcon::Home => Self::Home,
-            MockTreeIcon::Usb => Self::Usb,
-            MockTreeIcon::Instrument => Self::Instrument,
-            MockTreeIcon::Waveform => Self::Waveform,
-            MockTreeIcon::Clock => Self::Clock,
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -151,7 +117,7 @@ fn load_catalog() -> Catalog {
         .map(|row| TreeRow {
             depth: row.depth,
             label: &row.label,
-            icon: row.icon.into(),
+            icon: row.icon,
             count: row.count,
             expanded: row.expanded,
             selected: row.selected,

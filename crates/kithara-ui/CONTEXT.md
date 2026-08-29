@@ -1585,12 +1585,15 @@ document can only answer once its controls have sizes.
 
 ## Icon Identity
 
-A document names an `IconName`; `render/icons.rs::document_icon` joins it to `render::Icon`
-(`tree_icon` joins the host-facing `TreeIcon` the same way), and `render/icons.rs::source`
-joins `Icon` to a lucide glyph or an embedded SVG. The legs are guarded differently: coverage by an
-exhaustive match with no wildcard, so a new `IconName` does not build until given an arm; which
-glyph an arm names by a runtime table in that file's test module, compared by codepoint because
-`lucide_icons::Icon` has no equality.
+`IconName` is the one name an icon has: a document names it, a host names it in a `TreeRow`,
+and `render/icons.rs::source` joins it to a lucide glyph or an embedded SVG. There is one leg
+rather than three because the three enums held the same names and every crossing was an identity
+match, so a face reached a document only after it had been written out four times. Coverage is
+guarded by an exhaustive match with no wildcard, so a new `IconName` does not build until given an
+arm; which glyph an arm names is guarded by a runtime table in that file's test module, compared by
+codepoint because `lucide_icons::Icon` has no equality.
+`Kithara` and `Zvuk` are brand marks rather than lucide glyphs, so they are read from the SVG the
+repository ships and drawn as outlines.
 Role-named variants are the drift surface: `Faders`, `Collection`, `Charts` and `Waveform` are named
 after their purpose, and each has a lucide-named neighbour that looks like a plausible home. The
 guard asserts both directions - each menu glyph resolves to its namesake, and no role-named

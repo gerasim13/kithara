@@ -36,14 +36,13 @@ pub use document::{Clock, Ctx, PlacedMount, Snap};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{control_event, span_event};
 pub(crate) use hosted::{HostedControlPlan, Resolving};
-pub use icons::Icon;
-pub(crate) use icons::{Mark, document_icon, tree_icon};
+pub(crate) use icons::Mark;
 #[cfg(feature = "iced")]
 pub use immediate::LayoutPreview;
 pub(crate) use layer::{HostLayer, LayerHit, WindowLayerProgram, place_popover};
 pub use model::{
     PortalMapView, PortalTarget, ReadValue, Reads, ScalarRange, StereoLevels, TableCell, TableRow,
-    TableValue, TreeIcon, TreeRow, WaveBucket, WaveformView,
+    TableValue, TreeRow, WaveBucket, WaveformView,
 };
 pub use owner::InputOwner;
 pub(crate) use picker::{picker_hits, picker_selected_index};

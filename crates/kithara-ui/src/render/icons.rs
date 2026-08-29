@@ -9,124 +9,7 @@ use iced::{
     },
 };
 
-use crate::{draw::Outline, module::IconName, render::model::TreeIcon};
-
-/// Icon available to renderers.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Icon {
-    Activity,
-    Bell,
-    ChevronDown,
-    ChevronRight,
-    ChevronUp,
-    ChevronsLeft,
-    ChevronsRight,
-    Circle,
-    Crown,
-    Disc,
-    Collection,
-    Folder,
-    FolderPlus,
-    Faders,
-    FastForward,
-    Gear,
-    Home,
-    Headphones,
-    Instrument,
-    Lock,
-    LockOpen,
-    Maximize,
-    Menu,
-    MusicNote,
-    Orbit,
-    Pause,
-    Play,
-    PlayReverse,
-    PlaylistAdd,
-    Playlist,
-    Plus,
-    Radio,
-    RefreshCw,
-    RepeatOnce,
-    Repeat,
-    Rewind,
-    Save,
-    Shuffle,
-    SkipBack,
-    SkipForward,
-    SlidersHorizontal,
-    SpeakerHigh,
-    SpeakerLow,
-    SpeakerX,
-    Search,
-    Charts,
-    Clock,
-    Monitor,
-    Usb,
-    Waveform,
-    X,
-    Zvuk,
-    ZoomIn,
-    ZoomOut,
-}
-
-pub(crate) fn document_icon(icon: IconName) -> Icon {
-    match icon {
-        IconName::Activity => Icon::Activity,
-        IconName::Bell => Icon::Bell,
-        IconName::ChevronDown => Icon::ChevronDown,
-        IconName::ChevronRight => Icon::ChevronRight,
-        IconName::ChevronUp => Icon::ChevronUp,
-        IconName::Circle => Icon::Circle,
-        IconName::Clock => Icon::Clock,
-        IconName::Crown => Icon::Crown,
-        IconName::Disc => Icon::Disc,
-        IconName::Faders => Icon::Faders,
-        IconName::FastForward => Icon::FastForward,
-        IconName::FolderPlus => Icon::FolderPlus,
-        IconName::Gear => Icon::Gear,
-        IconName::Headphones => Icon::Headphones,
-        IconName::Lock => Icon::Lock,
-        IconName::LockOpen => Icon::LockOpen,
-        IconName::Maximize => Icon::Maximize,
-        IconName::Menu => Icon::Menu,
-        IconName::Monitor => Icon::Monitor,
-        IconName::Orbit => Icon::Orbit,
-        IconName::Play => Icon::Play,
-        IconName::PlayReverse => Icon::PlayReverse,
-        IconName::Playlist => Icon::Playlist,
-        IconName::Plus => Icon::Plus,
-        IconName::Radio => Icon::Radio,
-        IconName::RefreshCw => Icon::RefreshCw,
-        IconName::Rewind => Icon::Rewind,
-        IconName::Save => Icon::Save,
-        IconName::SlidersHorizontal => Icon::SlidersHorizontal,
-        IconName::SpeakerHigh => Icon::SpeakerHigh,
-        IconName::Waveform => Icon::Waveform,
-        IconName::X => Icon::X,
-        IconName::ZoomIn => Icon::ZoomIn,
-        IconName::ZoomOut => Icon::ZoomOut,
-    }
-}
-
-pub(crate) fn tree_icon(icon: TreeIcon) -> Icon {
-    match icon {
-        TreeIcon::Collection => Icon::Collection,
-        TreeIcon::Playlist => Icon::Playlist,
-        TreeIcon::Folder => Icon::Folder,
-        TreeIcon::Plus => Icon::Plus,
-        TreeIcon::Zvuk => Icon::Zvuk,
-        TreeIcon::Search => Icon::Search,
-        TreeIcon::Charts => Icon::Charts,
-        TreeIcon::Monitor => Icon::Monitor,
-        TreeIcon::Home => Icon::Home,
-        TreeIcon::Usb => Icon::Usb,
-        TreeIcon::Instrument => Icon::Instrument,
-        TreeIcon::Waveform => Icon::Waveform,
-        TreeIcon::Clock => Icon::Clock,
-    }
-}
+use crate::{draw::Outline, module::IconName};
 
 enum IconSource {
     Lucide(lucide_icons::Icon),
@@ -166,6 +49,7 @@ mod art {
 
     pub(super) static PLAY_REVERSE: Art =
         Art::new(include_str!("../../assets/icons/play-reverse.svg"));
+    pub(super) static KITHARA: Art = Art::new(include_str!("../../assets/icons/kithara.svg"));
     pub(super) static ZVUK: Art = Art::new(include_str!("../../assets/icons/zvuk.svg"));
 }
 
@@ -179,7 +63,7 @@ pub(crate) enum Mark {
     Outline(&'static Outline),
 }
 
-impl Icon {
+impl IconName {
     pub(crate) fn lucide_glyph(self) -> Option<char> {
         match source(self) {
             IconSource::Lucide(icon) => Some(char::from(icon)),
@@ -214,62 +98,63 @@ impl Icon {
     }
 }
 
-fn source(icon: Icon) -> IconSource {
+fn source(icon: IconName) -> IconSource {
     match icon {
-        Icon::Activity => IconSource::Lucide(lucide_icons::Icon::Activity),
-        Icon::Bell => IconSource::Lucide(lucide_icons::Icon::Bell),
-        Icon::Charts => IconSource::Lucide(lucide_icons::Icon::TrendingUp),
-        Icon::ChevronDown => IconSource::Lucide(lucide_icons::Icon::ChevronDown),
-        Icon::ChevronRight => IconSource::Lucide(lucide_icons::Icon::ChevronRight),
-        Icon::ChevronUp => IconSource::Lucide(lucide_icons::Icon::ChevronUp),
-        Icon::ChevronsLeft => IconSource::Lucide(lucide_icons::Icon::ChevronsLeft),
-        Icon::ChevronsRight => IconSource::Lucide(lucide_icons::Icon::ChevronsRight),
-        Icon::Circle => IconSource::Lucide(lucide_icons::Icon::Circle),
-        Icon::Crown => IconSource::Lucide(lucide_icons::Icon::Crown),
-        Icon::Clock => IconSource::Lucide(lucide_icons::Icon::Clock),
-        Icon::Collection => IconSource::Lucide(lucide_icons::Icon::CircleDot),
-        Icon::Disc => IconSource::Lucide(lucide_icons::Icon::Disc),
-        Icon::Faders => IconSource::Lucide(lucide_icons::Icon::Sliders),
-        Icon::FastForward => IconSource::Lucide(lucide_icons::Icon::FastForward),
-        Icon::Folder => IconSource::Lucide(lucide_icons::Icon::Folder),
-        Icon::FolderPlus => IconSource::Lucide(lucide_icons::Icon::FolderPlus),
-        Icon::Gear => IconSource::Lucide(lucide_icons::Icon::Settings),
-        Icon::Headphones => IconSource::Lucide(lucide_icons::Icon::Headphones),
-        Icon::Home => IconSource::Lucide(lucide_icons::Icon::Home),
-        Icon::Instrument => IconSource::Lucide(lucide_icons::Icon::KeyboardMusic),
-        Icon::Lock => IconSource::Lucide(lucide_icons::Icon::Lock),
-        Icon::LockOpen => IconSource::Lucide(lucide_icons::Icon::LockOpen),
-        Icon::Maximize => IconSource::Lucide(lucide_icons::Icon::Maximize),
-        Icon::Menu => IconSource::Lucide(lucide_icons::Icon::Menu),
-        Icon::Monitor => IconSource::Lucide(lucide_icons::Icon::Monitor),
-        Icon::MusicNote => IconSource::Lucide(lucide_icons::Icon::Music),
-        Icon::Orbit => IconSource::Lucide(lucide_icons::Icon::Orbit),
-        Icon::Pause => IconSource::Lucide(lucide_icons::Icon::Pause),
-        Icon::Play => IconSource::Lucide(lucide_icons::Icon::Play),
-        Icon::Playlist => IconSource::Lucide(lucide_icons::Icon::ListMusic),
-        Icon::PlaylistAdd => IconSource::Lucide(lucide_icons::Icon::ListPlus),
-        Icon::Plus => IconSource::Lucide(lucide_icons::Icon::Plus),
-        Icon::Radio => IconSource::Lucide(lucide_icons::Icon::Radio),
-        Icon::RefreshCw => IconSource::Lucide(lucide_icons::Icon::RefreshCw),
-        Icon::Repeat => IconSource::Lucide(lucide_icons::Icon::Repeat),
-        Icon::RepeatOnce => IconSource::Lucide(lucide_icons::Icon::Repeat1),
-        Icon::Rewind => IconSource::Lucide(lucide_icons::Icon::Rewind),
-        Icon::Save => IconSource::Lucide(lucide_icons::Icon::Save),
-        Icon::Search => IconSource::Lucide(lucide_icons::Icon::Search),
-        Icon::Shuffle => IconSource::Lucide(lucide_icons::Icon::Shuffle),
-        Icon::SkipBack => IconSource::Lucide(lucide_icons::Icon::SkipBack),
-        Icon::SkipForward => IconSource::Lucide(lucide_icons::Icon::SkipForward),
-        Icon::SlidersHorizontal => IconSource::Lucide(lucide_icons::Icon::SlidersHorizontal),
-        Icon::SpeakerHigh => IconSource::Lucide(lucide_icons::Icon::Volume2),
-        Icon::SpeakerLow => IconSource::Lucide(lucide_icons::Icon::Volume1),
-        Icon::SpeakerX => IconSource::Lucide(lucide_icons::Icon::VolumeX),
-        Icon::Usb => IconSource::Lucide(lucide_icons::Icon::Usb),
-        Icon::Waveform => IconSource::Lucide(lucide_icons::Icon::AudioWaveform),
-        Icon::X => IconSource::Lucide(lucide_icons::Icon::X),
-        Icon::ZoomIn => IconSource::Lucide(lucide_icons::Icon::ZoomIn),
-        Icon::ZoomOut => IconSource::Lucide(lucide_icons::Icon::ZoomOut),
-        Icon::PlayReverse => IconSource::Svg(&art::PLAY_REVERSE),
-        Icon::Zvuk => IconSource::Svg(&art::ZVUK),
+        IconName::Activity => IconSource::Lucide(lucide_icons::Icon::Activity),
+        IconName::Bell => IconSource::Lucide(lucide_icons::Icon::Bell),
+        IconName::Charts => IconSource::Lucide(lucide_icons::Icon::TrendingUp),
+        IconName::ChevronDown => IconSource::Lucide(lucide_icons::Icon::ChevronDown),
+        IconName::ChevronRight => IconSource::Lucide(lucide_icons::Icon::ChevronRight),
+        IconName::ChevronUp => IconSource::Lucide(lucide_icons::Icon::ChevronUp),
+        IconName::ChevronsLeft => IconSource::Lucide(lucide_icons::Icon::ChevronsLeft),
+        IconName::ChevronsRight => IconSource::Lucide(lucide_icons::Icon::ChevronsRight),
+        IconName::Circle => IconSource::Lucide(lucide_icons::Icon::Circle),
+        IconName::Crown => IconSource::Lucide(lucide_icons::Icon::Crown),
+        IconName::Clock => IconSource::Lucide(lucide_icons::Icon::Clock),
+        IconName::Collection => IconSource::Lucide(lucide_icons::Icon::CircleDot),
+        IconName::Disc => IconSource::Lucide(lucide_icons::Icon::Disc),
+        IconName::Faders => IconSource::Lucide(lucide_icons::Icon::Sliders),
+        IconName::FastForward => IconSource::Lucide(lucide_icons::Icon::FastForward),
+        IconName::Folder => IconSource::Lucide(lucide_icons::Icon::Folder),
+        IconName::FolderPlus => IconSource::Lucide(lucide_icons::Icon::FolderPlus),
+        IconName::Gear => IconSource::Lucide(lucide_icons::Icon::Settings),
+        IconName::Headphones => IconSource::Lucide(lucide_icons::Icon::Headphones),
+        IconName::Home => IconSource::Lucide(lucide_icons::Icon::Home),
+        IconName::Instrument => IconSource::Lucide(lucide_icons::Icon::KeyboardMusic),
+        IconName::Lock => IconSource::Lucide(lucide_icons::Icon::Lock),
+        IconName::LockOpen => IconSource::Lucide(lucide_icons::Icon::LockOpen),
+        IconName::Maximize => IconSource::Lucide(lucide_icons::Icon::Maximize),
+        IconName::Menu => IconSource::Lucide(lucide_icons::Icon::Menu),
+        IconName::Monitor => IconSource::Lucide(lucide_icons::Icon::Monitor),
+        IconName::MusicNote => IconSource::Lucide(lucide_icons::Icon::Music),
+        IconName::Orbit => IconSource::Lucide(lucide_icons::Icon::Orbit),
+        IconName::Pause => IconSource::Lucide(lucide_icons::Icon::Pause),
+        IconName::Play => IconSource::Lucide(lucide_icons::Icon::Play),
+        IconName::Playlist => IconSource::Lucide(lucide_icons::Icon::ListMusic),
+        IconName::PlaylistAdd => IconSource::Lucide(lucide_icons::Icon::ListPlus),
+        IconName::Plus => IconSource::Lucide(lucide_icons::Icon::Plus),
+        IconName::Radio => IconSource::Lucide(lucide_icons::Icon::Radio),
+        IconName::RefreshCw => IconSource::Lucide(lucide_icons::Icon::RefreshCw),
+        IconName::Repeat => IconSource::Lucide(lucide_icons::Icon::Repeat),
+        IconName::RepeatOnce => IconSource::Lucide(lucide_icons::Icon::Repeat1),
+        IconName::Rewind => IconSource::Lucide(lucide_icons::Icon::Rewind),
+        IconName::Save => IconSource::Lucide(lucide_icons::Icon::Save),
+        IconName::Search => IconSource::Lucide(lucide_icons::Icon::Search),
+        IconName::Shuffle => IconSource::Lucide(lucide_icons::Icon::Shuffle),
+        IconName::SkipBack => IconSource::Lucide(lucide_icons::Icon::SkipBack),
+        IconName::SkipForward => IconSource::Lucide(lucide_icons::Icon::SkipForward),
+        IconName::SlidersHorizontal => IconSource::Lucide(lucide_icons::Icon::SlidersHorizontal),
+        IconName::SpeakerHigh => IconSource::Lucide(lucide_icons::Icon::Volume2),
+        IconName::SpeakerLow => IconSource::Lucide(lucide_icons::Icon::Volume1),
+        IconName::SpeakerX => IconSource::Lucide(lucide_icons::Icon::VolumeX),
+        IconName::Usb => IconSource::Lucide(lucide_icons::Icon::Usb),
+        IconName::Waveform => IconSource::Lucide(lucide_icons::Icon::AudioWaveform),
+        IconName::X => IconSource::Lucide(lucide_icons::Icon::X),
+        IconName::ZoomIn => IconSource::Lucide(lucide_icons::Icon::ZoomIn),
+        IconName::ZoomOut => IconSource::Lucide(lucide_icons::Icon::ZoomOut),
+        IconName::Kithara => IconSource::Svg(&art::KITHARA),
+        IconName::PlayReverse => IconSource::Svg(&art::PLAY_REVERSE),
+        IconName::Zvuk => IconSource::Svg(&art::ZVUK),
     }
 }
 
@@ -278,28 +163,31 @@ mod tests {
     use kithara_test_utils::kithara;
     use lucide_icons::Icon as Lucide;
 
-    use super::{Icon, Mark};
-    use crate::draw::{FillRule, Rect};
+    use super::Mark;
+    use crate::{
+        draw::{FillRule, Rect},
+        module::IconName,
+    };
 
     #[kithara::test]
     fn every_app_menu_glyph_resolves_to_its_lucide_namesake() {
-        let table: [(Icon, Lucide); 16] = [
-            (Icon::Menu, Lucide::Menu),
-            (Icon::X, Lucide::X),
-            (Icon::ChevronDown, Lucide::ChevronDown),
-            (Icon::Maximize, Lucide::Maximize),
-            (Icon::Disc, Lucide::Disc),
-            (Icon::Gear, Lucide::Settings),
-            (Icon::Monitor, Lucide::Monitor),
-            (Icon::Plus, Lucide::Plus),
-            (Icon::RefreshCw, Lucide::RefreshCw),
-            (Icon::ChevronRight, Lucide::ChevronRight),
-            (Icon::Activity, Lucide::Activity),
-            (Icon::SlidersHorizontal, Lucide::SlidersHorizontal),
-            (Icon::Circle, Lucide::Circle),
-            (Icon::Radio, Lucide::Radio),
-            (Icon::FolderPlus, Lucide::FolderPlus),
-            (Icon::Save, Lucide::Save),
+        let table: [(IconName, Lucide); 16] = [
+            (IconName::Menu, Lucide::Menu),
+            (IconName::X, Lucide::X),
+            (IconName::ChevronDown, Lucide::ChevronDown),
+            (IconName::Maximize, Lucide::Maximize),
+            (IconName::Disc, Lucide::Disc),
+            (IconName::Gear, Lucide::Settings),
+            (IconName::Monitor, Lucide::Monitor),
+            (IconName::Plus, Lucide::Plus),
+            (IconName::RefreshCw, Lucide::RefreshCw),
+            (IconName::ChevronRight, Lucide::ChevronRight),
+            (IconName::Activity, Lucide::Activity),
+            (IconName::SlidersHorizontal, Lucide::SlidersHorizontal),
+            (IconName::Circle, Lucide::Circle),
+            (IconName::Radio, Lucide::Radio),
+            (IconName::FolderPlus, Lucide::FolderPlus),
+            (IconName::Save, Lucide::Save),
         ];
 
         for (icon, lucide) in table {
@@ -313,19 +201,19 @@ mod tests {
 
     #[kithara::test]
     fn role_named_incumbents_keep_their_own_glyphs() {
-        let prohibited: [(Icon, Lucide); 5] = [
-            (Icon::Faders, Lucide::SlidersHorizontal),
-            (Icon::Collection, Lucide::Circle),
-            (Icon::ChevronsRight, Lucide::ChevronRight),
-            (Icon::Waveform, Lucide::Activity),
-            (Icon::Charts, Lucide::Activity),
+        let prohibited: [(IconName, Lucide); 5] = [
+            (IconName::Faders, Lucide::SlidersHorizontal),
+            (IconName::Collection, Lucide::Circle),
+            (IconName::ChevronsRight, Lucide::ChevronRight),
+            (IconName::Waveform, Lucide::Activity),
+            (IconName::Charts, Lucide::Activity),
         ];
-        let canon: [(Icon, Lucide); 5] = [
-            (Icon::Faders, Lucide::Sliders),
-            (Icon::Collection, Lucide::CircleDot),
-            (Icon::ChevronsRight, Lucide::ChevronsRight),
-            (Icon::Waveform, Lucide::AudioWaveform),
-            (Icon::Charts, Lucide::TrendingUp),
+        let canon: [(IconName, Lucide); 5] = [
+            (IconName::Faders, Lucide::Sliders),
+            (IconName::Collection, Lucide::CircleDot),
+            (IconName::ChevronsRight, Lucide::ChevronsRight),
+            (IconName::Waveform, Lucide::AudioWaveform),
+            (IconName::Charts, Lucide::TrendingUp),
         ];
 
         for (icon, wrong) in prohibited {
@@ -346,8 +234,8 @@ mod tests {
 
     #[kithara::test]
     fn svg_icons_do_not_cross_the_glyph_seam() {
-        assert_eq!(Icon::PlayReverse.lucide_glyph(), None);
-        assert_eq!(Icon::Zvuk.lucide_glyph(), None);
+        assert_eq!(IconName::PlayReverse.lucide_glyph(), None);
+        assert_eq!(IconName::Zvuk.lucide_glyph(), None);
     }
 
     /// Both authored icons read as outlines, so neither has to reach a toolkit
@@ -361,7 +249,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        for icon in [Icon::PlayReverse, Icon::Zvuk] {
+        for icon in [IconName::PlayReverse, IconName::Zvuk] {
             let Some(Mark::Outline(outline)) = icon.mark() else {
                 panic!("{icon:?} must read as an outline");
             };
@@ -371,7 +259,7 @@ mod tests {
             );
         }
 
-        let Some(Mark::Outline(zvuk)) = Icon::Zvuk.mark() else {
+        let Some(Mark::Outline(zvuk)) = IconName::Zvuk.mark() else {
             panic!("the mark must be an outline");
         };
         assert_eq!(zvuk.placed(box_of).rule(), FillRule::EvenOdd);

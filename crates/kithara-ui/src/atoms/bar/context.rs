@@ -61,7 +61,7 @@ impl Context {
             gap: metrics.context_gap,
             // Decoration rather than content: the path is what this strip says,
             // and a mark that cannot be read leaves the words where they are.
-            icon: crate::render::Icon::Zvuk.mark(),
+            icon: crate::module::IconName::Zvuk.mark(),
             icon_color: skin.rgba(metrics.context_icon_color),
             icon_size: metrics.context_icon_size,
             padding_x: metrics.context_padding_x,

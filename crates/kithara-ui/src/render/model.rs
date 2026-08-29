@@ -1,4 +1,4 @@
-use crate::draw::Pt;
+use crate::{draw::Pt, module::IconName};
 
 /// Stereo levels and volume exposed to renderers.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -59,32 +59,13 @@ pub struct ScalarRange {
     pub max: f32,
 }
 
-/// Icon associated with a renderer-facing tree row.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum TreeIcon {
-    Collection,
-    Playlist,
-    Folder,
-    Plus,
-    Zvuk,
-    Search,
-    Charts,
-    Monitor,
-    Home,
-    Usb,
-    Instrument,
-    Waveform,
-    Clock,
-}
-
 /// Borrowed browser-tree row exposed to renderers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TreeRow<'a> {
     pub label: &'a str,
     pub count: Option<u32>,
     pub expanded: Option<bool>,
-    pub icon: TreeIcon,
+    pub icon: IconName,
     pub muted: bool,
     pub selected: bool,
     pub depth: u8,

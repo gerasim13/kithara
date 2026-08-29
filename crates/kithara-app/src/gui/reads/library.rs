@@ -1,5 +1,6 @@
-use kithara_ui::render::{
-    Node, ReadValue, Scope, TableCell, TableRow, TableValue, TreeIcon, TreeRow,
+use kithara_ui::{
+    module::IconName,
+    render::{Node, ReadValue, Scope, TableCell, TableRow, TableValue, TreeRow},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -96,9 +97,9 @@ fn tree<'a>(catalog: &Catalog, library: &LibraryView) -> Vec<TreeRow<'a>> {
             ),
             expanded: None,
             icon: match group {
-                LibraryScope::All => TreeIcon::Collection,
-                LibraryScope::Local => TreeIcon::Folder,
-                LibraryScope::Stream => TreeIcon::Playlist,
+                LibraryScope::All => IconName::Collection,
+                LibraryScope::Local => IconName::Folder,
+                LibraryScope::Stream => IconName::Playlist,
             },
             muted: false,
             selected: group == library.scope,

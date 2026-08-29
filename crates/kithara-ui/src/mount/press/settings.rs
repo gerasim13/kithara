@@ -14,8 +14,9 @@ mod host {
     use super::Settings;
     use crate::{
         atoms::bar::settings::Settings as Face,
+        module::IconName,
         render::{
-            Icon, Mark, Skin, UiEvent,
+            Mark, Skin, UiEvent,
             controls::{Draws, Grip, Reading},
         },
     };
@@ -30,7 +31,7 @@ mod host {
         /// The gear is the button: art that cannot be read leaves an empty box
         /// rather than a frame with a hole in it.
         fn data(&self, _read: Reading<'_>) -> Option<Mark> {
-            Icon::Gear.mark()
+            IconName::Gear.mark()
         }
 
         /// Pressing it opens a surface the application owns. There is no

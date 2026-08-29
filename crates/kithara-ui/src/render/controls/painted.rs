@@ -895,10 +895,10 @@ mod tests {
         builtin,
         draw::Pt,
         interact::{PointerPhase, mouse as pointer_input},
-        module::{ButtonStyle, FaderStyle, Tone},
+        module::{ButtonStyle, FaderStyle, IconName, Tone},
         mount,
         render::{
-            Icon, ReadValue, Reads, StereoLevels,
+            ReadValue, Reads, StereoLevels,
             controls::{Draws, Grip},
             document::probe,
             masonry::{HostAction, MasonryControl, Painted},
@@ -1252,7 +1252,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        for icon in [Icon::Play, Icon::Zvuk] {
+        for icon in [IconName::Play, IconName::Zvuk] {
             let mark = icon
                 .mark()
                 .unwrap_or_else(|| panic!("{icon:?} must have a mark"));
@@ -1295,20 +1295,20 @@ mod tests {
         };
         for (style, icon) in [
             (ButtonStyle::Default, None),
-            (ButtonStyle::Default, Some(Icon::Play)),
+            (ButtonStyle::Default, Some(IconName::Play)),
             (ButtonStyle::Transport, None),
             (ButtonStyle::TransportPrimary, None),
-            (ButtonStyle::MicroPrimary, Some(Icon::Play)),
+            (ButtonStyle::MicroPrimary, Some(IconName::Play)),
             (ButtonStyle::VisNav, None),
         ] {
             for active in [false, true] {
                 let painter = || {
                     Button::new(
                         ButtonConfig::builder()
-                            .maybe_mark(icon.and_then(Icon::mark))
+                            .maybe_mark(icon.and_then(IconName::mark))
                             .style(style)
                             .build(),
-                        icon.and_then(Icon::mark),
+                        icon.and_then(IconName::mark),
                         skin,
                     )
                 };
@@ -1382,7 +1382,7 @@ mod tests {
                 14.0,
             )
         };
-        for icon in [Icon::Play, Icon::Zvuk] {
+        for icon in [IconName::Play, IconName::Zvuk] {
             let mark = icon
                 .mark()
                 .unwrap_or_else(|| panic!("{icon:?} must have a mark"));
@@ -1941,8 +1941,8 @@ mod pressed {
             painter::{ButtonData, NavData},
         },
         builtin,
-        module::ButtonStyle,
-        render::{ControlAction, Icon},
+        module::{ButtonStyle, IconName},
+        render::ControlAction,
     };
 
     /// One pin for every `Grip::Press` control rather than one per control:
@@ -1950,7 +1950,7 @@ mod pressed {
     #[kithara::test]
     fn a_press_inside_the_bounds_publishes_an_activation() {
         let skin = builtin::skin();
-        let mark = Icon::Play
+        let mark = IconName::Play
             .mark()
             .unwrap_or_else(|| panic!("the play icon must have a mark"));
         let paint = Paint::new(
@@ -1996,7 +1996,7 @@ mod pressed {
     #[kithara::test]
     fn a_press_on_a_command_publishes_the_event_the_control_named() {
         let skin = builtin::skin();
-        let mark = Icon::Gear
+        let mark = IconName::Gear
             .mark()
             .unwrap_or_else(|| panic!("the gear icon must have a mark"));
         let gesture = Gesture::command(

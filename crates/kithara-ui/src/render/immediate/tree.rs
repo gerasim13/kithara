@@ -6,9 +6,8 @@ use iced::{
 
 use crate::{
     atoms::tree::face::Tree as TreeFace,
-    render::{
-        IcedSkin, Icon, InputOwner, ReadValue, Skin, UiEvent, Widget, search_input, tree_rows,
-    },
+    module::IconName,
+    render::{IcedSkin, InputOwner, ReadValue, Skin, UiEvent, Widget, search_input, tree_rows},
 };
 
 #[derive(bon::Builder)]
@@ -55,7 +54,7 @@ fn search_bar<'a>(
     skin: &'a Skin,
     owner: InputOwner,
 ) -> Element<'a, UiEvent> {
-    let icon = container(Icon::Search.view(
+    let icon = container(IconName::Search.view(
         skin.tree.search_icon_size,
         skin.color(skin.tree.search_icon_color),
     ))

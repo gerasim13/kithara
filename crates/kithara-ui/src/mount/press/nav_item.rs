@@ -29,7 +29,6 @@ mod host {
         render::{
             ReadValue, Skin,
             controls::{Draws, Grip, Reading},
-            document_icon,
         },
     };
 
@@ -44,9 +43,7 @@ mod host {
         /// whose endpoint has not said which page is current draws nothing —
         /// and neither does one whose art could not be read.
         fn data(&self, read: Reading<'_>) -> Option<NavData> {
-            let (Some(ReadValue::Bool(active)), Some(mark)) =
-                (read.value, document_icon(self.icon).mark())
-            else {
+            let (Some(ReadValue::Bool(active)), Some(mark)) = (read.value, self.icon.mark()) else {
                 return None;
             };
             Some(NavData {

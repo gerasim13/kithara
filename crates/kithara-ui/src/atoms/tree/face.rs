@@ -4,7 +4,8 @@ use num_traits::ToPrimitive;
 
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, TRANSPARENT, Transform},
-    render::{Skin, TreeIcon, TreeRow, tree_icon},
+    module::IconName,
+    render::{Skin, TreeRow},
     shaping::TextContext,
     skin::TextRoleSkin,
 };
@@ -24,7 +25,7 @@ struct Row {
     count: Option<String>,
     depth: u8,
     expanded: Option<bool>,
-    icon: TreeIcon,
+    icon: IconName,
     label: String,
     muted: bool,
     selected: bool,
@@ -197,11 +198,11 @@ impl Row {
         color: Rgba,
         skin: &Skin,
     ) {
-        if self.icon == TreeIcon::Zvuk {
+        if self.icon == IconName::Zvuk {
             paint_zvuk(list, bounds, x, color, skin.tree.icon_size);
             return;
         }
-        let Some(glyph) = tree_icon(self.icon).lucide_glyph() else {
+        let Some(glyph) = self.icon.lucide_glyph() else {
             return;
         };
         let content = glyph.to_string();
@@ -358,7 +359,7 @@ mod tests {
             TreeRow {
                 depth: 0,
                 label: "First",
-                icon: TreeIcon::Folder,
+                icon: IconName::Folder,
                 count: None,
                 expanded: Some(true),
                 selected: false,
@@ -367,7 +368,7 @@ mod tests {
             TreeRow {
                 depth: 1,
                 label: "Second",
-                icon: TreeIcon::Playlist,
+                icon: IconName::Playlist,
                 count: Some(2),
                 expanded: None,
                 selected: true,
@@ -376,7 +377,7 @@ mod tests {
             TreeRow {
                 depth: 1,
                 label: "Third",
-                icon: TreeIcon::Zvuk,
+                icon: IconName::Zvuk,
                 count: None,
                 expanded: None,
                 selected: false,

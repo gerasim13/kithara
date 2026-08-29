@@ -55,11 +55,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{DrawListBuilder, Rect, Settings, TextContext, VisualState};
-    use crate::{
-        builtin,
-        draw::DrawCmd,
-        render::{Icon, Mark},
-    };
+    use crate::{builtin, draw::DrawCmd, module::IconName, render::Mark};
 
     const BOUNDS: Rect = Rect {
         h: 32.0,
@@ -69,7 +65,7 @@ mod tests {
     };
 
     fn gear() -> Mark {
-        Icon::Gear
+        IconName::Gear
             .mark()
             .unwrap_or_else(|| panic!("the built-in gear must resolve to a mark"))
     }

@@ -4,7 +4,8 @@ use super::face::Tree;
 use crate::{
     draw::{DrawList, DrawListBuilder, Pt, Rect, Rgba, Transform},
     engine::TextInputSnapshot,
-    render::{Skin, TreeIcon, tree_icon},
+    module::IconName,
+    render::Skin,
     shaping::TextContext,
 };
 
@@ -117,7 +118,7 @@ fn paint_search_icon(
     bounds: Rect,
     skin: &Skin,
 ) {
-    let Some(glyph) = tree_icon(TreeIcon::Search).lucide_glyph() else {
+    let Some(glyph) = IconName::Search.lucide_glyph() else {
         return;
     };
     let content = glyph.to_string();

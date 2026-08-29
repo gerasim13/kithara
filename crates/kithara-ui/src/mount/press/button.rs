@@ -43,11 +43,10 @@ mod host {
             button::{Button as Face, ButtonConfig, ButtonLabel},
             painter::ButtonData,
         },
-        module::ButtonStyle,
+        module::{ButtonStyle, IconName},
         render::{
-            Icon, Mark, ReadValue, Skin,
+            Mark, ReadValue, Skin,
             controls::{Draws, Grip, Reading},
-            document_icon,
         },
     };
 
@@ -62,18 +61,23 @@ mod host {
     /// What a button draws once its style has had its say about the document's
     /// icon. The style that names its own icon answers differently for each
     /// state; the rest answer the same either way.
-    fn mark(style: ButtonStyle, icon: Option<Icon>, active: bool) -> Option<Mark> {
+    fn mark(style: ButtonStyle, icon: Option<IconName>, active: bool) -> Option<Mark> {
         if style == ButtonStyle::MicroPrimary {
-            return if active { Icon::Pause } else { Icon::Play }.mark();
+            return if active {
+                IconName::Pause
+            } else {
+                IconName::Play
+            }
+            .mark();
         }
-        icon.and_then(Icon::mark)
+        icon.and_then(IconName::mark)
     }
 
     impl Draws for Button {
         type Painter = Face;
 
         fn painter(&self, skin: &Skin) -> Face {
-            let icon = self.icon.map(document_icon);
+            let icon = self.icon;
             let marks = Marks {
                 active: mark(self.style, icon, true),
                 idle: mark(self.style, icon, false),
@@ -113,7 +117,7 @@ mod host {
     mod tests {
         use kithara_test_utils::kithara;
 
-        use super::{ButtonStyle, Icon, Mark, mark};
+        use super::{ButtonStyle, IconName, Mark, mark};
 
         /// The one style that names its own icon keeps naming it, and every
         /// other style draws the authored art rather than handing it to a
@@ -121,15 +125,15 @@ mod host {
         #[kithara::test]
         fn micro_primary_keeps_its_forced_lucide_icon() {
             assert!(matches!(
-                mark(ButtonStyle::MicroPrimary, Some(Icon::PlayReverse), false),
-                Some(Mark::Glyph(glyph)) if Some(glyph) == Icon::Play.lucide_glyph()
+                mark(ButtonStyle::MicroPrimary, Some(IconName::PlayReverse), false),
+                Some(Mark::Glyph(glyph)) if Some(glyph) == IconName::Play.lucide_glyph()
             ));
         }
 
         #[kithara::test]
         fn authored_art_reaches_a_button_as_an_outline() {
             assert!(matches!(
-                mark(ButtonStyle::Default, Some(Icon::PlayReverse), false),
+                mark(ButtonStyle::Default, Some(IconName::PlayReverse), false),
                 Some(Mark::Outline(_))
             ));
         }

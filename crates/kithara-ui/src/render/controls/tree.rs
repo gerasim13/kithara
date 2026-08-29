@@ -285,7 +285,8 @@ mod tests {
     use crate::{
         builtin,
         interact::{Input, PointerPhase, mouse as mouse_input},
-        render::{TreeIcon, TreeRow},
+        module::IconName,
+        render::TreeRow,
     };
 
     fn rows() -> [TreeRow<'static>; 3] {
@@ -293,7 +294,7 @@ mod tests {
             TreeRow {
                 depth: 0,
                 label: "First",
-                icon: TreeIcon::Folder,
+                icon: IconName::Folder,
                 count: None,
                 expanded: Some(true),
                 selected: false,
@@ -302,7 +303,7 @@ mod tests {
             TreeRow {
                 depth: 1,
                 label: "Second",
-                icon: TreeIcon::Playlist,
+                icon: IconName::Playlist,
                 count: Some(2),
                 expanded: None,
                 selected: true,
@@ -311,7 +312,7 @@ mod tests {
             TreeRow {
                 depth: 1,
                 label: "Third",
-                icon: TreeIcon::Zvuk,
+                icon: IconName::Zvuk,
                 count: None,
                 expanded: None,
                 selected: false,
