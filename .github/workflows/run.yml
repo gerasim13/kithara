@@ -67,7 +67,14 @@ jobs:
 
   # Every lane's verdict, not the first one's: these answer independent
   # questions and a run that stops at the first red hides the rest.
+  #
+  # Named after the lane at both levels. A `uses:` job renders the callee's
+  # name under its own, and an unnamed caller falls back to the job id plus
+  # every matrix value - `run (deep-rtsan-file, 120, 0, rtsan-junit-file,
+  # target/nextest/rtsan/junit.xml, always)` for one lane. The tree should
+  # answer what ran, not how it was parameterised.
   run:
+    name: ${{ matrix.lane }}
     needs: select
     if: ${{ needs.select.outputs.matrix != '[]' }}
     strategy:
@@ -90,6 +97,7 @@ jobs:
   # need the selection itself, though: a failed render leaves an empty output,
   # and `always()` alone would hand `fromJSON` an empty string.
   dependent:
+    name: ${{ matrix.lane }}
     needs: [select, run]
     if: ${{ always() && needs.select.result == 'success' && needs.select.outputs.dependent != '[]' }}
     strategy:

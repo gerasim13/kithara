@@ -1689,15 +1689,32 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
 
     // A caller reaches this through `uses:`, and GitHub renders the callee's
-    // job name in the run tree rather than the caller's. Without this every
-    // lane of an eighteen-way fan-out reads `run`, and which lane failed is
-    // legible only through the API.
+    // job name under the caller's own. Without this every lane of an
+    // eighteen-way fan-out reads `run`, and which lane failed is legible only
+    // through the API.
     let job = workflow_job(workflow_jobs(&workflow), "run");
     assert_eq!(
         mapping_field(job, "name").as_str(),
         Some("${{ inputs.lane }}"),
         "the executor's job carries the lane's name"
     );
+}
+
+// The other half of the same tree. An unnamed calling job falls back to its id
+// plus every matrix value it passed, so the level above each lane reads
+// `run (deep-rtsan-file, 120, 0, rtsan-junit-file, ...)` - the parameters,
+// where the lane's name belongs.
+#[test]
+fn the_fan_out_names_each_branch_after_its_lane() {
+    let workflow = github_workflow("run.yml");
+    let jobs = workflow_jobs(&workflow);
+    for name in ["run", "dependent"] {
+        assert_eq!(
+            mapping_field(workflow_job(jobs, name), "name").as_str(),
+            Some("${{ matrix.lane }}"),
+            "`{name}` carries the lane's name"
+        );
+    }
 }
 
 /// A caller and a called workflow agree on inputs across two files, and
