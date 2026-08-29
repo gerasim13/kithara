@@ -17,13 +17,7 @@ const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d66110
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
-const HEAVY_LINUX_WORKFLOWS: [&str; 5] = [
-    "coverage.yml",
-    "lanes.yml",
-    "miri.yml",
-    "mutants.yml",
-    "quality.yml",
-];
+const HEAVY_LINUX_WORKFLOWS: [&str; 4] = ["coverage.yml", "lanes.yml", "miri.yml", "quality.yml"];
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw"

@@ -116,12 +116,3 @@ jobs:
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
     uses: ./.github/workflows/stress.yml
-
-  # No group here, unlike the two above: this one is declared inside
-  # mutants.yml, which is also started by hand. A caller that held the same
-  # group would be waiting for a turn its own callee needs.
-  mutants:
-    if: >-
-      vars.KITHARA_RUNNER_LABELS != ''
-      && (inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly')) == 'weekly'
-    uses: ./.github/workflows/mutants.yml

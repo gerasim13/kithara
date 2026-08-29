@@ -651,6 +651,38 @@
   <require os> linux
   <require tools> cargo just
   just test miri
+# deep-mutants / branch
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / main
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
+# deep-mutants / release
+  <require os> linux
+  <require tools> cargo just
+  just test mutants run-all --jobs 4
 # deep-perf / branch
   <require os> macos
   <require tools> cargo just

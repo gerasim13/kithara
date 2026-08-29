@@ -1142,6 +1142,36 @@ kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
 
+# Mutation testing, scoped by `.config/mutation-suites.toml` rather than by the
+# workspace: four suites, each naming one package, the production files it may
+# mutate, and the `test()` filters that must kill the mutants, run against
+# `--lib` alone. A workspace-wide run was measured at three days and killed
+# nothing - integration suites cover behaviour, not lines, so a mutant either
+# survives every one of them or is caught by fifty at once. The curated run
+# takes eight minutes; the timeout is the headroom for a hung mutant, not a
+# budget the suites are expected to spend.
+[ext.ci.lanes.deep-mutants]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+  ], label = "unit mutation suites" },
+]
+role = "deep"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants", path = "target/mutants-ci" }
+timeout_minutes = 120
+
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
 # can act on. Values stay redacted, so neither the log nor the report repeats a
@@ -2116,7 +2146,7 @@ unimock_traits_dir = "crates/kithara-play/src/api"
 
 [[quality.assessment.not_applicable_tools]]
 tool = "cargo-mutants"
-reason = "Workspace-wide mutation testing is prohibitively expensive and does not provide actionable signal."
+reason = "Workspace-wide mutation testing was measured at three days and killed nothing; the `deep-mutants` lane runs the curated unit suites in `.config/mutation-suites.toml` instead."
 
 [[quality.assessment.deep_stages]]
 name = "extended-clippy"
