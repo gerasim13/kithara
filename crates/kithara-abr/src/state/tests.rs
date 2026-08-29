@@ -15,9 +15,25 @@ use kithara_platform::{
 };
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
+use unimock::{MockFn, Unimock, matching};
 
 use super::{AbrDecision, AbrState, AbrView, PendingAbrClaim, PendingAbrDecision};
-use crate::{Abr, AbrController, AbrSettings, Estimator, ThroughputEstimator};
+use crate::{Abr, AbrController, AbrMock, AbrSettings, Estimator, ThroughputEstimator};
+
+/// Peer that answers with the state and variants it is given and keeps the
+/// default `Abr` behaviour everywhere else. Every test in this module
+/// reaches all three methods; unimock rejects a clause that none does.
+fn abr_peer(state: &Arc<AbrState>, variants: Vec<VariantInfo>) -> Arc<dyn Abr> {
+    Arc::new(Unimock::new((
+        AbrMock::cancel
+            .each_call(matching!())
+            .returns(CancelToken::never()),
+        AbrMock::state
+            .each_call(matching!())
+            .returns(Some(Arc::clone(state))),
+        AbrMock::variants.each_call(matching!()).returns(variants),
+    )))
+}
 
 /// Canonical 3-variant fixture used by every test in this module. Private
 /// to the test module so it never leaks into the public API.
@@ -765,25 +781,6 @@ fn locked_state_rejects_switch(
     );
 }
 
-struct SeedPeer {
-    cancel: CancelToken,
-    state: Arc<AbrState>,
-    variants: Vec<VariantInfo>,
-}
-
-impl Abr for SeedPeer {
-    fn cancel(&self) -> CancelToken {
-        self.cancel.clone()
-    }
-
-    fn state(&self) -> Option<Arc<AbrState>> {
-        Some(Arc::clone(&self.state))
-    }
-    fn variants(&self) -> Vec<VariantInfo> {
-        self.variants.clone()
-    }
-}
-
 struct TickPeer {
     cancel: CancelToken,
     state: Arc<AbrState>,
@@ -974,11 +971,7 @@ async fn auto_mode_with_default_seed_picks_high_variant_on_cold_start() {
         .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
-    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&state),
-        variants: audio_variants_4tier(),
-    });
+    let peer = abr_peer(&state, audio_variants_4tier());
     let handle = controller.register(&peer);
     controller.run_tick(handle.peer_id(), Instant::now());
     assert_eq!(
@@ -1002,11 +995,7 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
         .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(None)));
-    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&state),
-        variants: audio_variants_4tier(),
-    });
+    let peer = abr_peer(&state, audio_variants_4tier());
     let handle = controller.register(&peer);
     controller.run_tick(handle.peer_id(), Instant::now());
     assert_eq!(state.current_variant_index(), VariantIndex::new(0));
@@ -1232,11 +1221,7 @@ async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
 async fn tick_already_optimal_retracts_stale_throughput_pending() {
     let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(2)))));
-    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&state),
-        variants: test_variants_3(),
-    });
+    let peer = abr_peer(&state, test_variants_3());
     let handle = controller.register(&peer);
 
     // A quality down-switch, not a rescue: a rescue answers a variant that
@@ -1275,11 +1260,7 @@ fn tick_min_interval_hold_preserves_pending() {
         .build();
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&state),
-        variants: audio_variants_4tier(),
-    });
+    let peer = abr_peer(&state, audio_variants_4tier());
     let handle = controller.register(&peer);
     state.request_target(VariantIndex::new(3), AbrReason::UpSwitch);
 
@@ -1305,11 +1286,7 @@ fn tick_min_interval_hold_preserves_pending() {
 async fn set_mode_back_to_current_kills_queued_switch() {
     let controller = AbrController::new(settings_fast());
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-    let peer: Arc<dyn Abr> = Arc::new(SeedPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&state),
-        variants: test_variants_3(),
-    });
+    let peer = abr_peer(&state, test_variants_3());
     let handle = controller.register(&peer);
     handle
         .set_mode(AbrMode::Manual(VariantIndex::new(2)))
@@ -1338,30 +1315,9 @@ async fn lock_refcount_holds_across_record_bandwidth() {
     let controller =
         AbrController::with_estimator(settings, Arc::new(ThroughputEstimator::new()) as Arc<_>);
 
-    struct LockedPeer {
-        cancel: CancelToken,
-        state: Arc<AbrState>,
-        variants: Vec<VariantInfo>,
-    }
-    impl Abr for LockedPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-        fn variants(&self) -> Vec<VariantInfo> {
-            self.variants.clone()
-        }
-    }
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     state.lock();
-    let peer: Arc<dyn Abr> = Arc::new(LockedPeer {
-        cancel: CancelToken::never(),
-        state: Arc::clone(&state),
-        variants: test_variants_3(),
-    });
+    let peer = abr_peer(&state, test_variants_3());
     let handle = controller.register(&peer);
 
     for _ in 0..20 {

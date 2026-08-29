@@ -278,10 +278,11 @@ mod tests {
         time::{Duration, Instant},
     };
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
-        Abr, AbrController, AbrSettings, ThroughputEstimator,
+        Abr, AbrController, AbrMock, AbrSettings, ThroughputEstimator,
         state::{AbrDecision, AbrState},
     };
 
@@ -321,21 +322,33 @@ mod tests {
             .build()
     }
 
-    struct StatefulPeer {
-        cancel: CancelToken,
-        state: Arc<AbrState>,
+    /// Peer that answers with the state it is given. `variants` keeps its
+    /// `Abr` default — unimock rejects a clause no test reaches, so the
+    /// variant-reading tests use [`abr_peer_with_variants`] instead.
+    fn abr_peer(state: &Arc<AbrState>) -> Arc<dyn Abr> {
+        Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(CancelToken::never()),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(state))),
+        )))
     }
-    impl Abr for StatefulPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
 
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-        fn variants(&self) -> Vec<VariantInfo> {
-            test_variants_3()
-        }
+    /// [`abr_peer`] plus the canonical 3-variant fixture.
+    fn abr_peer_with_variants(state: &Arc<AbrState>) -> Arc<dyn Abr> {
+        Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(CancelToken::never()),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(state))),
+            AbrMock::variants
+                .each_call(matching!())
+                .returns(test_variants_3()),
+        )))
     }
 
     #[kithara::test(tokio)]
@@ -346,10 +359,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -385,10 +395,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -408,10 +415,7 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
         handle.lock();
@@ -432,10 +436,7 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer_with_variants(&state);
         let handle = controller.register(&peer);
 
         let variants = handle.variants();
@@ -469,10 +470,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
-            let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-                cancel: CancelToken::never(),
-                state: Arc::clone(&state),
-            });
+            let peer = abr_peer_with_variants(&state);
             let h = controller.register(&peer);
             assert_eq!(h.variants().len(), 3);
             h
@@ -493,10 +491,7 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
         let mut rx = bus.subscribe();
