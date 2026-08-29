@@ -1272,6 +1272,8 @@ role = "platforms"
 kinds = ["nightly"]
 timeout_minutes = 120
 
+# Off on this host, not gone: the guest is ARM64, so the suite ran under
+# emulation and reported on it as much as on the commit. `--only windows-x64` still reaches it.
 [ext.ci.lanes.windows-x64]
 cache_group = "windows"
 label = "Windows"
@@ -1293,7 +1295,7 @@ steps = [
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
 role = "platforms"
-kinds = ["nightly"]
+kinds = []
 timeout_minutes = 120
 
 # The x86_64 suite used to run here too, on a host with no x86_64 in it: every
