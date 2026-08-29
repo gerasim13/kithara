@@ -13,8 +13,8 @@
 [[suite]]
 name = "crossfader"
 package = "kithara-play"
-files = ["crates/kithara-play/src/api/mix.rs"]
-test_filters = ["test(/api::mix::tests::/)"]
+files = ["crates/kithara-play/src/engine/mix.rs"]
+test_filters = ["test(/engine::mix::tests::/)"]
 timeout_seconds = 120
 
 # Throughput estimation: sample windows, minimum durations, chunk filtering and

@@ -285,6 +285,22 @@ mod tests {
         fs::write(root.join(CONFIG_PATH), content).unwrap();
     }
 
+    /// The suites the repository ships, not a fixture. Every other test here
+    /// proves the machinery against a synthetic config and never opens the file
+    /// the `deep-mutants` lane runs, which is how `crossfader` came to name a
+    /// production file that had moved. Validation covers the whole config
+    /// before any suite runs, so one stale path failed `list`, `run` and
+    /// `run-all` alike: the lane spent its week reporting an error instead of
+    /// a surviving mutant, and nothing on the push gate could say so.
+    #[test]
+    fn the_shipped_suites_still_name_the_files_they_mutate() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask sits beside the workspace root");
+        MutationConfig::load(root)
+            .unwrap_or_else(|error| panic!("the shipped {CONFIG_PATH} is unusable: {error:#}"));
+    }
+
     #[test]
     fn suite_command_is_package_file_and_unit_test_scoped() {
         let root = tempdir().unwrap();
