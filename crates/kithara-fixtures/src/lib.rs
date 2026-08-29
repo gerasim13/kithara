@@ -7,7 +7,6 @@
 //! invalidation contract.
 
 pub mod asset;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;

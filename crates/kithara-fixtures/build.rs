@@ -114,15 +114,31 @@ fn codegen(namespace: &Path, resolved: &[(String, String, &'static AssetDef)]) -
             panic!("kithara-fixtures: the store path for `{name}` is not valid UTF-8")
         });
         let content_type = def.content_type;
+        // rustc records an `include_bytes!` path in dep-info, so cargo tracks
+        // the store entry an embedded accessor was built from. An on-disk
+        // accessor reads the file at run time, which wasm has no way to do.
+        let (cfg, body) = if def.embed {
+            (
+                "",
+                format!("    crate::asset::Asset::embedded(&{entry}, include_bytes!({path:?}))"),
+            )
+        } else {
+            (
+                "#[cfg(not(target_arch = \"wasm32\"))]\n",
+                format!(
+                    "    static BYTES: ::std::sync::OnceLock<Vec<u8>> = \
+                     ::std::sync::OnceLock::new();\n    \
+                     crate::asset::Asset::on_disk(&{entry}, &BYTES)"
+                ),
+            )
+        };
         let _ = write!(
             out,
             "static {entry}: crate::asset::AssetEntry = crate::asset::AssetEntry {{\n    \
              name: {name:?},\n    id: {id:?},\n    path: {path:?},\n    \
              content_type: {content_type:?},\n}};\n\n\
-             #[must_use]\n\
-             pub fn {name}() -> crate::asset::Asset {{\n    \
-             static BYTES: ::std::sync::OnceLock<Vec<u8>> = ::std::sync::OnceLock::new();\n    \
-             crate::asset::Asset::on_disk(&{entry}, &BYTES)\n}}\n\n",
+             {cfg}#[must_use]\n\
+             pub fn {name}() -> crate::asset::Asset {{\n{body}\n}}\n\n",
         );
         let _ = writeln!(manifest, "    &{entry},");
     }

@@ -25,6 +25,10 @@ encoded inside a test's wall-clock deadline.
 - `src/store.rs` — the store itself: identity, namespace, atomic writes, and the
   cross-process lock that keeps two producers off one entry.
 
+An asset declared `#[kithara::asset(..., embed)]` is baked into the binary with
+`include_bytes!` instead of being read from disk at run time. It is still
+generated once, into the store, like every other asset.
+
 ## Usage
 
 ```rust

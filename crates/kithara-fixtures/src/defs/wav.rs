@@ -75,7 +75,7 @@ fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
 }
 
 /// 440 Hz tone with two lower-amplitude source-time markers.
-#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
 #[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK, Consts::MARKER_PEAK)]
 fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> {
     wav(total_frames, |frame| {

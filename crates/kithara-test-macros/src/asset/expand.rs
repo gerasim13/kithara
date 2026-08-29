@@ -24,6 +24,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_name = func.sig.ident.clone();
     let fn_name_literal = fn_name.to_string();
     let content_type = &args.content_type;
+    let embed = args.embed;
     let ext = &args.ext;
 
     let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
@@ -34,6 +35,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                     build: || #fn_name(#(#values),*),
                     case: #case_literal,
                     content_type: #content_type,
+                    embed: #embed,
                     ext: #ext,
                     func: #fn_name_literal,
                 }

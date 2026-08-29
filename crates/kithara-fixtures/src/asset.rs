@@ -21,6 +21,7 @@ pub struct Asset {
 }
 
 enum Source {
+    Embedded(&'static [u8]),
     OnDisk(&'static OnceLock<Vec<u8>>),
 }
 
@@ -34,6 +35,15 @@ impl Asset {
         }
     }
 
+    /// Asset baked into the binary at compile time.
+    #[must_use]
+    pub const fn embedded(entry: &'static AssetEntry, bytes: &'static [u8]) -> Self {
+        Self {
+            entry,
+            source: Source::Embedded(bytes),
+        }
+    }
+
     /// Bytes of the asset.
     ///
     /// # Panics
@@ -43,6 +53,7 @@ impl Asset {
     #[must_use]
     pub fn bytes(&self) -> &'static [u8] {
         match self.source {
+            Source::Embedded(bytes) => bytes,
             Source::OnDisk(cell) => cell.get_or_init(|| {
                 std::fs::read(self.entry.path).unwrap_or_else(|error| {
                     panic!(
@@ -65,6 +76,7 @@ impl Asset {
     #[must_use]
     pub fn path(&self) -> Option<&'static Path> {
         match self.source {
+            Source::Embedded(_) => None,
             Source::OnDisk(_) => Some(Path::new(self.entry.path)),
         }
     }

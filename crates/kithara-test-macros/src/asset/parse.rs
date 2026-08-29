@@ -43,16 +43,29 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
 /// Parsed `#[kithara::asset(ext = "…", content_type = "…")]`.
 pub(crate) struct AssetArgs {
     pub(crate) content_type: LitStr,
+    /// Bake the asset into the binary instead of reading it from the store.
+    pub(crate) embed: bool,
     pub(crate) ext: LitStr,
 }
 
 impl Parse for AssetArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut content_type: Option<LitStr> = None;
+        let mut embed = false;
         let mut ext: Option<LitStr> = None;
 
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
+            if key == "embed" {
+                if embed {
+                    return Err(syn::Error::new(key.span(), "duplicate key `embed`"));
+                }
+                embed = true;
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<Token![=]>()?;
             let value = input.parse::<LitStr>()?;
             let slot = match key.to_string().as_str() {
@@ -61,7 +74,10 @@ impl Parse for AssetArgs {
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
-                        format!("unknown asset key `{other}`; expected `ext` or `content_type`"),
+                        format!(
+                            "unknown asset key `{other}`; expected `ext`, `content_type`, \
+                             or `embed`"
+                        ),
                     ));
                 }
             };
@@ -89,7 +105,11 @@ impl Parse for AssetArgs {
             ));
         }
 
-        Ok(Self { content_type, ext })
+        Ok(Self {
+            content_type,
+            embed,
+            ext,
+        })
     }
 }
 
@@ -136,6 +156,26 @@ mod tests {
     fn a_duplicate_key_is_rejected() {
         assert!(
             syn::parse_str::<AssetArgs>(r#"ext = "wav", ext = "mp3", content_type = "audio/wav""#)
+                .is_err(),
+        );
+    }
+
+    #[test]
+    fn embed_is_off_by_default_and_opt_in() {
+        let plain = syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav""#)
+            .expect("valid attribute");
+        assert!(!plain.embed);
+
+        let embedded =
+            syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav", embed"#)
+                .expect("valid attribute");
+        assert!(embedded.embed);
+    }
+
+    #[test]
+    fn embed_is_rejected_twice() {
+        assert!(
+            syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav", embed, embed"#)
                 .is_err(),
         );
     }

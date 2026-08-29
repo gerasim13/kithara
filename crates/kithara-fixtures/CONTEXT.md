@@ -56,6 +56,23 @@ one root — races on the same entries. The protocol is double-checked:
 `EntryLock` releases with its file handle, so a producer that panics or is
 killed does not wedge the store.
 
+## `embed`
+
+`#[kithara::asset(..., embed)]` changes how an asset is *served*, never how it is
+produced. The build script materializes it into the store exactly as it does any
+other asset, then emits an accessor that reads that file back with
+`include_bytes!` — one generation pass, bytes baked into the binary.
+
+Consequences, in the order they matter:
+
+- `Asset::path()` returns `None`. An embedded asset has no file at run time, so
+  a test that needs a path on disk must not embed.
+- The bytes cost binary size in every test binary that links the accessor. Embed
+  where disk access is the thing under test or unavailable — wasm has no
+  filesystem, and only embedded accessors compile there.
+- rustc records `include_bytes!` paths in dep-info, so cargo rebuilds the
+  accessor when the store entry it was built from changes.
+
 ## Generators Stay Out Of The Library
 
 `src/defs/` is reached only through `#[path]` from `build.rs`. Two consequences,

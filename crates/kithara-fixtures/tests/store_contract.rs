@@ -83,3 +83,25 @@ fn the_namespace_carries_a_build_fingerprint() {
     assert_eq!(fingerprint.len(), store::FINGERPRINT_HEX_LEN);
     assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
 }
+
+#[kithara::test(native, flash(false))]
+fn an_embedded_asset_has_no_file_to_read() {
+    let embedded = assets::marked_sine_wav_a440_6s();
+    assert_eq!(
+        embedded.path(),
+        None,
+        "an embedded asset must not carry a store path",
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn an_embedded_asset_carries_the_bytes_that_were_stored() {
+    let embedded = assets::marked_sine_wav_a440_6s();
+    let stored = assets::MANIFEST
+        .iter()
+        .find(|entry| entry.id == embedded.entry().id)
+        .map(|entry| std::fs::read(entry.path).expect("read the stored asset"))
+        .unwrap_or_else(|| panic!("asset {} is missing from the manifest", embedded.entry().id));
+
+    assert_eq!(embedded.bytes(), stored.as_slice());
+}
