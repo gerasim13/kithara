@@ -293,8 +293,8 @@ fn all_four_shipped_wave_documents_mount_through_the_neutral_facade() {
             true,
         ),
         (
-            "app-overview-row",
-            include_str!("../../kithara-app/assets/ui/modules/app-overview-row.kmodule.ron"),
+            "deck-overview-row",
+            include_str!("../assets/modules/deck/overview-row.kmodule.ron"),
             studio_layout(),
             &[("deck-a/wave", WaveStyle::Default)][..],
             InputOwner::Engine,

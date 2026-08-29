@@ -734,7 +734,7 @@ to `skin`, `solve` to `layout::Axis`.
 
 The retained interaction boundary explicitly names nineteen documents: `app-deck`,
 `app-strip`, `app-mixer`, `app-mixer-single`, `app-overview`,
-`app-overview-row`, `app-overview-single`, `gallery-knobs`, `gallery-meters`,
+`app-overview-single`, `deck-overview-row`, `gallery-knobs`, `gallery-meters`,
 `gallery-toggles`, `gallery-chips`, `gallery-buttons-tab`, `gallery-cells-tab`,
 `gallery-faders-tab`, `gallery-library2-tab`, `gallery-table-tab`, `gallery-tree-tab`,
 `gallery-module-tabs`, and `gallery-nav`. A direct layout module is selected by its compiled module
@@ -860,7 +860,7 @@ the two hosts own disjoint targets and no shared gesture state.
 
 The dual mixer adds one crossfader and an inert divider around two supported strips; the single
 mixer contains one supported strip. Each strip contains knobs, a vertical VU, and a label. Each
-`app-overview-row` contains one supported wave between two inert text labels. `gallery-knobs`
+`deck-overview-row` contains one supported wave between two inert text labels. `gallery-knobs`
 contains four knobs and a label; `gallery-meters` contains a stereo meter, two vertical VUs, and a
 label; `gallery-toggles` contains two toggles, two checkboxes, and a label.
 `gallery-buttons-tab` contains six activation buttons and two inert text labels; its micro

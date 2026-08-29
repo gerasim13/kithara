@@ -1326,14 +1326,14 @@ mod tests {
                 root: Row(children: [
                     Include(
                         id: "a",
-                        source: "app-overview-row.kmodule.ron",
+                        source: "deck-overview-row.kmodule.ron",
                         with: { "deck": "a" },
                     ),
                 ]))"#,
         );
         resolver.insert(
-            "app-overview-row.kmodule.ron",
-            r#"(schema: "kithara.module", version: 1, id: "app-overview-row",
+            "deck-overview-row.kmodule.ron",
+            r#"(schema: "kithara.module", version: 1, id: "deck-overview-row",
                 parameters: ["deck"],
                 root: Row(gap: 0.0, size: (w: Fill, h: Fixed(40.0)), children: [
                     Text(id: "letter", label: "A"),
@@ -4391,7 +4391,7 @@ mod tests {
         let row = &children[0];
 
         assert_eq!(ui.resolve(*module), "app-overview");
-        assert!(ui.includes_module(*instance, &Address::Root.child(0), "app-overview-row"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(0), "deck-overview-row"));
         let mut components = Vec::new();
         claimed_components(row, &mut components);
         assert_eq!(components, ["wave"]);
