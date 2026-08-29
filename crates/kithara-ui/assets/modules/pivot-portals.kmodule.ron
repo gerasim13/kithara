@@ -4,7 +4,8 @@
     id: "pivot-portals",
     chrome: Plain,
     root: Column(
-        size: (w: Fill, h: Shrink),
+        size: (w: Fill, h: Fill),
+        background: Bg,
         gap: 0.0,
         children: [
             Row(

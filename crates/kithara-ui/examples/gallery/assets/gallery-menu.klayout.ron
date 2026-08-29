@@ -25,7 +25,7 @@
                         children: [
                             (weight: 1.0, node: Module(
                                 instance: "app-menu",
-                                source: "modules/app-menu.kmodule.ron",
+                                source: "modules/tabs/menu-bar.kmodule.ron",
                                 frame: (left: false, right: false, top: false),
                                 size: (w: Fixed(340.0), h: Fixed(42.0)),
                             )),

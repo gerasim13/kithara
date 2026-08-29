@@ -4,6 +4,8 @@
     id: "gallery-module-tabs",
     chrome: Plain,
     root: Row(
+        size: (w: Fill, h: Fill),
+        background: Bg,
         children: [
             TabLarge(
                 id: "deck",

@@ -127,7 +127,10 @@ impl Default for MenuState {
 
 impl MenuState {
     pub(crate) fn activate(&mut self, path: &str) -> bool {
-        let Some(id) = path.strip_prefix("app-menu/") else {
+        // The page mounts the menu the way the application does: a bar of its
+        // own, with the menu included in it, so the bar stands between the page
+        // and every control the menu names.
+        let Some(id) = path.strip_prefix("app-menu/menu/") else {
             return false;
         };
         let (instance, node) = id.split_once('/').unwrap_or((id, ""));

@@ -4,6 +4,8 @@
     id: "gallery-library2-tab",
     chrome: Plain,
     root: Row(
+        size: (w: Fill, h: Fill),
+        background: Bg,
         gap: Some(1.0),
         children: [
             Tree(

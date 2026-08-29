@@ -71,10 +71,29 @@ pub(super) fn allocate(items: &[Item], axis: Axis, remaining: f32) -> Vec<Alloca
     }
 
     let weight_sum = remaining_weight(items, &allocations, axis);
-    for (item, allocation) in items.iter().zip(&mut allocations) {
+    // Shares meet on whole pixels, each one taken as the distance from the edge
+    // before it: an edge left on a fraction is rounded twice by the host that
+    // places the cells, once as one cell's end and once as the next one's
+    // start, and the pixel between the two roundings is a pixel neither cell
+    // paints. The last share keeps the fraction so the row still ends where the
+    // room does.
+    let last = items
+        .iter()
+        .zip(&allocations)
+        .rposition(|(item, allocation)| item.main_weight(axis) != 0.0 && !allocation.is_pinned);
+    let mut exact = 0.0;
+    let mut placed = 0.0;
+    for (index, (item, allocation)) in items.iter().zip(&mut allocations).enumerate() {
         let weight = item.main_weight(axis);
         if weight != 0.0 && !allocation.is_pinned {
-            allocation.extent = (pool * f64::from(weight) / weight_sum).as_();
+            exact += pool * f64::from(weight) / weight_sum;
+            let edge = if Some(index) == last {
+                exact
+            } else {
+                exact.round()
+            };
+            allocation.extent = (edge - placed).as_();
+            placed = edge;
         }
     }
 

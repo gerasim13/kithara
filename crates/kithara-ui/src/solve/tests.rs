@@ -270,8 +270,13 @@ fn fixed_and_fill_items_split_the_available_main_extent() {
     );
 }
 
+/// Shares of an extent that does not divide evenly tile it on whole pixels:
+/// each cell starts where the one before it ended, and the last ends on the far
+/// edge. A cell that ended on a fraction would be rounded twice by the host that
+/// places it, once at its own edge and once at its neighbour's, and the pixel
+/// between the two roundings is a pixel neither cell paints.
 #[kithara::test]
-fn fills_share_a_fractional_remainder_without_sequential_rounding() {
+fn fills_tile_a_fractional_remainder_on_whole_pixels() {
     let fill = TestItem::new(
         Size::new(Length::Fill, Length::Fixed(1.0)),
         Size::new(0.0, 1.0),
@@ -288,12 +293,9 @@ fn fills_share_a_fractional_remainder_without_sequential_rounding() {
     assert_eq!(
         placements(&distribution),
         vec![
-            item(Point::new(0.0, 0.0), Size::new(10.0 / 3.0, 1.0)),
-            item(Point::new(10.0 / 3.0, 0.0), Size::new(10.0 / 3.0, 1.0)),
-            item(
-                Point::new(10.0 / 3.0 + 10.0 / 3.0, 0.0),
-                Size::new(10.0 / 3.0, 1.0),
-            ),
+            item(Point::ORIGIN, Size::new(3.0, 1.0)),
+            item(Point::new(3.0, 0.0), Size::new(4.0, 1.0)),
+            item(Point::new(7.0, 0.0), Size::new(3.0, 1.0)),
         ]
     );
 }

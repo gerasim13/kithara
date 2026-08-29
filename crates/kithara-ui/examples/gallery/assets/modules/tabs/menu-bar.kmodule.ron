@@ -1,14 +1,13 @@
 (
     schema: "kithara.module",
     version: 1,
-    id: "gallery-chrome-row-c",
+    id: "gallery-menu-bar",
     chrome: Plain,
-    root: Column(
+    root: Row(
         size: (w: Fill, h: Fill),
         background: Bg,
-        pad: Some(14.0),
         children: [
-            Text(id: "label", style: Section, label: "C / CORNERS AND SIDES"),
+            Include(id: "menu", source: "../app-menu.kmodule.ron"),
         ],
     ),
 )

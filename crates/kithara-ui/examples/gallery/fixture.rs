@@ -357,6 +357,10 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/library2.kmodule.ron"),
     ),
     (
+        "modules/tabs/menu-bar.kmodule.ron",
+        include_str!("assets/modules/tabs/menu-bar.kmodule.ron"),
+    ),
+    (
         "modules/tabs/menu-context.kmodule.ron",
         include_str!("assets/modules/tabs/menu-context.kmodule.ron"),
     ),
@@ -425,8 +429,8 @@ const ASSETS: &[(&str, &str)] = &[
         include_str!("assets/modules/tabs/typography.kmodule.ron"),
     ),
     (
-        "modules/tabs/vis-spacer.kmodule.ron",
-        include_str!("assets/modules/tabs/vis-spacer.kmodule.ron"),
+        "modules/tabs/spacer.kmodule.ron",
+        include_str!("assets/modules/tabs/spacer.kmodule.ron"),
     ),
     (
         "modules/tabs/vis.kmodule.ron",

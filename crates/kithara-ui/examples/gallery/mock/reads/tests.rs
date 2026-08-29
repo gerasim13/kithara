@@ -349,18 +349,18 @@ fn default_menu_state_is_the_frozen_design_snapshot() {
 fn the_popover_path_only_closes_while_the_burger_toggles() {
     let mut reads = MockReads::default();
 
-    reads.apply("app-menu/pop", &ControlAction::Activate);
+    reads.apply("app-menu/menu/pop", &ControlAction::Activate);
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
-    reads.apply("app-menu/pop", &ControlAction::Activate);
+    reads.apply("app-menu/menu/pop", &ControlAction::Activate);
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
 
-    reads.apply("app-menu/burger", &ControlAction::Activate);
+    reads.apply("app-menu/menu/burger", &ControlAction::Activate);
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
-    reads.apply("app-menu/burger", &ControlAction::Activate);
+    reads.apply("app-menu/menu/burger", &ControlAction::Activate);
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
 
-    reads.apply("app-menu/burger", &ControlAction::Activate);
-    reads.apply("app-menu/header-close", &ControlAction::Activate);
+    reads.apply("app-menu/menu/burger", &ControlAction::Activate);
+    reads.apply("app-menu/menu/header-close", &ControlAction::Activate);
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
 }
 
@@ -382,7 +382,7 @@ fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
         Some(ReadValue::Bool(false))
     );
 
-    reads.apply("app-menu/new-window", &ControlAction::Activate);
+    reads.apply("app-menu/menu/new-window", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
         Some(ReadValue::Text("3 WINDOWS"))
@@ -396,20 +396,20 @@ fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
         Some(ReadValue::Bool(false))
     );
 
-    reads.apply("app-menu/new-window", &ControlAction::Activate);
+    reads.apply("app-menu/menu/new-window", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
         Some(ReadValue::Text("3 WINDOWS"))
     );
 
-    reads.apply("app-menu/window-1/close", &ControlAction::Activate);
+    reads.apply("app-menu/menu/window-1/close", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
         Some(ReadValue::Text("3 WINDOWS"))
     );
 
-    reads.apply("app-menu/window-3/close", &ControlAction::Activate);
-    reads.apply("app-menu/window-2/close", &ControlAction::Activate);
+    reads.apply("app-menu/menu/window-3/close", &ControlAction::Activate);
+    reads.apply("app-menu/menu/window-2/close", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.window.count"),
         Some(ReadValue::Text("1 WINDOW"))
@@ -424,7 +424,7 @@ fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
 fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
     let mut reads = MockReads::default();
 
-    reads.apply("app-menu/window-2/focus", &ControlAction::Activate);
+    reads.apply("app-menu/menu/window-2/focus", &ControlAction::Activate);
 
     assert_eq!(
         reads.get("ui.window.active@window=2"),
@@ -451,7 +451,7 @@ fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
         Some(ReadValue::Bool(false))
     );
 
-    reads.apply("app-menu/module-ov/cell", &ControlAction::Activate);
+    reads.apply("app-menu/menu/module-ov/cell", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.module.on@module=ov"),
         Some(ReadValue::Bool(true))
@@ -470,7 +470,7 @@ fn opening_one_menu_group_closes_the_other() {
         reads.get("ui.menu.group_hidden@group=mod"),
         Some(ReadValue::Bool(true))
     );
-    reads.apply("app-menu/modules-head", &ControlAction::Activate);
+    reads.apply("app-menu/menu/modules-head", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.menu.group_open@group=mod"),
         Some(ReadValue::Bool(true))
@@ -480,7 +480,7 @@ fn opening_one_menu_group_closes_the_other() {
         Some(ReadValue::Bool(true))
     );
 
-    reads.apply("app-menu/layouts-head", &ControlAction::Activate);
+    reads.apply("app-menu/menu/layouts-head", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.menu.group_hidden@group=mod"),
         Some(ReadValue::Bool(true))
@@ -490,7 +490,7 @@ fn opening_one_menu_group_closes_the_other() {
         Some(ReadValue::Bool(true))
     );
 
-    reads.apply("app-menu/layouts-head", &ControlAction::Activate);
+    reads.apply("app-menu/menu/layouts-head", &ControlAction::Activate);
     assert_eq!(
         reads.get("ui.menu.group_hidden@group=lay"),
         Some(ReadValue::Bool(true))
@@ -505,7 +505,7 @@ fn applying_a_layout_renames_the_active_window() {
         reads.get("ui.layout.selected@layout=1"),
         Some(ReadValue::Bool(true))
     );
-    reads.apply("app-menu/layout-2/apply", &ControlAction::Activate);
+    reads.apply("app-menu/menu/layout-2/apply", &ControlAction::Activate);
 
     assert_eq!(
         reads.get("ui.layout.selected@layout=1"),
@@ -535,8 +535,8 @@ fn the_record_and_cast_hints_follow_their_own_flags() {
         Some(ReadValue::Text("AUDIO LIVE"))
     );
 
-    reads.apply("app-menu/record/toggle", &ControlAction::Activate);
-    reads.apply("app-menu/cast/toggle", &ControlAction::Activate);
+    reads.apply("app-menu/menu/record/toggle", &ControlAction::Activate);
+    reads.apply("app-menu/menu/cast/toggle", &ControlAction::Activate);
 
     assert_eq!(
         reads.get("ui.set.record_hint"),
