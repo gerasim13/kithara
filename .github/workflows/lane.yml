@@ -1,40 +1,62 @@
 name: Lane
 
-# One recipe run against a fresh checkout on the self-hosted fleet.
+# One declared CI lane, run against a fresh checkout on the self-hosted fleet.
 #
-# Ten jobs in ci.yml were this file with one line changed: the same pinned
-# checkout, the same `runs-on`, the same single `just` command. Stating it once
-# means the pinned action SHAs, the runner labels, and the artifact upload have
-# one place to be wrong in, and a caller says only what it runs and for how
-# long.
+# A caller names a lane and a pipeline kind; `.config/xtask.toml` and
+# `xtask ci lane` own what that lane actually does. Stating the pinned
+# checkout, the runner labels, and the artifact upload here once means a
+# caller says only which lane to run, for which pipeline, and for how long -
+# never a command of its own.
 #
-# A caller that needs more than a recipe - several steps, an environment the
-# recipe cannot carry, `continue-on-error` - stays a job of its own. This is the
+# A caller that needs more than one lane - several steps, an environment the
+# lane cannot carry, `continue-on-error` - stays a job of its own. This is the
 # uniform case, not every case.
 on:
   workflow_call:
     inputs:
-      run:
-        description: The recipe this lane runs.
+      lane:
+        description: Name of the declared CI lane to run.
+        required: true
+        type: string
+      kind:
+        description: Pipeline kind the lane runs under, for `xtask ci lane --kind`.
         required: true
         type: string
       timeout-minutes:
-        description: How long the recipe may take before the job is killed.
+        description: How long the lane may take before the job is killed.
         required: true
         type: number
       fetch-depth:
         description: >-
-          How much history the recipe reads. The tip alone is enough for
+          How much history the lane reads. The tip alone is enough for
           anything that does not compare against a revision; `0` is the whole
           history, which a baseline comparison needs.
         default: 1
         type: number
       artifact-name:
-        description: Name of the artifact to upload, when the recipe leaves one.
+        description: Name of the artifact to upload, when the lane leaves one.
         default: ''
         type: string
       artifact-path:
         description: Path the artifact is collected from. Empty uploads nothing.
+        default: ''
+        type: string
+      artifact-when:
+        description: >-
+          `always` uploads the artifact regardless of the lane's result;
+          `failure` uploads it only when the lane fails.
+        default: always
+        type: string
+      download:
+        description: >-
+          Name of an artifact this lane downloads before it runs, when it
+          depends on one lane's output. Empty downloads nothing.
+        default: ''
+        type: string
+      controller-pin:
+        description: >-
+          Revision the lane checks out as its controller, when it needs a
+          checkout beside the subject one. Empty checks out none.
         default: ''
         type: string
 
@@ -56,13 +78,21 @@ jobs:
           fetch-depth: ${{ inputs.fetch-depth }}
 
       - name: Run the lane
-        run: ${{ inputs.run }}
+        run: just ci lane "${{ inputs.lane }}" --kind "${{ inputs.kind }}"
 
-      # Uploaded even when the recipe failed: a budget report is most worth
-      # reading on the run that broke the budget.
+      # `artifact-when: always` uploads even when the lane failed: a budget
+      # report is most worth reading on the run that broke the budget.
+      # `failure` uploads only on a failed lane, for evidence that exists
+      # solely because something went wrong.
+      #
+      # `if-no-files-found: error` applies to every lane, not only the ones
+      # that expect it: a declared artifact is the lane's own claim that it
+      # will produce that file, and an upload that finds nothing is that
+      # claim broken, not a reason to warn and move on.
       - name: Upload the lane's report
-        if: ${{ always() && inputs.artifact-path != '' }}
+        if: ${{ always() && inputs.artifact-path != '' && (inputs.artifact-when == 'always' || failure()) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ inputs.artifact-name }}
+          name: ${{ inputs.artifact-name }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ inputs.artifact-path }}
+          if-no-files-found: error

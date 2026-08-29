@@ -1602,3 +1602,30 @@ fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
         "`just ci run` needs the GitLab host profile: {callers:?}"
     );
 }
+
+// The executor's whole job is to run a lane the catalog named. A workflow that
+// can be handed an arbitrary command is a second place for a command to live.
+#[test]
+fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
+    let workflow = github_workflow("lane.yml");
+    let on = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("on is a mapping");
+    let workflow_call = mapping_field(on, "workflow_call")
+        .as_mapping()
+        .expect("workflow_call is a mapping");
+    let inputs = mapping_field(workflow_call, "inputs")
+        .as_mapping()
+        .expect("inputs are a mapping");
+    assert!(
+        inputs.contains_key("lane"),
+        "the executor takes a lane name"
+    );
+    assert!(!inputs.contains_key("run"), "the executor takes no command");
+
+    let text = github_workflow_text("lane.yml");
+    assert!(
+        text.contains("just ci lane \"${{ inputs.lane }}\" --kind \"${{ inputs.kind }}\""),
+        "the executor runs the named lane"
+    );
+}
