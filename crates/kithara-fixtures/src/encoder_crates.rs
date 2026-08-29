@@ -133,7 +133,11 @@ mod tests {
 
     use super::{BTreeSet, Lockfile};
 
-    const UNCLASSIFIED_DIRECT_DEPENDENCY: &str = r#"
+    /// Lockfiles the classifier is asked to read.
+    struct Consts;
+
+    impl Consts {
+        const UNCLASSIFIED_DIRECT_DEPENDENCY: &str = r#"
 version = 4
 
 [[package]]
@@ -146,7 +150,7 @@ name = "mp3lame-sys"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
-    const CLASSIFIED_ENCODER_DEPENDENCY: &str = r#"
+        const CLASSIFIED_ENCODER_DEPENDENCY: &str = r#"
 version = 4
 
 [[package]]
@@ -159,7 +163,7 @@ name = "fdk-aac"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
-    const TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE: &str = r#"
+        const TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE: &str = r#"
 version = 4
 
 [[package]]
@@ -177,7 +181,7 @@ name = "mp3lame-sys"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 "#;
-    const MISSING_ENCODER: &str = r#"
+        const MISSING_ENCODER: &str = r#"
 version = 4
 
 [[package]]
@@ -195,6 +199,7 @@ name = "ffmpeg-next"
 version = "8.1.0"
 checksum = "ffmpeg-next-checksum"
 "#;
+    }
 
     fn unaccounted(lockfile: &str) -> BTreeSet<String> {
         Lockfile::parse(lockfile)
@@ -204,28 +209,29 @@ checksum = "ffmpeg-next-checksum"
 
     #[kithara::test(native, flash(false))]
     fn encoder_versions_rejects_missing_encoder() {
-        let lockfile = Lockfile::parse(MISSING_ENCODER).expect("test lockfile must be TOML");
+        let lockfile =
+            Lockfile::parse(Consts::MISSING_ENCODER).expect("test lockfile must be TOML");
 
         assert!(lockfile.encoder_versions().is_err());
     }
 
     #[kithara::test(native, flash(false))]
     fn unclassified_direct_external_dependency_is_reported() {
-        let unaccounted = unaccounted(UNCLASSIFIED_DIRECT_DEPENDENCY);
+        let unaccounted = unaccounted(Consts::UNCLASSIFIED_DIRECT_DEPENDENCY);
 
         assert_eq!(unaccounted, BTreeSet::from(["mp3lame-sys".to_owned()]));
     }
 
     #[kithara::test(native, flash(false))]
     fn classified_encoder_dependency_is_not_reported() {
-        let unaccounted = unaccounted(CLASSIFIED_ENCODER_DEPENDENCY);
+        let unaccounted = unaccounted(Consts::CLASSIFIED_ENCODER_DEPENDENCY);
 
         assert!(unaccounted.is_empty());
     }
 
     #[kithara::test(native, flash(false))]
     fn dependency_through_local_package_is_not_reported() {
-        let unaccounted = unaccounted(TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE);
+        let unaccounted = unaccounted(Consts::TRANSITIVE_DEPENDENCY_OF_LOCAL_PACKAGE);
 
         assert!(unaccounted.is_empty());
     }

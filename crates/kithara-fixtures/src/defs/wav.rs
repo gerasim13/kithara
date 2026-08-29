@@ -1,5 +1,6 @@
 use kithara_test_macros as kithara;
-use num_traits::cast;
+
+use super::tone;
 
 struct Consts;
 
@@ -58,20 +59,13 @@ fn wav(total_frames: usize, sample: impl Fn(usize) -> i16) -> Vec<u8> {
     out
 }
 
-fn sine(frame: usize, peak: i16) -> i16 {
-    let frame = f64::from(u32::try_from(frame).expect("invariant: a fixture is under 2^32 frames"));
-    let phase = std::f64::consts::TAU * Consts::TONE_HZ * frame / f64::from(Consts::SAMPLE_RATE);
-    let scaled = (phase.sin() * f64::from(peak))
-        .round()
-        .clamp(f64::from(i16::MIN), f64::from(i16::MAX));
-    cast(scaled).unwrap_or(0)
-}
-
 /// Plain 440 Hz tone.
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK)]
 fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
-    wav(total_frames, |frame| sine(frame, peak))
+    wav(total_frames, |frame| {
+        tone::sine(frame, Consts::SAMPLE_RATE, Consts::TONE_HZ, peak)
+    })
 }
 
 /// 440 Hz tone with two lower-amplitude source-time markers.
@@ -82,6 +76,7 @@ fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> 
         let in_marker = Consts::MARKER_STARTS
             .iter()
             .any(|start| frame >= *start && frame < start + Consts::MARKER_FRAMES);
-        sine(frame, if in_marker { marker_peak } else { peak })
+        let peak = if in_marker { marker_peak } else { peak };
+        tone::sine(frame, Consts::SAMPLE_RATE, Consts::TONE_HZ, peak)
     })
 }

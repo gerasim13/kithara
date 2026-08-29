@@ -85,6 +85,29 @@ both load-bearing:
   in the library can synthesize an asset, which is the whole point: a test's
   deadline never contains an encode.
 
+## What A Build Costs
+
+Measured with `cargo build -p kithara-fixtures` on an already-compiled tree,
+three assets in the matrix (two six-second WAVs, one two-second MP3):
+
+| Case | Wall clock |
+| --- | --- |
+| Warm — store populated, script not rerun | 1.8–2.8 s |
+| Cold — store wiped, every asset regenerated | 6.0–7.1 s |
+
+The difference, ~4 s, is the whole of generation: the build script binary
+starts, every generator runs, the encoders produce bytes, the store takes
+them. Warm is cargo walking the dependency graph and finding nothing to do —
+a floor this crate does not control.
+
+Two costs sit outside the table. Compiling the encode stack the first time
+dominates both columns and amortizes like any build dependency. And the run
+that regenerates pays once for the whole workspace, where before every test
+binary that wanted an asset paid inside its own deadline.
+
+These numbers are the baseline the next migration stages are measured
+against: the cold column grows with the matrix, the warm column must not.
+
 ## Where The Analyzers Cannot Follow
 
 Two workspace checks are told about this crate rather than worked around at the

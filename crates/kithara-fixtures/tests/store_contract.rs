@@ -105,3 +105,20 @@ fn an_embedded_asset_carries_the_bytes_that_were_stored() {
 
     assert_eq!(embedded.bytes(), stored.as_slice());
 }
+
+#[kithara::test(native, flash(false))]
+fn the_encoded_pilot_is_an_mpeg_audio_stream() {
+    const ID3_TAG: &[u8; 3] = b"ID3";
+    const MPEG_SYNC: u8 = 0xFF;
+
+    let asset = assets::sine_mp3_a440_2s();
+    let bytes = asset.bytes();
+
+    assert_eq!(asset.entry().content_type, "audio/mpeg");
+    assert!(
+        bytes.starts_with(ID3_TAG) || bytes.first() == Some(&MPEG_SYNC),
+        "expected an MPEG audio stream, got {:?}",
+        &bytes[..bytes.len().min(ID3_TAG.len())],
+    );
+    assert!(bytes.len() > ID3_TAG.len());
+}

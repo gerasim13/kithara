@@ -10,7 +10,9 @@
 //! - a change to the encoding code or to an encoder crate's resolved version
 //!   yields a fresh namespace, so a stale cache can never serve outdated bytes.
 
-#[path = "src/encoder_crates.rs"]
+// Transitional: `kithara-fixtures` owns the encoder-version fingerprint now.
+// This build script and its L2 cache both disappear in the migration's stage 2.
+#[path = "../crates/kithara-fixtures/src/encoder_crates.rs"]
 mod encoder_crates;
 
 use std::{
@@ -97,6 +99,7 @@ fn main() {
     }
     hash_encoder_versions(&mut hasher);
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../crates/kithara-fixtures/src/encoder_crates.rs");
 
     println!(
         "cargo:rustc-env=KITHARA_FIXTURE_BUILD={:016x}",
