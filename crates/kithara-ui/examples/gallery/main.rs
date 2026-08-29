@@ -1,4 +1,6 @@
 mod capture;
+#[cfg(test)]
+mod checks;
 mod compare;
 mod custom;
 mod fixture;
@@ -9,10 +11,6 @@ mod masonry_shots;
 mod mock;
 mod offscreen;
 mod sections;
-#[cfg(test)]
-mod steady;
-#[cfg(test)]
-mod walk;
 
 use iced::{
     Color, Element, Size, Subscription, Task, Theme, theme, theme::Base, time as iced_time, window,
@@ -1106,7 +1104,7 @@ mod tests {
         assert_eq!(
             found.popovers,
             [
-                ("app-menu/pop", "ui.menu.open"),
+                ("app-menu/menu/pop", "ui.menu.open"),
                 ("ctx/track-1/menu", "gallery.menu.context@row=1"),
                 ("ctx/track-2/menu", "gallery.menu.context@row=2"),
                 ("ctx/track-3/menu", "gallery.menu.context@row=3"),
@@ -1129,7 +1127,7 @@ mod tests {
                 "ctx/track-1/queue",
             ]
         );
-        assert!(found.pressables.contains(&"app-menu/burger"));
+        assert!(found.pressables.contains(&"app-menu/menu/burger"));
     }
 
     /// One object the motion page declares, with the track it travels along.
@@ -1856,7 +1854,7 @@ mod tests {
         assert!(!keys.is_empty());
 
         let mut reads = MockReads::default();
-        reads.apply("app-menu/new-window", &ControlAction::Activate);
+        reads.apply("app-menu/menu/new-window", &ControlAction::Activate);
         let unanswered: Vec<_> = keys
             .iter()
             .copied()

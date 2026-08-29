@@ -33,7 +33,7 @@
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
-use super::{Consts, capture::Shot};
+use crate::{Consts, capture::Shot};
 
 /// What is done to a page between one picture and the next.
 #[derive(Clone, Copy, Debug)]
@@ -169,7 +169,7 @@ fn whole_f32(value: f32) -> u32 {
 /// leave the two sides of the comparison saying the same thing and a page the
 /// window wrongly left still would read as a page that was never moving.
 fn moves(page: Shot) -> bool {
-    let mut gallery = super::Gallery::mounted();
+    let mut gallery = crate::Gallery::mounted();
     gallery.select(page);
     gallery.compiled().animates || gallery.reads.feeds()
 }
@@ -211,11 +211,11 @@ mod immediate {
     /// window does between two frames is exactly this, and a fresh renderer
     /// each time would answer a different, easier question.
     pub(super) fn pictures(page: Shot, draws: usize, between: Between) -> Vec<Picture> {
-        let mut gallery = super::super::Gallery::mounted();
+        let mut gallery = crate::Gallery::mounted();
         gallery.select(page);
-        let theme = super::super::theme(gallery.skin());
+        let theme = crate::theme(gallery.skin());
         let base = theme.base();
-        let logical = super::super::window_size();
+        let logical = crate::window_size();
         let mut renderer = renderer();
         let mut cache = Cache::default();
         let (width, height) = physical();
@@ -227,7 +227,7 @@ mod immediate {
                     run(&mut gallery, between);
                 }
                 let mut interface = UserInterface::build(
-                    super::super::view(&gallery, window::Id::unique()),
+                    crate::view(&gallery, window::Id::unique()),
                     logical,
                     mem::take(&mut cache),
                     &mut renderer,
@@ -260,12 +260,12 @@ mod immediate {
     /// and it subscribes for the pages that move, so a page it would leave
     /// still is left still here too. Ticking every page regardless would
     /// measure motion on the strength of the harness rather than of the window.
-    fn run(gallery: &mut super::super::Gallery, between: Between) {
+    fn run(gallery: &mut crate::Gallery, between: Between) {
         if !gallery.moves() {
             return;
         }
         for _ in 0..between.ticks() {
-            drop(super::super::update(gallery, Message::Tick));
+            drop(crate::update(gallery, Message::Tick));
         }
     }
 
