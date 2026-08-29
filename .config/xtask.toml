@@ -1007,7 +1007,7 @@ steps = [
   ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
-kinds = ["nightly"]
+kinds = []
 kinds_github = ["main", "branch", "nightly"]
 timeout_minutes = 120
 
@@ -1025,7 +1025,7 @@ steps = [
   ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
-kinds = ["nightly"]
+kinds = []
 kinds_github = ["main", "branch", "nightly"]
 timeout_minutes = 120
 
@@ -1043,7 +1043,7 @@ steps = [
   ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
 ]
 role = "gate"
-kinds = ["nightly"]
+kinds = []
 kinds_github = ["main", "branch", "nightly"]
 timeout_minutes = 120
 
@@ -1120,7 +1120,8 @@ tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["test", "miri"], label = "Miri interpreter run" }]
 role = "deep"
-kinds = ["weekly"]
+kinds = []
+kinds_github = ["weekly"]
 queue = "heavy-linux"
 timeout_minutes = 240
 
@@ -1471,7 +1472,8 @@ steps = [
   ] } },
 ]
 role = "quality"
-kinds = ["nightly", "weekly"]
+kinds = []
+kinds_github = ["nightly", "weekly"]
 timeout_minutes = 360
 
 [ext.ci.lanes.quality-similarity]
@@ -1484,7 +1486,8 @@ program = "just"
 artifact = { name = "similarity-report", path = "target/similarity" }
 steps = [{ args = ["lint", "similarity"], label = "duplication report" }]
 role = "quality"
-kinds = ["nightly", "weekly"]
+kinds = []
+kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.quality-architecture]
@@ -1507,7 +1510,8 @@ steps = [
   ], label = "orphan sweep" },
 ]
 role = "quality"
-kinds = ["nightly", "weekly"]
+kinds = []
+kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.quality-coverage-risk]
@@ -1520,7 +1524,8 @@ program = "just"
 artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
 steps = [{ args = ["quality", "coverage-risk"], label = "coverage risk" }]
 role = "quality"
-kinds = ["nightly", "weekly"]
+kinds = []
+kinds_github = ["nightly", "weekly"]
 timeout_minutes = 240
 
 # `just ci health` fetches the `main` baseline itself with `git fetch
@@ -1535,7 +1540,8 @@ program = "just"
 artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
 steps = [{ args = ["ci", "health"], label = "workspace health" }]
 role = "quality"
-kinds = ["nightly", "weekly"]
+kinds = []
+kinds_github = ["nightly", "weekly"]
 timeout_minutes = 120
 
 # The consolidated report is the sequence the quality jobs lacked: five
@@ -1559,7 +1565,8 @@ steps = [
   ], label = "consolidated quality report" },
 ]
 role = "quality"
-kinds = ["nightly", "weekly"]
+kinds = []
+kinds_github = ["nightly", "weekly"]
 needs = [
   "quality-assess",
   "quality-similarity",

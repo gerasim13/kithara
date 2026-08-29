@@ -1158,20 +1158,53 @@ exit 19
         names
     }
 
+    /// Lanes no pipeline schedules and no fleet claims. Each one is reached by
+    /// name alone and says so with empty membership, which is a declaration
+    /// rather than an oversight - and naming them here is what keeps a lane
+    /// that merely forgot its membership from hiding among them.
+    const BY_NAME_ONLY: [&str; 1] = ["deep-gpu"];
+
     #[test]
-    fn the_pipeline_schedules_every_lane_and_only_real_lanes() {
-        let scheduled = scheduled_lanes();
+    fn a_pipeline_job_only_ever_runs_a_declared_lane() {
         let lanes = declared_lanes();
-        for name in &scheduled {
+        for name in scheduled_lanes() {
             assert!(
-                Lane::parse(name, &lanes).is_ok(),
+                Lane::parse(&name, &lanes).is_ok(),
                 "a pipeline job runs `{name}`, which is not a CI lane"
             );
         }
-        for name in every_lane() {
+    }
+
+    /// `kinds` is GitLab's membership and `kinds_github` is GitHub's, so a
+    /// lane claiming a pipeline kind here is claiming a GitLab job runs it.
+    #[test]
+    fn a_lane_that_claims_a_pipeline_kind_has_a_pipeline_job() {
+        let scheduled = scheduled_lanes();
+        for (name, lane) in declared_lanes() {
+            if lane.kinds.is_empty() {
+                continue;
+            }
             assert!(
                 scheduled.contains(&name),
-                "no pipeline job runs the {name} lane"
+                "the {name} lane claims {:?}, but no pipeline job runs it",
+                lane.kinds
+            );
+        }
+    }
+
+    /// The lanes that are still Rust are GitLab's by construction, so this
+    /// only has to answer for the declared ones: a lane belongs to a fleet, or
+    /// it belongs to the list above.
+    #[test]
+    fn every_declared_lane_is_claimed_by_a_fleet_or_named_as_by_name_only() {
+        let scheduled = scheduled_lanes();
+        for (name, lane) in declared_lanes() {
+            assert!(
+                scheduled.contains(&name)
+                    || !lane.kinds_github.is_empty()
+                    || BY_NAME_ONLY.contains(&name.as_str()),
+                "nothing reaches the {name} lane: no pipeline job runs it, it claims no \
+                 GitHub pipeline kind, and it is not named as reachable by name alone"
             );
         }
     }
