@@ -25,8 +25,8 @@ env:
 # pending run and lets every new arrival evict it, so a second push to a branch
 # cancelled the run already waiting there — a queue in name only. `queue` takes
 # no expression and may not be declared beside `cancel-in-progress: true`, so
-# the cancellation of superseded pushes goes with it, the trade lanes.yml
-# already made. A superseded push runs to completion instead of being cancelled.
+# the cancellation of superseded pushes goes with it. A superseded push runs to
+# completion instead of being cancelled.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: false

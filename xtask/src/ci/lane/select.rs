@@ -26,8 +26,10 @@ pub(crate) struct LanesArgs {
     pub(crate) role: String,
     #[arg(long, value_enum)]
     pub(crate) kind: PipelineKind,
-    /// Render only these lanes, whatever their membership says. This is how a
-    /// single subtask is run on its own.
+    /// Render only these lanes, whatever their kinds say. This is how a single
+    /// subtask is run on its own. A name must be a declared lane, and one this
+    /// role owns must reach this fleet; a name another role owns simply leaves
+    /// this role empty.
     #[arg(long, value_delimiter = ' ')]
     pub(crate) only: Vec<String>,
     #[arg(long, value_enum, default_value_t = Fleet::Github)]
@@ -172,10 +174,14 @@ pub(crate) fn render(
         })
         .collect();
 
-    // `--only` is a promise that every name given lands somewhere. A name
-    // whose role or kind does not match falls out of both `matrix` and
-    // `dependent` silently otherwise, and an empty selection would still exit
-    // 0 for a caller that asked for something specific.
+    // `--only` is a promise that every name this role owns lands somewhere. A
+    // name whose kind or operating system does not match falls out of both
+    // `matrix` and `dependent` silently otherwise, and an empty selection
+    // would still exit 0 for a caller that asked for something specific.
+    //
+    // A name another role owns is that role's business, not an error here: the
+    // dispatcher hands one `--only` to every role it starts, and the three that
+    // do not own the lane have nothing to run rather than something to refuse.
     let landed: BTreeSet<&str> = matrix
         .iter()
         .map(|entry| entry.lane.as_str())
@@ -186,6 +192,7 @@ pub(crate) fn render(
         .iter()
         .map(String::as_str)
         .filter(|name| !landed.contains(name))
+        .filter(|name| lanes[*name].role == args.role)
         .collect();
     if !missing.is_empty() {
         bail!(
@@ -319,19 +326,38 @@ mod tests {
     }
 
     #[test]
-    fn an_only_that_matches_no_role_or_kind_is_refused_rather_than_rendering_empty() {
-        // `deep-miri` is a real lane, so the unknown-lane check above does not
-        // catch it; asking for it under the `gate` role must still fail
-        // instead of silently returning an empty selection.
+    fn an_only_this_role_owns_that_this_fleet_cannot_reach_is_refused_rather_than_empty() {
+        // A name bypasses its lane's kinds, so what is left to refuse is the
+        // machine: asking this fleet for a macOS lane must fail rather than
+        // return an empty selection a caller reads as success.
+        let mut lanes = catalog();
+        let mut elsewhere = lane("deep", &["nightly"], &[]);
+        elsewhere.os = Some("macos".to_owned());
+        lanes.insert("deep-apple".to_owned(), elsewhere);
+
         let error = render(
-            &catalog(),
-            &args("gate", PipelineKind::Main, &["deep-miri"]),
+            &lanes,
+            &args("deep", PipelineKind::Nightly, &["deep-apple"]),
         )
-        .expect_err("a lane outside the requested role is refused");
+        .expect_err("a lane this fleet cannot reach is refused");
         assert!(
-            error.to_string().contains("deep-miri"),
+            error.to_string().contains("deep-apple"),
             "the error must name what selected nothing: {error}"
         );
+    }
+
+    #[test]
+    fn an_only_another_role_owns_renders_empty_instead_of_refusing() {
+        // The dispatcher hands one `--only` to every role it starts. Refusing
+        // here would turn every request for one lane into three red jobs beside
+        // the one that ran it.
+        let selection = render(
+            &catalog(),
+            &args("gate", PipelineKind::Nightly, &["deep-miri"]),
+        )
+        .expect("a lane another role owns is not this role's to refuse");
+        assert!(selection.matrix.is_empty());
+        assert!(selection.dependent.is_empty());
     }
 
     #[test]

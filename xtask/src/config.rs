@@ -192,6 +192,16 @@ impl CiProjectConfig {
             if !matches!(os, "linux" | "macos" | "windows") {
                 bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
             }
+            // `kinds_github` is a statement that GitHub schedules this lane, and
+            // GitHub's fan-out reaches one pool. A lane naming another machine
+            // would be refused at selection and never run, which is a lane
+            // declared into a schedule it cannot reach - the failure this
+            // catalog exists to make impossible, not one to restate quietly.
+            if !lane.kinds_github.is_empty() && os != "linux" {
+                bail!(
+                    "ext.ci.lanes.{name}.kinds_github schedules a `{os}` lane, and the GitHub fleet is Linux"
+                );
+            }
             if lane.label.is_empty() {
                 bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
@@ -765,6 +775,40 @@ steps = ["nightly_retained"]
         assert!(!nightly.require_all_assets);
         assert_eq!(nightly.tokens, ["GH_TOKEN", "GITLAB_TOKEN"]);
         assert_eq!(nightly.steps, vec![PublishStep::NightlyRetained]);
+    }
+
+    // A lane that names a machine and then declares GitHub schedules it is two
+    // statements that cannot both be true. Selection refuses the lane silently,
+    // so the catalog says the lane runs nightly and nothing ever runs it.
+    #[test]
+    fn a_lane_off_the_github_fleet_may_not_declare_a_github_schedule() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.apple-thing]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "platforms"
+kinds = ["nightly"]
+kinds_github = ["nightly"]
+timeout_minutes = 30
+"#,
+        );
+
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("a macOS lane may not claim a GitHub schedule");
+        assert!(
+            error.to_string().contains("the GitHub fleet is Linux"),
+            "the error must name the fleet: {error}"
+        );
     }
 
     #[test]

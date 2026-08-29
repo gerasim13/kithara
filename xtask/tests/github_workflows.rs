@@ -1662,6 +1662,85 @@ fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
     );
 }
 
+// `only` is how one subtask is run on its own, and the dispatcher hands the
+// same list to every job it starts. The role fan-out answers it by rendering
+// an empty selection for a lane it does not own; the jobs beside the fan-out
+// have no selection to render, so they answer it in their own condition. A
+// request for one lane that also started the Windows guest, the emulator and
+// the stress campaign would be a request for one lane in name only.
+#[test]
+fn a_request_for_one_lane_starts_nothing_beside_it() {
+    let workflow = github_workflow("dispatch.yml");
+    let jobs = workflow_jobs(&workflow);
+    let fan_out = ["gate", "platforms", "deep", "quality"];
+
+    for (name, job) in jobs {
+        let name = name.as_str().expect("a dispatcher job name is a string");
+        if fan_out.contains(&name) {
+            continue;
+        }
+        let condition = job
+            .get("if")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("`{name}` runs unconditionally"));
+        assert!(
+            condition.contains("inputs.only"),
+            "`{name}` starts on a request for another lane: {condition}"
+        );
+    }
+
+    // The GPU suite is the one of them that is a declared lane, and this is
+    // the only caller that can start it, so it answers to its own name rather
+    // than standing aside for every request.
+    let gpu = workflow_job(jobs, "gpu")
+        .get("if")
+        .and_then(Value::as_str)
+        .expect("the GPU job is guarded");
+    assert!(
+        gpu.contains("contains(inputs.only, 'deep-gpu')"),
+        "the GPU job answers to its lane's name: {gpu}"
+    );
+}
+
+// A lane declared in the catalog and a workflow spelling out the same command
+// are two places for one suite to change. The GPU lane stays out of the role
+// fan-out - it wants a runner pool of its own, and the fan-out schedules onto
+// the single Linux pool - but staying out of the selection is not a licence to
+// restate what it runs.
+#[test]
+fn the_gpu_workflow_names_its_lane_instead_of_repeating_it() {
+    let text = github_workflow_text("gpu.yml");
+    assert!(
+        text.contains("just ci lane deep-gpu"),
+        "the GPU workflow runs the declared lane"
+    );
+    assert!(
+        !text.contains("just test"),
+        "the GPU workflow carries no suite command of its own"
+    );
+
+    // Nothing selects the lane it names, on either provider, so this workflow
+    // is the only caller that can start it. A kind appearing here would put a
+    // GPU suite on a pool with no graphics device.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lane = &config["ext"]["ci"]["lanes"]["deep-gpu"];
+    for field in ["kinds", "kinds_github"] {
+        let kinds = lane[field]
+            .as_array()
+            .unwrap_or_else(|| panic!("deep-gpu.{field} is an array"));
+        assert!(
+            kinds.is_empty(),
+            "deep-gpu.{field} schedules a GPU-less pool"
+        );
+    }
+}
+
 // The executor's whole job is to run a lane the catalog named. A workflow that
 // can be handed an arbitrary command is a second place for a command to live.
 #[test]

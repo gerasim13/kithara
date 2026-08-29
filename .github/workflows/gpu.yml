@@ -30,5 +30,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Named directly rather than through the role fan-out: this lane wants a
+      # runner pool of its own, and `run.yml` schedules onto the one Linux pool
+      # every other lane shares. `deep-gpu` therefore claims no pipeline kind -
+      # nothing selects it - and this is the one caller that runs it.
       - name: Run the render tests
-        run: just test run -p kithara-ui --features kithara-ui/gpu -E 'test(/vis::/)'
+        run: just ci lane deep-gpu --kind nightly

@@ -92,27 +92,36 @@ jobs:
     if: >-
       vars.KITHARA_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
     uses: ./.github/workflows/network.yml
 
   # Three machines the Linux fan-out cannot reach: each has a runner pool of
   # its own, named by a variable of its own, so each stays a workflow of its
   # own until the catalog can name a pool.
+  #
+  # `only` names lanes, and the fan-out is what selects lanes, so a request for
+  # one lane leaves these out - the GPU suite excepted, because it is a declared
+  # lane and this is the only caller that can start it. Each of these workflows
+  # also starts on its own, which is how one of them is run by hand.
   windows:
     if: >-
       vars.KITHARA_WINDOWS_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
     uses: ./.github/workflows/windows.yml
 
   android:
     if: >-
       vars.KITHARA_ANDROID_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
     uses: ./.github/workflows/android.yml
 
   gpu:
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
+      && ((inputs.only || '') == '' || contains(inputs.only, 'deep-gpu'))
     uses: ./.github/workflows/gpu.yml
 
   # The repeated run that turns "fails sometimes" into a rate. It has a runner
@@ -123,4 +132,5 @@ jobs:
       vars.KITHARA_STRESS_ENABLED == 'true'
       && vars.KITHARA_STRESS_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
+      && (inputs.only || '') == ''
     uses: ./.github/workflows/stress.yml
