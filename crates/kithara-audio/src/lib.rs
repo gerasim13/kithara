@@ -10,21 +10,15 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 
-pub mod analysis;
 mod audio;
-mod blob;
-mod coverage;
 #[cfg(any(test, feature = "mock"))]
 pub mod mock;
 mod pipeline;
 mod producer;
 mod runtime;
 mod traits;
-mod waveform;
 
 pub use audio::{Audio, PreparedAudio, SeekHandle};
-pub use blob::frame::BlobError;
-pub use coverage::{Coverage, FrameRange};
 #[cfg(feature = "resample-glide")]
 pub use kithara_resampler::glide::{GlideBackend, GlideConfig, GlideInterpolation};
 #[cfg(feature = "resample-rubato")]
@@ -45,6 +39,3 @@ pub use traits::{
     AudioRead, AudioReader, AudioSession, AudioSource, ChunkOutcome, DecodeError, DecodeResult,
     PendingReason, ReadOutcome, SeekBegin, SeekOutcome, SourceDiscontinuity,
 };
-#[cfg(feature = "analysis-waveform")]
-pub use waveform::WaveformAnalyzer;
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, bucket::Waveform};

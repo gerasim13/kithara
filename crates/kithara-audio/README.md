@@ -15,8 +15,8 @@
 # kithara-audio
 
 Decoded-audio source pipeline with decoder lifecycle, decoder-owned sample-rate
-conversion, source readiness, and source-signal analysis. `Audio<S>` is the audio
-reader surface. `Audio::prepare` returns the concrete `AudioSource` and
+conversion, and source readiness. `Audio<S>` is the audio reader surface.
+`Audio::prepare` returns the concrete `AudioSource` and
 worker-neutral `PreparedAudioLane`; `kithara-play` owns `PlayWorker`, the
 per-track node, final output admission, playback effects, and engine-load
 measurement, while `kithara-warp` owns the resident Warp renderer.
@@ -27,7 +27,7 @@ measurement, while `kithara-warp` owns the resident Warp renderer.
 
 <tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
 
-<tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>resample-rubato</code> + <code>analysis-beat</code> + <code>analysis-waveform</code> + <code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
+<tr><td><code>default</code></td><td>yes</td><td><code>symphonia</code> + <code>resample-rubato</code> + <code>client-reqwest</code> + <code>tls-rustls</code></td></tr>
 
 <tr><td><code>symphonia</code></td><td>yes</td><td>Symphonia software decoder path via <code>kithara-decode/symphonia</code></td></tr>
 
@@ -40,8 +40,6 @@ measurement, while `kithara-warp` owns the resident Warp renderer.
 <tr><td><code>android</code></td><td>no</td><td>Android <code>MediaExtractor</code>/<code>MediaCodec</code> via <code>kithara-decode/android</code></td></tr>
 
 <tr><td><code>fdk-aac</code></td><td>no</td><td>Enable libfdk-aac HE-AAC v1/v2 decode in the software path</td></tr>
-
-<tr><td><code>beat-nn</code></td><td>no</td><td>Enable NN beat/downbeat analysis through <code>kithara-beat</code></td></tr>
 
 <tr><td><code>client-wreq</code></td><td>no</td><td>Forward the native <code>wreq</code> HTTP backend selection to network-reaching deps</td></tr>
 
@@ -68,10 +66,6 @@ measurement, while `kithara-warp` owns the resident Warp renderer.
   seam consumed by `kithara-play`.
 - `ResamplerQuality` / `ResamplerOptions` — sample-rate-conversion config
   threaded into the decoder-owned resampler plan.
-- `AnalyzerBuilder` / `AnalysisWorker` / `TrackAnalysis` — source-signal
-  waveform and optional beat analysis.
-- `Waveform` / `BeatGrid` — analysis artifacts; public blob I/O uses
-  `Vec::<u8>::from(&artifact)` and `Artifact::try_from(&[u8])`.
 
 ## Usage
 
@@ -113,8 +107,9 @@ without reconstructing protocol policy. `kithara-signal` owns `AudioSpec`,
 `kithara-bufpool` owns their pooled sample storage. This crate owns the runtime
 `AudioReader` and `AudioSource` protocols around those values. `kithara-play` composes the prepared
 source with `kithara-warp` and `kithara-stretch`; none of those playback
-transforms are owned here. Analysis runs on the decoded source signal, not the
-play-owned post-EQ or post-stretch output.
+transforms are owned here. `kithara-analysis` consumes this crate's decoded
+source and observer protocols; analysis itself is not owned here.
 
-See [CONTEXT.md](CONTEXT.md) for detailed threading, seek/recreate, analysis,
-blob, and prepared-source contracts.
+See [CONTEXT.md](CONTEXT.md) for detailed threading, seek/recreate, and
+prepared-source contracts. Source analysis contracts are in
+[`kithara-analysis`](../kithara-analysis/CONTEXT.md).

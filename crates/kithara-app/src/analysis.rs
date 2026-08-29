@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
-    audio::analysis::BeatAnalysisConfig,
+    analysis::BeatAnalysisConfig,
     bufpool::{BytePool, SamplePool},
     decode::DecodeError,
     events::{EngineEvent, Envelope, Event, EventReceiver, SessionEvent, TrackId},
@@ -514,13 +514,10 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::{
+        analysis::{AnalysisFingerprint, BeatAnalysisConfig, Coverage, FrameRange, Waveform},
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore,
             StorageBackend,
-        },
-        audio::{
-            Coverage, FrameRange, Waveform,
-            analysis::{AnalysisFingerprint, BeatAnalysisConfig},
         },
         bufpool::{BytePool, Region, SamplePool},
         events::{EngineEvent, Event, RouteChangeReason, RouteDescription, SessionEvent, TrackId},

@@ -2,10 +2,10 @@
 use std::num::NonZeroU32;
 
 #[cfg(test)]
-use kithara::audio::Coverage;
+use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    audio::FrameRange,
+    analysis::FrameRange,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
     play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
@@ -374,7 +374,7 @@ impl StateController {
 /// detector was are two answers about the same markers, and passing them
 /// separately is how they come to disagree.
 fn bpm_info_from_state(
-    beat: &kithara::audio::analysis::BeatSnapshot,
+    beat: &kithara::analysis::BeatSnapshot,
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<BpmInfo> {
@@ -543,10 +543,7 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::audio::{
-        BeatGrid,
-        analysis::{BeatSnapshot, GridState},
-    };
+    use ::kithara::analysis::{BeatGrid, BeatSnapshot, GridState};
     use kithara_test_utils::kithara;
 
     use super::{

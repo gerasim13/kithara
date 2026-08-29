@@ -35,6 +35,10 @@ pub mod audio {
     pub use kithara_audio::*;
 }
 
+pub mod analysis {
+    pub use kithara_analysis::*;
+}
+
 #[cfg(feature = "broadcast")]
 pub mod broadcast {
     pub use kithara_broadcast::*;

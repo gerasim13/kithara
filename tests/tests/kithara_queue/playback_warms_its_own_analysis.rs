@@ -4,16 +4,14 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    audio::{
-        NoResamplerBackend,
-        analysis::{AnalysisWorker, AnalyzerBuilder},
-    },
+    analysis::{AnalysisWorker, AnalyzerBuilder},
     bufpool::Region,
     events::TrackStatus,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource},
+    resampler::NoResamplerBackend,
     signal::AudioSpec,
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -89,13 +87,10 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
         &cancel,
-        AnalyzerBuilder::<NoResamplerBackend>::default()
-            .with_sample_pool(region.sample_pool())
-            .with_waveform(64),
+        AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
     );
     let (analysis, producer) = worker.analyze(
         stalled_reader(AudioSpec::new(2, rate)),
-        cancel.child(),
         "played-track".into(),
         rate,
     );

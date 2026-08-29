@@ -6,8 +6,9 @@ use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use kithara::{
+    analysis::{AnalysisParams, WaveformAnalyzer},
     assets::{AssetStore, StorageBackend},
-    audio::{AnalysisParams, AudioConfig, AudioRead, ReadOutcome, WaveformAnalyzer},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
     bufpool::{Region, SamplePool},
     file::{File, FileConfig},
     platform::{

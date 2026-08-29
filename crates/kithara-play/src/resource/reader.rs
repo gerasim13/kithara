@@ -340,7 +340,7 @@ impl Resource {
 }
 
 /// Unwrap a `Resource` into its underlying reader, e.g. to hand the opened
-/// source to the shared analysis worker (`kithara_audio::analysis`).
+/// source to the shared `kithara-analysis` worker.
 ///
 /// Disarms the per-track cancel before moving the reader out: the live reader
 /// outlives this wrapper, so freeing the wrapper must not tear down its fetch

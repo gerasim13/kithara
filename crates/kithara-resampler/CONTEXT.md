@@ -21,7 +21,8 @@ Decoder placement is not owned here: `kithara-decode` decides whether a decoder
 uses a codec-embedded converter or wraps decoded audio in a decoder adapter. Codec
 lifecycle, media input, and gapless translation stay there. Playback graph
 routing is not owned here either: `kithara-audio` passes device-rate config into
-decode and analysis but must not contain backend-specific resampler policy.
+decode, while `kithara-analysis` owns analysis-side use; neither crate contains
+backend-specific resampler policy.
 
 ## Allocation Contract
 
@@ -84,7 +85,7 @@ through the builder, so overriding one keeps the other defaults.
 `Resample<S>` carries `target_sample_rate`, quality and options with a placement
 scope `S` (`Unit<B>` or `Decode<B>`), keeping the backend in the type at the call
 site. `MonoStream<B>` / `MonoStreamConfig<B>` are the pooled single-channel
-streaming adapter used by beat analysis in `kithara-audio`.
+streaming adapter used by beat analysis in `kithara-analysis`.
 
 ## Built-In Backend Families
 

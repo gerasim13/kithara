@@ -8,7 +8,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    audio::{Bucket, analysis::BeatAnalysisConfig},
+    analysis::{BeatAnalysisConfig, Bucket},
     bufpool::{BytePool, SamplePool},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},

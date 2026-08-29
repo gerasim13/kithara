@@ -15,8 +15,9 @@ use std::{
 use axum::{Router, body::Body, extract::State, http::header, response::Response, routing::get};
 use bytes::Bytes;
 use kithara::{
+    analysis::BeatAnalysisConfig,
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome, analysis::BeatAnalysisConfig},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
     bufpool::Region,
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},

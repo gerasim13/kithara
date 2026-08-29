@@ -23,7 +23,7 @@ attribution.
 
 A leaf analysis crate: it takes whole-track mono f32 PCM at 22 050 Hz and
 returns raw beat / downbeat positions in seconds. It owns no decoder, resampler,
-or I/O — the consumer (`kithara-audio`) handles decode, downmix, resample, and
+or I/O — the consumer (`kithara-analysis`) handles decode, downmix, resample, and
 grid cleanup.
 
 ## Key types

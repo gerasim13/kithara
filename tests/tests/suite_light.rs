@@ -14,6 +14,7 @@ mod gapless_common;
 
 mod browser_runner_smoke;
 mod events;
+mod kithara_analysis;
 mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;

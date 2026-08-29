@@ -18,7 +18,8 @@ flowchart LR
 ```
 
 `kithara-signal` owns decoded-audio values and checked layout/time conversion;
-`kithara-audio` prepares the decoded source and analysis input seam.
+`kithara-audio` prepares the decoded source, while `kithara-analysis` owns the
+progressive source-analysis pass and its artifacts.
 `kithara-play` owns the Player/deck, `PlayWorker` scheduler, per-track node,
 ordinary post-Warp effects, and final output admission before `read()` reaches
 the callback. It composes the resident `Warp<S>` and synchronous
@@ -46,15 +47,15 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><td><code>resample-glide</code></td><td>no</td><td>Glide resampler backend for explicit playback/decode config selection without Rubato</td></tr>
 
-<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-audio</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
+<tr><td><code>analysis-beat</code></td><td>yes</td><td>Beat-analysis pass in <code>kithara-analysis</code>; the mono resampler backend comes from <code>BeatAnalysisConfig</code>. Apple FFI device sets omit this feature.</td></tr>
 
-<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-audio</code>; waveform/blob types remain unconditional</td></tr>
+<tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-analysis</code>; waveform/blob types remain unconditional</td></tr>
 
 <tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Signalsmith engine lives in <code>kithara-stretch</code></td></tr>
 
 <tr><td><code>stretch-bungee</code></td><td>no</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Bungee engine lives in <code>kithara-stretch</code></td></tr>
 
-<tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-audio</code> / <code>kithara-beat</code></td></tr>
+<tr><td><code>beat-nn</code></td><td>no</td><td>NN beat/downbeat detector through <code>kithara-analysis</code> / <code>kithara-beat</code></td></tr>
 
 <tr><td><code>apple</code></td><td>no</td><td>Apple AudioToolbox hardware decoder (<code>kithara-audio/apple</code>, <code>kithara-decode/apple</code>, <code>kithara-play/apple</code>) plus queue forwarding when <code>queue</code> is enabled; does not imply Rubato</td></tr>
 
@@ -122,7 +123,7 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Re-exports
 
-Each engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
+Each engine layer is re-exported as a module: `kithara::analysis`, `kithara::audio`, `kithara::bufpool`,
 `kithara::decode`, `kithara::events`, `kithara::platform`, `kithara::play`,
 `kithara::stream`, `kithara::warp`. The `file`/`hls`/`assets`/`net`/`storage`/`queue` modules are
 feature-gated; `kithara::abr` and `kithara::drm` are exposed with `hls`. For

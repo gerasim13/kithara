@@ -2,8 +2,8 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
+    analysis::BeatAnalysisConfig,
     assets::AssetStore,
-    audio::analysis::BeatAnalysisConfig,
     hls::SizeProbeMethod,
     play::{PlayWorker, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,

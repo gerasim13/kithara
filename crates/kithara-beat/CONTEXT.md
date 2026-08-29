@@ -8,7 +8,7 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
   caller's job — this crate has no decoder or resampler dependency and does no I/O.
 - Output: `RawBeats { beats, downbeats }` — pooled positions in **seconds**, sorted,
   deduplicated, every downbeat snapped to the nearest beat. Grid cleanup and source-frame
-  conversion belong to the consumer (`kithara-audio`).
+  conversion belong to the consumer (`kithara-analysis`).
 - Models load from `(mel, beat)` ONNX bytes via `BeatThis::builder()` — the caller decides embed
   vs file vs download; `embed-small-model` exposes the bundled bytes. The same builder takes the
   `BeatConfig` the peak picker runs with and the caller-owned `SamplePool`. Tensor inputs, copied

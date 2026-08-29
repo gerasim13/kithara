@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use kithara::audio::Waveform;
+use kithara::analysis::Waveform;
 use kithara_ui::render::WaveBucket;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 

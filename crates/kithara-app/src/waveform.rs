@@ -1,14 +1,12 @@
 use std::num::NonZeroU32;
 
-pub use kithara::audio::analysis::TrackAnalysis;
+pub use kithara::analysis::TrackAnalysis;
 use kithara::{
-    audio::{
-        AudioReader,
-        analysis::{
-            AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisToken, AnalysisWorker,
-            AnalyzerBuilder, BeatAnalysisConfig,
-        },
+    analysis::{
+        AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisToken, AnalysisWorker,
+        AnalyzerBuilder, BeatAnalysisConfig,
     },
+    audio::AudioReader,
     bufpool::SamplePool,
     prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
 };
@@ -62,9 +60,7 @@ impl TrackAnalysisRunner {
         beat_config: AppBeatAnalysisConfig,
         sample_pool: SamplePool,
     ) -> Self {
-        let builder = AnalyzerBuilder::default()
-            .with_sample_pool(sample_pool)
-            .with_beat_config(beat_config);
+        let builder = AnalyzerBuilder::new(sample_pool).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();
@@ -105,8 +101,8 @@ impl TrackAnalysisRunner {
     {
         self.clear();
 
-        let run = self.worker.child_token();
         let (rx, producer, pass) = self.worker.open(token, rate);
+        let run = pass.cancel_token().clone();
         deliver(producer);
         let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
@@ -145,7 +141,7 @@ async fn run_analysis(
     let Some(reader) = open_reader(config, &cancel, rate).await else {
         return;
     };
-    worker.start(pass, reader, cancel);
+    worker.start(pass, reader);
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app

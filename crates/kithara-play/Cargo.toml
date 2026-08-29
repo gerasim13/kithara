@@ -13,15 +13,7 @@ categories = ["multimedia::audio"]
 ignored = ["unimock"]
 
 [features]
-default = [
-    "symphonia",
-    "resample-rubato",
-    "analysis-beat",
-    "analysis-waveform",
-    "stretch-signalsmith",
-    "client-reqwest",
-    "tls-rustls",
-]
+default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
@@ -74,8 +66,6 @@ webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
-analysis-beat = ["kithara-audio/analysis-beat"]
-analysis-waveform = ["kithara-audio/analysis-waveform"]
 stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 # Re-export of testing helpers (engine module + macro mocks).

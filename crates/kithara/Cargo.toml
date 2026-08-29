@@ -26,6 +26,7 @@ default = [
 # form so a backend choice never force-enables them. Android forwards
 # `kithara-net?/client-wreq` below; Apple HTTP is a separate opt-in feature.
 client-reqwest = [
+    "kithara-analysis/client-reqwest",
     "kithara-net?/client-reqwest",
     "kithara-stream/client-reqwest",
     "kithara-assets?/client-reqwest",
@@ -41,6 +42,7 @@ client-reqwest = [
     "kithara-abr?/client-reqwest",
 ]
 client-wreq = [
+    "kithara-analysis/client-wreq",
     "kithara-net?/client-wreq",
     "kithara-stream/client-wreq",
     "kithara-assets?/client-wreq",
@@ -56,6 +58,7 @@ client-wreq = [
     "kithara-abr?/client-wreq",
 ]
 tls-rustls = [
+    "kithara-analysis/tls-rustls",
     "kithara-net?/tls-rustls",
     "kithara-stream/tls-rustls",
     "kithara-assets?/tls-rustls",
@@ -71,6 +74,7 @@ tls-rustls = [
     "kithara-abr?/tls-rustls",
 ]
 tls-native = [
+    "kithara-analysis/tls-native",
     "kithara-net?/tls-native",
     "kithara-stream/tls-native",
     "kithara-assets?/tls-native",
@@ -89,12 +93,27 @@ tls-native = [
 broadcast = ["dep:kithara-broadcast"]
 # Enable the Symphonia software decoder path. Disable to compile with
 # only a hardware backend (apple/android) and no software fallback.
-symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia", "kithara-queue?/symphonia"]
-webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs", "kithara-queue?/webcodecs"]
+symphonia = [
+    "kithara-analysis/symphonia",
+    "kithara-audio/symphonia",
+    "kithara-decode/symphonia",
+    "kithara-queue?/symphonia",
+]
+webcodecs = [
+    "kithara-analysis/webcodecs",
+    "kithara-audio/webcodecs",
+    "kithara-decode/webcodecs",
+    "kithara-queue?/webcodecs",
+]
 # libfdk-aac override for HE-AAC v1/v2 streams. Symphonia ships an
 # LC-only AAC decoder; without this feature, HE-AAC v2 (parametric
 # stereo + SBR) streams fail in the software pipeline.
-fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac", "kithara-queue?/fdk-aac"]
+fdk-aac = [
+    "kithara-analysis/fdk-aac",
+    "kithara-audio/fdk-aac",
+    "kithara-decode/fdk-aac",
+    "kithara-queue?/fdk-aac",
+]
 resample-glide = [
     "kithara-audio/resample-glide",
     "kithara-decode/resample-glide",
@@ -107,15 +126,15 @@ resample-rubato = [
     "kithara-play/resample-rubato",
     "kithara-resampler/resample-rubato",
 ]
-analysis-beat = ["kithara-audio/analysis-beat", "kithara-play/analysis-beat"]
-analysis-waveform = ["kithara-audio/analysis-waveform", "kithara-play/analysis-waveform"]
+analysis-beat = ["kithara-analysis/analysis-beat"]
+analysis-waveform = ["kithara-analysis/analysis-waveform"]
 # Native-only C++ time-stretch backends. Native builds require at least one;
 # enabling both makes them selectable at runtime in the DJ deck.
 stretch-signalsmith = ["kithara-play/stretch-signalsmith", "kithara-queue?/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee", "kithara-queue?/stretch-bungee"]
 # NN beat/downbeat detector (kithara-beat, embedded small model) in the
 # analysis registry.
-beat-nn = ["kithara-audio/beat-nn"]
+beat-nn = ["kithara-analysis/beat-nn"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
@@ -171,8 +190,15 @@ perf = [
 # coupled to symphonia for desktop/WASM software fallback builds only. HTTP
 # backend selection is separate so macOS desktop/tests can use the decoder
 # without pulling the real-clock NSURLSession backend.
-apple = ["kithara-audio/apple", "kithara-decode/apple", "kithara-play/apple", "kithara-queue?/apple"]
+apple = [
+    "kithara-analysis/apple",
+    "kithara-audio/apple",
+    "kithara-decode/apple",
+    "kithara-play/apple",
+    "kithara-queue?/apple",
+]
 apple-fused-src = [
+    "kithara-analysis/apple",
     "kithara-audio/apple-fused-src",
     "kithara-decode/apple",
     "kithara-play/apple-fused-src",
@@ -184,6 +210,7 @@ apple-fused-src = [
 # when `kithara-net` is already pulled (via `file`/`hls`) and never forces it on.
 apple-net = ["kithara-net?/client-apple", "kithara-stream/client-apple"]
 android = [
+    "kithara-analysis/android",
     "kithara-audio/android",
     "kithara-decode/android",
     "kithara-net?/client-wreq",
@@ -194,6 +221,7 @@ full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dependencies]
 kithara-abr = { workspace = true, optional = true, default-features = false }
+kithara-analysis = { workspace = true, default-features = false }
 kithara-assets = { workspace = true, optional = true }
 kithara-audio = { workspace = true, default-features = false }
 kithara-broadcast = { workspace = true, optional = true, default-features = false }

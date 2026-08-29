@@ -14,8 +14,6 @@ default = [
     "backend-cpal",
     "symphonia",
     "resample-rubato",
-    "analysis-beat",
-    "analysis-waveform",
     "stretch-signalsmith",
     "client-reqwest",
     "tls-rustls",
@@ -34,8 +32,6 @@ webcodecs = ["kithara-play/webcodecs"]
 fdk-aac = ["kithara-play/fdk-aac"]
 resample-glide = ["kithara-play/resample-glide"]
 resample-rubato = ["kithara-play/resample-rubato"]
-analysis-beat = ["kithara-play/analysis-beat"]
-analysis-waveform = ["kithara-play/analysis-waveform"]
 stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
 stretch-bungee = ["kithara-play/stretch-bungee"]
 probe = ["kithara-play/probe"]

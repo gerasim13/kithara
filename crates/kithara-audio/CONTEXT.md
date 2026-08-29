@@ -20,10 +20,11 @@ protocol policy.
 ### Musical-coordinate ownership
 
 `kithara-warp` is the canonical owner of beat maps, session coordinates, and
-the synchronization protocol. This crate publishes decoded signal and analysis
-facts only; it neither defines Warp coordinates nor converts between parallel
-map representations. The R7 audio seam does not advance a `WarpMap`, report
-runtime map progress, or acknowledge rendered/presented synchronization.
+the synchronization protocol. This crate publishes decoded signal facts only;
+`kithara-analysis` publishes analysis facts. Neither crate defines Warp
+coordinates nor converts between parallel map representations. The R7 audio seam
+does not advance a `WarpMap`, report runtime map progress, or acknowledge
+rendered/presented synchronization.
 
 `kithara-signal` is the canonical owner of decoded-signal values
 (`AudioSpec`, `AudioChunkInfo`, `AudioChunk`) and pure sample/time math;
@@ -76,8 +77,8 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 The generic scheduler, its `run_loop`, task slots, service classes, and
 playback hang-watchdog policy belong to `kithara-play::PlayWorker`. This crate
 publishes worker-neutral `AudioSource` outcomes and immediate/deferred wake
-capabilities only. Analysis keeps its separate single-node runner on the
-existing analysis thread; it does not expose or share the playback scheduler.
+capabilities only. `kithara-analysis` owns its separate single-node runner; it
+does not expose or share the playback scheduler.
 
 ### Preload gate
 
@@ -455,265 +456,6 @@ is a typed config decision, never a runtime fallback chain. Output capacity is a
 correctness invariant, not a knob: the backend reports `output_frames_for_input`
 in the ceil frame domain and the decoder adapter sizes buffers from that.
 
-## Track analysis
-
-`analysis/` owns the reusable per-track analysis engine, generic over
-`B: ResamplerBackend`. `AnalyzerBuilder<B>` is the public, `Default`-constructed
-selector (`with_waveform`, `with_beat` — which requires `B: Default` —
-`with_beat_config`, `with_sample_pool`), and `is_empty()` lets callers skip
-scheduling a pass entirely. `TrackAnalyzers` is the crate-private per-track set;
-each analyzer is fed every decoded chunk once.
-`TrackAnalysis` is the public snapshot: caller token, revision, rate axis,
-extent, coverage, per-artifact fingerprint, waveform, and beat. It is
-self-contained by contract - a consumer holding only a snapshot can render the
-waveform, place markers on the source timeline, and tell how much of the track
-it is based on. `source_frames()` is the denominator that turns a `BeatGrid`
-frame into a fraction: the extent when known, covered frames otherwise, so a
-repeated or overlapping range counts once.
-
-A pass publishes many times. `TrackAnalyzers::snapshot` leaves the pass able to
-accept further ranges and bumps a strictly increasing revision, so a consumer
-discards anything that does not outrank what it holds. `AnalysisTask` publishes
-every `PUBLISH_SECONDS` of newly covered source and once more at end of stream,
-keyed to decoded frames rather than wall-clock time, so a run produces the same
-revision sequence every time. Only that last publication pins the extent, to the
-covered frontier. `GridState` is `Final` only once the whole known extent is one
-covered run.
-
-Identity is an opaque `AnalysisToken` the caller opens the pass with; this crate
-echoes it and never interprets it. `AnalysisFingerprint` carries the beat tag and
-the waveform tag separately, so a waveform resolution change cannot invalidate
-stored beat results.
-
-The rate axis is named when the pass opens, not discovered from the first chunk:
-`AnalysisWorker::analyze` takes it, the caller opens its reader onto the same
-one, and a range on another axis is refused rather than redefining what a frame
-number means. Analyzers are still built lazily by whichever range arrives first,
-so a pass that covers nothing allocates nothing.
-
-`Coverage` is the canonical record of which source ranges a pass has observed,
-kept as sorted, disjoint, non-adjacent runs; `TrackAnalyzers` owns it and every
-consumer reads it, there is no second copy. A chunk's range comes from
-`AudioChunkInfo::frame_offset` and `frames`, so position never depends on arrival
-order. `TrackAnalysis::missing` is derived from that same record rather than
-kept beside it; its horizon is the extent once known and the covered frontier
-until then, the same rule `source_frames` uses.
-
-### Decode scheduling
-
-`AnalysisTask` does not read its reader in order. It picks where to decode next
-by one rule: the middle of the largest uncovered range. That degenerates to
-binary subdivision on an uncovered track, so an early snapshot describes the
-whole track rather than its opening, and to refilling holes on one playback has
-mostly covered; a range another producer covered is never decoded again.
-
-- **Two extents.** The pass publishes the covered frontier at end of stream, or
-  the length the schedule planned against when that is longer, so a range given
-  up on past the last covered frame is still reported missing. The schedule
-  works from the reader's stated length - available before anything is decoded -
-  bounded by what that reader proved: end of stream, or a seek answered
-  `PastEof`. That figure is never written into the pass, because
-  `TrackAnalyzers::ingest` refuses a range reaching past the extent it holds and
-  an under-reported duration would refuse the source's own tail.
-- **Run bounds.** A run decodes at least one beat detector window, read off the
-  beat configuration, before another position is chosen; a shorter run would
-  leave every position contributing a partial window and the markers would move.
-  It ends at covered audio or at the end of the extent. Where it starts comes
-  from its first decoded chunk, not from `landed_at`: a seek is begun rather
-  than completed when it answers, so the decoder resumes at its own boundary.
-- **End of pass.** No position is left when the extent is covered, or when every
-  position still uncovered has proved unreachable. A run waiting on its reader
-  is never asked to reschedule, so the covered extent is checked before it too -
-  that is how a pass whose last uncovered range a producer filled ends without
-  its reader reaching end of stream.
-- **Retirement.** A position whose run decoded nothing new is never chosen
-  again, which keeps a source with coarse seeking from being asked for it
-  forever. The test is what that run decoded, not what the pass covered while it
-  ran, since a producer folding ranges from anywhere would keep an unreachable
-  position eligible for as long as playback feeds the pass. The cost is stated
-  rather than hidden: retiring the middle of a gap drops the whole gap from the
-  schedule, so a source that snaps out of every gap leaves a hole, reported as
-  missing like any other, and refilling a hole costs a seek per halving.
-- **Decode error.** It ends the pass without discarding it: the ranges already
-  delivered are published and the rest reported missing.
-
-A source that reports no duration has no middle to seek to, so the task decodes
-it in order and never repositions the reader. This is a degraded mode rather
-than a fallback over a missing answer: "where is the middle of this track"
-genuinely has no answer for a live stream.
-
-## Producer ingest
-
-`analysis/producer/` is the seam a component that must not be slowed down uses
-to contribute ranges it has already decoded, so a track being played is not
-decoded a second time. `AnalysisProducer` names its pass once, when `analyze`
-hands it back, so offering costs no lookup and two producers never contend; a
-track with no open pass has no handle at all.
-
-`offer` downmixes to mono by the channel mean - the same reduction both
-analyzers apply - and copies into a bounded transport allocated when the pass
-opens: a sample ring plus a ring of `(start, frames)` descriptors. It never
-blocks, never allocates and never retains the caller's buffer, so a caller under
-a forbid-blocking policy may recycle its buffer as soon as the call returns. A
-range that does not fit is refused whole and reported untaken; it stays
-uncovered, so it stays missing and eligible to be produced again. `Outlet` is
-deliberately not the transport here: it parks a failed push in a one-slot
-overflow and still reports `Ok`, so it cannot report the first refusal.
-
-That the offer neither blocks nor allocates is asserted, not just stated: the
-`rtsan` lane calls it inside a forbid-blocking region, where RTSan aborts on a
-malloc, free, lock, or syscall. The taken path is the heaviest one - the refused
-and closed paths return before writing - so proving it covers them. A pass that
-ends drops the reading half; the next offer reports the pass closed and the
-caller lets its handle go.
-
-`AnalysisProducer` implements the neutral `AudioObserver` contract. Playback
-can attach it to a queued track without `kithara-audio`, `kithara-play`, or
-`kithara-queue` knowing which analyzer consumes the decoded ranges. Rejection is
-best-effort and never changes playback; a refused range remains uncovered and
-eligible for the analysis reader to decode later.
-
-The analysis worker drains the transport on its own tick, where the DSP is
-allowed to happen, and folds **one block per descriptor**. Contiguous
-descriptors are never joined, for correctness rather than as a missed
-optimisation: `Runs::merge` finishes the frontier `MonoStream` and `Runs::open`
-starts a fresh one at every push boundary, so the beat resampler's segmentation
-is a pure function of the block boundaries. Per descriptor those are the
-producer's own chunk boundaries; joined, they would depend on how many
-descriptors happened to be waiting for the tick.
-
-`BeatAnalysisConfig<B>` carries the implementation-affecting beat tunables and a
-standalone resampler backend handle. Defaults: 1024-frame mono resampler blocks,
-22 050 Hz detector input, 30-second detector windows with 2 seconds of overlap,
-`ResamplerQuality::High`. The analyzer never stores whole-track source PCM: it
-downmixes to mono and keeps each covered span at the detector rate, a quarter of
-the source cost and outside the playback pool.
-
-The contiguous run, not the pass, owns the resampler. `MonoStream` is
-sequential, so a range decoded later cannot be pushed through the stream that
-produced an earlier one: a run keeps its stream only while it is the frontier,
-and the moment another segment is appended behind it the stream is flushed into
-the run's mono and dropped. Every join is pinned to the detector frame its
-source position implies, so per-segment rounding cannot accumulate into marker
-drift. A detector window is a fixed span of the absolute detector-rate timeline,
-keyed by index: detected once, wherever in the arrival order its span completes,
-with its markers at the source position they were found at. Markers therefore
-agree across arrival orders within the resampler's splice tolerance rather than
-byte for byte - byte equality would mean re-detecting everything after every
-filled gap.
-
-A run that reaches `detector_min_window_seconds` is detected as it stands rather
-than waiting for a full window plus overlap, which is what makes a track usable
-from its first covered piece; that estimate is re-detected once the window
-fills. Once the extent is known the grid is spread across it at its own tempo,
-keeping every detected marker where it was found, so a later revision replaces
-filled positions with detected ones as coverage arrives.
-
-Run mono comes from the same injected `SamplePool` as everything else in the pass,
-and the runs additionally share a mono budget of four detector windows.
-Detection consumes the front of a run and never its back, so the budget is spent
-from the earliest run forward; a reclaimed span stays covered for every other
-consumer but beat cannot analyse it again, and reclaimed ranges are recorded for
-the snapshot to report. Marker equality across arrival orders therefore holds
-below the budget: past it, a span reordered far behind the frontier can be
-reclaimed before its window completes. Grid-cleanup scratch comes from that same
-pool, injected through `AnalyzerBuilder::with_sample_pool`; cleanup does not
-construct a second one.
-
-`AnalysisWorker<B>` is the public handle over the private `AnalysisRunner` and
-its single long-lived `AnalysisNode<B>` on the existing `kithara-analysis`
-thread (absent on wasm32). It neither constructs nor shares the playback
-scheduler. Jobs carry caller-owned cancel tokens; `child_token()`
-hands out children of the worker's own job scope, so there is one cancel
-hierarchy, and the caller keeps at most one job in flight, cancelling the
-previous token to preempt. Results arrive on a `watch` channel: waveform first,
-then waveform+beat when a beat pass is configured; on failure or cancel the
-sender drops without a value. The node owns the job receiver, the task FSM, and
-the single `Box<dyn BeatDetector>` taken at construction — detector ownership is
-never shared or locked. `Decode` consumes at most one chunk per tick. The
-runner park is flash-visible and `analyze` wakes it after enqueueing; no
-sleep, backoff loop, or poll watcher. `AnalysisObserver` keeps the normal
-no-progress watchdog and separately classifies returned heavy ticks against a
-120-second budget; a detector call is indivisible, so an over-budget call can
-only be reported after it returns.
-
-**Feature seams.** There is no single `analysis` feature. Artifact types are
-unconditional because analysis and cache keys use them even when a pass is
-absent. `analysis-waveform` gates the `realfft` analyzer (and
-`with_waveform`), `analysis-beat` gates the beat analyzer path, `beat-nn` is a
-detector backend on top of `analysis-beat`. Without `analysis-beat`,
-`with_beat()` is a compile-time no-op — `is_empty()` is the runtime signal.
-
-## Waveform
-
-Pure synchronous DSP turning decoded PCM into a `Waveform` for display. No async,
-I/O, cancel, or colour types here: band → colour mapping and orchestration belong
-to consumer crates. Tunables live in `AnalysisParams`.
-
-- **Source-only invariant**: analysis runs on the decoded SOURCE signal, never
-  post-EQ / post-timestretch / post-resample output. Playback-rate and mixer
-  transforms remap only the time axis and never re-run analysis.
-- **Playback observation is separate**: the optional `AudioObserver` sees the
-  playback decoder output before playback effects. Its `AudioChunk::meta.spec` is
-  authoritative and may already reflect decoder-side sample-rate conversion;
-  source-rate offline analysis does not consume this feed.
-- **`Bucket { low, mid, high }`** are three independent band heights per bucket,
-  each normalized to `[0, 1]` on one shared scale — not a single bar plus a
-  colour. The deck paints them as concentric mirrored bars, so the tallest is the
-  outer hull. All-zero is silence, renders as nothing, never `NaN`.
-- **Position-addressed windows**: `WaveformAnalyzer::push` takes the source frame
-  the block starts at, scatters the block into every window it touches, and
-  reduces a window once every one of its own frames has been written. Blocks may
-  arrive in any order, twice, or overlapping. A window's completeness is its own
-  written set, never the pass's `Coverage`: the two diverge exactly when a
-  window is evicted, and reducing on coverage would then publish a half-silent
-  window instead of leaving the span unanalysed. Windows still waiting are
-  capped, and the oldest is evicted: its span then reads as uncovered, which is
-  what a gap already looks like.
-- **Normalized-position index**: buckets are indexed by normalized track position
-  `[0, 1]`, never wall-clock seconds. `bucketize` is the single home of that
-  mapping — bucket `b` folds the raw range `[b*R/N, (b+1)*R/N)` and always returns
-  exactly `N` values, filling an empty range with the supplied `empty`. An
-  uncovered span therefore renders as silence for now; the sparse series keeps
-  which windows exist, so per-bucket coverage can surface later.
-  `WaveformAnalyzer::snapshot` spreads the buckets over the window count the
-  source extent implies, so bucket boundaries stay put as coverage grows, and
-  falls back to the highest reduced window when the extent is unknown. It clamps
-  the request to that count, so a short track yields fewer buckets rather than
-  fabricated ones, and it does not consume the pass: a pass publishes many times.
-- **PCM ↔ frequency boundary**: `WaveformAnalyzer::new` takes the track
-  `sample_rate` because band crossovers map to FFT bins via
-  `bin_hz = sample_rate / fft_size`. A constant sample rate per track is assumed;
-  build the analyzer once the first chunk's `AudioSpec` is known.
-- **Reduction**: per Hann window, band energy is summed into low/mid/high (DC bin
-  zeroed; windows below `energy_floor` RMS contribute nothing) and each band is
-  divided by its bin count — an energy DENSITY, without which the wide mid/high
-  bands outweigh the narrow low band by bin count alone. Windows hop by
-  `fft_size / 4` (75% overlap), so every source frame feeds four windows; only
-  sources shorter than one window fall back to a single zero-padded window, and
-  only once the extent is known, so no snapshot publishes a padded frontier
-  window. `snapshot` keeps each bucket's loudest window
-  (component-wise max), takes `sqrt` to magnitude, applies the per-band
-  perceptual `band_gain`, then divides all three by one shared global max —
-  shared, not per-band, so the loudness tilt survives.
-
-## Blob codec
-
-Analysis artifacts persisted to the on-disk cache (`Waveform`, `BeatGrid`) share
-one versioned little-endian encoding via the crate-internal, domain-agnostic
-`blob` module: the `Blob` trait owns the frame (a `u32` `Blob::VERSION` header
-then the body), each artifact implements only its body, and decoding requires the
-cursor to consume the blob exactly — trailing bytes are corruption.
-
-Each artifact owns its `VERSION`. A mismatch is `BlobError::Version`; a
-truncated, mis-sized, or out-of-range body is `BlobError::Corrupt`. Both are cache
-misses — the caller re-analyses and overwrites; there is no in-place migration.
-Speculative allocation from an untrusted length prefix is capped at
-`MAX_PREALLOC`. `BlobError` is the only piece crossing the crate boundary (the
-public `TryFrom<&[u8]>` error); `Blob`, `Reader`, `Writer` stay internal. The
-composite track-analysis blob (version + config fingerprint + per-artifact
-sections) is an app-layer concern owned by `kithara-app`.
-
 ## Agent guardrails
 
 - `kithara-audio` owns decoder lifecycle, seek/session state, source
@@ -721,9 +463,11 @@ sections) is an app-layer concern owned by `kithara-app`.
   source contracts and must not reconstruct HLS or file policy from
   protocol-specific heuristics.
 - Playback cancellation and scheduling policy belong to `kithara-play`; audio
-  sources observe only their scoped cancellation and wake contracts. Each
-  queued analysis job owns its own scoped token, while the private analysis
-  runner owns cancellation of its single long-lived node.
+  sources observe only their scoped cancellation and wake contracts.
+- `kithara-analysis` consumes the decoded source through `AudioReader` and
+  `AudioObserver`; it owns progressive analysis, waveform/beat artifacts, and
+  pure analysis bytes. It does not move decoder, playback, or cache I/O policy
+  into this crate.
 - Prefer explicit FSM or session objects for multi-step control flow; do not
   scatter new `pending_*` or shadow flags across source and consumer layers.
   Playback effects and their reset/drain policy belong to `kithara-play`, not

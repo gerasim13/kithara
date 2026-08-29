@@ -60,7 +60,7 @@ measurement before the task is registered on the shared worker.
 
 The generic scheduler kernel and concrete playback scheduler are private to
 `kithara-play::PlayWorker`. `kithara-audio` exposes only the prepared source and
-wake contracts; its analysis worker uses a separate private single-node runner.
+wake contracts. `kithara-analysis` owns a separate private single-node runner.
 No workspace production code can construct a second playback scheduler path.
 
 There is one chain and one final output path:
@@ -260,7 +260,7 @@ potentially-foreign parent it was handed.
 `Resource` holds a `CancelGuard` around the per-track token, declared before `inner` so a
 mid-session unload tears down the whole track subtree (stream *and* `Audio`) before the reader
 drops. The `From<Resource>` reader unwrap disarms the guard, because the live reader then outlives
-the wrapper (analysis worker) and rides the analysis run-scope cancel instead.
+the wrapper and rides the `kithara-analysis` run-scope cancel instead.
 
 Hard-coded `CancelToken::root()` / `CancelToken::never()` outside the `cancel_root_sites` allowlist
 are forbidden and enforced by `just lint arch`; kithara-play is not on that allowlist.
@@ -532,8 +532,6 @@ resampler fields.
 | `resample-glide` | no | Glide resampler backend for explicit config selection |
 | `stretch-signalsmith` | yes | Forward the Signalsmith engine to the warp-owned time-stretch renderer |
 | `stretch-bungee` | no | Forward the Bungee engine to the warp-owned time-stretch renderer |
-| `analysis-beat` | yes | Beat-analysis pass forwarding; absent from Apple FFI device sets |
-| `analysis-waveform` | yes | RealFFT waveform analyzer forwarding |
 | `client-reqwest` | yes | Forward the reqwest HTTP backend to network-reaching deps |
 | `client-wreq` | no | Forward the wreq HTTP backend to network-reaching deps |
 | `tls-rustls` | yes | Forward rustls TLS selection to network-reaching deps |

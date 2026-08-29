@@ -1,31 +1,24 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::{Error as IoError, ErrorKind},
-    num::NonZeroU32,
 };
 
 use kithara::{
+    analysis::{AnalysisFingerprint, AnalysisToken, TrackAnalysis},
     assets::{
         AcquisitionResult, AssetResource, AssetResourceState, AssetStore, AssetsError, ReadSide,
         ResourceKey, WriteSide,
     },
-    audio::{
-        BeatGrid, Coverage, FrameRange, Waveform,
-        analysis::{AnalysisFingerprint, AnalysisToken, BeatSnapshot, GridState},
-    },
-    bufpool::{ByteBuffer, BytePool},
+    bufpool::BytePool,
     decode::DecodeError,
     prelude::ResourceConfig,
 };
 use tracing::{debug, warn};
 
-use crate::waveform::TrackAnalysis;
-
 /// Tunables for the analysis cache, grouped to keep the module surface small.
 struct Consts;
 
 impl Consts {
-    const ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0005;
     /// Cap on the in-memory tier; past it the oldest entries fall back to disk.
     const MAX_MEM_ENTRIES: usize = 64;
 }
@@ -122,7 +115,7 @@ impl TrackAnalysisCache {
         let reader = target.store.open_resource(resource, None).ok()?;
         let mut bytes = self.byte_pool.get();
         reader.read_into(&mut bytes).ok()?;
-        match analysis_from_bytes(&bytes, &self.fingerprint) {
+        match TrackAnalysis::try_from((&bytes[..], &self.fingerprint)) {
             Ok(analysis) => {
                 debug!("track analysis cache: disk hit");
                 Some(analysis)
@@ -190,13 +183,11 @@ impl TrackAnalysisCache {
 
     fn store_disk(&self, target: &AnalysisTarget, analysis: &TrackAnalysis) {
         let resource = &target.key;
-        let bytes = match analysis_to_bytes(analysis, &self.byte_pool) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                warn!(%e, ?resource, "track analysis cache: encode failed");
-                return;
-            }
-        };
+        let mut bytes = self.byte_pool.get();
+        if let Err(e) = analysis.write_to(&mut bytes) {
+            warn!(%e, ?resource, "track analysis cache: encode failed");
+            return;
+        }
         if let Err(e) = write_resource(&target.store, resource, &bytes) {
             warn!(%e, ?resource, "track analysis cache: blob write failed");
         }
@@ -224,18 +215,6 @@ fn write_resource(
     Ok(())
 }
 
-#[derive(Debug, derive_more::Display)]
-enum AnalysisBytesError {
-    #[display("track analysis blob version {found} != expected {expected}")]
-    Version { found: u32, expected: u32 },
-    #[display("track analysis blob has a stale config fingerprint")]
-    Fingerprint,
-    #[display("track analysis blob is too large")]
-    TooLarge,
-    #[display("track analysis blob is corrupt")]
-    Corrupt,
-}
-
 /// The token a stored blob carries: derived from the resource key the blob
 /// lives under, so a restored snapshot identifies the same content it was
 /// analysed from rather than a session-scoped id.
@@ -249,238 +228,19 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
     }
 }
 
-fn analysis_to_bytes(
-    analysis: &TrackAnalysis,
-    byte_pool: &BytePool,
-) -> Result<ByteBuffer, AnalysisBytesError> {
-    let mut out = byte_pool.get();
-    out.extend_from_slice(&Consts::ANALYSIS_BYTES_VERSION.to_le_bytes());
-    write_str(&mut out, analysis.token().as_str())?;
-    out.extend_from_slice(&analysis.source_sample_rate().get().to_le_bytes());
-    write_optional_u64(&mut out, analysis.extent());
-    out.extend_from_slice(&analysis.revision().to_le_bytes());
-    write_ranges(&mut out, analysis.coverage().runs())?;
-
-    write_str(
-        &mut out,
-        analysis.fingerprint().waveform().unwrap_or_default(),
-    )?;
-    write_section(&mut out, |out| {
-        if let Some(waveform) = analysis.waveform() {
-            waveform.write_to(out);
-        }
-    })?;
-
-    write_str(&mut out, analysis.fingerprint().beat().unwrap_or_default())?;
-    let beat = analysis.beat();
-    write_section(&mut out, |out| {
-        if let Some(beat) = beat {
-            beat.grid().write_to(out);
-        }
-    })?;
-    out.push(u8::from(
-        beat.is_some_and(|beat| beat.state() == GridState::Final),
-    ));
-    write_ranges(&mut out, beat.map_or(&[], BeatSnapshot::unanalysed))?;
-    Ok(out)
-}
-
-fn analysis_from_bytes(
-    bytes: &[u8],
-    active: &AnalysisFingerprint,
-) -> Result<TrackAnalysis, AnalysisBytesError> {
-    let mut cursor = 0usize;
-    let version = read_u32(bytes, &mut cursor)?;
-    if version != Consts::ANALYSIS_BYTES_VERSION {
-        return Err(AnalysisBytesError::Version {
-            found: version,
-            expected: Consts::ANALYSIS_BYTES_VERSION,
-        });
-    }
-    let token = read_str(bytes, &mut cursor)?;
-    let source_sample_rate =
-        NonZeroU32::new(read_u32(bytes, &mut cursor)?).ok_or(AnalysisBytesError::Corrupt)?;
-    let extent = read_optional_u64(bytes, &mut cursor)?;
-    let revision = read_u64(bytes, &mut cursor)?;
-    let coverage = read_ranges(bytes, &mut cursor)?;
-
-    let waveform_tag = read_str(bytes, &mut cursor)?;
-    let waveform_bytes = read_section(bytes, &mut cursor)?;
-    let beat_tag = read_str(bytes, &mut cursor)?;
-    let grid_bytes = read_section(bytes, &mut cursor)?;
-    let final_grid = read_u8(bytes, &mut cursor)? == 1;
-    let unanalysed = read_ranges(bytes, &mut cursor)?;
-    if cursor != bytes.len() {
-        return Err(AnalysisBytesError::Corrupt);
-    }
-
-    let waveform_ok = waveform_tag == active.waveform().unwrap_or_default();
-    let beat_ok = beat_tag == active.beat().unwrap_or_default();
-    if !waveform_ok && !beat_ok {
-        return Err(AnalysisBytesError::Fingerprint);
-    }
-
-    let waveform = (waveform_ok && !waveform_bytes.is_empty())
-        .then(|| Waveform::try_from(waveform_bytes))
-        .transpose()
-        .map_err(|_| AnalysisBytesError::Corrupt)?;
-    let grid = (beat_ok && !grid_bytes.is_empty())
-        .then(|| BeatGrid::try_from(grid_bytes))
-        .transpose()
-        .map_err(|_| AnalysisBytesError::Corrupt)?;
-    let state = if final_grid {
-        GridState::Final
-    } else {
-        GridState::Provisional
-    };
-
-    let mut restored = Coverage::default();
-    for range in coverage {
-        restored.insert(range);
-    }
-
-    // Only a settled pass is stored, so what comes back is one.
-    Ok(TrackAnalysis::builder()
-        .token(token.as_str().into())
-        .revision(revision)
-        .source_sample_rate(source_sample_rate)
-        .maybe_extent(extent)
-        .settled(true)
-        .coverage(restored)
-        .fingerprint(AnalysisFingerprint::new(
-            beat_ok.then_some(beat_tag.as_str()),
-            waveform_ok.then_some(waveform_tag.as_str()),
-        ))
-        .maybe_waveform(waveform)
-        .maybe_beat(grid.map(|grid| BeatSnapshot::new(grid, state, unanalysed)))
-        .build())
-}
-
-fn write_str(out: &mut Vec<u8>, value: &str) -> Result<(), AnalysisBytesError> {
-    let len = u32::try_from(value.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
-    out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(value.as_bytes());
-    Ok(())
-}
-
-fn read_str(bytes: &[u8], cursor: &mut usize) -> Result<String, AnalysisBytesError> {
-    let len = usize::try_from(read_u32(bytes, cursor)?).map_err(|_| AnalysisBytesError::Corrupt)?;
-    let raw = read_slice(bytes, cursor, len)?;
-    String::from_utf8(raw.to_vec()).map_err(|_| AnalysisBytesError::Corrupt)
-}
-
-fn write_optional_u64(out: &mut Vec<u8>, value: Option<u64>) {
-    out.push(u8::from(value.is_some()));
-    out.extend_from_slice(&value.unwrap_or(0).to_le_bytes());
-}
-
-fn read_optional_u64(bytes: &[u8], cursor: &mut usize) -> Result<Option<u64>, AnalysisBytesError> {
-    let present = read_u8(bytes, cursor)? == 1;
-    let value = read_u64(bytes, cursor)?;
-    Ok(present.then_some(value))
-}
-
-fn write_ranges(out: &mut Vec<u8>, ranges: &[FrameRange]) -> Result<(), AnalysisBytesError> {
-    let count = u32::try_from(ranges.len()).map_err(|_| AnalysisBytesError::TooLarge)?;
-    out.extend_from_slice(&count.to_le_bytes());
-    for range in ranges {
-        out.extend_from_slice(&range.start().to_le_bytes());
-        out.extend_from_slice(&range.frames().to_le_bytes());
-    }
-    Ok(())
-}
-
-fn read_ranges(bytes: &[u8], cursor: &mut usize) -> Result<Vec<FrameRange>, AnalysisBytesError> {
-    let count =
-        usize::try_from(read_u32(bytes, cursor)?).map_err(|_| AnalysisBytesError::Corrupt)?;
-    // A range costs 16 bytes on the wire, so a length prefix can never claim
-    // more than what is left to read.
-    if count.saturating_mul(16) > bytes.len().saturating_sub(*cursor) {
-        return Err(AnalysisBytesError::Corrupt);
-    }
-    let mut out: Vec<FrameRange> = Vec::with_capacity(count);
-    for _ in 0..count {
-        let start = read_u64(bytes, cursor)?;
-        let frames = read_u64(bytes, cursor)?;
-        out.push(FrameRange::new(start, frames));
-    }
-    Ok(out)
-}
-
-fn read_u8(bytes: &[u8], cursor: &mut usize) -> Result<u8, AnalysisBytesError> {
-    let value = bytes
-        .get(*cursor)
-        .copied()
-        .ok_or(AnalysisBytesError::Corrupt)?;
-    *cursor += 1;
-    Ok(value)
-}
-
-fn write_section<F>(out: &mut Vec<u8>, write: F) -> Result<(), AnalysisBytesError>
-where
-    F: FnOnce(&mut Vec<u8>),
-{
-    let len_offset = out.len();
-    out.extend_from_slice(&0_u64.to_le_bytes());
-    let section_offset = out.len();
-    write(out);
-    let len =
-        u64::try_from(out.len() - section_offset).map_err(|_| AnalysisBytesError::TooLarge)?;
-    out[len_offset..section_offset].copy_from_slice(&len.to_le_bytes());
-    Ok(())
-}
-
-fn read_section<'a>(bytes: &'a [u8], cursor: &mut usize) -> Result<&'a [u8], AnalysisBytesError> {
-    let len = usize::try_from(read_u64(bytes, cursor)?).map_err(|_| AnalysisBytesError::Corrupt)?;
-    read_slice(bytes, cursor, len)
-}
-
-fn read_slice<'a>(
-    bytes: &'a [u8],
-    cursor: &mut usize,
-    len: usize,
-) -> Result<&'a [u8], AnalysisBytesError> {
-    let end = cursor.checked_add(len).ok_or(AnalysisBytesError::Corrupt)?;
-    let slice = bytes.get(*cursor..end).ok_or(AnalysisBytesError::Corrupt)?;
-    *cursor = end;
-    Ok(slice)
-}
-
-fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, AnalysisBytesError> {
-    let chunk = read_array::<4>(bytes, cursor)?;
-    Ok(u32::from_le_bytes(chunk))
-}
-
-fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, AnalysisBytesError> {
-    let chunk = read_array::<8>(bytes, cursor)?;
-    Ok(u64::from_le_bytes(chunk))
-}
-
-fn read_array<const N: usize>(
-    bytes: &[u8],
-    cursor: &mut usize,
-) -> Result<[u8; N], AnalysisBytesError> {
-    let end = cursor.checked_add(N).ok_or(AnalysisBytesError::Corrupt)?;
-    let chunk = bytes.get(*cursor..end).ok_or(AnalysisBytesError::Corrupt)?;
-    let mut out = [0u8; N];
-    out.copy_from_slice(chunk);
-    *cursor = end;
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU32, path::Path};
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
+        analysis::{
+            AnalysisFingerprint, BeatGrid, BeatSnapshot, Coverage, FrameRange, GridState,
+            TrackAnalysis, Waveform,
+        },
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
             AssetStore, StorageBackend,
-        },
-        audio::{
-            BeatGrid, Coverage, FrameRange, Waveform,
-            analysis::{AnalysisFingerprint, BeatSnapshot, GridState},
         },
         bufpool::BytePool,
         file::File,
@@ -491,11 +251,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use url::Url;
 
-    use super::{
-        AnalysisBytesError, AnalysisTarget, Consts, TrackAnalysisCache, analysis_from_bytes,
-        analysis_to_bytes,
-    };
-    use crate::waveform::TrackAnalysis;
+    use super::{AnalysisTarget, Consts, TrackAnalysisCache};
 
     /// The beat tag two tests must agree on: one of them keeps it while the
     /// waveform tag moves.
@@ -550,10 +306,6 @@ mod tests {
         analysis(Some(grid()), Some(wave()), 1_234_567)
     }
 
-    fn wave_only() -> TrackAnalysis {
-        analysis(None, Some(wave()), 0)
-    }
-
     fn store_in(dir: &Path) -> AssetStore {
         AssetStore::builder()
             .backend(StorageBackend::Disk { root: dir.into() })
@@ -591,52 +343,6 @@ mod tests {
 
     fn analysis_cache() -> TrackAnalysisCache {
         TrackAnalysisCache::new(fp(), BytePool::default())
-    }
-
-    #[kithara::test]
-    fn codec_round_trips_waveform_and_beat() {
-        let analysis = full_analysis();
-        let bytes = analysis_to_bytes(&analysis, &BytePool::default()).expect("encodes");
-        let back = analysis_from_bytes(&bytes, &fp()).expect("decodes");
-        assert_eq!(
-            back.waveform().expect("waveform survives").buckets(),
-            wave().buckets()
-        );
-        assert_eq!(back.beat().expect("beat grid survives").grid(), &grid());
-        assert_eq!(
-            back.source_frames(),
-            1_234_567,
-            "source_frames must survive the round-trip"
-        );
-    }
-
-    #[kithara::test]
-    fn codec_round_trips_without_beat() {
-        let bytes = analysis_to_bytes(&wave_only(), &BytePool::default()).expect("encodes");
-        let back = analysis_from_bytes(&bytes, &fp()).expect("decodes");
-        assert!(back.waveform().is_some());
-        assert!(back.beat().is_none(), "absent beat must stay absent");
-    }
-
-    #[kithara::test]
-    fn codec_round_trips_beat_only() {
-        let analysis = analysis(Some(grid()), None, 0);
-        let bytes = analysis_to_bytes(&analysis, &BytePool::default()).expect("encodes");
-        let back = analysis_from_bytes(&bytes, &fp()).expect("decodes");
-        assert!(back.waveform().is_none());
-        assert_eq!(back.beat().expect("beat grid survives").grid(), &grid());
-    }
-
-    #[kithara::test]
-    fn stale_fingerprint_is_a_miss() {
-        let bytes = analysis_to_bytes(&full_analysis(), &BytePool::default()).expect("encodes");
-        assert!(
-            matches!(
-                analysis_from_bytes(&bytes, &fingerprint("other-wave", "other-beat")),
-                Err(AnalysisBytesError::Fingerprint)
-            ),
-            "a config change must invalidate the blob"
-        );
     }
 
     #[kithara::test]
@@ -954,61 +660,6 @@ mod tests {
         assert!(
             hit.waveform().is_none(),
             "the waveform was analysed at another resolution and must be dropped"
-        );
-    }
-
-    /// Two covered runs with a gap between them, so the round-trip has real
-    /// coverage structure to preserve.
-    fn gapped_analysis() -> TrackAnalysis {
-        let mut coverage = Coverage::default();
-        coverage.insert(FrameRange::new(0, 400));
-        coverage.insert(FrameRange::new(600, 400));
-        TrackAnalysis::builder()
-            .token("assets/track.analysis".into())
-            .revision(11)
-            .source_sample_rate(rate())
-            .extent(1_000)
-            .coverage(coverage)
-            .fingerprint(fp())
-            .waveform(wave())
-            .beat(BeatSnapshot::new(
-                grid(),
-                GridState::Provisional,
-                vec![FrameRange::new(400, 200)],
-            ))
-            .build()
-    }
-
-    #[kithara::test]
-    fn a_blob_round_trips_every_snapshot_field() {
-        let want = gapped_analysis();
-        let bytes = analysis_to_bytes(&want, &BytePool::default()).expect("encodes");
-        let got = analysis_from_bytes(&bytes, &fp()).expect("decodes");
-
-        assert_eq!(got.token(), want.token(), "identity");
-        assert_eq!(
-            got.source_sample_rate(),
-            want.source_sample_rate(),
-            "rate axis"
-        );
-        assert_eq!(got.extent(), want.extent(), "extent");
-        assert_eq!(got.coverage(), want.coverage(), "coverage");
-        assert_eq!(got.revision(), want.revision(), "revision");
-        assert_eq!(
-            got.waveform_completeness(),
-            want.waveform_completeness(),
-            "waveform completeness"
-        );
-        let (got_beat, want_beat) = (
-            got.beat().expect("beat survives"),
-            want.beat().expect("beat fixture"),
-        );
-        assert_eq!(got_beat.grid(), want_beat.grid(), "grid");
-        assert_eq!(got_beat.state(), want_beat.state(), "grid state");
-        assert_eq!(
-            got_beat.unanalysed(),
-            want_beat.unanalysed(),
-            "unanalysed ranges"
         );
     }
 }

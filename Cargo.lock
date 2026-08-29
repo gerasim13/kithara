@@ -4168,6 +4168,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "kithara",
  "kithara-abr",
+ "kithara-analysis",
  "kithara-assets",
  "kithara-audio",
  "kithara-broadcast",
@@ -4214,6 +4215,35 @@ dependencies = [
  "tracing",
  "unimock",
  "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-analysis"
+version = "0.0.1-alpha4"
+dependencies = [
+ "bon",
+ "delegate",
+ "derive_more",
+ "fieldwork",
+ "kithara-audio",
+ "kithara-beat",
+ "kithara-bufpool",
+ "kithara-decode",
+ "kithara-events",
+ "kithara-platform",
+ "kithara-resampler",
+ "kithara-signal",
+ "kithara-test-macros",
+ "kithara-test-utils",
+ "kithara-warp",
+ "kithara-workspace-hack",
+ "num-traits",
+ "realfft",
+ "ringbuf 0.5.0",
+ "serde",
+ "thiserror 2.0.18",
+ "tracing",
+ "unimock",
 ]
 
 [[package]]
@@ -4316,14 +4346,12 @@ dependencies = [
  "cbc",
  "crossbeam-queue",
  "delegate",
- "derive_more",
  "fieldwork",
  "hotpath",
  "js-sys",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
- "kithara-beat",
  "kithara-bufpool",
  "kithara-decode",
  "kithara-events",
@@ -4337,10 +4365,8 @@ dependencies = [
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-warp",
  "kithara-workspace-hack",
  "num-traits",
- "realfft",
  "ringbuf 0.5.0",
  "serde",
  "tempfile",

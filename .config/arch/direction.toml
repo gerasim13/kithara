@@ -47,7 +47,7 @@ crates = ["kithara-audio", "kithara-warp"]
 [[layer]]
 index = 7
 name = "playback"
-crates = ["kithara-play"]
+crates = ["kithara-analysis", "kithara-play"]
 
 [[layer]]
 index = 8
