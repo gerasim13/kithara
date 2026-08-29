@@ -1,9 +1,12 @@
 use std::path::Path;
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::AudioConfig,
+    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
@@ -42,12 +45,22 @@ async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &Path,
     abr: AbrMode,
-) -> Audio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls>> {
     let url = server.url("/master.m3u8");
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(cache_dir))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.into(),
+                })
+                .pool(byte_pool.clone())
+                .build(),
+        )
+        .pool(byte_pool.clone())
         .cancel(cancel)
         .initial_abr_mode(abr)
         .build();
@@ -59,13 +72,14 @@ async fn create_hls_audio(
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
 
-    Audio::<Stream<Hls>>::new(config)
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>>")
 }

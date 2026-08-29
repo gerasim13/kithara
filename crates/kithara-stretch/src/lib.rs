@@ -5,27 +5,17 @@ compile_error!(
      A build with no stretch backend should not depend on this crate."
 );
 
-mod backend;
-pub use backend::{StretchBackend, StretchBackendError};
-
-mod config;
-pub use config::StretchOptions;
-
 mod kind;
 pub use kind::StretchKind;
 
 mod factory;
-pub use factory::build_backend;
+pub use factory::build_engine;
 
 mod backends;
-#[cfg(feature = "stretch-bungee")]
-pub use backends::BungeeElastic;
-#[cfg(feature = "stretch-signalsmith")]
-pub use backends::SignalsmithElastic;
 
 mod elastic;
 pub use elastic::{
-    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticLatency,
-    ElasticPriming, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticDrain, ElasticEngine, ElasticError,
+    ElasticLatency, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
     ElasticSpanPlan, ElasticSpanRequest,
 };

@@ -80,7 +80,7 @@ pub(crate) fn replay_ordered_in(
 }
 
 fn ordered(list: &DrawList, frame: &mut Frame, resources: &TextResources, bounds: Rect) {
-    let mut run = Vec::new();
+    let mut run: Vec<&DrawCmd> = Vec::new();
     for command in list.commands() {
         if let DrawCmd::Clip { region, list } = command {
             flush(&mut run, frame, resources, bounds);
@@ -248,7 +248,7 @@ fn draw_segment(
         .normalized_coords()
         .iter()
         .map(|coord| NormalizedCoord::from_bits(*coord))
-        .collect::<Vec<_>>();
+        .collect::<Vec<NormalizedCoord>>();
     let location = LocationRef::new(&normalized_coords);
     for glyph in segment.glyphs() {
         let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {

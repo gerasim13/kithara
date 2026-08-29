@@ -34,6 +34,8 @@ impl Consts {
     /// Pre-allocated per-frame PCM buffer. AAC frames are at most
     /// 2048 samples × 2 channels for HE-AAC v2.
     const MAX_SAMPLES: usize = 8192;
+    /// Maximum ADTS frame size encoded by its 13-bit frame-length field.
+    const MAX_ADTS_FRAME_BYTES: usize = 0x1fff;
 }
 
 fn sample_rate_index(rate: u32) -> u8 {
@@ -198,6 +200,7 @@ pub(crate) struct AacDecoder {
     /// (each packet carries its own header — bare HLS AAC, .aac
     /// files).
     transport: Transport,
+    adts: [u8; Consts::MAX_ADTS_FRAME_BYTES],
     pcm: [i16; Consts::MAX_SAMPLES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
@@ -290,6 +293,7 @@ impl AacDecoder {
             buf,
             transport,
             codec_params: params.clone(),
+            adts: [0; Consts::MAX_ADTS_FRAME_BYTES],
             pcm: [0; Consts::MAX_SAMPLES],
             delay_remaining: 0,
             metadata_validated: false,
@@ -320,11 +324,16 @@ impl AudioDecoder for AacDecoder {
             }
             Transport::Adts => {
                 let header = build_adts_header(self.config, payload.len());
-                let mut frame = Vec::with_capacity(header.len() + payload.len());
-                frame.extend_from_slice(&header);
-                frame.extend_from_slice(payload);
+                let frame_len = header
+                    .len()
+                    .checked_add(payload.len())
+                    .filter(|length| *length <= Consts::MAX_ADTS_FRAME_BYTES)
+                    .ok_or(Error::DecodeError("aac: ADTS frame exceeds 13-bit length"))?;
+                let (header_out, payload_out) = self.adts[..frame_len].split_at_mut(header.len());
+                header_out.copy_from_slice(&header);
+                payload_out.copy_from_slice(payload);
                 self.decoder
-                    .fill(&frame)
+                    .fill(&self.adts[..frame_len])
                     .map_err(|e| Error::DecodeError(e.message()))?;
             }
         }

@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -12,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -142,13 +142,16 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
-    let net = NetOptions::builder().is_insecure(true).build();
+    let byte_pool = BytePool::default();
+    let net = NetOptions::builder()
+        .byte_pool(byte_pool.clone())
+        .is_insecure(true)
+        .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
     let store = AssetStore::builder()
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -156,21 +159,24 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+            .cancel(shutdown.child())
+            .build(),
+    );
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker.clone())
         .store(store)
         .build();
 
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
@@ -184,7 +190,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     );
 
     let mut rx = queue.subscribe();
-    let id = queue.append(source);
+    let id = queue.append(source).expect("append packaged DRM track");
     wait_for_status(
         &mut rx,
         &queue,

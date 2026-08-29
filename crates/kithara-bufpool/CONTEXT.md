@@ -13,9 +13,9 @@ Each shard's queue capacity is fixed at construction (`max_buffers / SHARDS`, cl
 
 ## Region and the Shared Budget
 
-`Region` is the canonical owner of one byte budget shared by a `BytePool` and a `PcmPool`; `RegionConfig` exposes exactly one knob, `max_bytes` (default 256 MB). Composition roots — app `main`, the FFI `NativeInner` and its asset store, a standalone `Queue` that builds its own player — construct one `Region` and pass region-derived pools down through configs. Library code never calls `BytePool::default()` / `PcmPool::default()` outside tests; those are process-wide `OnceLock` singletons kept for top-level convenience. Pools built via `new` / `with_byte_budget` own a private budget.
+`Region` is the canonical owner of one byte budget shared by a `BytePool` and a `SamplePool`; `RegionConfig` exposes exactly one knob, `max_bytes` (default 256 MB). Composition roots — app `main`, the FFI `NativeInner` and its asset store, a standalone `Queue` that builds its own player — construct one `Region` and pass region-derived pools down through configs. Library code never calls `BytePool::default()` / `SamplePool::default()` outside tests; those are process-wide `OnceLock` singletons kept for top-level convenience. Pools built via `new` / `with_byte_budget` own a private budget.
 
-The budget counts **admitted pool capacity in bytes**, not RSS: allocator metadata, rounding, transient copies during growth, and plain `Vec`s outside the pool (e.g. time-stretch scratch) are not covered.
+The budget counts **tracked pool capacity in bytes**, not RSS: allocator metadata, rounding, transient copies during growth, and plain `Vec`s outside the pool (e.g. time-stretch scratch) are not covered. Checked growth never crosses the configured cap. Infallible initialization can cross it, keeps the actual capacity tracked, and reports the event through `budget_overshoots`.
 
 ### Travelling charge
 
@@ -28,12 +28,18 @@ A buffer's byte charge is acquired at first growth and released only when a retu
 
 `ensure_len` is transactional: it reserves the budget delta **before** allocating (`try_reserve_exact` into a fresh `Vec`), reconciles the actual capacity against the reservation, and rolls back fully on any failure — a failed call leaves length, capacity, and budget untouched. Growth is amortized (doubling, falling back to the exact request when the budget cannot afford the double) so incremental `ensure_len` loops stay O(n).
 
-On the PCM side `ensure_len` is the **only** way to grow. `PcmBuf` is a nominal guard that derefs to `[f32]`, not `Vec<f32>`, so the raw `Vec` growth mutators (`resize`, `reserve`, `extend`, `extend_from_slice`, `push`, …) do not exist on it — calling one is a compile error, not a runtime overshoot. Length still shrinks via the inherent `clear` / `truncate` / `drain`; capacity and slice access come through the deref. Two escape hatches are deliberate: the `get_with` / `pre_warm` init closures receive the inner `&mut Vec<f32>` (charged after the closure, so an over-grow there counts as a `budget_overshoots` rather than being blocked), and `into_inner()` hands back an owned `Vec<f32>`.
+After acquisition, `ensure_len` is the only way to grow a `SampleBuffer`. The nominal guard derefs to `[f32]`, not `Vec<f32>`, so raw growth mutators (`resize`, `reserve`, `extend`, `extend_from_slice`, `push`, ...) do not exist on it. Length still shrinks through `clear`, `truncate`, `drain`, `retain`, and `dedup`; capacity and slice access come through the deref.
+
+Initialization has separate, deliberate contracts:
+
+- `get_with` exposes the inner `Vec` to an initializer, and `collect` clears then extends that same reused allocation from an iterator. Both operations are infallible: the pool measures their capacity delta afterward. Growth beyond the configured cap is retained and increments `PoolStats::budget_overshoots` / `RegionStats::budget_overshoots`.
+- `pre_warm` initializes a new buffer before admission, then requests its full byte charge. If the budget rejects it, pre-warm drops that buffer and stops.
+- `into_inner()` hands back the owned `Vec`; its existing charge must return through `recycle` or `attach` as described above.
 
 The byte side keeps `PooledOwned<_, Vec<u8>>` deref to `Vec<u8>` because its I/O consumers grow through `Read`-style `&mut Vec<u8>` sinks; there raw `DerefMut` growth past the cap stays observable via `PoolStats::budget_overshoots` / `RegionStats::budget_overshoots` rather than compile-blocked.
 
 ## Integration
 
-Pools are injected through configs (`AudioConfig::byte_pool` / `pcm_pool`, `FileConfig::pool`, `HlsConfig::pool`, `ResamplerSettings::pcm_pool`) so each surface owns its sizing policy.
+Pools are injected through configs (`AudioConfig::byte_pool` / `sample_pool`, `FileConfig::pool`, `HlsConfig::pool`, `ResamplerSettings::sample_pool`) so each surface owns its sizing policy.
 
 `SharedPool`, `Pool`, `Pooled`, `PooledOwned`, `Reuse`, and `PoolStats` are re-exported `#[doc(hidden)]` for workspace-internal use only.

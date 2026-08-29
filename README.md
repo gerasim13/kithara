@@ -33,7 +33,9 @@ full player.
 - **Progressive HTTP** — stream MP3, AAC, FLAC, and ALAC with disk caching and pull-driven range fetches
 - **HLS VOD** — adaptive bitrate, variant switching, cross-codec recreate, AES-128-CBC encrypted segments, on-disk segment cache
 - **Multi-backend decode** — Symphonia (software, cross-platform), Apple AudioToolbox (macOS/iOS), Android `MediaCodec` (Android)
-- **Audio pipeline** — fixed-ratio sample-rate conversion, effects chain, OS-thread worker with backpressure
+- **Decoded source pipeline** — decoder lifecycle, fixed-ratio sample-rate conversion, and readiness (`kithara-audio`)
+- **Progressive source analysis** — waveform and beat analysis over decoded source ranges (`kithara-analysis`)
+- **Playback chain** — shared worker, resident Warp, time-stretch/effects, and final output admission (`kithara-play`)
 - **Persistent disk cache** — lease/pin semantics, LRU eviction, crash-safe writes
 - **Zero-allocation hot paths** — sharded buffer pool for decode and I/O loops
 - **WASM** — browser playback bindings with shared-memory threading (`kithara-ffi` web module)

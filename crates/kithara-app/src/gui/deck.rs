@@ -1,4 +1,4 @@
-use kithara::{abr::AbrMode, audio::effects::eq::GainDb, events::AdvanceReason};
+use kithara::{abr::AbrMode, events::AdvanceReason, play::effects::eq::GainDb};
 use kithara_platform::sync::Arc;
 use kithara_queue::{TrackId, Transition};
 use tracing::{debug, error};
@@ -75,14 +75,22 @@ pub(crate) fn handle(deck: &mut DeckUi, msg: &DeckMsg) {
         DeckMsg::TogglePlayPause => toggle_play_pause(deck),
         DeckMsg::Pause => deck.controller.queue().pause(),
         DeckMsg::Next => {
-            deck.controller
+            if let Err(error) = deck
+                .controller
                 .queue()
-                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
+                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+            {
+                error!(%error, "advance to next track failed");
+            }
         }
         DeckMsg::Prev => {
-            deck.controller
+            if let Err(error) = deck
+                .controller
                 .queue()
-                .return_to_previous(Transition::Crossfade);
+                .return_to_previous(Transition::Crossfade)
+            {
+                error!(%error, "return to previous track failed");
+            }
         }
         DeckMsg::SeekTo(pos) => seek_to(deck, pos),
         DeckMsg::EqBandChanged(band, db) => eq_band_changed(deck, band, db),

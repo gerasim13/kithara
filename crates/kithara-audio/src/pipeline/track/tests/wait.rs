@@ -12,7 +12,7 @@ use crate::{
             CurrentFsm, Track, TrackStep, WaitContext, WaitState, WaitingForSource, WaitingReason,
         },
     },
-    renderer::AudioWorkerSource,
+    traits::{AudioSource, AudioSourceExt},
 };
 
 /// Park the track in `WaitingForSource(Playback)` the way a transient

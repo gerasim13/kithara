@@ -1,86 +1,86 @@
+use std::mem::size_of;
+
 use kithara_bufpool::{BudgetExhausted, Region, RegionConfig};
 use kithara_test_utils::kithara;
 
 #[kithara::test]
-fn byte_growth_exhausts_shared_budget_for_pcm() {
+fn byte_growth_exhausts_shared_budget_for_samples() {
     let region = Region::new(RegionConfig::builder().max_bytes(16).build());
     let byte_pool = region.byte_pool();
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
     let mut bytes = byte_pool.get();
     bytes.ensure_len(16).unwrap();
 
-    let mut pcm = pcm_pool.get();
-    assert_eq!(pcm.ensure_len(1), Err(BudgetExhausted));
+    let mut samples = sample_pool.get();
+    assert_eq!(samples.ensure_len(1), Err(BudgetExhausted));
 }
 
 #[kithara::test]
-fn pcm_growth_exhausts_shared_budget_for_bytes() {
+fn samples_growth_exhausts_shared_budget_for_bytes() {
     let region = Region::new(RegionConfig::builder().max_bytes(16).build());
     let byte_pool = region.byte_pool();
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
-    let mut pcm = pcm_pool.get();
-    pcm.ensure_len(4).unwrap();
+    let mut samples = sample_pool.get();
+    samples.ensure_len(4).unwrap();
 
     let mut bytes = byte_pool.get();
     assert_eq!(bytes.ensure_len(1), Err(BudgetExhausted));
 }
 
-/// Default PCM policy stores 128 buffers across 8 shards, so one home shard
-/// queue holds 16. A single-threaded test always returns to the same home
-/// shard, which makes the 17th return deterministically overflow the queue.
-const PCM_SHARD_SLOTS: usize = 16;
+// A single-threaded test returns all buffers to one 16-slot home shard, making
+// the 17th return deterministically overflow that queue.
+const SAMPLE_SHARD_SLOTS: usize = 16;
 
-/// Bytes charged for one `ensure_len(4)` PCM buffer (4 × f32).
-const PCM_BUF_BYTES: usize = 16;
+const SAMPLE_BUF_BYTES: usize = 4 * size_of::<f32>();
 
 #[kithara::test]
 fn rejected_drop_releases_shared_budget() {
     let region = Region::new(RegionConfig::default());
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
-    let held: Vec<_> = (0..PCM_SHARD_SLOTS + 1)
+    let held: Vec<_> = (0..SAMPLE_SHARD_SLOTS + 1)
         .map(|_| {
-            let mut buf = pcm_pool.get();
+            let mut buf = sample_pool.get();
             buf.ensure_len(4).unwrap();
             buf
         })
         .collect();
     assert_eq!(
         region.stats().allocated_bytes,
-        (PCM_SHARD_SLOTS + 1) * PCM_BUF_BYTES
+        (SAMPLE_SHARD_SLOTS + 1) * SAMPLE_BUF_BYTES
     );
     drop(held);
 
     assert_eq!(
         region.stats().allocated_bytes,
-        PCM_SHARD_SLOTS * PCM_BUF_BYTES
+        SAMPLE_SHARD_SLOTS * SAMPLE_BUF_BYTES
     );
 }
 
 #[kithara::test]
 fn rejected_recycle_releases_shared_budget() {
     let region = Region::new(RegionConfig::default());
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
-    let mut extra = pcm_pool.get();
+    let mut extra = sample_pool.get();
     extra.ensure_len(4).unwrap();
     let extra = extra.into_inner();
 
-    let held: Vec<_> = (0..PCM_SHARD_SLOTS)
+    let held: Vec<_> = (0..SAMPLE_SHARD_SLOTS)
         .map(|_| {
-            let mut buf = pcm_pool.get();
+            let mut buf = sample_pool.get();
             buf.ensure_len(4).unwrap();
             buf
         })
         .collect();
     drop(held);
-    pcm_pool.recycle(extra);
+    sample_pool.recycle(extra);
 
     assert_eq!(
         region.stats().allocated_bytes,
-        PCM_SHARD_SLOTS * PCM_BUF_BYTES
+        SAMPLE_SHARD_SLOTS * SAMPLE_BUF_BYTES
     );
 }
 
@@ -88,7 +88,7 @@ fn rejected_recycle_releases_shared_budget() {
 fn stats_combine_budget_and_keep_pool_hits_separate() {
     let region = Region::new(RegionConfig::builder().max_bytes(64).build());
     let byte_pool = region.byte_pool();
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
     {
         let mut bytes = byte_pool.get();
@@ -96,18 +96,18 @@ fn stats_combine_budget_and_keep_pool_hits_separate() {
     }
     drop(byte_pool.get());
     {
-        let mut pcm = pcm_pool.get();
-        pcm.ensure_len(4).unwrap();
+        let mut samples = sample_pool.get();
+        samples.ensure_len(4).unwrap();
     }
-    drop(pcm_pool.get());
+    drop(sample_pool.get());
 
     let stats = region.stats();
     assert_eq!(stats.allocated_bytes, 32);
     assert_eq!(stats.max_bytes, 64);
     assert_eq!(stats.byte_pool_hits, 1);
     assert_eq!(stats.byte_pool_misses, 1);
-    assert_eq!(stats.pcm_pool_hits, 1);
-    assert_eq!(stats.pcm_pool_misses, 1);
+    assert_eq!(stats.sample_pool_hits, 1);
+    assert_eq!(stats.sample_pool_misses, 1);
 }
 
 #[kithara::test]
@@ -132,29 +132,29 @@ fn failed_growth_preserves_buffer_and_budget() {
 #[kithara::test]
 fn successful_growth_charges_actual_capacity() {
     let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let pcm_pool = region.pcm_pool();
-    let mut pcm = pcm_pool.get();
+    let sample_pool = region.sample_pool();
+    let mut samples = sample_pool.get();
 
-    pcm.ensure_len(17).unwrap();
+    samples.ensure_len(17).unwrap();
 
     assert_eq!(
         region.stats().allocated_bytes,
-        pcm.capacity() * size_of::<f32>()
+        samples.capacity() * size_of::<f32>()
     );
 }
 
 #[kithara::test]
 fn attach_round_trip_keeps_travelling_charge_balanced() {
     let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
-    let mut pcm = pcm_pool.get();
-    pcm.ensure_len(4).unwrap();
+    let mut samples = sample_pool.get();
+    samples.ensure_len(4).unwrap();
     let charged = region.stats().allocated_bytes;
 
-    let inner = pcm.into_inner();
+    let inner = samples.into_inner();
     assert_eq!(region.stats().allocated_bytes, charged);
-    let reattached = pcm_pool.attach(inner);
+    let reattached = sample_pool.attach(inner);
     assert_eq!(region.stats().allocated_bytes, charged);
     drop(reattached);
 
@@ -164,16 +164,16 @@ fn attach_round_trip_keeps_travelling_charge_balanced() {
 #[kithara::test]
 fn smaller_ensure_len_keeps_capacity_charged() {
     let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let pcm_pool = region.pcm_pool();
-    let mut pcm = pcm_pool.get();
+    let sample_pool = region.sample_pool();
+    let mut samples = sample_pool.get();
 
-    pcm.ensure_len(17).unwrap();
-    let capacity = pcm.capacity();
+    samples.ensure_len(17).unwrap();
+    let capacity = samples.capacity();
     let allocated = region.stats().allocated_bytes;
-    pcm.ensure_len(4).unwrap();
+    samples.ensure_len(4).unwrap();
 
-    assert_eq!(pcm.len(), 17);
-    assert_eq!(pcm.capacity(), capacity);
+    assert_eq!(samples.len(), 17);
+    assert_eq!(samples.capacity(), capacity);
     assert_eq!(region.stats().allocated_bytes, allocated);
 }
 
@@ -193,17 +193,17 @@ fn get_with_budget_overshoot_is_observable() {
 #[kithara::test]
 fn growth_beyond_capacity_amortizes() {
     let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let pcm_pool = region.pcm_pool();
-    let mut pcm = pcm_pool.get();
+    let sample_pool = region.sample_pool();
+    let mut samples = sample_pool.get();
 
-    pcm.ensure_len(16).unwrap();
-    let first_cap = pcm.capacity();
-    pcm.ensure_len(first_cap + 1).unwrap();
-    assert!(pcm.capacity() >= first_cap * 2);
+    samples.ensure_len(16).unwrap();
+    let first_cap = samples.capacity();
+    samples.ensure_len(first_cap + 1).unwrap();
+    assert!(samples.capacity() >= first_cap * 2);
 
-    let doubled = pcm.capacity();
-    pcm.ensure_len(doubled).unwrap();
-    assert_eq!(pcm.capacity(), doubled);
+    let doubled = samples.capacity();
+    samples.ensure_len(doubled).unwrap();
+    assert_eq!(samples.capacity(), doubled);
 }
 
 #[kithara::test]
@@ -219,17 +219,17 @@ fn amortized_growth_falls_back_to_exact_fit_under_budget() {
     assert_eq!(region.stats().allocated_bytes, 6);
 }
 
-/// Default PCM policy trims a returned buffer to 200_000 elements once its
+/// Default sample policy trims a returned buffer to 200_000 elements once its
 /// capacity is past twice that.
-const PCM_TRIM_LEN: usize = 200_000;
+const SAMPLE_TRIM_LEN: usize = 200_000;
 
 #[kithara::test]
 fn a_trimmed_return_releases_what_it_gave_back() {
     let region = Region::new(RegionConfig::default());
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
-    let mut buf = pcm_pool.get();
-    buf.ensure_len(PCM_TRIM_LEN * 4).unwrap();
+    let mut buf = sample_pool.get();
+    buf.ensure_len(SAMPLE_TRIM_LEN * 4).unwrap();
     let charged = region.stats().allocated_bytes;
     drop(buf);
 
@@ -243,16 +243,16 @@ fn a_trimmed_return_releases_what_it_gave_back() {
 #[kithara::test]
 fn cycling_one_oversized_buffer_does_not_drain_the_budget() {
     let region = Region::new(RegionConfig::default());
-    let pcm_pool = region.pcm_pool();
+    let sample_pool = region.sample_pool();
 
     for _ in 0..64 {
-        let mut buf = pcm_pool.get();
-        buf.ensure_len(PCM_TRIM_LEN * 4).unwrap();
+        let mut buf = sample_pool.get();
+        buf.ensure_len(SAMPLE_TRIM_LEN * 4).unwrap();
     }
 
     let held = region.stats().allocated_bytes;
     assert!(
-        held < PCM_TRIM_LEN * 4 * size_of::<f32>() * 2,
+        held < SAMPLE_TRIM_LEN * 4 * size_of::<f32>() * 2,
         "reusing one buffer 64 times charges {held} bytes"
     );
 }

@@ -18,10 +18,11 @@ builders; this crate exposes no cfg-selected default backend handle.
 capabilities and fails at build, it is not a fallback.
 
 Decoder placement is not owned here: `kithara-decode` decides whether a decoder
-uses a codec-embedded converter or wraps decoded PCM in a decoder adapter. Codec
+uses a codec-embedded converter or wraps decoded audio in a decoder adapter. Codec
 lifecycle, media input, and gapless translation stay there. Playback graph
 routing is not owned here either: `kithara-audio` passes device-rate config into
-decode and analysis but must not contain backend-specific resampler policy.
+decode, while `kithara-analysis` owns analysis-side use; neither crate contains
+backend-specific resampler policy.
 
 ## Allocation Contract
 
@@ -29,10 +30,10 @@ Hot paths must not allocate through ordinary `Vec` growth. Backends use one of
 these storage owners:
 
 - caller-owned input and output slices passed to `Resampler::process_into_buffer`;
-- scratch buffers taken from the `PcmPool` inside `ResamplerSettings`;
+- scratch buffers taken from the `SamplePool` inside `ResamplerSettings`;
 - backend-owned pooled scratch acquired during construction or reset.
 
-Library code must not call `PcmPool::default()` as a hidden fallback. The pool is
+Library code must not call `SamplePool::default()` as a hidden fallback. The pool is
 injected by the surface that owns memory sizing, matching the `kithara-bufpool`
 contract. Construction may pre-warm scratch for the configured channels and chunk
 size; steady-state processing reuses already-owned buffers.
@@ -43,7 +44,7 @@ scratch and keep the public trait on borrowed planar slices.
 
 ## Backend Contract
 
-`Resampler` is standalone PCM-to-PCM only: it accepts borrowed planar `f32`
+`Resampler` handles standalone decoded audio only: it accepts borrowed planar `f32`
 slices and writes into caller-owned planar output slices. The returned
 `ResamplerProcess` reports accepted input frames and produced output frames.
 Callers size output using the backend's frame-capacity methods
@@ -75,7 +76,7 @@ External backends may ignore quality or map it into their own config.
 ## Configuration Shapes
 
 Everything is constructed through bon builders. `ResamplerSettings` (channels,
-`pcm_pool`, mode, options, quality) is what a backend builds from;
+`sample_pool`, mode, options, quality) is what a backend builds from;
 `ResamplerConfig<B>` pairs it with a backend value and is what `create_resampler`
 consumes. `ResamplerOptions` holds the numeric tunables — `max_ratio_adjustment`
 8.0, `passthrough_tolerance` 0.0001, `chunk_size` 4096 — and its `Default` goes
@@ -84,7 +85,7 @@ through the builder, so overriding one keeps the other defaults.
 `Resample<S>` carries `target_sample_rate`, quality and options with a placement
 scope `S` (`Unit<B>` or `Decode<B>`), keeping the backend in the type at the call
 site. `MonoStream<B>` / `MonoStreamConfig<B>` are the pooled single-channel
-streaming adapter used by beat analysis in `kithara-audio`.
+streaming adapter used by beat analysis in `kithara-analysis`.
 
 ## Built-In Backend Families
 
@@ -99,7 +100,7 @@ streaming adapter used by beat analysis in `kithara-audio`.
 
 ## Platform Backend Families
 
-`apple::AppleAudioConverterBackend` is a standalone PCM-to-PCM `AudioConverter`
+`apple::AppleAudioConverterBackend` is a standalone CoreAudio `AudioConverter`
 backend compiled on macOS/iOS without a cargo feature. It advertises
 `FIXED_RATIO | REPORTS_LATENCY | STANDALONE` and takes an
 `AudioConverterFactory` through `apple::AppleAudioConverterConfig`;
@@ -109,7 +110,7 @@ denies unsafe code, so unavoidable Apple unsafe lives in `kithara-apple`.
 Codec-embedded Apple decode remains in `kithara-decode` but uses the same shared
 Apple ABI crate.
 
-No Android backend exists until there is a real Android PCM resampler. Future
+No Android backend exists until there is a real Android resampling backend. Future
 backend families get cargo features only when their implementation module lands;
 empty placeholder features are not part of the public contract.
 
@@ -117,9 +118,9 @@ empty placeholder features are not part of the public contract.
 
 `kithara-decode` imports this crate and supports one of two placements:
 
-- codec-embedded: the decoder emits target-rate PCM internally (Apple decoder
+- codec-embedded: the decoder emits target-rate audio internally (Apple decoder
   plus Apple `AudioConverter`);
-- decoder-adapter: any decoder emits source-rate PCM and is wrapped by a
+- decoder-adapter: any decoder emits source-rate audio and is wrapped by a
   standalone backend from this crate — built-in or any external type implementing
   `ResamplerBackend`.
 

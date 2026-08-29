@@ -15,7 +15,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -109,22 +109,26 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     Arc<Queue>,
-    Arc<PlayerImpl>,
     Downloader,
     AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::SamplePool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
-            .player(Arc::clone(&player))
+            .player(player)
             .store(store.clone())
             .build(),
     ));
@@ -134,7 +138,7 @@ fn build_queue_with_tick(
             .max_concurrent(Consts::MAX_CONCURRENT)
             .build(),
     );
-    (queue, player, downloader, store, tick_handle)
+    (queue, downloader, store, tick_handle)
 }
 
 #[derive(Debug, Default)]
@@ -184,15 +188,13 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     let url = build_hls_with_delay(&helper).await;
 
     let temp = temp_dir();
-    let (queue, player, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut rx = player.bus().subscribe();
+    let mut rx = queue.subscribe();
 
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader.clone())
     .store(store)
     .initial_abr_mode(AbrMode::Auto(None))
@@ -203,7 +205,9 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     )
     .build();
 
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append stale-fetch seek track");
     queue.select(track_id, Transition::None).expect("select");
 
     wait_for_loader_done(&queue, track_id, Consts::LOAD_DEADLINE)
@@ -217,7 +221,7 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
     // emitted `AudioEvent::PlaybackProgress` with a non-zero position. This
     // is the discriminating gate: `HlsEvent::SegmentReadStart` only proves
     // the stream layer is reading (it can fire during the up-front blocking
-    // build in `Audio::new`, before the processor has the track in a playing
+    // preparation in `PlayWorker::open`, before the processor has the track in a playing
     // state). The seek path runs through the processor —
     // `apply_seek` only forwards `track.seek` for tracks in
     // `FadingIn`/`Playing`, and only that path reaches `Audio::seek ->

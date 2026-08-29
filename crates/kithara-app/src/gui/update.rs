@@ -2,7 +2,7 @@ use iced::{
     Task, window,
     window::{Direction, Mode},
 };
-use kithara::audio::{EqBandConfig, effects::eq::GainDb};
+use kithara::play::effects::eq::{EqBandConfig, GainDb};
 use kithara_platform::time::Duration;
 use kithara_ui::render::{WindowCommand, WindowEdge};
 use tracing::{error, warn};
@@ -33,7 +33,7 @@ pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
     let task = match message {
         Message::BroadcastToggle => state
             .broadcast
-            .toggle()
+            .toggle(state.session.host())
             .map_or_else(Task::none, stop_broadcast),
         Message::BroadcastStopped(duration) => {
             state.broadcast.complete_stop();
@@ -179,7 +179,7 @@ fn set_eq_mode(state: &mut Kithara, mode: EqMode) {
         return;
     }
 
-    let mut changes = Vec::new();
+    let mut changes: Vec<EqModeChange<'_>> = Vec::new();
     for deck in state.decks.iter() {
         let current = deck
             .controller
@@ -267,7 +267,7 @@ fn handle_tick(state: &mut Kithara) {
     state.ui.advance(Duration::from_millis(
         subscription_config(playing).tick_interval_ms,
     ));
-    state.broadcast.poll();
+    state.broadcast.poll(state.session.host());
     for deck in state.decks.iter() {
         let _ = deck.controller.queue().tick();
         deck.controller.refresh_continuous();

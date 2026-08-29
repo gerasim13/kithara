@@ -57,7 +57,7 @@ pub fn outline(document: &str) -> Result<Outline, SvgError> {
     let fit = Fit::read(root.attribute("viewBox").ok_or(SvgError::NoViewBox)?)?;
 
     let mut rule: Option<FillRule> = None;
-    let mut verbs = Vec::new();
+    let mut verbs: Vec<Verb> = Vec::new();
     for node in root.descendants().filter(roxmltree::Node::is_element) {
         if node == root {
             continue;

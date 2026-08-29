@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -12,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -59,13 +59,16 @@ struct Ctx {
 }
 
 async fn build_ctx() -> Ctx {
-    let net = NetOptions::builder().is_insecure(true).build();
+    let byte_pool = BytePool::default();
+    let net = NetOptions::builder()
+        .byte_pool(byte_pool.clone())
+        .is_insecure(true)
+        .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
     let store = AssetStore::builder()
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -73,20 +76,23 @@ async fn build_ctx() -> Ctx {
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+            .cancel(shutdown.child())
+            .build(),
+    );
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker.clone())
         .store(store)
         .build();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let q = Arc::clone(&queue);
@@ -312,13 +318,13 @@ async fn observe_scrub_outcome(obs: ScrubObservation<'_>) -> ScrubOutcome {
             .map(|r| r.map(|env| env.event))
         {
             Ok(Ok(ev)) => {
-                if let Event::Player(PlayerEvent::ItemDidFail { src, .. }) = &ev
-                    && src.as_ref() == target_src
+                if let Event::Player(PlayerEvent::ItemDidFail { item }) = &ev
+                    && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidFail);
                 }
-                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) = &ev
-                    && src.as_ref() == target_src
+                if let Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) = &ev
+                    && item.track().src.as_ref() == target_src
                 {
                     last_terminal_for_target = Some(AdvanceTrigger::DidPlayToEnd);
                 }
@@ -394,13 +400,16 @@ async fn rapid_scrub_does_not_silently_advance(#[case] backend: DecoderBackend) 
 
     let _before_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend));
+        .append(build_track_source(SENTINEL_BEFORE, &ctx, backend))
+        .expect("append leading sentinel");
     let target_id = ctx
         .queue
-        .append(build_track_source(TARGET_TRACK, &ctx, backend));
+        .append(build_track_source(TARGET_TRACK, &ctx, backend))
+        .expect("append scrub target");
     let _after_id = ctx
         .queue
-        .append(build_track_source(SENTINEL_AFTER, &ctx, backend));
+        .append(build_track_source(SENTINEL_AFTER, &ctx, backend))
+        .expect("append trailing sentinel");
 
     wait_for_loaded(&mut rx, &ctx.queue, target_id, LOAD_BUDGET)
         .await

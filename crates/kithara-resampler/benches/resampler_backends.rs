@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_resampler::apple::{AppleAudioConverterBackend, AudioToolboxConverterFactory};
 #[cfg(feature = "resample-glide")]
@@ -140,7 +140,7 @@ where
             target_sample_rate: non_zero_u32(target_rate),
         })
         .options(ResamplerOptions::builder().chunk_size(block).build())
-        .pcm_pool(PcmPool::new(
+        .sample_pool(SamplePool::new(
             64,
             block.saturating_mul(channels).saturating_mul(4),
         ))

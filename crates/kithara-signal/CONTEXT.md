@@ -1,0 +1,41 @@
+# kithara-signal - Context
+
+## Ownership
+
+This crate is the canonical decoded-audio signal data plane. It owns
+`AudioSpec`, `AudioChunkInfo`, `AudioChunk`, `FrameCount`, `SampleCount`, sample
+sanitation, and pure frame/sample/duration conversion.
+
+`AudioChunk` owns a `kithara-bufpool::SampleBuffer`; `kithara-bufpool` remains
+the owner of allocation budgets, pool mechanics, recycling, `SamplePool`, and
+`SampleBuffer`. `kithara-stream` remains the owner of encoded/container media
+facts and transport positions.
+
+## Dependency Boundary
+
+The crate may depend downward on `kithara-platform` primitives and
+`kithara-bufpool`. It must not depend on decode, stream, network, assets,
+workers, schedulers, Warp, stretch, playback, Host, analyzer code, or backend
+features.
+
+Decoder, playback, Warp, and analyzer crates consume these values without
+creating aliases or duplicate decoded-signal types.
+
+`segment_index` and `variant_index` are opaque provenance values supplied by a
+decoder; this crate does not interpret them or own protocol policy.
+
+## Stable Value Shapes
+
+`AudioSpec`, `AudioChunkInfo`, and `AudioChunk` intentionally remain directly
+constructible named-field values. Existing workspace crates build fixtures and
+read hot-path fields through struct literals and direct access; this mechanical
+extraction preserves that stable value contract instead of introducing a
+parallel builder migration.
+
+## Runtime Contract
+
+Construction and resize may reserve storage only through the caller-injected
+`SamplePool`; borrowed views and layout conversions do not allocate. These
+types do not start work or own mutable runtime coordination. Moving them into
+this crate must preserve buffer lifetime, timeline fields, ordering, and
+failure behavior exactly.

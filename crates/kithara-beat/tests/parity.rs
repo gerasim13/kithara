@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use common::{Score, f_measure, load_golden};
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
+use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
 
 const WINDOW: f64 = 0.070;
@@ -54,6 +55,7 @@ fn python_parity_small_model() {
     let mut bt = BeatThis::builder()
         .mel_model(MEL_MODEL_BYTES)
         .beat_model(BEAT_MODEL_BYTES)
+        .sample_pool(SamplePool::default())
         .build()
         .unwrap_or_else(|e| panic!("BeatThis::builder failed: {e}"));
     let raw = bt

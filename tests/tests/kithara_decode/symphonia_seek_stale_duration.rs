@@ -34,7 +34,7 @@ fn partial_slice(full: &'static [u8]) -> &'static [u8] {
 fn decoder_config() -> DecoderConfig {
     DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
         .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .sample_pool(kithara::bufpool::SamplePool::default())
         .build()
 }
 

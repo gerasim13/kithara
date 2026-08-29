@@ -1,8 +1,11 @@
 #[cfg(feature = "gui")]
-use kithara::audio::{EqBandConfig, effects::eq::GainDb};
+use kithara::play::effects::eq::{EqBandConfig, GainDb};
 use kithara::{
-    audio::generate_log_spaced_bands,
-    play::{PlayError, PlayerConfig, PlayerImpl, SessionHandle, StretchControls, apply_mix},
+    host::{Host, HostOwned},
+    play::{
+        PlayError, PlayerConfig, PlayerImpl, StretchControls,
+        effects::eq::generate_log_spaced_bands,
+    },
 };
 use kithara_platform::sync::Arc;
 use kithara_queue::{Queue, QueueConfig};
@@ -75,8 +78,7 @@ pub struct DeckId(pub usize);
 
 /// One app deck: its own player, queue and tempo controls.
 pub struct Deck {
-    pub player: Arc<PlayerImpl>,
-    pub queue: Arc<Queue>,
+    pub queue: HostOwned<Queue>,
     pub timestretch: Arc<StretchControls>,
     pub id: DeckId,
 }
@@ -85,34 +87,34 @@ impl Deck {
     /// Build a deck with its own player, queue and time-stretch handle, all
     /// hanging off the app's shutdown token. Every deck joins `session`: the
     /// mix batch only accepts players of one shared audio session.
-    #[must_use]
-    pub fn build(id: DeckId, config: &AppConfig, session: &SessionHandle) -> Self {
+    ///
+    /// # Errors
+    /// Returns [`PlayError`] when the Host rejects the new deck.
+    pub fn build(id: DeckId, config: &AppConfig, host: &mut Host) -> Result<Self, PlayError> {
         let timestretch = StretchControls::new(1.0);
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .cancel(config.shutdown.child())
                 .crossfade_duration(config.crossfade_seconds)
                 .eq_layout(generate_log_spaced_bands(config.eq_bands))
-                .byte_pool(config.byte_pool.clone())
-                .pcm_pool(config.pcm_pool.clone())
-                .session(session.dispatcher())
                 .timestretch(Arc::clone(&timestretch))
+                .worker(config.worker.clone())
                 .build(),
-        ));
-        let queue = Arc::new(Queue::new(
+        );
+        let queue = Queue::new(
             QueueConfig::builder()
-                .player(Arc::clone(&player))
+                .player(player)
                 .store(config.store.clone())
                 .cancel(config.shutdown.child())
                 .build(),
-        ));
+        );
+        let queue = host.insert(queue)?;
 
-        Self {
-            player,
+        Ok(Self {
             queue,
             timestretch,
             id,
-        }
+        })
     }
 }
 
@@ -122,18 +124,25 @@ impl Deck {
 /// The deck list is dynamic. `mix.strips` is kept parallel to `decks` — same
 /// length, same order — by this type alone; every lookup goes through
 /// [`DeckSet::position`], never through a raw [`DeckId`] value.
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub struct DeckSet {
+    #[field(get)]
+    host: Host,
+    #[field(get)]
     mix: MixState,
+    #[field(get)]
     decks: Vec<Deck>,
     next_id: usize,
 }
 
 impl DeckSet {
     #[must_use]
-    pub fn new(decks: Vec<Deck>) -> Self {
+    pub fn new(host: Host, decks: Vec<Deck>) -> Self {
         let next_id = decks.iter().map(|deck| deck.id.0 + 1).max().unwrap_or(0);
         let mix = MixState::new(decks.len());
         Self {
+            host,
             mix,
             decks,
             next_id,
@@ -150,7 +159,9 @@ impl DeckSet {
         self.decks.push(deck);
         let next = self.mix.resized(self.decks.len());
         if let Err(e) = self.commit(next) {
-            self.decks.pop();
+            if let Some(deck) = self.decks.pop() {
+                self.host.remove(&deck.queue)?;
+            }
             return Err(e);
         }
         Ok(())
@@ -162,13 +173,12 @@ impl DeckSet {
     /// Returns [`PlayError`] when the mix is invalid or the session rejects it.
     pub fn commit(&mut self, next: MixState) -> Result<(), PlayError> {
         let levels = next.levels()?;
-        let inputs: Vec<(&PlayerImpl, f32)> = self
+        let inputs = self
             .decks
             .iter()
             .zip(&levels)
-            .map(|(deck, &level)| (deck.player.as_ref(), level))
-            .collect();
-        apply_mix(inputs)?;
+            .map(|(deck, &level)| deck.queue.level(level));
+        self.host.apply_mix(inputs)?;
         self.mix = next;
         Ok(())
     }
@@ -176,16 +186,6 @@ impl DeckSet {
     #[must_use]
     pub fn deck(&self, id: DeckId) -> Option<&Deck> {
         self.decks.iter().find(|deck| deck.id == id)
-    }
-
-    #[must_use]
-    pub fn decks(&self) -> &[Deck] {
-        &self.decks
-    }
-
-    #[must_use]
-    pub fn mix(&self) -> &MixState {
-        &self.mix
     }
 
     /// Id for the next deck; never reuses one that has been handed out.
@@ -210,6 +210,7 @@ impl DeckSet {
         let Some(index) = self.position(id) else {
             return Ok(());
         };
+        let previous = self.mix.clone();
         let deck = self.decks.remove(index);
         let mut next = self.mix.clone();
         next.strips.remove(index);
@@ -217,6 +218,11 @@ impl DeckSet {
         if let Err(e) = self.commit(next) {
             self.decks.insert(index, deck);
             return Err(e);
+        }
+        if let Err(error) = self.host.remove(&deck.queue) {
+            self.decks.insert(index, deck);
+            self.commit(previous)?;
+            return Err(error);
         }
         Ok(())
     }
@@ -266,47 +272,62 @@ impl DeckSet {
     }
 }
 
+impl Drop for DeckSet {
+    fn drop(&mut self) {
+        for deck in &self.decks {
+            if let Err(error) = self.host.remove(&deck.queue) {
+                tracing::error!(
+                    deck_id = deck.id.0,
+                    ?error,
+                    "failed to remove deck during shutdown"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use kithara::{
-        bufpool::{BytePool, PcmPool},
-        play::PlayerConfig,
+        bufpool::Region,
+        host::HostConfig,
+        play::{PlayWorker, PlayWorkerConfig},
     };
     use kithara_queue::QueueConfig;
 
     use super::*;
 
-    fn one_deck(id: DeckId, session: &SessionHandle) -> Deck {
+    fn one_deck(id: DeckId, host: &mut Host, worker: &PlayWorker) -> Deck {
         let timestretch = StretchControls::new(1.0);
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
-                .session(session.dispatcher())
                 .timestretch(Arc::clone(&timestretch))
+                .worker(worker.clone())
                 .build(),
-        ));
-        let queue = Arc::new(Queue::new(
-            QueueConfig::builder().player(Arc::clone(&player)).build(),
-        ));
+        );
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = host.insert(queue).expect("host accepts the test deck");
         Deck {
-            player,
             queue,
             timestretch,
             id,
         }
     }
 
-    fn deck_set_on(count: usize, session: &SessionHandle) -> DeckSet {
-        DeckSet::new(
-            (0..count)
-                .map(|index| one_deck(DeckId(index), session))
-                .collect(),
+    fn worker() -> PlayWorker {
+        let region = Region::default();
+        PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
         )
     }
 
     fn deck_set(count: usize) -> DeckSet {
-        deck_set_on(count, &SessionHandle::spawn_native())
+        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+        let worker = worker();
+        let decks = (0..count)
+            .map(|index| one_deck(DeckId(index), &mut host, &worker))
+            .collect();
+        DeckSet::new(host, decks)
     }
 
     #[kithara::test(native, flash(false))]
@@ -336,7 +357,7 @@ mod tests {
 
         for (i, a) in set.decks().iter().enumerate() {
             for b in set.decks().iter().skip(i + 1) {
-                assert!(!Arc::ptr_eq(&a.player, &b.player));
+                assert_ne!(a.queue.id(), b.queue.id());
             }
         }
 
@@ -383,12 +404,13 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn adding_a_second_deck_turns_the_crossfader_on() {
-        let session = SessionHandle::spawn_native();
-        let mut set = deck_set_on(1, &session);
+        let mut set = deck_set(1);
         assert_eq!(set.mix().levels().unwrap(), vec![1.0], "lone deck bypasses");
 
         let id = set.next_id();
-        set.add(one_deck(id, &session)).expect("add a deck");
+        let worker = worker();
+        let deck = one_deck(id, &mut set.host, &worker);
+        set.add(deck).expect("add a deck");
         set.set_crossfader(0.0).expect("crossfader to A");
 
         assert_eq!(set.decks().len(), 2);
@@ -421,6 +443,6 @@ mod tests {
     fn session_mix_never_writes_player_content_volume() {
         let mut set = deck_set(2);
         set.set_trim(DeckId(0), 0.5).expect("trim deck 0");
-        assert_eq!(set.decks()[0].player.volume(), 1.0);
+        assert_eq!(set.decks()[0].queue.volume(), 1.0);
     }
 }

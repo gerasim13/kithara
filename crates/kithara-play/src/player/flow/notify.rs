@@ -1,25 +1,26 @@
 use std::{ops::Deref, sync::atomic::Ordering};
 
+use kithara_events::Event;
 use kithara_platform::sync::Arc;
 
-use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
     api::{EngineEvent, ItemRole, PlayerEvent, SlotId, TrackRef},
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
 struct Notifier<'a> {
-    player: &'a PlayerImpl,
+    player: &'a PlayerRuntime,
 }
 
 impl<'a> Notifier<'a> {
-    const fn new(player: &'a PlayerImpl) -> Self {
+    const fn new(player: &'a PlayerRuntime) -> Self {
         Self { player }
     }
 }
 
 impl Deref for Notifier<'_> {
-    type Target = PlayerImpl;
+    type Target = PlayerRuntime;
 
     fn deref(&self) -> &Self::Target {
         self.player
@@ -51,6 +52,12 @@ impl Notifier<'_> {
             }
             PlayerNotification::HandoverRequested => {
                 self.handle_handover_requested();
+            }
+            PlayerNotification::RateChanged { rate } => {
+                self.core
+                    .engine
+                    .bus()
+                    .publish(PlayerEvent::RateChanged { rate: *rate });
             }
             PlayerNotification::PlaybackStopped {
                 reason: TrackPlaybackStopReason::Eof,
@@ -109,8 +116,8 @@ impl Notifier<'_> {
     /// Slot identity answers only half of the role: a slot is a processor
     /// holding an arena, and `commit_next` promotes the successor *inside*
     /// the current slot, leaving it in the phase as the activated
-    /// `PendingNext`. So an item in the held slot naming a src other than
-    /// the promoted one is the item promoted over — it sits inside the
+    /// `PendingNext`. So an item in the held slot carrying an identity other
+    /// than the promoted one is the item promoted over — it sits inside the
     /// leading slot, but it is not what the listener is hearing.
     fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> Option<ItemRole> {
         let (src, id) = match notification {
@@ -127,9 +134,9 @@ impl Notifier<'_> {
             .lock()
             .pending()
             .filter(|pending| pending.state.activated())
-            .map(|pending| Arc::clone(&pending.src));
+            .map(|pending| pending.item_id);
         Some(match promoted {
-            Some(promoted) if promoted != track.src => ItemRole::Outgoing(track),
+            Some(promoted) if promoted != track.id => ItemRole::Outgoing(track),
             _ => ItemRole::Leading(track),
         })
     }
@@ -205,9 +212,6 @@ impl Notifier<'_> {
             while let Some(notification) = self.core.engine.pop_slot_notification(slot_id) {
                 saw_slot = true;
                 tracing::debug!(?notification, "process_notifications: handle");
-                if let PlayerNotification::Unloaded { src } = &notification {
-                    self.core.engine.unbind_slot_seek(slot_id, src);
-                }
                 self.dispatch_notification(slot_id, &notification);
             }
             if !self.core.engine.drain_slot_trash(slot_id) && !saw_slot {
@@ -230,7 +234,7 @@ impl Notifier<'_> {
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     pub fn process_notifications(&self) {
         Notifier::new(self).process_notifications();
     }
@@ -258,11 +262,11 @@ pub(crate) fn player_event_from_notification(
 }
 
 fn player_events_from_notification(
-    player: &PlayerImpl,
+    player: &PlayerRuntime,
     notification: &PlayerNotification,
     item: &ItemRole,
-) -> Vec<kithara_events::Event> {
-    let mut events = Vec::new();
+) -> Vec<Event> {
+    let mut events: Vec<Event> = Vec::new();
     match notification {
         PlayerNotification::PlaybackStarted { .. } => {
             events.push(PlayerEvent::PlaybackStarted { item: item.clone() }.into());
@@ -293,26 +297,37 @@ fn player_events_from_notification(
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_events::{Envelope, Event, EventReceiver, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::{
+        PlayWorker, PlayWorkerConfig,
         player::{
-            PlayerConfig,
+            PlayerConfig, PlayerImpl,
             state::{PendingNext, PendingNextState},
         },
         session::testing,
     };
 
-    /// The identity every notification in this module names.
-    const ITEM: TrackId = TrackId(7);
+    struct Items;
+
+    impl Items {
+        const OUTGOING: TrackId = TrackId(7);
+        const PROMOTED: TrackId = TrackId(8);
+        const BACKGROUND: TrackId = TrackId(9);
+    }
 
     /// A started player holding one slot — the slot the phase calls current.
     fn player_with_slot() -> (PlayerImpl, SlotId) {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+        );
         let player = PlayerImpl::new(
-            PlayerConfig::test_builder()
+            PlayerConfig::builder()
+                .worker(worker)
                 .session(testing::test_session())
                 .build(),
         );
@@ -326,12 +341,13 @@ mod tests {
     /// Put the slot mid-crossfade: the successor is loaded into this same
     /// slot's arena and already promoted over the outgoing track, exactly
     /// as `commit_next` leaves it.
-    fn activate_pending(player: &PlayerImpl, src: &str) {
+    fn activate_pending(player: &PlayerImpl, item_id: TrackId, src: &str) {
         let mut phase = player.phase.lock();
         let Some(pending) = phase.pending_mut() else {
             panic!("BUG: an active phase must carry a pending slot");
         };
         *pending = Some(PendingNext {
+            item_id,
             src: Arc::from(src),
             state: PendingNextState::ActivatedReady,
             index: 1,
@@ -339,17 +355,21 @@ mod tests {
         });
     }
 
-    fn stop_notification(src: &str, reason: TrackPlaybackStopReason) -> PlayerNotification {
+    fn stop_notification(
+        item_id: TrackId,
+        src: &str,
+        reason: TrackPlaybackStopReason,
+    ) -> PlayerNotification {
         PlayerNotification::PlaybackStopped {
             src: Arc::from(src),
-            item_id: ITEM,
+            item_id,
             reason,
             seek_epoch: 0,
         }
     }
 
     fn eof_notification() -> PlayerNotification {
-        stop_notification("leading.mp3", TrackPlaybackStopReason::Eof)
+        stop_notification(Items::OUTGOING, "leading.mp3", TrackPlaybackStopReason::Eof)
     }
 
     /// Each test dispatches exactly one notification, so the first role a
@@ -366,15 +386,15 @@ mod tests {
         None
     }
 
-    fn track(slot: SlotId, src: &str) -> TrackRef {
-        TrackRef::new(ITEM, slot, Arc::from(src))
+    fn track(item_id: TrackId, slot: SlotId, src: &str) -> TrackRef {
+        TrackRef::new(item_id, slot, Arc::from(src))
     }
 
     #[kithara::test]
     fn eof_playback_stopped_notification_maps_to_item_end_event() {
         let event = player_event_from_notification(
             &eof_notification(),
-            ItemRole::Leading(track(SlotId::new(0), "leading.mp3")),
+            ItemRole::Leading(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(matches!(
             event,
@@ -387,8 +407,12 @@ mod tests {
     #[kithara::test]
     fn failed_playback_stopped_notification_carries_the_role() {
         let event = player_event_from_notification(
-            &stop_notification("leading.mp3", TrackPlaybackStopReason::Failed),
-            ItemRole::Background(track(SlotId::new(0), "leading.mp3")),
+            &stop_notification(
+                Items::OUTGOING,
+                "leading.mp3",
+                TrackPlaybackStopReason::Failed,
+            ),
+            ItemRole::Background(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(matches!(
             event,
@@ -401,8 +425,12 @@ mod tests {
     #[kithara::test]
     fn playback_stopped_notification_does_not_map_to_item_end_event() {
         let event = player_event_from_notification(
-            &stop_notification("leading.mp3", TrackPlaybackStopReason::Stop),
-            ItemRole::Leading(track(SlotId::new(0), "leading.mp3")),
+            &stop_notification(
+                Items::OUTGOING,
+                "leading.mp3",
+                TrackPlaybackStopReason::Stop,
+            ),
+            ItemRole::Leading(track(Items::OUTGOING, SlotId::new(0), "leading.mp3")),
         );
         assert!(event.is_none());
     }
@@ -416,7 +444,11 @@ mod tests {
 
         assert_eq!(
             published_role(&mut rx),
-            Some(ItemRole::Leading(track(slot, "leading.mp3"))),
+            Some(ItemRole::Leading(track(
+                Items::OUTGOING,
+                slot,
+                "leading.mp3",
+            ))),
             "with nothing promoted over it, the held slot's track is the one being heard"
         );
     }
@@ -430,11 +462,22 @@ mod tests {
         let background = SlotId::new(slot.value() + 1);
         let mut rx = player.subscribe();
 
-        Notifier::new(&player).dispatch_notification(background, &eof_notification());
+        Notifier::new(&player).dispatch_notification(
+            background,
+            &stop_notification(
+                Items::BACKGROUND,
+                "leading.mp3",
+                TrackPlaybackStopReason::Eof,
+            ),
+        );
 
         assert_eq!(
             published_role(&mut rx),
-            Some(ItemRole::Background(track(background, "leading.mp3"))),
+            Some(ItemRole::Background(track(
+                Items::BACKGROUND,
+                background,
+                "leading.mp3",
+            ))),
             "an end from a slot the phase does not hold is not the track being heard"
         );
     }
@@ -447,17 +490,19 @@ mod tests {
     #[kithara::test]
     fn the_outgoing_half_of_a_crossfade_is_not_the_leading_track() {
         let (player, slot) = player_with_slot();
-        activate_pending(&player, "leading.mp3");
+        activate_pending(&player, Items::PROMOTED, "same.mp3");
         let mut rx = player.subscribe();
 
         Notifier::new(&player).dispatch_notification(
             slot,
-            &stop_notification("outgoing.mp3", TrackPlaybackStopReason::Eof),
+            &stop_notification(Items::OUTGOING, "same.mp3", TrackPlaybackStopReason::Eof),
         );
 
         assert_eq!(
             published_role(&mut rx),
-            Some(ItemRole::Outgoing(track(slot, "outgoing.mp3"))),
+            Some(ItemRole::Outgoing(
+                track(Items::OUTGOING, slot, "same.mp3",)
+            )),
             "the track promoted over is not the one the listener is hearing"
         );
     }
@@ -467,14 +512,17 @@ mod tests {
     #[kithara::test]
     fn the_promoted_half_of_a_crossfade_is_the_leading_track() {
         let (player, slot) = player_with_slot();
-        activate_pending(&player, "leading.mp3");
+        activate_pending(&player, Items::PROMOTED, "same.mp3");
         let mut rx = player.subscribe();
 
-        Notifier::new(&player).dispatch_notification(slot, &eof_notification());
+        Notifier::new(&player).dispatch_notification(
+            slot,
+            &stop_notification(Items::PROMOTED, "same.mp3", TrackPlaybackStopReason::Eof),
+        );
 
         assert_eq!(
             published_role(&mut rx),
-            Some(ItemRole::Leading(track(slot, "leading.mp3"))),
+            Some(ItemRole::Leading(track(Items::PROMOTED, slot, "same.mp3",))),
             "the promoted track is the one being heard"
         );
     }
@@ -492,13 +540,17 @@ mod tests {
             background,
             &PlayerNotification::PlaybackStarted {
                 src: Arc::from("background.mp3"),
-                item_id: ITEM,
+                item_id: Items::BACKGROUND,
             },
         );
 
         assert_eq!(
             published_role(&mut rx),
-            Some(ItemRole::Background(track(background, "background.mp3"))),
+            Some(ItemRole::Background(track(
+                Items::BACKGROUND,
+                background,
+                "background.mp3"
+            ))),
             "a start from a slot the phase does not hold is not the item being heard"
         );
     }

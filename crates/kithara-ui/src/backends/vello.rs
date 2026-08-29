@@ -278,7 +278,7 @@ fn ramp(gradient: Gradient, stops: Stops) -> Brush {
                 .as_slice()
                 .iter()
                 .map(|stop| ColorStop::from((stop.offset, Color::from(stop.color))))
-                .collect::<Vec<_>>()
+                .collect::<Vec<ColorStop>>()
                 .as_slice(),
         ),
     )

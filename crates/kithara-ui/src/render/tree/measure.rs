@@ -338,7 +338,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
                     |weight| solve::Item::weighted(declared.into(), weight),
                 )
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<solve::Item>>();
         let mut measure = IcedMeasure {
             children: &mut self.children,
             child_layouts: &self.child_layouts,

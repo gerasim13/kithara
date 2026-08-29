@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 
 use kithara_assets::AssetStore;
+use kithara_audio::AudioObserver;
 use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
@@ -13,10 +14,9 @@ use kithara_platform::{
         task::{JoinHandle, spawn},
     },
 };
-use kithara_play::{AnalysisProducer, PlayerImpl, Resource, ResourceConfig};
+use kithara_play::{Resource, ResourceConfig, player::PlayerControl};
 
 use crate::{
-    analysis::Mailbox,
     attempts::{LoadClass, Ticket},
     error::QueueError,
     track::{TrackSource, Tracks},
@@ -25,12 +25,9 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
-    /// Analysis handles the app has left for tracks whose pass is open. A
-    /// load takes the one addressed to its own track, if there is one.
-    analysis: Mailbox<AnalysisProducer>,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
-    player: Arc<PlayerImpl>,
+    player: PlayerControl,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
@@ -41,7 +38,7 @@ pub(crate) struct Loader {
 
 impl Loader {
     pub(crate) fn new(
-        player: Arc<PlayerImpl>,
+        player: PlayerControl,
         store: AssetStore,
         max_concurrent_loads: NonZeroUsize,
         tracks: Arc<Tracks>,
@@ -50,15 +47,14 @@ impl Loader {
             player,
             store,
             tracks,
-            analysis: Mailbox::default(),
             prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             interactive_lane: Arc::new(Semaphore::new(1)),
         }
     }
 
-    /// Leave `producer` for `id`, to be attached when that track loads.
-    pub(crate) fn leave_analysis(&self, id: TrackId, producer: AnalysisProducer) {
-        self.analysis.leave(id, producer);
+    /// Attach `observer` through `id`'s live-or-pending decoder relay.
+    pub(crate) fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O) {
+        self.tracks.attach_observer(id, Box::new(observer));
     }
 
     fn attempt_config(
@@ -97,8 +93,6 @@ impl Loader {
                     .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
                 ResourceConfig::for_src(src)
                     .store(self.store.clone())
-                    .byte_pool(self.player.byte_pool().clone())
-                    .pcm_pool(self.player.pcm_pool().clone())
                     .build()
             }
             TrackSource::Config(boxed) => *boxed,
@@ -109,18 +103,18 @@ impl Loader {
                 ..ScopeLabel::default()
             }));
         }
-        Ok(self.player.prepare_config(config))
+        self.player.prepare_config(config).map_err(QueueError::from)
     }
 
-    /// Load a [`Resource`] from a prepared config, attaching the analysis
-    /// handle left for this track when there is one. Caller is responsible
+    /// Load a [`Resource`] from a prepared config, attaching the observer
+    /// left for this track when there is one. Caller is responsible
     /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
     async fn load(&self, id: TrackId, config: ResourceConfig) -> Result<Resource, QueueError> {
         let slow_watcher =
             Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
-        let analysis = self.analysis.take(id);
+        let observer = self.tracks.observer_relay(id);
         let resource_fut = async {
-            Resource::new(config, analysis)
+            Resource::new_observed(config, Box::new(observer))
                 .await
                 .map_err(|e| QueueError::Resource(format!("{e}")))
         };
@@ -250,10 +244,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_assets::{AssetStore, StorageBackend};
-    use kithara_bufpool::{BytePool, PcmPool, Region};
+    use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::time::Duration;
-    use kithara_play::PlayerConfig;
+    use kithara_play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
+    };
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -288,6 +284,7 @@ mod tests {
     /// [`EventBus`] (so tests can subscribe for assertions).
     struct LoaderFixture {
         loader: Arc<Loader>,
+        _player: PlayerImpl,
         tracks: Arc<Tracks>,
         bus: EventBus,
     }
@@ -295,22 +292,29 @@ mod tests {
     impl LoaderFixtureSpec {
         fn build(self) -> LoaderFixture {
             let region = Region::default();
-            let player = Arc::new(PlayerImpl::new(
+            let worker = PlayWorker::new(
+                PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+            );
+            let player = PlayerImpl::new(
                 PlayerConfig::builder()
-                    .byte_pool(region.byte_pool())
-                    .pcm_pool(region.pcm_pool())
+                    .worker(worker)
+                    .session(crate::queue::test_session())
                     .build(),
-            ));
+            );
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
+            let store = AssetStore::builder()
+                .pool(player.byte_pool().clone())
+                .build();
             let loader = Arc::new(Loader::new(
-                player,
-                AssetStore::builder().build(),
+                player.control(),
+                store,
                 self.cap,
                 Arc::clone(&tracks),
             ));
             LoaderFixture {
                 loader,
+                _player: player,
                 tracks,
                 bus,
             }
@@ -319,7 +323,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn build_config_preserves_caller_supplied_config() {
-        let loader = LoaderFixtureSpec::default().build().loader;
+        let fixture = LoaderFixtureSpec::default().build();
+        let loader = &fixture.loader;
         let supplied_store = AssetStore::builder()
             .backend(StorageBackend::Memory)
             .build();
@@ -328,8 +333,6 @@ mod tests {
         };
         let given = ResourceConfig::for_src(src)
             .store(supplied_store.clone())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .preferred_peak_bitrate(321.0)
             .build();
         let Ok(returned) = loader.build_config(TrackId(1), TrackSource::Config(Box::new(given)))
@@ -367,7 +370,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn build_config_invalid_uri_errors() {
-        let loader = LoaderFixtureSpec::default().build().loader;
+        let fixture = LoaderFixtureSpec::default().build();
+        let loader = &fixture.loader;
         let Err(err) = loader.build_config(TrackId(1), TrackSource::Uri("not-a-url".into())) else {
             panic!("should reject relative path");
         };
@@ -377,7 +381,8 @@ mod tests {
     #[kithara::test(tokio, multi_thread)]
     async fn prefetch_lane_caps_concurrent_loads() {
         let cap = NonZeroUsize::new(2).expect("BUG: 2 > 0 is mathematically guaranteed");
-        let loader = LoaderFixtureSpec::default().with_cap(cap).build().loader;
+        let fixture = LoaderFixtureSpec::default().with_cap(cap).build();
+        let loader = &fixture.loader;
 
         let in_flight = Arc::new(AtomicUsize::new(0));
         let max_seen = Arc::new(AtomicUsize::new(0));

@@ -2,7 +2,6 @@
 //!
 //! See `CONTEXT.md` for the public API contract and migration notes.
 
-mod analysis;
 mod attempts;
 mod config;
 mod error;
@@ -15,5 +14,7 @@ pub use config::QueueConfig;
 pub use error::QueueError;
 pub use kithara_events::{QueueEvent, TrackId, TrackStatus};
 pub use navigation::{NavigationState, RepeatMode};
-pub use queue::{PlaybackView, Queue, Transition};
+#[cfg(any(test, feature = "probe"))]
+pub use queue::test_utils;
+pub use queue::{PlaybackView, Queue, QueueControl, Transition};
 pub use track::{TrackEntry, TrackSource};

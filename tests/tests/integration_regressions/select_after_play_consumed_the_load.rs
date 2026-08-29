@@ -15,6 +15,7 @@
 use std::{fs, path::PathBuf};
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::ConsumerWakeMode,
     events::{Event, QueueEvent},
     platform::{
@@ -22,7 +23,10 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, SessionDispatcher},
+    play::{
+        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, SessionDispatcher,
+        player::PlayerControlSource,
+    },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
@@ -88,14 +92,12 @@ fn fixture_path(temp_dir: &TestTempDir, index: usize) -> PathBuf {
     path
 }
 
-fn resource_config(temp_dir: &TestTempDir, index: usize) -> ResourceConfig {
+fn resource_config(temp_dir: &TestTempDir, store: &AssetStore, index: usize) -> ResourceConfig {
     ResourceConfig::for_src(
         ResourceConfig::parse_src(fixture_path(temp_dir, index).to_string_lossy())
             .expect("absolute fixture path"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
-    .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+    .store(store.clone())
     .build()
 }
 
@@ -108,15 +110,28 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         entered_tx,
         release_rx,
     ));
-    let player = Arc::new(PlayerImpl::new(
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+            ))
             .session(session)
             .build(),
-    ));
+    );
+    let player_control = player.control();
     let queue = Arc::new(Queue::new(
-        QueueConfig::builder().player(Arc::clone(&player)).build(),
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();
@@ -124,10 +139,11 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     let ids: Vec<_> = (0..TRACK_COUNT)
         .map(|index| {
             queue.append(TrackSource::Config(Box::new(resource_config(
-                &temp_dir, index,
+                &temp_dir, &store, index,
             ))))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("queue is open while fixtures are appended");
 
     // `play` is issued while every track is still loading, exactly as the iOS
     // surface does, and parks inside the engine start.
@@ -159,7 +175,7 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
     playing.await.expect("play must join");
 
     assert!(
-        !player.item_has_resource(0),
+        !player_control.item_has_resource(0),
         "precondition: play did not consume the load that landed inside the engine \
          start, so the reported window was never opened"
     );

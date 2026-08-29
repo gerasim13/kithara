@@ -12,10 +12,10 @@ use jni::{
     sys::{jint, jlong},
 };
 use kithara::{
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ReadOutcome},
-    bufpool::{BytePool, PcmPool},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    bufpool::{BytePool, SamplePool},
     file::{File as FileSource, FileConfig, FileSrc},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_assets::{AssetStore, StorageBackend};
 use kithara_platform::{
@@ -122,24 +122,28 @@ async fn run_capture(input: PathBuf, output: PathBuf, seconds: usize) -> jlong {
         "offline capture: start"
     );
 
+    let byte_pool = BytePool::default();
+    let sample_pool = SamplePool::default();
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .build();
     let file_cfg = FileConfig::for_src(FileSrc::Local(input))
         .store(store)
         .build();
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool.clone())
+            .cancel(CancelToken::never())
+            .build(),
+    );
     let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
         .hint("mp3".to_string())
-        .worker(worker)
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
         .build();
 
-    let mut audio = match Audio::<Stream<FileSource>>::new(audio_cfg).await {
+    let mut audio = match worker.open(audio_cfg).await {
         Ok(a) => a,
         Err(err) => {
-            error!(?err, "Audio::new failed");
+            error!(?err, "play worker failed to open audio");
             return Consts::RC_AUDIO_BUILD;
         }
     };

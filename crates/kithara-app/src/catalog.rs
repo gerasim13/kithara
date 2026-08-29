@@ -1,5 +1,5 @@
 use kithara::prelude::ResourceConfig;
-use kithara_queue::{Queue, QueueError, Transition};
+use kithara_queue::{QueueControl, QueueError, Transition};
 
 use crate::{config::AppConfig, sources::build_source};
 
@@ -69,24 +69,25 @@ impl Catalog {
 /// # Errors
 /// Returns [`QueueError`] when the queue rejects the selection.
 pub fn load_onto(
-    queue: &Queue,
+    queue: &QueueControl,
     entry: &CatalogEntry,
     config: &AppConfig,
 ) -> Result<(), QueueError> {
-    let id = queue
+    let existing = queue
         .tracks()
         .into_iter()
         .find(|track| track.url.as_deref() == Some(entry.source.as_str()))
-        .map_or_else(
-            || queue.append(build_source(&entry.url, config)),
-            |track| track.id,
-        );
+        .map(|track| track.id);
+    let id = match existing {
+        Some(id) => id,
+        None => queue.append(build_source(&entry.url, config))?,
+    };
     queue.select(id, Transition::None)
 }
 
 /// Whether this deck already holds the track — the library's per-deck marker.
 #[must_use]
-pub fn is_loaded(queue: &Queue, entry: &CatalogEntry) -> bool {
+pub fn is_loaded(queue: &QueueControl, entry: &CatalogEntry) -> bool {
     queue
         .tracks()
         .iter()

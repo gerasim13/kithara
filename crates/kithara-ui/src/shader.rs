@@ -112,7 +112,7 @@ pub(crate) fn compile(
             .global_variables
             .iter()
             .filter_map(|(_, variable)| variable.binding.as_ref())
-            .collect::<Vec<_>>();
+            .collect::<Vec<&naga::ResourceBinding>>();
         if resources.len() != 1 || resources[0].group != 0 || resources[0].binding != 0 {
             return Err(error(
                 origin,

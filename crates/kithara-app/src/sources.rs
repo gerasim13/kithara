@@ -65,8 +65,7 @@ pub(crate) fn build_resource_config(
     Some(
         builder
             .downloader(config.downloader.clone())
-            .byte_pool(config.byte_pool.clone())
-            .pcm_pool(config.pcm_pool.clone())
+            .worker(config.worker.clone())
             .store(config.store.clone())
             .keys(keys)
             .maybe_headers(headers)

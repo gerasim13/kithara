@@ -195,7 +195,7 @@ fn header<'a>(
     input_owner: InputOwner,
 ) -> Element<'a, UiEvent> {
     let metrics = skin.chrome;
-    let mut children = Vec::with_capacity(5 + assign.len());
+    let mut children: Vec<Element<'a, UiEvent>> = Vec::with_capacity(5 + assign.len());
     if let Some(chip) = chip {
         children.push(chrome_leaf(ChromeLeaf::Chip(chip), skin));
     }

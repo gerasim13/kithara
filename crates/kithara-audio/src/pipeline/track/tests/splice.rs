@@ -5,17 +5,18 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_bufpool::{BytePool, PcmPool};
-use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory, GaplessMode, PcmChunk};
+use kithara_bufpool::{BytePool, SamplePool};
+use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory, GaplessMode};
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
+use kithara_signal::AudioChunk;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, PlayheadRead,
-    PlayheadState, PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
+    Activity, AudioCodec, ByteMap, ContainerFormat, MediaInfo, PlayheadRead, PlayheadState,
+    PlayheadWrite, ReadOutcome, ReaderProfile, SeekControl, SeekObserve, SeekState,
     SegmentDescriptor, Source, SourceError, SourcePhase, SourceProbe, SourceSeekAnchor, Stream,
     StreamError, StreamResult, StreamType, VariantControl, VariantPromotion, VariantReaderPlan,
     VariantReaderTake, VariantTransition, WorkerWake,
@@ -33,10 +34,10 @@ use crate::{
         stream::shared::SharedStream,
         track::{self, TrackStep},
     },
-    renderer::AudioWorkerSource,
+    traits::{AudioSource, AudioSourceExt},
 };
 
-fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
     let Fetch::Data { data, .. } = fetch else {
         panic!("TrackStep::Produced must carry PCM data");
     };
@@ -376,6 +377,8 @@ struct TestWake;
 
 impl WorkerWake for TestWake {
     fn wake(&self) {}
+
+    fn defer(&self) {}
 }
 
 fn asset_bytes(name: &str) -> Vec<u8> {
@@ -442,7 +445,7 @@ fn decoder_config<T: StreamType>(
     DecoderConfig::builder()
         .backend(backend)
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .byte_len_handle(byte_len)
         .maybe_byte_map(stream.byte_map())
         .gapless(false)
@@ -470,11 +473,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         decoder_config(&shared_stream, backend, initial_byte_len),
     )
     .expect("create initial slq fMP4 decoder");
-    let initial_spec = initial_decoder.spec();
     let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
-    let pcm_pool = PcmPool::default();
-    let effects =
-        crate::pipeline::config::create_effects(initial_spec, None, &pcm_pool, Vec::new());
     let factory_byte_len = Arc::new(AtomicU64::new(0));
     let decoder_factory = DecoderFactory::new(
         move |mut reader, info| {
@@ -484,7 +483,7 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
                 DecoderConfig::builder()
                     .backend(backend)
                     .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
+                    .sample_pool(SamplePool::default())
                     .byte_len_handle(factory_byte_len.clone())
                     .maybe_byte_map(reader.byte_map())
                     .maybe_hooks(reader.take_event_sink())
@@ -498,7 +497,6 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         None,
     );
     let decode = DecodeInit {
-        byte_pool: BytePool::default(),
         decoder_factory,
         host_sample_rate,
         decoder: initial_decoder,
@@ -506,10 +504,10 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         gapless_mode: GaplessMode::Disabled,
         media_info: Some(media_info(Consts::SLQ_VARIANT)),
         playback_resampler_backend: "none",
-        pcm_pool: PcmPool::default(),
+        sample_pool: SamplePool::default(),
         recreate_on_host_rate_change: false,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -531,7 +529,7 @@ fn run_pending_rebuild_inline(source: &mut StreamAudioSource<SpliceStream>) {
     source.flush_deferred();
 }
 
-fn append_left_channel(left: &mut Vec<f32>, chunk: &PcmChunk) {
+fn append_left_channel(left: &mut Vec<f32>, chunk: &AudioChunk) {
     let channels = usize::from(chunk.meta.spec.channels);
     assert_eq!(channels, Consts::CHANNELS, "AAC fixture should be stereo");
     for frame in 0..chunk.frames() {
@@ -590,7 +588,9 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 append_left_channel(&mut left, &chunk);
-                source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+                source
+                    .playhead
+                    .advance(&crate::audio::chunk_position(&chunk.meta));
                 if !switched
                     && chunk.meta.segment_index == Some(Consts::SPLICE_SEGMENT - 1)
                     && chunk.meta.end_timestamp >= splice_time
@@ -661,7 +661,9 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
                 append_left_channel(&mut left, &chunk);
-                source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+                source
+                    .playhead
+                    .advance(&crate::audio::chunk_position(&chunk.meta));
                 if !recreated
                     && chunk.meta.segment_index == Some(Consts::SPLICE_SEGMENT - 1)
                     && chunk.meta.end_timestamp >= recreate_after

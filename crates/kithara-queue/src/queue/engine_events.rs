@@ -8,11 +8,11 @@ use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
 use super::{
-    Queue,
+    QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
 
-impl Queue {
+impl QueueControl {
     pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
         let Some(next) = self.next_selectable_entry() else {
             return;
@@ -125,7 +125,7 @@ impl Queue {
             reason: "mid-stream engine failure".to_string(),
             auto_skipped: true,
         });
-        let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
+        let _ = self.advance_to_next_inner(Transition::None, AdvanceReason::TrackFailed);
     }
 
     /// `item` is the player's verdict on which item in its arena ended.
@@ -154,7 +154,7 @@ impl Queue {
             debug!(%track, pos, dur, ?item, "not the leading item: not advancing");
             return;
         }
-        let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
+        let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
     }
 
     pub(super) fn process_player_event(&self, ev: &Event) {
@@ -192,7 +192,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
         let queue = make_queue();
-        let id = queue.register_for_test();
+        let id = queue.probe_register();
 
         for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
             queue

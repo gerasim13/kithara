@@ -131,6 +131,10 @@ impl<T: StreamType> SharedStream<T> {
         format_change_segment_range(self.variants.as_deref())
     }
 
+    pub(crate) fn has_variant_surface(&self) -> bool {
+        self.variants.is_some()
+    }
+
     /// Real-time on-core seek (FSM recreate/boundary, decoder
     /// `OffsetReader`): cursor math + cursor set through the probe, no
     /// lock and no `prime_seek_range` spin on the forbid-blocking produce

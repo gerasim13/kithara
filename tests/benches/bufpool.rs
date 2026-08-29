@@ -4,7 +4,7 @@ use std::{hint::black_box, thread};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use kithara::{
-    bufpool::{ByteBudget, BytePool, PcmPool, Pool},
+    bufpool::{ByteBudget, BytePool, Pool, SamplePool},
     platform::time::Duration,
 };
 use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
@@ -60,7 +60,7 @@ fn bench_get_put_multi_thread(c: &mut Criterion) {
 
 fn bench_ensure_len(c: &mut Criterion) {
     let byte_pool = BytePool::with_byte_budget(1024, 0, ByteBudget(256 * 1024 * 1024));
-    let pcm_pool = PcmPool::new(128, 200_000);
+    let sample_pool = SamplePool::new(128, 200_000);
     let mut group = c.benchmark_group("bufpool_ensure_len");
     group.sample_size(20);
     group.measurement_time(Duration::from_secs(6));
@@ -77,7 +77,7 @@ fn bench_ensure_len(c: &mut Criterion) {
 
     group.bench_function("ensure_len_f32_16k", |b| {
         b.iter(|| {
-            let mut buf = pcm_pool.get();
+            let mut buf = sample_pool.get();
             if let Err(_e) = buf.ensure_len(16 * 1024) {
                 panic!("ensure_len(f32) should not exhaust budget in benchmark");
             }

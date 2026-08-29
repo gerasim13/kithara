@@ -2,10 +2,12 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, auto, detect_direction,
@@ -38,7 +40,7 @@ impl Consts {
 /// Both are permanent for this `Audio` instance, so the stress test treats
 /// them identically: end of this read loop. A terminal Err counts against
 /// the `dead_seeks` tolerance budget (1% of `STRESS_SEEK_ITERATIONS`).
-fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, usize, bool) {
+fn read_with_retry<R: AudioRead>(audio: &mut R, buf: &mut [f32]) -> (usize, usize, bool) {
     for retry in 0..Consts::MAX_ZERO_READS {
         match audio.read(buf) {
             Ok(ReadOutcome::Frames { count, .. }) => return (count.get(), retry, false),
@@ -161,20 +163,33 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let store = if ephemeral {
         let cap =
             NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
         AssetStore::builder()
             .backend(StorageBackend::Memory)
+            .pool(worker.byte_pool().clone())
             .cache_capacity(cap)
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .pool(worker.byte_pool().clone())
+            .build()
     };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(worker.byte_pool().clone())
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -185,14 +200,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("create Audio pipeline");
+    let mut audio = worker.open(config).await.expect("create Audio pipeline");
 
     let spec = audio.spec();
     info!(

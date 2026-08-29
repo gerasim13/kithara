@@ -66,9 +66,9 @@ impl Sheet {
                     (column * frame_w, row * frame_h),
                     (frame_w, frame_h),
                 );
-                Image::pixels(id, frame_w, frame_h, Arc::from(cut))
+                Image::pixels(id, frame_w, frame_h, cut)
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<Image>>();
         Ok(Self { frames })
     }
 
@@ -114,7 +114,7 @@ fn read(name: &str, png: &[u8]) -> Result<(png::OutputInfo, Vec<u8>), SheetError
 }
 
 /// One frame's pixels, lifted row by row out of the sheet.
-fn crop(sheet: &[u8], sheet_width: u32, at: (u32, u32), size: (u32, u32)) -> Vec<u8> {
+fn crop(sheet: &[u8], sheet_width: u32, at: (u32, u32), size: (u32, u32)) -> Arc<[u8]> {
     let stride = sheet_width as usize * 4;
     let (x, y) = (at.0 as usize * 4, at.1 as usize);
     let width = size.0 as usize * 4;

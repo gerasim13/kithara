@@ -597,7 +597,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        compile::{CompiledNode, CompiledUi, compile},
+        compile::{Address, CompiledNode, CompiledUi, compile},
         draw::{DrawList, Pt, Rect},
         engine::{PickerSnapshot, ScrollConfig},
         expand::ControlSpec,
@@ -1855,7 +1855,7 @@ mod tests {
 
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2205,7 +2205,7 @@ mod tests {
         let viewport = Size::new(320.0, 500.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2323,7 +2323,7 @@ mod tests {
         };
         let meters = &children[1];
 
-        assert!(ui.includes_module(*instance, &[1], "gallery-meters"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(1), "gallery-meters"));
         let mut components = Vec::new();
         claimed_components(meters, &mut components);
         assert_eq!(components, ["stereo-meter", "vertical-vu", "vertical-vu"]);
@@ -2340,7 +2340,7 @@ mod tests {
         let viewport = Size::new(160.0, 180.0);
         let child = super::super::node::render_engine_node(
             meters,
-            &[1],
+            &Address::Root.child(1),
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2406,7 +2406,7 @@ mod tests {
         };
         let toggles = &children[1];
 
-        assert!(ui.includes_module(*instance, &[1], "gallery-toggles"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(1), "gallery-toggles"));
         let mut components = Vec::new();
         claimed_components(toggles, &mut components);
         assert_eq!(components, ["activation"; 4]);
@@ -2423,7 +2423,7 @@ mod tests {
         let viewport = Size::new(200.0, 100.0);
         let child = super::super::node::render_engine_node(
             toggles,
-            &[1],
+            &Address::Root.child(1),
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2492,7 +2492,7 @@ mod tests {
         };
         let chips = &children[1];
 
-        assert!(ui.includes_module(*instance, &[1], "gallery-chips"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(1), "gallery-chips"));
         let mut components = Vec::new();
         claimed_components(chips, &mut components);
         assert_eq!(components, ["activation"; 2]);
@@ -2509,7 +2509,7 @@ mod tests {
         let viewport = Size::new(100.0, 80.0);
         let child = super::super::node::render_engine_node(
             chips,
-            &[1],
+            &Address::Root.child(1),
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2611,7 +2611,7 @@ mod tests {
         let viewport = Size::new(320.0, 160.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2759,7 +2759,7 @@ mod tests {
         let viewport = Size::new(1_000.0, 400.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2886,7 +2886,7 @@ mod tests {
         let narrow = Size::new(1_000.0, 640.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -2996,7 +2996,7 @@ mod tests {
         let wide = Size::new(1_200.0, 640.0);
         let mut child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -3069,7 +3069,7 @@ mod tests {
         let viewport = Size::new(900.0, 600.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -3451,7 +3451,7 @@ mod tests {
         let hosted_layout = HostedLayout::new(root, ctx(&ui, &reads), builtin::skin());
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -3568,7 +3568,7 @@ mod tests {
         let viewport_bounds = Rectangle::with_size(viewport);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -3798,7 +3798,7 @@ mod tests {
         ] {
             let child = super::super::node::render_engine_node(
                 root,
-                &[],
+                &Address::Root,
                 *instance,
                 ctx(&ui, &reads),
                 builtin::skin(),
@@ -3901,7 +3901,7 @@ mod tests {
         let viewport = Size::new(500.0, 80.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -3992,7 +3992,7 @@ mod tests {
         let viewport = Size::new(198.0, 620.0);
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -4148,7 +4148,7 @@ mod tests {
         let renderer = headless_renderer();
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(ui, &reads),
             builtin::skin(),
@@ -4390,7 +4390,7 @@ mod tests {
         let row = &children[0];
 
         assert_eq!(ui.resolve(*module), "app-overview");
-        assert!(ui.includes_module(*instance, &[0], "app-overview-row"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(0), "app-overview-row"));
         let mut components = Vec::new();
         claimed_components(row, &mut components);
         assert_eq!(components, ["wave"]);
@@ -4407,7 +4407,7 @@ mod tests {
         let viewport = Size::new(200.0, 40.0);
         let child = super::super::node::render_engine_node(
             row,
-            &[0],
+            &Address::Root.child(0),
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -4578,8 +4578,8 @@ mod tests {
             panic!("fixture root must be a module");
         };
 
-        assert!(ui.includes_module(*instance, &[0], "strip-body"));
-        assert!(ui.includes_module(*instance, &[0], "app-strip"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(0), "strip-body"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(0), "app-strip"));
     }
 
     #[kithara::test]
@@ -4607,8 +4607,8 @@ mod tests {
         assert_eq!(strips.len(), 3, "two strips must surround one divider");
 
         assert_eq!(ui.resolve(*module), "app-mixer");
-        assert!(ui.includes_module(*instance, &[0, 0], "app-strip"));
-        assert!(ui.includes_module(*instance, &[0, 2], "app-strip"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(0).child(0), "app-strip"));
+        assert!(ui.includes_module(*instance, &Address::Root.child(0).child(2), "app-strip"));
         let mut components = Vec::new();
         claimed_components(root, &mut components);
         assert_eq!(
@@ -4634,7 +4634,7 @@ mod tests {
 
         let child = super::super::node::render_engine_node(
             root,
-            &[],
+            &Address::Root,
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -4796,7 +4796,7 @@ mod tests {
         let viewport = Size::new(112.0, 420.0);
         let child = super::super::node::render_engine_node(
             strip,
-            &[0, 0],
+            &Address::Root.child(0).child(0),
             *instance,
             ctx(&ui, &reads),
             builtin::skin(),
@@ -4840,7 +4840,7 @@ mod tests {
         };
         let next_child = super::super::node::render_engine_node(
             strip,
-            &[0, 0],
+            &Address::Root.child(0).child(0),
             *instance,
             ctx(&ui, &refreshed_reads),
             builtin::skin(),

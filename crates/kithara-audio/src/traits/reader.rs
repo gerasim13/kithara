@@ -1,19 +1,20 @@
 use std::num::NonZeroU32;
 
-use kithara_decode::{DecodeError, PcmSpec, TrackMetadata};
+use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
+use kithara_signal::AudioSpec;
 
 use super::{ChunkOutcome, ReadOutcome, SeekOutcome};
-use crate::{ServiceClass, renderer::PreloadGate};
+use crate::producer::PreloadGate;
 
 mod kithara {
     pub(crate) use kithara_test_macros::mock;
 }
 
-/// PCM data-plane operations.
-#[kithara::mock(api = PcmReadMock)]
-pub trait PcmRead {
+/// Decoded-audio data-plane operations.
+#[kithara::mock(api = AudioReadMock)]
+pub trait AudioRead {
     /// Cached span: the timestamp up to which the source's bytes are on disk
     /// and need no further network. Unrelated to [`Self::position`] — bytes
     /// land ahead of the decoder. Readers with no download side report `0`.
@@ -21,7 +22,7 @@ pub trait PcmRead {
         Duration::from_secs(0)
     }
 
-    /// Decoded-ahead frontier: the timestamp up to which PCM has been
+    /// Decoded-ahead frontier: the timestamp up to which audio has been
     /// decoded and is ready to play. Always `>=` [`Self::position`].
     /// Authoritative source for the buffered/playable window; non-adaptive
     /// or chunk-less readers may report `0`.
@@ -34,7 +35,7 @@ pub trait PcmRead {
     /// Returns [`ChunkOutcome::Chunk`] or [`ChunkOutcome::Eof`].
     /// Decoder / channel failures surface as `Err(DecodeError)`.
     /// Discards any partially-consumed chunk from previous
-    /// [`PcmRead::read`] calls.
+    /// [`AudioRead::read`] calls.
     ///
     /// Default implementation reports immediate natural EOF — readers
     /// without chunk-level support shouldn't be polled this way.
@@ -52,7 +53,7 @@ pub trait PcmRead {
     /// Get current playback position.
     fn position(&self) -> Duration;
 
-    /// Read interleaved PCM samples.
+    /// Read interleaved audio samples.
     ///
     /// After `preload()`, returns immediately from buffered data
     /// without blocking. The returned [`ReadOutcome`] distinguishes
@@ -63,11 +64,11 @@ pub trait PcmRead {
     /// # Errors
     ///
     /// Returns `Err(DecodeError)` for terminal producer failures:
-    /// closed PCM channel, decoder fault, or backend error. The error
+    /// closed audio channel, decoder fault, or backend error. The error
     /// is one-way — once returned, subsequent reads continue to fail.
     fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError>;
 
-    /// Read deinterleaved (planar) PCM samples.
+    /// Read deinterleaved (planar) audio samples.
     ///
     /// After `preload()`, returns immediately from buffered data
     /// without blocking. Each slice in `output` corresponds to one
@@ -83,13 +84,13 @@ pub trait PcmRead {
         output: &'a mut [&'a mut [f32]],
     ) -> Result<ReadOutcome, DecodeError>;
 
-    /// Get the current PCM specification.
-    fn spec(&self) -> PcmSpec;
+    /// Get the current decoded-audio specification.
+    fn spec(&self) -> AudioSpec;
 }
 
-/// PCM track and session introspection.
-#[kithara::mock(api = PcmSessionMock)]
-pub trait PcmSession {
+/// Decoded-audio track and session introspection.
+#[kithara::mock(api = AudioSessionMock)]
+pub trait AudioSession {
     /// Runtime ABR handle for the underlying stream.
     ///
     /// Adaptive readers (HLS) return `Some(handle)` so the queue/FFI can
@@ -107,6 +108,13 @@ pub trait PcmSession {
 
     /// Get track metadata.
     fn metadata(&self) -> &TrackMetadata;
+
+    /// Whether this reader has crossed its one-way playback preload latch.
+    ///
+    /// Readers without worker-backed preload keep the default `false`.
+    fn is_preloaded(&self) -> bool {
+        false
+    }
 
     /// Decoder epoch whose preload gate should be observed by async callers.
     ///
@@ -128,16 +136,16 @@ pub trait PcmSession {
 }
 
 /// The control-plane half of a seek: the part that publishes an event and wakes a decode worker,
-/// both lock-taking, leaving the audio callback only [`PcmControl::sync_seek`].
+/// both lock-taking, leaving the audio callback only [`AudioControl::sync_seek`].
 pub trait SeekBegin: Send + Sync {
     /// Begin a seek to `position` and report where it will land. Blocking by design — never call
     /// this from an audio callback.
     fn begin(&self, position: Duration) -> SeekOutcome;
 }
 
-/// PCM control operations and runtime knobs.
-#[kithara::mock(api = PcmControlMock)]
-pub trait PcmControl {
+/// Decoded-audio control operations and runtime knobs.
+#[kithara::mock(api = AudioControlMock)]
+pub trait AudioControl {
     /// Preload initial chunks into internal buffers.
     ///
     /// After calling this, subsequent `read()` / `read_planar()` /
@@ -150,7 +158,7 @@ pub trait PcmControl {
     /// # Errors
     ///
     /// Returns `Err(DecodeError)` only on terminal setup failure
-    /// (closed PCM channel, backend error). Successful preload always
+    /// (closed audio channel, backend error). Successful preload always
     /// returns `Ok(())` even if the stream contains no data.
     fn preload(&mut self) -> Result<(), DecodeError> {
         Ok(())
@@ -186,22 +194,9 @@ pub trait PcmControl {
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
     fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
-
-    /// Set the playback rate for timeline scaling.
-    ///
-    /// Rate > 1.0 speeds up playback (position advances faster).
-    /// Rate < 1.0 slows down playback (position advances slower).
-    /// The actual pitch-shifting is done by the resampler.
-    fn set_playback_rate(&self, _rate: f32) {}
-
-    /// Update the scheduling priority hint for the shared worker.
-    ///
-    /// Maps track playback state to worker priority: `Audible` tracks
-    /// are decoded first, then `Warm`, then `Idle`.
-    fn set_service_class(&self, _class: ServiceClass) {}
 }
 
-/// Primary PCM interface for reading and controlling decoded audio.
+/// Primary interface for reading and controlling decoded audio.
 ///
 /// **Terminal-state contract.** Three failure-mode-agnostic outcomes
 /// are distinguishable by the caller:
@@ -209,6 +204,6 @@ pub trait PcmControl {
 /// - `Ok(ReadOutcome::Frames { .. })` — reader is alive and produced frames.
 /// - `Ok(ReadOutcome::Eof { .. })` — natural end of stream.
 /// - `Err(DecodeError)` — decoder or channel failure.
-pub trait PcmReader: PcmRead + PcmSession + PcmControl + MaybeSend {}
+pub trait AudioReader: AudioRead + AudioSession + AudioControl + MaybeSend {}
 
-impl<T> PcmReader for T where T: PcmRead + PcmSession + PcmControl + MaybeSend {}
+impl<T> AudioReader for T where T: AudioRead + AudioSession + AudioControl + MaybeSend {}

@@ -140,28 +140,42 @@ pub(crate) enum CoverageSpan {
 /// window mapping. `unready` is in ascending track order. Every unready stretch
 /// rounds outward, so a pixel column that is part covered reads unready: the
 /// picture may understate what is known by under a pixel, never overstate it.
-pub(crate) fn coverage_spans<F>(unready: &[[f32; 2]], to_x: F, width: f32) -> Vec<CoverageSpan>
+pub(crate) fn coverage_spans<'a, F>(
+    unready: &'a [[f32; 2]],
+    to_x: F,
+    width: f32,
+) -> impl Iterator<Item = CoverageSpan> + 'a
 where
-    F: Fn(f32) -> f32,
+    F: Fn(f32) -> f32 + 'a,
 {
-    let mut out = Vec::with_capacity(unready.len() * 2 + 1);
-    let mut covered_from = 0.0;
-    for &[start, end] in unready {
-        let x0 = to_x(start).floor().clamp(0.0, width);
-        let x1 = to_x(end).ceil().clamp(0.0, width);
-        if x1 <= x0 {
-            continue;
-        }
-        if x0 > covered_from {
-            out.push(CoverageSpan::Covered([covered_from, x0]));
-        }
-        out.push(CoverageSpan::Unready([x0, x1], [start > 0.0, end < 1.0]));
-        covered_from = x1;
-    }
-    if width > covered_from {
-        out.push(CoverageSpan::Covered([covered_from, width]));
-    }
-    out
+    unready
+        .iter()
+        .copied()
+        .map(Some)
+        .chain(iter::once(None))
+        .scan(0.0, move |covered_from, hole| {
+            let Some([start, end]) = hole else {
+                return Some([
+                    (width > *covered_from)
+                        .then_some(CoverageSpan::Covered([*covered_from, width])),
+                    None,
+                ]);
+            };
+            let x0 = to_x(start).floor().clamp(0.0, width);
+            let x1 = to_x(end).ceil().clamp(0.0, width);
+            if x1 <= x0 {
+                return Some([None, None]);
+            }
+            let covered =
+                (x0 > *covered_from).then_some(CoverageSpan::Covered([*covered_from, x0]));
+            *covered_from = x1;
+            Some([
+                covered,
+                Some(CoverageSpan::Unready([x0, x1], [start > 0.0, end < 1.0])),
+            ])
+        })
+        .flatten()
+        .flatten()
 }
 
 /// Draw what the analysis has covered and what it has not.
@@ -446,18 +460,14 @@ mod tests {
     }
 
     /// The single unready stretch a partition holds.
-    fn marked(spans: &[CoverageSpan]) -> [f32; 2] {
-        let marked: Vec<[f32; 2]> = spans
-            .iter()
-            .filter_map(|span| match *span {
-                CoverageSpan::Unready(span, _) => Some(span),
-                CoverageSpan::Covered(_) => None,
-            })
-            .collect();
-        match marked[..] {
-            [span] => span,
-            _ => panic!("one hole is marked: {spans:?}"),
+    fn marked(spans: impl Iterator<Item = CoverageSpan>) -> [f32; 2] {
+        let mut marked = None;
+        for span in spans {
+            if let CoverageSpan::Unready(span, _) = span {
+                assert!(marked.replace(span).is_none(), "only one hole is marked");
+            }
         }
+        marked.expect("one hole is marked")
     }
 
     fn assert_within(actual: [f32; 2], expected: [f32; 2], tolerance: f32) {
@@ -476,9 +486,9 @@ mod tests {
     /// absence.
     #[kithara::test]
     fn a_fully_covered_lane_is_one_covered_span() {
-        assert_eq!(
-            coverage_spans(&[], |norm| norm * 100.0, 100.0),
-            [CoverageSpan::Covered([0.0, 100.0])]
+        assert!(
+            coverage_spans(&[], |norm| norm * 100.0, 100.0)
+                .eq([CoverageSpan::Covered([0.0, 100.0])])
         );
     }
 
@@ -486,13 +496,12 @@ mod tests {
     /// data stops, and takes a boundary on both sides it meets.
     #[kithara::test]
     fn a_hole_breaks_the_baseline_and_takes_both_boundaries() {
-        assert_eq!(
-            coverage_spans(&[[0.25, 0.5]], |norm| norm * 100.0, 100.0),
-            [
+        assert!(
+            coverage_spans(&[[0.25, 0.5]], |norm| norm * 100.0, 100.0).eq([
                 CoverageSpan::Covered([0.0, 25.0]),
                 CoverageSpan::Unready([25.0, 50.0], [true, true]),
                 CoverageSpan::Covered([50.0, 100.0]),
-            ]
+            ])
         );
     }
 
@@ -500,13 +509,12 @@ mod tests {
     /// there, so that side takes no boundary.
     #[kithara::test]
     fn a_region_at_the_edge_drops_the_boundary_it_does_not_meet() {
-        assert_eq!(
-            coverage_spans(&[[0.0, 0.25], [0.75, 1.0]], |norm| norm * 100.0, 100.0),
-            [
+        assert!(
+            coverage_spans(&[[0.0, 0.25], [0.75, 1.0]], |norm| norm * 100.0, 100.0).eq([
                 CoverageSpan::Unready([0.0, 25.0], [false, true]),
                 CoverageSpan::Covered([25.0, 75.0]),
                 CoverageSpan::Unready([75.0, 100.0], [true, false]),
-            ]
+            ])
         );
     }
 
@@ -514,13 +522,12 @@ mod tests {
     /// part covered reads unready rather than claiming audio nothing decoded.
     #[kithara::test]
     fn a_gap_off_the_pixel_grid_rounds_outward() {
-        assert_eq!(
-            coverage_spans(&[[0.404, 0.606]], |norm| norm * 100.0, 100.0),
-            [
+        assert!(
+            coverage_spans(&[[0.404, 0.606]], |norm| norm * 100.0, 100.0).eq([
                 CoverageSpan::Covered([0.0, 40.0]),
                 CoverageSpan::Unready([40.0, 61.0], [true, true]),
                 CoverageSpan::Covered([61.0, 100.0]),
-            ]
+            ])
         );
     }
 
@@ -528,9 +535,9 @@ mod tests {
     /// not told about track it cannot show.
     #[kithara::test]
     fn a_region_outside_the_view_is_dropped() {
-        assert_eq!(
-            coverage_spans(&[[0.0, 0.1]], |norm| (norm - 0.5) * 100.0, 100.0),
-            [CoverageSpan::Covered([0.0, 100.0])]
+        assert!(
+            coverage_spans(&[[0.0, 0.1]], |norm| (norm - 0.5) * 100.0, 100.0)
+                .eq([CoverageSpan::Covered([0.0, 100.0])])
         );
     }
 
@@ -543,12 +550,12 @@ mod tests {
         let hole = [0.25, 0.5];
         let window = window_bounds(0.375, MAX_ZOOM);
 
-        let deck = marked(&coverage_spans(
+        let deck = marked(coverage_spans(
             &[hole],
             |norm| norm_to_x(norm, &window, WIDTH),
             WIDTH,
         ));
-        let overview = marked(&coverage_spans(&[hole], |norm| norm * WIDTH, WIDTH));
+        let overview = marked(coverage_spans(&[hole], |norm| norm * WIDTH, WIDTH));
 
         assert_within(
             deck.map(|x| x_to_norm(x, &window, WIDTH).expect("a positive width")),

@@ -1,10 +1,10 @@
-use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
+use kithara_signal::AudioChunk;
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
 
 use crate::{
-    analysis::{AnalysisProducer, Offer},
     audio::event::{
         decode_error_detail, map_audio_codec_kind, map_decode_error_class, map_decode_error_kind,
     },
@@ -77,12 +77,6 @@ pub(crate) fn tick<T: StreamType>(
             {
                 return DecodeAction::StartRecreate(recreate);
             }
-            if let Some(chunk) = core.next_drain() {
-                return produced(chunk, epoch, &mut ctx);
-            }
-            if let Some(emit) = ctx.emit {
-                emit.enqueue(AudioEvent::EndOfStream.into());
-            }
             return DecodeAction::Eof;
         }
         match core.next_chunk(ctx.stream.position()) {
@@ -100,8 +94,7 @@ pub(crate) fn tick<T: StreamType>(
                     continue;
                 }
                 hang_reset!();
-                core.track(&chunk, ctx.playhead, ctx.emit);
-                offer_to_analysis(&chunk, ctx.analysis);
+                core.track(&chunk, ctx.emit);
                 if let Err(error) = core.push(chunk) {
                     return decode_failed(core, error, &ctx);
                 }
@@ -115,22 +108,6 @@ pub(crate) fn tick<T: StreamType>(
             Err(error) if error.classify() == ErrorClass::Interrupted => {}
             Err(error) => return decode_failed(core, error, &ctx),
         }
-    }
-}
-
-/// Hand a decoded chunk to this track's analysis pass, if one is open.
-///
-/// This is the only point where a chunk is both complete and positioned and
-/// has not yet entered the effect chain, so what a pass is fed is the decoded
-/// audio rather than the played audio. The offer copies and returns; a range
-/// it cannot take stays uncovered, which the pass reports as missing, and
-/// playback is never slowed to avoid that.
-fn offer_to_analysis(chunk: &PcmChunk, slot: &mut Option<AnalysisProducer>) {
-    let Some(producer) = slot.as_mut() else {
-        return;
-    };
-    if producer.offer(&chunk.samples[..], chunk.spec(), chunk.meta.frame_offset) == Offer::Closed {
-        *slot = None;
     }
 }
 
@@ -172,7 +149,7 @@ fn decode_failed<T: StreamType>(
 }
 
 pub(crate) fn produced<T: StreamType>(
-    chunk: PcmChunk,
+    chunk: AudioChunk,
     epoch: u64,
     ctx: &mut DecodeCtx<'_, T>,
 ) -> DecodeAction {

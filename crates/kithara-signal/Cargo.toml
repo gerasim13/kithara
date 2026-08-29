@@ -1,0 +1,26 @@
+[package]
+name = "kithara-signal"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Decoded-audio signal values and sample/time math for Kithara."
+keywords = ["audio", "buffer", "frames", "samples", "signal"]
+categories = ["multimedia::audio"]
+
+[dependencies]
+kithara-bufpool = { workspace = true }
+kithara-platform = { workspace = true }
+
+derive_more = { workspace = true }
+fast-interleave = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
+
+[lints]
+workspace = true

@@ -125,7 +125,7 @@ where
         key: CacheKey,
         entry: CacheEntry<A::ReadyRes, A::IndexRes>,
     ) -> Vec<ResourceKey> {
-        let mut invalidated = Vec::new();
+        let mut invalidated: Vec<ResourceKey> = Vec::new();
 
         let effective = self.capacity.get() + self.pinned_cache_count(cache);
 
@@ -323,7 +323,7 @@ where
         pinned: &DashSet<ResourceKey>,
         max_bytes: u64,
     ) -> Vec<ResourceKey> {
-        let mut invalidated = Vec::new();
+        let mut invalidated: Vec<ResourceKey> = Vec::new();
         while Self::retained_bytes(cache, pinned) > max_bytes {
             let Some(key) = cache
                 .iter()
@@ -621,7 +621,7 @@ where
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         {
             let mut cache = self.cache.lock();
-            let keys_to_remove: Vec<_> = cache
+            let keys_to_remove: Vec<CacheKey> = cache
                 .iter()
                 .filter_map(|(cache_key, _)| match cache_key {
                     CacheKey::Resource {

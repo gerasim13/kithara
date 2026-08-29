@@ -18,11 +18,14 @@ Dependencies point strictly **downward**; nothing lower reaches back up into orc
                      |
                kithara-queue   (multi-track queue, auto-advance, pause gate)
                      |
-               kithara-play    (transport, crossfade, tempo/key-lock, sessions)
-                     |
-               kithara-audio   (RT pipeline: ring, PreloadGate, seek-epoch, analysis)
-              /      |      \        \
-   kithara-decode  kithara-stretch  kithara-beat  kithara-encode
+               kithara-play    (Player/deck, worker/scheduler, effects, sessions)
+                /          \
+     kithara-audio                    kithara-warp
+ (decoded PCM source,             (maps/groups + identity Warp
+  SRC, readiness)                   + synchronous WarpRenderer)
+       /      |      \                 |
+ kithara-decode  kithara-encode      kithara-stretch
+                                      (backend engines)
               |
    kithara-file   kithara-hls       ← protocol Peer/Source implementations
               \      /
@@ -51,12 +54,20 @@ are no-ops in production builds).
   sit *above* it; `kithara-abr`, `kithara-events`, `kithara-net`, and `kithara-storage` sit *below*.
 - **`kithara-assets`** sits beside storage (over storage/bufpool/drm/events) and is consumed by the protocol crates and
   everything above them. `kithara-stream` does **not** depend on it.
+- **`kithara-warp`** owns the `WarpMap` / `SyncGroup` synchronization contracts, the resident identity `Warp<S>`
+  wrapper carrying live stretch controls, and the synchronous `WarpRenderer` time-stretch stage. It does not own source
+  lifecycle, the worker, the Host/session, or presentation acknowledgement; R7 does not yet connect map progress to the
+  production render path. `kithara-analysis` consumes its backend-independent grid types, while feature-enabled
+  `kithara-warp` delegates DSP to the backend engines owned by `kithara-stretch`.
 - **`kithara`** is the facade aggregating protocols + storage + net behind feature flags; `kithara-ffi` and `kithara-app`
   consume it rather than reaching into protocol crates for the playback path.
-- **Side branches:** `kithara-stretch` and `kithara-beat` are optional DSP for `kithara-audio`; `kithara-resampler` serves
-  decode/audio/play; `kithara-encode` depends only on `kithara-stream` and serves the integration harness and transcode;
-  `kithara-ui` is the toolkit-independent UI model (RON skin/layout/module documents → `CompiledUi`) used by
-  `kithara-app` under its `gui` feature.
+- **Side branches:** `kithara-stretch` supplies backend engines to the `kithara-warp` renderer; `kithara-warp` owns the
+  temporal-control protocol and synchronous time-stretch stage. `kithara-analysis`
+  consumes decoded source ranges from `kithara-audio`, `kithara-beat`, and
+  `kithara-resampler` to publish waveform/beat artifacts; `kithara-encode`
+  depends only on `kithara-stream` and serves the integration harness and transcode; `kithara-ui` is the
+  toolkit-independent UI model (RON skin/layout/module documents → `CompiledUi`) used by `kithara-app` under its `gui`
+  feature.
 
 ## End-to-end data flow
 
@@ -68,13 +79,17 @@ Pull-driven: each layer pulls from the one below; backpressure and wakeups propa
 1. **Decode.** `kithara-decode` composes a `Demuxer` + `FrameCodec` into `ComposedDecoder`, selected at runtime by
   `DecoderFactory`, producing PCM frames and handling gapless priming/trim and seek pre-roll. Backends are feature-gated
   (symphonia / apple / android / webcodecs).
-1. **Audio pipeline.** `kithara-audio` drives the decode worker on its own thread, fills a lock-free ring behind a
-  `PreloadGate`, resamples to the device format, routes optional time-stretch through `kithara-stretch`, and applies
-  waveform/beat taps. Seek and format-change are state machines (seek-epoch, recreate) so a re-aim never replays stale
-  audio.
-1. **Play / queue.** `kithara-play` owns transport: start/stop, crossfade between decks, tempo/key-lock, session hosting,
-  and the current-item announce contract (`PlayerImpl` / `EngineImpl`). `kithara-queue` stacks multiple tracks with
-  auto-advance and a pause gate, handing decks to `kithara-play`.
+1. **Decoded source.** `kithara-audio` owns decoder lifecycle, decoder-side sample-rate conversion, readiness,
+  seek/recreate state, and the worker-neutral prepared producer seam. It does not register playback nodes or apply
+  playback effects.
+1. **Source analysis.** `kithara-analysis` runs progressive waveform/beat passes over an `AudioReader` or decoded
+  `AudioObserver` chunks. It owns analysis state and pure artifact bytes; `kithara-app` owns `AssetStore` cache I/O and
+  policy.
+1. **Play / queue.** `kithara-play` owns the Player/deck, `PlayWorker` scheduler, per-track `DecoderNode`, final output
+  admission, ordinary effects, engine-load measurement, transport, crossfade, and session hosting. It composes the
+  resident identity `Warp<S>` and synchronous `kithara-warp::WarpRenderer` time-stretch stage.
+  `kithara-queue` stacks Players with auto-advance and a pause gate. R7 keeps `WarpMap` / `SyncGroup` actuation and
+  presentation acknowledgement outside the production path.
 1. **Surfaces.** `kithara-ffi` exposes the `AudioPlayer` facade across the FFI / wasm boundary (worker-vs-main-thread
   ownership protocol); `kithara-app` is the desktop app (iced + `kithara-ui`) and adds the track-analysis cache.
 
@@ -140,12 +155,17 @@ contracts whose owner is not obvious from the crate name:
 - byte-availability SSoT, Pending/Ready gate, consumer-demand single-producer, index persistence (pins/LRU) →
   `kithara-assets`
 - blocking coordination, Mmap-vs-Mem, chunked atomic claim → `kithara-storage`
-- ring/preload-gate threading, seek-epoch and format-change/recreate state machines, time-stretch routing →
-  `kithara-audio`
+- decoder lifecycle/SRC, source readiness, prepared producer seam, seek-epoch and format-change/recreate state machines
+  → `kithara-audio`
+- progressive waveform/beat scheduling, analysis snapshots, producer ingest, and pure artifact/composite bytes
+  → `kithara-analysis`; `AssetStore` cache I/O and policy → `kithara-app`
+- `WarpMap` / `SyncGroup` contracts, resident identity `Warp<S>` controls, and synchronous `WarpRenderer` time-stretch
+  → `kithara-warp`; backend engines → `kithara-stretch`
 - gapless priming/trim, seek pre-roll, recreate/no-fallback strategy, read-ahead strand → `kithara-decode`
 - two-mode `wait_range`, variant switch + decoder-probe rebuild, init-segment routing, format-change byte ranges →
   `kithara-hls`
-- atomic engine start, session hosting, announce contract, RT-audio rtsan rules → `kithara-play`; select serialization
-  race → `kithara-queue`
-- worker-vs-main-thread ownership, cfg-gating boundary, wasm postbuild → `kithara-ffi`; `ANALYSIS_BYTES_VERSION` cache
-  identity → `kithara-app`
+- Player/deck, playback worker/scheduler/node/final output, ordinary effects/load, atomic engine start, session hosting,
+  announce contract,
+  RT-audio rtsan rules → `kithara-play`; select serialization race → `kithara-queue`
+- worker-vs-main-thread ownership, cfg-gating boundary, wasm postbuild → `kithara-ffi`; analysis codec version →
+  `kithara-analysis`, cache identity and policy → `kithara-app`

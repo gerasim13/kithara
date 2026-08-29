@@ -10,7 +10,7 @@ use super::{
     measure::{Flex, Measured},
 };
 #[cfg(test)]
-use crate::compile::CompiledNode;
+use crate::compile::{Address, CompiledNode};
 use crate::{
     compile::CompiledUi,
     draw::Transform,
@@ -349,7 +349,7 @@ fn stage<'a>(children: Vec<Element<'a, UiEvent>>, size: Option<SizeSpec>) -> Ele
     let Some(size) = size else {
         return Stack::with_children(children).into();
     };
-    let mut layers = Vec::with_capacity(children.len() + 1);
+    let mut layers: Vec<Element<'a, UiEvent>> = Vec::with_capacity(children.len() + 1);
     layers.push(Element::from(Space::new()));
     layers.extend(children);
     Stack::with_children(layers)
@@ -415,7 +415,7 @@ pub(super) fn render_compiled<'a>(
 #[cfg(test)]
 pub(super) fn render_engine_node<'a>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     owner: InternId,
     ctx: Ctx<'a, '_>,
     skin: &'a Skin,

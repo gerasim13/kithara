@@ -1,15 +1,13 @@
 use std::num::NonZeroU32;
 
-pub use kithara::audio::analysis::TrackAnalysis;
+pub use kithara::analysis::TrackAnalysis;
 use kithara::{
-    audio::{
-        PcmReader,
-        analysis::{
-            AnalysisFingerprint, AnalysisProducer, AnalysisToken, AnalysisWorker, AnalyzerBuilder,
-            BeatAnalysisConfig,
-        },
+    analysis::{
+        AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisToken, AnalysisWorker,
+        AnalyzerBuilder, BeatAnalysisConfig,
     },
-    bufpool::PcmPool,
+    audio::AudioReader,
+    bufpool::SamplePool,
     prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
 };
 use kithara_platform::{
@@ -22,7 +20,6 @@ use kithara_platform::{
 };
 use tracing::warn;
 
-type AppAnalysisWorker = AnalysisWorker<PlaybackResamplerBackend>;
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
 type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 
@@ -33,7 +30,7 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
-    worker: Arc<AppAnalysisWorker>,
+    worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
     /// What this configuration produces, per artifact: the cache keys off it.
     fingerprint: AnalysisFingerprint,
@@ -43,7 +40,7 @@ pub struct TrackAnalysisRunner {
     active: bool,
 }
 
-/// An in-flight run: its child token and the spawned open/forward task.
+/// An in-flight run: its child token and the spawned fallback-reader open task.
 /// Teardown is cooperative — cancelling the token exits the worker's decode
 /// loop at its next per-chunk check.
 struct RunHandle {
@@ -60,17 +57,15 @@ impl TrackAnalysisRunner {
         master: &CancelToken,
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Self {
-        let builder = AnalyzerBuilder::default()
-            .with_pcm_pool(pcm_pool)
-            .with_beat_config(beat_config);
+        let builder = AnalyzerBuilder::new(sample_pool).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();
-        let active = !builder.is_empty();
-        let fingerprint = builder.fingerprint();
         let worker = Arc::new(AnalysisWorker::new(master, builder));
+        let active = worker.is_active();
+        let fingerprint = worker.fingerprint().clone();
         Self {
             fingerprint,
             worker,
@@ -90,10 +85,9 @@ impl TrackAnalysisRunner {
     /// a producer feeding the same pass later shares one axis with it.
     /// Staged results arrive on the returned receiver,
     /// which closes when the run ends; nothing arrives on failure/cancel.
-    /// `deliver` receives the producer half of the pass once it opens, which
-    /// is after the reader does and so cannot be returned from here. The
-    /// runner does not know what the handle is for; leaving it where the
-    /// track's load will find it is the caller's business.
+    /// `deliver` receives the producer half synchronously, before the fallback
+    /// reader is opened. The runner does not know what the handle is for;
+    /// attaching it to the track's playback path is the caller's business.
     pub fn analyze<D>(
         &mut self,
         config: AppResourceConfig,
@@ -102,20 +96,19 @@ impl TrackAnalysisRunner {
         deliver: D,
     ) -> watch::Receiver<Option<TrackAnalysis>>
     where
-        D: FnOnce(AnalysisProducer) + Send + 'static,
+        D: FnOnce(AnalysisProducer),
     {
         self.clear();
 
-        let run = self.worker.child_token();
-        let (tx, rx) = watch::channel(None);
+        let (rx, producer, pass) = self.worker.open(token, rate);
+        let run = pass.cancel_token().clone();
+        deliver(producer);
         let task = task::spawn(run_analysis(
             Arc::clone(&self.worker),
             config,
             run.clone(),
-            token,
             rate,
-            tx,
-            deliver,
+            pass,
         ));
         self.current = Some(RunHandle { task, cancel: run });
         rx
@@ -136,48 +129,34 @@ impl Drop for TrackAnalysisRunner {
     }
 }
 
-/// Open `config` and run it through the shared worker, forwarding every
-/// staged update to `tx`.
-async fn run_analysis<D>(
-    worker: Arc<AppAnalysisWorker>,
+/// Open `config` and start the already-open pass on the shared worker.
+async fn run_analysis(
+    worker: Arc<AnalysisWorker>,
     config: AppResourceConfig,
     cancel: CancelToken,
-    token: AnalysisToken,
     rate: NonZeroU32,
-    tx: watch::Sender<Option<TrackAnalysis>>,
-    deliver: D,
-) where
-    D: FnOnce(AnalysisProducer) + Send + 'static,
-{
+    pass: AnalysisPass,
+) {
     let Some(reader) = open_reader(config, &cancel, rate).await else {
         return;
     };
-    let (mut rx, producer) = worker.analyze(reader, cancel, token, rate);
-    deliver(producer);
-
-    while rx.changed().await.is_ok() {
-        let analysis = rx.borrow().clone();
-        if let Some(analysis) = analysis {
-            // The receiver may be gone (deck swapped).
-            tx.send(Some(analysis)).ok();
-        }
-    }
+    worker.start(pass, reader);
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app
-/// shutdown tear the standalone audio worker down top-down) and unwrap the
+/// shutdown tear its registered playback task down top-down) and unwrap the
 /// reader for the analysis worker.
 async fn open_reader(
     mut config: AppResourceConfig,
     cancel: &CancelToken,
     rate: NonZeroU32,
-) -> Option<Box<dyn PcmReader>> {
+) -> Option<Box<dyn AudioReader>> {
     if cancel.is_cancelled() {
         return None;
     }
     config.set_cancel(cancel.child());
     config.set_host_sample_rate(rate);
-    let mut resource = match Resource::new(config, None).await {
+    let mut resource = match Resource::new(config).await {
         Ok(r) => r,
         Err(e) => {
             warn!(?e, "analysis: resource open failed");

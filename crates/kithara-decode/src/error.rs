@@ -1,6 +1,7 @@
 use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
 use kithara_bufpool::BudgetExhausted;
+use kithara_signal::SignalError;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use kithara_stream::{NotReadyCause, StreamPending};
@@ -11,10 +12,11 @@ use kithara_stream::{NotReadyCause, StreamPending};
 /// in the `Backend` variant.
 ///
 /// The real-time decode core constructs [`InvalidData`](Self::InvalidData),
-/// [`SeekFailed`](Self::SeekFailed) and [`SeekOutOfRange`](Self::SeekOutOfRange)
-/// on the `#[kithara::rtsan_forbid_blocking]` produce path, so those variants
-/// carry only `&'static str` / `Copy` fields — construction never allocates.
-/// `Display` formatting may allocate, but only off-RT when actually rendered.
+/// [`Signal`](Self::Signal), [`SeekFailed`](Self::SeekFailed), and
+/// [`SeekOutOfRange`](Self::SeekOutOfRange) on the
+/// `#[kithara::rtsan_forbid_blocking]` produce path, so those variants carry
+/// only `&'static str` / `Copy` fields - construction never allocates. `Display`
+/// formatting may allocate, but only off-RT when actually rendered.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum DecodeError {
@@ -32,6 +34,15 @@ pub enum DecodeError {
 
     #[error("Invalid data: {detail}")]
     InvalidData { detail: &'static str },
+
+    /// Checked signal layout or timeline conversion failed. The source is a
+    /// small typed value, so constructing this variant does not allocate.
+    #[error("invalid audio signal: {source}")]
+    Signal {
+        #[from]
+        #[source]
+        source: SignalError,
+    },
 
     #[error("Seek failed: {detail}")]
     SeekFailed { detail: &'static str },
@@ -97,13 +108,13 @@ pub enum DecodeError {
     #[error("cursor scratch buffer detached during a planar read")]
     ScratchDetached,
 
-    /// The PCM stream feeding a consumer ended in failure, carrying the
+    /// The decoded-audio stream feeding a consumer ended in failure, carrying the
     /// producer-side cause as a typed source plus a `&'static str` tag for
     /// the site that observed it. Distinct from [`Io`](Self::Io): a channel
     /// that closed without a marker is not an IO fault, and collapsing the
     /// causes into one message leaves them separable only by string.
-    #[error("PCM stream failed at {what}: {source}")]
-    PcmStream {
+    #[error("decoded-audio stream failed at {what}: {source}")]
+    AudioStream {
         what: &'static str,
         #[source]
         source: Box<dyn StdError + Send + Sync>,
@@ -244,15 +255,15 @@ impl DecodeError {
         }
     }
 
-    /// Wrap a producer-side stream failure as a [`DecodeError::PcmStream`]
+    /// Wrap a producer-side stream failure as a [`DecodeError::AudioStream`]
     /// with a `&'static str` site tag, keeping the cause a typed source
     /// instead of a pre-formatted message.
     #[must_use]
-    pub fn pcm_stream<E>(what: &'static str, err: E) -> Self
+    pub fn audio_stream<E>(what: &'static str, err: E) -> Self
     where
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
-        Self::PcmStream {
+        Self::AudioStream {
             what,
             source: err.into(),
         }
@@ -323,6 +334,10 @@ mod tests {
 
     #[kithara::test]
     #[case::invalid_data(DecodeError::InvalidData { detail: "bad frame" }, "Invalid data: bad frame")]
+    #[case::signal(
+        DecodeError::Signal { source: SignalError::ChannelCountZero },
+        "invalid audio signal: audio channel count must be non-zero"
+    )]
     #[case::seek_failed(DecodeError::SeekFailed { detail: "timestamp out of range" }, "Seek failed: timestamp out of range")]
     #[case::probe_failed(DecodeError::ProbeFailed, "Probe failed: could not detect codec")]
     #[case::unsupported_codec(
@@ -345,9 +360,9 @@ mod tests {
         DecodeError::ScratchDetached,
         "cursor scratch buffer detached during a planar read"
     )]
-    #[case::pcm_stream(
-        DecodeError::pcm_stream("preload", IoError::other("producer gone")),
-        "PCM stream failed at preload: producer gone"
+    #[case::audio_stream(
+        DecodeError::audio_stream("preload", IoError::other("producer gone")),
+        "decoded-audio stream failed at preload: producer gone"
     )]
     fn test_error_display(#[case] error: DecodeError, #[case] expected: &str) {
         assert_eq!(error.to_string(), expected);

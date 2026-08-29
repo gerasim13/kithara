@@ -46,8 +46,9 @@ where
     /// Each buffer is initialized via `init`, then returned to the pool.
     /// This eliminates cold-start allocation misses for real-time paths.
     ///
-    /// Respects byte budget — the `init` closure may trigger allocations
-    /// tracked via `get_with`. Buffers that exceed budget are simply dropped.
+    /// The initializer may allocate before budget admission. The completed
+    /// buffer is charged before recycling; if the budget rejects it, pre-warm
+    /// stops and drops that buffer.
     pub fn pre_warm<F: Fn(&mut T)>(&self, count: usize, init: F) {
         for _ in 0..count {
             let mut val = T::default();
@@ -82,6 +83,24 @@ where
             trim_capacity,
             budget,
         )))
+    }
+}
+
+impl<const SHARDS: usize, T> SharedPool<SHARDS, Vec<T>> {
+    /// Collect values directly into a reused buffer owned by this pool.
+    ///
+    /// Like [`get_with`](SharedPool::get_with), collection is infallible:
+    /// growth is tracked after initialization. Crossing the byte budget still
+    /// returns the buffer and increments [`PoolStats::budget_overshoots`].
+    #[must_use]
+    pub fn collect<I>(&self, values: I) -> PooledOwned<SHARDS, Vec<T>>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        self.get_with(move |buffer| {
+            buffer.clear();
+            buffer.extend(values);
+        })
     }
 }
 

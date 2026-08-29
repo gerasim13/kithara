@@ -126,15 +126,30 @@ impl FileInner {
     /// Settle a fetch against its writer epoch and current byte coverage.
     /// Cancellation relinquishes; fatal or initial zero-progress errors fail.
     pub(super) fn finalize_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
+        if !completion.invalid_response
+            && matches!(completion.error, Some(NetError::Cancelled))
+            && self.commit_fetch_if_complete(epoch, completion)
+        {
+            return;
+        }
         if self.settle_fetch_error(epoch, completion) {
             return;
         }
+        let _ = self.commit_fetch_if_complete(epoch, completion);
+    }
+
+    fn commit_fetch_if_complete(
+        &self,
+        epoch: &WriterEpoch,
+        completion: FetchCompletion<'_>,
+    ) -> bool {
         if !epoch.is_current() {
-            return;
+            return false;
         }
-        if let Some(final_len) = self.resolved_final_len(completion) {
-            self.commit_if_complete(epoch, final_len);
-        }
+        let Some(final_len) = self.resolved_final_len(completion) else {
+            return false;
+        };
+        self.commit_if_complete(epoch, final_len)
     }
 
     fn resolved_final_len(&self, completion: FetchCompletion<'_>) -> Option<u64> {

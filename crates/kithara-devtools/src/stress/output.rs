@@ -414,14 +414,14 @@ mod tests {
     fn emit_child_output() {
         assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(CHILD_ENV_VALUE));
         {
-            let mut stdout = std::io::stdout().lock();
+            let mut stdout = io::stdout().lock();
             stdout
                 .write_all(STDOUT_MARKER)
                 .expect("write stdout marker");
             stdout.flush().expect("flush stdout marker");
         }
         {
-            let mut stderr = std::io::stderr().lock();
+            let mut stderr = io::stderr().lock();
             stderr
                 .write_all(STDERR_MARKER)
                 .expect("write stderr marker");
@@ -434,14 +434,14 @@ mod tests {
     #[ignore = "subprocess entrypoint"]
     fn emit_then_block() {
         assert_eq!(env::var(CHILD_ENV).as_deref(), Ok(BLOCK_CHILD_ENV_VALUE));
-        let mut stderr = std::io::stderr().lock();
+        let mut stderr = io::stderr().lock();
         stderr
             .write_all(STDERR_MARKER)
             .expect("write stderr marker");
         stderr.flush().expect("flush stderr marker");
         drop(stderr);
         let mut input = Vec::new();
-        std::io::stdin()
+        io::stdin()
             .read_to_end(&mut input)
             .expect("wait for parent pipe closure");
         fs::write(

@@ -2,38 +2,44 @@ use std::ops::Deref;
 
 use kithara_platform::{sync::Arc, time::Duration};
 
+#[cfg(test)]
+use super::super::core::PlayerImpl;
 use super::super::{
-    core::PlayerImpl,
+    core::PlayerRuntime,
     state::{PendingNext, PendingNextState},
 };
-use crate::{api::EngineEvent, bridge::PlayerCmd, error::PlayError};
+use crate::{
+    api::{EngineEvent, TrackId},
+    bridge::PlayerCmd,
+    error::PlayError,
+};
 
 /// Outcome of resolving an arm request under the short phase lock, acted on
 /// outside the lock to avoid holding it across `send_to_slot`.
 enum ArmDecision {
     /// The same index is already armed; return its src verbatim.
     AlreadyArmed(Arc<str>),
-    /// The slot was cleared; optionally unload the previous src.
-    Clear(Option<Arc<str>>),
+    /// The slot was cleared; optionally unload the previous item.
+    Clear(Option<TrackId>),
 }
 
 struct ActivatedPending {
-    src: Arc<str>,
+    item_id: TrackId,
     duration_seconds: f64,
 }
 
 struct Handover<'a> {
-    player: &'a PlayerImpl,
+    player: &'a PlayerRuntime,
 }
 
 impl<'a> Handover<'a> {
-    const fn new(player: &'a PlayerImpl) -> Self {
+    const fn new(player: &'a PlayerRuntime) -> Self {
         Self { player }
     }
 }
 
 impl Deref for Handover<'_> {
-    type Target = PlayerImpl;
+    type Target = PlayerRuntime;
 
     fn deref(&self) -> &Self::Target {
         self.player
@@ -58,11 +64,11 @@ impl Handover<'_> {
         let outcome = if pending.state.activated() {
             None
         } else {
-            let src = Arc::clone(&pending.src);
+            let item_id = pending.item_id;
             let duration_seconds = pending.duration_seconds;
             pending.state = PendingNextState::ActivatedReady;
             Some(ActivatedPending {
-                src,
+                item_id,
                 duration_seconds,
             })
         };
@@ -95,7 +101,7 @@ impl Handover<'_> {
             }
             Some(existing) => {
                 let unload = (!(existing.state.activated() && existing.index == current_index))
-                    .then(|| existing.src.clone());
+                    .then_some(existing.item_id);
                 if let Some(slot) = phase.pending_mut() {
                     *slot = None;
                 }
@@ -109,13 +115,14 @@ impl Handover<'_> {
             ArmDecision::AlreadyArmed(src) => return Some(src),
             ArmDecision::Clear(unload) => unload,
         };
-        if let Some(prev_src) = to_unload {
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: prev_src });
+        if let Some(item_id) = to_unload {
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
         }
 
-        let (src, duration_seconds) = self.enqueue_to_processor(index)?;
+        let (item_id, src, duration_seconds) = self.enqueue_to_processor(index)?;
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
+                item_id,
                 index,
                 duration_seconds,
                 src: src.clone(),
@@ -151,7 +158,7 @@ impl Handover<'_> {
             return Ok(());
         };
 
-        self.start_playback(Arc::clone(&activated.src));
+        self.start_playback(activated.item_id);
         self.publish_crossfade_started();
         self.publish_current_track_snapshot(activated.duration_seconds);
         let current_index = self.current_index();
@@ -178,7 +185,7 @@ impl Handover<'_> {
 
     /// Drop the armed next slot without committing.
     ///
-    /// Sends `UnloadTrack` to the audio thread for the armed src and
+    /// Sends `UnloadTrack` to the audio thread for the armed item and
     /// clears the pending slot. Skips the unload if the armed slot has
     /// already been activated for the current index (the activated track
     /// is now the leading one — unloading would silence playback).
@@ -200,12 +207,14 @@ impl Handover<'_> {
                     .bus()
                     .publish(EngineEvent::CrossfadeCancelled);
             }
-            let _ = self.send_to_slot(PlayerCmd::UnloadTrack { src: pending.src });
+            let _ = self.send_to_slot(PlayerCmd::UnloadTrack {
+                item_id: pending.item_id,
+            });
         }
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
         Handover::new(self).arm_next(index)
     }
@@ -230,15 +239,27 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_events::{EngineEvent, Envelope, Event, PlayerEvent};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{player::PlayerConfig, session::testing};
+    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
+
+    fn worker() -> PlayWorker {
+        PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+        )
+    }
 
     #[kithara::test]
     fn commit_next_without_arm_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        );
         let err = player.commit_next(1).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
@@ -246,7 +267,8 @@ mod tests {
     #[kithara::test]
     fn commit_next_publishes_snapshot_before_current_item_changed() {
         let player = PlayerImpl::new(
-            PlayerConfig::test_builder()
+            PlayerConfig::builder()
+                .worker(worker())
                 .session(testing::test_session())
                 .build(),
         );
@@ -258,6 +280,7 @@ mod tests {
 
         if let Some(pending_slot) = player.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
+                item_id: TrackId::allocate(),
                 src: Arc::from("next.mp3"),
                 state: PendingNextState::Armed,
                 index: 1,

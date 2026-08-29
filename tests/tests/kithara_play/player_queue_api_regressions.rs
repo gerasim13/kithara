@@ -5,7 +5,7 @@ use std::path::Path;
 use kithara::{
     events::TrackId,
     platform::time::Duration,
-    play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
+    play::{PlayerEvent, Resource, ResourceConfig, player::PlayerControl},
 };
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
@@ -29,16 +29,13 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
     let first_id = TrackId::allocate();
     let second_id = TrackId::allocate();
 
-    harness.player().insert(
-        make_signal_resource(harness.player(), &server, temp_dir.path(), 440.0, 0.12).await,
-        first_id,
-        None,
-    );
-    harness.player().insert(
-        make_signal_resource(harness.player(), &server, temp_dir.path(), 880.0, 0.24).await,
-        second_id,
-        None,
-    );
+    let first = make_signal_resource(harness.player(), &server, temp_dir.path(), 440.0, 0.12).await;
+    let second =
+        make_signal_resource(harness.player(), &server, temp_dir.path(), 880.0, 0.24).await;
+    harness.with_player(|player| {
+        player.insert(first, first_id, None);
+        player.insert(second, second_id, None);
+    });
 
     harness.player().play();
     let _ = harness.tick_and_drain();
@@ -112,7 +109,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
 }
 
 async fn make_signal_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     freq_hz: f64,
@@ -130,12 +127,12 @@ async fn make_signal_resource(
         ResourceConfig::parse_src(url.as_str()).expect("valid signal fixture URL"),
     )
     .store(kithara_integration_tests::disk_asset_store(cache_dir))
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare queue regression resource config");
 
-    Resource::new(config, None)
+    Resource::new(config)
         .await
         .expect("open queue regression resource")
 }

@@ -1,10 +1,10 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
-    audio::analysis::BeatAnalysisConfig,
-    bufpool::PcmPool,
+    analysis::BeatAnalysisConfig,
+    bufpool::{BytePool, SamplePool},
     decode::DecodeError,
-    events::{Envelope, Event, EventReceiver, TrackId},
+    events::{EngineEvent, Envelope, Event, EventReceiver, SessionEvent, TrackId},
     prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
 use kithara_platform::{
@@ -15,7 +15,7 @@ use kithara_platform::{
         sync::{broadcast::error::RecvError, watch},
     },
 };
-use kithara_queue::{Queue, QueueEvent, TrackSource};
+use kithara_queue::{QueueControl, QueueEvent, TrackSource};
 use tracing::warn;
 
 use crate::{
@@ -33,7 +33,7 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 /// drives the background [`AnalysisController`]. Starts analysing the already
 /// loaded library immediately — independent of which UI is open.
 pub(crate) async fn listen(
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -42,7 +42,8 @@ pub(crate) async fn listen(
     let mut driver = AnalysisController::new(
         &cancel,
         &config.beat_analysis,
-        config.pcm_pool.clone(),
+        config.worker.byte_pool(),
+        config.worker.sample_pool(),
         config.waveform_max_buckets,
     );
 
@@ -56,24 +57,41 @@ pub(crate) async fn listen(
             () = driver.drive(&queue, &state, &config) => {}
             event = rx.recv() => match event {
                 Ok(Envelope { event, .. }) => {
-                    let track_changed =
-                        matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
-                    let tracks_changed = matches!(
-                        event,
-                        Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. })
-                    );
-                    apply_event(&event, &queue, &state);
-                    if tracks_changed {
-                        driver.on_tracks_changed(&queue, &state, &config);
-                    }
-                    if track_changed {
-                        driver.on_track_changed(&queue, &state, &config);
-                    }
+                    handle_event(&mut driver, &event, &queue, &state, &config);
                 }
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             },
         }
+    }
+}
+
+fn handle_event(
+    driver: &mut AnalysisController,
+    event: &Event,
+    queue: &QueueControl,
+    state: &Mutex<UiState>,
+    config: &AppConfig,
+) {
+    let track_changed = matches!(event, Event::Queue(QueueEvent::CurrentTrackChanged { .. }));
+    let tracks_changed = matches!(
+        event,
+        Event::Queue(QueueEvent::TrackAdded { .. } | QueueEvent::TrackRemoved { .. })
+    );
+    let output_axis_changed = matches!(
+        event,
+        Event::Engine(EngineEvent::Started) | Event::Session(SessionEvent::RouteChanged { .. })
+    );
+
+    apply_event(event, queue, state);
+    if tracks_changed {
+        driver.on_tracks_changed(queue, state, config);
+    }
+    if track_changed {
+        driver.on_track_changed(queue, state, config);
+    }
+    if output_axis_changed {
+        driver.pump(queue, state, config);
     }
 }
 
@@ -119,13 +137,18 @@ impl AnalysisController {
     pub(crate) fn new(
         cancel: &CancelToken,
         beat_config: &AppBeatAnalysisConfig,
-        pcm_pool: PcmPool,
+        byte_pool: &BytePool,
+        sample_pool: &SamplePool,
         waveform_max_buckets: usize,
     ) -> Self {
-        let runner =
-            TrackAnalysisRunner::new(cancel, waveform_max_buckets, beat_config.clone(), pcm_pool);
+        let runner = TrackAnalysisRunner::new(
+            cancel,
+            waveform_max_buckets,
+            beat_config.clone(),
+            sample_pool.clone(),
+        );
         Self {
-            cache: TrackAnalysisCache::new(runner.fingerprint().clone()),
+            cache: TrackAnalysisCache::new(runner.fingerprint().clone(), byte_pool.clone()),
             runner,
             current: None,
             displayed: None,
@@ -158,7 +181,7 @@ impl AnalysisController {
     /// intermediate, or commit and pump on close. Parks when no run is active.
     pub(crate) async fn drive(
         &mut self,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -179,7 +202,7 @@ impl AnalysisController {
     /// preempt an in-flight background run so the visible deck wins.
     pub(crate) fn on_track_changed(
         &mut self,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -203,7 +226,7 @@ impl AnalysisController {
     /// keep the background pass going. Cached tracks are skipped cheaply.
     pub(crate) fn on_tracks_changed(
         &mut self,
-        queue: &Arc<Queue>,
+        queue: &QueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -222,7 +245,7 @@ impl AnalysisController {
     /// back at the front of the queue so the next pump opens a fresh pass on
     /// the new axis. Letting the old pass follow the device would leave one
     /// snapshot series whose frames mean two different things.
-    fn retire_stale_axis(&mut self, queue: &Arc<Queue>) {
+    fn retire_stale_axis(&mut self, queue: &QueueControl) {
         let Some(run) = &self.current else {
             return;
         };
@@ -268,7 +291,12 @@ impl AnalysisController {
     /// Start the next analysis worth running, if none is in flight: serve
     /// the current track from cache, skip background tracks that are cached
     /// or unkeyable, decode the first genuine miss.
-    pub(crate) fn pump(&mut self, queue: &Arc<Queue>, state: &Mutex<UiState>, config: &AppConfig) {
+    pub(crate) fn pump(
+        &mut self,
+        queue: &QueueControl,
+        state: &Mutex<UiState>,
+        config: &AppConfig,
+    ) {
         self.retire_stale_axis(queue);
         if self.current.is_some() {
             return;
@@ -343,9 +371,9 @@ impl AnalysisController {
             // The handle waits where this track's load will find it. A track
             // already loaded keeps it waiting until it loads again, so a pass
             // opened mid-play warms nothing this time round.
-            let queue = Arc::clone(queue);
+            let queue = queue.clone();
             let rx = self.runner.analyze(cfg, token, rate, move |producer| {
-                queue.set_analysis(track_id, producer);
+                queue.attach_observer(track_id, producer);
             });
             self.current = Some(Run {
                 target,
@@ -486,18 +514,17 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::{
+        analysis::{AnalysisFingerprint, BeatAnalysisConfig, Coverage, FrameRange, Waveform},
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore,
             StorageBackend,
         },
-        audio::{
-            Coverage, FrameRange, Waveform,
-            analysis::{AnalysisFingerprint, BeatAnalysisConfig},
-        },
-        bufpool::{BytePool, PcmPool},
-        events::TrackId,
+        bufpool::{BytePool, Region, SamplePool},
+        events::{EngineEvent, Event, RouteChangeReason, RouteDescription, SessionEvent, TrackId},
         file::File,
+        host::{Host, HostConfig},
         net::{HttpClient, NetOptions},
+        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
         prelude::{PlaybackResamplerBackend, ResourceConfig},
         stream::dl::{Downloader, DownloaderConfig},
     };
@@ -506,10 +533,10 @@ mod tests {
         sync::{Arc, Mutex},
         tokio::sync::watch,
     };
-    use kithara_queue::{Queue, QueueConfig};
+    use kithara_queue::{Queue, QueueConfig, QueueControl};
     use kithara_test_utils::kithara;
 
-    use super::{AnalysisController, Plan, Run, pending_order, plan_analysis};
+    use super::{AnalysisController, Plan, Run, handle_event, pending_order, plan_analysis};
     use crate::{
         state::UiState,
         wave_cache::{AnalysisTarget, TrackAnalysisCache},
@@ -558,7 +585,7 @@ mod tests {
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(AnalysisFingerprint::default())
+        TrackAnalysisCache::new(AnalysisFingerprint::default(), BytePool::default())
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
@@ -570,22 +597,35 @@ mod tests {
                 .expect("valid test source"),
         )
         .store(store)
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
         .discriminator(discriminator)
         .build();
         AnalysisTarget::for_config(&config).expect("test source has an analysis target")
     }
 
     fn state_with_current(ids: &[TrackId], current: usize) -> Mutex<UiState> {
-        let queue = Queue::new(QueueConfig::default());
+        let (_host, queue) = queue();
         for id in ids {
-            queue.append_with_id(*id, format!("file:///tmp/track-{id}.mp3"));
+            queue
+                .append_with_id(*id, format!("file:///tmp/track-{id}.mp3"))
+                .expect("append test track");
         }
         let mut state = UiState::empty();
         state.tracks = queue.tracks();
         state.current_track_index = Some(current);
         Mutex::new(state)
+    }
+
+    fn queue() -> (Host, QueueControl) {
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+        );
+        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = host.insert(queue).expect("host accepts queue");
+        let control = queue.control().clone();
+        (host, control)
     }
 
     fn controller_with_run(
@@ -597,7 +637,8 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            PcmPool::default(),
+            &BytePool::default(),
+            &SamplePool::default(),
             MAX_BUCKETS,
         );
         let (tx, rx) = watch::channel(value);
@@ -651,11 +692,17 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn plan_refills_a_hit_that_lost_an_artifact() {
         let a = target("root_refill");
-        let stored = TrackAnalysisCache::new(AnalysisFingerprint::new(None, Some("wave:v1")));
+        let stored = TrackAnalysisCache::new(
+            AnalysisFingerprint::new(None, Some("wave:v1")),
+            BytePool::default(),
+        );
         let mut stored = stored;
         stored.put(a.clone(), analysis());
 
-        let mut current = TrackAnalysisCache::new(AnalysisFingerprint::new(None, Some("wave:v2")));
+        let mut current = TrackAnalysisCache::new(
+            AnalysisFingerprint::new(None, Some("wave:v2")),
+            BytePool::default(),
+        );
         assert!(
             matches!(
                 plan_analysis(Some(&a), None, &mut current),
@@ -690,6 +737,10 @@ mod tests {
     }
 
     fn app_config(cancel: &CancelToken) -> crate::config::AppConfig {
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+        );
         crate::config::AppConfig::builder()
             .downloader(Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(
@@ -699,8 +750,7 @@ mod tests {
                 .build(),
             ))
             .shutdown(cancel.child())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(worker)
             .store(
                 AssetStore::builder()
                     .backend(StorageBackend::Memory)
@@ -711,15 +761,18 @@ mod tests {
 
     #[kithara::test(native, tokio)]
     async fn a_pass_is_opened_on_the_engine_axis() {
-        let queue = Arc::new(Queue::new(QueueConfig::default()));
-        queue.append_with_id(TrackId::from(1), "file:///tmp/track-1.mp3".to_owned());
+        let (_host, queue) = queue();
+        queue
+            .append_with_id(TrackId::from(1), "file:///tmp/track-1.mp3".to_owned())
+            .expect("append test track");
         let state = state_with_current(&[TrackId::from(1)], 0);
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            PcmPool::default(),
+            &BytePool::default(),
+            &SamplePool::default(),
             MAX_BUCKETS,
         );
 
@@ -735,7 +788,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_pass_ends_when_the_engine_leaves_its_axis() {
-        let queue = Arc::new(Queue::new(QueueConfig::default()));
+        let (_host, queue) = queue();
         let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
 
         // The fixture run is pinned to 44.1 kHz.
@@ -762,7 +815,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_pass_on_the_engine_axis_is_left_alone() {
-        let queue = Arc::new(Queue::new(QueueConfig::default()));
+        let (_host, queue) = queue();
         let (mut controller, _tx) = controller_with_run(TrackId::from(1), target("root_a"), None);
         controller.current = controller.current.take().map(|run| Run {
             axis: NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero"),
@@ -774,6 +827,48 @@ mod tests {
         assert!(
             controller.current.is_some(),
             "a pass still on the engine's axis keeps running"
+        );
+    }
+
+    fn assert_axis_event_restarts(event: Event) {
+        let track_id = TrackId::from(1);
+        let (_host, queue) = queue();
+        queue
+            .append_with_id(track_id, "file:///tmp/track-1.mp3".to_owned())
+            .expect("append test track");
+        let state = state_with_current(&[track_id], 0);
+        let cancel = CancelToken::root();
+        let config = app_config(&cancel);
+        let (mut controller, _tx) = controller_with_run(track_id, target("stale_axis"), None);
+        let engine_axis = NonZeroU32::new(queue.sample_rate()).expect("engine rate is non-zero");
+        let stale_axis = NonZeroU32::new(if engine_axis.get() == 44_100 {
+            48_000
+        } else {
+            44_100
+        })
+        .expect("fixture rate is non-zero");
+        controller.current.as_mut().expect("fixture run").axis = stale_axis;
+
+        handle_event(&mut controller, &event, &queue, &state, &config);
+
+        let restarted = controller.current.as_ref().expect("pass restarted");
+        assert_eq!(restarted.track_id, track_id);
+        assert_eq!(
+            restarted.axis, engine_axis,
+            "the event loop reopens the pass on the live engine axis"
+        );
+        cancel.cancel();
+    }
+
+    #[kithara::test(native, tokio)]
+    fn engine_start_and_route_change_restart_a_stale_axis() {
+        assert_axis_event_restarts(EngineEvent::Started.into());
+        assert_axis_event_restarts(
+            SessionEvent::RouteChanged {
+                reason: RouteChangeReason::Unknown,
+                previous_route: RouteDescription::default(),
+            }
+            .into(),
         );
     }
 
@@ -901,8 +996,6 @@ mod tests {
                 .expect("valid test source"),
         )
         .store(store)
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
         .build();
         let error = AnalysisTarget::for_config(&config).expect_err("layout must be rejected");
         let current = TrackId::allocate();
@@ -913,7 +1006,8 @@ mod tests {
         let mut controller = AnalysisController::new(
             &cancel,
             &BeatAnalysisConfig::<PlaybackResamplerBackend>::default(),
-            PcmPool::default(),
+            &BytePool::default(),
+            &SamplePool::default(),
             MAX_BUCKETS,
         );
         controller.displayed = Some(target("previous"));

@@ -107,7 +107,7 @@ fn test_no_unbounded_growth() {
 }
 
 #[kithara::test]
-fn test_pcm_pool_budget_stable() {
+fn test_sample_pool_budget_stable() {
     let pool =
         SharedPool::<8, Vec<f32>>::with_byte_budget(128, 200_000, ByteBudget(2 * 1024 * 1024));
 

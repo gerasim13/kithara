@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
 
 use super::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
@@ -29,7 +29,7 @@ fn rubato_resamples_borrowed_planar_slices() {
                 .unwrap_or_else(|| panic!("test target rate")),
         })
         .options(ResamplerOptions::builder().chunk_size(256).build())
-        .pcm_pool(PcmPool::new(4, 4_096))
+        .sample_pool(SamplePool::new(4, 4_096))
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -63,7 +63,7 @@ fn rubato_factory_output_has_no_ratio_control_surface() {
                 .unwrap_or_else(|| panic!("test target rate")),
         })
         .options(ResamplerOptions::builder().chunk_size(256).build())
-        .pcm_pool(PcmPool::new(4, 4_096))
+        .sample_pool(SamplePool::new(4, 4_096))
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -87,7 +87,7 @@ fn rubato_fft_is_selected_by_backend_config() {
                 .unwrap_or_else(|| panic!("test target rate")),
         })
         .options(ResamplerOptions::builder().chunk_size(256).build())
-        .pcm_pool(PcmPool::new(4, 4_096))
+        .sample_pool(SamplePool::new(4, 4_096))
         .build();
     let backend = RubatoBackend::with_config(RubatoConfig {
         algorithm: RubatoAlgorithm::Fft,

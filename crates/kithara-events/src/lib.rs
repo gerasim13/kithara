@@ -46,8 +46,7 @@ pub use app::AppEvent;
 pub use asset::{AssetEvent, EvictReason};
 #[cfg(feature = "audio")]
 pub use audio::{
-    AudioEvent, AudioFormat, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation,
-    TrackFailureKind,
+    AudioEvent, PlaybackResamplerKind, SeekLifecycleStage, SegmentLocation, TrackFailureKind,
 };
 pub use bus::{DEFAULT_EVENT_BUS_CAPACITY, EventBus};
 pub use bus_event::BusEvent;

@@ -3,13 +3,14 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
-    DecoderSeekOutcome, PcmSpec, duration_for_frames, spawn_webcodecs_probe,
+    DecoderSeekOutcome, spawn_webcodecs_probe,
 };
 use kithara_platform::time::{self, Duration};
 use kithara_resampler::NoResamplerBackend;
+use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -52,7 +53,7 @@ impl HeAacV2Fixture {
 
 #[derive(Debug)]
 struct DecodeSummary {
-    spec: PcmSpec,
+    spec: AudioSpec,
     eof: bool,
     saw_ascending: bool,
     frames: usize,
@@ -123,7 +124,10 @@ async fn seek_generation() {
         "60% MP3 seek must land before EOF"
     );
 
-    let earliest = target.saturating_sub(duration_for_frames(spec.sample_rate.get(), 1));
+    let earliest = target.saturating_sub(
+        spec.duration_for(1)
+            .expect("single-frame duration is representable"),
+    );
     let mut post_seek_chunks = 0usize;
     for _ in 0..MAX_DECODE_OUTCOMES {
         match decoder.next_chunk().expect("decode post-seek MP3 chunk") {
@@ -156,10 +160,10 @@ async fn seek_trim_no_preroll_leak() {
 
     let mut decoder = create_file_decoder(MP3, "mp3", DecoderBackend::WebCodecs);
     let duration = decoder.duration().expect("MP3 duration must be known");
-    let sample_rate = decoder.spec().sample_rate.get();
+    let spec = decoder.spec();
 
     for ratio in [0.17, 0.37, 0.73] {
-        let target = mid_packet_target(duration, sample_rate, ratio);
+        let target = mid_packet_target(duration, spec, ratio);
         assert!(
             matches!(
                 decoder.seek(target).expect("seek WebCodecs MP3"),
@@ -302,7 +306,7 @@ async fn he_aac_v2_decode() {
 }
 
 async fn prepare_webcodecs(codec: &str) {
-    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(PcmPool::default()));
+    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(SamplePool::default()));
     assert_browser_support(codec).await;
     for _ in 0..100 {
         if webcodecs_runtime_ready(codec) {
@@ -394,19 +398,20 @@ fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend> 
     DecoderConfig::<NoResamplerBackend>::builder()
         .backend(backend)
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .build()
 }
 
-fn mid_packet_target(duration: Duration, sample_rate: u32, ratio: f64) -> Duration {
+fn mid_packet_target(duration: Duration, spec: AudioSpec, ratio: f64) -> Duration {
     const PACKET_FRAMES: u64 = 1_152;
 
-    let scaled_frames = duration.as_secs_f64() * f64::from(sample_rate) * ratio;
+    let scaled_frames = duration.as_secs_f64() * f64::from(spec.sample_rate.get()) * ratio;
     let mut target_frame = scaled_frames.round().to_u64().unwrap_or(1);
     if target_frame.is_multiple_of(PACKET_FRAMES) {
         target_frame = target_frame.saturating_add(1);
     }
-    duration_for_frames(sample_rate, target_frame)
+    spec.duration_for(target_frame)
+        .expect("test target is representable")
 }
 
 fn create_file_decoder(bytes: &[u8], hint: &str, backend: DecoderBackend) -> Box<dyn Decoder> {

@@ -5,7 +5,6 @@ use std::sync::LazyLock;
 use arbitrary::Arbitrary;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    bufpool::{BytePool, PcmPool},
     play::{PlaybackResamplerBackend, ResourceConfig},
 };
 use libfuzzer_sys::fuzz_target;
@@ -29,8 +28,6 @@ fuzz_target!(|input: Input| {
     let _ = ResourceConfig::parse_src(text.as_ref()).map(|src| {
         ResourceConfig::<PlaybackResamplerBackend>::for_src(src)
             .store(STORE.clone())
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
             .build()
     });
 });

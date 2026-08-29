@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
 
 use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
@@ -22,7 +22,7 @@ fn settings(mode: ResamplerMode) -> ResamplerSettings {
         .channels(channels(1))
         .mode(mode)
         .options(ResamplerOptions::builder().chunk_size(16).build())
-        .pcm_pool(PcmPool::new(16, 1_024))
+        .sample_pool(SamplePool::new(16, 1_024))
         .build()
 }
 

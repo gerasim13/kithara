@@ -1,7 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{
     AudioCodec, BoxedEventSink, NotReadyCause, PendingReason, ReaderChunkSignal, ReaderSeekSignal,
 };
@@ -11,30 +12,27 @@ use crate::{
     BlenderProfile,
     codec::FrameCodec,
     demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
-    duration_for_frames,
     error::DecodeResult,
     traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
-    types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
+    types::TrackMetadata,
 };
 
-/// Frames the decoder drops from the head of its PCM, counted as they are
+/// Frames the decoder drops from the head of its decoded signal, counted as they are
 /// dropped rather than declared up front.
 ///
 /// `supplied` comes from the packet's own duration converted at the output
 /// sample rate, so it is already in the domain the decoder emits in: an
 /// SBR codec whose access unit is 1024 core frames but 2048 output frames
 /// is measured against 2048, not against a core-rate constant.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 struct HeadStrip {
     settled: bool,
+    #[field(get, copy)]
     frames: u64,
 }
 
 impl HeadStrip {
-    const fn frames(self) -> u64 {
-        self.frames
-    }
-
     /// Stops once a packet comes back whole: from there on the decoder is
     /// through its delay, and a short packet is the stream's own tail
     /// rather than more strip.
@@ -72,8 +70,8 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// first frame past the target is consumed. Lets `seek(target)`
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
-    pool: PcmPool,
-    spec: PcmSpec,
+    pool: SamplePool,
+    spec: AudioSpec,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     zero_frame_count: u32,
@@ -96,13 +94,13 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
 /// `pool` is a required field with no `Default`: the host must thread its
 /// configured pool all the way to the decoder, and a missing pool must be
 /// a compile error, not a silent fall-back to the process-global
-/// `PcmPool::default()`. The test-only [`DecoderRuntime::for_test`] is the
+/// `SamplePool::default()`. The test-only [`DecoderRuntime::for_test`] is the
 /// single place that opts into the global pool, and it is `#[cfg(test)]`
 /// so production code physically cannot reach it.
 pub(crate) struct DecoderRuntime {
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) hooks: Option<BoxedEventSink>,
-    pub(crate) pool: PcmPool,
+    pub(crate) pool: SamplePool,
     pub(crate) epoch: u64,
 }
 
@@ -129,7 +127,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
-    /// Build the output `PcmChunk` from a just-filled pool buffer plus
+    /// Build the output `AudioChunk` from a just-filled pool buffer plus
     /// the demuxed frame's metadata. Inlined fields (rather than taking
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
     /// invoking this — needed because `Frame<'_>` borrows into the
@@ -137,11 +135,11 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
     #[kithara::probe(timestamp, frames)]
     fn build_chunk(
         &mut self,
-        buf: PcmBuf,
+        buf: SampleBuffer,
         frames: u32,
         timestamp: Duration,
         source_bytes: u64,
-    ) -> PcmChunk {
+    ) -> AudioChunk {
         let live_spec = self.codec.spec();
         self.spec = live_spec;
 
@@ -149,7 +147,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         let frame_duration = Duration::from_secs_f64(chunk_secs);
         let end_timestamp = timestamp.saturating_add(frame_duration);
 
-        let timestamp_frame = frame_offset_for(timestamp, live_spec.sample_rate.get());
+        let timestamp_frame = live_spec.frame_at(timestamp).unwrap_or(u64::MAX);
         if self.resync_frame_offset_to_pts {
             self.resync_frame_offset_to_pts = false;
             self.frame_offset = timestamp_frame;
@@ -162,7 +160,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         let frame_offset = self.frame_offset;
         self.frame_offset = self.frame_offset.saturating_add(u64::from(frames));
 
-        let meta = PcmMeta {
+        let meta = AudioChunkInfo {
             end_timestamp,
             timestamp,
             frames,
@@ -174,7 +172,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             spec: live_spec,
             epoch: self.epoch,
         };
-        PcmChunk::new(meta, buf)
+        AudioChunk::new(meta, buf)
     }
 
     fn drain_codec_eof(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -186,7 +184,10 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
 
         let mut buf = self.pool.get();
-        let timestamp = duration_for_frames(self.spec.sample_rate.get(), self.frame_offset);
+        let timestamp = self
+            .spec
+            .duration_for(self.frame_offset)
+            .unwrap_or(Duration::from_nanos(u64::MAX));
         let frames = self.codec.decode_frame(&[], timestamp, &[], &mut buf)?;
         if frames == 0 {
             return Ok(DecoderChunkOutcome::Eof);
@@ -244,7 +245,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.codec
                     .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
             self.head_strip.record(
-                frame_offset_for(frame_duration, self.spec.sample_rate.get()),
+                self.spec.frame_at(frame_duration).unwrap_or(u64::MAX),
                 u64::from(frames),
             );
             let zero_frame_budget_reached = if frames == 0 {
@@ -263,10 +264,12 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 let decoded_end = if chunk_pts == frame_pts {
                     frame_end
                 } else {
-                    chunk_pts.saturating_add(duration_for_frames(
-                        self.codec.spec().sample_rate.get(),
-                        u64::from(frames),
-                    ))
+                    chunk_pts.saturating_add(
+                        self.codec
+                            .spec()
+                            .duration_for(u64::from(frames))
+                            .unwrap_or(Duration::from_nanos(u64::MAX)),
+                    )
                 };
                 if (frames == 0 && frame_end <= target) || (frames > 0 && decoded_end <= target) {
                     drop(buf);
@@ -334,7 +337,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                 self.codec.flush()?;
                 self.zero_frame_count = 0;
                 self.pending_seek_target = (landed_at < pos).then_some(pos);
-                self.frame_offset = frame_offset_for(landed_at, self.spec.sample_rate.get());
+                self.frame_offset = self.spec.frame_at(landed_at).unwrap_or(u64::MAX);
                 self.resync_frame_offset_to_pts = true;
                 self.timeline_gap_frames = 0;
                 Ok(DecoderSeekOutcome::Landed {
@@ -384,7 +387,7 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
         Ok(outcome)
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -426,13 +429,13 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 
 #[cfg(test)]
 impl DecoderRuntime {
-    /// Test-only runtime: the process-global [`PcmPool::default`], epoch 0,
+    /// Test-only runtime: the process-global [`SamplePool::default`], epoch 0,
     /// no byte-length handle, no hooks. Confined to test builds so a
     /// production decoder can never silently bind the global pool instead
     /// of the host's configured one.
     pub(crate) fn for_test() -> Self {
         Self {
-            pool: PcmPool::default(),
+            pool: SamplePool::default(),
             epoch: 0,
             byte_len_handle: None,
             hooks: None,
@@ -491,22 +494,6 @@ mod default_priming_tests {
         assert_eq!(decoder.default_priming_frames(AudioCodec::Opus), 312);
         assert_eq!(decoder.default_priming_frames(AudioCodec::Flac), 0);
     }
-}
-
-/// Absolute sample frame a PTS falls on. Rounds the sub-second part to the
-/// nearest frame (half-up) so this map stays consistent with [`frames_to_trim`],
-/// which positions trimmed content by `round(delta_secs * sample_rate)`. A floor
-/// here disagreed with that round by up to one frame: when a demuxer quantizes a
-/// seek landing a fraction of a sample below the exact target frame, a floored
-/// label reads one frame short of the contiguous decode head (a −1 seam at a
-/// mid-playback recreate), while the trimmed audio itself stays continuous.
-fn frame_offset_for(at: Duration, sample_rate: u32) -> u64 {
-    let secs = at.as_secs();
-    let subsec_frames = (u64::from(at.subsec_nanos()) * u64::from(sample_rate))
-        .saturating_add(500_000_000)
-        / 1_000_000_000;
-    secs.saturating_mul(u64::from(sample_rate))
-        .saturating_add(subsec_frames)
 }
 
 /// Per-channel sample count to drop from the head of the target packet
@@ -680,9 +667,9 @@ mod smoke_tests {
 
 #[cfg(test)]
 fn write_silent_test_frame(
-    spec: PcmSpec,
+    spec: AudioSpec,
     frames_per_call: u32,
-    out: &mut PcmBuf,
+    out: &mut SampleBuffer,
 ) -> DecodeResult<u32> {
     let frames = usize::try_from(frames_per_call)?;
     let samples = frames
@@ -701,25 +688,26 @@ fn write_silent_test_frame(
 #[cfg(test)]
 mod test_stub_codec {
 
-    use kithara_bufpool::PcmBuf;
+    use kithara_bufpool::SampleBuffer;
     use kithara_platform::time::Duration;
+    use kithara_signal::AudioSpec;
 
-    use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
+    use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct ConstFrameCodec {
-        spec: PcmSpec,
+        spec: AudioSpec,
         frames_per_call: u32,
     }
 
     pub(super) struct LaggedQueueCodec {
         decoded_pts: Duration,
         pending_pts: Option<Duration>,
-        spec: PcmSpec,
+        spec: AudioSpec,
         frames_per_call: u32,
     }
 
     impl ConstFrameCodec {
-        pub(super) fn new(spec: PcmSpec, frames_per_call: u32) -> Self {
+        pub(super) fn new(spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
                 spec,
                 frames_per_call,
@@ -728,7 +716,7 @@ mod test_stub_codec {
     }
 
     impl LaggedQueueCodec {
-        pub(super) fn new(spec: PcmSpec, frames_per_call: u32) -> Self {
+        pub(super) fn new(spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
                 spec,
                 frames_per_call,
@@ -744,7 +732,7 @@ mod test_stub_codec {
             _bytes: &[u8],
             _pts: Duration,
             _packet_desc: &[u8],
-            out: &mut PcmBuf,
+            out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
             super::write_silent_test_frame(self.spec, self.frames_per_call, out)
         }
@@ -753,7 +741,7 @@ mod test_stub_codec {
             Ok(())
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
@@ -764,7 +752,7 @@ mod test_stub_codec {
             _bytes: &[u8],
             pts: Duration,
             _packet_desc: &[u8],
-            out: &mut PcmBuf,
+            out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
             let Some(decoded_pts) = self.pending_pts.replace(pts) else {
                 out.clear();
@@ -783,7 +771,7 @@ mod test_stub_codec {
             Ok(())
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
@@ -797,21 +785,22 @@ mod test_counting_codec {
         sync::atomic::{AtomicU32, Ordering},
     };
 
-    use kithara_bufpool::PcmBuf;
+    use kithara_bufpool::SampleBuffer;
     use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::AudioSpec;
 
-    use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
+    use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct CountingCodec {
         pub(super) decode_calls: Arc<AtomicU32>,
         pub(super) flush_calls: Arc<AtomicU32>,
-        pub(super) spec: PcmSpec,
+        pub(super) spec: AudioSpec,
         pub(super) frames_per_call: u32,
         frames: VecDeque<u32>,
     }
 
     impl CountingCodec {
-        pub(super) fn new(spec: PcmSpec, frames_per_call: u32) -> Self {
+        pub(super) fn new(spec: AudioSpec, frames_per_call: u32) -> Self {
             Self {
                 spec,
                 frames_per_call,
@@ -833,7 +822,7 @@ mod test_counting_codec {
             _bytes: &[u8],
             _pts: Duration,
             _packet_desc: &[u8],
-            out: &mut PcmBuf,
+            out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
             self.decode_calls.fetch_add(1, Ordering::SeqCst);
             let frames = self.frames.pop_front().unwrap_or(self.frames_per_call);
@@ -845,7 +834,7 @@ mod test_counting_codec {
             Ok(())
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
@@ -856,21 +845,22 @@ mod test_eof_drain_codec {
 
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use kithara_bufpool::PcmBuf;
+    use kithara_bufpool::SampleBuffer;
     use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::AudioSpec;
 
-    use crate::{codec::FrameCodec, error::DecodeResult, types::PcmSpec};
+    use crate::{codec::FrameCodec, error::DecodeResult};
 
     pub(super) struct EofDrainCodec {
         pub(super) empty_decode_calls: Arc<AtomicU32>,
-        spec: PcmSpec,
+        spec: AudioSpec,
         tail_pending: bool,
         frames_per_call: u32,
         tail_frames: u32,
     }
 
     impl EofDrainCodec {
-        pub(super) fn new(spec: PcmSpec, frames_per_call: u32, tail_frames: u32) -> Self {
+        pub(super) fn new(spec: AudioSpec, frames_per_call: u32, tail_frames: u32) -> Self {
             Self {
                 empty_decode_calls: Arc::new(AtomicU32::new(0)),
                 spec,
@@ -887,7 +877,7 @@ mod test_eof_drain_codec {
             bytes: &[u8],
             _pts: Duration,
             _packet_desc: &[u8],
-            out: &mut PcmBuf,
+            out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
             if bytes.is_empty() {
                 self.empty_decode_calls.fetch_add(1, Ordering::SeqCst);
@@ -907,20 +897,20 @@ mod test_eof_drain_codec {
             Ok(())
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
 
     pub(super) struct QueueCodec {
         pub(super) empty_decode_calls: Arc<AtomicU32>,
-        spec: PcmSpec,
+        spec: AudioSpec,
         tail_pending: bool,
         tail_frames: u32,
     }
 
     impl QueueCodec {
-        pub(super) fn new(spec: PcmSpec, tail_frames: u32) -> Self {
+        pub(super) fn new(spec: AudioSpec, tail_frames: u32) -> Self {
             Self {
                 spec,
                 tail_frames,
@@ -936,7 +926,7 @@ mod test_eof_drain_codec {
             bytes: &[u8],
             _pts: Duration,
             _packet_desc: &[u8],
-            out: &mut PcmBuf,
+            out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
             if !bytes.is_empty() {
                 self.tail_pending = true;
@@ -962,7 +952,7 @@ mod test_eof_drain_codec {
             true
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
     }
@@ -974,13 +964,13 @@ mod seek_trim_tests {
     use std::{num::NonZeroU32, sync::atomic::Ordering};
 
     use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::AudioSpec;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
     use super::{test_counting_codec::CountingCodec, test_stub_codec::LaggedQueueCodec, *};
     use crate::{
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Frame, TrackInfo},
-        duration_for_frames, frames_for_duration,
         traits::Decoder,
     };
 
@@ -992,6 +982,32 @@ mod seek_trim_tests {
         const PACKET_COUNT: u64 = 6;
         const PACKET_FRAMES: u32 = 1024;
         const SAMPLE_RATE: u32 = 44_100;
+    }
+
+    fn test_spec(sample_rate: u32) -> AudioSpec {
+        AudioSpec::new(
+            1,
+            NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
+        )
+    }
+
+    fn test_duration(sample_rate: u32, frames: u64) -> Duration {
+        test_spec(sample_rate)
+            .duration_for(frames)
+            .expect("test duration is representable")
+    }
+
+    fn test_frames(sample_rate: u32, duration: Duration) -> usize {
+        test_spec(sample_rate)
+            .frames_for(duration)
+            .expect("test frame count is representable")
+            .get()
+    }
+
+    fn test_frame(sample_rate: u32, timestamp: Duration) -> u64 {
+        test_spec(sample_rate)
+            .frame_at(timestamp)
+            .expect("test frame is representable")
     }
 
     struct ThreeFrameDemuxer {
@@ -1109,13 +1125,13 @@ mod seek_trim_tests {
     }
 
     fn packet_duration() -> Duration {
-        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
     }
 
     fn regular_seek_frames() -> Vec<BoundaryFrame> {
         (0..Consts::PACKET_COUNT)
             .map(|packet_idx| BoundaryFrame {
-                pts: duration_for_frames(
+                pts: test_duration(
                     Consts::SAMPLE_RATE,
                     packet_idx.saturating_mul(u64::from(Consts::PACKET_FRAMES)),
                 ),
@@ -1149,7 +1165,7 @@ mod seek_trim_tests {
         const FRAME_FRAMES: u32 = 882;
 
         let codec = CountingCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             FRAME_FRAMES,
         );
         let calls = Arc::clone(&codec.decode_calls);
@@ -1175,9 +1191,9 @@ mod seek_trim_tests {
             "decode_frame must be called for pre-target frames so MDCT advances"
         );
 
-        let packet = duration_for_frames(Consts::SAMPLE_RATE, 1_024);
+        let packet = test_duration(Consts::SAMPLE_RATE, 1_024);
         let codec = CountingCodec::new(
-            PcmSpec::new(
+            AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
             ),
@@ -1225,17 +1241,17 @@ mod seek_trim_tests {
         const SUPPLIED_FRAMES: u32 = 960;
 
         assert_eq!(
-            frames_for_duration(OUTPUT_SAMPLE_RATE, PACKET_DURATION),
+            test_frames(OUTPUT_SAMPLE_RATE, PACKET_DURATION),
             usize::try_from(SUPPLIED_FRAMES).expect("supplied frames fit in usize")
         );
         assert_eq!(
-            frames_for_duration(SOURCE_SAMPLE_RATE, PACKET_DURATION),
+            test_frames(SOURCE_SAMPLE_RATE, PACKET_DURATION),
             480,
             "the fixture must distinguish source-rate from output-rate frames"
         );
 
         let codec = CountingCodec::new(
-            PcmSpec::new(
+            AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(OUTPUT_SAMPLE_RATE).expect("test rate"),
             ),
@@ -1280,10 +1296,10 @@ mod seek_trim_tests {
         const SAMPLE_RATE: u32 = 44_100;
         const PACKET_FRAMES: u32 = 1024;
 
-        let target = duration_for_frames(SAMPLE_RATE, u64::from(PACKET_FRAMES));
+        let target = test_duration(SAMPLE_RATE, u64::from(PACKET_FRAMES));
         let rounded_past_target = target.saturating_add(Duration::from_nanos(1));
         let codec = CountingCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             PACKET_FRAMES,
         );
         let calls = Arc::clone(&codec.decode_calls);
@@ -1325,7 +1341,7 @@ mod seek_trim_tests {
 
         let target = Duration::from_millis(10);
         let codec = LaggedQueueCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             FRAME_FRAMES,
         );
         let demuxer = ThreeFrameDemuxer {
@@ -1347,20 +1363,23 @@ mod seek_trim_tests {
 
     #[kithara::test]
     #[case::packet_boundary(
-        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES)),
+        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES)),
         SeekTrimLayout::RegularPackets
     )]
     #[case::mid_packet(
-        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
+        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512),
         SeekTrimLayout::RegularPackets
     )]
     #[case::rounding_hair_past_boundary(
-        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
+        test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES))
             .saturating_add(Duration::from_nanos(1)),
         SeekTrimLayout::RoundedPastTarget
     )]
     #[case::multiple_fully_pre_target_packets(
-        duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) * 3 + 512),
+        test_duration(
+            Consts::SAMPLE_RATE,
+            u64::from(Consts::PACKET_FRAMES) * 3 + 512,
+        ),
         SeekTrimLayout::RegularPackets
     )]
     fn seek_trim_lands_first_chunk_on_exact_target_frame(
@@ -1368,7 +1387,7 @@ mod seek_trim_tests {
         #[case] layout: SeekTrimLayout,
     ) {
         let codec = CountingCodec::new(
-            PcmSpec::new(
+            AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(Consts::SAMPLE_RATE).expect("test rate"),
             ),
@@ -1387,7 +1406,7 @@ mod seek_trim_tests {
         let DecoderChunkOutcome::Chunk(chunk) = outcome else {
             panic!("expected Chunk, got {outcome:?}");
         };
-        let expected_frame = frame_offset_for(target, Consts::SAMPLE_RATE);
+        let expected_frame = test_frame(Consts::SAMPLE_RATE, target);
         let packet_offset = expected_frame % u64::from(Consts::PACKET_FRAMES);
         let expected_frames = if packet_offset == 0 {
             Consts::PACKET_FRAMES
@@ -1398,7 +1417,7 @@ mod seek_trim_tests {
         assert_eq!(chunk.meta.frame_offset, expected_frame);
         assert_eq!(chunk.meta.timestamp, target);
         assert_eq!(
-            frame_offset_for(chunk.meta.timestamp, Consts::SAMPLE_RATE),
+            test_frame(Consts::SAMPLE_RATE, chunk.meta.timestamp),
             expected_frame
         );
         assert!(
@@ -1413,9 +1432,8 @@ mod seek_trim_tests {
     #[kithara::test]
     fn seek_trim_uses_codec_output_rate_for_resampled_chunks() {
         let source_packet_start =
-            duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES));
-        let target =
-            duration_for_frames(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512);
+            test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES));
+        let target = test_duration(Consts::SAMPLE_RATE, u64::from(Consts::PACKET_FRAMES) + 512);
         let output_packet_frames = u32::try_from(frames_to_trim(
             Duration::ZERO,
             packet_duration(),
@@ -1423,7 +1441,7 @@ mod seek_trim_tests {
         ))
         .expect("output packet frame count fits in u32");
         let codec = CountingCodec::new(
-            PcmSpec::new(
+            AudioSpec::new(
                 Consts::CHANNELS,
                 NonZeroU32::new(Consts::OUTPUT_SAMPLE_RATE).expect("test rate"),
             ),
@@ -1445,7 +1463,7 @@ mod seek_trim_tests {
         let expected_trim = frames_to_trim(source_packet_start, target, Consts::OUTPUT_SAMPLE_RATE);
         let expected_frames =
             output_packet_frames - u32::try_from(expected_trim).expect("trim fits in u32");
-        let expected_frame = frame_offset_for(target, Consts::OUTPUT_SAMPLE_RATE);
+        let expected_frame = test_frame(Consts::OUTPUT_SAMPLE_RATE, target);
 
         assert_eq!(
             chunk.meta.spec.sample_rate.get(),
@@ -1536,7 +1554,7 @@ mod eof_drain_tests {
         const SAMPLE_RATE: u32 = 48_000;
 
         let codec = EofDrainCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             FRAMES,
             TAIL_FRAMES,
         );
@@ -1564,7 +1582,12 @@ mod eof_drain_tests {
         assert_eq!(drained_chunk.meta.frame_offset, u64::from(FRAMES));
         assert_eq!(
             drained_chunk.meta.timestamp,
-            duration_for_frames(SAMPLE_RATE, u64::from(FRAMES))
+            AudioSpec::new(
+                1,
+                NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero"),
+            )
+            .duration_for(u64::from(FRAMES))
+            .expect("test duration is representable")
         );
         assert_eq!(empty_calls.load(Ordering::SeqCst), 2);
     }
@@ -1575,7 +1598,7 @@ mod eof_drain_tests {
         const SAMPLE_RATE: u32 = 44_100;
 
         let codec = QueueCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             TAIL_FRAMES,
         );
         let empty_calls = Arc::clone(&codec.empty_decode_calls);
@@ -1604,7 +1627,7 @@ mod eof_drain_tests {
         const SAMPLE_RATE: u32 = 44_100;
 
         let codec = EofDrainCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate")),
             FRAMES,
             TAIL_FRAMES,
         );
@@ -1762,7 +1785,7 @@ mod hook_tests {
         log: Arc<Mutex<CallLog>>,
     ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec> {
         let codec = ConstFrameCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
         );
         let hooks: BoxedEventSink = Box::new(LoggingHooks { log });
@@ -1805,7 +1828,7 @@ mod hook_tests {
             .collect();
         let demuxer = StubDemuxer::with_outcomes(outcomes, Vec::new());
         let codec = ConstFrameCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             0,
         );
         let mut decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
@@ -1892,16 +1915,17 @@ mod pool_budget_tests {
 
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_platform::time::Duration;
+    use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::test_stub_codec::ConstFrameCodec;
-    use crate::{codec::FrameCodec, types::PcmSpec};
+    use crate::codec::FrameCodec;
 
     #[kithara::test]
     fn codec_warm_pool_does_not_grow_alloc_misses() {
-        let pool = PcmPool::new(32, 8192);
+        let pool = SamplePool::new(32, 8192);
         for _ in 0..4 {
             let mut buf = pool.get();
             buf.ensure_len(2048).unwrap();
@@ -1909,7 +1933,7 @@ mod pool_budget_tests {
         let warmup_misses = pool.stats().alloc_misses;
 
         let mut codec = ConstFrameCodec::new(
-            PcmSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
+            AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1024,
         );
         for _ in 0..200 {

@@ -19,7 +19,7 @@ impl ResamplerProcess {
     }
 }
 
-/// Standalone planar PCM resampler.
+/// Standalone planar audio resampler.
 pub trait Resampler: Send + 'static {
     fn capabilities(&self) -> ResamplerCapabilities;
 

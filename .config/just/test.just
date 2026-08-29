@@ -120,7 +120,7 @@ audio-artifacts OUTPUT:
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-integration-tests --test suite_light \
         --run-ignored=only \
-        -E 'test(=kithara_audio::no_sync_passthrough::record_no_sync_unity_playback_artifacts)'
+        -E 'test(/kithara_audio::no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-integration-tests --test suite_heavy \
         --run-ignored=only \

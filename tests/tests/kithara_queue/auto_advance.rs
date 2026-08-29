@@ -4,11 +4,11 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     events::{AdvanceReason, Event, QueueEvent},
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, RepeatMode, Transition},
+    queue::{Queue, QueueConfig, RepeatMode, Transition, test_utils::QueueProbe},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -26,7 +26,7 @@ fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig 
 }
 
 fn make_resource(label: &str, secs: f64, value: f32) -> Resource {
-    let spec = PcmSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
+    let spec = AudioSpec::new(CHANNELS, NonZeroU32::new(SAMPLE_RATE).expect("test rate"));
     resource_from_reader_with_src(
         TestPcmReader::with_value(spec, secs, value),
         Arc::from(format!("memory://{label}")),
@@ -68,6 +68,71 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
     pcm
 }
 
+#[kithara::test]
+fn crossfade_started_requires_a_live_predecessor() {
+    const CROSSFADE_SECS: f32 = 0.2;
+
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(CROSSFADE_SECS)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let queue = Queue::new(with_autoplay(
+        QueueConfig::builder().player(harness.take_player()).build(),
+        false,
+    ));
+    let id = queue.insert_loaded_for_test(make_resource("initial", 0.2, 0.3));
+    let mut receiver = queue.subscribe();
+
+    queue
+        .select(id, Transition::Crossfade)
+        .expect("select initial track");
+
+    while let Ok(envelope) = receiver.try_recv() {
+        assert!(
+            !matches!(
+                envelope.event,
+                Event::Queue(QueueEvent::CrossfadeStarted { .. })
+            ),
+            "a cold select cannot crossfade from an idle player"
+        );
+    }
+
+    let mut saw_playing = false;
+    for _ in 0..MAX_BLOCKS {
+        let _ = queue.tick();
+        let _ = harness.render(BLOCK_FRAMES);
+        let is_playing = queue.is_playing();
+        saw_playing |= is_playing;
+        if saw_playing && !is_playing {
+            break;
+        }
+    }
+    assert!(
+        saw_playing,
+        "the predecessor must start before reaching EOF"
+    );
+    assert!(!queue.is_playing(), "the predecessor must reach EOF");
+    queue.tick().expect("process predecessor EOF");
+
+    let successor = queue.insert_loaded_for_test(make_resource("successor", 1.0, 0.3));
+    let mut receiver = queue.subscribe();
+    queue
+        .select(successor, Transition::Crossfade)
+        .expect("select successor after EOF");
+
+    while let Ok(envelope) = receiver.try_recv() {
+        assert!(
+            !matches!(
+                envelope.event,
+                Event::Queue(QueueEvent::CrossfadeStarted { .. })
+            ),
+            "a completed predecessor cannot start a crossfade"
+        );
+    }
+}
+
 #[kithara::test(tokio)]
 async fn repeat_one_natural_advance_keeps_current_track() {
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -77,9 +142,7 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
     let id = queue.insert_loaded_for_test(make_resource("one", 1.0, 0.3));
@@ -96,7 +159,9 @@ async fn repeat_one_natural_advance_keeps_current_track() {
         }))
     ));
     assert_eq!(
-        queue.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof),
+        queue
+            .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+            .expect("advance repeat-one queue"),
         Some(id)
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(id));
@@ -111,9 +176,7 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
     let first = queue.insert_loaded_for_test(make_resource("first", 1.0, 0.2));
@@ -131,7 +194,9 @@ async fn repeat_all_natural_advance_wraps_last_track_to_first() {
         }))
     ));
     assert_eq!(
-        queue.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof),
+        queue
+            .advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof)
+            .expect("advance repeat-all queue"),
         Some(first)
     );
     assert_eq!(queue.current().map(|entry| entry.id), Some(first));
@@ -153,9 +218,7 @@ async fn cf_zero_queue_tick_advances_to_second_track_audio() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
 
@@ -222,9 +285,7 @@ async fn cf_nonzero_queue_tick_crossfades_to_second_track_audio() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
 
@@ -299,9 +360,7 @@ async fn queue_tick_pumps_audio_thread_notifications_to_bus() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
     let mut rx = queue.subscribe();
@@ -372,9 +431,7 @@ async fn autoplay_first_registered_track_plays_first_even_when_loaded_last() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         true,
     ));
 
@@ -439,9 +496,7 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
 
@@ -491,12 +546,10 @@ async fn cf_zero_replay_after_full_playthrough_still_advances() {
     );
 }
 
-/// When the LAST track finishes via auto-advance, the queue must pause
-/// the player so the UI sees a stopped state — otherwise `rate` stays
-/// at the previous default and `is_playing()` keeps returning true on
-/// a ghost position past the last EOF.
+/// When the last track finishes, the live playback snapshot must become inactive
+/// so the UI sees a stopped state even though transport intent remains unchanged.
 #[kithara::test(tokio)]
-async fn queue_pauses_player_when_last_track_ends() {
+async fn queue_stops_live_playback_when_last_track_ends() {
     use kithara::{
         events::{Event, QueueEvent},
         platform::tokio::sync::broadcast::error::TryRecvError,
@@ -511,9 +564,7 @@ async fn queue_pauses_player_when_last_track_ends() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
     let mut rx = queue.subscribe();
@@ -550,9 +601,7 @@ async fn queue_pauses_player_when_last_track_ends() {
     );
     assert!(
         !queue.is_playing(),
-        "player must be paused after the last track ends so UI shows a \
-         stopped state — otherwise rate stays at default and `is_playing` \
-         keeps returning true past the final EOF"
+        "live playback must stop after the last EOF"
     );
 }
 
@@ -571,9 +620,7 @@ async fn autoplay_first_track_does_not_self_arm_and_kill_its_own_decoder() {
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         true,
     ));
 

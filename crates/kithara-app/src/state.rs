@@ -2,12 +2,12 @@
 use std::num::NonZeroU32;
 
 #[cfg(test)]
-use kithara::audio::Coverage;
+use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    audio::{FrameRange, effects::eq::GainDb},
+    analysis::FrameRange,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
-    play::StretchControls,
+    play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };
@@ -17,7 +17,7 @@ use kithara_platform::{
     time::Duration,
     tokio::task,
 };
-use kithara_queue::{Queue, QueueEvent, TrackEntry};
+use kithara_queue::{QueueControl, QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
@@ -56,10 +56,12 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &Queue) -> Self {
+    fn new(queue: &QueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
+        let beat_marks = empty_marks();
+        let downbeat_marks = empty_marks();
 
         Self {
             tracks,
@@ -75,9 +77,9 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
-            beat_marks: Arc::from(Vec::new()),
-            downbeat_marks: Arc::from(Vec::new()),
-            unready_ranges: Arc::from(Vec::new()),
+            beat_marks,
+            downbeat_marks,
+            unready_ranges: Arc::default(),
             is_seeking: false,
             seek_position: 0.0,
             engine_load: EngineLoadSnapshot::default(),
@@ -87,6 +89,8 @@ impl UiState {
     /// Bare default state for unit tests.
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
+        let beat_marks = empty_marks();
+        let downbeat_marks = empty_marks();
         Self {
             current_track_index: None,
             selected_variant: None,
@@ -96,9 +100,9 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
-            beat_marks: Arc::from(Vec::new()),
-            downbeat_marks: Arc::from(Vec::new()),
-            unready_ranges: Arc::from(Vec::new()),
+            beat_marks,
+            downbeat_marks,
+            unready_ranges: Arc::default(),
             abr_mode_is_auto: true,
             is_seeking: false,
             playing: false,
@@ -119,17 +123,15 @@ impl UiState {
             .and_then(|a| {
                 a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
-                        frames_to_fractions(grid.grid().beats(), a.source_frames()),
-                        frames_to_fractions(grid.grid().downbeats(), a.source_frames()),
+                        frames_to_fractions(grid.artifact().beats(), a.source_frames()),
+                        frames_to_fractions(grid.artifact().downbeats(), a.source_frames()),
                     )
                 })
             })
-            .unwrap_or_else(|| (Arc::from(Vec::new()), Arc::from(Vec::new())));
+            .unwrap_or_else(|| (empty_marks(), empty_marks()));
         self.beat_marks = beats;
         self.downbeat_marks = downbeats;
-        self.unready_ranges = analysis
-            .as_ref()
-            .map_or_else(|| Arc::from(Vec::new()), unready_ranges);
+        self.unready_ranges = analysis.as_ref().map_or_else(Arc::default, unready_ranges);
         self.analysis = analysis;
     }
 }
@@ -144,35 +146,35 @@ fn fraction(frame: u64, total: f64) -> f32 {
 /// Map source-frame positions to track fractions in `[0, 1]`, clamping
 /// out-of-range frames to `1.0`. Empty input or `total == 0` yields empty.
 fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
-    if frames.is_empty() || total == 0 {
-        return Arc::from(Vec::new());
+    if total == 0 {
+        return empty_marks();
     }
     let total_f: f64 = total.as_();
-    let out: Vec<f32> = frames
-        .iter()
-        .map(|&frame| fraction(frame, total_f))
-        .collect();
-    Arc::from(out)
+    Arc::from_iter(frames.iter().map(|&frame| fraction(frame, total_f)))
+}
+
+fn empty_marks() -> Arc<[f32]> {
+    Arc::default()
 }
 
 /// Map source-frame ranges to track fractions in `[0, 1]`. Empty input or
 /// `total == 0` yields empty, and an empty range is dropped.
 fn ranges_to_fractions(ranges: &[FrameRange], total: u64) -> Arc<[[f32; 2]]> {
     if ranges.is_empty() || total == 0 {
-        return Arc::from(Vec::new());
+        return Arc::default();
     }
     let total_f: f64 = total.as_();
-    let out: Vec<[f32; 2]> = ranges
-        .iter()
-        .filter(|range| !range.is_empty())
-        .map(|range| {
-            [
-                fraction(range.start(), total_f),
-                fraction(range.end(), total_f),
-            ]
-        })
-        .collect();
-    Arc::from(out)
+    Arc::from_iter(
+        ranges
+            .iter()
+            .filter(|range| !range.is_empty())
+            .map(|range| {
+                [
+                    fraction(range.start(), total_f),
+                    fraction(range.end(), total_f),
+                ]
+            }),
+    )
 }
 
 /// A snapshot covering `runs` of a track `extent` frames long, or of unknown
@@ -199,7 +201,7 @@ pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis
 /// missing, so a live source claims nothing rather than guessing.
 fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
     if analysis.extent().is_none() || analysis.is_complete() {
-        return Arc::from(Vec::new());
+        return Arc::default();
     }
     ranges_to_fractions(&analysis.missing(), analysis.source_frames())
 }
@@ -221,7 +223,7 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 pub struct StateController {
     beat_clock: Arc<Mutex<BeatClockState>>,
     #[field(get, deref = false)]
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
@@ -238,19 +240,14 @@ impl StateController {
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
     pub fn new(
-        queue: Arc<Queue>,
+        queue: QueueControl,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancelToken,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(
-            Arc::clone(&queue),
-            Arc::clone(&state),
-            config,
-            cancel.clone(),
-        );
+        spawn_listener(queue.clone(), Arc::clone(&state), config, cancel.clone());
 
         Self {
             queue,
@@ -331,7 +328,7 @@ impl StateController {
         let Some(beat) = analysis.beat() else {
             return;
         };
-        let grid = beat.grid();
+        let grid = beat.artifact();
         let source_frames = analysis.source_frames();
         let slot = SlotId::new(1);
         let mut beat_clock = self.beat_clock.lock();
@@ -377,11 +374,11 @@ impl StateController {
 /// detector was are two answers about the same markers, and passing them
 /// separately is how they come to disagree.
 fn bpm_info_from_state(
-    beat: &kithara::audio::analysis::BeatSnapshot,
+    beat: &kithara::analysis::BeatSnapshot,
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<BpmInfo> {
-    let grid = beat.grid();
+    let grid = beat.artifact();
     let first_beat = *grid.beats().first()?;
     if source_frames == 0 || duration_secs <= 0.0 {
         return None;
@@ -417,7 +414,7 @@ impl Drop for StateController {
 }
 
 fn spawn_listener(
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -428,13 +425,13 @@ fn spawn_listener(
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
 /// active slot are no-ops; the master EQ persists once a slot accepts them.
-fn reapply_eq(queue: &Queue, eq_bands: &[GainDb]) {
+fn reapply_eq(queue: &QueueControl, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
         let _ = queue.set_eq_gain(band, f32::from(gain));
     }
 }
 
-pub(crate) fn apply_event(event: &Event, queue: &Queue, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiState>) {
     match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
@@ -546,10 +543,7 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::audio::{
-        BeatGrid,
-        analysis::{BeatSnapshot, GridState},
-    };
+    use ::kithara::analysis::{BeatArtifact, BeatSnapshot, BeatState};
     use kithara_test_utils::kithara;
 
     use super::{
@@ -558,8 +552,8 @@ mod tests {
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {
         BeatSnapshot::new(
-            BeatGrid::new(120.0, beats, Vec::new(), Vec::new()),
-            GridState::Provisional,
+            BeatArtifact::new(120.0, beats, Vec::new()),
+            BeatState::Provisional,
             Vec::new(),
         )
     }

@@ -2,12 +2,13 @@
 
 use kithara::{
     audio::{
-        ChunkOutcome, DecodeError, PcmControl, PcmRead, PcmReader, PcmSession, PendingReason,
-        ReadOutcome, SeekOutcome,
+        AudioControl, AudioRead, AudioReader, AudioSession, ChunkOutcome, DecodeError,
+        PendingReason, ReadOutcome, SeekOutcome,
     },
-    decode::{PcmSpec, TrackMetadata},
+    decode::TrackMetadata,
     events::EventBus,
     platform::time::Duration,
+    signal::AudioSpec,
 };
 
 /// A reader that never yields a chunk, so a pass fed by it covers nothing on
@@ -15,12 +16,12 @@ use kithara::{
 pub struct Stalled {
     bus: EventBus,
     metadata: TrackMetadata,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 /// Boxed [`Stalled`] reader on `spec`, ready for `AnalysisWorker::analyze`.
 #[must_use]
-pub fn stalled_reader(spec: PcmSpec) -> Box<dyn PcmReader> {
+pub fn stalled_reader(spec: AudioSpec) -> Box<dyn AudioReader> {
     Box::new(Stalled {
         spec,
         bus: EventBus::default(),
@@ -28,7 +29,7 @@ pub fn stalled_reader(spec: PcmSpec) -> Box<dyn PcmReader> {
     })
 }
 
-impl PcmSession for Stalled {
+impl AudioSession for Stalled {
     fn duration(&self) -> Option<Duration> {
         None
     }
@@ -42,7 +43,7 @@ impl PcmSession for Stalled {
     }
 }
 
-impl PcmRead for Stalled {
+impl AudioRead for Stalled {
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         Ok(ChunkOutcome::Pending {
             reason: PendingReason::Buffering,
@@ -65,12 +66,12 @@ impl PcmRead for Stalled {
         unreachable!("analysis pulls chunks")
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 }
 
-impl PcmControl for Stalled {
+impl AudioControl for Stalled {
     fn seek(&mut self, _position: Duration) -> Result<SeekOutcome, DecodeError> {
         unreachable!("this reader never moves")
     }

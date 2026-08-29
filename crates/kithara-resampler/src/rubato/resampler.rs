@@ -40,7 +40,7 @@ impl RubatoResampler {
             target_rate,
             settings.channels,
             settings.options,
-            settings.pcm_pool.clone(),
+            settings.sample_pool.clone(),
         )
         .map_err(|err| ResamplerBuildError::BackendBuild {
             backend,

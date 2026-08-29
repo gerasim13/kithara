@@ -1,20 +1,12 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
-use kithara_bufpool::{BytePool, PcmPool};
 use kithara_events::EventBus;
-use kithara_platform::{CancelToken, sync::Arc};
+use kithara_platform::CancelToken;
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_stream::{MediaInfo, StreamType};
-use portable_atomic::AtomicF32;
 
-use crate::{
-    analysis::AnalysisProducer,
-    effects::timestretch::StretchControls,
-    pipeline::config::AudioDecoderConfig,
-    renderer::{AudioWorkerHandle, EngineLoad},
-    traits::AudioEffect,
-};
+use crate::{pipeline::config::AudioDecoderConfig, traits::AudioObserver};
 
 struct Consts;
 
@@ -57,9 +49,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) decoder: AudioDecoderConfig<B>,
-    /// Shared byte pool for temporary buffers (probe, etc.).
-    #[field(get)]
-    pub(crate) byte_pool: BytePool,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
     #[field(get, copy)]
@@ -69,39 +58,17 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     pub(crate) bus: Option<EventBus>,
     /// Master cancel token for the audio pipeline.
     pub(crate) cancel: Option<CancelToken>,
-    /// Live audio-engine cost meter (decode + effects). When set, the worker
-    /// publishes its per-chunk processing cost here.
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Optional format hint (file extension like "mp3", "wav")
     pub(crate) hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
     #[field(get, copy)]
     pub(crate) host_sample_rate: Option<NonZeroU32>,
-    /// Producer half of an open analysis pass for this track. When set, each
-    /// decoded chunk is offered to it before the effect chain runs, so a track
-    /// being played warms its own analysis instead of being decoded twice.
-    pub(crate) analysis: Option<AnalysisProducer>,
     /// Media info hint for format detection
     pub(crate) media_info: Option<MediaInfo>,
-    /// Legacy shared playback-rate state for direct `Audio` callers. The
-    /// effect chain no longer consumes this value: speed lives in
-    /// [`StretchControls`] when a stretch backend is compiled in.
-    pub(crate) playback_rate: Option<Arc<AtomicF32>>,
-    /// Live playback-speed controls (plus key-lock + backend when a stretch
-    /// backend is compiled in). `Some` inserts a `TimeStretchProcessor` in the
-    /// source domain on native stretch builds. Without a compiled
-    /// backend, including wasm, no speed DSP is inserted and playback remains
-    /// at unity.
-    pub(crate) stretch: Option<Arc<StretchControls>>,
-    /// Optional shared audio worker handle.
-    pub(crate) worker: Option<AudioWorkerHandle>,
-    /// Shared PCM pool for temporary buffers.
-    #[field(get)]
-    pub(crate) pcm_pool: PcmPool,
-    /// Additional effects to append after decoder-domain processing.
-    #[builder(default)]
-    #[field(get)]
-    pub(crate) effects: Vec<Box<dyn AudioEffect>>,
+    /// Optional bounded, nonblocking observer of decoder-output PCM.
+    /// [`kithara_signal::AudioChunk::meta`] describes its post-conversion format;
+    /// it runs before playback effects and owns any asynchronous copy.
+    pub(crate) observer: Option<Box<dyn AudioObserver>>,
     /// Make a producer-ring underrun block (engine-aware park) instead of
     /// surfacing an empty outcome. Offline (faster-than-real-time) consumers
     /// opt in so `read` / `next_chunk` wait for the decode worker instead of
@@ -122,7 +89,7 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = Consts::PCM_BUFFER_CHUNKS)]
     #[field(get)]
-    pub(crate) pcm_buffer_chunks: usize,
+    pub(crate) audio_buffer_chunks: usize,
 }
 
 impl<T, B> AudioConfig<T, B>
@@ -142,12 +109,6 @@ where
         self.cancel.as_ref()
     }
 
-    /// Return the configured engine-load meter.
-    #[must_use]
-    pub const fn engine_load(&self) -> Option<&Arc<EngineLoad>> {
-        self.engine_load.as_ref()
-    }
-
     /// Return the optional format hint.
     #[must_use]
     pub fn hint(&self) -> Option<&str> {
@@ -158,23 +119,5 @@ where
     #[must_use]
     pub const fn media_info(&self) -> Option<&MediaInfo> {
         self.media_info.as_ref()
-    }
-
-    /// Return the legacy playback-rate state.
-    #[must_use]
-    pub const fn playback_rate(&self) -> Option<&Arc<AtomicF32>> {
-        self.playback_rate.as_ref()
-    }
-
-    /// Return the live stretch controls.
-    #[must_use]
-    pub const fn stretch(&self) -> Option<&Arc<StretchControls>> {
-        self.stretch.as_ref()
-    }
-
-    /// Return the configured audio worker.
-    #[must_use]
-    pub const fn worker(&self) -> Option<&AudioWorkerHandle> {
-        self.worker.as_ref()
     }
 }

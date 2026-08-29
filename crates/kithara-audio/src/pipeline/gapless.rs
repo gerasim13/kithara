@@ -1,8 +1,6 @@
-use kithara_decode::{
-    ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer, PcmChunk,
-    duration_for_frames,
-};
+use kithara_decode::{ChunkRetire, GaplessMode, GaplessOutput, GaplessProfile, GaplessTrimmer};
 use kithara_platform::time::Duration;
+use kithara_signal::AudioChunk;
 
 /// Iterator over one pending gapless output batch.
 type GaplessOutputIter = <GaplessOutput as IntoIterator>::IntoIter;
@@ -59,7 +57,7 @@ impl GaplessStage {
 
     /// Return the next trimmed chunk from the current output batch.
     #[must_use]
-    pub(crate) fn next(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next(&mut self) -> Option<AudioChunk> {
         let pending = self.pending.as_mut()?;
         let next = pending.next();
         if pending.len() == 0 {
@@ -78,7 +76,7 @@ impl GaplessStage {
     }
 
     /// Feed one decoded chunk into the trimmer.
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
+    pub(crate) fn push(&mut self, chunk: AudioChunk) {
         let output = self.trimmer.push(chunk);
         self.replace_pending(output);
     }
@@ -129,6 +127,9 @@ pub(crate) fn visible_duration(
         return Some(raw);
     }
 
-    let trim = duration_for_frames(profile.spec().sample_rate.get(), trim_frames);
+    let trim = profile
+        .spec()
+        .duration_for(trim_frames)
+        .unwrap_or(Duration::from_nanos(u64::MAX));
     Some(raw.saturating_sub(trim))
 }

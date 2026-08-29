@@ -323,8 +323,8 @@ where
         measure: Option<MeasureAxis>,
         children: Vec<SplitMount<MasonryNode<Action>>>,
     ) -> MasonryNode<Action> {
-        let mut layouts = Vec::with_capacity(children.len());
-        let mut nodes = Vec::with_capacity(children.len());
+        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
+        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
         let mut blocks = Vec::new();
         for cell in children {
             let split_size = match axis {
@@ -508,8 +508,8 @@ where
 
     fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
         let size = group.size().unwrap_or(SizeSpec::FILL);
-        let mut layouts = Vec::with_capacity(children.len());
-        let mut nodes = Vec::with_capacity(children.len());
+        let mut layouts: Vec<ChildLayout> = Vec::with_capacity(children.len());
+        let mut nodes: Vec<MasonryNode<Action>> = Vec::with_capacity(children.len());
         let mut blocks = Vec::new();
         for child in children {
             let block = self.block(child.block, &mut blocks);

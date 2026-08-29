@@ -1,5 +1,6 @@
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{BlenderProfile, PcmChunk, PcmSpec};
+use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_decode::BlenderProfile;
+use kithara_signal::{AudioChunk, AudioSpec};
 
 struct Consts;
 
@@ -20,17 +21,17 @@ enum JoinState {
     },
 }
 
-pub(crate) struct PcmBlender {
+pub(crate) struct GaplessBlender {
     active: BlenderProfile,
     join: JoinState,
-    outgoing: PcmBuf,
-    pool: PcmPool,
+    outgoing: SampleBuffer,
+    pool: SamplePool,
     prepared: BlenderProfile,
-    prepared_outgoing: PcmBuf,
+    prepared_outgoing: SampleBuffer,
 }
 
-impl PcmBlender {
-    pub(crate) fn new(active: BlenderProfile, pool: &PcmPool) -> Self {
+impl GaplessBlender {
+    pub(crate) fn new(active: BlenderProfile, pool: &SamplePool) -> Self {
         let samples = join_samples(active.spec());
         let outgoing = pool.get_with(|buffer| buffer.resize(samples, 0.0));
         let prepared_outgoing = pool.get_with(|buffer| buffer.resize(samples, 0.0));
@@ -44,7 +45,7 @@ impl PcmBlender {
         }
     }
 
-    fn apply_join(&mut self, chunk: &mut PcmChunk) {
+    fn apply_join(&mut self, chunk: &mut AudioChunk) {
         let JoinState::Active { frame, frames } = &mut self.join else {
             return;
         };
@@ -99,7 +100,7 @@ impl PcmBlender {
         u64::from(join_frames(self.active.spec()))
     }
 
-    pub(crate) fn process_active(&mut self, mut chunk: PcmChunk) -> PcmChunk {
+    pub(crate) fn process_active(&mut self, mut chunk: AudioChunk) -> AudioChunk {
         debug_assert_eq!(chunk.spec(), self.active.spec());
         self.apply_join(&mut chunk);
         chunk
@@ -131,7 +132,7 @@ impl PcmBlender {
     }
 }
 
-fn join_frames(spec: PcmSpec) -> u16 {
+fn join_frames(spec: AudioSpec) -> u16 {
     u16::try_from(
         u64::from(spec.sample_rate.get())
             .saturating_mul(u64::from(Consts::JOIN_MICROS))
@@ -141,6 +142,6 @@ fn join_frames(spec: PcmSpec) -> u16 {
     .max(Consts::MIN_JOIN_FRAMES)
 }
 
-fn join_samples(spec: PcmSpec) -> usize {
+fn join_samples(spec: AudioSpec) -> usize {
     usize::from(join_frames(spec)).saturating_mul(usize::from(spec.channels.max(1)))
 }

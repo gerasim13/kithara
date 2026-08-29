@@ -38,7 +38,7 @@ fn corner_verbs(bounds: Rect, radius: f32, corners: FrameCorners) -> Vec<Verb> {
         },
         to,
     };
-    let mut verbs = Vec::with_capacity(9);
+    let mut verbs: Vec<Verb> = Vec::with_capacity(9);
     verbs.push(Verb::MoveTo(Pt {
         x: left + tl,
         y: top,

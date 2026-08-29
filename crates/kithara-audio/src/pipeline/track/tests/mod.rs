@@ -1,4 +1,3 @@
-mod analysis;
 mod gate;
 mod rebuild;
 mod splice;

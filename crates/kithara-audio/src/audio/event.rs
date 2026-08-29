@@ -1,8 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_decode::{
-    DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass, PcmMeta,
-    PcmSpec,
+    DecodeError, DecoderBackend as DecodeBackend, DecoderResamplerConfig, ErrorClass,
 };
 use kithara_events::{
     AudioCodecKind, AudioEvent, ContainerKind, DecodeErrorClass, DecodeErrorKind,
@@ -12,6 +11,7 @@ use kithara_events::{
 };
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_resampler::ResamplerBackend;
+use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, PlayheadWrite, SeekObserve};
 use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
@@ -99,7 +99,7 @@ impl AudioEvents {
         &self,
         seek: &dyn SeekObserve,
         epoch: u64,
-        meta: Option<PcmMeta>,
+        meta: Option<AudioChunkInfo>,
         position: Duration,
     ) {
         let Some(seek_epoch) = seek.pending_epoch() else {
@@ -311,7 +311,7 @@ pub(crate) struct DecoderChangedEventData<'a> {
     pub(crate) cause: DecoderChangeCause,
     pub(crate) duration: Option<Duration>,
     pub(crate) media_info: Option<&'a MediaInfo>,
-    pub(crate) spec: PcmSpec,
+    pub(crate) spec: AudioSpec,
     pub(crate) base_offset: u64,
     pub(crate) epoch: u64,
 }
@@ -342,7 +342,7 @@ pub(crate) fn decoder_changed_event(data: DecoderChangedEventData<'_>) -> Decode
 
 pub(crate) fn decoder_gapless_event(
     media_info: Option<&MediaInfo>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     track_info: &kithara_decode::DecoderTrackInfo,
     domain: FrameDomain,
 ) -> Option<DecoderEvent> {
@@ -360,7 +360,7 @@ pub(crate) fn decoder_gapless_event(
 
 pub(crate) fn decoder_resampler_event<B>(
     resampler: Option<&DecoderResamplerConfig<B>>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     input_rate: Option<u32>,
 ) -> Option<DecoderEvent>
 where
@@ -396,18 +396,21 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{PcmChunk, PcmMeta};
+    use kithara_bufpool::SamplePool;
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::sync::Arc;
+    use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::{SeekControl, SeekState};
     use kithara_test_utils::kithara;
 
     use super::*;
     use crate::audio::{Fetch, ring::create_channels};
 
-    fn empty_chunk() -> PcmChunk {
-        PcmChunk::new(PcmMeta::default(), PcmPool::default().attach(Vec::new()))
+    fn empty_chunk() -> AudioChunk {
+        AudioChunk::new(
+            AudioChunkInfo::default(),
+            SamplePool::default().attach(Vec::new()),
+        )
     }
 
     #[kithara::test]

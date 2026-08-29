@@ -39,8 +39,13 @@ Routing inside the single `InnerEncoder` implementation:
 
 `EncoderFactory::frame_samples(codec)` returns those same natural frame sizes; segmenters must use it rather than assuming 1024.
 
+### Scratch ownership
+
+Every `PackagedEncodeRequest` must carry the caller's shared `BytePool` and `SamplePool`. Packaged backends reuse those pools for temporary byte and converted-sample storage; production encoding must not create or default a component-local pool. A scratch lease ends inside the encode call and is returned before the resulting track can outlive the request.
+
 ### `EncodedTrack` output contract
 
+- `EncodedAccessUnit::bytes` is a long-lived owned `Vec<u8>`, not pooled scratch. It must not retain a pool lease: access units can outlive the encoder request and move independently through muxing, caching, and transport.
 - `codec_config` is codec-dependent: FLAC yields the 34-byte STREAMINFO body, HE-AAC yields the AudioSpecificConfig, and **AAC-LC yields an empty blob** — the muxer has to synthesize the ASC itself.
 - `media_info` is the request's info with `codec`, `sample_rate`, and `channels` overridden from the actual encode. The FLAC and HE-AAC paths additionally force `container = Fmp4`; the AAC-LC path leaves the requested container untouched.
 - FFmpeg backends rescale packets from `1/sample_rate` to `1/timescale` and normalize every timestamp against the first packet's `min(pts, dts)`, so a track always starts at 0; `is_sync` comes from the packet's key flag. The fdk HE-AAC path synthesizes `pts = dts` itself in timescale units from the encoder frame length and marks every access unit `is_sync`.

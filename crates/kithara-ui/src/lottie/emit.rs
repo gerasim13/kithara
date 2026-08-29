@@ -325,7 +325,7 @@ fn ramp(gradient: &Gradient, alpha: f64, layer: &str) -> Result<Paint, LottieErr
             color: faded(stop.color.to_alpha_color::<Srgb>(), alpha),
             offset: stop.offset,
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<Stop>>();
     let stops = Stops::new(&stops).map_err(|source| LottieError::Ramp {
         layer: layer.to_owned(),
         source,

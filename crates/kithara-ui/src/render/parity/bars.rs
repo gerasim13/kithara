@@ -170,7 +170,7 @@ fn retained_menus(standing: &str, width: u32, height: u32) -> Vec<Vec<Rect>> {
                 .iter()
                 .filter_map(|row| ui.rect_of(&format!("{bar}/{row}")))
                 .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
-                .collect::<Vec<_>>()
+                .collect::<Vec<Rect>>()
         })
         .filter(|menu| !menu.is_empty())
         .collect()

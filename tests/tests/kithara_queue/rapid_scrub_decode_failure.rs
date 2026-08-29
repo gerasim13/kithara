@@ -12,7 +12,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -252,27 +252,32 @@ impl Harness {
             .build(),
         );
         let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .worker(PlayWorker::new(
+                    PlayWorkerConfig::for_pools(
+                        kithara::bufpool::BytePool::default(),
+                        kithara::bufpool::SamplePool::default(),
+                    )
+                    .build(),
+                ))
                 .session(OfflineSession::arc_auto())
                 .build(),
-        ));
+        );
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
         let cfg =
             ResourceConfig::for_src(ResourceConfig::parse_src(master.as_str()).expect("valid URL"))
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .downloader(downloader)
                 .store(store)
                 .initial_abr_mode(AbrMode::Auto(None))
                 .build();
         let mut rx = queue.subscribe();
-        let id = queue.append(TrackSource::Config(Box::new(cfg)));
+        let id = queue
+            .append(TrackSource::Config(Box::new(cfg)))
+            .expect("append rapid-scrub track");
 
         wait_for_status(&mut rx, &queue, id, TrackStatus::Loaded, LOAD_BUDGET)
             .await

@@ -46,8 +46,7 @@ pub(crate) fn app_track_source(
         .build();
     let builder = builder
         .downloader(config.downloader.clone())
-        .byte_pool(config.byte_pool.clone())
-        .pcm_pool(config.pcm_pool.clone())
+        .worker(config.worker.clone())
         .keys(keys)
         .maybe_headers(headers)
         .size_probe_method(config.size_probe_method)

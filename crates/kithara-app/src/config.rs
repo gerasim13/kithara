@@ -2,11 +2,10 @@ use std::{fmt, path::PathBuf};
 
 use bon::Builder;
 use kithara::{
-    assets::{AssetStore, BytePool},
-    audio::analysis::BeatAnalysisConfig,
-    bufpool::PcmPool,
+    analysis::BeatAnalysisConfig,
+    assets::AssetStore,
     hls::SizeProbeMethod,
-    play::policy::DomainKeyPolicy,
+    play::{PlayWorker, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
     stream::dl::Downloader,
 };
@@ -66,11 +65,11 @@ pub struct AppConfig {
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
-    /// App-wide shared byte pool for network and cache buffers.
-    pub byte_pool: BytePool,
+    /// One playback worker shared by every deck in this app session.
+    pub worker: PlayWorker,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
-    /// it (see `main.rs`). The chain flag reaches the audio worker and HLS
+    /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
     /// coord lock-free `is_cancelled()` reads; every subsystem derives its
     /// own [`CancelToken::child`] from this consumer-top master.
     pub shutdown: CancelToken,
@@ -79,8 +78,6 @@ pub struct AppConfig {
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
-    /// App-wide shared PCM pool for playback and track analysis.
-    pub pcm_pool: PcmPool,
     /// HLS size-estimation probe strategy (see
     /// [`kithara::hls::SizeProbeMethod`]).
     #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
@@ -132,8 +129,7 @@ impl fmt::Debug for AppConfig {
             .field("palette", &self.palette)
             .field("log_directives", &self.log_directives)
             .field("tracks", &self.tracks)
-            .field("byte_pool", &self.byte_pool)
-            .field("pcm_pool", &self.pcm_pool)
+            .field("worker", &self.worker)
             .field(
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,

@@ -155,7 +155,7 @@ impl TextContext {
     }
 
     fn glyph_run(&self, layout: &Layout<()>, style: FaceStyle) -> GlyphRun {
-        let mut segments = Vec::new();
+        let mut segments: Vec<GlyphSegment> = Vec::new();
         for line in layout.lines() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(run) = item else {

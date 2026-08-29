@@ -1,8 +1,9 @@
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
+use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
-use crate::{error::DecodeResult, types::PcmSpec};
+use crate::error::DecodeResult;
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 #[non_exhaustive]
@@ -30,11 +31,11 @@ pub(crate) const fn access_unit_frames(codec: AudioCodec) -> u32 {
 /// interleaved f32 PCM into the caller-provided pool buffer (`out`).
 /// They never see container bytes — container parsing is the demuxer's
 /// job. They never allocate their own output `Vec<f32>` — output flows
-/// through the injected `PcmPool`, which keeps the hot path zero-alloc
+/// through the injected `SamplePool`, which keeps the hot path zero-alloc
 /// once the pool is warm.
 pub(crate) trait FrameCodec: Send + 'static {
     /// Decode one demuxed frame into `out` (interleaved f32, from the
-    /// shared `PcmPool`); returns frames written, `0` for a consumed
+    /// shared `SamplePool`); returns frames written, `0` for a consumed
     /// packet that produced no PCM (warm-up / backpressure). `pts` is the
     /// demuxer presentation time (diagnostics only). `packet_desc` carries
     /// opaque per-packet VBR metadata (Apple MP3/ALAC serialize an
@@ -51,7 +52,7 @@ pub(crate) trait FrameCodec: Send + 'static {
         frame_data: &[u8],
         pts: Duration,
         packet_desc: &[u8],
-        out: &mut PcmBuf,
+        out: &mut SampleBuffer,
     ) -> DecodeResult<u32>;
 
     /// Presentation time of the PCM produced by the most recent non-empty
@@ -106,7 +107,7 @@ pub(crate) trait FrameCodec: Send + 'static {
     }
 
     /// PCM output specification.
-    fn spec(&self) -> PcmSpec;
+    fn spec(&self) -> AudioSpec;
 
     /// Decoder-owned packet-time bias removed before the first PCM frame.
     fn timestamp_bias_frames(&self) -> u64 {

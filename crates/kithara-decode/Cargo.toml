@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Pluggable audio decode (Symphonia / Apple / Android) to PCM."
+description = "Pluggable audio decode (Symphonia / Apple / Android) to decoded signal."
 keywords = ["audio", "decoder", "codec", "pcm", "hls"]
 categories = ["multimedia::audio"]
 
@@ -53,6 +53,7 @@ kithara-bufpool = { workspace = true }
 kithara-mpa = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
+kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }

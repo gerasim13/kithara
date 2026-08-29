@@ -2,13 +2,18 @@
     test,
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
 ))]
-use kithara_platform::time::Duration;
+use std::num::NonZeroU32;
 
 #[cfg(any(
     test,
     all(feature = "apple", any(target_os = "macos", target_os = "ios"))
 ))]
-use crate::pcm::duration_for_frames;
+use kithara_platform::time::Duration;
+#[cfg(any(
+    test,
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+use kithara_signal::AudioSpec;
 
 struct Consts;
 impl Consts {
@@ -59,7 +64,8 @@ pub(crate) fn read_xing_duration(data: &[u8]) -> Option<Duration> {
         return None;
     }
     let frames = u64::from(frame_count).saturating_mul(u64::from(tag.header.samples_per_frame));
-    Some(duration_for_frames(tag.header.sample_rate, frames))
+    let sample_rate = NonZeroU32::new(tag.header.sample_rate)?;
+    AudioSpec::new(1, sample_rate).duration_for(frames).ok()
 }
 
 struct XingTag<'a> {
@@ -265,7 +271,15 @@ mod tests {
     fn extracts_duration_from_xing_frame_count() {
         let buf = build_mpeg1_stereo_xing(576, 960);
         let duration = read_xing_duration(&buf).expect("BUG: duration");
-        assert_eq!(duration, duration_for_frames(44_100, 100 * 1152));
+        let spec = AudioSpec::new(
+            1,
+            NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
+        );
+        assert_eq!(
+            duration,
+            spec.duration_for(100 * 1152)
+                .expect("test duration is representable")
+        );
     }
 
     #[kithara::test(native, flash(false))]

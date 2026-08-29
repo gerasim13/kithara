@@ -226,7 +226,7 @@ pub(in crate::flash) fn snapshot() -> String {
     let Ok(mut reg) = REGISTRY.try_lock() else {
         return "sync registry: lock held — cannot snapshot\n".to_string();
     };
-    let mut live = Vec::new();
+    let mut live: Vec<Arc<PrimEntry>> = Vec::new();
     reg.entries.retain(|_, w| {
         w.upgrade().is_some_and(|e| {
             live.push(e);

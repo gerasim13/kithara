@@ -4,7 +4,7 @@ use super::{
     Band, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, Snap, SplitMount,
 };
 use crate::{
-    compile::{CompiledNode, CompiledUi, SplitCell},
+    compile::{Address, CompiledNode, CompiledUi, SplitCell},
     draw::{Pt, Transform},
     expand::{Binding, ExpandedNode, MagnetSpec, MeasureSpec, SurfaceSpec},
     ids::InternId,
@@ -65,7 +65,7 @@ where
 #[cfg(test)]
 pub(crate) fn render_engine_subtree<H>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     owner: InternId,
     ctx: Ctx<'_, '_>,
     mut host: H,
@@ -100,7 +100,7 @@ where
             base,
             steps,
         } => {
-            let mut branches = Vec::with_capacity(steps.len() + 1);
+            let mut branches: Vec<H::Output> = Vec::with_capacity(steps.len() + 1);
             branches.push(compiled(base, ctx, host));
             for (_, node) in steps {
                 branches.push(compiled(node, ctx, host));
@@ -120,7 +120,7 @@ where
             children,
             ..
         } => {
-            let mut mounted = Vec::with_capacity(children.len());
+            let mut mounted: Vec<SplitMount<H::Output>> = Vec::with_capacity(children.len());
             for cell in split_cells::<H>(children, snapshot) {
                 let size = compiled_node_size_with_hidden(&cell.node, ctx.skin, snapshot);
                 let output = compiled(&cell.node, ctx, host);
@@ -167,7 +167,7 @@ where
             let content = (!collapsed).then(|| {
                 let child = expanded(
                     root,
-                    &[],
+                    &Address::Root,
                     Branch {
                         owner: *instance,
                         input_owner: if content_hosted {
@@ -296,7 +296,7 @@ fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Gr
 /// question is asked once here and the answer never reaches [`mounted`].
 fn expanded<H>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -335,7 +335,7 @@ struct Adaptive<'a> {
 /// and the host chooses. A measured reading is answered here.
 fn mount_adaptive<H>(
     adaptive: &Adaptive<'_>,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -353,22 +353,10 @@ where
     let snapshot: &dyn Snapshot = &ctx;
     match measure.axis() {
         Some(axis) => {
-            let mut branches = Vec::with_capacity(steps.len() + 1);
-            branches.push(expanded(
-                base,
-                &child_address(address, 0),
-                branch,
-                ctx,
-                host,
-            ));
+            let mut branches: Vec<H::Output> = Vec::with_capacity(steps.len() + 1);
+            branches.push(expanded(base, &address.child(0), branch, ctx, host));
             for (index, (_, node)) in steps.iter().enumerate() {
-                branches.push(expanded(
-                    node,
-                    &child_address(address, index + 1),
-                    branch,
-                    ctx,
-                    host,
-                ));
+                branches.push(expanded(node, &address.child(index + 1), branch, ctx, host));
             }
             host.measured(
                 Measured {
@@ -383,7 +371,7 @@ where
         }
         None => expanded(
             adaptive_branch(measure, base, steps, snapshot),
-            &child_address(address, 0),
+            &address.child(0),
             branch,
             ctx,
             host,
@@ -394,7 +382,7 @@ where
 /// How a row becomes host output.
 fn mount_row<H>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -458,7 +446,7 @@ where
 /// How a column becomes host output.
 fn mount_column<H>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -513,7 +501,7 @@ where
 /// How one node becomes host output, once the engine question is settled.
 fn mounted<H>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -530,7 +518,7 @@ where
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Reveal { child, .. } => {
-            expanded(child, &child_address(address, 0), branch, ctx, host)
+            expanded(child, &address.child(0), branch, ctx, host)
         }
         ExpandedNode::Adaptive {
             measure,
@@ -575,11 +563,11 @@ where
             host,
         ),
         ExpandedNode::Pressable { path, child, .. } => {
-            let child = expanded(child, &child_address(address, 0), branch, ctx, host);
+            let child = expanded(child, &address.child(0), branch, ctx, host);
             host.pressable(*path, child, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Scroll { id, child, .. } => {
-            let child = expanded(child, &child_address(address, 0), branch, ctx, host);
+            let child = expanded(child, &address.child(0), branch, ctx, host);
             host.scroll(*id, child, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Slot { children, .. } => {
@@ -592,14 +580,7 @@ where
                 .iter()
                 .enumerate()
                 .map(|(index, child)| {
-                    mount_staged(
-                        child,
-                        &child_address(address, index),
-                        branch,
-                        &scene,
-                        ctx,
-                        host,
-                    )
+                    mount_staged(child, &address.child(index), branch, &scene, ctx, host)
                 })
                 .collect();
             host.stage(mounted, effective_size(node, ctx.skin, snapshot))
@@ -634,7 +615,7 @@ where
 
 fn mount_popover<H>(
     node: PopoverNode<'_>,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -642,8 +623,8 @@ fn mount_popover<H>(
 where
     H: Host,
 {
-    let anchor = expanded(node.anchor, &child_address(address, 0), branch, ctx, host);
-    let content = child_address(address, 1);
+    let anchor = expanded(node.anchor, &address.child(0), branch, ctx, host);
+    let content = address.child(1);
     host.popover(
         Popover {
             path: node.path,
@@ -660,7 +641,7 @@ where
 
 fn expanded_children<H>(
     children: &[ExpandedNode],
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     snapshot: &dyn Snapshot,
     ctx: Ctx<'_, '_>,
@@ -676,7 +657,7 @@ where
         .map(|(index, child)| {
             expanded(
                 child,
-                &child_address(address, index),
+                &address.child(index),
                 Branch {
                     round: FrameCorners::EMPTY,
                     ..branch
@@ -691,7 +672,7 @@ where
 fn mount_group<H>(
     group: Group<'_>,
     children: &[ExpandedNode],
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     snapshot: &dyn Snapshot,
     ctx: Ctx<'_, '_>,
@@ -708,7 +689,7 @@ where
 fn expanded_group_children<H>(
     children: &[ExpandedNode],
     axis: Axis,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     snapshot: &dyn Snapshot,
     ctx: Ctx<'_, '_>,
@@ -727,7 +708,7 @@ where
             minimum: main_minimum(child, axis, ctx.skin, snapshot),
             output: expanded(
                 child,
-                &child_address(address, index),
+                &address.child(index),
                 Branch {
                     round: FrameCorners::EMPTY,
                     ..branch
@@ -816,7 +797,7 @@ fn scalar(ctx: Ctx<'_, '_>, binding: &Binding) -> Option<f32> {
 fn mount_object<H>(
     track: Track<'_>,
     child: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     ctx: Ctx<'_, '_>,
     host: &mut H,
@@ -827,7 +808,7 @@ where
     let here = track.resolve(ctx);
     expanded(
         child,
-        &child_address(address, 0),
+        &address.child(0),
         Branch {
             transform: here.matrix().then(branch.transform),
             ..branch
@@ -885,7 +866,7 @@ fn point(at: (f32, f32), read: Option<&Binding>, ctx: Ctx<'_, '_>) -> Pt {
 
 fn mount_staged<H>(
     node: &ExpandedNode,
-    address: &[usize],
+    address: &Address<'_>,
     branch: Branch,
     scene: &Scene,
     ctx: Ctx<'_, '_>,
@@ -906,7 +887,7 @@ where
     else {
         return expanded(node, address, branch, ctx, host);
     };
-    let mounted = expanded(child, &child_address(address, 0), branch, ctx, host);
+    let mounted = expanded(child, &address.child(0), branch, ctx, host);
     host.placed(
         PlacedMount {
             path: *path,
@@ -917,13 +898,6 @@ where
         },
         mounted,
     )
-}
-
-fn child_address(parent: &[usize], index: usize) -> Vec<usize> {
-    let mut address = Vec::with_capacity(parent.len() + 1);
-    address.extend_from_slice(parent);
-    address.push(index);
-    address
 }
 
 fn main_minimum(
@@ -943,7 +917,7 @@ fn main_minimum(
     }
 }
 
-fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &[usize]) -> bool {
+fn hosts_engine(ui: &CompiledUi, owner: InternId, address: &Address<'_>) -> bool {
     HOSTED_MODULES
         .iter()
         .any(|module| ui.includes_module(owner, address, module))

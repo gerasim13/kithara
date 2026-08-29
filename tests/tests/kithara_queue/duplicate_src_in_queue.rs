@@ -11,10 +11,10 @@ use std::num::NonZero;
 
 use kithara::{
     self,
-    decode::PcmSpec,
     events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
-    queue::{Queue, QueueConfig, Transition},
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -38,17 +38,17 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
         SAMPLE_RATE,
     );
     let config = QueueConfig::builder()
-        .player(Arc::clone(harness.player()))
+        .player(harness.take_player())
         .should_autoplay(false)
         .build();
     (harness, Queue::new(config))
 }
 
 fn load(queue: &Queue, id: TrackId) {
-    let spec = PcmSpec {
-        channels: CHANNELS,
-        sample_rate: NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
-    };
+    let spec = AudioSpec::new(
+        CHANNELS,
+        NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
+    );
     queue.complete_load_for_test(
         id,
         resource_from_reader_with_src(
@@ -77,8 +77,8 @@ fn status_of(queue: &Queue, id: TrackId) -> TrackStatus {
 /// The failing track is the *second* entry carrying this URL.
 fn fixture_playing_the_second_copy() -> (OfflinePlayerHarness, Queue, TrackId, TrackId) {
     let (harness, queue) = make_fixture();
-    let first = queue.append(REPEATED_SRC);
-    let playing = queue.append(REPEATED_SRC);
+    let first = queue.append(REPEATED_SRC).expect("append first copy");
+    let playing = queue.append(REPEATED_SRC).expect("append second copy");
     load(&queue, first);
     load(&queue, playing);
 

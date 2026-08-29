@@ -11,9 +11,9 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
-    events::{AbrMode, TrackId},
+    events::AbrMode,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -21,7 +21,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -62,13 +62,16 @@ struct ProdCtx {
 }
 
 fn build_prod_ctx() -> ProdCtx {
-    let net = NetOptions::builder().is_insecure(true).build();
+    let byte_pool = BytePool::default();
+    let net = NetOptions::builder()
+        .byte_pool(byte_pool.clone())
+        .is_insecure(true)
+        .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let byte_pool = BytePool::default();
     let store = AssetStore::builder()
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
@@ -76,11 +79,15 @@ fn build_prod_ctx() -> ProdCtx {
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+            .cancel(shutdown.child())
+            .build(),
+    );
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown)
-        .byte_pool(byte_pool)
-        .pcm_pool(PcmPool::default())
+        .worker(worker)
         .store(store)
         .build();
     ProdCtx {
@@ -91,13 +98,12 @@ fn build_prod_ctx() -> ProdCtx {
 
 async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let prod = build_prod_ctx();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
@@ -108,7 +114,9 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
             }
         }
     });
-    let track_id = queue.append(prod_drm_spec(url, &prod));
+    let track_id = queue
+        .append(prod_drm_spec(url, &prod))
+        .expect("append production DRM track");
 
     // Use the same harness assertions but skip the per-track-cache
     // bootstrap by driving the queue directly here — production
@@ -350,13 +358,12 @@ async fn user_sim_prod_drm_seek_immediately_after_loaded_low() {
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
 async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
     let prod = build_prod_ctx();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
@@ -368,8 +375,12 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
         }
     });
 
-    let track0 = queue.append(prod_drm_spec(PROD_DRM_TRACK, &prod));
-    let track1 = queue.append(prod_drm_spec(PROD_DRM_TRACK_ALT, &prod));
+    let track0 = queue
+        .append(prod_drm_spec(PROD_DRM_TRACK, &prod))
+        .expect("append production DRM track 0");
+    let track1 = queue
+        .append(prod_drm_spec(PROD_DRM_TRACK_ALT, &prod))
+        .expect("append production DRM track 1");
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
     wait_for_loaded(&queue, track0, Duration::from_secs(60))
@@ -414,13 +425,12 @@ async fn user_sim_prod_drm_rapid_scrub_no_warmup_no_advance() {
 async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
     use kithara::play::SeekOutcome;
     let prod = build_prod_ctx();
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let q_for_tick = Arc::clone(&queue);
     let tick = tokio::task::spawn(async move {
@@ -431,7 +441,9 @@ async fn run_prod_drm_scenario_no_warmup(url: &str, ratio: f64) {
             }
         }
     });
-    let track_id = queue.append(prod_drm_spec(url, &prod));
+    let track_id = queue
+        .append(prod_drm_spec(url, &prod))
+        .expect("append no-warmup production DRM track");
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;
     wait_for_loaded(&queue, track_id, Duration::from_secs(60))
@@ -701,18 +713,21 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
 
     let prod = build_prod_ctx();
     let session = Arc::new(OfflineSession::new_manual());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(prod.config.worker.clone())
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
     let mut track_ids = Vec::with_capacity(urls.len());
     for url in urls {
-        track_ids.push(queue.append(prod_drm_spec(url, &prod)));
+        track_ids.push(
+            queue
+                .append(prod_drm_spec(url, &prod))
+                .expect("append multi-track production DRM track"),
+        );
     }
 
     use kithara_integration_tests::user_sim::harness::wait_for_loaded;

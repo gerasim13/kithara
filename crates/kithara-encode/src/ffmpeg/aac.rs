@@ -24,10 +24,16 @@ impl AacFFmpegEncoder {
             .build()?;
 
         let mut access_units: Vec<EncodedAccessUnit> = Vec::new();
-        pump_pcm_samples(pcm, Self::frame_samples(), |samples| {
-            access_units.extend(encoder.push(samples)?);
-            Ok(())
-        })?;
+        pump_pcm_samples(
+            pcm,
+            &request.byte_pool,
+            &request.sample_pool,
+            Self::frame_samples(),
+            |samples| {
+                access_units.extend(encoder.push(samples)?);
+                Ok(())
+            },
+        )?;
         access_units.extend(encoder.finish()?);
 
         let mut media_info = request.media_info.clone();
@@ -54,6 +60,7 @@ impl AacFFmpegEncoder {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     use super::{AacFFmpegEncoder, PackagedEncodeRequest};
@@ -75,17 +82,21 @@ mod tests {
     }
 
     fn encode_offline(pcm: &TestPcm) -> EncodedTrack {
-        AacFFmpegEncoder::encode(&PackagedEncodeRequest {
-            pcm,
-            media_info: MediaInfo::builder()
-                .container(ContainerFormat::Fmp4)
+        AacFFmpegEncoder::encode(
+            &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+                .pcm(pcm)
+                .media_info(
+                    MediaInfo::builder()
+                        .container(ContainerFormat::Fmp4)
+                        .build(),
+                )
+                .encoder_delay(Consts::ENCODER_DELAY)
+                .timescale(Consts::SAMPLE_RATE)
+                .trailing_delay(Consts::TRAILING_DELAY)
+                .bit_rate(Consts::BIT_RATE)
+                .packets_per_segment(2)
                 .build(),
-            encoder_delay: Consts::ENCODER_DELAY,
-            timescale: Consts::SAMPLE_RATE,
-            trailing_delay: Consts::TRAILING_DELAY,
-            bit_rate: Consts::BIT_RATE,
-            packets_per_segment: 2,
-        })
+        )
         .expect("offline AAC-LC encode")
     }
 

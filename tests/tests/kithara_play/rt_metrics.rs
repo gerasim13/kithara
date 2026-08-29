@@ -9,8 +9,7 @@ use std::num::NonZeroU32;
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::PcmPool,
-    decode::PcmSpec,
+    bufpool::SamplePool,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -18,6 +17,7 @@ use kithara::{
         bridge::{PlayerCmd, RtMetricsSnapshot, SlotControl, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::audio_mock::{
     Fault, FaultyPcmReader, SeekSplitReader, TestPcmReader,
@@ -31,8 +31,8 @@ fn block_len() -> usize {
     usize::try_from(BLOCK_FRAMES).expect("block frames fit usize")
 }
 
-fn spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
+fn spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"))
 }
 
 fn processor() -> (PlayerNodeProcessor, SlotControl) {
@@ -42,7 +42,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &PcmPool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
         control,
     )
 }
@@ -65,31 +65,29 @@ fn boxed(resource: Resource, src: &str) -> Box<PlayerResource> {
     Box::new(PlayerResource::new(
         resource,
         Arc::from(src),
-        &PcmPool::default(),
+        &SamplePool::default(),
     ))
 }
 
-fn load(control: &mut SlotControl, resource: Box<PlayerResource>) {
+fn load(control: &mut SlotControl, resource: Box<PlayerResource>) -> TrackId {
+    let item_id = TrackId::allocate();
     control
         .cmd_tx
-        .try_push(PlayerCmd::LoadTrack {
-            resource,
-            item_id: TrackId::allocate(),
-        })
+        .try_push(PlayerCmd::LoadTrack { resource, item_id })
         .ok();
+    item_id
 }
 
 fn render_loaded_blocks(
-    src: &str,
     resource: Box<PlayerResource>,
     blocks: usize,
 ) -> (PlayerNodeProcessor, Vec<f32>) {
     let (mut processor, mut control) = processor();
-    load(&mut control, resource);
+    let item_id = load(&mut control, resource);
     control.cmd_tx.try_push(PlayerCmd::SetPaused(false)).ok();
     processor.drain_commands();
 
-    if let Some(track) = processor.track_mut(&Arc::from(src)) {
+    if let Some(track) = processor.track_mut(item_id) {
         track.play();
     }
 
@@ -108,8 +106,8 @@ fn render_loaded_blocks(
     (processor, out_l)
 }
 
-fn render_loaded(src: &str, resource: Box<PlayerResource>) -> PlayerNodeProcessor {
-    render_loaded_blocks(src, resource, 1).0
+fn render_loaded(resource: Box<PlayerResource>) -> PlayerNodeProcessor {
+    render_loaded_blocks(resource, 1).0
 }
 
 fn metrics(processor: &PlayerNodeProcessor) -> RtMetricsSnapshot {
@@ -118,7 +116,7 @@ fn metrics(processor: &PlayerNodeProcessor) -> RtMetricsSnapshot {
 
 #[kithara::test]
 fn decode_error_is_counted_not_logged() {
-    let processor = render_loaded("broken.mp3", faulty_track("broken.mp3", Fault::DecodeError));
+    let processor = render_loaded(faulty_track("broken.mp3", Fault::DecodeError));
 
     assert!(
         metrics(&processor).decode_errors() > 0,
@@ -128,8 +126,7 @@ fn decode_error_is_counted_not_logged() {
 
 #[kithara::test]
 fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
-    let (processor, rendered) =
-        render_loaded_blocks("stalled.mp3", faulty_track("stalled.mp3", Fault::Stall), 4);
+    let (processor, rendered) = render_loaded_blocks(faulty_track("stalled.mp3", Fault::Stall), 4);
 
     assert!(
         metrics(&processor).underruns() > 0,
@@ -144,7 +141,7 @@ fn source_with_nothing_ready_renders_silence_and_counts_an_underrun() {
 
 #[kithara::test]
 fn a_healthy_track_reports_no_trouble() {
-    let processor = render_loaded("ok.mp3", healthy_track("ok.mp3"));
+    let processor = render_loaded(healthy_track("ok.mp3"));
 
     assert_eq!(metrics(&processor), RtMetricsSnapshot::default());
 }
@@ -153,14 +150,13 @@ fn a_healthy_track_reports_no_trouble() {
 fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
     let (reader, counts) = SeekSplitReader::new(spec());
     let (mut processor, mut control) = processor();
-    load(
+    let item_id = load(
         &mut control,
         boxed(Resource::from_reader(reader, None), "split.mp3"),
     );
     processor.drain_commands();
 
-    let src: Arc<str> = Arc::from("split.mp3");
-    if let Some(track) = processor.track_mut(&src) {
+    if let Some(track) = processor.track_mut(item_id) {
         track.seek(30.0);
     }
 
@@ -180,7 +176,7 @@ fn a_seek_on_the_audio_thread_only_syncs_never_blocks() {
         "beginning belongs to the control thread, not to this call"
     );
     assert!(
-        (processor.track(&src).expect("track loaded").position() - 30.0).abs() < 0.001,
+        (processor.track(item_id).expect("track loaded").position() - 30.0).abs() < 0.001,
         "the media clock still re-bases on the new position"
     );
 }
@@ -191,13 +187,14 @@ fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
     let resource = boxed(Resource::from_reader(reader, None), "split.mp3");
     let handle = resource.seek_handle().expect("reader splits its seek");
     let (_, mut control) = processor();
+    let item_id = TrackId::allocate();
 
-    control.bind_seek(Arc::from("split.mp3"), handle);
+    control.bind_seek(item_id, Arc::clone(&handle));
     control.begin_seek(Duration::from_secs(30));
     assert_eq!(counts.begins(), 1);
     assert_eq!(counts.blocking_seeks(), 0);
 
-    control.unbind_seek("split.mp3");
+    control.unbind_seek(item_id, &handle);
     control.begin_seek(Duration::from_secs(45));
     assert_eq!(
         counts.begins(),
@@ -207,14 +204,58 @@ fn the_slot_begins_seeks_for_the_tracks_it_shipped() {
 }
 
 #[kithara::test]
+fn unloading_one_seek_binding_preserves_other_identity() {
+    let (first_reader, first_counts) = SeekSplitReader::new(spec());
+    let first = boxed(Resource::from_reader(first_reader, None), "same.mp3");
+    let first_handle = first.seek_handle().expect("reader splits its seek");
+    let first_id = TrackId::allocate();
+
+    let (second_reader, second_counts) = SeekSplitReader::new(spec());
+    let second = boxed(Resource::from_reader(second_reader, None), "same.mp3");
+    let second_handle = second.seek_handle().expect("reader splits its seek");
+    let second_id = TrackId::allocate();
+
+    let (_, mut control) = processor();
+    control.bind_seek(first_id, Arc::clone(&first_handle));
+    control.bind_seek(second_id, Arc::clone(&second_handle));
+    control.unbind_seek(first_id, &first_handle);
+    control.begin_seek(Duration::from_secs(30));
+
+    assert_eq!(first_counts.begins(), 0, "the unloaded item stays detached");
+    assert_eq!(
+        second_counts.begins(),
+        1,
+        "the other queue item keeps its seek path despite sharing the URL"
+    );
+
+    let (replacement_reader, replacement_counts) = SeekSplitReader::new(spec());
+    let replacement = boxed(Resource::from_reader(replacement_reader, None), "same.mp3");
+    let replacement_handle = replacement.seek_handle().expect("reader splits its seek");
+    control.bind_seek(second_id, replacement_handle);
+    control.unbind_seek(second_id, &second_handle);
+    control.begin_seek(Duration::from_secs(45));
+
+    assert_eq!(
+        second_counts.begins(),
+        1,
+        "the retired resource generation stays detached"
+    );
+    assert_eq!(
+        replacement_counts.begins(),
+        1,
+        "retiring the old generation must keep its replacement bound"
+    );
+}
+
+#[kithara::test]
 fn evicting_an_audible_track_is_counted() {
     let (mut processor, mut control) = processor();
 
     for idx in 0..PlayerNodeProcessor::MAX_TRACKS {
         let src = format!("track-{idx}.mp3");
-        load(&mut control, healthy_track(&src));
+        let item_id = load(&mut control, healthy_track(&src));
         processor.drain_commands();
-        if let Some(track) = processor.track_mut(&Arc::from(src.as_str())) {
+        if let Some(track) = processor.track_mut(item_id) {
             track.play();
         }
     }
@@ -231,9 +272,9 @@ fn evicting_an_audible_track_is_counted() {
 #[kithara::test]
 fn a_block_larger_than_declared_is_clamped_not_grown() {
     let (mut processor, mut control) = processor();
-    load(&mut control, healthy_track("ok.mp3"));
+    let item_id = load(&mut control, healthy_track("ok.mp3"));
     processor.drain_commands();
-    if let Some(track) = processor.track_mut(&Arc::from("ok.mp3")) {
+    if let Some(track) = processor.track_mut(item_id) {
         track.play();
     }
 

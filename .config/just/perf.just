@@ -58,7 +58,7 @@ compare *ARGS:
 bench MODE="build":
     #!/usr/bin/env bash
     set -uo pipefail
-    benches=(abr_estimator bufpool refactor_hotpaths rt_block_budget)
+    benches=(abr_estimator bufpool perf_audit refactor_hotpaths rt_block_budget)
     case "{{ MODE }}" in
       build)
         for b in "${benches[@]}"; do

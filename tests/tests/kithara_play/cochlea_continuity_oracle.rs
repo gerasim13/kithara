@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use cochlea_features::{Audio as CochleaAudio, SegmentOpts, segment_timeline};
-use kithara::{decode::PcmSpec, events::TrackId};
+use kithara::{events::TrackId, signal::AudioSpec};
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
@@ -19,7 +19,7 @@ const SEGMENT_WINDOW_MS: f64 = 20.0;
 const SAMPLE_SILENCE_THRESHOLD: f32 = 1.0e-4;
 
 fn render_no_switch_control() -> Vec<f32> {
-    let spec = PcmSpec::new(
+    let spec = AudioSpec::new(
         CHANNELS,
         NonZeroU32::new(SAMPLE_RATE).expect("test sample rate is non-zero"),
     );
@@ -29,15 +29,16 @@ fn render_no_switch_control() -> Vec<f32> {
             .build(),
         SAMPLE_RATE,
     );
-    harness.player().insert(
-        resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
-        TrackId::allocate(),
-        None,
-    );
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select no-switch control item");
+    harness.with_player(|player| {
+        player.insert(
+            resource_from_reader(TestPcmReader::with_value(spec, 3.0, 0.5)),
+            TrackId::allocate(),
+            None,
+        );
+        player
+            .select_item(0, true)
+            .expect("select no-switch control item");
+    });
 
     let mut rendered = Vec::with_capacity(CAPTURE_FRAMES * usize::from(CHANNELS));
     while rendered.len() / usize::from(CHANNELS) < CAPTURE_FRAMES {

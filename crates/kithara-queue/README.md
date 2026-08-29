@@ -55,11 +55,22 @@ underlying player / audio / hls / file events through a single stream.
 ```rust
 use std::sync::Arc;
 
+use kithara_bufpool::Region;
+use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, Transition};
 
 #[tokio::main]
 async fn main() {
-    let queue = Arc::new(Queue::new(QueueConfig::default()));
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
+    let player = Arc::new(PlayerImpl::new(
+        PlayerConfig::builder().worker(worker).build(),
+    ));
+    let queue = Arc::new(Queue::new(
+        QueueConfig::builder().player(player).build(),
+    ));
     queue.set_tracks(["https://example.com/a.mp3", "https://example.com/b.mp3"]);
 
     // Caller explicitly picks the first track to play. Queue does not

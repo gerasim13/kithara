@@ -7,14 +7,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_decode::{
-    DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, PcmChunk,
+    DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, DecoderSeekOutcome,
 };
+use kithara_platform::time::Duration;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode,
     ResamplerProcess, ResamplerSettings,
 };
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
 
@@ -34,6 +36,26 @@ const POISON: [[f32; FRAMES]; 2] = [
     [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e-40],
     [0.25, -0.25, 0.5, -0.5],
 ];
+
+fn test_spec(sample_rate: u32) -> AudioSpec {
+    AudioSpec::new(
+        CHANNELS,
+        NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
+    )
+}
+
+fn test_duration(sample_rate: u32, frames: u64) -> Duration {
+    test_spec(sample_rate)
+        .duration_for(frames)
+        .expect("test duration is representable")
+}
+
+fn test_frames(sample_rate: u32, duration: Duration) -> usize {
+    test_spec(sample_rate)
+        .frames_for(duration)
+        .expect("test frame count is representable")
+        .get()
+}
 
 #[derive(Clone)]
 struct AdapterProbeBackend;
@@ -284,7 +306,7 @@ impl Resampler for DelayedProbeResampler {
 fn standalone_decoder_adapter_wraps_configured_backend() {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_with_resampler(target_rate, AdapterProbeBackend);
-    let output: PcmChunk = decoder
+    let output: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
@@ -299,7 +321,7 @@ fn standalone_decoder_adapter_wraps_configured_backend() {
 fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
     let mut decoder = decoder_with_resampler(target_rate, DelayedProbeBackend);
-    let output: PcmChunk = decoder
+    let output: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
@@ -314,6 +336,88 @@ fn standalone_decoder_adapter_flushes_backend_delay_at_eof() {
 }
 
 #[kithara::test(native, flash(false))]
+fn standalone_decoder_seek_reanchors_output_to_trimmed_target() {
+    const TARGET: Duration = Duration::from_millis(30);
+    const WAV_FRAMES: usize = 4_096;
+
+    let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
+    let mut decoder = decoder_over(
+        test_wav_with_frames(WAV_FRAMES),
+        target_rate,
+        AdapterProbeBackend,
+    );
+    let DecoderSeekOutcome::Landed { landed_at, .. } =
+        decoder.seek(TARGET).expect("seek resampled decoder")
+    else {
+        panic!("seek target must be inside the test WAV");
+    };
+    assert!(
+        landed_at < TARGET,
+        "test requires a coarse inner landing before the requested target"
+    );
+    let output: AudioChunk = decoder
+        .next_chunk()
+        .expect("first chunk after seek")
+        .try_into()
+        .expect("resampled output chunk");
+    let target_frame =
+        u64::try_from(test_frames(TARGET_RATE, TARGET)).expect("target frame fits u64");
+
+    assert_eq!(output.meta.frame_offset, target_frame);
+    assert_eq!(output.meta.timestamp, TARGET);
+    assert_eq!(
+        output.meta.timestamp,
+        test_duration(TARGET_RATE, output.meta.frame_offset)
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn standalone_decoder_seek_rounds_timeline_frames_half_up() {
+    const SOURCE_TARGET_FRAME: u64 = 1_441;
+    const ROUNDING_TARGET_RATE: u32 = 44_085;
+    const EXPECTED_LANDED_FRAME: u64 = 1_152;
+    const EXPECTED_OUTPUT_FRAME: u64 = 1_441;
+    const WAV_FRAMES: usize = 4_096;
+
+    let target = test_duration(SOURCE_RATE, SOURCE_TARGET_FRAME);
+    let target_rate = NonZeroU32::new(ROUNDING_TARGET_RATE).expect("test rate");
+    let mut decoder = decoder_over(
+        test_wav_with_frames(WAV_FRAMES),
+        target_rate,
+        AdapterProbeBackend,
+    );
+    let DecoderSeekOutcome::Landed {
+        landed_at,
+        landed_frame,
+        ..
+    } = decoder.seek(target).expect("seek resampled decoder")
+    else {
+        panic!("seek target must be inside the test WAV");
+    };
+    let output: AudioChunk = decoder
+        .next_chunk()
+        .expect("first chunk after seek")
+        .try_into()
+        .expect("resampled output chunk");
+
+    assert_eq!(
+        test_frames(ROUNDING_TARGET_RATE, landed_at),
+        1_151,
+        "test landing must distinguish floor from half-up"
+    );
+    assert_eq!(
+        test_frames(ROUNDING_TARGET_RATE, target),
+        1_440,
+        "test target must distinguish floor from half-up"
+    );
+    assert_eq!(
+        (landed_frame, output.meta.frame_offset),
+        (EXPECTED_LANDED_FRAME, EXPECTED_OUTPUT_FRAME)
+    );
+    assert_eq!(output.meta.timestamp, Duration::from_nanos(32_686_854));
+}
+
+#[kithara::test(native, flash(false))]
 fn resampler_never_sees_a_sample_the_file_poisoned() {
     let captured: Captured = Arc::default();
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("test rate");
@@ -322,7 +426,7 @@ fn resampler_never_sees_a_sample_the_file_poisoned() {
         target_rate,
         CaptureProbeBackend(Arc::clone(&captured)),
     );
-    let _: PcmChunk = decoder
+    let _: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
@@ -354,11 +458,11 @@ fn resampler_never_sees_a_sample_the_file_poisoned() {
 }
 
 #[kithara::test(native, flash(false))]
-fn decoder_factory_uses_configured_pcm_pool() {
-    let pcm_pool = PcmPool::new(4, 4_096);
+fn decoder_factory_uses_configured_sample_pool() {
+    let sample_pool = SamplePool::new(4, 4_096);
     let config: DecoderConfig = DecoderConfig::builder()
         .byte_pool(BytePool::new(4, 4_096))
-        .pcm_pool(pcm_pool.clone())
+        .sample_pool(sample_pool.clone())
         .build();
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -368,14 +472,14 @@ fn decoder_factory_uses_configured_pcm_pool() {
         DecoderFactory::create_from_media_info(Cursor::new(test_wav()), &media_info, config)
             .expect("decoder builds");
 
-    assert_eq!(pcm_pool.allocated_bytes(), 0);
-    let chunk: PcmChunk = decoder
+    assert_eq!(sample_pool.allocated_bytes(), 0);
+    let chunk: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
         .expect("decoded chunk");
     assert!(!chunk.samples.is_empty());
-    assert!(pcm_pool.allocated_bytes() > 0);
+    assert!(sample_pool.allocated_bytes() > 0);
 }
 
 fn decoder_with_resampler<B>(
@@ -402,7 +506,7 @@ where
         .build();
     let config = DecoderConfig::builder()
         .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .sample_pool(SamplePool::default())
         .resampler(
             DecoderResamplerConfig::builder()
                 .target_sample_rate(target_rate)
@@ -419,7 +523,11 @@ const fn marker_samples() -> &'static [f32] {
 }
 
 fn test_wav() -> Vec<u8> {
-    let data_size = FRAMES
+    test_wav_with_frames(FRAMES)
+}
+
+fn test_wav_with_frames(frames: usize) -> Vec<u8> {
+    let data_size = frames
         .saturating_mul(usize::from(CHANNELS))
         .saturating_mul(usize::from(WAV_BYTES_PER_SAMPLE));
     let mut wav = wav_header(WAV_PCM_FORMAT, WAV_BITS_PER_SAMPLE, data_size);

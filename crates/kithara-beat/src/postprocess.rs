@@ -31,11 +31,8 @@ impl PeakPicker {
             });
         }
 
-        let beat_frames = find_peaks(beat_logits, &self.config);
-        let downbeat_frames = find_peaks(downbeat_logits, &self.config);
-
-        let beats: Vec<BeatMark> = beat_frames.iter().map(Peak::mark).collect();
-        let mut downbeats: Vec<BeatMark> = downbeat_frames.iter().map(Peak::mark).collect();
+        let beats = find_marks(beat_logits, &self.config);
+        let mut downbeats = find_marks(downbeat_logits, &self.config);
 
         snap_downbeats_to_beats(&beats, &mut downbeats);
 
@@ -50,7 +47,7 @@ struct Peak {
 }
 
 impl Peak {
-    fn mark(&self) -> BeatMark {
+    fn mark(self) -> BeatMark {
         BeatMark {
             at: (self.at / f64::from(FPS)).as_(),
             confidence: sigmoid(self.logit),
@@ -62,61 +59,74 @@ fn sigmoid(logit: f32) -> f32 {
     1.0 / (1.0 + (-logit).exp())
 }
 
-fn find_peaks(logits: &[f32], config: &BeatConfig) -> Vec<Peak> {
-    let len = logits.len();
-    let mut peaks: Vec<(usize, f32)> = Vec::new();
-
-    for i in 0..len {
-        // The default threshold of 0 is probability 0.5 after the sigmoid.
-        if logits[i] <= config.peak_threshold {
-            continue;
-        }
-
-        let start = i.saturating_sub(config.peak_half_width);
-        let end = (i + config.peak_half_width + 1).min(len);
-
-        let mut is_max = true;
-        for j in start..end {
-            if logits[j] > logits[i] {
-                is_max = false;
-                break;
-            }
-        }
-
-        if is_max {
-            peaks.push((i, logits[i]));
-        }
-    }
-
-    deduplicate_peaks(&peaks, config.dedup_width)
+fn candidates<'a>(
+    logits: &'a [f32],
+    config: &'a BeatConfig,
+) -> impl Iterator<Item = (usize, f32)> + 'a {
+    (0..logits.len()).filter_map(|index| {
+        let start = index.saturating_sub(config.peak_half_width);
+        let end = (index + config.peak_half_width + 1).min(logits.len());
+        (logits[index] > config.peak_threshold
+            && !logits[start..end]
+                .iter()
+                .any(|&value| value > logits[index]))
+        .then_some((index, logits[index]))
+    })
 }
 
-fn deduplicate_peaks(peaks: &[(usize, f32)], width: usize) -> Vec<Peak> {
-    let Some((&(first, first_logit), rest)) = peaks.split_first() else {
-        return Vec::new();
+fn visit_deduplicated_peaks(
+    mut peaks: impl Iterator<Item = (usize, f32)>,
+    width: usize,
+    mut visit: impl FnMut(Peak),
+) {
+    let Some((first, first_logit)) = peaks.next() else {
+        return;
     };
 
-    let mut result = Vec::new();
     let mut p: f64 = first.as_();
     let mut logit = first_logit;
     let mut c = 1.0_f64;
 
-    for &(p2_usize, p2_logit) in rest {
+    for (p2_usize, p2_logit) in peaks {
         let p2: f64 = p2_usize.as_();
         if p2 - p <= width.as_() {
             c += 1.0;
             p += (p2 - p) / c;
             logit = logit.max(p2_logit);
         } else {
-            result.push(Peak { at: p, logit });
+            visit(Peak { at: p, logit });
             p = p2;
             logit = p2_logit;
             c = 1.0;
         }
     }
-    result.push(Peak { at: p, logit });
+    visit(Peak { at: p, logit });
+}
 
-    result
+fn find_marks(logits: &[f32], config: &BeatConfig) -> Vec<BeatMark> {
+    let mut marks: Vec<BeatMark> = Vec::new();
+    visit_deduplicated_peaks(candidates(logits, config), config.dedup_width, |peak| {
+        marks.push(peak.mark());
+    });
+    marks
+}
+
+#[cfg(test)]
+fn find_peaks(logits: &[f32], config: &BeatConfig) -> Vec<Peak> {
+    let mut peaks: Vec<Peak> = Vec::new();
+    visit_deduplicated_peaks(candidates(logits, config), config.dedup_width, |peak| {
+        peaks.push(peak);
+    });
+    peaks
+}
+
+#[cfg(test)]
+fn deduplicate_peaks(peaks: &[(usize, f32)], width: usize) -> Vec<Peak> {
+    let mut deduplicated: Vec<Peak> = Vec::new();
+    visit_deduplicated_peaks(peaks.iter().copied(), width, |peak| {
+        deduplicated.push(peak);
+    });
+    deduplicated
 }
 
 fn snap_downbeats_to_beats(beats: &[BeatMark], downbeats: &mut Vec<BeatMark>) {

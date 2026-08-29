@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, RequestId, RequestMethod},
     net::{HttpClient, NetOptions},
     platform::{
@@ -59,15 +60,13 @@ async fn wait_for_playing(queue: &Queue, expected: bool, deadline: Duration) -> 
 fn resource_config(
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    temp_dir: &TestTempDir,
+    store: &AssetStore,
     index: usize,
 ) -> ResourceConfig {
     let url = handle.child_url(&format!("storm-{index}.mp3"));
     ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store.clone())
         .build()
 }
 
@@ -111,18 +110,35 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             })
         })
         .collect();
+    let region = kithara::bufpool::Region::default();
+    let byte_pool = region.byte_pool();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
-    let player = Arc::new(PlayerImpl::new(
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(byte_pool.clone())
+        .build();
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
+    );
+    let queue = Arc::new(Queue::new(
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .build(),
     ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut status_rx = queue.subscribe();
     let mut probe_rx = queue.subscribe();
@@ -134,11 +150,12 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             queue.append(TrackSource::Config(Box::new(resource_config(
                 handle,
                 &downloader,
-                &temp_dir,
+                &store,
                 index,
             ))))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()
+        .expect("queue is open while fixtures are appended");
     // Only the first track is awaited: the others must still be transferring
     // when the storm starts.
     wait_for_loader_done_event(&mut status_rx, &queue, ids[0], Duration::from_secs(60))

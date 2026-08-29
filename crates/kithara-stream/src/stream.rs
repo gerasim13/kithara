@@ -188,7 +188,7 @@ pub trait StreamType: MaybeSend + 'static {
     /// Event bus type carried by the stream config.
     ///
     /// Concrete stream types set this to `kithara_events::EventBus`.
-    /// `Audio::new()` constrains `T::Events = EventBus` to extract it.
+    /// Audio preparation constrains `T::Events = EventBus` to extract it.
     type Events: Clone + MaybeSend + MaybeSync + 'static;
 
     /// Source implementing `Source`.
@@ -201,7 +201,7 @@ pub trait StreamType: MaybeSend + 'static {
 
     /// Extract the event bus from config (if set).
     ///
-    /// Used by `Audio::new()` to share a single bus across the stream
+    /// Used during audio preparation to share a single bus across the stream
     /// and the audio pipeline.
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         let _ = config;

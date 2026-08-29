@@ -1,4 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
+use std::ops::Range;
+
+#[cfg(not(target_arch = "wasm32"))]
 use crate::fixture_cache::FixtureCache;
 use crate::signal_pcm::{Finite, SignalPcm, signal};
 
@@ -6,6 +9,9 @@ const WAV_HEADER_SIZE: usize = 44;
 
 #[cfg(not(target_arch = "wasm32"))]
 const SINE_WAV_CACHE_DOMAIN: &str = "sine-wav";
+
+#[cfg(not(target_arch = "wasm32"))]
+const MARKED_SINE_WAV_CACHE_DOMAIN: &str = "marked-sine-wav";
 
 #[cfg(not(target_arch = "wasm32"))]
 struct ScaledSine {
@@ -19,6 +25,28 @@ impl signal::SignalFn for ScaledSine {
         let phase =
             std::f64::consts::TAU * self.frequency_hz * frame as f64 / f64::from(sample_rate);
         (phase.sin() * f64::from(self.peak)) as i16
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct MarkedSine {
+    frequency_hz: f64,
+    markers: [Range<usize>; 2],
+    marker_peak: i16,
+    peak: i16,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl signal::SignalFn for MarkedSine {
+    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
+        let phase =
+            std::f64::consts::TAU * self.frequency_hz * frame as f64 / f64::from(sample_rate);
+        let peak = if self.markers.iter().any(|marker| marker.contains(&frame)) {
+            self.marker_peak
+        } else {
+            self.peak
+        };
+        (phase.sin() * f64::from(peak)) as i16
     }
 }
 
@@ -90,22 +118,98 @@ pub fn prepare_sine_wav(
     spec.extend_from_slice(&sample_rate.to_le_bytes());
     spec.extend_from_slice(&channels.to_le_bytes());
 
-    let cache = FixtureCache::from_env();
-    if let Some(bytes) = cache.get(SINE_WAV_CACHE_DOMAIN, &spec) {
-        return bytes;
-    }
-    let _lock = cache.lock_entry(SINE_WAV_CACHE_DOMAIN, &spec);
-    if let Some(bytes) = cache.get(SINE_WAV_CACHE_DOMAIN, &spec) {
-        return bytes;
-    }
-
-    let bytes = create_wav(
+    prepare_cached_wav(
+        SINE_WAV_CACHE_DOMAIN,
+        &spec,
         ScaledSine { frequency_hz, peak },
         total_frames,
         sample_rate,
         channels,
+    )
+}
+
+/// Prepare a sine WAV with a lower-amplitude source-time marker through the
+/// shared, build-fingerprinted fixture cache.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use]
+pub fn prepare_marked_sine_wav(
+    frequency_hz: f64,
+    peak: i16,
+    marker_peak: i16,
+    markers: [Range<usize>; 2],
+    total_frames: usize,
+    sample_rate: u32,
+    channels: u16,
+) -> Vec<u8> {
+    assert!(frequency_hz.is_finite() && frequency_hz > 0.0);
+    assert!(peak > 0 && marker_peak > 0 && marker_peak < peak);
+    assert!(
+        markers
+            .iter()
+            .all(|marker| { marker.start < marker.end && marker.end <= total_frames })
     );
-    cache.store(SINE_WAV_CACHE_DOMAIN, &spec, &bytes);
+    assert!(markers[0].end < markers[1].start);
+    assert!(total_frames > 0 && sample_rate > 0 && channels > 0);
+
+    let mut spec = Vec::with_capacity(64);
+    spec.extend_from_slice(&frequency_hz.to_bits().to_le_bytes());
+    spec.extend_from_slice(&peak.to_le_bytes());
+    spec.extend_from_slice(&marker_peak.to_le_bytes());
+    for marker in &markers {
+        spec.extend_from_slice(
+            &u64::try_from(marker.start)
+                .expect("WAV marker start fits u64")
+                .to_le_bytes(),
+        );
+        spec.extend_from_slice(
+            &u64::try_from(marker.end)
+                .expect("WAV marker end fits u64")
+                .to_le_bytes(),
+        );
+    }
+    spec.extend_from_slice(
+        &u64::try_from(total_frames)
+            .expect("WAV fixture frame count fits u64")
+            .to_le_bytes(),
+    );
+    spec.extend_from_slice(&sample_rate.to_le_bytes());
+    spec.extend_from_slice(&channels.to_le_bytes());
+
+    prepare_cached_wav(
+        MARKED_SINE_WAV_CACHE_DOMAIN,
+        &spec,
+        MarkedSine {
+            frequency_hz,
+            markers,
+            marker_peak,
+            peak,
+        },
+        total_frames,
+        sample_rate,
+        channels,
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_cached_wav<S: signal::SignalFn>(
+    domain: &str,
+    spec: &[u8],
+    signal: S,
+    total_frames: usize,
+    sample_rate: u32,
+    channels: u16,
+) -> Vec<u8> {
+    let cache = FixtureCache::from_env();
+    if let Some(bytes) = cache.get(domain, spec) {
+        return bytes;
+    }
+    let _lock = cache.lock_entry(domain, spec);
+    if let Some(bytes) = cache.get(domain, spec) {
+        return bytes;
+    }
+
+    let bytes = create_wav(signal, total_frames, sample_rate, channels);
+    cache.store(domain, spec, &bytes);
     bytes
 }
 

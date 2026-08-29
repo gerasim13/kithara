@@ -52,22 +52,22 @@ for block in blocks {
     scratch.shrink_to_fit();         // hands the pages right back
 }
 // good
-let mut scratch = pcm_pool.get_with(|b| b.resize(n, 0.0));
+let mut scratch = sample_pool.get_with(|b| b.resize(n, 0.0));
 for block in blocks { scratch.clear(); scratch.resize(n, 0.0); dsp(block, &mut scratch); }
 ```
 
 `clear()` keeps capacity for the next pass; `shrink` only at lifecycle boundaries (track unload / cache evict) to a watermark, as bufpool's `shrink_to(trim)` does.
 *tier: hot | detector: none (manual; overlaps `perf.prefer-*-pool`) | preventive*
 
-**PCM/byte buffers outside kithara-bufpool** (flagship)
+**Decoded-sample/byte buffers outside kithara-bufpool** (flagship)
 
 ```rust
 // bad
 let mut buf = vec![0.0f32; frames * channels];  // RT/decode path
-let raw = pcm_pool();                            // global accessor
+let raw = SamplePool::default();                 // global accessor
 // good
-let mut buf = self.pcm_pool.get_with(|b| { b.clear(); b.resize(frames * channels, 0.0); });
-// PooledOwned recycles on drop; take PcmPool/BytePool from the app top, never the global accessor
+let mut buf = self.sample_pool.get_with(|b| { b.clear(); b.resize(frames * channels, 0.0); });
+// PooledOwned recycles on drop; inject SamplePool/BytePool from the app top
 ```
 
 *tier: hot | detector: `perf.prefer-primitive-pool` / `perf.no-global-pool-accessor` (ast-grep) | already-enforced*
@@ -155,11 +155,11 @@ let taken = mem::take(&mut buf);  // whole buffer; else drain(..).extend/for_eac
 
 ```rust
 // bad
-enum Event { Tick, Decoded(PcmChunk /* inline, bloats every Event */) }
-fn feed(chunk: PcmChunk) {..}
+enum Event { Tick, Decoded(AudioChunk /* inline, bloats every Event */) }
+fn feed(chunk: AudioChunk) {..}
 // good
-enum Event { Tick, Decoded(Box<PcmChunk>) }
-fn feed(chunk: &PcmChunk) {..}
+enum Event { Tick, Decoded(Box<AudioChunk>) }
+fn feed(chunk: &AudioChunk) {..}
 ```
 
 An unboxed fat variant sizes *every* enum value to the largest arm.

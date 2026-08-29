@@ -1,24 +1,25 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara_audio::{AudioWorkerHandle, ConsumerWakeMode, EqBandConfig};
-use kithara_bufpool::PcmPool;
+use kithara_audio::ConsumerWakeMode;
+use kithara_bufpool::SamplePool;
 use kithara_events::EventBus;
 use kithara_platform::{
-    CancelScope, CancelToken,
+    CancelToken,
     sync::{Arc, Mutex},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
 use portable_atomic::AtomicF32;
 use ringbuf::traits::{Consumer, Producer};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-use super::{config::EngineConfig, session::default_session_handle, slots::SlotTable};
+use super::{config::EngineConfig, slots::SlotTable};
 use crate::{
     api::{EngineEvent, SlotId},
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
+    effects::eq::EqBandConfig,
     error::PlayError,
-    session::{PlayerId, SessionHandle, SessionSampleRate},
+    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
 };
 
 type SlotHandle = SlotControl;
@@ -28,20 +29,16 @@ type SlotHandle = SlotControl;
 pub struct EngineImpl {
     running: AtomicBool,
     master_volume: AtomicF32,
-    #[field(get)]
-    worker: AudioWorkerHandle,
     config: EngineConfig,
     eq_layout: Mutex<Vec<EqBandConfig>>,
     #[field(get, vis = "pub(crate)")]
     bus: EventBus,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
-    #[field(get, vis = "pub(super)")]
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
     #[field(get, vis = "pub(crate)")]
-    pcm_pool: PcmPool,
-    #[field(get = session_handle, vis = "pub(super)")]
+    sample_pool: SamplePool,
     session: SessionHandle,
 }
 
@@ -52,24 +49,21 @@ impl EngineImpl {
         let session = config
             .session
             .take()
-            .map_or_else(default_session_handle, SessionHandle::new);
+            .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
-        let resolved_pool = config.pcm_pool.clone();
+        let resolved_pool = config.sample_pool.clone();
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
-        let worker_cancel = CancelScope::new(config.cancel.clone()).token();
-
         Self {
             config,
             eq_layout,
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
-            pcm_pool: resolved_pool,
+            sample_pool: resolved_pool,
             player_id: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
             slots: Mutex::new(SlotTable::with_capacity(max_slots)),
-            worker: AudioWorkerHandle::with_cancel(worker_cancel),
             runtime: RuntimeHandle::try_current().ok(),
         }
     }
@@ -78,6 +72,10 @@ impl EngineImpl {
         if let Some(cancel) = &self.config.cancel {
             cancel.cancel();
         }
+    }
+
+    pub(crate) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
+        self.session.bind(binding)
     }
 
     pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
@@ -100,7 +98,11 @@ impl EngineImpl {
     }
 
     fn drain_slot_trash_handle(handle: &mut SlotHandle) {
-        while handle.trash_rx.try_pop().is_some() {}
+        while let Some(track) = handle.trash_rx.try_pop() {
+            if let Some(seek) = track.seek_handle() {
+                handle.unbind_seek(track.item_id(), &seek);
+            }
+        }
     }
 
     pub(crate) fn eq_band_count(&self) -> usize {
@@ -118,9 +120,11 @@ impl EngineImpl {
         }
 
         let id = self.session.register_player(
+            self.config.grid_id,
             self.bus.clone(),
             self.eq_layout.lock().clone(),
-            self.pcm_pool.clone(),
+            self.sample_pool.clone(),
+            self.config.sample_rate,
         )?;
         *player_id = Some(id);
         drop(player_id);
@@ -150,17 +154,24 @@ impl EngineImpl {
         let result = match slots.get_mut(slot) {
             Some(handle) => {
                 // A resource crossing to the audio thread leaves its seek handle behind: beginning
-                // a seek takes locks, so it stays on this side. Released on the matching
-                // `Unloaded`.
-                if let PlayerCmd::LoadTrack { resource, .. } = &cmd
-                    && let Some(seek) = resource.seek_handle()
-                {
-                    handle.bind_seek(Arc::clone(resource.src()), seek);
-                }
-                handle
+                // a seek takes locks, so it stays on this side. Bind only after the command is
+                // accepted; the exact resource generation is released when it returns as trash.
+                let seek = match &cmd {
+                    PlayerCmd::LoadTrack { resource, item_id } => {
+                        resource.seek_handle().map(|handle| (*item_id, handle))
+                    }
+                    _ => None,
+                };
+                let result = handle
                     .cmd_tx
                     .try_push(cmd)
-                    .map_err(|_| PlayError::SlotChannelFull { slot })
+                    .map_err(|_| PlayError::SlotChannelFull { slot });
+                if result.is_ok()
+                    && let Some((item_id, seek)) = seek
+                {
+                    handle.bind_seek(item_id, seek);
+                }
+                result
             }
             None => Err(PlayError::SlotNotFound(slot)),
         };
@@ -172,14 +183,6 @@ impl EngineImpl {
         let slots = self.slots.lock();
         if let Some(handle) = slots.get(slot) {
             handle.begin_seek(position);
-        }
-        drop(slots);
-    }
-
-    pub(crate) fn unbind_slot_seek(&self, slot: SlotId, src: &str) {
-        let mut slots = self.slots.lock();
-        if let Some(handle) = slots.get_mut(slot) {
-            handle.unbind_seek(src);
         }
         drop(slots);
     }
@@ -219,27 +222,31 @@ impl EngineImpl {
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.session.tick()
     }
-}
-
-impl Drop for EngineImpl {
-    fn drop(&mut self) {
-        let player_id = *self.player_id.lock();
-        if let Some(player_id) = player_id
-            && let Err(err) = self.session.unregister_player(player_id)
-        {
-            warn!(
-                ?err,
-                player_id, "failed to unregister player from shared session"
-            );
-        }
-
-        self.worker.shutdown();
-    }
-}
-
-impl EngineImpl {
     pub fn active_slots(&self) -> Vec<SlotId> {
         self.slots.lock().ids()
+    }
+
+    /// Explicitly detach this player from its session.
+    ///
+    /// A failed detach retains the registered identity so the owning Host can
+    /// retry or report the still-live member instead of losing lifecycle
+    /// ownership. Repeated successful calls are no-ops.
+    pub fn close(&self) -> Result<(), PlayError> {
+        let _start = self.start_lock.lock();
+        let Some(player_id) = *self.player_id.lock() else {
+            return Ok(());
+        };
+
+        if self.running.load(Ordering::Acquire) {
+            self.session.stop_player(player_id)?;
+            self.slots.lock().clear();
+            self.running.store(false, Ordering::Release);
+            self.emit(EngineEvent::Stopped);
+        }
+
+        self.session.unregister_player(player_id)?;
+        *self.player_id.lock() = None;
+        Ok(())
     }
 
     pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
@@ -267,7 +274,7 @@ impl EngineImpl {
 
     /// Store the desired gain without dispatching: the mixer batch already
     /// actuated the graph.
-    pub(super) fn commit_desired_master_volume(&self, level: f32) {
+    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
         self.master_volume.store(level, Ordering::Relaxed);
     }
 
@@ -290,7 +297,7 @@ impl EngineImpl {
     ///
     /// Returns the config default if the engine is not running yet.
     /// Used to pre-initialise the resampler in `ResourceConfig` so that
-    /// `make_sincs` runs during `Audio::new()` (off the worker thread)
+    /// `make_sincs` runs while the resource is prepared (off the worker thread)
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
         if !self.running.load(Ordering::Acquire) {
@@ -309,6 +316,17 @@ impl EngineImpl {
         self.config.max_slots
     }
 
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn session_handle(&self) -> &SessionHandle {
+        &self.session
+    }
+
+    #[cfg(any(test, feature = "probe"))]
     pub(super) fn registered_player_id(&self) -> Option<PlayerId> {
         *self.player_id.lock()
     }
@@ -377,35 +395,5 @@ impl EngineImpl {
 
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn engine_creates_worker() {
-        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
-        let _w = engine.worker();
-    }
-
-    #[kithara::test]
-    fn engine_worker_is_clonable() {
-        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
-        let w1 = engine.worker().clone();
-        let w2 = engine.worker().clone();
-        w1.wake();
-        w2.wake();
-    }
-
-    #[kithara::test]
-    fn engine_drop_shuts_down_worker() {
-        let engine = EngineImpl::new(EngineConfig::test_builder().build(), EventBus::default());
-        let worker_clone = engine.worker().clone();
-        drop(engine);
-        worker_clone.wake();
     }
 }

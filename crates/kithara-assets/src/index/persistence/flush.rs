@@ -158,11 +158,11 @@ impl FlushHub {
             g.retain(|w| w.strong_count() > 0);
             g.iter().filter_map(Weak::upgrade).collect()
         };
-        let alive_keys: Vec<usize> = alive
-            .iter()
-            .map(|s| Arc::as_ptr(s).cast::<()>().addr())
-            .collect();
-        self.non_durable.retain(|k| alive_keys.contains(k));
+        self.non_durable.retain(|key| {
+            alive
+                .iter()
+                .any(|source| Arc::as_ptr(source).cast::<()>().addr() == *key)
+        });
 
         let mut first_err = None;
         for src in &alive {

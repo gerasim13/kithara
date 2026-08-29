@@ -1,7 +1,7 @@
 use std::{cell::Cell, marker::PhantomData, rc::Rc};
 
 use masonry::{
-    core::{NewWidget, Widget, WidgetId},
+    core::{NewWidget, Widget, WidgetId, WidgetPod},
     kurbo::Rect as MasonryRect,
 };
 
@@ -185,18 +185,18 @@ impl<Action> MasonryNode<Action> {
         background: Option<Rgba>,
         frame: Option<(FrameSides, Rgba, f32)>,
     ) -> Self {
-        let mut child_widgets = Vec::with_capacity(children.len());
-        let mut layers = Vec::new();
-        let mut popovers = Vec::new();
-        let mut blocks = Vec::new();
-        let mut engine_targets = Vec::new();
-        let mut engines = Vec::new();
-        let mut boxes = Vec::new();
-        let mut watched = Vec::new();
-        let mut native = Vec::new();
+        let mut child_widgets: Vec<WidgetPod<Node>> = Vec::with_capacity(children.len());
+        let mut layers: Vec<NewWidget<dyn Widget>> = Vec::new();
+        let mut popovers: Vec<PopoverRegistration> = Vec::new();
+        let mut blocks: Vec<BlockRegistration> = Vec::new();
+        let mut engine_targets: Vec<EngineTarget> = Vec::new();
+        let mut engines: Vec<Rc<HostedEngine>> = Vec::new();
+        let mut boxes: Vec<NodeBox> = Vec::new();
+        let mut watched: Vec<Watched> = Vec::new();
+        let mut native: Vec<WidgetId> = Vec::new();
         let mut window = None;
         #[cfg(test)]
-        let mut child_ids = Vec::new();
+        let mut child_ids: Vec<WidgetId> = Vec::new();
         for child in children {
             layers.extend(child.layers);
             popovers.extend(child.popovers);
@@ -225,7 +225,7 @@ impl<Action> MasonryNode<Action> {
         }
         #[cfg(test)]
         let document_ids = {
-            let mut ids = Vec::with_capacity(child_ids.len() + 1);
+            let mut ids: Vec<WidgetId> = Vec::with_capacity(child_ids.len() + 1);
             ids.push(widget.id());
             ids.extend(child_ids);
             ids

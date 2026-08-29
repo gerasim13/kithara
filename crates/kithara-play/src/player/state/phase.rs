@@ -1,8 +1,10 @@
 use kithara_platform::sync::Arc;
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
-    api::{PlayerEvent, SlotId, TimeControlStatus, WaitingReason},
+    api::{PlayerEvent, SlotId, TimeControlStatus, TrackId, WaitingReason},
     bridge::PlayerCmd,
     error::PlayError,
 };
@@ -36,6 +38,7 @@ impl PendingNextState {
 /// `Playlist` owns the current index; `PendingNext` only tracks the
 /// already-enqueued successor and whether it has been activated.
 pub(crate) struct PendingNext {
+    pub(crate) item_id: TrackId,
     pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
     pub(crate) duration_seconds: f64,
@@ -243,6 +246,10 @@ impl PlayerPhase {
         }
     }
 
+    const fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused { .. })
+    }
+
     /// Replace the ABR handle on the active phase (no-op from `Idle`).
     pub(crate) fn set_abr_handle(&mut self, handle: Option<kithara_abr::AbrHandle>) {
         match self {
@@ -282,7 +289,7 @@ impl PlayerPhase {
     }
 }
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// Promote the phase to `Loading` carrying `slot`, preserving any armed
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
@@ -338,6 +345,8 @@ impl PlayerImpl {
             /// Discriminant of the current phase under a short lock.
             #[call(kind)]
             pub(crate) fn phase_kind(&self) -> PlayerPhaseKind;
+            /// Whether playback is explicitly held in the paused phase.
+            pub fn is_paused(&self) -> bool;
             /// Phase gate: the active slot, or [`TransitionError::WrongPhase`] when
             /// the player holds no slot (phases `Idle` / `Stopped`-without-slot).
             #[expr($.ok_or(TransitionError::WrongPhase))]
@@ -349,9 +358,11 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
@@ -412,7 +423,15 @@ mod tests {
 
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
-        let player = PlayerImpl::new(crate::player::PlayerConfig::test_builder().build());
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+        );
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(testing::test_session())
+                .build(),
+        );
         assert_eq!(
             player.require_active_slot(),
             Err(TransitionError::WrongPhase)

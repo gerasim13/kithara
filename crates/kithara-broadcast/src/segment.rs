@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use kithara_encode::EncodedAccessUnit;
 
 use crate::{
@@ -89,13 +89,13 @@ impl Segmenter {
             return None;
         }
 
-        let mut bytes = Vec::with_capacity(TimestampTag::LEN + self.frames.len());
+        let mut bytes = BytesMut::with_capacity(TimestampTag::LEN + self.frames.len());
         bytes.extend_from_slice(&TimestampTag::render(self.stream_ts, self.timescale));
         bytes.extend_from_slice(&self.frames);
 
         let segment = Segment {
             seq: self.next_seq,
-            bytes: Bytes::from(bytes),
+            bytes: bytes.freeze(),
             duration_ts: self.duration_ts,
             discontinuity: self.discontinuity,
         };

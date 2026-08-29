@@ -22,15 +22,18 @@ and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
 
 ```rust
 use kithara_assets::AssetStore;
-use kithara_bufpool::{BytePool, PcmPool};
-use kithara_play::ResourceConfig;
+use kithara_bufpool::Region;
+use kithara_play::{PlayWorker, PlayWorkerConfig, ResourceConfig};
 
+let region = Region::default();
+let worker = PlayWorker::new(
+    PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+);
 let resource: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
     "https://example.com/track.m3u8",
 )?)
-    .store(AssetStore::builder().build())
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .store(AssetStore::builder().pool(region.byte_pool()).build())
+    .worker(worker)
     .build();
 ```
 
@@ -41,10 +44,12 @@ to the single `decoder` field.
 
 ## Core Surface
 
-- `EngineImpl` owns session dispatch, slot registration, master output state,
-  and the shared decode worker.
-- `PlayerImpl` owns playlist and parameter state, transport flow, status, and
-  item handover.
+- `PlayWorker` owns the shared playback scheduler, pools, and task-registration
+  lifetime for one or many players.
+- `EngineImpl` owns session dispatch, slot registration, and master output
+  state.
+- `PlayerImpl` owns playlist and parameter state, transport flow, status, item
+  handover, and one clone of its explicitly supplied `PlayWorker`.
 - `Resource` opens file, HLS, and reader sources from `ResourceConfig`.
 - `PlayerNode` is the public real-time audio graph node.
 - `policy` owns domain-aware cache identity and DRM request routing above the
@@ -73,7 +78,8 @@ File and HLS pipelines are unconditional; cpal output is the default backend.
 Enable `mock` for `EqualizerMock`.
 
 The role-first source tree is organized as `api/`, `bridge/`, `engine/`,
-`player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/{web}/`, plus the
-target-gated `wasm` surface.
+`effects/`, `player/{state,flow}/`, `resource/`, `rt/{track}/`, `session/`, and
+`worker/`, plus the target-gated `wasm` surface. Concrete output-session state,
+graph dispatch, and platform clients live in `kithara-host`.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -28,7 +28,7 @@ pub(crate) fn table_dividers(
         extra / flexible.to_f32().unwrap_or(f32::MAX)
     };
     let mut edge = bounds.x - horizontal_offset;
-    let mut dividers = Vec::new();
+    let mut dividers: Vec<ColumnDividerLayout> = Vec::new();
     for (index, column) in columns.iter().cloned().enumerate() {
         let width = if column.column.flexible() {
             column.width + flexible_extra

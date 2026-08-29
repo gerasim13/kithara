@@ -1,11 +1,11 @@
 use kithara::{
-    audio::{StretchControls, StretchKind},
     events::{
         AudioEvent, BusEvent, DecoderEvent, DownloaderEvent, Event, EventReceiver, FileEvent,
         HlsEvent, ItemEvent, PlaybackResamplerKind, PlayerEvent, SeekLifecycleStage,
     },
     platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError},
     play::{Cmd, PlayerImpl, Reply, Resource, SessionDispatcher, SessionError},
+    warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::offline::OfflineSession;
 use serde::Serialize;

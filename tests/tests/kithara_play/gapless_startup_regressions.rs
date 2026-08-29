@@ -49,7 +49,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
     let resource =
         create_delayed_gapless_hls_resource(harness.player(), &server, temp_dir.path()).await;
 
-    harness.player().insert(resource, TrackId::allocate(), None);
+    harness.with_player(|player| player.insert(resource, TrackId::allocate(), None));
 
     let started_at = Instant::now();
     harness.player().play();
@@ -89,7 +89,7 @@ async fn gapless_modes_do_not_block_network_startup_until_full_cache(
 }
 
 async fn create_delayed_gapless_hls_resource(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
 ) -> Resource {
@@ -127,12 +127,12 @@ async fn create_delayed_gapless_hls_resource(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare delayed gapless HLS resource config");
 
-    Resource::new(config, None)
+    Resource::new(config)
         .await
         .expect("open delayed gapless HLS resource")
 }

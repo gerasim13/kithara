@@ -2,21 +2,34 @@
 
 use kithara::{
     abr::AbrMode,
-    bufpool::{BytePool, PcmPool},
+    assets::{AssetStore, StorageBackend},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
+    events::{AudioEvent, Event, EventReceiver, PlayerEvent},
     net::{HttpClient, NetOptions},
     platform::{
-        CancelToken,
-        time::{Duration, sleep},
-        tokio::task::yield_now,
+        CancelScope, CancelToken,
+        sync::Arc,
+        time::{Duration, Instant, sleep, timeout},
+        tokio::{
+            sync::broadcast::error::RecvError,
+            task::{self, yield_now},
+        },
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, offline::OfflinePlayer, temp_dir,
-    waits::render_until_position as raw_render_until_position,
+    PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
+    offline::{OfflinePlayer, OfflineSession},
+    temp_dir,
+    waits::{
+        render_until_position as raw_render_until_position, wait_for_loader_done_event,
+        wait_for_position_event,
+    },
 };
+use kithara_test_utils::probe::capture::install as install_recorder;
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -36,12 +49,33 @@ impl Consts {
     const GATED_SEGMENTS: [usize; 2] = [1, 2];
     const GATE_REQUEST_TICKS: u32 = 2_000;
     const GATE_HOLD_TICKS: u32 = 4;
+
+    const RATE_SEED: u64 = 0xA11C_E5EE_D5EE_0001;
+    const SCENARIO_DURATION: Duration = Duration::from_secs(60);
+    const RATE_CHANGE_INTERVAL: Duration = Duration::from_millis(10);
+    const RATE_PATTERN: [f32; 8] = [0.72, 1.38, 0.86, 1.24, 0.64, 1.55, 0.93, 1.12];
+    const SEEK_INTERVAL: Duration = Duration::from_millis(500);
+    const SEEK_STOP_MARGIN: Duration = Duration::from_secs(5);
+    const SEEK_MIN_SECONDS: f64 = 6.0;
+    const SEEK_MAX_SECONDS: f64 = 160.0;
+    const MIN_RATE_CHANGES: usize = 3_000;
+    const MIN_SEEKS: usize = 40;
+    const MIN_OBSERVATIONS_PER_SEEK: usize = 4;
+    const RATE_SEEK_PROGRESS_BUDGET: Duration = Duration::from_secs(8);
+    const MONITOR_POLL_INTERVAL: Duration = Duration::from_millis(100);
 }
 
 struct ControlledGate {
     segment: usize,
     handle: SegmentGateHandle,
     released: bool,
+}
+
+#[derive(Debug, Default)]
+struct PlaybackStats {
+    effective_rate_changes: usize,
+    max_progress_gap: Duration,
+    progress_events: usize,
 }
 
 fn blocks_for_seconds(secs: f64) -> u32 {
@@ -75,6 +109,125 @@ async fn render_until_position(
 
 fn segment_for_target(target: f64) -> usize {
     if target < 8.0 { 1 } else { 2 }
+}
+
+#[kithara::flash(true)]
+async fn drive_queue_ticks(queue: Arc<Queue>) {
+    loop {
+        sleep(Duration::from_millis(50)).await;
+        if queue.tick().is_err() {
+            break;
+        }
+    }
+}
+
+#[kithara::flash(true)]
+async fn churn_rates(queue: Arc<Queue>, seed: u64, stop: CancelToken) -> usize {
+    let mut rng = Xorshift64::new(seed);
+    let mut changes = 0;
+    while !stop.is_cancelled() {
+        let random_byte = rng.next_u64().to_le_bytes()[0];
+        let rate = Consts::RATE_PATTERN[usize::from(random_byte) % Consts::RATE_PATTERN.len()];
+        queue.set_rate(rate);
+        changes += 1;
+        sleep(Consts::RATE_CHANGE_INTERVAL).await;
+    }
+    changes
+}
+
+async fn observe_playback(
+    mut rx: EventReceiver,
+    initial_rate: f32,
+    stop: CancelToken,
+) -> Result<PlaybackStats, String> {
+    let mut stats = PlaybackStats::default();
+    let mut last_progress = Instant::now();
+    let mut last_rate = initial_rate;
+
+    while !stop.is_cancelled() {
+        match timeout(Consts::MONITOR_POLL_INTERVAL, rx.recv()).await {
+            Ok(Ok(envelope)) => match envelope.event {
+                Event::Audio(AudioEvent::PlaybackProgress { .. }) => {
+                    let now = Instant::now();
+                    stats.max_progress_gap = stats
+                        .max_progress_gap
+                        .max(now.saturating_duration_since(last_progress));
+                    stats.progress_events += 1;
+                    last_progress = now;
+                }
+                Event::Player(PlayerEvent::RateChanged { rate }) => {
+                    if (rate - last_rate).abs() > f32::EPSILON {
+                        stats.effective_rate_changes += 1;
+                        last_rate = rate;
+                    }
+                }
+                _ => {}
+            },
+            Ok(Err(RecvError::Lagged(_))) | Err(_) => {}
+            Ok(Err(RecvError::Closed)) => {
+                return Err("playback event stream closed during stress".to_string());
+            }
+        }
+
+        let stalled_for = Instant::now().saturating_duration_since(last_progress);
+        if stalled_for > Consts::RATE_SEEK_PROGRESS_BUDGET {
+            return Err(format!(
+                "sink produced no PlaybackProgress for {stalled_for:?}"
+            ));
+        }
+    }
+
+    Ok(stats)
+}
+
+async fn seek_and_require_read(queue: &Queue, stage: &str, target: f64) {
+    let mut progress_rx = queue.subscribe();
+    let recorder = install_recorder();
+    queue
+        .seek(target)
+        .unwrap_or_else(|error| panic!("{stage}: seek to {target:.2}s: {error}"));
+
+    timeout(Consts::RATE_SEEK_PROGRESS_BUDGET, async {
+        let output = recorder
+            .wait_for_probe_async(
+                |event| {
+                    event.target == "kithara_audio_probe"
+                        && event.probe_name() == Some("post_seek_output")
+                        && event.u64("pending").is_some_and(|pending| {
+                            pending != 0 && event.u64("epoch") == Some(pending)
+                        })
+                },
+                Consts::RATE_SEEK_PROGRESS_BUDGET,
+            )
+            .await
+            .unwrap_or_else(|| panic!("{stage}: seek produced no output"));
+        let output_seq = output.seq().expect("probe sequence");
+        let seek_epoch = output.u64("epoch").expect("post-seek output epoch");
+        recorder
+            .wait_for_probe_async(
+                |event| {
+                    event.target == "kithara_stream_probe"
+                        && event.probe_name() == Some("write_playhead")
+                        && event.seq().is_some_and(|seq| seq > output_seq)
+                },
+                Consts::RATE_SEEK_PROGRESS_BUDGET,
+            )
+            .await
+            .unwrap_or_else(|| panic!("{stage}: HLS read did not progress after seek"));
+
+        loop {
+            match progress_rx.recv().await.map(|envelope| envelope.event) {
+                Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                    seek_epoch: progress_epoch,
+                    ..
+                })) if progress_epoch == seek_epoch => break,
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => panic!("{stage}: playback event stream closed"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{stage}: seek made no complete read-to-sink progress"));
 }
 
 #[kithara::flash(true)]
@@ -141,11 +294,12 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(PlayWorker::new(
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+    ))
     .build();
 
-    let resource = Resource::new(cfg, None)
+    let resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
@@ -214,4 +368,195 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
             n = hangs.len(),
         );
     }
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    flash(false),
+    timeout(Duration::from_secs(120)),
+    hang_timeout_secs(10)
+)]
+#[case::symphonia(DecoderBackend::Symphonia)]
+#[cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    case::apple(DecoderBackend::Apple)
+)]
+#[cfg_attr(target_os = "android", case::android(DecoderBackend::Android))]
+#[ignore = "run: just test run --flash=off -p kithara-integration-tests --test suite_stress --run-ignored=only -E 'test(~hls_rate_seek_stress_keeps_playback_live)'"]
+async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBackend) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    kithara_integration_tests::apple_warmup::warm_if_apple(backend);
+
+    let server = TestServerHelper::new().await;
+    let master = server.asset("hls/master.m3u8");
+    let temp = temp_dir();
+    let shutdown = CancelScope::new(None);
+    let shutdown_token = shutdown.token();
+    let byte_pool = BytePool::default();
+    let sample_pool = SamplePool::default();
+    let store = AssetStore::builder()
+        .cancel(shutdown_token.child())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .pool(byte_pool.clone())
+        .build();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
+            .cancel(shutdown_token.child())
+            .build(),
+    );
+    let downloader = Downloader::new(
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            shutdown_token.child(),
+        ))
+        .build(),
+    );
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .worker(worker)
+            .session(OfflineSession::arc_auto())
+            .cancel(shutdown_token.child())
+            .build(),
+    );
+    let queue = Arc::new(Queue::new(
+        QueueConfig::builder()
+            .player(player)
+            .store(store.clone())
+            .cancel(shutdown_token.child())
+            .build(),
+    ));
+    let tick_handle = task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+
+    let hls_config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(master.as_str()).expect("valid packaged HLS URL"),
+    )
+    .downloader(downloader.clone())
+    .cancel(shutdown_token.child())
+    .store(store)
+    .decoder(
+        kithara::audio::AudioDecoderConfig::builder()
+            .backend(backend)
+            .build(),
+    )
+    .initial_abr_mode(AbrMode::manual(0))
+    .build();
+
+    let mut rx = queue.subscribe();
+    let hls_id = queue
+        .append(TrackSource::Config(Box::new(hls_config)))
+        .expect("append packaged HLS track");
+    wait_for_loader_done_event(&mut rx, &queue, hls_id, Duration::from_secs(20))
+        .await
+        .expect("packaged HLS track must load");
+    queue
+        .select(hls_id, Transition::None)
+        .expect("loaded HLS track must select");
+    queue.play();
+
+    let _ = wait_for_position_event(&mut rx, &queue, 0.75, Duration::from_secs(15))
+        .await
+        .expect("HLS playback must be active before rate stress");
+    assert!(queue.is_playing(), "precondition: player must be active");
+    let scenario_started = Instant::now();
+    let deadline = scenario_started + Consts::SCENARIO_DURATION;
+    let monitor_stop = shutdown_token.child();
+    let monitor_handle = task::spawn(observe_playback(
+        queue.subscribe(),
+        queue.rate(),
+        monitor_stop.clone(),
+    ));
+    let churn_stop = shutdown_token.child();
+    let churn_handle = task::spawn(churn_rates(
+        Arc::clone(&queue),
+        Consts::RATE_SEED,
+        churn_stop.clone(),
+    ));
+    let mut seek_rng = Xorshift64::new(Consts::RATE_SEED ^ 0x5EE7_5EE7_5EE7_5EE7);
+    let mut seek_count = 0;
+
+    while deadline.saturating_duration_since(Instant::now()) > Consts::SEEK_STOP_MARGIN {
+        sleep(Consts::SEEK_INTERVAL).await;
+        let target = seek_rng.range_f64(Consts::SEEK_MIN_SECONDS, Consts::SEEK_MAX_SECONDS);
+        seek_and_require_read(
+            &queue,
+            &format!("seed={:#018x}, rate/seek {seek_count}", Consts::RATE_SEED),
+            target,
+        )
+        .await;
+        seek_count += 1;
+    }
+
+    sleep(deadline.saturating_duration_since(Instant::now())).await;
+    churn_stop.cancel();
+    let applied_changes = churn_handle.await.unwrap_or_else(|error| {
+        panic!(
+            "seed={:#018x}: rate churn task failed: {error}",
+            Consts::RATE_SEED
+        )
+    });
+    monitor_stop.cancel();
+    let playback_stats = monitor_handle
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "seed={:#018x}: playback monitor task failed: {error}",
+                Consts::RATE_SEED
+            )
+        })
+        .unwrap_or_else(|error| panic!("seed={:#018x}: {error}", Consts::RATE_SEED));
+    assert!(
+        scenario_started.elapsed() >= Consts::SCENARIO_DURATION,
+        "seed={:#018x}: scenario ended before sixty seconds",
+        Consts::RATE_SEED
+    );
+    assert!(
+        applied_changes >= Consts::MIN_RATE_CHANGES,
+        "seed={:#018x}: only {applied_changes} rate changes in sixty seconds",
+        Consts::RATE_SEED
+    );
+    assert!(
+        seek_count >= Consts::MIN_SEEKS,
+        "seed={:#018x}: only {seek_count} seeks in sixty seconds",
+        Consts::RATE_SEED
+    );
+    let min_observations = seek_count.saturating_mul(Consts::MIN_OBSERVATIONS_PER_SEEK);
+    assert!(
+        playback_stats.progress_events >= min_observations,
+        "seed={:#018x}: only {} sink PlaybackProgress events for {seek_count} seeks",
+        Consts::RATE_SEED,
+        playback_stats.progress_events
+    );
+    assert!(
+        playback_stats.effective_rate_changes >= min_observations,
+        "seed={:#018x}: only {} effective RateChanged transitions for {seek_count} seeks",
+        Consts::RATE_SEED,
+        playback_stats.effective_rate_changes
+    );
+    assert!(
+        playback_stats.max_progress_gap <= Consts::RATE_SEEK_PROGRESS_BUDGET,
+        "seed={:#018x}: maximum sink progress gap was {:?}",
+        Consts::RATE_SEED,
+        playback_stats.max_progress_gap
+    );
+    assert_eq!(
+        queue.current().map(|track| track.id),
+        Some(hls_id),
+        "seed={:#018x}: HLS stopped being selected after sixty seconds",
+        Consts::RATE_SEED
+    );
+    assert!(
+        queue.is_playing(),
+        "seed={:#018x}: HLS playback stopped after sixty seconds",
+        Consts::RATE_SEED
+    );
+
+    shutdown.cancel();
+    tick_handle.abort();
+    let _tick_result = tick_handle.await;
+    drop(queue);
+    drop(downloader);
+    drop(temp);
 }

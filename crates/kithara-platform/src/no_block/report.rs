@@ -148,7 +148,7 @@ fn nextest_prefix_from(
     test_name: Option<&str>,
     stress_current: Option<&str>,
 ) -> String {
-    let mut fields = Vec::with_capacity(5);
+    let mut fields: Vec<String> = Vec::with_capacity(5);
     if let Some(run_id) = run_id.filter(|value| !value.is_empty()) {
         fields.push(format!(
             "run_id={}",

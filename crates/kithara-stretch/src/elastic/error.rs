@@ -52,16 +52,28 @@ pub enum ElasticError {
     /// A continuous source-to-output rate was invalid or unsupported.
     #[error("elastic source rate {0} is outside the supported envelope")]
     InvalidRate(f64),
+    /// The independent pitch scale was not finite, positive, or representable.
+    #[error("elastic pitch scale {0} is invalid")]
+    InvalidPitch(f64),
     /// The priming history did not match the backend latency and channel count.
     #[error("elastic priming history has {actual} samples; expected {expected}")]
     HistorySampleCount { actual: usize, expected: usize },
+    /// The priming source lookahead did not match the backend latency and channel count.
+    #[error("elastic priming lookahead has {actual} samples; expected {expected}")]
+    LookaheadSampleCount { actual: usize, expected: usize },
     /// A priming request did not produce exactly the declared output latency.
     #[error("elastic warmup has {actual} output frames; expected {expected}")]
     WarmupOutputFrameCount { actual: usize, expected: usize },
     /// A block sample count overflowed the platform index type.
     #[error("elastic block sample count overflow")]
     SampleCountOverflow,
-    /// A backend declared a rate window that cannot bound a rate.
+    /// The injected sample pool could not reserve an engine scratch buffer.
+    #[error("elastic sample pool budget exhausted")]
+    SamplePoolBudgetExhausted,
+    /// The resident input history exceeded its prepared rolling storage.
+    #[error("elastic input history needs {required} frames; prepared capacity is {capacity}")]
+    InputStorage { required: usize, capacity: usize },
+    /// A prepared frame domain produced a rate window that cannot bound a rate.
     #[error("elastic rate envelope {min}..={max} is not a finite positive range")]
     InvalidRateEnvelope { min: f64, max: f64 },
     /// The engine could not be constructed for the prepared shape.
@@ -97,7 +109,7 @@ pub enum ElasticError {
     /// A source cursor was too far from the requested continuous source path.
     #[error("elastic phase error {error} exceeds the continuous correction limit {limit}")]
     PhaseDiscontinuity { error: f64, limit: f64 },
-    /// The backend rate envelope had no headroom for continuous correction.
-    #[error("elastic phase error {error} cannot be corrected inside the backend rate envelope")]
+    /// The prepared rate envelope had no headroom for continuous correction.
+    #[error("elastic phase error {error} cannot be corrected inside the prepared rate envelope")]
     PhaseCorrectionUnavailable { error: f64 },
 }

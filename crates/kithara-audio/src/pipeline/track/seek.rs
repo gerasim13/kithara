@@ -1,4 +1,4 @@
-use kithara_decode::PcmChunk;
+use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::trace;
 
@@ -31,7 +31,10 @@ impl TrackPhase for SeekRequested {
 }
 
 impl Track<SeekRequested> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let request = self.into_inner();
         if !src.readiness.source_is_ready(&src.shared_stream) {
             let phase = src.shared_stream.phase();
@@ -77,7 +80,10 @@ impl TrackPhase for ApplyingSeek {
 }
 
 impl Track<ApplyingSeek> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let applying = self.into_inner();
         let anchor_variant = match applying.mode {
             SeekMode::Anchor(anchor) => anchor.variant_index,
@@ -156,7 +162,10 @@ impl TrackPhase for AwaitingResume {
 }
 
 impl Track<AwaitingResume> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let resume = self.into_inner();
         let post_seek_offset = post_seek_anchor_offset(&src.shared_stream, &resume);
         let ready = post_seek_offset.map_or_else(
@@ -235,7 +244,10 @@ impl TrackPhase for WaitingForSource {
 }
 
 impl Track<WaitingForSource> {
-    pub(crate) fn step<T: StreamType>(self, src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+    pub(crate) fn step<T: StreamType>(
+        self,
+        src: &mut StreamAudioSource<T>,
+    ) -> TrackStep<AudioChunk> {
         let WaitState {
             context,
             reason: stored_reason,

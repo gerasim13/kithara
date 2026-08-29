@@ -5,9 +5,9 @@ Contracts and invariants for the kithara-app crate; the README is the overview.
 ## Broadcast service
 
 The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request
-stays `Requested` until the session exposes its measured output rate, which configures both the ring and the
-encoder and arms the single mix tap. App-root cancellation ends the origin and encoder; dropping the running
-phase releases the tap.
+stays `Requested` until the Host exposes its measured output rate, which configures both the ring and the
+encoder and arms the single Host mix tap. App-root cancellation ends the origin and encoder; stopping the
+running phase releases the tap before the encoder drains.
 
 Stopping blocks — it closes the feed, drains the encoder and joins the worker — so the toggle moves the handle
 into an iced task and marks the service `Stopping`; only that task's completion message makes it `Off`. The GUI
@@ -190,8 +190,8 @@ it to `iced` as `min_size`.
 
 ## Track analysis cache
 
-Source analysis is an expensive whole-track decode deriving the coloured waveform and an optional beat grid /
-BPM estimate in one pass, so the combined result is memoized (`wave_cache.rs`). Each deck's `StateController`
+Progressive source analysis derives the coloured waveform and an optional beat grid / BPM estimate from decoded
+ranges, so the combined result is memoized (`wave_cache.rs`). Each deck's `StateController`
 spawns one `analysis::listen` task owning one `AnalysisController` and one `TrackAnalysisCache`, so the cache
 needs no synchronization. Two identity spaces are kept separate on purpose:
 
@@ -216,8 +216,8 @@ otherwise be served forever as emptiness. Disk reads probe `AssetStore::resource
 missing key would create it. The disk tier stores one blob per track as a resource of the track's asset scope
 (`analysis/track.analysis`), so the artifact is evicted, moved and deleted together with the cached audio bytes.
 
-Invalidation has two levers. `Consts::ANALYSIS_BYTES_VERSION` must be bumped whenever the blob framing or the
-waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
+Invalidation has two levers. The composite codec version in `kithara-analysis` must be bumped whenever its framing
+or the waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
 into every blob and a mismatch is a miss, so `WAVEFORM_MAX_BUCKETS` and runtime beat-analysis tuning re-analyse
 on their own. Because the identity is the source location and not the bytes, a file overwritten in place keeps
 its entry until the version is bumped — acceptable for a library of stable files.

@@ -61,7 +61,7 @@ fn test_byte_pool_budget_tracks_correctly() {
 }
 
 #[kithara::test]
-fn test_pcm_pool_shard_capacity() {
+fn test_sample_pool_shard_capacity() {
     let pool = Pool::<8, Vec<f32>>::new(128, 200_000);
     let shard = pool.shard_index_of();
 
@@ -77,7 +77,7 @@ fn test_pcm_pool_shard_capacity() {
 }
 
 #[kithara::test]
-fn test_pcm_pool_no_cross_shard_needed_typical() {
+fn test_sample_pool_no_cross_shard_needed_typical() {
     let pool = Pool::<8, Vec<f32>>::new(128, 200_000);
 
     {

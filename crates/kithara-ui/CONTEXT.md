@@ -81,9 +81,13 @@ an allocation failure returns `UiDocError::ArenaFull`.
   document strings.
 - Layout scratch is not pooled and does not need to be: a retained widget keeps its own vectors
   and refills them in place, and an immediate widget keeps them in the state its tree holds for it.
-  `perf.reuse-layout-scratch` enforces that for this crate and `kithara-app`, in place of the
-  `perf.prefer-primitive-pool` rule the streaming crates read - see
-  `docs/guides/performance/allocation.md`.
+  `perf.reuse-layout-scratch` enforces that for this crate and `kithara-app`, on top of the
+  workspace-wide `perf.prefer-primitive-pool` rule both crates now also read - see
+  `docs/guides/performance/allocation.md`. That rule asks a collection to name its element type,
+  which is why a `Vec` local here is spelled out even where nothing about it is primitive.
+- `draw/pool/` is this crate's pool home and `perf.no-component-pool-construction` exempts it, the
+  way it exempts `kithara-bufpool`: `DrawPools::new` builds the family a host then injects through
+  `UiConfig`, so it is the owner site rather than a component reaching for storage of its own.
 - The pool family belongs to the host, not to the document. `UiConfig` carries it and every
   document compiled against that configuration shares it, because a `DrawPools` clone is an `Arc`
   clone. A host builds its configuration once - `app::Ui` in `new`, `kithara-app`'s `AppUi` for both

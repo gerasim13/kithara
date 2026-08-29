@@ -3,7 +3,6 @@
 use std::path::Path;
 
 use kithara::{
-    audio::generate_log_spaced_bands,
     events::{AbrEvent, AdvanceReason, Event, EventReceiver},
     hls::AbrMode,
     platform::{
@@ -11,8 +10,11 @@ use kithara::{
         time::{self, Duration},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerImpl, Resource, ResourceConfig, StretchControls, apply_mix},
-    queue::{Queue, QueueConfig, Transition},
+    play::{
+        Resource, ResourceConfig, StretchControls, apply_mix,
+        effects::eq::generate_log_spaced_bands, player::PlayerControl,
+    },
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -64,7 +66,8 @@ type ClassRun = (FrameClass, usize, usize);
 type ToneRun = (ToneClass, usize, usize);
 
 fn with_provenance_headroom(harness: OfflinePlayerHarness) -> OfflinePlayerHarness {
-    apply_mix([(harness.player().as_ref(), PROVENANCE_LEVEL)])
+    harness
+        .with_player(|player| apply_mix([(player, PROVENANCE_LEVEL)]))
         .expect("apply provenance fixture headroom");
     harness
 }
@@ -997,9 +1000,7 @@ async fn setup_queue_with_sample_rate(
         render_sample_rate,
     ));
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
 
@@ -1040,9 +1041,7 @@ async fn setup_multivariant_flac_queue(
         SAMPLE_RATE,
     ));
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
 
@@ -1129,9 +1128,7 @@ async fn setup_flac_queue_with_player_config_autoplay_geometry(
         harness
     };
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         should_autoplay,
     ));
 
@@ -1180,9 +1177,7 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
         SAMPLE_RATE,
     );
     let queue = Queue::new(with_autoplay(
-        QueueConfig::builder()
-            .player(Arc::clone(harness.player()))
-            .build(),
+        QueueConfig::builder().player(harness.take_player()).build(),
         false,
     ));
 
@@ -1211,7 +1206,7 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
 }
 
 async fn hls_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1221,7 +1216,7 @@ async fn hls_resource(
 }
 
 async fn hls_resource_with_segments(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1241,7 +1236,7 @@ async fn hls_resource_with_segments(
 }
 
 async fn hls_resource_with_segments_and_duration(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1267,11 +1262,11 @@ async fn hls_resource_with_segments_and_duration(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
-    let mut resource = Resource::new(config, None)
+    config = player
+        .prepare_config(config)
+        .expect("prepare advance-boundary HLS resource");
+    let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for advance-boundary fixture");
     let _ = resource.preload().await;
@@ -1279,7 +1274,7 @@ async fn hls_resource_with_segments_and_duration(
 }
 
 async fn hls_multivariant_flac_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1303,11 +1298,11 @@ async fn hls_multivariant_flac_resource(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
-    let mut resource = Resource::new(config, None)
+    config = player
+        .prepare_config(config)
+        .expect("prepare advance-boundary multivariant FLAC resource");
+    let mut resource = Resource::new(config)
         .await
         .expect("open HLS multivariant FLAC resource for advance-boundary fixture");
     let _ = resource.preload().await;
@@ -1315,7 +1310,7 @@ async fn hls_multivariant_flac_resource(
 }
 
 async fn hls_sine_aac_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     freq_hz: f64,
@@ -1335,11 +1330,11 @@ async fn hls_sine_aac_resource(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
-    let mut resource = Resource::new(config, None)
+    config = player
+        .prepare_config(config)
+        .expect("prepare advance-boundary sine AAC resource");
+    let mut resource = Resource::new(config)
         .await
         .expect("open HLS sine AAC resource for advance-boundary fixture");
     let _ = resource.preload().await;
@@ -1554,7 +1549,9 @@ fn drive_app_layer_crossfade_advance(queue: &Queue, auto_advanced_index: &mut Op
         let current = queue.current_index().unwrap_or(0);
         if *auto_advanced_index != Some(current) && current + 1 < queue.len() {
             *auto_advanced_index = Some(current);
-            let _ = queue.advance_to_next(Transition::Crossfade, AdvanceReason::UserNext);
+            queue
+                .advance_to_next(Transition::Crossfade, AdvanceReason::UserNext)
+                .expect("advance provenance crossfade");
         }
     }
 }

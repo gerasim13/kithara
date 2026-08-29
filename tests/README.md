@@ -149,7 +149,8 @@ Test categories on `cargo +nightly test --target wasm32-unknown-unknown`:
 - **`kithara_hls/`** — HLS integration tests with `browser` flag (unified `test_server`)
 
 `tests/tests/kithara_wasm/stress.rs` currently contains ignored regression specs:
-`Audio::new` stalls in the `wasm-bindgen-test` headless runner during bootstrap.
+`PlayWorker::open` stalls during audio preparation in the `wasm-bindgen-test`
+headless runner bootstrap.
 `tests/tests/kithara_file/live_stress_real_mp3.rs` is also ignored on `wasm32`
 for the same reason.
 Active browser/player coverage lives in the Selenium suite below.

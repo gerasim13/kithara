@@ -30,7 +30,7 @@ required-features = ["uniffi-bindgen-cli"]
 # Device builds compile with `--no-default-features` (see `xtask apple`/
 # `xtask android`), so `symphonia` is never pulled into apple/android — the
 # hardware backend is the sole decoder there.
-default = ["uniffi", "symphonia", "client-reqwest", "tls-rustls"]
+default = ["uniffi", "symphonia", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 uniffi = ["dep:uniffi"]
 uniffi-bindgen-cli = ["uniffi", "uniffi/cli", "uniffi/cargo-metadata"]
 apple = [
@@ -38,16 +38,21 @@ apple = [
     "kithara/apple-net",
     "kithara-play/apple-fused-src",
     "kithara-queue/apple-fused-src",
+    "stretch-signalsmith",
 ]
-android = ["kithara/android"]
+android = ["kithara/android", "stretch-signalsmith"]
 # Cross-platform software decode backend. Not part of apple/android
 # (those own hardware decode on-device). Used for the host-side
 # uniffi-bindgen build, where neither the apple nor the android
 # (target_os-gated) DecoderBackend variant exists, so without a
 # backend feature `DecoderBackend` would be an empty enum.
 symphonia = ["kithara/symphonia", "kithara-queue/symphonia"]
-stretch-signalsmith = ["kithara/stretch-signalsmith"]
-stretch-bungee = ["kithara/stretch-bungee"]
+stretch-signalsmith = [
+    "kithara/stretch-signalsmith",
+    "kithara-play/stretch-signalsmith",
+    "kithara-queue/stretch-signalsmith",
+]
+stretch-bungee = ["kithara/stretch-bungee", "kithara-play/stretch-bungee", "kithara-queue/stretch-bungee"]
 # Marker feature for wasm32 build matrix (parallel to apple/android).
 # Actual wasm-only deps live under [target.'cfg(target_arch = "wasm32")'].
 # Forwards the reqwest stack so the wasm build (which runs with
@@ -126,14 +131,13 @@ tracing-subscriber = { workspace = true }
 # `symphonia`, which would leak into apple/android device builds (compiled
 # with `--no-default-features`). symphonia is re-added explicitly via the
 # crate-local `symphonia` feature (in the default set, off on device).
-kithara = { workspace = true, default-features = false, features = ["file", "hls"] }
+kithara = { workspace = true, default-features = false, features = ["backend-cpal", "file", "hls"] }
 kithara-drm = { workspace = true }
 # Direct dep so the cross-platform `core::types` / `core::item` can resolve
-# the shared play types from `kithara_play` on native too (the wasm arm pulls
-# the same crate with the web-audio backend). The `probe` feature is gated
-# behind the crate's own `test` feature below.
-kithara-play = { workspace = true, default-features = false, features = ["backend-cpal"] }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
+# the shared play types from `kithara_play` on native and WASM. Output backend
+# selection belongs to `kithara-host`.
+kithara-play = { workspace = true, default-features = false }
+kithara-queue = { workspace = true, default-features = false }
 
 bytes = { workspace = true }
 # Pulled in by firewheel-cpal transitively; surfaced as a direct dep under
@@ -155,6 +159,7 @@ kithara-drm = { workspace = true }
 # key-processor types directly (native reaches the same types through the
 # `kithara` facade and a native-only `kithara-drm` dep).
 kithara-hls = { workspace = true, default-features = false }
+kithara-host = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen"] }
 # `resample-rubato` is in `kithara-play`'s default set, so turning defaults off
 # to keep the native device builds lean silently left wasm with
 # `NoResamplerBackend`. A WebAudio context runs at one rate, and every track
@@ -162,8 +167,8 @@ kithara-hls = { workspace = true, default-features = false }
 # 44.1 kHz context — then failed to open with "resampler backend none does not
 # support fixed-ratio mode". rubato is what native plays through, so wasm
 # resamples the same way rather than a cheaper way.
-kithara-play = { workspace = true, default-features = false, features = ["backend-web-audio", "wasm-bindgen", "symphonia", "webcodecs", "resample-rubato"] }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-web-audio", "symphonia", "webcodecs"] }
+kithara-play = { workspace = true, default-features = false, features = ["symphonia", "webcodecs", "resample-rubato"] }
+kithara-queue = { workspace = true, default-features = false, features = ["symphonia", "webcodecs"] }
 kithara-test-macros = { workspace = true }
 
 bytes = { workspace = true }
@@ -193,10 +198,7 @@ tracing-android = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 kithara = { workspace = true, features = ["probe"] }
 kithara-net = { workspace = true, default-features = false }
-kithara-queue = { workspace = true, default-features = false, features = [
-    "backend-cpal",
-    "probe",
-] }
+kithara-queue = { workspace = true, default-features = false, features = ["probe"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 futures = { workspace = true }

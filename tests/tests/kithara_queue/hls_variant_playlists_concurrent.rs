@@ -15,7 +15,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -67,22 +67,26 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
     Arc<Queue>,
-    Arc<PlayerImpl>,
     Downloader,
     AssetStore,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::SamplePool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
-            .player(Arc::clone(&player))
+            .player(player)
             .store(store.clone())
             .build(),
     ));
@@ -92,7 +96,7 @@ fn build_queue_with_tick(
             .max_concurrent(Consts::MAX_CONCURRENT)
             .build(),
     );
-    (queue, player, downloader, store, tick_handle)
+    (queue, downloader, store, tick_handle)
 }
 
 fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
@@ -231,15 +235,13 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     let url = build_hls(&helper).await;
 
     let temp = temp_dir();
-    let (queue, player, downloader, store, tick_handle) = build_queue_with_tick(&temp);
+    let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let mut rx = player.bus().subscribe();
+    let mut rx = queue.subscribe();
 
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader.clone())
     .store(store)
     .initial_abr_mode(AbrMode::Auto(None))
@@ -250,7 +252,9 @@ async fn variant_media_playlists_load_concurrently(#[case] decoder: DecoderBacke
     )
     .build();
 
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append multivariant HLS track");
     queue.select(track_id, Transition::None).expect("select");
 
     let variant_request_ids = match observe_until_loaded(&mut rx, &queue, track_id, &url).await {

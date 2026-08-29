@@ -7,12 +7,13 @@ use std::{
 };
 
 use kithara::{
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     decode::{
-        DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo, PcmChunk,
-        PcmMeta, PcmSpec, mock::DecoderMock,
+        DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo,
+        mock::DecoderMock,
     },
     platform::{sync::Arc, time::Duration},
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use unimock::{MockFn, Unimock, matching};
 
@@ -80,8 +81,8 @@ pub struct ScriptedOptions {
 /// the requested position by default.
 #[must_use]
 pub fn scripted_decoder(
-    spec: PcmSpec,
-    chunks: Vec<PcmChunk>,
+    spec: AudioSpec,
+    chunks: Vec<AudioChunk>,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
     options: ScriptedOptions,
@@ -108,8 +109,8 @@ pub fn scripted_decoder(
 /// `verify_in_drop: false` data-plane tests.
 #[must_use]
 pub fn scripted_decoder_loose(
-    spec: PcmSpec,
-    chunks: Vec<PcmChunk>,
+    spec: AudioSpec,
+    chunks: Vec<AudioChunk>,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
@@ -127,8 +128,8 @@ pub fn scripted_decoder_loose(
 /// disabled.
 #[must_use]
 pub fn scripted_inner_decoder_with_track_info_loose(
-    spec: PcmSpec,
-    chunks: Vec<PcmChunk>,
+    spec: AudioSpec,
+    chunks: Vec<AudioChunk>,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,
     track_info: DecoderTrackInfo,
@@ -149,7 +150,7 @@ pub fn scripted_inner_decoder_with_track_info_loose(
 ///
 /// Produces fixed-size chunks until `stop` becomes true.
 #[must_use]
-pub fn infinite_decoder(spec: PcmSpec, stop: Arc<AtomicBool>) -> (Box<dyn Decoder>, DecoderLogs) {
+pub fn infinite_decoder(spec: AudioSpec, stop: Arc<AtomicBool>) -> (Box<dyn Decoder>, DecoderLogs) {
     build_infinite_decoder(spec, stop, true)
 }
 
@@ -159,14 +160,14 @@ pub fn infinite_decoder(spec: PcmSpec, stop: Arc<AtomicBool>) -> (Box<dyn Decode
 /// to be called in every scenario.
 #[must_use]
 pub fn infinite_decoder_loose(
-    spec: PcmSpec,
+    spec: AudioSpec,
     stop: Arc<AtomicBool>,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
     build_infinite_decoder(spec, stop, false)
 }
 
 fn build_infinite_decoder(
-    spec: PcmSpec,
+    spec: AudioSpec,
     stop: Arc<AtomicBool>,
     verify_in_drop: bool,
 ) -> (Box<dyn Decoder>, DecoderLogs) {
@@ -185,12 +186,12 @@ fn build_infinite_decoder(
             if stop.load(Ordering::Acquire) {
                 return Ok(DecoderChunkOutcome::Eof);
             }
-            Ok(DecoderChunkOutcome::Chunk(PcmChunk::new(
-                PcmMeta {
+            Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
+                AudioChunkInfo {
                     spec,
                     ..Default::default()
                 },
-                PcmPool::default().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
+                SamplePool::default().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
             )))
         },
         Vec::new(),
@@ -201,7 +202,7 @@ fn build_infinite_decoder(
 }
 
 fn build_decoder_mock<F>(
-    spec: PcmSpec,
+    spec: AudioSpec,
     next_chunk: F,
     seek_results: Vec<DecodeResult<DecoderSeekOutcome>>,
     duration: Option<Duration>,

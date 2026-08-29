@@ -51,7 +51,7 @@ mod host {
                 .scope_items
                 .iter()
                 .map(|item| read.ctx.ui.resolve(*item).to_owned())
-                .collect::<Vec<_>>();
+                .collect::<Vec<String>>();
             Some(Viewed {
                 breadcrumb: (*breadcrumb).to_owned(),
                 scope: (!items.is_empty()).then(|| Scope {

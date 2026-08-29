@@ -28,7 +28,7 @@ pub enum TrackReadOutcome {
     Full {
         /// Playback position snapshot after the read (seconds).
         position: f64,
-        /// Real PCM frames copied from the underlying resource/scratch buffer.
+        /// Real audio frames copied from the underlying resource/scratch buffer.
         frames: usize,
         /// Visible duration snapshot in seconds.
         duration: f64,
@@ -51,13 +51,13 @@ pub enum TrackReadOutcome {
 impl PlayerTrack {
     /// Advance the media clock by `frames` of mixed output.
     ///
-    /// The mix output runs on the output clock; one output frame carries
-    /// `playback_rate` media frames, which is what the stretch slot consumed
-    /// from the source to produce it.
+    /// The mix output runs on the output clock; one output frame carries the
+    /// resource's current effective rate in media frames.
     fn advance_media_clock(&mut self, frames: usize) {
         let output_frames: f64 = AsPrimitive::as_(frames);
+        let playback_rate = self.playback_rate();
         self.served_media_frames =
-            output_frames.mul_add(f64::from(self.playback_rate), self.served_media_frames);
+            output_frames.mul_add(f64::from(playback_rate), self.served_media_frames);
     }
 
     fn check_notifications(

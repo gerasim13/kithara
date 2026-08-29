@@ -84,7 +84,7 @@ fn shader_spec(
         .uniforms
         .iter()
         .map(|(name, _)| name.clone())
-        .collect::<Vec<_>>();
+        .collect::<Vec<String>>();
     let uniforms = extra
         .uniforms
         .iter()
@@ -417,7 +417,7 @@ fn table_spec(
     extra: &ExtraBindings,
     path: &str,
 ) -> Result<ControlSpec, UiDocError> {
-    let mut resolved = Vec::with_capacity(columns.len());
+    let mut resolved: Vec<TableColumn> = Vec::with_capacity(columns.len());
     for (index, column) in columns.iter().enumerate() {
         let label = resolve_text_key(
             context.text,

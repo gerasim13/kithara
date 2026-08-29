@@ -7,8 +7,9 @@ use std::{
 
 use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    GaplessMode, GaplessProfile, PcmChunk, PcmSpec,
+    GaplessMode, GaplessProfile,
 };
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::MediaInfo;
 use tracing::warn;
 
@@ -21,7 +22,7 @@ mod holdback;
 struct Holdback {
     join_frames: u64,
     slots: usize,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -31,18 +32,18 @@ pub(crate) enum StageProgress {
 }
 
 pub(crate) struct StageFailure {
-    pub(crate) chunk: PcmChunk,
+    pub(crate) chunk: AudioChunk,
     pub(crate) error: DecodeError,
 }
 
 pub(crate) enum StageResult {
     Ready,
     NeedMore,
-    Invalid(StageFailure),
+    Invalid(Box<StageFailure>),
 }
 
 pub(crate) enum StageOutput {
-    Output(Option<PcmChunk>),
+    Output(Option<AudioChunk>),
     Invalid(StageFailure),
 }
 
@@ -75,7 +76,7 @@ pub(crate) struct DecoderGeneration {
     timeline_gap_floor: u64,
     media_info: Option<MediaInfo>,
     pending_head_skip: Option<ResumeState>,
-    staged: VecDeque<PcmChunk>,
+    staged: VecDeque<AudioChunk>,
     #[cfg(test)]
     staged_scan_count: Cell<usize>,
     #[field(get, vis = "pub(crate)")]
@@ -163,7 +164,7 @@ impl DecoderGeneration {
         self.media_info.as_ref()
     }
 
-    pub(crate) fn next(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn next(&mut self) -> Option<AudioChunk> {
         self.holdback = None;
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
@@ -194,7 +195,7 @@ impl DecoderGeneration {
         self.pending_head_skip.as_mut()
     }
 
-    pub(crate) fn stage(&mut self, chunk: PcmChunk) {
+    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.gapless.push(chunk);
         while let Some(chunk) = self.gapless.next() {
@@ -202,22 +203,22 @@ impl DecoderGeneration {
         }
     }
 
-    pub(crate) fn push(&mut self, chunk: PcmChunk) {
+    pub(crate) fn push(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.gapless.push(chunk);
     }
 
-    pub(crate) fn pop_staged(&mut self) -> Option<PcmChunk> {
+    pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
         self.holdback = None;
         self.staged.pop_front()
     }
 
-    pub(crate) fn push_staged_front(&mut self, chunk: PcmChunk) {
+    pub(crate) fn push_staged_front(&mut self, chunk: AudioChunk) {
         self.holdback = None;
         self.staged.push_front(chunk);
     }
 
-    pub(crate) fn staged_span(&self) -> Option<(u64, u64, PcmSpec)> {
+    pub(crate) fn staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
         #[cfg(test)]
         self.record_staged_scan();
         let first = self.staged.front()?;
@@ -233,7 +234,7 @@ impl DecoderGeneration {
         Some((start, end, spec))
     }
 
-    pub(crate) fn staged_covers(&self, spec: PcmSpec, start: u64, frames: u64) -> bool {
+    pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
         let Some(end) = start.checked_add(frames) else {
             return false;
         };
@@ -245,7 +246,7 @@ impl DecoderGeneration {
 
     pub(crate) fn copy_staged_frames(
         &self,
-        spec: PcmSpec,
+        spec: AudioSpec,
         start: u64,
         frames: u64,
         output: &mut [f32],
@@ -331,7 +332,7 @@ impl DecoderGeneration {
     }
 }
 
-fn chunk_range(chunk: &PcmChunk, spec: PcmSpec) -> Option<(u64, u64)> {
+fn chunk_range(chunk: &AudioChunk, spec: AudioSpec) -> Option<(u64, u64)> {
     let channels = usize::from(spec.channels);
     if channels == 0 || chunk.spec() != spec || !chunk.samples.len().is_multiple_of(channels) {
         return None;
@@ -349,7 +350,7 @@ fn chunk_range(chunk: &PcmChunk, spec: PcmSpec) -> Option<(u64, u64)> {
     ))
 }
 
-fn stage_failure(chunk: PcmChunk, detail: &'static str) -> StageFailure {
+fn stage_failure(chunk: AudioChunk, detail: &'static str) -> StageFailure {
     StageFailure {
         chunk,
         error: DecodeError::InvalidData { detail },
@@ -370,9 +371,10 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::PcmPool;
-    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo, PcmMeta};
+    use kithara_bufpool::SamplePool;
+    use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo};
     use kithara_platform::time::Duration;
+    use kithara_signal::AudioChunkInfo;
     use kithara_stream::PrerollHint;
     use kithara_test_utils::kithara;
 
@@ -381,7 +383,7 @@ mod tests {
     struct EofDecoder {
         gapless: Option<GaplessInfo>,
         default_priming: u64,
-        spec: PcmSpec,
+        spec: AudioSpec,
     }
 
     impl Decoder for EofDecoder {
@@ -402,7 +404,7 @@ mod tests {
             })
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
 
@@ -413,14 +415,14 @@ mod tests {
         fn update_byte_len(&self, _len: u64) {}
     }
 
-    fn spec(channels: u16, rate: u32) -> PcmSpec {
-        PcmSpec::new(
+    fn spec(channels: u16, rate: u32) -> AudioSpec {
+        AudioSpec::new(
             channels,
             NonZeroU32::new(rate).expect("test rate must be non-zero"),
         )
     }
 
-    fn generation(spec: PcmSpec) -> DecoderGeneration {
+    fn generation(spec: AudioSpec) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: None,
@@ -435,7 +437,7 @@ mod tests {
         )
     }
 
-    fn media_generation(spec: PcmSpec, trailing_frames: u64) -> DecoderGeneration {
+    fn media_generation(spec: AudioSpec, trailing_frames: u64) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
@@ -452,7 +454,7 @@ mod tests {
 
     /// A track whose container carries no gapless metadata while the codec
     /// table offers an estimate — the AAC-LC case at a quality-switch seam.
-    fn priming_generation(spec: PcmSpec, mode: GaplessMode) -> DecoderGeneration {
+    fn priming_generation(spec: AudioSpec, mode: GaplessMode) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
                 gapless: None,
@@ -467,15 +469,15 @@ mod tests {
         )
     }
 
-    fn chunk(spec: PcmSpec, offset: u64, frames: u32, sample_frames: usize) -> PcmChunk {
-        PcmChunk::new(
-            PcmMeta {
+    fn chunk(spec: AudioSpec, offset: u64, frames: u32, sample_frames: usize) -> AudioChunk {
+        AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 frame_offset: offset,
                 frames,
                 ..Default::default()
             },
-            PcmPool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
+            SamplePool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
         )
     }
 

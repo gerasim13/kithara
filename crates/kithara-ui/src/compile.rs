@@ -70,10 +70,15 @@ impl CompiledUi {
     }
 
     #[cfg(feature = "render")]
-    pub(crate) fn includes_module(&self, owner: InternId, address: &[usize], module: &str) -> bool {
+    pub(crate) fn includes_module(
+        &self,
+        owner: InternId,
+        address: &Address<'_>,
+        module: &str,
+    ) -> bool {
         self.includes
             .iter()
-            .filter(|include| include.owner == owner && include.address.as_ref() == address)
+            .filter(|include| include.owner == owner && address.names(&include.address))
             .any(|include| self.resolve(include.module) == module)
     }
 
@@ -119,6 +124,45 @@ struct IncludedModule {
     address: Box<[usize]>,
     module: InternId,
     owner: InternId,
+}
+
+/// Where one node sits under the document root.
+///
+/// A walk carries its position by borrowing the parent it came from rather
+/// than owning a path of its own: the address is read at the few leaves that
+/// ask whether they host an engine, and nothing about it outlives the mount
+/// that built it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Address<'a> {
+    Root,
+    Child { parent: &'a Self, index: usize },
+}
+
+impl Address<'_> {
+    /// The address one step further down, at `index` among this node's children.
+    pub(crate) const fn child(&self, index: usize) -> Address<'_> {
+        Address::Child {
+            parent: self,
+            index,
+        }
+    }
+
+    /// Whether this address names `path`, compared from the leaf upward.
+    fn names(&self, path: &[usize]) -> bool {
+        let mut node = self;
+        let mut rest = path;
+        while let Self::Child { parent, index } = node {
+            let Some((last, head)) = rest.split_last() else {
+                return false;
+            };
+            if last != index {
+                return false;
+            }
+            node = parent;
+            rest = head;
+        }
+        rest.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -27,7 +27,7 @@ pub(crate) enum AcceptEncodingPolicy {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn accept_encoding_value(compression: Compression) -> String {
-    let mut codings = Vec::new();
+    let mut codings: Vec<&'static str> = Vec::new();
     if compression.contains(Compression::GZIP) {
         codings.push("gzip");
     }

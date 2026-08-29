@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use kithara::{self, decode::PcmSpec, events::TrackId, play::Resource};
+use kithara::{self, events::TrackId, play::Resource, signal::AudioSpec};
 use kithara_integration_tests::offline::{
     OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader,
 };
@@ -13,8 +13,8 @@ const BLOCK_FRAMES: usize = 512;
 const TARGET_SAMPLES: usize = 8_820;
 const MAX_RENDERED_FRAMES: usize = 9_000;
 
-fn mock_spec() -> PcmSpec {
-    PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"))
+fn mock_spec() -> AudioSpec {
+    AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("test rate"))
 }
 
 fn make_resource(duration_secs: f64) -> Resource {
@@ -30,17 +30,13 @@ fn offline_harness_smoke() {
         OfflinePlayerOptions::builder().build(),
         SAMPLE_RATE,
     );
-    harness
-        .player()
-        .insert(make_resource(0.1), TrackId::allocate(), None);
-    harness
-        .player()
-        .insert(make_resource(0.1), TrackId::allocate(), None);
-
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.insert(make_resource(0.1), TrackId::allocate(), None);
+        player.insert(make_resource(0.1), TrackId::allocate(), None);
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 
     let mut rendered: Vec<f32> = Vec::new();
     let mut total_frames: usize = 0;

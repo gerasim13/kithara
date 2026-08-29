@@ -28,6 +28,7 @@ tls-native = ["kithara-stream/tls-native"]
 tls-rustls = ["kithara-stream/tls-rustls"]
 
 [dependencies]
+kithara-bufpool = { workspace = true }
 kithara-stream = { workspace = true }
 
 bon = { workspace = true }

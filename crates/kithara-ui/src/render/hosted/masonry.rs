@@ -375,7 +375,7 @@ impl TablePlan {
             .enumerate()
             .filter(|(index, _)| column_resizable(&columns, *index))
             .map(|(index, column)| (index, self.divider_path(&column.column)))
-            .collect::<Vec<_>>();
+            .collect::<Vec<(usize, &str)>>();
         for (index, path) in resizable {
             let width = engine
                 .column_divider_value(path)

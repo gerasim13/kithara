@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -13,7 +13,7 @@ use kithara::{
         tokio,
         tokio::sync::OnceCell,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -43,13 +43,16 @@ static CTX: OnceCell<Ctx> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
-        let net = NetOptions::builder().is_insecure(true).build();
+        let byte_pool = BytePool::default();
+        let net = NetOptions::builder()
+            .byte_pool(byte_pool.clone())
+            .is_insecure(true)
+            .build();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let shutdown = CancelToken::never();
-        let byte_pool = BytePool::default();
         let store = AssetStore::builder()
             .cancel(shutdown.child())
             .backend(StorageBackend::default())
@@ -57,20 +60,23 @@ async fn shared_ctx() -> &'static Ctx {
             .flush_hub(flush_hub)
             .layouts(baked::build_baked_asset_layouts())
             .build();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+                .cancel(shutdown.child())
+                .build(),
+        );
         let config = AppConfig::builder()
             .downloader(downloader)
             .shutdown(shutdown)
-            .byte_pool(byte_pool)
-            .pcm_pool(PcmPool::default())
+            .worker(worker.clone())
             .store(store)
             .build();
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
+                .worker(worker)
                 .session(OfflineSession::arc_auto())
                 .build(),
-        ));
+        );
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let q = Arc::clone(&queue);
@@ -174,7 +180,10 @@ async fn zvuk_prod_drm_track_plays(#[case] backend: DecoderBackend) {
     let ctx = shared_ctx().await;
     let source = build_track_source(PROD_TRACK, ctx, backend);
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source);
+    let track_id = ctx
+        .queue
+        .append(source)
+        .expect("append production DRM track");
 
     wait_for_loaded(&mut rx, &ctx.queue, track_id, Duration::from_secs(30))
         .await

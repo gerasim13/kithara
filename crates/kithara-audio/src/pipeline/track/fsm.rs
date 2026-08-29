@@ -1,7 +1,8 @@
 use std::mem;
 
-use kithara_decode::{DecodeError, PcmChunk};
+use kithara_decode::DecodeError;
 use kithara_events::AudioEvent;
+use kithara_signal::AudioChunk;
 use kithara_stream::{SourcePhase, StreamType};
 use tracing::warn;
 
@@ -177,7 +178,7 @@ fn emit_failure_log(failure: &TrackFailure) {
     }
 }
 
-pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackStep<PcmChunk> {
+pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackStep<AudioChunk> {
     if !matches!(src.state, CurrentFsm::RebuildingDecoder(_))
         && let Some(target) = preempt_target(&src.seek_engine, &src.state, src.seek_obs.as_ref())
     {

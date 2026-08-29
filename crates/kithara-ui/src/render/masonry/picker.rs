@@ -13,7 +13,7 @@ use super::custom::HostAction;
 use crate::{
     atoms::{bar::context::Context, table::face::Drawn, tree::retained::Drawn as TreeDrawn},
     draw::{Pt, Rect},
-    engine::{Engine, PickerSnapshot, Target},
+    engine::{Descriptor, Engine, PickerSnapshot, Target},
     interact::{
         CursorShape, Input, MOUSE, Outcome, PointerInput, PointerPhase,
         masonry::{pointer_button, portable_scroll},
@@ -162,7 +162,7 @@ impl HostedEngine {
             .targets
             .iter()
             .flat_map(|target| target.plan.active_descriptors(&targets))
-            .collect::<Vec<_>>();
+            .collect::<Vec<Descriptor>>();
         engine.reconcile(descriptors);
         for target in &targets {
             engine.set_scroll_viewport(target.path, target.hit.area());

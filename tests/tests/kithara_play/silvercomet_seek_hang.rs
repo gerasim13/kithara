@@ -11,7 +11,7 @@ use kithara::{
         CancelToken, thread,
         time::{Duration, Instant, timeout},
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -122,8 +122,13 @@ async fn build_resource(
         ResourceConfig::parse_src(url)
             .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
+    .worker(PlayWorker::new(
+        PlayWorkerConfig::for_pools(
+            kithara::bufpool::BytePool::default(),
+            kithara::bufpool::SamplePool::default(),
+        )
+        .build(),
+    ))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)
@@ -134,9 +139,9 @@ async fn build_resource(
     )
     .initial_abr_mode(abr)
     .build();
-    let mut resource = Resource::new(cfg, None)
+    let mut resource = Resource::new(cfg)
         .await
-        .unwrap_or_else(|e| panic!("Resource::new({url}, None): {e:?}"));
+        .unwrap_or_else(|e| panic!("Resource::new({url}): {e:?}"));
     timeout(Duration::from_secs(15), resource.preload())
         .await
         .unwrap_or_else(|_| panic!("Resource::preload({url}) timed out after 15s"))

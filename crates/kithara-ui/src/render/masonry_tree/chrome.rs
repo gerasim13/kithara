@@ -28,7 +28,7 @@ where
     /// assigned to, and the chevron that folds it away.
     pub(super) fn module_header(&self, module: &Module<'_>) -> MasonryNode<Action> {
         let metrics = self.skin.chrome;
-        let mut children = Vec::with_capacity(4 + module.assign().len());
+        let mut children: Vec<MasonryNode<Action>> = Vec::with_capacity(4 + module.assign().len());
         if let Some(chip) = module.chip() {
             children
                 .push(self.chrome_label(ChromeLabel::chip(self.skin), self.ctx.ui.resolve(chip)));

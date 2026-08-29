@@ -1,24 +1,27 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_platform::time::Duration;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerProcess,
     ResamplerSettings, create_resampler,
+};
+use kithara_signal::{
+    AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, PlanarBuffer, sanitize_sample,
 };
 use kithara_stream::AudioCodec;
 use smallvec::SmallVec;
 
 use crate::{
     BlenderProfile, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
-    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, Frames, GaplessInfo,
-    GaplessTailCompensation, PcmChunk, PcmMeta, PcmSpec, TrackMetadata, duration_for_frames,
-    frames_for_duration, sanitize_sample,
+    DecoderResamplerConfig, DecoderSeekOutcome, DecoderTrackInfo, GaplessInfo,
+    GaplessTailCompensation, TrackMetadata,
 };
 
 pub(crate) fn wrap<B>(
     decoder: Box<dyn Decoder>,
     config: Option<DecoderResamplerConfig<B>>,
-    pool: &PcmPool,
+    pool: &SamplePool,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
@@ -39,20 +42,21 @@ where
     backend: B,
     decoder: Box<dyn Decoder>,
     target_sample_rate: NonZeroU32,
-    last_input_meta: Option<PcmMeta>,
-    pending_meta: Option<PcmMeta>,
-    pool: PcmPool,
-    source_spec: PcmSpec,
-    target_spec: PcmSpec,
+    last_input_meta: Option<AudioChunkInfo>,
+    pending_meta: Option<AudioChunkInfo>,
+    pool: SamplePool,
+    source_spec: AudioSpec,
+    target_spec: AudioSpec,
     resampler: B::Resampler,
     options: kithara_resampler::ResamplerOptions,
     quality: kithara_resampler::ResamplerQuality,
-    input: SmallVec<[PcmBuf; 8]>,
-    output: SmallVec<[PcmBuf; 8]>,
-    scratch: SmallVec<[PcmBuf; 8]>,
+    input: PlanarBuffer,
+    output: PlanarBuffer,
+    scratch: PlanarBuffer,
     eof_flushed: bool,
     emitted_frames: u64,
     output_frame_offset: u64,
+    reanchor_output_on_next_chunk: bool,
     source_frames_seen: u64,
     output_skip_frames: usize,
 }
@@ -64,11 +68,11 @@ where
     fn new(
         decoder: Box<dyn Decoder>,
         config: DecoderResamplerConfig<B>,
-        pool: &PcmPool,
+        pool: &SamplePool,
     ) -> DecodeResult<Self> {
         let backend = config.backend;
         let source_spec = decoder.spec();
-        let target_spec = PcmSpec::new(source_spec.channels, config.target_sample_rate);
+        let target_spec = AudioSpec::new(source_spec.channels, config.target_sample_rate);
         let resampler = build_resampler(
             backend.clone(),
             source_spec,
@@ -77,22 +81,24 @@ where
             config.options,
             pool.clone(),
         )?;
+        let empty = FrameCount::new(0);
         Ok(Self {
             backend,
             decoder,
             emitted_frames: 0,
             eof_flushed: false,
-            input: channel_buffers(pool, source_spec.channels),
+            input: PlanarBuffer::new(pool, source_spec, empty)?,
             last_input_meta: None,
             options: config.options,
-            output: channel_buffers(pool, source_spec.channels),
+            output: PlanarBuffer::new(pool, target_spec, empty)?,
             output_frame_offset: 0,
             output_skip_frames: resampler.output_delay(),
             pending_meta: None,
             pool: pool.clone(),
             quality: config.quality,
+            reanchor_output_on_next_chunk: false,
             resampler,
-            scratch: channel_buffers(pool, source_spec.channels),
+            scratch: PlanarBuffer::new(pool, target_spec, empty)?,
             source_frames_seen: 0,
             source_spec,
             target_sample_rate: config.target_sample_rate,
@@ -100,15 +106,18 @@ where
         })
     }
 
-    fn append_chunk(&mut self, chunk: &PcmChunk) -> DecodeResult<()> {
+    fn append_chunk(&mut self, chunk: &AudioChunk) -> DecodeResult<()> {
         let spec = chunk.spec();
-        if spec != self.source_spec {
+        let source_spec_changed = spec != self.source_spec;
+        if source_spec_changed {
             self.rebuild_for_source_spec(spec)?;
-            self.output_frame_offset = u64::try_from(frames_for_duration(
-                self.target_sample_rate.get(),
-                chunk.meta.timestamp,
-            ))
-            .unwrap_or(u64::MAX);
+        }
+        if source_spec_changed || self.reanchor_output_on_next_chunk {
+            self.output_frame_offset = self
+                .target_spec
+                .frame_at(chunk.meta.timestamp)
+                .unwrap_or(u64::MAX);
+            self.reanchor_output_on_next_chunk = false;
         }
         if self.pending_meta.is_none() {
             self.pending_meta = Some(chunk.meta);
@@ -119,16 +128,14 @@ where
         self.source_frames_seen = self
             .source_frames_seen
             .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
-        let base_len = self.input[0].len();
-        for channel in self.input.iter_mut().take(channels) {
-            let old_len = channel.len();
-            channel.ensure_len(old_len.saturating_add(frames))?;
-        }
-        for frame in 0..frames {
-            let base = frame.saturating_mul(channels);
-            for channel in 0..channels {
-                let dst = base_len + frame;
-                self.input[channel][dst] = sanitize_sample(chunk.samples[base + channel]);
+        let base_len = self.input.frames().get();
+        self.input
+            .resize_frames(FrameCount::new(base_len.saturating_add(frames)))?;
+        for channel in 0..channels {
+            let destination = self.input.channel_mut(channel)?;
+            for frame in 0..frames {
+                let base = frame.saturating_mul(channels);
+                destination[base_len + frame] = sanitize_sample(chunk.samples[base + channel]);
             }
         }
         Ok(())
@@ -138,16 +145,10 @@ where
         usize::from(self.source_spec.channels)
     }
 
-    fn clear_planar(buffers: &mut SmallVec<[PcmBuf; 8]>, channels: usize) {
-        for buffer in buffers.iter_mut().take(channels) {
-            buffer.clear();
-        }
-    }
-
-    fn drain_ready(&mut self) -> DecodeResult<Option<PcmChunk>> {
+    fn drain_ready(&mut self) -> DecodeResult<Option<AudioChunk>> {
         loop {
             let input_frames = self.resampler.input_frames_next();
-            if self.input[0].len() < input_frames {
+            if self.input.frames().get() < input_frames {
                 break;
             }
             let process = self.process_block(input_frames)?;
@@ -159,16 +160,14 @@ where
             if process.input_frames == 0 {
                 break;
             }
-            self.drop_consumed(process.input_frames);
+            self.drop_consumed(process.input_frames)?;
         }
         self.finish_output()
     }
 
-    fn drop_consumed(&mut self, frames: usize) {
-        let channels = self.channels();
-        for buffer in self.input.iter_mut().take(channels) {
-            buffer.drain(..frames);
-        }
+    fn drop_consumed(&mut self, frames: usize) -> DecodeResult<()> {
+        self.input.truncate_front(FrameCount::new(frames))?;
+        Ok(())
     }
 
     fn expected_output_frames(&self) -> u64 {
@@ -180,45 +179,46 @@ where
         u64::try_from(expected).unwrap_or(u64::MAX)
     }
 
-    fn finish_output(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        if self.output[0].is_empty() {
+    fn finish_output(&mut self) -> DecodeResult<Option<AudioChunk>> {
+        if self.output.frames().get() == 0 {
             return Ok(None);
         }
-        let frames = Frames::new(self.output[0].len());
+        let frames = self.output.frames();
         let samples = self.interleave(frames)?;
         let mut meta = self.pending_meta.take().unwrap_or_default();
         meta.spec = self.target_spec;
         meta.frame_offset = self.output_frame_offset;
         meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
-        meta.timestamp = duration_for_frames(self.target_sample_rate.get(), meta.frame_offset);
+        meta.timestamp = self
+            .target_spec
+            .duration_for(meta.frame_offset)
+            .unwrap_or(Duration::from_nanos(u64::MAX));
         self.output_frame_offset = self
             .output_frame_offset
             .saturating_add(u64::try_from(frames.get()).unwrap_or(u64::MAX));
         self.emitted_frames = self
             .emitted_frames
             .saturating_add(u64::try_from(frames.get()).unwrap_or(u64::MAX));
-        meta.end_timestamp =
-            duration_for_frames(self.target_sample_rate.get(), self.output_frame_offset);
-        let channels = self.channels();
-        Self::clear_planar(&mut self.output, channels);
-        Ok(Some(PcmChunk::new(meta, samples)))
+        meta.end_timestamp = self
+            .target_spec
+            .duration_for(self.output_frame_offset)
+            .unwrap_or(Duration::from_nanos(u64::MAX));
+        self.output.clear();
+        Ok(Some(AudioChunk::new(meta, samples)))
     }
 
-    fn flush_residual(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        if self.input[0].is_empty() && self.ready_output_frames() >= self.expected_output_frames() {
+    fn flush_residual(&mut self) -> DecodeResult<Option<AudioChunk>> {
+        if self.input.frames().get() == 0
+            && self.ready_output_frames() >= self.expected_output_frames()
+        {
             return Ok(None);
         }
         if self.pending_meta.is_none() {
             self.pending_meta = self.last_input_meta;
         }
-        let channels = self.channels();
         while self.ready_output_frames() < self.expected_output_frames() {
             let input_frames = self.resampler.input_frames_next();
-            let buffered = self.input[0].len();
-            for buffer in self.input.iter_mut().take(channels) {
-                buffer.ensure_len(input_frames)?;
-                buffer[buffered..input_frames].fill(0.0);
-            }
+            self.input.resize_frames(FrameCount::new(input_frames))?;
             let ready_before = self.ready_output_frames();
             let process = self.process_block(input_frames)?;
             if process.input_frames > input_frames {
@@ -229,43 +229,36 @@ where
             if process.input_frames == 0 && self.ready_output_frames() == ready_before {
                 break;
             }
-            self.drop_consumed(process.input_frames);
+            self.drop_consumed(process.input_frames)?;
         }
         self.finish_output()
     }
 
-    fn interleave(&self, frames: Frames) -> DecodeResult<PcmBuf> {
-        let channels = self.channel_count();
+    fn interleave(&self, frames: FrameCount) -> DecodeResult<SampleBuffer> {
         let mut samples = self.pool.get();
-        samples.ensure_len(frames.samples(channels).get())?;
-        for frame in 0..frames.get() {
-            let base = frame.saturating_mul(channels.get());
-            for channel in 0..channels.get() {
-                samples[base + channel] = self.output[channel][frame];
-            }
-        }
+        let sample_count = self.target_spec.sample_count(frames)?.get();
+        samples.ensure_len(sample_count)?;
+        self.output.view().interleave_into(&mut samples)?;
         Ok(samples)
-    }
-
-    fn channel_count(&self) -> NonZeroUsize {
-        NonZeroUsize::new(self.channels()).unwrap_or(NonZeroUsize::MIN)
     }
 
     fn process_block(&mut self, input_frames: usize) -> DecodeResult<ResamplerProcess> {
         let channels = self.channels();
         let output_frames = self.resampler.output_frames_next();
-        for buffer in self.scratch.iter_mut().take(channels) {
-            buffer.ensure_len(output_frames)?;
-        }
-        let input = self.input[..channels]
-            .iter()
-            .map(|buffer| &buffer[..input_frames])
-            .collect::<SmallVec<[&[f32]; 8]>>();
+        self.scratch.resize_frames(FrameCount::new(output_frames))?;
+        let input_view = self.input.view().range(0..input_frames)?;
+        let input = (0..channels)
+            .map(|channel| input_view.channel(channel))
+            .collect::<Result<SmallVec<[&[f32]; 8]>, _>>()?;
         let process = {
-            let mut output = self.scratch[..channels]
-                .iter_mut()
-                .map(|buffer| &mut buffer[..output_frames])
-                .collect::<SmallVec<[&mut [f32]; 8]>>();
+            let stride = self.scratch.stride().get();
+            let mut remaining = self.scratch.as_samples_mut();
+            let mut output = SmallVec::<[&mut [f32]; 8]>::with_capacity(channels);
+            for _ in 0..channels {
+                let (channel, rest) = remaining.split_at_mut(stride);
+                output.push(&mut channel[..output_frames]);
+                remaining = rest;
+            }
             self.resampler
                 .process_into_buffer(&input, &mut output)
                 .map_err(DecodeError::backend)?
@@ -284,11 +277,12 @@ where
         let usable = usize::try_from(remaining)
             .unwrap_or(usize::MAX)
             .min(available);
+        let old_len = self.output.frames().get();
+        self.output
+            .resize_frames(FrameCount::new(old_len.saturating_add(usable)))?;
         for channel in 0..channels {
-            let old_len = self.output[channel].len();
-            self.output[channel].ensure_len(old_len.saturating_add(usable))?;
-            let dst = &mut self.output[channel][old_len..old_len + usable];
-            let src = &self.scratch[channel][skip..skip + usable];
+            let src = &self.scratch.channel(channel)?[skip..skip + usable];
+            let dst = &mut self.output.channel_mut(channel)?[old_len..old_len + usable];
             dst.copy_from_slice(src);
         }
         Ok(process)
@@ -296,11 +290,11 @@ where
 
     fn ready_output_frames(&self) -> u64 {
         self.emitted_frames
-            .saturating_add(u64::try_from(self.output[0].len()).unwrap_or(u64::MAX))
+            .saturating_add(u64::try_from(self.output.frames().get()).unwrap_or(u64::MAX))
     }
 
-    fn rebuild_for_source_spec(&mut self, source_spec: PcmSpec) -> DecodeResult<()> {
-        let target_spec = PcmSpec::new(source_spec.channels, self.target_sample_rate);
+    fn rebuild_for_source_spec(&mut self, source_spec: AudioSpec) -> DecodeResult<()> {
+        let target_spec = AudioSpec::new(source_spec.channels, self.target_sample_rate);
         let resampler = build_resampler(
             self.backend.clone(),
             source_spec,
@@ -309,12 +303,16 @@ where
             self.options,
             self.pool.clone(),
         )?;
+        let empty = FrameCount::new(0);
+        let input = PlanarBuffer::new(&self.pool, source_spec, empty)?;
+        let output = PlanarBuffer::new(&self.pool, target_spec, empty)?;
+        let scratch = PlanarBuffer::new(&self.pool, target_spec, empty)?;
         self.source_spec = source_spec;
         self.target_spec = target_spec;
-        self.input = channel_buffers(&self.pool, source_spec.channels);
-        self.output = channel_buffers(&self.pool, source_spec.channels);
+        self.input = input;
+        self.output = output;
         self.output_skip_frames = resampler.output_delay();
-        self.scratch = channel_buffers(&self.pool, source_spec.channels);
+        self.scratch = scratch;
         self.resampler = resampler;
         self.emitted_frames = 0;
         self.source_frames_seen = 0;
@@ -322,10 +320,10 @@ where
     }
 
     fn reset_resampler_state(&mut self) {
-        let channels = self.channels();
-        Self::clear_planar(&mut self.input, channels);
-        Self::clear_planar(&mut self.output, channels);
+        self.input.clear();
+        self.output.clear();
         self.pending_meta = None;
+        self.reanchor_output_on_next_chunk = false;
         self.last_input_meta = None;
         self.emitted_frames = 0;
         self.eof_flushed = false;
@@ -386,7 +384,7 @@ where
         }
     }
 
-    fn seek(&mut self, pos: kithara_platform::time::Duration) -> DecodeResult<DecoderSeekOutcome> {
+    fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
         let outcome = self.decoder.seek(pos)?;
         self.reset_resampler_state();
         match outcome {
@@ -396,11 +394,8 @@ where
                 preroll,
                 ..
             } => {
-                self.output_frame_offset = u64::try_from(frames_for_duration(
-                    self.target_sample_rate.get(),
-                    landed_at,
-                ))
-                .unwrap_or(u64::MAX);
+                self.output_frame_offset = self.target_spec.frame_at(landed_at).unwrap_or(u64::MAX);
+                self.reanchor_output_on_next_chunk = true;
                 Ok(DecoderSeekOutcome::Landed {
                     landed_at,
                     landed_byte,
@@ -414,7 +409,7 @@ where
         }
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.target_spec
     }
 
@@ -446,7 +441,7 @@ where
 
     delegate::delegate! {
         to self.decoder {
-            fn duration(&self) -> Option<kithara_platform::time::Duration>;
+            fn duration(&self) -> Option<Duration>;
             fn flush_reader_signals(&mut self);
             fn metadata(&self) -> TrackMetadata;
             fn update_byte_len(&self, len: u64);
@@ -456,11 +451,11 @@ where
 
 fn build_resampler<B>(
     backend: B,
-    source_spec: PcmSpec,
+    source_spec: AudioSpec,
     target_sample_rate: NonZeroU32,
     quality: kithara_resampler::ResamplerQuality,
     options: kithara_resampler::ResamplerOptions,
-    pool: PcmPool,
+    pool: SamplePool,
 ) -> DecodeResult<B::Resampler>
 where
     B: ResamplerBackend,
@@ -477,17 +472,13 @@ where
         })
         .options(options)
         .quality(quality)
-        .pcm_pool(pool)
+        .sample_pool(pool)
         .build();
     let config = ResamplerConfig::builder()
         .backend(backend)
         .settings(settings)
         .build();
     create_resampler(&config).map_err(DecodeError::backend)
-}
-
-fn channel_buffers(pool: &PcmPool, channels: u16) -> SmallVec<[PcmBuf; 8]> {
-    (0..usize::from(channels)).map(|_| pool.get()).collect()
 }
 
 fn round_scaled_frames(count: u64, source_rate: u32, target_rate: u32) -> DecodeResult<u64> {

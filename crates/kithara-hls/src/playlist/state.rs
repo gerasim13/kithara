@@ -60,7 +60,7 @@ impl FromWithParams<&[VariantStream], &[MediaPlaylist]> for PlaylistState {
     /// index in `variants`. Segment URIs are resolved against the media
     /// playlist URL; failures fall back to the media URL itself.
     fn build(variants: &[VariantStream], media_playlists: &[MediaPlaylist]) -> Self {
-        let mut bandwidths_bps = Vec::with_capacity(variants.len());
+        let mut bandwidths_bps: Vec<Option<u64>> = Vec::with_capacity(variants.len());
         let variant_states: Vec<VariantState> = variants
             .iter()
             .zip(media_playlists.iter())

@@ -4,7 +4,7 @@ use std::{
 };
 
 use bon::Builder;
-use kithara_bufpool::{PcmBuf, PcmPool};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use crate::{
@@ -19,7 +19,7 @@ pub struct MonoStreamConfig<B> {
     pub backend: B,
     pub source_sample_rate: NonZeroU32,
     pub target_sample_rate: NonZeroU32,
-    pub pcm_pool: PcmPool,
+    pub sample_pool: SamplePool,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
@@ -34,7 +34,7 @@ where
         f.debug_struct("MonoStreamConfig")
             .field("backend", &self.backend.name())
             .field("options", &self.options)
-            .field("pcm_pool", &"<injected>")
+            .field("sample_pool", &"<injected>")
             .field("quality", &self.quality)
             .field("source_sample_rate", &self.source_sample_rate)
             .field("target_sample_rate", &self.target_sample_rate)
@@ -46,10 +46,10 @@ pub struct MonoStream<B>
 where
     B: ResamplerBackend,
 {
-    input_block: PcmBuf,
-    output_block: PcmBuf,
-    pending: PcmBuf,
-    ready: PcmBuf,
+    input_block: SampleBuffer,
+    output_block: SampleBuffer,
+    pending: SampleBuffer,
+    ready: SampleBuffer,
     resampler: B::Resampler,
     ratio: f64,
     total_in: u64,
@@ -78,7 +78,7 @@ where
             })
             .quality(config.quality)
             .options(config.options)
-            .pcm_pool(config.pcm_pool.clone())
+            .sample_pool(config.sample_pool.clone())
             .build();
         let resampler_config = ResamplerConfig::builder()
             .backend(backend)
@@ -88,16 +88,23 @@ where
         let delay = resampler.output_delay();
         let ratio =
             f64::from(config.target_sample_rate.get()) / f64::from(config.source_sample_rate.get());
-        let input_block =
-            pooled_buffer(&config.pcm_pool, resampler.input_frames_max(), backend_name)?;
+        let input_block = pooled_buffer(
+            &config.sample_pool,
+            resampler.input_frames_max(),
+            backend_name,
+        )?;
         let output_block = pooled_buffer(
-            &config.pcm_pool,
+            &config.sample_pool,
             resampler.output_frames_max(),
             backend_name,
         )?;
-        let pending = pooled_buffer(&config.pcm_pool, resampler.input_frames_max(), backend_name)?;
+        let pending = pooled_buffer(
+            &config.sample_pool,
+            resampler.input_frames_max(),
+            backend_name,
+        )?;
         let ready = pooled_buffer(
-            &config.pcm_pool,
+            &config.sample_pool,
             resampler.output_frames_max(),
             backend_name,
         )?;
@@ -204,7 +211,10 @@ where
     }
 }
 
-fn append_iter(dst: &mut PcmBuf, samples: impl Iterator<Item = f32>) -> Result<(), ResamplerError> {
+fn append_iter(
+    dst: &mut SampleBuffer,
+    samples: impl Iterator<Item = f32>,
+) -> Result<(), ResamplerError> {
     let start = dst.len();
     let (lower, _) = samples.size_hint();
     ensure_len(dst, start.saturating_add(lower))?;
@@ -221,25 +231,25 @@ fn append_iter(dst: &mut PcmBuf, samples: impl Iterator<Item = f32>) -> Result<(
     Ok(())
 }
 
-fn append_slice(dst: &mut PcmBuf, src: &[f32]) -> Result<(), ResamplerError> {
+fn append_slice(dst: &mut SampleBuffer, src: &[f32]) -> Result<(), ResamplerError> {
     let old_len = dst.len();
     ensure_len(dst, old_len.saturating_add(src.len()))?;
     dst[old_len..old_len + src.len()].copy_from_slice(src);
     Ok(())
 }
 
-fn copy_slice(dst: &mut PcmBuf, src: &[f32]) -> Result<(), ResamplerError> {
+fn copy_slice(dst: &mut SampleBuffer, src: &[f32]) -> Result<(), ResamplerError> {
     ensure_len(dst, src.len())?;
     dst[..src.len()].copy_from_slice(src);
     Ok(())
 }
 
-fn ensure_len(buf: &mut PcmBuf, len: usize) -> Result<(), ResamplerError> {
+fn ensure_len(buf: &mut SampleBuffer, len: usize) -> Result<(), ResamplerError> {
     buf.ensure_len(len)?;
     Ok(())
 }
 
-fn extend_zeros(dst: &mut PcmBuf, count: usize) -> Result<(), ResamplerError> {
+fn extend_zeros(dst: &mut SampleBuffer, count: usize) -> Result<(), ResamplerError> {
     let old_len = dst.len();
     ensure_len(dst, old_len.saturating_add(count))?;
     dst[old_len..].fill(0.0);
@@ -247,10 +257,10 @@ fn extend_zeros(dst: &mut PcmBuf, count: usize) -> Result<(), ResamplerError> {
 }
 
 fn pooled_buffer(
-    pool: &PcmPool,
+    pool: &SamplePool,
     capacity: usize,
     backend: &'static str,
-) -> Result<PcmBuf, ResamplerBuildError> {
+) -> Result<SampleBuffer, ResamplerBuildError> {
     let mut buffer = pool.get();
     buffer
         .ensure_len(capacity)

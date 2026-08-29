@@ -8,7 +8,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio::task::yield_now,
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -204,8 +204,13 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         let builder = ResourceConfig::for_src(
             ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
         )
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
+        .worker(PlayWorker::new(
+            PlayWorkerConfig::for_pools(
+                kithara::bufpool::BytePool::default(),
+                kithara::bufpool::SamplePool::default(),
+            )
+            .build(),
+        ))
         .downloader(downloader.clone())
         .discriminator("t0")
         .store(store);
@@ -218,7 +223,7 @@ async fn hls_seek_middle_lands_under_simulated_slow_connection(#[case] scenario:
         }
     };
 
-    let resource = Resource::new(cfg, None)
+    let resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 

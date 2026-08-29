@@ -2,7 +2,7 @@
 
 use kithara::{
     abr::AbrMode,
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
@@ -10,7 +10,7 @@ use kithara::{
         flash::real_io,
         time::{self, Duration, Instant},
     },
-    play::{Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
     stream::{
         AudioCodec,
         dl::{Downloader, DownloaderConfig},
@@ -132,6 +132,9 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
     );
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+    );
 
     let cfg: ResourceConfig = ResourceConfig::for_src(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid master URL"),
@@ -145,11 +148,10 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
             .build(),
     )
     .initial_abr_mode(AbrMode::manual(TOP_VARIANT))
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker)
     .build();
 
-    let resource = Resource::new(cfg, None)
+    let resource = Resource::new(cfg)
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 

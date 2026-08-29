@@ -148,13 +148,8 @@ impl GuiFrontend {
     }
 
     /// Gives the bar's REC cell a session to put on air.
-    pub fn attach_broadcast(
-        &mut self,
-        session: kithara::play::SessionHandle,
-        shutdown: kithara_platform::CancelToken,
-    ) {
+    pub fn attach_broadcast(&mut self, shutdown: kithara_platform::CancelToken) {
         self.broadcast = Some(crate::broadcast::Broadcaster::new(
-            session,
             shutdown,
             self.config.broadcast_tap_lead,
         ));
@@ -187,7 +182,7 @@ impl GuiFrontend {
             .iter()
             .map(|deck| {
                 let controller = Arc::new(StateController::new(
-                    Arc::clone(&deck.queue),
+                    deck.queue.control().clone(),
                     Arc::clone(&deck.timestretch),
                     config.clone(),
                     config.shutdown.child(),

@@ -3,13 +3,15 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
     StretchKind,
-    audio::{DecoderResamplerSettings, StretchControls},
+    audio::DecoderResamplerSettings,
     events::{ResamplerKind, TrackId},
     platform::sync::Arc,
     play::PlaybackResamplerBackend,
+    warp::StretchControls,
 };
 use kithara_integration_tests::{
     TestServerHelper,
+    cochlea::percentile_f32,
     fixture_protocol::DelayRule,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
 };
@@ -190,14 +192,15 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
     )
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
-    .byte_pool(harness.player().byte_pool().clone())
-    .pcm_pool(harness.player().pcm_pool().clone())
     .decoder(decoder)
     .initial_abr_mode(AbrMode::manual(AAC_HIGH))
     .events(bus)
     .build();
-    let config = harness.player().prepare_config(config);
-    let resource = Resource::new(config, None)
+    let config = harness
+        .player()
+        .prepare_config(config)
+        .unwrap_or_else(|error| panic!("prepare {label} Kithara App resource: {error}"));
+    let resource = Resource::new(config)
         .await
         .unwrap_or_else(|error| panic!("open {label} Kithara App resource: {error:?}"));
     assert_eq!(
@@ -208,14 +211,13 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
     let abr = resource
         .abr_handle()
         .unwrap_or_else(|| panic!("{label} HLS resource must expose an ABR handle"));
-    harness.player().reserve_slots(1);
-    harness
-        .player()
-        .replace_item(0, resource, TrackId::allocate());
-    harness
-        .player()
-        .select_item(0, true)
-        .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
+    harness.with_player(|player| {
+        player.reserve_slots(1);
+        player.replace_item(0, resource, TrackId::allocate());
+        player
+            .select_item(0, true)
+            .unwrap_or_else(|error| panic!("select {label} Kithara App resource: {error}"));
+    });
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut active_blocks = 0usize;
@@ -371,13 +373,6 @@ fn desktop_silent_buckets(samples: &[f32]) -> usize {
     .count()
 }
 
-fn percentile(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
-    assert!(!values.is_empty(), "percentile input must not be empty");
-    values.sort_by(f32::total_cmp);
-    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
-    values[index]
-}
-
 fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
     assert_eq!(
         switched.len(),
@@ -423,9 +418,9 @@ fn assert_no_desktop_click(switched: &[f32], control: &[f32]) {
             }
         }
         let step_limit =
-            percentile(&mut excess_steps, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
+            percentile_f32(&mut excess_steps, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
         let residual_limit =
-            percentile(&mut excess_residuals, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
+            percentile_f32(&mut excess_residuals, 999, 1_000).mul_add(ORACLE_RATIO, ORACLE_SLACK);
         assert!(
             peak_step.0 <= step_limit,
             "Kithara App AAC-to-FLAC switch inserted a click on channel {channel}: excess_step={:.6} at host frame {}, limit={step_limit:.6}",

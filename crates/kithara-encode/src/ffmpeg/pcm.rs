@@ -7,22 +7,28 @@ use ffmpeg::{
     frame::Audio as AudioFrame,
 };
 use ffmpeg_next as ffmpeg;
+use kithara_bufpool::{BytePool, SamplePool};
 
-use crate::{EncodeResult, PcmSource};
+use crate::{EncodeError, EncodeResult, PcmSource};
 
 pub(crate) const PCM_INPUT_FORMAT: Sample = Sample::I16(SampleType::Packed);
 
 const I16_SCALE: f32 = 32_768.0;
 
-fn pump_pcm_bytes<E>(
+fn pump_pcm_bytes(
     pcm: &dyn PcmSource,
+    byte_pool: &BytePool,
     chunk_frames: usize,
-    mut on_frames: impl FnMut(&[u8], usize) -> Result<(), E>,
-) -> Result<(), E> {
+    mut on_frames: impl FnMut(&[u8], usize) -> EncodeResult<()>,
+) -> EncodeResult<()> {
     let bytes_per_frame = usize::from(pcm.channels()) * size_of::<i16>();
     let total_byte_len = pcm.total_byte_len().unwrap_or(0);
-
-    let mut buf = vec![0u8; chunk_frames * bytes_per_frame];
+    let chunk_bytes = chunk_frames
+        .checked_mul(bytes_per_frame)
+        .ok_or_else(|| EncodeError::InvalidInput("PCM chunk byte count overflow".to_owned()))?;
+    let mut buf = byte_pool.get();
+    buf.ensure_len(chunk_bytes)
+        .map_err(|error| EncodeError::Backend(Box::new(error)))?;
     let mut offset = 0;
     let mut first_frame = 0;
 
@@ -50,18 +56,25 @@ fn pump_pcm_bytes<E>(
 
 pub(crate) fn pump_pcm_samples(
     pcm: &dyn PcmSource,
+    byte_pool: &BytePool,
+    sample_pool: &SamplePool,
     chunk_frames: usize,
     mut on_samples: impl FnMut(&[f32]) -> EncodeResult<()>,
 ) -> EncodeResult<()> {
-    let mut samples = Vec::with_capacity(chunk_frames * usize::from(pcm.channels()));
+    let mut samples = sample_pool.get();
 
-    pump_pcm_bytes(pcm, chunk_frames, |frames, _| {
+    pump_pcm_bytes(pcm, byte_pool, chunk_frames, |frames, _| {
         samples.clear();
-        samples.extend(
-            frames
-                .chunks_exact(size_of::<i16>())
-                .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE),
-        );
+        let sample_count = frames.len() / size_of::<i16>();
+        samples
+            .ensure_len(sample_count)
+            .map_err(|error| EncodeError::Backend(Box::new(error)))?;
+        for (sample, pair) in samples
+            .iter_mut()
+            .zip(frames.chunks_exact(size_of::<i16>()))
+        {
+            *sample = f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE;
+        }
         on_samples(&samples)
     })
 }
@@ -74,19 +87,41 @@ pub(crate) fn pump_pcm_frames(
     let channels = pcm.channels();
     let sample_rate = pcm.sample_rate();
     let bytes_per_frame = usize::from(channels) * size_of::<i16>();
+    let chunk_bytes = chunk_frames
+        .checked_mul(bytes_per_frame)
+        .ok_or(FfmpegError::InvalidData)?;
+    let total_byte_len = pcm.total_byte_len().unwrap_or(0);
+    let mut offset = 0;
+    let mut first_frame = 0;
 
-    pump_pcm_bytes(pcm, chunk_frames, |frames, first_frame| {
+    while offset < total_byte_len {
+        let read_bytes = (total_byte_len - offset).min(chunk_bytes);
         let mut audio_frame = AudioFrame::new(
             PCM_INPUT_FORMAT,
-            frames.len() / bytes_per_frame,
+            chunk_frames,
             ChannelLayout::default(i32::from(channels)),
         );
+        let read = pcm.read_pcm_at(offset, &mut audio_frame.data_mut(0)[..read_bytes]);
+        if read == 0 {
+            break;
+        }
+
+        let frame_bytes = read - read % bytes_per_frame;
+        if frame_bytes == 0 {
+            break;
+        }
+        let frames = frame_bytes / bytes_per_frame;
+        audio_frame.set_samples(frames);
         audio_frame.set_rate(sample_rate);
         audio_frame.set_pts(Some(first_frame as i64));
-        audio_frame.data_mut(0)[..frames.len()].copy_from_slice(frames);
 
-        on_frame(&audio_frame)
-    })
+        on_frame(&audio_frame)?;
+
+        offset += frame_bytes;
+        first_frame += frames;
+    }
+
+    Ok(())
 }
 
 pub(crate) fn send_frame_to_filter(
@@ -132,6 +167,8 @@ pub(crate) fn drain_filtered_frames(
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, SamplePool};
+
     use super::pump_pcm_samples;
     use crate::test_pcm::TestPcm;
 
@@ -140,10 +177,16 @@ mod tests {
         let pcm = TestPcm::from_samples(&[i16::MIN, -16_384, 0, 16_384, i16::MAX], 48_000, 1);
 
         let mut samples = Vec::new();
-        pump_pcm_samples(&pcm, 2, |chunk| {
-            samples.extend_from_slice(chunk);
-            Ok(())
-        })
+        pump_pcm_samples(
+            &pcm,
+            &BytePool::default(),
+            &SamplePool::default(),
+            2,
+            |chunk| {
+                samples.extend_from_slice(chunk);
+                Ok(())
+            },
+        )
         .expect("read the source");
 
         assert_eq!(samples, [-1.0, -0.5, 0.0, 0.5, 32_767.0 / 32_768.0]);
@@ -154,10 +197,16 @@ mod tests {
         let pcm = TestPcm::from_bytes(vec![0x00, 0x40, 0x00, 0x40, 0x11], 48_000, 2);
 
         let mut samples = Vec::new();
-        pump_pcm_samples(&pcm, 1, |chunk| {
-            samples.extend_from_slice(chunk);
-            Ok(())
-        })
+        pump_pcm_samples(
+            &pcm,
+            &BytePool::default(),
+            &SamplePool::default(),
+            1,
+            |chunk| {
+                samples.extend_from_slice(chunk);
+                Ok(())
+            },
+        )
         .expect("read the source");
 
         assert_eq!(samples, [0.5, 0.5]);

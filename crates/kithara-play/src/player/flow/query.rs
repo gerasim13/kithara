@@ -1,12 +1,13 @@
 use delegate::delegate;
-use kithara_audio::{AudioWorkerHandle, EngineLoadSnapshot};
 use kithara_events::EventBus;
 use kithara_platform::tokio::runtime::Handle as RuntimeHandle;
 
-use super::super::core::PlayerImpl;
-use crate::{api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl};
+use super::super::core::PlayerRuntime;
+use crate::{
+    EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
+};
 
-impl PlayerImpl {
+impl PlayerRuntime {
     /// ABR handle of the currently loaded item, if any.
     ///
     /// Reads the stash populated by `enqueue_to_processor` — stays valid for
@@ -22,6 +23,10 @@ impl PlayerImpl {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
             pub const fn engine(&self) -> &EngineImpl;
+            /// Shared playback worker configured for this Player.
+            #[field(&worker)]
+            #[must_use]
+            pub const fn worker(&self) -> &PlayWorker;
         }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.
@@ -29,14 +34,12 @@ impl PlayerImpl {
             pub fn auto_advance_enabled(&self) -> bool;
             /// Get crossfade duration in seconds.
             pub fn crossfade_duration(&self) -> f32;
-            /// Default playback rate used by `play()` and `select_item()`.
+            /// Default playback-rate target used by `play()` and `select_item()`.
             pub fn default_rate(&self) -> f32;
             /// Returns `true` if the player is muted.
             pub fn is_muted(&self) -> bool;
             /// Get prefetch lead time in seconds.
             pub fn prefetch_duration(&self) -> f32;
-            /// Current playback rate (0.0 = paused).
-            pub fn rate(&self) -> f32;
             /// Get current volume (0.0..=1.0).
             pub fn volume(&self) -> f32;
         }
@@ -49,9 +52,6 @@ impl PlayerImpl {
             /// Runtime handle captured by this player's engine.
             #[must_use]
             pub const fn runtime(&self) -> Option<&RuntimeHandle>;
-            /// Shared audio worker handle for this player's engine.
-            #[must_use]
-            pub fn worker(&self) -> &AudioWorkerHandle;
         }
         to self {
             /// Returns `true` if the player is in playing state.
@@ -62,6 +62,10 @@ impl PlayerImpl {
             #[expr(Some($?.position))]
             #[call(playback_snapshot)]
             pub fn position_seconds(&self) -> Option<f64>;
+            /// Current effective playback rate (`0.0` while paused or without a slot).
+            #[expr($.map_or(0.0, |snapshot| snapshot.rate))]
+            #[call(playback_snapshot)]
+            pub fn rate(&self) -> f32;
         }
         to self.core.items {
             /// Current item index in the queue.

@@ -224,7 +224,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
 }
 
 async fn create_gapless_hls_resource(
-    player: &kithara::play::PlayerImpl,
+    player: &kithara::play::player::PlayerControl,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     signal: PackagedSignal,
@@ -261,11 +261,11 @@ async fn create_gapless_hls_resource(
         ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
-    let mut resource = Resource::new(config, None)
+    config = player
+        .prepare_config(config)
+        .expect("prepare seamless queue HLS resource config");
+    let mut resource = Resource::new(config)
         .await
         .expect("open HLS resource for seamless queue fixture");
     let _ = resource.preload().await;
@@ -273,16 +273,15 @@ async fn create_gapless_hls_resource(
 }
 
 fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; N]) {
-    harness.player().reserve_slots(items.len());
-    for (index, resource) in items.into_iter().enumerate() {
-        harness
-            .player()
-            .replace_item(index, resource, TrackId::allocate());
-    }
-    harness
-        .player()
-        .select_item(0, true)
-        .expect("select first queue item");
+    harness.with_player(|player| {
+        player.reserve_slots(items.len());
+        for (index, resource) in items.into_iter().enumerate() {
+            player.replace_item(index, resource, TrackId::allocate());
+        }
+        player
+            .select_item(0, true)
+            .expect("select first queue item");
+    });
 }
 
 async fn render_until_second_item_end(

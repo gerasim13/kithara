@@ -341,7 +341,7 @@ where
                 if signals.is_empty() {
                     break;
                 }
-                signals.drain(..).collect::<Vec<_>>()
+                signals.drain(..).collect::<Vec<RenderRootSignal>>()
             };
             for signal in pending {
                 match signal {

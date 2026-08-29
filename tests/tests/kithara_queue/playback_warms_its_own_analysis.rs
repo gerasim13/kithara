@@ -4,16 +4,15 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    audio::{
-        NoResamplerBackend,
-        analysis::{AnalysisWorker, AnalyzerBuilder},
-    },
-    bufpool::{BytePool, PcmPool},
-    decode::PcmSpec,
+    analysis::{AnalysisWorker, AnalyzerBuilder},
+    bufpool::Region,
+    events::TrackStatus,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource},
+    resampler::NoResamplerBackend,
+    signal::AudioSpec,
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -26,9 +25,9 @@ use kithara_integration_tests::{
 /// audio a second time.
 ///
 /// The pass's own reader only stalls, so every covered frame arrived through
-/// the producer. The handle is left between `append` and `play`: `append` only
-/// spawns the load, and nothing is awaited in between, so the load provably
-/// has not run a step and finds the handle waiting.
+/// the producer. Attachment happens after the queue reports the resource
+/// loaded, proving it reaches the decoder through the live relay rather than
+/// relying on task scheduling during resource admission.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let helper = TestServerHelper::new().await;
@@ -36,13 +35,16 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let player = Arc::new(PlayerImpl::new(
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .worker(worker)
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -59,22 +61,6 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         }
     });
 
-    let rate = NonZeroU32::new(queue.sample_rate()).expect("the engine runs at some rate");
-    let cancel = CancelToken::never();
-    let worker = AnalysisWorker::new(
-        &cancel,
-        AnalyzerBuilder::<NoResamplerBackend>::default().with_waveform(64),
-    );
-    let (analysis, producer) = worker.analyze(
-        stalled_reader(PcmSpec {
-            channels: 2,
-            sample_rate: rate,
-        }),
-        cancel.child(),
-        "played-track".into(),
-        rate,
-    );
-
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
             .build(),
@@ -82,14 +68,33 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
     )
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
     .downloader(downloader)
     .store(store)
     .build();
 
-    let id = queue.append(TrackSource::Config(Box::new(cfg)));
-    queue.set_analysis(id, producer);
+    let id = queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("analysis fixture track appends");
+    wait_until(Duration::from_secs(60), "playback resource load", || {
+        queue
+            .track(id)
+            .is_some_and(|entry| matches!(entry.status, TrackStatus::Loaded))
+    })
+    .await
+    .expect("playback resource did not finish loading");
+
+    let rate = NonZeroU32::new(queue.sample_rate()).expect("the engine runs at some rate");
+    let cancel = CancelToken::never();
+    let worker = AnalysisWorker::new(
+        &cancel,
+        AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
+    );
+    let (analysis, producer) = worker.analyze(
+        stalled_reader(AudioSpec::new(2, rate)),
+        "played-track".into(),
+        rate,
+    );
+    queue.attach_observer(id, producer);
     queue.play();
 
     let covered = || {
