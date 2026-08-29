@@ -16,7 +16,7 @@ impl BytesEncodeTargetExt for BytesEncodeTarget {
             Self::Mp3 => "audio/mpeg",
             Self::Flac => "audio/flac",
             Self::Aac => "audio/aac",
-            Self::M4a => "audio/mp4",
+            Self::M4a | Self::Alac => "audio/mp4",
         }
     }
 }

@@ -9,9 +9,11 @@ use kithara::{
 };
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_integration_tests::{encode_test_pcm::SawtoothPcmFixture, ensure_silence_1s_alac_m4a};
+use kithara_fixtures::assets::alac_silence_1s;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
+use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
@@ -287,17 +289,13 @@ enum StandaloneCase {
 impl StandaloneCase {
     fn fixture(self) -> (Vec<u8>, MediaInfo) {
         match self {
-            Self::AlacM4a => {
-                let path = ensure_silence_1s_alac_m4a();
-                let bytes = std::fs::read(&path).expect("read ALAC fixture");
-                (
-                    bytes,
-                    MediaInfo::builder()
-                        .maybe_codec(Some(AudioCodec::Alac))
-                        .maybe_container(Some(ContainerFormat::Mp4))
-                        .build(),
-                )
-            }
+            Self::AlacM4a => (
+                alac_silence_1s().bytes().to_vec(),
+                MediaInfo::builder()
+                    .maybe_codec(Some(AudioCodec::Alac))
+                    .maybe_container(Some(ContainerFormat::Mp4))
+                    .build(),
+            ),
             Self::NativeFlac => (
                 synth_native_flac_1s(),
                 MediaInfo::builder()

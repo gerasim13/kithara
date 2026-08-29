@@ -13,7 +13,6 @@
 
 pub mod abr_fixtures;
 pub use abr_fixtures::auto;
-pub mod alac_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod analysis_pass;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -70,7 +69,6 @@ pub mod rng;
 pub mod server_url;
 pub mod signal_asset;
 pub mod signal_pcm;
-pub mod signal_source;
 pub mod signal_source_utils;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
@@ -90,7 +88,6 @@ pub mod waits;
 pub mod wav;
 
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};
-pub use alac_fixture::ensure_silence_1s_alac_m4a;
 #[cfg(not(target_arch = "wasm32"))]
 pub use assets_ext::disk_asset_store;
 pub use assets_ext::memory_asset_store;
