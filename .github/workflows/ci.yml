@@ -101,196 +101,21 @@ jobs:
       - name: Confirm the runner is reachable
         run: just --version
 
-  # Ten jobs that were the same ten lines with one recipe changed: the same
-  # pinned checkout, the same runner labels, the same single `just` command.
-  # `lane.yml` holds the ten lines and this list holds what differs. A lane that
-  # needs more than a recipe - the test lanes, the suite selection, the advisory
-  # browser - stays a job of its own below.
+  # Every gate lane, from the one catalog. What each of them runs, how long it
+  # may take, how much history it reads and what it leaves behind is declared in
+  # `.config/xtask.toml`; `run.yml` renders the selection and `lane.yml` runs
+  # each entry. Nothing about a lane is described here, so nothing here can
+  # disagree with what GitLab runs.
   #
-  # The runner image carries the toolchain, so these jobs install no packages.
-  # The advisory browser lane below is the deliberate exception: it provisions a
-  # reviewed Chrome/ChromeDriver pair for each run.
-  checks:
-    name: ${{ matrix.name }}
+  # A push to the default branch is a `main` pipeline and any other push is a
+  # `branch` one; a lane says which of the two schedules it.
+  lanes:
+    name: Gate
     needs: gate
-    # Every lane's verdict, not the first one's: these answer independent
-    # questions and a run that stops at the first red hides the other nine.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Lint
-            run: just lint full
-            timeout: 60
-            depth: 1
-          # The image knows which toolchain is the minimum supported one, so the
-          # version stays owned by the reviewed pins rather than repeated here.
-          - name: MSRV
-            run: RUSTUP_TOOLCHAIN="${KITHARA_MSRV_TOOLCHAIN}" just check
-            timeout: 60
-            depth: 1
-          - name: cargo-deny
-            run: just deps deny
-            timeout: 30
-            depth: 1
-          - name: Architecture checks
-            run: just lint arch
-            timeout: 30
-            depth: 1
-          - name: WASM checks
-            run: just platform wasm
-            timeout: 60
-            depth: 1
-          - name: cargo-machete
-            run: just deps machete
-            timeout: 30
-            depth: 1
-          - name: WASM size budget
-            run: just platform wasm size-check
-            timeout: 60
-            depth: 1
-            artifact: wasm-slim-report
-            artifact_path: target/wasm-slim-result.json
-          - name: Feature powerset
-            run: just deps hack
-            timeout: 120
-            depth: 1
-          # The baseline is a revision, so the history holding it must be here.
-          - name: Semver checks
-            run: just deps semver
-            timeout: 60
-            depth: 0
-          # Memory is the other budget a player cannot overrun quietly: pool
-          # budgets, allocation regressions, a zero-allocation audio hot path,
-          # and the resident size of an HLS playback. `just perf memory` runs
-          # all four.
-          - name: Memory budgets
-            run: just perf memory
-            timeout: 60
-            depth: 1
-    uses: ./.github/workflows/lane.yml
+    uses: ./.github/workflows/run.yml
     with:
-      run: ${{ matrix.run }}
-      timeout-minutes: ${{ matrix.timeout }}
-      fetch-depth: ${{ matrix.depth }}
-      artifact-name: ${{ matrix.artifact || '' }}
-      artifact-path: ${{ matrix.artifact_path || '' }}
-
-  test:
-    name: Tests (simulated clock)
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run tests
-        env:
-          KITHARA_HANG_DUMP_DIR: ${{ github.workspace }}/target/hang
-        run: |
-          mkdir -p "$KITHARA_HANG_DUMP_DIR"
-          just test all
-
-      # A hang dump names the branch that starved the watchdog; the job's
-      # container does not outlive the job, so an unuploaded dump is evidence
-      # destroyed at the exact moment it exists.
-      - name: Upload hang dumps
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hang-dumps-simulated-clock
-          path: target/hang/
-          if-no-files-found: ignore
-
-  # The virtual clock collapses fixture delays, so order-of-service defects
-  # cannot reproduce above. Own target dir: the two builds differ.
-  test-real-clock:
-    name: Tests (real clock)
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Run tests on a real clock
-        env:
-          KITHARA_HANG_DUMP_DIR: ${{ github.workspace }}/target/hang
-        run: |
-          mkdir -p "$KITHARA_HANG_DUMP_DIR"
-          CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target}/flash-off" just test run --flash=off
-
-      - name: Upload hang dumps
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: hang-dumps-real-clock
-          path: target/hang/
-          if-no-files-found: ignore
-
-  # `just test` no longer carries the build tooling or the harness it is written
-  # with; three lanes do. The nightly sweep in lanes.yml is what catches a
-  # product change breaking them, but a change to their OWN sources must not wait
-  # a night, so this runs the lanes that this push actually touches.
-  #
-  # The selection happens inside the job rather than in a job of its own, and the
-  # job runs unconditionally with an empty selection as a legitimate outcome.
-  # Both follow from what this workflow already guarantees: every job depends on
-  # `gate` and nothing else, and `required` below reads anything other than an
-  # executed success — skipped included — as a failure. A job that skipped itself
-  # on an empty selection would turn every ordinary push red.
-  support:
-    name: Support suites
-    needs: gate
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The selection compares against a base, which a shallow single-branch
-          # checkout does not carry.
-          fetch-depth: 0
-
-      - name: Run the suites this push touches
-        run: just test run --touched
-
-  wasm-browser:
-    name: Chromium WebCodecs (advisory)
-    needs: gate
-    continue-on-error: true
-    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # The browser is installed in the image, not by the job: Debian ships
-      # `chromium` with a version-matched `chromium-driver`, and `.config/ci-pins.toml`
-      # records which pair a rebuild brought in. Downloading Chrome for Testing
-      # per job did the opposite — it read a version index on GitHub Pages, three
-      # of whose four addresses this network cannot reach, and then installed an
-      # OLDER build over the working pair. The recipe is called directly, as every
-      # other job here does: `just ci run <lane>` is the host executor's entry and
-      # wants a host profile this container has no reason to carry.
-      - name: Run the Chromium browser lane
-        run: just test wasm chrome webcodecs
-
-  # Real-time correctness is what this product is for: an allocation or a lock
-  # on the audio thread is a dropout, not a slow path. It ran nightly, which
-  # meant learning about it the morning after the push that caused it.
-  #
-  # The fast lane is a tripwire over the mock decoder. The real-decoder lanes
-  # exercise file and HLS playback under the same required sanitizer gate.
-  rtsan:
-    name: RealtimeSanitizer
-    needs: gate
-    uses: ./.github/workflows/rtsan.yml
+      role: gate
+      kind: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'main' || 'branch' }}
 
   # This is the one stable required status. GitHub treats a skipped job as an
   # acceptable required check, so the aggregate must run unconditionally and
@@ -304,11 +129,7 @@ jobs:
     needs:
       - authorize
       - gate
-      - checks
-      - test
-      - test-real-clock
-      - support
-      - rtsan
+      - lanes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

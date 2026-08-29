@@ -360,16 +360,6 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
     let jobs = workflow_jobs(&workflow);
 
-    let advisory_browser = workflow_job(jobs, "wasm-browser");
-    assert_eq!(
-        mapping_field(advisory_browser, "name").as_str(),
-        Some("Chromium WebCodecs (advisory)")
-    );
-    assert_eq!(
-        mapping_field(advisory_browser, "continue-on-error").as_bool(),
-        Some(true)
-    );
-
     let authorize = workflow_job(jobs, "authorize");
     assert_hosted_authorization(authorize);
     // The one condition this job may carry. Anything else here, and a push that
@@ -393,9 +383,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             continue;
         }
         let job = workflow_job(jobs, &name);
-        if name != "wasm-browser" {
-            assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
-        }
+        assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
         assert_eq!(
             job_needs(job),
             BTreeSet::from(["gate".to_owned()]),
@@ -404,6 +392,23 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         let condition = job.get("if").and_then(Value::as_str).unwrap_or_default();
         assert!(!condition.contains("KITHARA_RUNNER_LABELS"));
         assert!(!condition.contains("github.actor"));
+    }
+
+    // The push entry describes no lane of its own. It names a role, and the
+    // catalog answers which lanes that is - so a gate lane cannot be declared
+    // here and nowhere else, which is how GitHub and GitLab drifted apart.
+    let lanes = workflow_job(jobs, "lanes");
+    assert_eq!(
+        mapping_field(lanes, "uses").as_str(),
+        Some("./.github/workflows/run.yml")
+    );
+    let with = mapping_field(lanes, "with")
+        .as_mapping()
+        .expect("the gate call passes inputs");
+    assert_eq!(mapping_field(with, "role").as_str(), Some("gate"));
+    for name in workflow_job_names(jobs) {
+        let job = workflow_job(jobs, &name);
+        assert_no_key(&Value::Mapping(job.clone()), "strategy");
     }
 
     let required = workflow_job(jobs, "required");
@@ -422,7 +427,6 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
-    expected.remove("wasm-browser");
     assert_eq!(job_needs(required), expected);
 
     let step = first_step(required);
@@ -1627,5 +1631,138 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     assert!(
         text.contains("just ci lane \"${{ inputs.lane }}\" --kind \"${{ inputs.kind }}\""),
         "the executor runs the named lane"
+    );
+}
+
+/// A caller and a called workflow agree on inputs across two files, and
+/// nothing in the repository checked that they still do. A renamed input is
+/// not a compile error and not a failing test: GitHub rejects the run at
+/// validation time, the calling job never starts, and the aggregate reads a
+/// job that never ran as a failure with no cause named in it.
+fn called_workflow_inputs(name: &str) -> Option<Mapping> {
+    let workflow = github_workflow(name);
+    let on = workflow.as_mapping()?.get("on")?.as_mapping()?;
+    // `workflow_call:` with nothing under it is a workflow that takes no
+    // inputs, not a workflow that cannot be called.
+    let Some(call) = on.get("workflow_call")?.as_mapping() else {
+        return Some(Mapping::new());
+    };
+    match call.get("inputs") {
+        Some(inputs) => inputs.as_mapping().cloned(),
+        None => Some(Mapping::new()),
+    }
+}
+
+fn local_workflow_calls() -> Vec<(String, String, String, Mapping)> {
+    let mut calls = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            let Some(job) = job.as_mapping() else {
+                continue;
+            };
+            let Some(uses) = job.get("uses").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(called) = uses.strip_prefix("./.github/workflows/") else {
+                continue;
+            };
+            let passed = job
+                .get("with")
+                .and_then(Value::as_mapping)
+                .cloned()
+                .unwrap_or_default();
+            calls.push((name.clone(), job_name.to_owned(), called.to_owned(), passed));
+        }
+    }
+    calls
+}
+
+#[test]
+fn a_caller_never_passes_an_input_the_called_workflow_does_not_take() {
+    for (caller, job, called, passed) in local_workflow_calls() {
+        let declared = called_workflow_inputs(&called)
+            .unwrap_or_else(|| panic!("{called} is called by {caller} but takes no workflow_call"));
+        for key in passed.keys() {
+            let key = key.as_str().expect("workflow input name is a string");
+            assert!(
+                declared.contains_key(key),
+                "{caller} job `{job}` passes `{key}` to {called}, which does not take it"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_caller_always_passes_every_input_the_called_workflow_requires() {
+    for (caller, job, called, passed) in local_workflow_calls() {
+        let declared = called_workflow_inputs(&called)
+            .unwrap_or_else(|| panic!("{called} is called by {caller} but takes no workflow_call"));
+        for (key, spec) in &declared {
+            let key = key.as_str().expect("workflow input name is a string");
+            let required = spec
+                .as_mapping()
+                .and_then(|spec| spec.get("required"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            assert!(
+                !required || passed.contains_key(key),
+                "{called} requires `{key}`, which {caller} job `{job}` does not pass"
+            );
+        }
+    }
+}
+
+// One fan-out for every role. Five role workflows differing by one string is
+// the duplication this catalog exists to remove.
+#[test]
+fn the_role_runner_reads_its_matrix_from_the_catalog() {
+    let workflow = github_workflow("run.yml");
+    let jobs = workflow_jobs(&workflow);
+    assert_eq!(
+        workflow_job_names(jobs),
+        BTreeSet::from([
+            "select".to_owned(),
+            "run".to_owned(),
+            "dependent".to_owned()
+        ])
+    );
+
+    // The role and the kind reach the script as environment variables. A
+    // workflow that pastes a caller's string into a shell command runs a
+    // command the caller wrote, not one this repository reviewed.
+    let render = named_step(
+        workflow_job(jobs, "select"),
+        "Render the jobs this role schedules",
+    );
+    let env = mapping_field(render, "env")
+        .as_mapping()
+        .expect("the render step has an environment");
+    assert_eq!(
+        mapping_field(env, "ROLE").as_str(),
+        Some("${{ inputs.role }}")
+    );
+    assert_eq!(
+        mapping_field(env, "KIND").as_str(),
+        Some("${{ inputs.kind }}")
+    );
+    assert!(
+        mapping_field(render, "run")
+            .as_str()
+            .unwrap_or_default()
+            .contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
+        "the selection comes from the catalog"
+    );
+
+    let text = github_workflow_text("run.yml");
+    assert!(
+        text.contains("uses: ./.github/workflows/lane.yml"),
+        "the fan-out runs through the executor"
+    );
+    assert_eq!(
+        job_needs(workflow_job(jobs, "dependent")),
+        BTreeSet::from(["select".to_owned(), "run".to_owned()]),
+        "a dependent lane runs after the matrix it reads"
     );
 }
