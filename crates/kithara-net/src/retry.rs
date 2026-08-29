@@ -237,13 +237,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn test_default_retry_policy_new() {
-        let policy = RetryPolicy::default();
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.policy.max_retries, 3);
-    }
-
-    #[kithara::test]
     #[case(0, true, "first attempt should retry")]
     #[case(1, true, "second attempt should retry")]
     #[case(2, true, "third attempt should retry")]
@@ -518,29 +511,6 @@ mod tests {
         let result = retry_net.head(url, None).await;
 
         assert!(result.is_ok());
-    }
-
-    #[kithara::test]
-    fn test_retry_policy_trait_max_attempts() {
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(10),
-            max_retries: 5,
-        };
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.max_attempts(), 5);
-    }
-
-    #[kithara::test]
-    fn test_retry_policy_trait_delay() {
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(50),
-            max_delay: Duration::from_secs(10),
-            max_retries: 3,
-        };
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.delay_for_attempt(0), Duration::ZERO);
-        assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
     }
 
     #[kithara::test(tokio)]

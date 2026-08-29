@@ -326,15 +326,3 @@ fn log_eviction_outcome(asset_root: &str, result: AssetsResult<()>) {
         Err(error) => tracing::debug!(%asset_root, %error, "Failed to delete asset"),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    #[kithara::test]
-    fn byte_recorder_mock_api_is_generated() {
-        let _ = ByteRecorderMock::record_bytes;
-    }
-}

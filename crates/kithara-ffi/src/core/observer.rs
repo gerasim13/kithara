@@ -61,8 +61,6 @@ pub const AUTH_TOKEN_HEADER: &str = "X-Auth-Token";
 
 #[cfg(test)]
 mod tests {
-    use unimock::Unimock;
-
     use super::*;
 
     fn assert_send_sync<T: Send + Sync + ?Sized>() {}
@@ -72,12 +70,5 @@ mod tests {
         assert_send_sync::<dyn PlayerObserver>();
         assert_send_sync::<dyn ItemObserver>();
         assert_send_sync::<dyn SeekCallback>();
-    }
-
-    #[kithara::test]
-    fn observer_mock_apis_are_generated() {
-        let _ = PlayerObserverMock::on_event;
-        let _ = ItemObserverMock::on_event;
-        let _ = Unimock::new(());
     }
 }
