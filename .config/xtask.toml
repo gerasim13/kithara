@@ -1306,6 +1306,65 @@ kinds = ["weekly"]
 kinds_github = ["nightly"]
 timeout_minutes = 180
 
+# `just test` runs neither the build tooling nor the harness the product tests
+# are written with, so a product change can break them from the other side and
+# no push notices. A push that touches their own sources runs them straight
+# away through `linux-support`; these three are the unattended sweep. GitLab
+# schedules none of them - its lane stage carries the product lanes only.
+[ext.ci.lanes.linux-tooling]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=tooling",
+  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 180
+
+[ext.ci.lanes.linux-harness]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=harness",
+  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 180
+
+[ext.ci.lanes.linux-fixtures]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=fixtures",
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 180
+
 [ext.ci.lanes.linux-broadcast]
 cache_group = "linux"
 label = "Linux"

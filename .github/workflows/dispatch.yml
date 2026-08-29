@@ -86,6 +86,14 @@ jobs:
       kind: ${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}
       only: ${{ inputs.only || '' }}
 
+  # The one Linux lane the fan-out cannot carry: it needs build-time secrets,
+  # and one executor serves every declared lane.
+  network:
+    if: >-
+      vars.KITHARA_RUNNER_LABELS != ''
+      && (inputs.kind || 'nightly') == 'nightly'
+    uses: ./.github/workflows/network.yml
+
   # Three machines the Linux fan-out cannot reach: each has a runner pool of
   # its own, named by a variable of its own, so each stays a workflow of its
   # own until the catalog can name a pool.

@@ -1251,6 +1251,86 @@
   <require tools> cargo just sccache
   just test run --lane=doc
     CARGO_BUILD_JOBS=2
+# linux-fixtures / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-fixtures / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=fixtures
+    CARGO_BUILD_JOBS=2
+# linux-harness / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
+# linux-harness / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=harness
+    CARGO_BUILD_JOBS=2
 # linux-integration-regressions / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1627,6 +1707,46 @@
   just test run --flash=off
     CARGO_TARGET_DIR=<root>/target/flash-off
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-tooling / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
+# linux-tooling / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --lane=tooling
+    CARGO_BUILD_JOBS=2
 # linux-wasm / branch
   <require os> linux
   <require tools> cargo just sccache

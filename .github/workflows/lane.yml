@@ -53,12 +53,6 @@ on:
           depends on one lane's output. Empty downloads nothing.
         default: ''
         type: string
-      controller-pin:
-        description: >-
-          Revision the lane checks out as its controller, when it needs a
-          checkout beside the subject one. Empty checks out none.
-        default: ''
-        type: string
 
 # Not inherited from the caller: a called workflow gets its own environment.
 env:
@@ -66,7 +60,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Named after the lane, not after this file. A caller reaches this workflow
+  # through `uses:`, and GitHub renders the callee's job name in the run tree,
+  # not the caller's - so without this every lane in a fan-out reads `run` and
+  # the tree says which lanes ran only through the API.
   run:
+    name: ${{ inputs.lane }}
     runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
 

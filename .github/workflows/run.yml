@@ -68,7 +68,6 @@ jobs:
   # Every lane's verdict, not the first one's: these answer independent
   # questions and a run that stops at the first red hides the rest.
   run:
-    name: ${{ matrix.lane }}
     needs: select
     if: ${{ needs.select.outputs.matrix != '[]' }}
     strategy:
@@ -91,7 +90,6 @@ jobs:
   # need the selection itself, though: a failed render leaves an empty output,
   # and `always()` alone would hand `fromJSON` an empty string.
   dependent:
-    name: ${{ matrix.lane }}
     needs: [select, run]
     if: ${{ always() && needs.select.result == 'success' && needs.select.outputs.dependent != '[]' }}
     strategy:

@@ -17,7 +17,6 @@ const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d66110
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
-const HEAVY_LINUX_WORKFLOWS: [&str; 4] = ["coverage.yml", "lanes.yml", "miri.yml", "quality.yml"];
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw"
@@ -563,18 +562,59 @@ fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
     // minutes with fifteen of eighteen runner slots and two thirds of the CPU
     // idle. Coverage, the extra suites, Miri, mutation, and assessment ask for
     // the whole fleet, so they take turns; a push does not wait behind them.
-    for name in HEAVY_LINUX_WORKFLOWS {
-        let workflow = github_workflow(name);
-        let concurrency = workflow_concurrency(&workflow);
+    // `network.yml` holds the group itself. `dispatch.yml` holds it on the jobs
+    // that call the fan-out for the heavy roles, because a lane cannot: one
+    // `run.yml` serves every role, and a group declared there would serialise
+    // the light lanes with the heavy ones.
+    let network = github_workflow("network.yml");
+    let concurrency = workflow_concurrency(&network);
+    assert_eq!(
+        mapping_field(concurrency, "group").as_str(),
+        Some(HEAVY_LINUX_GROUP)
+    );
+    assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
+
+    let dispatch = github_workflow("dispatch.yml");
+    let jobs = workflow_jobs(&dispatch);
+    for role in ["deep", "quality"] {
+        let job = workflow_job(jobs, role);
+        let group = mapping_field(job, "concurrency")
+            .as_mapping()
+            .unwrap_or_else(|| panic!("the {role} call names a concurrency group"));
         assert_eq!(
-            mapping_field(concurrency, "group").as_str(),
+            mapping_field(group, "group").as_str(),
             Some(HEAVY_LINUX_GROUP),
-            "{name}"
+            "{role}"
         );
         assert_eq!(
-            mapping_field(concurrency, "queue").as_str(),
+            mapping_field(group, "queue").as_str(),
             Some("max"),
-            "{name}"
+            "{role}"
+        );
+    }
+
+    // Every lane that says it wants the whole fleet must be scheduled by one of
+    // those two calls; a lane declaring the queue under a role nobody holds the
+    // group for would run beside the pushes it is meant to take turns with.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    for (name, lane) in config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog is a table")
+    {
+        if lane.get("queue").and_then(toml::Value::as_str) != Some("heavy-linux") {
+            continue;
+        }
+        let role = lane["role"].as_str().expect("a lane names a role");
+        assert!(
+            matches!(role, "deep" | "quality"),
+            "lane `{name}` queues with the heavy lanes under role `{role}`, \
+             which holds no group"
         );
     }
 
@@ -587,137 +627,68 @@ fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
     assert_ne!(group_prefix(&group), group_prefix(HEAVY_LINUX_GROUP));
 }
 
+// The three lanes are separate so a red one names which playback path broke,
+// and each pins the standalone backend: one gate runs one backend, and a second
+// axis doubles the runner's bill. The instrumented backend is no longer offered
+// from a run dialog - the catalog carries no per-run knobs - and an
+// investigation sets `KITHARA_RTSAN_BACKEND` for itself.
 #[test]
 fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
-    let workflow = github_workflow("rtsan.yml");
-    assert_no_key(&workflow, "continue-on-error");
-    let jobs = workflow_jobs(&workflow);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog is a table");
 
-    let authorize = workflow_job(jobs, "authorize");
-    assert_hosted_authorization(authorize);
-    // Nothing starts this workflow on a repository without runners: it is only
-    // ever called. So it needs no guard, and a condition here could only ever
-    // skip a judgement someone asked for.
-    assert!(!authorize.contains_key("if"));
-    let rtsan = workflow_job(jobs, "rtsan");
-    assert_eq!(job_needs(rtsan), BTreeSet::from(["authorize".to_owned()]));
-    assert!(!rtsan.contains_key("if"));
-
-    let strategy = mapping_field(rtsan, "strategy")
-        .as_mapping()
-        .expect("RTSan strategy is a mapping");
-    let matrix = mapping_field(strategy, "matrix")
-        .as_mapping()
-        .expect("RTSan matrix is a mapping");
-    let lanes: Vec<&str> = mapping_field(matrix, "lane")
-        .as_sequence()
-        .expect("RTSan lanes are a sequence")
-        .iter()
-        .map(|lane| lane.as_str().expect("RTSan lane is a string"))
-        .collect();
-    assert_eq!(lanes, ["rtsan", "rtsan-file", "rtsan-hls"]);
-
-    assert!(
-        !matrix.contains_key("backend"),
-        "one gate runs one backend; a second matrix axis doubles the runner's bill"
-    );
-
-    let lane_step = named_step(rtsan, "Run RTSan lane");
-    let lane_env = mapping_field(lane_step, "env")
-        .as_mapping()
-        .expect("RTSan lane environment is a mapping");
-    assert_eq!(
-        mapping_field(lane_env, "KITHARA_RTSAN_BACKEND").as_str(),
-        Some("${{ inputs.backend || 'standalone' }}")
-    );
-    assert_eq!(
-        mapping_field(lane_env, "LANE").as_str(),
-        Some("${{ matrix.lane }}")
-    );
-
-    let upload = named_step(rtsan, "Upload the RTSan report");
-    assert_uploads(upload, &["target/nextest/rtsan/junit.xml"]);
-    let upload_inputs = mapping_field(upload, "with")
-        .as_mapping()
-        .expect("RTSan upload inputs are a mapping");
-    let artifact = mapping_field(upload_inputs, "name")
-        .as_str()
-        .expect("RTSan artifact name is a string");
-    for coordinate in [
-        "${{ inputs.backend || 'standalone' }}",
-        "${{ matrix.lane }}",
-        "${{ github.run_id }}",
-        "${{ github.run_attempt }}",
+    let mut artifacts = BTreeSet::new();
+    for (name, recipe) in [
+        ("deep-rtsan-fast", "rtsan"),
+        ("deep-rtsan-file", "rtsan-file"),
+        ("deep-rtsan-hls", "rtsan-hls"),
     ] {
-        assert!(
-            artifact.contains(coordinate),
-            "RTSan artifact name omits {coordinate:?} and collides across cells"
-        );
-    }
-    assert_eq!(
-        mapping_field(upload_inputs, "if-no-files-found").as_str(),
-        Some("error")
-    );
-}
-
-/// The gate judges with the standalone runtime unless someone says otherwise.
-/// Both backends are kept working; only one is paid for per run.
-#[test]
-fn rtsan_defaults_to_the_standalone_backend() {
-    let workflow = github_workflow("rtsan.yml");
-    let root = workflow.as_mapping().expect("workflow is a mapping");
-    let triggers = mapping_field(root, "on")
-        .as_mapping()
-        .expect("workflow triggers are a mapping");
-    for trigger in ["workflow_call", "workflow_dispatch"] {
-        let inputs = mapping_field(
-            mapping_field(triggers, trigger)
-                .as_mapping()
-                .unwrap_or_else(|| panic!("{trigger} is a mapping")),
-            "inputs",
-        )
-        .as_mapping()
-        .expect("RTSan inputs are a mapping");
-        let backend = mapping_field(inputs, "backend")
-            .as_mapping()
-            .expect("RTSan backend input is a mapping");
+        let lane = lanes[name].as_table().unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(lane["os"].as_str(), Some("linux"), "{name}");
+        let steps = lane["steps"].as_array().expect("a lane has steps");
         assert_eq!(
-            mapping_field(backend, "default").as_str(),
+            steps.len(),
+            1,
+            "{name} runs one backend, not a matrix of them"
+        );
+        let step = steps[0].as_table().expect("a step is a table");
+        let args: Vec<&str> = step["args"]
+            .as_array()
+            .expect("a step has args")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        assert_eq!(args, ["test", recipe], "{name}");
+        assert_eq!(
+            step["env"]["KITHARA_RTSAN_BACKEND"].as_str(),
             Some("standalone"),
-            "{trigger} must default to the standalone backend"
+            "{name}"
+        );
+
+        // A shared artifact name would have the three lanes overwrite each
+        // other's evidence, and the report would describe one of them.
+        let artifact = lane["artifact"]
+            .as_table()
+            .expect("a lane names its artifact");
+        assert_eq!(
+            artifact["path"].as_str(),
+            Some("target/nextest/rtsan/junit.xml"),
+            "{name}"
+        );
+        assert_eq!(artifact["when"].as_str(), Some("always"), "{name}");
+        assert!(
+            artifacts.insert(artifact["name"].as_str().expect("an artifact is named")),
+            "{name} shares its artifact name with another RTSan lane"
         );
     }
-}
-
-/// The instrumented backend is one dropdown away, not deleted: a verdict that
-/// needs the compiler's own instrumentation must be reachable from the UI.
-#[test]
-fn rtsan_offers_the_instrumented_backend_from_the_run_dialog() {
-    let workflow = github_workflow("rtsan.yml");
-    let root = workflow.as_mapping().expect("workflow is a mapping");
-    let dispatch = mapping_field(
-        mapping_field(root, "on")
-            .as_mapping()
-            .expect("workflow triggers are a mapping"),
-        "workflow_dispatch",
-    )
-    .as_mapping()
-    .expect("workflow_dispatch is a mapping");
-    let backend = mapping_field(
-        mapping_field(dispatch, "inputs")
-            .as_mapping()
-            .expect("RTSan inputs are a mapping"),
-        "backend",
-    )
-    .as_mapping()
-    .expect("RTSan backend input is a mapping");
-    let options: Vec<&str> = mapping_field(backend, "options")
-        .as_sequence()
-        .expect("RTSan backend options are a sequence")
-        .iter()
-        .map(|option| option.as_str().expect("RTSan backend option is a string"))
-        .collect();
-    assert_eq!(options, ["standalone", "instrumented"]);
 }
 
 #[test]
@@ -1715,6 +1686,17 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     assert!(
         text.contains("just ci lane \"${{ inputs.lane }}\" --kind \"${{ inputs.kind }}\""),
         "the executor runs the named lane"
+    );
+
+    // A caller reaches this through `uses:`, and GitHub renders the callee's
+    // job name in the run tree rather than the caller's. Without this every
+    // lane of an eighteen-way fan-out reads `run`, and which lane failed is
+    // legible only through the API.
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    assert_eq!(
+        mapping_field(job, "name").as_str(),
+        Some("${{ inputs.lane }}"),
+        "the executor's job carries the lane's name"
     );
 }
 
