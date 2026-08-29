@@ -1,5 +1,5 @@
 [package]
-name = "kithara-fixtures"
+name = "kithara-test-fixtures"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -26,7 +26,7 @@ sha2 = { workspace = true }
 toml = { workspace = true }
 
 [dev-dependencies]
-# The backend features are what lets `cargo test -p kithara-fixtures` stand on
+# The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
 # its own: kithara-net, reached through test-utils, refuses to build without one.
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
 

@@ -6,7 +6,7 @@ use axum::{
     routing::get,
 };
 use kithara::platform::sync::Arc;
-use kithara_fixtures::assets::by_name;
+use kithara_test_fixtures::assets::by_name;
 
 use crate::{native::routes::range::build_range_response, test_server_state::TestServerState};
 

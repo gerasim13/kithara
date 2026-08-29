@@ -17,7 +17,6 @@ use kithara::{
     stream::Stream,
     warp::{StretchControls, StretchKind, WarpConfig},
 };
-use kithara_fixtures::assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s};
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
     cochlea::{
@@ -29,6 +28,7 @@ use kithara_integration_tests::{
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     offline::{OfflinePlayer, OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
 };
+use kithara_test_fixtures::assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s};
 use num_traits::ToPrimitive;
 use serde::Serialize;
 

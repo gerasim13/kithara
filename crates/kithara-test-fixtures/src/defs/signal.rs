@@ -60,7 +60,7 @@ fn encode(
         target,
         bit_rate,
     })
-    .unwrap_or_else(|error| panic!("kithara-fixtures: {target:?} encode failed: {error}"))
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: {target:?} encode failed: {error}"))
     .bytes
 }
 
@@ -69,7 +69,7 @@ fn encode(
 fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
     let field = Consts::STREAMINFO_COUNT_OFFSET;
     let Some(slot) = bytes.get_mut(field..field + size_of::<u64>()) else {
-        panic!("kithara-fixtures: FLAC output is too short to hold a STREAMINFO block");
+        panic!("kithara-test-fixtures: FLAC output is too short to hold a STREAMINFO block");
     };
     let packed = u64::from_be_bytes(slot.try_into().expect("invariant: the slot is eight bytes"));
     let count = u64::try_from(total_frames).expect("invariant: a fixture is under 2^64 frames");

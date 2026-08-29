@@ -1,6 +1,6 @@
-# kithara-fixtures — Context
+# kithara-test-fixtures — Context
 
-Contracts and invariants for kithara-fixtures; the README is the overview.
+Contracts and invariants for kithara-test-fixtures; the README is the overview.
 
 ## Store Layout
 
@@ -87,7 +87,7 @@ both load-bearing:
 
 ## What A Build Costs
 
-Measured with `cargo build -p kithara-fixtures` on an already-compiled tree,
+Measured with `cargo build -p kithara-test-fixtures` on an already-compiled tree,
 three assets in the matrix (two six-second WAVs, one two-second MP3):
 
 | Case | Wall clock |
@@ -115,7 +115,7 @@ call site, because both misread it for the same reason: the code that consumes
 these exports is generated into `OUT_DIR` or lives in the build script, and a
 source scanner sees neither.
 
-- `dead_exports` (`.config/arch/thresholds.toml`) counts kithara-fixtures among
+- `dead_exports` (`.config/arch/thresholds.toml`) counts kithara-test-fixtures among
   the test crates. Its exports are reached only from generated accessors and its
   own build script, and a call it makes into a workspace API is a fixture, not a
   shipped caller.

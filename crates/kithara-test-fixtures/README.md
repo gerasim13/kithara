@@ -10,7 +10,7 @@
 
 </div>
 
-# kithara-fixtures
+# kithara-test-fixtures
 
 Audio test assets produced at build time and served from a content-addressed
 store on disk. A test asks for bytes and gets them; nothing is synthesized or
@@ -32,7 +32,7 @@ generated once, into the store, like every other asset.
 ## Usage
 
 ```rust
-use kithara_fixtures::store;
+use kithara_test_fixtures::store;
 
 let root = store::root_from_env();
 let namespace = store::namespace(&root, "0123456789abcdef");

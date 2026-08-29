@@ -49,7 +49,7 @@ impl Asset {
     /// # Panics
     ///
     /// Panics when the store entry is missing. That means the build script did
-    /// not run for this build: run `cargo build -p kithara-fixtures`.
+    /// not run for this build: run `cargo build -p kithara-test-fixtures`.
     #[must_use]
     pub fn bytes(&self) -> &'static [u8] {
         match self.source {
@@ -57,8 +57,8 @@ impl Asset {
             Source::OnDisk(cell) => cell.get_or_init(|| {
                 std::fs::read(self.entry.path).unwrap_or_else(|error| {
                     panic!(
-                        "kithara-fixtures: asset `{}` is missing from the store at {} ({error}); \
-                         run `cargo build -p kithara-fixtures` to materialize it",
+                        "kithara-test-fixtures: asset `{}` is missing from the store at {} ({error}); \
+                         run `cargo build -p kithara-test-fixtures` to materialize it",
                         self.entry.name, self.entry.path,
                     )
                 })

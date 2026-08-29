@@ -91,7 +91,7 @@ fn fingerprint() -> String {
     }
     for file in HASHED_FILES {
         fs::read(file)
-            .unwrap_or_else(|error| panic!("kithara-fixtures: cannot read {file}: {error}"))
+            .unwrap_or_else(|error| panic!("kithara-test-fixtures: cannot read {file}: {error}"))
             .hash(&mut hasher);
         println!("cargo:rerun-if-changed={file}");
     }
@@ -100,7 +100,7 @@ fn fingerprint() -> String {
     assert_eq!(
         hex.len(),
         store::FINGERPRINT_HEX_LEN,
-        "kithara-fixtures: the namespace length the store publishes must match what this writes",
+        "kithara-test-fixtures: the namespace length the store publishes must match what this writes",
     );
     hex
 }
@@ -113,7 +113,7 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
         let name = def.accessor_name();
         assert!(
             seen.insert(name.clone()),
-            "kithara-fixtures: two asset cases share the accessor name `{name}`",
+            "kithara-test-fixtures: two asset cases share the accessor name `{name}`",
         );
         let id = store::asset_id(def.func, def.case);
         resolved.push((name, id, *def));
@@ -127,17 +127,17 @@ fn materialize(namespace: &Path, resolved: &[(String, String, &'static AssetDef)
             continue;
         }
         let _lock = store::lock_entry(namespace, id)
-            .unwrap_or_else(|error| panic!("kithara-fixtures: lock for `{name}`: {error}"));
+            .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
         if store::read_entry(namespace, id, def.ext).is_some() {
             continue;
         }
         let bytes = (def.build)();
         assert!(
             !bytes.is_empty(),
-            "kithara-fixtures: `{name}` produced no bytes"
+            "kithara-test-fixtures: `{name}` produced no bytes"
         );
         store::write_entry(namespace, id, def.ext, &bytes)
-            .unwrap_or_else(|error| panic!("kithara-fixtures: write `{name}`: {error}"));
+            .unwrap_or_else(|error| panic!("kithara-test-fixtures: write `{name}`: {error}"));
     }
 }
 
@@ -149,7 +149,7 @@ fn codegen(namespace: &Path, resolved: &[(String, String, &'static AssetDef)]) -
         let entry = format!("ENTRY_{}", name.to_uppercase());
         let path = store::entry_path(namespace, id, def.ext);
         let path = path.to_str().unwrap_or_else(|| {
-            panic!("kithara-fixtures: the store path for `{name}` is not valid UTF-8")
+            panic!("kithara-test-fixtures: the store path for `{name}` is not valid UTF-8")
         });
         let content_type = def.content_type;
         // rustc records an `include_bytes!` path in dep-info, so cargo tracks
@@ -203,7 +203,7 @@ fn main() {
     let defs: Vec<&AssetDef> = inventory::iter::<AssetDef>.into_iter().collect();
     assert!(
         !defs.is_empty(),
-        "kithara-fixtures: the asset registry is empty; either `src/defs` declares no \
+        "kithara-test-fixtures: the asset registry is empty; either `src/defs` declares no \
          `#[kithara::asset]`, or the registrations were dropped at link time",
     );
     let resolved = resolve(&defs);
@@ -218,12 +218,12 @@ fn main() {
     let stamp = namespace.join(".stamp");
     if fs::read(&stamp).ok().as_deref() != Some(fingerprint.as_bytes()) {
         fs::write(&stamp, fingerprint.as_bytes())
-            .unwrap_or_else(|error| panic!("kithara-fixtures: write stamp: {error}"));
+            .unwrap_or_else(|error| panic!("kithara-test-fixtures: write stamp: {error}"));
     }
     println!("cargo:rerun-if-changed={}", stamp.display());
 
     let out_dir =
         PathBuf::from(std::env::var_os("OUT_DIR").expect("invariant: cargo always sets OUT_DIR"));
     fs::write(out_dir.join("assets.rs"), codegen(&namespace, &resolved))
-        .unwrap_or_else(|error| panic!("kithara-fixtures: write assets.rs: {error}"));
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: write assets.rs: {error}"));
 }

@@ -1,4 +1,4 @@
-/// One body the `/signal` route serves, named by the `kithara-fixtures`
+/// One body the `/signal` route serves, named by the `kithara-test-fixtures`
 /// accessor that generates it.
 ///
 /// The name travels instead of the accessor because this type compiles for
@@ -103,7 +103,7 @@ impl SignalAsset {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_fixtures::assets::MANIFEST;
+    use kithara_test_fixtures::assets::MANIFEST;
 
     use super::SignalAsset;
     use crate::kithara;

@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use kithara_fixtures::{assets, store};
+use kithara_test_fixtures::{assets, store};
 use kithara_test_utils::kithara;
 
 #[kithara::test(native, flash(false))]
@@ -53,7 +53,7 @@ fn the_pilot_asset_is_a_riff_wave_of_the_declared_length() {
     assert_eq!(asset.path(), Some(std::path::Path::new(asset_path(&asset))));
 }
 
-fn asset_path(asset: &kithara_fixtures::asset::Asset) -> &'static str {
+fn asset_path(asset: &kithara_test_fixtures::asset::Asset) -> &'static str {
     assets::MANIFEST
         .iter()
         .find(|entry| entry.id == asset.entry().id)

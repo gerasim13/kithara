@@ -10,10 +10,10 @@ use kithara::{
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_fixtures::assets::alac_silence_1s;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
 use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara_test_fixtures::assets::alac_silence_1s;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 

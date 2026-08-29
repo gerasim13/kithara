@@ -29,7 +29,7 @@ fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
         target: BytesEncodeTarget::Mp3,
         bit_rate: None,
     })
-    .unwrap_or_else(|error| panic!("kithara-fixtures: MP3 encode failed: {error}"))
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: MP3 encode failed: {error}"))
     .bytes
 }
 
@@ -49,6 +49,6 @@ fn alac(total_frames: usize) -> Vec<u8> {
         target: BytesEncodeTarget::Alac,
         bit_rate: None,
     })
-    .unwrap_or_else(|error| panic!("kithara-fixtures: ALAC encode failed: {error}"))
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: ALAC encode failed: {error}"))
     .bytes
 }
