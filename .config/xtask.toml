@@ -956,18 +956,50 @@ timeout_minutes = 30
 artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 
 # Real-time correctness is what this product is for: an allocation or a lock
-# on the audio thread is a dropout, not a slow path. The fast lane is a
-# tripwire over the mock decoder; the other two exercise file and HLS playback
-# under the same sanitizer. `KITHARA_RTSAN_BACKEND` is the default the
-# workflow's own `backend` input falls back to - the routine push and the
-# nightly soak both run standalone; `instrumented` stays a manual dispatch
-# door.
+# on the audio thread is a dropout, not a slow path. `deep-rtsan` is the full
+# suite - including `rtsan-async`, which the three Linux lanes below do not
+# cover - on the pinned nightly's instrumented sanitizer, on the platform that
+# ships it. The Linux lanes run the same file/HLS/tripwire suites under the
+# stable-toolchain standalone backend instead, so they can run on every push
+# rather than only nightly; `test.just` defaults an unset
+# `KITHARA_RTSAN_BACKEND` to instrumented, so they pin `standalone`
+# themselves. Same detector, two platforms, two backends - not duplication.
+[ext.ci.lanes.deep-rtsan]
+cache_group = "macos"
+label = "deep Apple"
+os = "macos"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "rtsan",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-async",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-file",
+  ], label = "real-time sanitizer suite" },
+  { args = [
+    "test",
+    "rtsan-hls",
+  ], label = "real-time sanitizer suite" },
+]
+role = "gate"
+kinds = ["nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 120
+
 [ext.ci.lanes.deep-rtsan-fast]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
+artifact = { name = "rtsan-junit-fast", path = "target/nextest/rtsan/junit.xml", when = "always" }
 steps = [
   { args = [
     "test",
@@ -976,7 +1008,7 @@ steps = [
 ]
 role = "gate"
 kinds = ["nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-file]
@@ -985,6 +1017,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
+artifact = { name = "rtsan-junit-file", path = "target/nextest/rtsan/junit.xml", when = "always" }
 steps = [
   { args = [
     "test",
@@ -993,7 +1026,7 @@ steps = [
 ]
 role = "gate"
 kinds = ["nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-hls]
@@ -1002,6 +1035,7 @@ label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
+artifact = { name = "rtsan-junit-hls", path = "target/nextest/rtsan/junit.xml", when = "always" }
 steps = [
   { args = [
     "test",
@@ -1010,7 +1044,7 @@ steps = [
 ]
 role = "gate"
 kinds = ["nightly"]
-kinds_github = ["main", "branch"]
+kinds_github = ["main", "branch", "nightly"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-perf]
@@ -1046,6 +1080,11 @@ timeout_minutes = 120
 # A shader that stopped reading what Rust writes it looks identical from the
 # outside until a frame is rendered and read back, so this is the one suite
 # that needs an attached graphics device rather than a software rasterizer.
+# Dispatched onto the ordinary fleet it would render on a software rasterizer
+# and report green on a gate that never ran, so it stays name-only here, the
+# same as `windows-x64`: `gpu.yml` already schedules it onto
+# `KITHARA_GPU_RUNNER_LABELS` and skips when that variable is empty, and the
+# catalog has no field yet for naming a runner pool.
 [ext.ci.lanes.deep-gpu]
 cache_group = "linux"
 label = "Linux"
@@ -1065,7 +1104,8 @@ steps = [
   ], label = "GPU visual suite" },
 ]
 role = "deep"
-kinds = ["nightly"]
+kinds = []
+kinds_github = []
 timeout_minutes = 60
 
 # Miri cannot enter a C library, and every `unsafe` block that matters here is
@@ -1306,6 +1346,7 @@ timeout_minutes = 90
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
@@ -1317,6 +1358,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["lint", "arch"], label = "architecture checks" }]
@@ -1330,6 +1372,7 @@ timeout_minutes = 30
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [
@@ -1348,6 +1391,7 @@ timeout_minutes = 60
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "memory"], label = "memory budgets" }]
@@ -1357,11 +1401,14 @@ timeout_minutes = 60
 
 # The virtual clock collapses fixture delays, so order-of-service defects
 # cannot reproduce on the simulated-clock lane. Its own target directory: the
-# two builds differ.
+# two builds differ. `{target}` keeps it inside the leased build-cache
+# directory rather than a fixed path under `{root}` that the lease eviction
+# and reclaim machinery would not know about.
 [ext.ci.lanes.linux-test-real-clock]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
@@ -1370,7 +1417,7 @@ steps = [
     "test",
     "run",
     "--flash=off",
-  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{root}/target/flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
+  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
 ]
 role = "gate"
 kinds_github = ["main", "branch"]
@@ -1399,9 +1446,10 @@ timeout_minutes = 60
 # The repository's own analysis recipes: until now nothing ran them
 # unattended. The nightly run assesses the shallow profile; the weekly run
 # reruns the whole workflow with the deep profile, which is why only the
-# assessment's own args change with the kind. All six share one heavy-linux
-# queue, the way the workflow's own `concurrency: group: heavy-linux-...`
-# does.
+# assessment's own args change with the kind. The workflow's own
+# `concurrency: group: heavy-linux-...` is declared once, workflow-wide, and
+# the six jobs inside it run concurrently - only this lane, the longest of the
+# six, carries the `heavy-linux` queue.
 [ext.ci.lanes.quality-assess]
 cache_group = "linux"
 label = "Linux"
@@ -1410,7 +1458,7 @@ fetch_depth = 0
 queue = "heavy-linux"
 tools = ["cargo", "just"]
 program = "just"
-artifact = { name = "quality-assessment", path = "target/quality-assessment" }
+artifact = { name = "quality-assessment", path = "target/quality-assessment/\ntarget/quality-report/\ntarget/quality-lab/" }
 steps = [
   { args = [
     "quality",
@@ -1430,7 +1478,7 @@ timeout_minutes = 360
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-queue = "heavy-linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "similarity-report", path = "target/similarity" }
@@ -1443,7 +1491,7 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-queue = "heavy-linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "architecture", path = "target/architecture" }
@@ -1466,38 +1514,39 @@ timeout_minutes = 120
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-queue = "heavy-linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
-artifact = { name = "coverage-risk", path = "target/quality-lab" }
+artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
 steps = [{ args = ["quality", "coverage-risk"], label = "coverage risk" }]
 role = "quality"
 kinds = ["nightly", "weekly"]
 timeout_minutes = 240
 
-# `just ci health` compares the branch against the tip of `main`, which a
-# shallow single-branch checkout does not carry.
+# `just ci health` fetches the `main` baseline itself with `git fetch
+# --depth=1`, so the checkout ahead of it only needs the tip.
 [ext.ci.lanes.quality-health]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-fetch_depth = 0
-queue = "heavy-linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
-artifact = { name = "health-report", path = "target/health-report.md" }
+artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
 steps = [{ args = ["ci", "health"], label = "workspace health" }]
 role = "quality"
 kinds = ["nightly", "weekly"]
 timeout_minutes = 120
 
 # The consolidated report is the sequence the quality jobs lacked: five
-# measurements, then one document that reads all five.
+# measurements, then one document that reads all five. `--artifacts` names
+# where the dispatcher's own download step lands them, not this workflow's
+# `target/quality-artifacts`.
 [ext.ci.lanes.quality-report]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
-queue = "heavy-linux"
+fetch_depth = 1
 tools = ["cargo", "just"]
 program = "just"
 artifact = { name = "quality-report", path = "target/quality-report.md" }
@@ -1506,7 +1555,7 @@ steps = [
     "ci",
     "report",
     "--artifacts",
-    "{root}/target/quality-artifacts",
+    "{root}/artifacts",
   ], label = "consolidated quality report" },
 ]
 role = "quality"

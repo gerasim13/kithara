@@ -207,6 +207,77 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
     }
 }
 
+// The rtsan lanes exist to run the instrumented allocator under load; a lane
+// that silently falls back to the harness's default backend would still be
+// green while checking nothing new. `quality-report`'s `--artifacts` value is
+// the one place a downstream dispatcher agrees with this catalog on where
+// artifacts land - drift there is silent, because `ci_report.rs` treats a
+// missing directory as "nothing to report" rather than an error.
+#[test]
+fn every_deep_rtsan_lane_names_its_backend_and_quality_report_names_its_artifacts_path() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("CI lanes are a table");
+
+    let mut checked = 0;
+    for (name, lane) in lanes {
+        if !name.starts_with("deep-rtsan-") {
+            continue;
+        }
+        let steps = lane
+            .get("steps")
+            .and_then(toml::Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
+        for step in steps {
+            let backend = step
+                .get("env")
+                .and_then(|env| env.get("KITHARA_RTSAN_BACKEND"))
+                .and_then(toml::Value::as_str);
+            assert!(
+                backend.is_some(),
+                "lane `{name}` must name its backend: KITHARA_RTSAN_BACKEND"
+            );
+        }
+        checked += 1;
+    }
+    assert!(checked > 0, "no deep-rtsan-* lane is configured to check");
+
+    let report = lanes
+        .get("quality-report")
+        .expect("quality-report lane is declared");
+    let steps = report
+        .get("steps")
+        .and_then(toml::Value::as_array)
+        .expect("quality-report has steps");
+    let mut found = false;
+    for step in steps {
+        let args: Vec<&str> = step
+            .get("args")
+            .and_then(toml::Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        let Some(position) = args.iter().position(|arg| *arg == "--artifacts") else {
+            continue;
+        };
+        assert_eq!(
+            args.get(position + 1),
+            Some(&"{root}/artifacts"),
+            "quality-report's --artifacts must be {{root}}/artifacts"
+        );
+        found = true;
+    }
+    assert!(found, "quality-report must pass --artifacts to a step");
+}
+
 // A lane naming a kind that no pipeline can be is a lane that never runs, and
 // nothing else would say so.
 #[test]

@@ -579,6 +579,70 @@
   <require os> macos
   <require tools> cargo just
   just perf bench ci
+# deep-gpu / branch
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / main
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-gpu / release
+  <require os> linux
+  <require tools> cargo just
+  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
+# deep-miri / branch
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / main
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test miri
+# deep-miri / release
+  <require os> linux
+  <require tools> cargo just
+  just test miri
 # deep-perf / branch
   <require os> macos
   <require tools> cargo just
@@ -675,6 +739,126 @@
   just test rtsan-async
   just test rtsan-file
   just test rtsan-hls
+# deep-rtsan-fast / branch
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / main
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-fast / release
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / branch
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / main
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-file / release
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-file
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / branch
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / main
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
+# deep-rtsan-hls / release
+  <require os> linux
+  <require tools> cargo just
+  just test rtsan-hls
+    KITHARA_RTSAN_BACKEND=standalone
 # deps-deny / branch
   <require os> linux
   <require tools> cargo just
@@ -811,6 +995,38 @@
   <require tools> cargo just
   just deps machete
   just deps shear
+# linux-arch / branch
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / platforms
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / main
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / nightly
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / weekly
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
+# linux-arch / release
+  <require os> linux
+  <require tools> cargo just
+  just lint arch
 # linux-broadcast / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1011,6 +1227,38 @@
   <require tools> cargo just sccache
   just test run --lane=integration-regressions
     CARGO_BUILD_JOBS=2
+# linux-lint / branch
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / platforms
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / main
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / nightly
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / weekly
+  <require os> linux
+  <require tools> cargo just
+  just lint full
+# linux-lint / release
+  <require os> linux
+  <require tools> cargo just
+  just lint full
 # linux-loom / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1051,6 +1299,78 @@
   <require tools> cargo just sccache
   just test run --lane=loom
     CARGO_BUILD_JOBS=2
+# linux-msrv / branch
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / platforms
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / main
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / nightly
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / weekly
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-msrv / release
+  <require os> linux
+  <require tools> cargo just
+  just check
+    RUSTUP_TOOLCHAIN=1.92.0
+# linux-perf-memory / branch
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / platforms
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / main
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / nightly
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / weekly
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
+# linux-perf-memory / release
+  <require os> linux
+  <require tools> cargo just
+  just perf memory
 # linux-secrets / branch
   <require os> linux
   <require tools> gitleaks
@@ -1123,6 +1443,38 @@
   <require tools> cargo just sccache
   just test run --lane=selenium-firefox
     CARGO_BUILD_JOBS=2
+# linux-support / branch
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / main
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
+# linux-support / release
+  <require os> linux
+  <require tools> cargo just
+  just test run --touched
 # linux-test / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1163,6 +1515,54 @@
   <require tools> cargo just sccache
   just test run --profile ci
     CARGO_BUILD_JOBS=2
+# linux-test-real-clock / branch
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / main
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-real-clock / release
+  <require os> linux
+  <require tools> cargo just
+  just test run --flash=off
+    CARGO_TARGET_DIR=<root>/target/flash-off
+    KITHARA_HANG_DUMP_DIR=<root>/target/hang
 # linux-wasm / branch
   <require os> linux
   <require tools> cargo just sccache
@@ -1195,6 +1595,206 @@
   <require os> linux
   <require tools> cargo just sccache
   just platform wasm
+# quality-architecture / branch
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / platforms
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / main
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / nightly
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / weekly
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-architecture / release
+  <require os> linux
+  <require tools> cargo just
+  just arch viz
+  just arch orphans --deny
+# quality-assess / branch
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-assess / platforms
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-assess / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-assess / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-assess / main
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-assess / nightly
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-assess / weekly
+  <require os> linux
+  <require tools> cargo just
+  just quality assess --depth deep
+# quality-assess / release
+  <require os> linux
+  <require tools> cargo just
+  just quality assess
+# quality-coverage-risk / branch
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / platforms
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / main
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / nightly
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / weekly
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-coverage-risk / release
+  <require os> linux
+  <require tools> cargo just
+  just quality coverage-risk
+# quality-health / branch
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / platforms
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / main
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / nightly
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / weekly
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-health / release
+  <require os> linux
+  <require tools> cargo just
+  just ci health
+# quality-report / branch
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / platforms
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / main
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / nightly
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / weekly
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-report / release
+  <require os> linux
+  <require tools> cargo just
+  just ci report --artifacts <root>/artifacts
+# quality-similarity / branch
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / platforms
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / main
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / nightly
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / weekly
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
+# quality-similarity / release
+  <require os> linux
+  <require tools> cargo just
+  just lint similarity
 # release-android / branch
   refused: ReleaseAndroid produces artifacts and is not a command lane
 # release-android / platforms
