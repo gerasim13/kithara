@@ -104,6 +104,8 @@ impl ViewControl for mount::Text<'_> {
                 .maybe_color(self.color)
                 .maybe_active_color(self.active_color)
                 .active(cx.ctx.flag(self.active))
+                .maybe_font(self.font)
+                .maybe_weight(self.weight)
                 .skin(cx.skin)
                 .build()
                 .view(),

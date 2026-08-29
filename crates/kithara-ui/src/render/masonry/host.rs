@@ -175,7 +175,8 @@ where
         let style = spec.style;
         let role = self
             .skin
-            .text_role(style, spec.color, spec.active_color, active);
+            .text_role(style, spec.color, spec.active_color, active)
+            .faced(spec.font, spec.weight);
         let padding_x = match style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,
             TextStyle::VisMeta => self.skin.vis.index_padding_x,

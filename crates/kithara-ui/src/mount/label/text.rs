@@ -6,7 +6,7 @@ use crate::{
     module::{TextAlign, TextStyle},
     mount::Control,
     size::{Dim, SizeSpec},
-    skin::{ColorRole, SkinDoc},
+    skin::{ColorRole, FontFamily, FontWeight, SkinDoc},
 };
 
 /// A run of text the document supplies or reads.
@@ -16,8 +16,10 @@ pub(crate) struct Text<'a> {
     pub(crate) active_color: Option<ColorRole>,
     pub(crate) align: TextAlign,
     pub(crate) color: Option<ColorRole>,
+    pub(crate) font: Option<FontFamily>,
     pub(crate) label: Option<InternId>,
     pub(crate) style: TextStyle,
+    pub(crate) weight: Option<FontWeight>,
 }
 
 impl Control for Text<'_> {

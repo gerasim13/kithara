@@ -33,14 +33,18 @@ macro_rules! controls {
                 active_color,
                 active,
                 align,
+                font,
+                weight,
             } => with.apply(
                 &$crate::mount::Text::builder()
                     .maybe_active(active.as_ref())
                     .maybe_active_color(*active_color)
                     .align(*align)
                     .maybe_color(*color)
+                    .maybe_font(*font)
                     .maybe_label(*label)
                     .style(*style)
+                    .maybe_weight(*weight)
                     .build(),
             ),
             $crate::expand::ControlSpec::Glyph {

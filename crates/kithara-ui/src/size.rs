@@ -906,6 +906,8 @@ mod tests {
                     active_color: None,
                     active: None,
                     align: TextAlign::Start,
+                    font: None,
+                    weight: None,
                 },
                 skin,
             )

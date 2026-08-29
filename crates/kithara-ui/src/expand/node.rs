@@ -11,7 +11,7 @@ use crate::{
     },
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
-    skin::ColorRole,
+    skin::{ColorRole, FontFamily, FontWeight},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,6 +164,8 @@ pub enum ControlSpec {
         active_color: Option<ColorRole>,
         active: Option<Binding>,
         align: TextAlign,
+        font: Option<FontFamily>,
+        weight: Option<FontWeight>,
     },
     Glyph {
         icon: IconName,

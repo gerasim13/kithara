@@ -11,7 +11,13 @@ use super::{
         WindowControlsStyle,
     },
 };
-use crate::{ids::NodeId, layout::FrameSides, param::Param, size::SizeSpec, skin::ColorRole};
+use crate::{
+    ids::NodeId,
+    layout::FrameSides,
+    param::Param,
+    size::SizeSpec,
+    skin::{ColorRole, FontFamily, FontWeight},
+};
 
 const fn default_framed() -> bool {
     true
@@ -341,6 +347,11 @@ pub enum ControlNode {
         active_color: Option<ColorRole>,
         #[serde(default)]
         active: Option<BindingRef>,
+        /// The face this run is set in, when it is not the one the style names.
+        #[serde(default)]
+        font: Option<Param<FontFamily>>,
+        #[serde(default)]
+        weight: Option<Param<FontWeight>>,
     },
     Glyph {
         id: NodeId,

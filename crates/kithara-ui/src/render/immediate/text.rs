@@ -16,7 +16,7 @@ use crate::{
         ReadValue, Skin, UiEvent, Widget,
         controls::{PaintState, Probe},
     },
-    skin::{ColorRole, TextRoleSkin},
+    skin::{ColorRole, FontFamily, FontWeight, TextRoleSkin},
 };
 
 #[derive(bon::Builder)]
@@ -28,6 +28,8 @@ pub(crate) struct Text<'value, 'data, 'skin> {
     value: Option<&'value ReadValue<'data>>,
     style: TextStyle,
     active: bool,
+    font: Option<FontFamily>,
+    weight: Option<FontWeight>,
 }
 
 impl<'a, 'value, 'data, 'skin> Widget<'a> for Text<'value, 'data, 'skin>
@@ -44,7 +46,8 @@ where
         };
         let role = self
             .skin
-            .text_role(self.style, self.color, self.active_color, self.active);
+            .text_role(self.style, self.color, self.active_color, self.active)
+            .faced(self.font, self.weight);
         let content = self.style.cased(value.to_owned());
         let padding_x = match self.style {
             TextStyle::VisFooter => self.skin.vis.footer_padding_x,

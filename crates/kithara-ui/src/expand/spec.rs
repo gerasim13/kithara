@@ -163,6 +163,8 @@ pub(super) fn control_spec(
             align,
             color,
             active_color,
+            font,
+            weight,
             ..
         } => ControlSpec::Text {
             style: *style,
@@ -171,6 +173,8 @@ pub(super) fn control_spec(
             active_color: *active_color,
             active: optional_binding(context, machine, extra.active.as_ref())?,
             align: *align,
+            font: context.optional_param(font.as_ref(), path)?,
+            weight: context.optional_param(weight.as_ref(), path)?,
         },
         ControlNode::NavItem { label, icon, .. } => ControlSpec::NavItem {
             label: intern_text(context, machine.interner, label, path, &context.origin)?,

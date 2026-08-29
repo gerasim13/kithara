@@ -64,6 +64,18 @@ pub struct TextRoleSkin {
     pub spacing: f32,
 }
 
+impl TextRoleSkin {
+    /// This role set in the face a run names, keeping the skin's where it
+    /// names none.
+    pub(crate) fn faced(self, font: Option<FontFamily>, weight: Option<FontWeight>) -> Self {
+        Self {
+            font: font.unwrap_or(self.font),
+            weight: weight.unwrap_or(self.weight),
+            ..self
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
