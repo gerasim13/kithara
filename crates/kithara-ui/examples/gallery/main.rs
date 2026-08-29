@@ -452,6 +452,40 @@ mod tests {
         assert_ne!(gallery.compiled().min, dark);
     }
 
+    /// The specimen switch is the runtime half of the face override: pressing a
+    /// family lights its item and unfolds that family's block, and folds away
+    /// the block of the family it left.
+    #[kithara::test]
+    fn pressing_a_face_family_unfolds_that_specimen_and_folds_the_others() {
+        let mut gallery = Gallery::mounted();
+        gallery.reads.select_tab(Tab::Assets);
+
+        drop(update(
+            &mut gallery,
+            Message::Ui(UiEvent::Control {
+                path: "assets/mono/item".to_owned(),
+                action: ControlAction::Activate,
+            }),
+        ));
+
+        assert_eq!(
+            gallery.reads.get("gallery.font.mono"),
+            Some(ReadValue::Bool(true))
+        );
+        assert_eq!(
+            gallery.reads.get("gallery.font.mono.hidden"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            gallery.reads.get("gallery.font.display"),
+            Some(ReadValue::Bool(false))
+        );
+        assert_eq!(
+            gallery.reads.get("gallery.font.display.hidden"),
+            Some(ReadValue::Bool(true))
+        );
+    }
+
     #[kithara::test]
     fn a_tick_moves_the_clock_a_page_binds_to() {
         let mut gallery = Gallery::mounted();
@@ -761,6 +795,7 @@ mod tests {
             "nav",
             |path| path.starts_with("gallery/"),
             &[
+                ("gallery/assets/item", "activation"),
                 ("gallery/atoms/item", "activation"),
                 ("gallery/buttons/item", "activation"),
                 ("gallery/cells/item", "activation"),
@@ -1026,6 +1061,59 @@ mod tests {
             .collect();
         let shipped: Vec<&str> = builtin::skins().iter().map(Skin::id).collect();
         assert_eq!(offered, shipped);
+    }
+
+    /// The specimen switch and the reading behind it are two hand-written
+    /// lists. A family named in one and not the other is either a switch
+    /// nothing answers or a face nobody can reach.
+    #[kithara::test]
+    fn the_assets_page_offers_every_face_family() {
+        let ui = compile(
+            Tab::Assets.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            custom::config(),
+        )
+        .unwrap_or_else(|error| panic!("{} must compile: {error}", Tab::Assets.entry()));
+        let mut paths = Vec::new();
+        collect_nav_item_paths(&ui.root, &ui, &mut paths);
+
+        let offered: Vec<&str> = paths
+            .iter()
+            .filter_map(|path| {
+                path.strip_prefix("assets/")
+                    .and_then(|rest| rest.strip_suffix("/item"))
+            })
+            .collect();
+        assert_eq!(offered, mock::FONT_FAMILIES);
+    }
+
+    /// The page claims to show the whole icon vocabulary. An icon the toolkit
+    /// draws and the page never names is a face a document may write with
+    /// nothing to look at first.
+    #[kithara::test]
+    fn the_assets_page_shows_every_icon_the_toolkit_draws() {
+        let ui = compile(
+            Tab::Assets.entry(),
+            &resolver(),
+            &mock::registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            custom::config(),
+        )
+        .unwrap_or_else(|error| panic!("{} must compile: {error}", Tab::Assets.entry()));
+        let mut shown = Vec::new();
+        each_control(&ui, &mut |path, spec| {
+            if let ControlSpec::Glyph { icon, .. } = spec
+                && path.starts_with("assets/icon-")
+            {
+                shown.push(*icon);
+            }
+        });
+
+        assert_eq!(shown, IconName::ALL);
     }
 
     fn collect_nav_item_paths(node: &CompiledNode, ui: &CompiledUi, paths: &mut Vec<String>) {

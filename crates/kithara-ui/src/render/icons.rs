@@ -163,7 +163,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use lucide_icons::Icon as Lucide;
 
-    use super::Mark;
+    use super::{IconSource, Mark};
     use crate::{
         draw::{FillRule, Rect},
         module::IconName,
@@ -232,15 +232,31 @@ mod tests {
         }
     }
 
-    #[kithara::test]
-    fn svg_icons_do_not_cross_the_glyph_seam() {
-        assert_eq!(IconName::PlayReverse.lucide_glyph(), None);
-        assert_eq!(IconName::Zvuk.lucide_glyph(), None);
+    /// Every icon drawn from an authored SVG, taken from the one list of icon
+    /// names rather than written out again here: a mark added to `source` and
+    /// forgotten here would otherwise go unchecked.
+    fn authored() -> Vec<IconName> {
+        IconName::ALL
+            .iter()
+            .copied()
+            .filter(|icon| matches!(super::source(*icon), IconSource::Svg(_)))
+            .collect()
     }
 
-    /// Both authored icons read as outlines, so neither has to reach a toolkit
+    #[kithara::test]
+    fn svg_icons_do_not_cross_the_glyph_seam() {
+        for icon in authored() {
+            assert_eq!(icon.lucide_glyph(), None, "{icon:?} draws its own art");
+        }
+    }
+
+    /// Every authored icon reads as an outline, so none has to reach a toolkit
     /// to be seen. One of them fills with the even-odd rule and would be a solid
     /// blob without it, which is why the rule is asserted rather than assumed.
+    ///
+    /// `Art` answers a document it cannot read with a log line and nothing
+    /// drawn, so an icon that stops parsing is blank rather than loud. This is
+    /// where that is caught.
     #[kithara::test]
     fn authored_icons_read_as_outlines_this_can_draw() {
         let box_of = Rect {
@@ -249,7 +265,7 @@ mod tests {
             x: 0.0,
             y: 0.0,
         };
-        for icon in [IconName::PlayReverse, IconName::Zvuk] {
+        for icon in authored() {
             let Some(Mark::Outline(outline)) = icon.mark() else {
                 panic!("{icon:?} must read as an outline");
             };

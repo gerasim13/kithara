@@ -7,6 +7,7 @@ pub(super) enum Tab {
     Faders,
     Modules,
     Typography,
+    Assets,
     Cells,
     Sizes,
     Tokens,
@@ -41,12 +42,13 @@ impl Tab {
     ///
     /// One list stands behind all three, so a page is added by writing it here
     /// and in the documents, and nowhere else.
-    const PAGES: [(Self, &'static str); 29] = [
+    const PAGES: [(Self, &'static str); 30] = [
         (Self::Atoms, "atoms"),
         (Self::Buttons, "buttons"),
         (Self::Faders, "faders"),
         (Self::Modules, "modules"),
         (Self::Typography, "typography"),
+        (Self::Assets, "assets"),
         (Self::Cells, "cells"),
         (Self::Sizes, "sizes"),
         (Self::Tokens, "tokens"),

@@ -32,6 +32,7 @@
                     Include(id: "faders", source: "nav/item.kmodule.ron", with: { "icon": "Faders", "label": "FADERS", "tab": "gallery.tab.faders" }),
                     Include(id: "modules", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "MODULES", "tab": "gallery.tab.modules" }),
                     Include(id: "typography", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TYPOGRAPHY", "tab": "gallery.tab.typography" }),
+                    Include(id: "assets", source: "nav/item.kmodule.ron", with: { "icon": "Kithara", "label": "ASSETS", "tab": "gallery.tab.assets" }),
                     Include(id: "cells", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "CELLS", "tab": "gallery.tab.cells" }),
                     Include(id: "sizes", source: "nav/item.kmodule.ron", with: { "icon": "Faders", "label": "SIZES", "tab": "gallery.tab.sizes" }),
                     Include(id: "tokens", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "TOKENS", "tab": "gallery.tab.tokens" }),

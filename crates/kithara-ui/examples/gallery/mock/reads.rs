@@ -24,6 +24,12 @@ use super::{
 };
 use crate::sections::{ModuleDemo, Tab};
 
+/// The face families the assets page sets its specimen in, named as the
+/// document writes them. The page offers one switch per name and the endpoints
+/// behind them are built from this list, so a family is added by writing it
+/// here and in the document.
+pub(crate) const FONT_FAMILIES: [&str; 3] = ["display", "sans", "mono"];
+
 /// What this application moves on the page it is showing.
 ///
 /// A document declares its own motion and a host reads that declaration off
@@ -80,6 +86,10 @@ pub(crate) struct MockReads {
     /// skin chosen here outlives every page turned afterwards.
     #[field(get, vis = "pub(crate)", copy)]
     active_skin: usize,
+    /// Which family the assets page sets its specimen in, as an index into
+    /// [`FONT_FAMILIES`]. It sits beside the skin for the same reason: the
+    /// choice outlives the page it was made on.
+    active_font: usize,
     tree_expanded: Vec<bool>,
     tree_rows: Vec<TreeRow<'static>>,
     tree_visible_indices: Vec<usize>,
@@ -135,6 +145,7 @@ impl Default for MockReads {
             active_module: ModuleDemo::Deck,
             active_tab: Tab::Atoms,
             active_skin: 0,
+            active_font: 0,
             button_cue: false,
             button_play: false,
             button_sync: true,
@@ -248,6 +259,12 @@ impl MockReads {
             {
                 self.select_skin(skin);
             }
+            path if let Some(family) = path
+                .strip_prefix("assets/")
+                .and_then(|rest| rest.strip_suffix("/item")) =>
+            {
+                self.select_font(family);
+            }
             path if path.ends_with("/transport/sync") => {
                 self.button_sync = !self.button_sync;
             }
@@ -332,6 +349,14 @@ impl MockReads {
     fn select_skin(&mut self, id: &str) {
         if let Some(index) = builtin::skins().iter().position(|skin| skin.id() == id) {
             self.active_skin = index;
+        }
+    }
+
+    /// Sets the specimen in the family of that name. A name no shipped family
+    /// answers to leaves the specimen in the one it is set in.
+    fn select_font(&mut self, family: &str) {
+        if let Some(index) = FONT_FAMILIES.iter().position(|named| *named == family) {
+            self.active_font = index;
         }
     }
 
@@ -443,6 +468,11 @@ impl MockReads {
             }
             endpoint if let Some(skin) = endpoint.strip_prefix("gallery.skin.") => {
                 builtin::skins()[self.active_skin].id() == skin
+            }
+            endpoint if let Some(rest) = endpoint.strip_prefix("gallery.font.") => {
+                let active = FONT_FAMILIES[self.active_font];
+                rest.strip_suffix(".hidden")
+                    .map_or_else(|| active == rest, |family| active != family)
             }
             _ => return None,
         };

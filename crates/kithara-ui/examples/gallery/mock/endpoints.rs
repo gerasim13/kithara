@@ -9,6 +9,7 @@ use kithara_ui::{
 use super::{
     consts::Consts,
     pages::{mixer, stress},
+    reads::FONT_FAMILIES,
 };
 use crate::sections::{ModuleDemo, Tab};
 
@@ -505,6 +506,20 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
             &format!("gallery.skin.{}", skin.id()),
             EndpointDesc::new(ValueKind::Bool),
         );
+    }
+    // The specimen switch reads two answers per family: whether it is the one
+    // chosen, which lights its item, and whether its block stays folded away.
+    for family in FONT_FAMILIES {
+        for id in [
+            format!("gallery.font.{family}"),
+            format!("gallery.font.{family}.hidden"),
+        ] {
+            registry.insert(
+                EndpointCategory::Model,
+                &id,
+                EndpointDesc::new(ValueKind::Bool),
+            );
+        }
     }
 }
 

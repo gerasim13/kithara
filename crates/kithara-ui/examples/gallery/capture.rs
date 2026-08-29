@@ -255,7 +255,7 @@ mod tests {
     fn a_page_photographed_once_keeps_the_name_a_still_set_gives_it() {
         assert_eq!(
             film("motion:1x1").file(shot(Tab::Motion), 0),
-            "22-motion.png"
+            "23-motion.png"
         );
     }
 
@@ -263,7 +263,7 @@ mod tests {
     fn a_page_photographed_more_than_once_numbers_its_photographs() {
         assert_eq!(
             film("motion:2x1").file(shot(Tab::Motion), 1),
-            "22-motion-001.png"
+            "23-motion-001.png"
         );
     }
 

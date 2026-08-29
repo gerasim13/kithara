@@ -1,0 +1,16 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-font-specimen",
+    parameters: ["family"],
+    root: Column(
+        gap: Some(8.0),
+        size: (w: Fill, h: Shrink),
+        children: [
+            Text(id: "normal", style: Brand, font: "$family", weight: Normal, label: "Kithara Deck 0123456789", size: (w: Fill, h: Fixed(20.0))),
+            Text(id: "medium", style: Brand, font: "$family", weight: Medium, label: "Kithara Deck 0123456789", size: (w: Fill, h: Fixed(20.0))),
+            Text(id: "semibold", style: Brand, font: "$family", weight: Semibold, label: "Kithara Deck 0123456789", size: (w: Fill, h: Fixed(20.0))),
+            Text(id: "bold", style: Brand, font: "$family", weight: Bold, label: "Kithara Deck 0123456789", size: (w: Fill, h: Fixed(20.0))),
+        ],
+    ),
+)

@@ -4,6 +4,7 @@
     id: "kithara-gallery",
     contract: 1,
     screens: {
+        "gallery-assets": "gallery-assets.klayout.ron",
         "gallery-atoms": "gallery-atoms.klayout.ron",
         "gallery-buttons": "gallery-buttons.klayout.ron",
         "gallery-cells": "gallery-cells.klayout.ron",

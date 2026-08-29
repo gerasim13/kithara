@@ -1,8 +1,25 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum IconName {
+macro_rules! icon_names {
+    ($($name:ident),* $(,)?) => {
+        /// The face an icon is drawn with, named once for the document that
+        /// asks for it and the host that hands it over.
+        #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+        #[non_exhaustive]
+        pub enum IconName {
+            $($name,)*
+        }
+
+        impl IconName {
+            /// Every icon a document may name, in the order they are
+            /// declared. One list stands behind the enum and this, so a face
+            /// is added by writing its name once.
+            pub const ALL: &'static [Self] = &[$(Self::$name,)*];
+        }
+    };
+}
+
+icon_names! {
     Activity,
     Bell,
     Charts,

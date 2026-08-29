@@ -6,4 +6,4 @@ mod quality;
 mod reads;
 
 pub(crate) use endpoints::{MockRegistry, registry};
-pub(crate) use reads::MockReads;
+pub(crate) use reads::{FONT_FAMILIES, MockReads};

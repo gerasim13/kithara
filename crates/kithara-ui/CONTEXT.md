@@ -1025,6 +1025,13 @@ search placeholder are catalog entries resolved onto `Skin` alone, and a table's
 are catalog keys the document itself carries; see "Text Catalog Ownership" for where they come
 from.
 
+A style names a face, and a run may name a different one. `Text` carries an optional `font` and
+`weight`, both `Param`, which reach `TextRoleSkin::faced` after the style has resolved: the run's
+choice wins for whichever half it states and the skin keeps the other. The skin still owns size,
+colour and tracking, so the override changes the face and nothing else. It exists because a
+specimen shows the same words in several faces at once, which a document that could only pick a
+role had no way to say.
+
 ## Text Catalog Ownership
 
 `TextDoc` is the fourth `DocKind` (`kithara.text`), parsed by `parse_text`; `builtin::text_doc()` is
@@ -1599,6 +1606,9 @@ after their purpose, and each has a lucide-named neighbour that looks like a pla
 guard asserts both directions - each menu glyph resolves to its namesake, and no role-named
 incumbent resolves to the neighbour it could be mistaken for. New variants take the lucide glyph
 name in UpperCamel.
+`IconName::ALL` and the enum come out of one `icon_names!` list, so a face is written once and the
+gallery's assets page can name every one of them; a test there compares what the page draws against
+that list, which is what keeps the census honest.
 
 ## Container Press Ownership
 
