@@ -33,7 +33,7 @@ use kithara_ui::{
 
 use self::{
     app::{Gallery, Message, update},
-    capture::{Capture, Film, Shot},
+    capture::{Capture, Shot},
     fixture::{Consts, resolver},
     mock::{MockReads, reads::FONT_FAMILIES},
     sections::{ModuleDemo, Tab},
@@ -1967,7 +1967,7 @@ mod tests {
     #[kithara::test]
     fn no_film_is_asked_for_when_no_spec_was_given() {
         assert_eq!(
-            Film::requested(),
+            capture::requested(),
             Ok(None),
             "an absent film spec is no film, not an error and not a still set",
         );

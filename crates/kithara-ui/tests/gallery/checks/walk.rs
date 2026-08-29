@@ -276,14 +276,14 @@ mod retained {
             builtin::text_doc(),
             custom::config(),
         )
-        .unwrap_or_else(|error| panic!("page {} must compile: {error}", page.name()))
+        .unwrap_or_else(|error| panic!("page {} must compile: {error}", page))
         .animates;
         let still = Still {
             gallery: at,
             ticks: ticks || animates,
         };
         let mut ui = Ui::new(still, config, size, 1.0)
-            .unwrap_or_else(|error| panic!("page {} must mount: {error}", page.name()));
+            .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
         // One frame at sixty a second, which is what the window tells the pass.
         let frame = Duration::from_millis(16);
         // The window asks for the first frame itself, once the surface is up.
@@ -295,7 +295,7 @@ mod retained {
                 break;
             }
             ui.render()
-                .unwrap_or_else(|error| panic!("page {} must draw: {error}", page.name()));
+                .unwrap_or_else(|error| panic!("page {} must draw: {error}", page));
             if !ui.complete_frame() {
                 asking = false;
                 break;
@@ -342,8 +342,7 @@ fn no_page_asks_for_frames_its_document_never_declared() {
         .flat_map(|host| {
             Shot::all().into_iter().filter_map(move |page| {
                 let walked = walk(*host, page);
-                (walked.asking && !walked.animates)
-                    .then(|| format!("{}: {}", host.name(), page.name()))
+                (walked.asking && !walked.animates).then(|| format!("{}: {}", host.name(), page))
             })
         })
         .collect();
@@ -396,7 +395,7 @@ fn every_page_that_declares_motion_keeps_asking_for_frames() {
         .into_iter()
         .filter_map(|page| {
             let walked = walk(Host::Retained, page);
-            (walked.animates && !walked.asking).then(|| page.name())
+            (walked.animates && !walked.asking).then(|| page.to_string())
         })
         .collect();
 

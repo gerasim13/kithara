@@ -11,17 +11,16 @@
 
 use std::{
     env,
-    fs::create_dir_all,
     path::{Path, PathBuf},
 };
 
-use iced::window;
-use kithara_ui::capture::{Geometry, Photographer, read_geometry, write_geometry, write_png};
+use iced::{Theme, window};
+use kithara_ui::capture::{Geometry, Photographer, Stage, read_geometry, shoot_set};
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    app::{theme, view},
-    capture::Film,
+    app::{Gallery, theme, view},
+    capture::{self, Shot},
 };
 
 /// The scale the offscreen set is photographed at when the directory does not
@@ -35,44 +34,68 @@ pub(super) fn run() -> bool {
     let Some(dir) = env::var_os("KITHARA_GALLERY_CAPTURE_OFFSCREEN").map(PathBuf::from) else {
         return false;
     };
-    match capture(&dir) {
+    match capture_set(&dir) {
         Ok(count) => println!("{count} page(s) written to {}", dir.display()),
         Err(error) => eprintln!("offscreen capture failed: {error}"),
     }
     true
 }
 
-fn capture(dir: &PathBuf) -> Result<usize, String> {
-    create_dir_all(dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
-    let frame = frame(dir);
-    write_geometry(dir, frame)?;
-    let mut gallery = crate::app::Gallery::mounted();
-    let skin = gallery.skin();
-    let theme = theme(skin);
-    let mut photographer = Photographer::new()?;
-    let film = Film::requested()?.unwrap_or_else(Film::stills);
-    let mut written = 0;
-    for &shot in &film.pages {
-        gallery.select(shot);
-        for photo in 0..film.photos {
-            // Time passes between two photographs, never before the first: a
-            // film opens where the page opens.
-            if photo > 0 {
-                for _ in 0..film.steps {
-                    gallery.tick();
-                }
-            }
-            let rgba = photographer.shoot(view(&gallery, window::Id::unique()), &theme, frame)?;
-            write_png(
-                &dir.join(film.file(shot, photo)),
-                &rgba,
-                frame.width,
-                frame.height,
-            )?;
-            written += 1;
-        }
+fn capture_set(dir: &Path) -> Result<usize, String> {
+    let film = capture::requested()?.unwrap_or_else(capture::stills);
+    let mut stage = Iced::new(frame(dir))?;
+    shoot_set(&mut stage, &film, dir).map(|written| written.len())
+}
+
+/// The gallery drawn by iced into a texture, one page at a time.
+struct Iced {
+    frame: Geometry,
+    gallery: Gallery,
+    photographer: Photographer,
+    /// The pixels of the page last photographed. Held here because the walk
+    /// borrows them rather than owning storage it cannot size.
+    pixels: Vec<u8>,
+    theme: Theme,
+}
+
+impl Iced {
+    fn new(frame: Geometry) -> Result<Self, String> {
+        let gallery = Gallery::mounted();
+        let theme = theme(gallery.skin());
+        Ok(Self {
+            frame,
+            gallery,
+            photographer: Photographer::new()?,
+            pixels: Vec::new(),
+            theme,
+        })
     }
-    Ok(written)
+}
+
+impl Stage for Iced {
+    type Page = Shot;
+
+    fn geometry(&self) -> Geometry {
+        self.frame
+    }
+
+    fn turn(&mut self, page: &Shot) -> Result<(), String> {
+        self.gallery.select(*page);
+        Ok(())
+    }
+
+    fn tick(&mut self) {
+        self.gallery.tick();
+    }
+
+    fn shoot(&mut self) -> Result<&[u8], String> {
+        self.pixels = self.photographer.shoot(
+            view(&self.gallery, window::Id::unique()),
+            &self.theme,
+            self.frame,
+        )?;
+        Ok(&self.pixels)
+    }
 }
 
 /// The geometry to photograph at: whatever a capture already sitting in this

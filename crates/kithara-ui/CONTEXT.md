@@ -685,9 +685,12 @@ made to agree or disagree at will. A set inherits the geometry of a set already 
 window set taken at the screen's scale can be answered on its own terms.
 
 The harness itself is this crate's, behind the `capture` feature: `capture::Photographer` takes the
-iced set, `capture::Offscreen` takes the masonry set, `capture::{Frame, write_png}` write a set and
-the geometry beside it, and `capture::diff` compares two sets. The example owns which pages to walk
-and what to do with the verdict, and nothing else. The feature is off by default so a shipped build
+iced set, `capture::Offscreen` takes the masonry set, `capture::Stage` is what a host answers to and
+`capture::shoot_set` is the one walk that photographs a `capture::Film` through any of them,
+`capture::{Geometry, write_png}` write a set and the geometry beside it, and `capture::diff` compares
+two sets. A page names its own file through `Display`, so the file a page lands in is the slug its nav
+item and its document already answer to rather than its position in the walk. The example owns which
+pages to walk and what to do with the verdict, and nothing else. The feature is off by default so a shipped build
 carries none of it, and the gallery names it in `required-features` so a build without it does not
 silently produce an example that cannot photograph anything.
 

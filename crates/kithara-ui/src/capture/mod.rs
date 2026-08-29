@@ -12,12 +12,18 @@
 #![cfg(feature = "capture")]
 
 pub mod diff;
+mod film;
 mod geometry;
 mod photo;
 #[cfg(feature = "masonry")]
 mod scene;
+mod set;
+mod stage;
 
+pub use film::{Film, page_file};
 pub use geometry::{Geometry, read_geometry, write_geometry, write_png};
 pub use photo::Photographer;
 #[cfg(feature = "masonry")]
 pub use scene::Offscreen;
+pub use set::shoot_set;
+pub use stage::Stage;

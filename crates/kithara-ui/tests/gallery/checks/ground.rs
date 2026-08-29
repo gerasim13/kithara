@@ -53,12 +53,12 @@ fn every_page_paints_over_the_whole_window() {
         .into_iter()
         .filter_map(|page| {
             let mut ui = Ui::new(Gallery::at(page), config, (width, height), 1.0)
-                .unwrap_or_else(|error| panic!("page {} must mount: {error}", page.name()));
+                .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
             let frame = ui
                 .render()
-                .unwrap_or_else(|error| panic!("page {} must draw: {error}", page.name()));
+                .unwrap_or_else(|error| panic!("page {} must draw: {error}", page));
             off.rasterise(&frame, 1.0, Color::TRANSPARENT, &mut rgba)
-                .unwrap_or_else(|error| panic!("page {} must rasterise: {error}", page.name()));
+                .unwrap_or_else(|error| panic!("page {} must rasterise: {error}", page));
             let stride: usize = AsPrimitive::<usize>::as_(width);
             let pixels = rgba.len() / 4;
             let bare: Vec<(usize, u8)> = rgba
@@ -70,7 +70,7 @@ fn every_page_paints_over_the_whole_window() {
             let (first, thinnest) = bare.first().copied()?;
             Some(format!(
                 "{}: {} of {pixels} pixel(s), first at {}x{} showing through at alpha {thinnest}",
-                page.name(),
+                page,
                 bare.len(),
                 first % stride,
                 first / stride,

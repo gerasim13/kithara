@@ -334,7 +334,7 @@ mod retained {
             .build();
         let (width, height) = physical();
         let mut ui = Ui::new(Gallery::at(page), config, (width, height), 1.0)
-            .unwrap_or_else(|error| panic!("page {} must mount: {error}", page.name()));
+            .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
 
         (0..draws)
             .map(|draw| {
@@ -343,7 +343,7 @@ mod retained {
                 }
                 let frame = ui
                     .render()
-                    .unwrap_or_else(|error| panic!("page {} must draw: {error}", page.name()));
+                    .unwrap_or_else(|error| panic!("page {} must draw: {error}", page));
                 Picture::Scene(streams(frame.scene()))
             })
             .collect()
@@ -388,7 +388,7 @@ fn a_page_held_at_one_moment_rasterises_the_same_twice() {
                         format!(
                             "{}: {}: draw {draw} differs from draw {} by {difference}",
                             host.name(),
-                            page.name(),
+                            page,
                             draw + 1,
                         )
                     })
@@ -425,7 +425,7 @@ fn a_page_that_moves_draws_a_different_picture_once_its_clock_has_run() {
             shots[0]
                 .against(&shots[1])
                 .is_none()
-                .then(|| format!("{}: {}", host.name(), page.name()))
+                .then(|| format!("{}: {}", host.name(), page))
         })
         .collect();
 
