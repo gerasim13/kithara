@@ -20,9 +20,12 @@ use crate::{
 #[derive(Debug, Args)]
 pub(crate) struct LaneArgs {
     /// The declared lane to run.
-    pub(crate) lane: String,
-    #[arg(long, value_enum, default_value_t = PipelineKind::Branch)]
-    pub(crate) kind: PipelineKind,
+    lane: String,
+    // Required, not defaulted: the only caller is a generated workflow that
+    // already passes this on every invocation, so a default would only paper
+    // over a resolution the caller owns.
+    #[arg(long, value_enum)]
+    kind: PipelineKind,
 }
 
 fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&'a CiLaneConfig> {
@@ -47,7 +50,10 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use crate::ci::config::{fixture, workspace_root};
 
     // A lane name that is not in the catalog must answer with the catalog,
     // not with whatever the machine happens to be missing.
@@ -63,7 +69,107 @@ mod tests {
 
     #[test]
     fn a_known_lane_is_returned() {
-        let lanes = BTreeMap::from([("linux-lint".to_owned(), CiLaneConfig::default())]);
-        assert!(lookup(&lanes, "linux-lint").is_ok());
+        let lanes = BTreeMap::from([
+            (
+                "linux-lint".to_owned(),
+                CiLaneConfig {
+                    label: "linux-lint".to_owned(),
+                    ..CiLaneConfig::default()
+                },
+            ),
+            (
+                "apple-test".to_owned(),
+                CiLaneConfig {
+                    label: "apple-test".to_owned(),
+                    ..CiLaneConfig::default()
+                },
+            ),
+        ]);
+        let found = lookup(&lanes, "apple-test").expect("a declared lane is found");
+        assert_eq!(
+            found.label, "apple-test",
+            "lookup must return the lane that was asked for, not merely any lane"
+        );
+    }
+
+    /// `ci run` requires `KITHARA_CI_HOST_CONFIG` and bails without it
+    /// (`xtask/src/ci/run.rs`). So a lane that reaches its own work at all,
+    /// with the ambient environment left untouched, is already the proof
+    /// that `ci lane` resolved no host profile: the fixture lane's one step
+    /// is `sh -c "exit 0"` (`cmd /C exit 0` on Windows), and `Ok` means
+    /// execution got there.
+    #[test]
+    fn a_lane_reaches_its_own_work_with_no_host_profile_resolved() {
+        let (program, step_args) = if cfg!(windows) {
+            ("cmd", r#"["/C", "exit", "0"]"#)
+        } else {
+            ("sh", r#"["-c", "exit 0"]"#)
+        };
+
+        let temp = tempfile::tempdir().expect("create fixture workspace");
+        let root = temp.path().to_path_buf();
+        fixture()
+            .pins
+            .write(&root.join("ci-pins.toml"))
+            .expect("write fixture pins into the temporary workspace");
+
+        let config_text = format!(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.trivial]
+cache_group = "host"
+program = "{program}"
+role = "gate"
+timeout_minutes = 1
+
+[[ext.ci.lanes.trivial.steps]]
+label = "run"
+args = {step_args}
+"#
+        );
+        let ctx = Ctx::new(
+            root,
+            toml::from_str(&config_text).expect("parse fixture lane config"),
+        );
+        let args = LaneArgs {
+            lane: "trivial".to_owned(),
+            kind: PipelineKind::Branch,
+        };
+
+        let result = run(&args, &ctx);
+
+        assert!(
+            result.is_ok(),
+            "a lane that needs no host profile must not fail resolving one: {result:?}"
+        );
+    }
+
+    /// The test above cannot fail loudly enough alone: a resolution bug that
+    /// only sometimes needs a host profile could still return `Ok`. This
+    /// pins the negative direction against the source directly: a GitHub
+    /// container has no host profile installed, so this entrypoint must
+    /// never name the machinery that would resolve one.
+    ///
+    /// Only the production half of this file is scanned - up to the
+    /// `#[cfg(test)]` boundary - because the forbidden names below are
+    /// themselves text inside this test module, and a census that read its
+    /// own assertion would always trip on its own data.
+    #[test]
+    fn ci_lane_never_names_host_profile_machinery() {
+        let source = fs::read_to_string(workspace_root().join("xtask/src/ci/lane/direct.rs"))
+            .expect("direct.rs is readable");
+        let production = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("direct.rs has a production half before its test module");
+        for forbidden in ["CiConfig::load", "CiEnvironment", "KITHARA_CI_HOST_CONFIG"] {
+            assert!(
+                !production.contains(forbidden),
+                "a GitHub container has no host profile, so `ci lane` must never resolve \
+                 one; found `{forbidden}` in direct.rs's production code"
+            );
+        }
     }
 }
