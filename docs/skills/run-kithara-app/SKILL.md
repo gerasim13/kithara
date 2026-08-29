@@ -15,7 +15,7 @@ uses the built-in defaults.
 ## Design-system gallery — only if explicitly requested
 
 ```bash
-cargo run -p kithara-ui --example gallery --features render
+cargo run -p kithara-ui --example gallery --features capture
 ```
 
 ## iOS — only if explicitly requested

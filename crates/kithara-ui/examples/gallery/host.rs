@@ -202,11 +202,10 @@ mod tests {
 mod fills {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
-    use kithara_ui::app::Ui;
+    use kithara_ui::{app::Ui, capture::Offscreen};
     use masonry::vello::peniko::Color;
 
     use super::{Config, Gallery, builtin, custom, mock, resolver};
-    use crate::masonry_shots::Offscreen;
 
     /// The document must fill the surface it was handed, at any display scale.
     ///
@@ -240,8 +239,8 @@ mod fills {
             // Black, not the skin's page colour: a corner that only shows what
             // the host cleared to would read as painted whatever the document
             // did, and the question here is whether the document reached it.
-            let rgba = off
-                .rasterise(&frame, scale, Color::BLACK)
+            let mut rgba = Vec::new();
+            off.rasterise(&frame, scale, Color::BLACK, &mut rgba)
                 .unwrap_or_else(|error| panic!("rasterise at {scale}x: {error}"));
 
             let width_px = width as usize;

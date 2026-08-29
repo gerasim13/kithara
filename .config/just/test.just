@@ -166,7 +166,7 @@ ui:
     KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
     just test run --lane=ui-doc
     just test run --lane=ui-perf
-    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/masonry)
+    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/capture,kithara-ui/masonry)
     KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
     KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
     KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \
@@ -178,14 +178,14 @@ ui:
     KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
       KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-app/assets/ui/parity-budget.txt \
       "${gallery[@]}"
-    cargo test -p kithara-ui --example gallery --profile test-release
+    cargo test -p kithara-ui --example gallery --features kithara-ui/capture --profile test-release
 
 # The same pages through a real window, which is the only one of the three
 # captures that needs a display. Its job is to say whether the headless iced
 # set draws what a window draws, so compare it against a set photographed at
 # the geometry this one recorded in `frame.txt`.
 ui-window DIR="target/parity/window":
-    KITHARA_GALLERY_CAPTURE={{ DIR }} cargo run -p kithara-ui --example gallery --features kithara-ui/render
+    KITHARA_GALLERY_CAPTURE={{ DIR }} cargo run -p kithara-ui --example gallery --features kithara-ui/capture
 
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:

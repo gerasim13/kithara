@@ -10,186 +10,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use futures_lite::future::block_on;
 use kithara_platform::time::Duration;
 use kithara_ui::{
-    app::{Config, Frame as UiFrame, Ui},
+    app::{Config, Ui},
     builtin,
-    render::{shader::ShaderPass, vis::VisPass},
-};
-use masonry::vello::{
-    AaConfig, AaSupport, RenderParams, Renderer, RendererOptions,
-    peniko::Color,
-    wgpu::{
-        Backends, BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device,
-        DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, MapMode, PollType, Queue,
-        RequestAdapterOptions, TexelCopyBufferInfo, TexelCopyBufferLayout, Texture,
-        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
-    },
+    capture::{Frame, Offscreen, read_frame, write_frame, write_png},
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    Consts,
-    capture::{Film, Frame, read_frame, write_frame, write_png},
-    custom,
-    host::Gallery,
-    mock, resolver,
-};
-
-/// A wgpu device with no surface, plus the Vello renderer that targets it.
-pub(super) struct Offscreen {
-    device: Device,
-    queue: Queue,
-    renderer: Renderer,
-    shaders: ShaderPass,
-    texture: Texture,
-    vis: VisPass,
-    width: u32,
-    height: u32,
-}
-
-impl Offscreen {
-    pub(super) fn new(width: u32, height: u32) -> Result<Self, String> {
-        let instance = Instance::new(&wgpu_options());
-        let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
-            .map_err(|error| format!("no wgpu adapter: {error}"))?;
-        let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
-            .map_err(|error| format!("no wgpu device: {error}"))?;
-        let renderer = Renderer::new(
-            &device,
-            RendererOptions {
-                use_cpu: false,
-                antialiasing_support: AaSupport::area_only(),
-                num_init_threads: None,
-                pipeline_cache: None,
-            },
-        )
-        .map_err(|error| format!("vello renderer: {error}"))?;
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some("gallery-masonry"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::STORAGE_BINDING
-                | TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let shaders = ShaderPass::new(&device);
-        let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
-        Ok(Self {
-            device,
-            queue,
-            renderer,
-            shaders,
-            texture,
-            vis,
-            width,
-            height,
-        })
-    }
-
-    /// Rasterises one scene and reads the pixels back as tightly packed RGBA.
-    ///
-    /// The base colour is the window's, not this capture's: the page behind a
-    /// document belongs to the skin, and a set cleared to anything else differs
-    /// from the other host wherever a document leaves its rectangle bare.
-    pub(super) fn rasterise(
-        &mut self,
-        frame: &UiFrame,
-        scale: f64,
-        base: Color,
-    ) -> Result<Vec<u8>, String> {
-        let view = self.texture.create_view(&TextureViewDescriptor::default());
-        self.shaders.render(
-            &self.device,
-            &self.queue,
-            &mut self.renderer,
-            frame.shaders(),
-        );
-        self.renderer
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                frame.scene(),
-                &view,
-                &RenderParams {
-                    base_color: base,
-                    width: self.width,
-                    height: self.height,
-                    antialiasing_method: AaConfig::Area,
-                },
-            )
-            .map_err(|error| format!("render_to_texture: {error}"))?;
-        self.vis.render(
-            &self.device,
-            &self.queue,
-            &view,
-            frame.vis(),
-            scale,
-            [self.width, self.height],
-        );
-
-        // wgpu requires each copied row to start on a 256-byte boundary.
-        let unpadded = self.width * 4;
-        let padded = unpadded.div_ceil(256) * 256;
-        let buffer = self.device.create_buffer(&BufferDescriptor {
-            label: Some("gallery-masonry-readback"),
-            size: u64::from(padded) * u64::from(self.height),
-            usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
-        encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
-            TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded),
-                    rows_per_image: Some(self.height),
-                },
-            },
-            Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.queue.submit([encoder.finish()]);
-
-        let slice = buffer.slice(..);
-        slice.map_async(MapMode::Read, |_| {});
-        self.device
-            .poll(PollType::Wait)
-            .map_err(|error| format!("poll: {error}"))?;
-        let mapped = slice.get_mapped_range();
-        let mut rgba = Vec::with_capacity((unpadded * self.height) as usize);
-        for row in 0..self.height {
-            let start = (row * padded) as usize;
-            rgba.extend_from_slice(&mapped[start..start + unpadded as usize]);
-        }
-        drop(mapped);
-        buffer.unmap();
-        Ok(rgba)
-    }
-}
-
-fn wgpu_options() -> InstanceDescriptor {
-    InstanceDescriptor {
-        backends: Backends::PRIMARY,
-        ..Default::default()
-    }
-}
+use super::{Consts, capture::Film, custom, host::Gallery, mock, resolver};
 
 /// Walks every gallery page through the Masonry host. Returns `false` when the
 /// environment variable is absent, so the caller falls through to the window.
@@ -220,6 +49,9 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
     write_frame(dir, frame)?;
     let film = Film::requested()?.unwrap_or_else(Film::stills);
     let mut written = 0;
+    // One buffer for the whole set: every page is the same geometry, so the
+    // pixels of the last page are the storage of the next.
+    let mut rgba = Vec::new();
 
     for &shot in &film.pages {
         let mut ui = Ui::new(
@@ -240,7 +72,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
             let ui_frame = ui
                 .render()
                 .map_err(|error| format!("draw {}: {error}", shot.name()))?;
-            let rgba = off.rasterise(&ui_frame, frame.scale, ui.background().into())?;
+            off.rasterise(&ui_frame, frame.scale, ui.background().into(), &mut rgba)?;
             let path = dir.join(film.file(shot, photo));
             write_png(&path, &rgba, frame.width, frame.height)?;
             println!("captured {}", path.display());

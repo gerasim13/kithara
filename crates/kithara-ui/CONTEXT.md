@@ -85,6 +85,10 @@ an allocation failure returns `UiDocError::ArenaFull`.
   workspace-wide `perf.prefer-primitive-pool` rule both crates now also read - see
   `docs/guides/performance/allocation.md`. That rule asks a collection to name its element type,
   which is why a `Vec` local here is spelled out even where nothing about it is primitive.
+- Reading a rendered texture back does not allocate per page: `backends::read_back` fills a buffer
+  the caller owns, so a walk over a set of pages reuses one buffer instead of taking a pool lease
+  for pixels that leave the toolkit as a PNG. It is the single owner of the 256-byte row-padding
+  arithmetic wgpu imposes; the conformance tests and `capture::Offscreen` both read through it.
 - `draw/pool/` is this crate's pool home and `perf.no-component-pool-construction` exempts it, the
   way it exempts `kithara-bufpool`: `DrawPools::new` builds the family a host then injects through
   `UiConfig`, so it is the owner site rather than a component reaching for storage of its own.
@@ -669,6 +673,13 @@ Each set writes the geometry it was taken at beside its pages, and `KITHARA_GALL
 refuses to compare two sets taken at different geometry, because two hosts scaled differently can be
 made to agree or disagree at will. A set inherits the geometry of a set already in its directory, so a
 window set taken at the screen's scale can be answered on its own terms.
+
+The harness itself is this crate's, behind the `capture` feature: `capture::Photographer` takes the
+iced set, `capture::Offscreen` takes the masonry set, `capture::{Frame, write_png}` write a set and
+the geometry beside it, and `capture::diff` compares two sets. The example owns which pages to walk
+and what to do with the verdict, and nothing else. The feature is off by default so a shipped build
+carries none of it, and the gallery names it in `required-features` so a build without it does not
+silently produce an example that cannot photograph anything.
 
 Two things the offscreen set gets from the runtime rather than from a hand-rolled layout-then-draw
 pass, because a capture that skips either draws a page of container backgrounds and nothing else: the

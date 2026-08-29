@@ -10,40 +10,16 @@
 //! checking that this path draws what a window draws.
 
 use std::{
-    borrow::Cow,
     env,
     fs::create_dir_all,
     path::{Path, PathBuf},
 };
 
-use futures_lite::future::block_on;
-use iced::{
-    Pixels, Size,
-    advanced::{
-        clipboard,
-        graphics::{Shell, Viewport, text::font_system},
-        mouse::Cursor,
-        renderer::Style,
-    },
-    theme::Base as _,
-    window,
-};
-use iced_renderer::fallback::Renderer as FallbackRenderer;
-use iced_runtime::{UserInterface, user_interface::Cache};
-use iced_wgpu::{
-    Engine, Renderer as WgpuRenderer,
-    wgpu::{
-        Backends, DeviceDescriptor, Instance, InstanceDescriptor, RequestAdapterOptions,
-        TextureFormat,
-    },
-};
-use kithara_ui::render::fonts::{FONT_BYTES, SANS};
+use iced::window;
+use kithara_ui::capture::{Frame, Photographer, read_frame, write_frame, write_png};
 use num_traits::cast::AsPrimitive;
 
-use super::{
-    capture::{Film, Frame, read_frame, write_frame, write_png},
-    theme, view,
-};
+use super::{capture::Film, theme, view};
 
 /// The scale the offscreen set is photographed at when the directory does not
 /// already say. One, so a page's pixels are its points and a difference between
@@ -70,7 +46,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
     let mut gallery = super::Gallery::mounted();
     let skin = gallery.skin();
     let theme = theme(skin);
-    let mut renderer = renderer()?;
+    let mut photographer = Photographer::new()?;
     let film = Film::requested()?.unwrap_or_else(Film::stills);
     let mut written = 0;
     for &shot in &film.pages {
@@ -83,7 +59,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
                     gallery.tick();
                 }
             }
-            let rgba = page(&gallery, &theme, frame, &mut renderer)?;
+            let rgba = photographer.shoot(view(&gallery, window::Id::unique()), &theme, frame)?;
             write_png(
                 &dir.join(film.file(shot, photo)),
                 &rgba,
@@ -94,96 +70,6 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
         }
     }
     Ok(written)
-}
-
-/// One page, laid out and rasterised at the frame's geometry.
-///
-/// The runtime's own interface does the drawing rather than a hand-rolled
-/// layout-then-draw. Two things this host needs come only from there: `update`
-/// is what builds the overlay every window layer paints from, and `draw` is
-/// what resets the renderer between pages.
-fn page(
-    gallery: &super::Gallery,
-    theme: &iced::Theme,
-    frame: Frame,
-    renderer: &mut iced::Renderer,
-) -> Result<Vec<u8>, String> {
-    let scale = AsPrimitive::<f32>::as_(frame.scale);
-    let logical = Size::new(
-        AsPrimitive::<f32>::as_(frame.width) / scale,
-        AsPrimitive::<f32>::as_(frame.height) / scale,
-    );
-    let mut ui = UserInterface::build(
-        view(gallery, window::Id::unique()),
-        logical,
-        Cache::default(),
-        renderer,
-    );
-    drop(ui.update(
-        &[],
-        Cursor::Unavailable,
-        renderer,
-        &mut clipboard::Null,
-        &mut Vec::new(),
-    ));
-    // The theme's own base is what the window clears to and writes text in.
-    // Passing anything else here shows up wherever the document leaves the
-    // background bare, and reads as a difference between the hosts.
-    let base = theme.base();
-    ui.draw(
-        renderer,
-        theme,
-        &Style {
-            text_color: base.text_color,
-        },
-        Cursor::Unavailable,
-    );
-    let FallbackRenderer::Primary(renderer) = renderer else {
-        return Err("the offscreen capture must rasterise through wgpu".to_owned());
-    };
-    Ok(renderer.screenshot(
-        &Viewport::with_physical_size(Size::new(frame.width, frame.height), scale),
-        base.background_color,
-    ))
-}
-
-/// A renderer with the gallery's own faces registered, drawing into a texture
-/// rather than into a surface.
-///
-/// wgpu and not the software rasteriser, because the window draws through wgpu:
-/// a set taken through a different engine answers a different question, and the
-/// one this set is here to answer is what the window shows.
-fn renderer() -> Result<iced::Renderer, String> {
-    let mut fonts = font_system()
-        .write()
-        .map_err(|error| format!("iced font system lock: {error}"))?;
-    for bytes in FONT_BYTES {
-        fonts.load_font(Cow::Borrowed(bytes));
-    }
-    drop(fonts);
-
-    let instance = Instance::new(&InstanceDescriptor {
-        backends: Backends::PRIMARY,
-        ..InstanceDescriptor::default()
-    });
-    let adapter = block_on(instance.request_adapter(&RequestAdapterOptions::default()))
-        .map_err(|error| format!("no wgpu adapter: {error}"))?;
-    let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor::default()))
-        .map_err(|error| format!("no wgpu device: {error}"))?;
-    let engine = Engine::new(
-        &adapter,
-        device,
-        queue,
-        TextureFormat::Rgba8UnormSrgb,
-        // The gallery's window opens with iced's own default, which is off.
-        None,
-        Shell::headless(),
-    );
-    Ok(FallbackRenderer::Primary(WgpuRenderer::new(
-        engine,
-        SANS,
-        Pixels(14.0),
-    )))
 }
 
 /// The geometry to photograph at: whatever a capture already sitting in this

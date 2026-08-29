@@ -6,6 +6,7 @@ pub(crate) mod atoms;
 #[cfg(any(feature = "render", feature = "vello"))]
 pub mod backends;
 pub mod builtin;
+pub mod capture;
 pub mod compile;
 #[cfg(any(feature = "render", feature = "vello"))]
 pub mod draw;

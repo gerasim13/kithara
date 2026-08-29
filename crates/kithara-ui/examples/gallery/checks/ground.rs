@@ -18,13 +18,12 @@ use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{Config, Ui},
     builtin,
+    capture::Offscreen,
 };
 use masonry::vello::peniko::Color;
 use num_traits::cast::AsPrimitive;
 
-use crate::{
-    Consts, capture::Shot, custom, host::Gallery, masonry_shots::Offscreen, mock, resolver,
-};
+use crate::{Consts, capture::Shot, custom, host::Gallery, mock, resolver};
 
 #[kithara::test]
 fn every_page_paints_over_the_whole_window() {
@@ -41,6 +40,8 @@ fn every_page_paints_over_the_whole_window() {
         .build();
     let mut off = Offscreen::new(width, height)
         .unwrap_or_else(|error| panic!("the pages must rasterise: {error}"));
+    // Every page is the same geometry, so one buffer serves the whole walk.
+    let mut rgba = Vec::new();
 
     let bare: Vec<String> = Shot::all()
         .into_iter()
@@ -50,8 +51,7 @@ fn every_page_paints_over_the_whole_window() {
             let frame = ui
                 .render()
                 .unwrap_or_else(|error| panic!("page {} must draw: {error}", page.name()));
-            let rgba = off
-                .rasterise(&frame, 1.0, Color::TRANSPARENT)
+            off.rasterise(&frame, 1.0, Color::TRANSPARENT, &mut rgba)
                 .unwrap_or_else(|error| panic!("page {} must rasterise: {error}", page.name()));
             let stride: usize = AsPrimitive::<usize>::as_(width);
             let pixels = rgba.len() / 4;

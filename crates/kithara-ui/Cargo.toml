@@ -17,6 +17,10 @@ default = ["iced"]
 # Tests that need a graphics device. Off by default: a machine without one
 # would fail them for having no hardware rather than for a defect.
 gpu = ["iced", "dep:pollster"]
+# Photographing a page with no window, and comparing two sets of photographs.
+# A debug harness rather than something a shipped build carries, so it is off
+# by default and lives behind this flag.
+capture = ["iced", "dep:futures-lite", "dep:iced_renderer", "dep:iced_runtime", "dep:iced_wgpu"]
 masonry = ["dep:futures-lite", "dep:masonry", "dep:winit", "vello"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 # Everything that draws. Artwork reading is part of it rather than an opt-in:
@@ -48,6 +52,9 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures-lite = { workspace = true, optional = true }
 iced = { workspace = true, optional = true }
+iced_renderer = { workspace = true, optional = true }
+iced_runtime = { workspace = true, optional = true }
+iced_wgpu = { workspace = true, optional = true }
 kurbo = { workspace = true }
 lucide-icons = { workspace = true, optional = true }
 masonry = { workspace = true, optional = true }
@@ -95,7 +102,10 @@ workspace = true
 
 [[example]]
 name = "gallery"
-required-features = ["iced"]
+# The gallery photographs its own pages and compares two hosts, which is what
+# `capture` carries. A build without it has no gallery rather than a gallery
+# that cannot answer the question it exists for.
+required-features = ["capture"]
 test = true
 
 [[example]]

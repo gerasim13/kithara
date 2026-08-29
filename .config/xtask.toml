@@ -581,6 +581,7 @@ prefix_args = [
 [test.lanes.ui]
 program = "cargo"
 default_features = [
+  "kithara-ui/capture",
   "kithara-ui/gpu",
   "kithara-ui/masonry",
   "kithara-app/masonry",

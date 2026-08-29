@@ -25,14 +25,12 @@ use vello::{
     kurbo::Affine,
     peniko::{Color as VelloColor, color::palette},
     wgpu::{
-        BufferDescriptor, BufferUsages, CommandEncoderDescriptor, Device, DeviceDescriptor,
-        Extent3d, Instance, InstanceDescriptor, MapMode, PollType, Queue, RequestAdapterOptions,
-        TexelCopyBufferInfo, TexelCopyBufferLayout, TextureDescriptor, TextureDimension,
-        TextureFormat, TextureUsages, TextureViewDescriptor,
+        DeviceDescriptor, Extent3d, Instance, InstanceDescriptor, RequestAdapterOptions,
+        TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureViewDescriptor,
     },
 };
 
-use super::{VelloBackend, replay_ordered};
+use super::{VelloBackend, read_back, replay_ordered};
 use crate::{
     builtin,
     draw::{
@@ -532,56 +530,7 @@ pub(crate) fn rasterise_at(
             },
         )
         .map_err(|error| format!("render_to_texture: {error}"))?;
-    read_back(&device, &queue, &texture, (width, height))
-}
-
-/// Copies the target texture back, undoing wgpu's 256-byte row padding.
-fn read_back(
-    device: &Device,
-    queue: &Queue,
-    texture: &vello::wgpu::Texture,
-    size: (u32, u32),
-) -> Result<Vec<u8>, String> {
-    let (width, height) = size;
-    let unpadded = width * 4;
-    let padded = unpadded.div_ceil(256) * 256;
-    let buffer = device.create_buffer(&BufferDescriptor {
-        label: Some("clip-conformance-readback"),
-        size: u64::from(padded) * u64::from(height),
-        usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
-            },
-        },
-        Extent3d {
-            width,
-            height,
-            depth_or_array_layers: 1,
-        },
-    );
-    queue.submit([encoder.finish()]);
-
-    let slice = buffer.slice(..);
-    slice.map_async(MapMode::Read, |_| {});
-    device
-        .poll(PollType::Wait)
-        .map_err(|error| format!("poll: {error}"))?;
-    let mapped = slice.get_mapped_range();
-    let mut rgba = Vec::with_capacity((unpadded * height) as usize);
-    for row in 0..height {
-        let start = (row * padded) as usize;
-        rgba.extend_from_slice(&mapped[start..start + unpadded as usize]);
-    }
-    drop(mapped);
-    buffer.unmap();
+    let mut rgba = Vec::new();
+    read_back(&device, &queue, &texture, (width, height), &mut rgba)?;
     Ok(rgba)
 }
