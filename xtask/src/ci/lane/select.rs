@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::{
     ci::run::PipelineKind,
-    config::{CiLaneArtifact, CiLaneConfig, KitharaExt},
+    config::{CiLaneArtifact, CiLaneConfig, KitharaExt, LANE_ROLES},
 };
 
 /// Which CI system is asking. A lane may answer them differently, because the
@@ -98,6 +98,13 @@ pub(crate) fn render(
     lanes: &BTreeMap<String, CiLaneConfig>,
     args: &LanesArgs,
 ) -> Result<Selection> {
+    if !LANE_ROLES.contains(&args.role.as_str()) {
+        bail!(
+            "`{}` is not a CI lane role; this repository has {}",
+            args.role,
+            LANE_ROLES.join(", ")
+        );
+    }
     for name in &args.only {
         if !lanes.contains_key(name) {
             bail!(
@@ -123,7 +130,13 @@ pub(crate) fn render(
     // A lane with `needs` never earns its own place through `--role`/`--kind`
     // or `--only`: it rides in only once a lane it reads from already made the
     // matrix above. Asking for one producer therefore brings its consumer with
-    // it, and asking for an unrelated lane does not.
+    // it, and asking for an unrelated lane does not. That need-presence test is
+    // necessary but not sufficient: by kind (empty `--only`), the consumer
+    // still has to answer for this fleet's kind the same way a matrix lane
+    // would, or a producer this fleet never runs would drag in a consumer it
+    // never asked for either. By name (`--only` naming the producer), the
+    // consumer's own membership does not gate it, because that is the whole
+    // point of asking for one lane by name.
     let present: BTreeSet<&str> = matrix.iter().map(|entry| entry.lane.as_str()).collect();
     let dependent: Vec<Dependent> = lanes
         .iter()
@@ -133,6 +146,12 @@ pub(crate) fn render(
                 .iter()
                 .any(|need| present.contains(need.as_str()))
         })
+        .filter(|(_, lane)| {
+            !args.only.is_empty()
+                || membership(lane, args.fleet)
+                    .iter()
+                    .any(|entry| entry == kind)
+        })
         .map(|(name, lane)| Dependent {
             lane: name.clone(),
             timeout: lane.timeout_minutes,
@@ -141,19 +160,49 @@ pub(crate) fn render(
         })
         .collect();
 
+    // `--only` is a promise that every name given lands somewhere. A name
+    // whose role or kind does not match falls out of both `matrix` and
+    // `dependent` silently otherwise, and an empty selection would still exit
+    // 0 for a caller that asked for something specific.
+    let landed: BTreeSet<&str> = matrix
+        .iter()
+        .map(|entry| entry.lane.as_str())
+        .chain(dependent.iter().map(|entry| entry.lane.as_str()))
+        .collect();
+    let missing: Vec<&str> = args
+        .only
+        .iter()
+        .map(String::as_str)
+        .filter(|name| !landed.contains(name))
+        .collect();
+    if !missing.is_empty() {
+        bail!(
+            "`{}` selected nothing for role `{}` kind `{}`; check the lane's role and kinds",
+            missing.join("`, `"),
+            args.role,
+            kind
+        );
+    }
+
     Ok(Selection { matrix, dependent })
+}
+
+/// Print one member of a selection alone, or the whole object when the
+/// caller did not ask for a member. Split out from `run` so the dispatch
+/// itself is testable without a `Ctx`.
+fn field(selection: &Selection, field: Option<Field>) -> Result<String> {
+    Ok(match field {
+        Some(Field::Matrix) => serde_json::to_string(&selection.matrix)?,
+        Some(Field::Dependent) => serde_json::to_string(&selection.dependent)?,
+        None => serde_json::to_string(selection)?,
+    })
 }
 
 pub(crate) fn run(args: &LanesArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let selection = render(&ext.ci.lanes, args)?;
-    let rendered = match args.field {
-        Some(Field::Matrix) => serde_json::to_string(&selection.matrix)?,
-        Some(Field::Dependent) => serde_json::to_string(&selection.dependent)?,
-        None => serde_json::to_string(&selection)?,
-    };
-    println!("{rendered}");
+    println!("{}", field(&selection, args.field)?);
     Ok(())
 }
 
@@ -256,19 +305,73 @@ mod tests {
         );
     }
 
-    // The two fleets buy different amounts of CI. Where a lane says so, the
-    // fleet asking is the one answered.
+    #[test]
+    fn an_only_that_matches_no_role_or_kind_is_refused_rather_than_rendering_empty() {
+        // `deep-miri` is a real lane, so the unknown-lane check above does not
+        // catch it; asking for it under the `gate` role must still fail
+        // instead of silently returning an empty selection.
+        let error = render(
+            &catalog(),
+            &args("gate", PipelineKind::Main, &["deep-miri"]),
+        )
+        .expect_err("a lane outside the requested role is refused");
+        assert!(
+            error.to_string().contains("deep-miri"),
+            "the error must name what selected nothing: {error}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_role_fails_with_the_roles_it_could_have_been() {
+        let error = render(&catalog(), &args("gaet", PipelineKind::Main, &[]))
+            .expect_err("a misspelled role is refused");
+        assert!(
+            error.to_string().contains("gate"),
+            "the error must list the roles: {error}"
+        );
+    }
+
+    #[test]
+    fn a_dependent_whose_own_kind_excludes_the_request_does_not_ride_in_on_its_need_alone() {
+        // `deep-weekly-report` reads `deep-stress`, which nightly selects, but
+        // its own kinds only name `weekly`. The need-presence test alone
+        // would wave it through; membership must still gate it because
+        // `--only` was not used to name it directly.
+        let lanes = BTreeMap::from([
+            ("deep-stress".to_owned(), lane("deep", &["nightly"], &[])),
+            (
+                "deep-weekly-report".to_owned(),
+                lane("deep", &["weekly"], &["deep-stress"]),
+            ),
+        ]);
+        let selection = render(&lanes, &args("deep", PipelineKind::Nightly, &[]))
+            .expect("the nightly deep role renders");
+        let names: Vec<&str> = selection
+            .matrix
+            .iter()
+            .map(|entry| entry.lane.as_str())
+            .collect();
+        assert_eq!(names, ["deep-stress"]);
+        assert!(
+            selection.dependent.is_empty(),
+            "a consumer outside this kind must not ride in on its need alone: {:?}",
+            selection.dependent
+        );
+    }
+
     #[test]
     fn a_field_prints_that_member_alone() {
         let selection = render(&catalog(), &args("gate", PipelineKind::Main, &[]))
             .expect("the gate role renders");
-        let printed = serde_json::to_string(&selection.matrix).expect("the matrix serialises");
+        let printed = field(&selection, Some(Field::Matrix)).expect("the matrix field renders");
         assert!(
-            printed.starts_with('['),
-            "a field prints a bare array: {printed}"
+            printed.starts_with('[') && printed.contains("linux-lint"),
+            "a field prints a bare array of that member alone: {printed}"
         );
     }
 
+    // The two fleets buy different amounts of CI. Where a lane says so, the
+    // fleet asking is the one answered.
     #[test]
     fn the_github_fleet_reads_its_own_membership_where_a_lane_declares_one() {
         let mut lanes = catalog();
