@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::future::Future;
 use std::num::NonZeroUsize;
 
 use kithara_assets::AssetStore;
@@ -5,8 +7,10 @@ use kithara_audio::AudioObserver;
 use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
+#[cfg(test)]
+use kithara_platform::sync::Notify;
 use kithara_platform::{
-    CancelToken,
+    CancelGroup, CancelToken,
     sync::Arc,
     tokio,
     tokio::{
@@ -25,6 +29,9 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
+    #[cfg(test)]
+    admission_started: Notify,
+    cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
     player: PlayerControl,
@@ -42,19 +49,36 @@ impl Loader {
         store: AssetStore,
         max_concurrent_loads: NonZeroUsize,
         tracks: Arc<Tracks>,
+        cancel: CancelToken,
     ) -> Self {
         Self {
-            player,
-            store,
-            tracks,
-            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            #[cfg(test)]
+            admission_started: Notify::default(),
+            cancel,
             interactive_lane: Arc::new(Semaphore::new(1)),
+            player,
+            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            tracks,
+            store,
         }
     }
 
     /// Attach `observer` through `id`'s live-or-pending decoder relay.
     pub(crate) fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O) {
         self.tracks.attach_observer(id, Box::new(observer));
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn hold_prefetch_permit(&self) -> impl Sized {
+        Arc::clone(&self.prefetch_lane)
+            .acquire_owned()
+            .await
+            .expect("BUG: loader keeps the prefetch semaphore open")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_for_admission(&self) -> impl Future<Output = ()> + '_ {
+        self.admission_started.notified()
     }
 
     fn attempt_config(
@@ -140,23 +164,31 @@ impl Loader {
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
     }
 
+    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
+        cancel.cancelled().await;
+        track_cancel.cancel();
+    }
+
     fn spawn_attempt(
         self: &Arc<Self>,
         ticket: Ticket,
         config: ResourceConfig,
-        cancel: CancelToken,
+        track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
         let this = Arc::clone(self);
         spawn(async move {
             let id = ticket.id;
+            let cancel = CancelGroup::new(vec![track_cancel.clone(), this.cancel.clone()]);
             let lane = match class {
                 LoadClass::Interactive => &this.interactive_lane,
                 LoadClass::Prefetch => &this.prefetch_lane,
             };
+            #[cfg(test)]
+            this.admission_started.notify_one();
             let permit = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => {
+                _ = Self::wait_and_cancel_track(&cancel, &track_cancel) => {
                     this.tracks.finish_attempt(&ticket, None);
                     return Err(QueueError::Cancelled(id));
                 }
@@ -170,7 +202,8 @@ impl Loader {
 
             let result = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => Err(QueueError::Cancelled(id)),
+                _ = Self::wait_and_cancel_track(&cancel, &track_cancel) =>
+                    Err(QueueError::Cancelled(id)),
                 result = this.load(id, config) => result,
             };
             drop(permit);
@@ -241,12 +274,15 @@ impl Loader {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        future,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
     };
@@ -254,6 +290,18 @@ mod tests {
 
     use super::*;
     use crate::track::TrackRecord;
+
+    struct CancelDropProbe {
+        cancel: CancelToken,
+        state: Arc<AtomicUsize>,
+    }
+
+    impl Drop for CancelDropProbe {
+        fn drop(&mut self) {
+            self.state
+                .store(usize::from(self.cancel.is_cancelled()), Ordering::SeqCst);
+        }
+    }
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
     /// override via setters when a specific concurrency cap matters.
@@ -277,6 +325,39 @@ mod tests {
             self.cap = cap;
             self
         }
+    }
+
+    #[kithara::test(tokio)]
+    async fn cancellation_precedes_in_flight_future_drop() {
+        let owner = CancelToken::root();
+        let queue_cancel = owner.child();
+        let track_cancel = owner.child();
+        let group = CancelGroup::new(vec![queue_cancel.clone(), track_cancel.clone()]);
+        let state = Arc::new(AtomicUsize::new(0));
+        let probe_state = Arc::clone(&state);
+        let probe_cancel = track_cancel.clone();
+        let (started_tx, started_rx) = oneshot::channel();
+        let in_flight = async move {
+            let _probe = CancelDropProbe {
+                cancel: probe_cancel,
+                state: probe_state,
+            };
+            let _ = started_tx.send(());
+            future::pending::<()>().await;
+        };
+        let canceller = spawn(async move {
+            started_rx.await.expect("in-flight future must start");
+            queue_cancel.cancel();
+        });
+
+        tokio::select! {
+            biased;
+            _ = Loader::wait_and_cancel_track(&group, &track_cancel) => {}
+            () = in_flight => panic!("in-flight future must stay pending"),
+        }
+        canceller.await.expect("canceller task must not panic");
+
+        assert_eq!(state.load(Ordering::SeqCst), 1);
     }
 
     /// Test fixture: the [`Loader`] under test, the shared
@@ -311,6 +392,7 @@ mod tests {
                 store,
                 self.cap,
                 Arc::clone(&tracks),
+                CancelToken::root(),
             ));
             LoaderFixture {
                 loader,

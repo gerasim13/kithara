@@ -38,6 +38,10 @@ One position indexes every list a deck appears in: `Decks` is built from `DeckSe
 `ViewCache::refresh` resizes against `Decks`, so the address tree joins them by position alone. Changing the
 session's deck list means rebuilding the view model with it; no key survives them drifting apart.
 
+Each `Deck` owns one cancellation token below the app shutdown token. Its player and queue receive independent
+children; its state controller and analysis listener share a third child. Dropping a deck cancels that subtree
+without cancelling the app root or a sibling deck.
+
 The first segment of a control path names a layout instance and `gui::ui::events::route` is the host's own list
 of them, held against the documents by unit test, so an instance the documents mint cannot go unanswered.
 

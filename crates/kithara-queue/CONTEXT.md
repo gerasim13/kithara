@@ -93,6 +93,9 @@ Two isolated semaphores so a prefetch parked on a dead host cannot starve a sele
   removing the record (`remove` / `clear`) or flipping the status to `Cancelled`
   aborts the load with no separate call. `finish_attempt` disarms — the token then
   belongs to the built `Resource`.
+- Loader admission and resource creation observe the OR of the queue-owned loader
+  token and the per-track token. Cancellation reaches the per-track subtree before
+  attempt ownership is released.
 - Tickets are generation-checked: a replaced ticket loses its claim (`mark_loading`
   returns `false`, the task releases its permit and returns `QueueError::Cancelled`).
 - `select` on a track still waiting for a prefetch permit promotes it into the

@@ -177,6 +177,7 @@ impl Queue {
             store,
             max_concurrent_loads,
             Arc::clone(&tracks),
+            cancel.child(),
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
@@ -335,6 +336,7 @@ impl Drop for Queue {
 pub(crate) mod tests {
     use core::sync::atomic::{AtomicU64, Ordering};
     use std::{
+        num::NonZeroUsize,
         sync::mpsc::{self, RecvTimeoutError},
         thread,
     };
@@ -354,6 +356,7 @@ pub(crate) mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::{TrackSource, attempts::LoadClass};
 
     pub(in crate::queue) fn make_queue() -> Queue {
         Queue::new(queue_config())
@@ -463,6 +466,39 @@ pub(crate) mod tests {
             Err(crate::QueueError::Play(PlayError::Closed))
         ));
         assert!(queue.is_empty());
+    }
+
+    #[kithara::test(tokio)]
+    async fn close_cancels_a_loader_waiting_for_admission() {
+        let queue = Queue::new(
+            QueueConfig::builder()
+                .player(player())
+                .max_concurrent_loads(NonZeroUsize::new(1).expect("BUG: one is always non-zero"))
+                .build(),
+        );
+        let permit = queue.loader.hold_prefetch_permit().await;
+        let id = TrackId::allocate();
+        let source = TrackSource::Uri("https://example.com/pending.mp3".into());
+        queue
+            .lock_tracks_mut()
+            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        let handle = queue
+            .loader
+            .spawn_load(id, source, LoadClass::Prefetch)
+            .expect("fresh track starts one load attempt");
+        queue.loader.wait_for_admission().await;
+
+        queue.close().expect("unstarted fixture must close");
+
+        let result = time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("queue close must wake the pending loader")
+            .expect("loader task must not panic");
+        assert!(matches!(
+            result,
+            Err(crate::QueueError::Cancelled(cancelled)) if cancelled == id
+        ));
+        drop(permit);
     }
 
     #[kithara::test]

@@ -104,7 +104,7 @@ impl GuiFrontend {
                     deck.queue.control().clone(),
                     Arc::clone(&deck.timestretch),
                     config.clone(),
-                    config.shutdown.child(),
+                    deck.cancel_child(),
                 ));
                 (deck.id, controller)
             })

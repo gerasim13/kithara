@@ -235,8 +235,8 @@ impl StateController {
     /// Build a controller and start the listener task that mirrors
     /// queue events into [`UiState`].
     ///
-    /// `cancel` must be a child of the app master, so the listener task
-    /// stops when the app shuts down.
+    /// `cancel` must be a child of the deck master, so the listener task
+    /// stops with its deck or the whole app.
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
     pub fn new(
