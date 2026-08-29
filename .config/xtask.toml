@@ -996,7 +996,6 @@ steps = [
 ]
 role = "gate"
 kinds = ["nightly"]
-kinds_github = ["main", "branch"]
 timeout_minutes = 120
 
 [ext.ci.lanes.deep-rtsan-fast]
@@ -1194,6 +1193,7 @@ tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
 role = "gate"
+kinds_github = ["main", "branch"]
 kinds = [
   "merge-request",
   "quarantine",

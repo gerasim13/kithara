@@ -77,12 +77,22 @@ fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
     &lane.kinds
 }
 
+/// Whether this fleet has a machine for the lane at all. The GitHub fan-out
+/// puts every lane through `lane.yml`, whose runner labels are the Linux
+/// fleet's; its macOS and Windows work runs from workflows of its own, against
+/// runner-label variables of their own. A lane that names another operating
+/// system is therefore not one GitHub schedules from the catalog, whatever its
+/// membership says - rendering it would run a macOS recipe on a Linux runner.
+fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
+    fleet != Fleet::Github || lane.os.as_deref().is_none_or(|os| os == "linux")
+}
+
 /// A lane with the asked-for role that this pipeline kind schedules, or that
 /// `--only` named directly. A lane with `needs` still has to pass this before
 /// it can land in `matrix`; `dependent` below never calls it, because a
 /// consumer's own membership is not what admits it.
 fn is_asked_for(lane: &CiLaneConfig, name: &str, kind: &str, args: &LanesArgs) -> bool {
-    if lane.role != args.role {
+    if lane.role != args.role || !reachable(lane, args.fleet) {
         return false;
     }
     if args.only.is_empty() {
@@ -140,7 +150,9 @@ pub(crate) fn render(
     let present: BTreeSet<&str> = matrix.iter().map(|entry| entry.lane.as_str()).collect();
     let dependent: Vec<Dependent> = lanes
         .iter()
-        .filter(|(_, lane)| lane.role == args.role && !lane.needs.is_empty())
+        .filter(|(_, lane)| {
+            lane.role == args.role && !lane.needs.is_empty() && reachable(lane, args.fleet)
+        })
         .filter(|(_, lane)| {
             lane.needs
                 .iter()
@@ -177,7 +189,7 @@ pub(crate) fn render(
         .collect();
     if !missing.is_empty() {
         bail!(
-            "`{}` selected nothing for role `{}` kind `{}`; check the lane's role and kinds",
+            "`{}` selected nothing for role `{}` kind `{}`; check the lane's role, kinds, and operating system",
             missing.join("`, `"),
             args.role,
             kind
@@ -389,5 +401,34 @@ mod tests {
         gitlab.fleet = Fleet::Gitlab;
         let gitlab = render(&lanes, &gitlab).expect("the GitLab fleet renders");
         assert!(gitlab.matrix.is_empty());
+    }
+
+    // The GitHub fan-out has one runner pool and it is Linux; its macOS and
+    // Windows work runs from workflows with runner labels of their own. A macOS
+    // lane rendered here would run its recipe on a Linux machine and report a
+    // green gate for a sanitizer that never ran.
+    #[test]
+    fn the_github_fleet_never_schedules_a_lane_from_another_operating_system() {
+        let mut lanes = catalog();
+        let mut elsewhere = lane("gate", &["main"], &[]);
+        elsewhere.os = Some("macos".to_owned());
+        lanes.insert("deep-rtsan".to_owned(), elsewhere);
+
+        let github = render(&lanes, &args("gate", PipelineKind::Main, &[]))
+            .expect("the GitHub fleet renders");
+        let names: Vec<&str> = github
+            .matrix
+            .iter()
+            .map(|entry| entry.lane.as_str())
+            .collect();
+        assert_eq!(names, ["linux-lint"]);
+
+        let mut gitlab = args("gate", PipelineKind::Main, &[]);
+        gitlab.fleet = Fleet::Gitlab;
+        let gitlab = render(&lanes, &gitlab).expect("the GitLab fleet renders");
+        assert!(
+            gitlab.matrix.iter().any(|entry| entry.lane == "deep-rtsan"),
+            "GitLab has the machine and still schedules the lane"
+        );
     }
 }
