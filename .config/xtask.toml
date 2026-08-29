@@ -1273,7 +1273,9 @@ kinds = ["nightly"]
 timeout_minutes = 120
 
 # Off on this host, not gone: the guest is ARM64, so the suite ran under
-# emulation and reported on it as much as on the commit. `--only windows-x64` still reaches it.
+# emulation and reported on it as much as on the commit. No kind schedules it;
+# `just ci run windows-x64` still reaches it, and GitLab arms it with
+# KITHARA_WINDOWS_X64_SUITE.
 [ext.ci.lanes.windows-x64]
 cache_group = "windows"
 label = "Windows"
