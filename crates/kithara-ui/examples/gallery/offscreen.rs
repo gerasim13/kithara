@@ -16,7 +16,7 @@ use std::{
 };
 
 use iced::window;
-use kithara_ui::capture::{Frame, Photographer, read_frame, write_frame, write_png};
+use kithara_ui::capture::{Geometry, Photographer, read_geometry, write_geometry, write_png};
 use num_traits::cast::AsPrimitive;
 
 use super::{capture::Film, theme, view};
@@ -42,7 +42,7 @@ pub(super) fn run() -> bool {
 fn capture(dir: &PathBuf) -> Result<usize, String> {
     create_dir_all(dir).map_err(|error| format!("create {}: {error}", dir.display()))?;
     let frame = frame(dir);
-    write_frame(dir, frame)?;
+    write_geometry(dir, frame)?;
     let mut gallery = super::Gallery::mounted();
     let skin = gallery.skin();
     let theme = theme(skin);
@@ -76,10 +76,10 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
 /// directory used, so a set taken on a display — where the scale is the
 /// screen's, not ours — can be answered on its own terms. Falls back to the
 /// gallery's own logical size at 1x, which is what the window opens at.
-fn frame(dir: &Path) -> Frame {
-    read_frame(dir).unwrap_or_else(|| {
+fn frame(dir: &Path) -> Geometry {
+    read_geometry(dir).unwrap_or_else(|| {
         let size = super::window_size();
-        Frame {
+        Geometry {
             height: AsPrimitive::<u32>::as_(size.height * SCALE),
             scale: SCALE.into(),
             width: AsPrimitive::<u32>::as_(size.width * SCALE),

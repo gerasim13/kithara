@@ -10,33 +10,37 @@ use std::{
 /// same terms, which is the only way a comparison between the two means
 /// anything. A caller builds one, so its fields stay open.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Frame {
+pub struct Geometry {
     pub height: u32,
     pub scale: f64,
     pub width: u32,
 }
 
-const FRAME_FILE: &str = "frame.txt";
+/// The name the first capture set was written with, and every set since.
+const GEOMETRY_FILE: &str = "frame.txt";
 
 /// Records the geometry a set was photographed at, beside the set.
 ///
 /// # Errors
 /// Fails when the file cannot be written.
-pub fn write_frame(dir: &Path, frame: Frame) -> Result<(), String> {
-    let path = dir.join(FRAME_FILE);
+pub fn write_geometry(dir: &Path, geometry: Geometry) -> Result<(), String> {
+    let path = dir.join(GEOMETRY_FILE);
     write(
         &path,
-        format!("{} {} {}\n", frame.width, frame.height, frame.scale),
+        format!(
+            "{} {} {}\n",
+            geometry.width, geometry.height, geometry.scale
+        ),
     )
     .map_err(|error| format!("write {}: {error}", path.display()))
 }
 
 /// Reads the geometry a capture set was taken at, if one was recorded.
 #[must_use]
-pub fn read_frame(dir: &Path) -> Option<Frame> {
-    let text = read_to_string(dir.join(FRAME_FILE)).ok()?;
+pub fn read_geometry(dir: &Path) -> Option<Geometry> {
+    let text = read_to_string(dir.join(GEOMETRY_FILE)).ok()?;
     let mut parts = text.split_whitespace();
-    Some(Frame {
+    Some(Geometry {
         width: parts.next()?.parse().ok()?,
         height: parts.next()?.parse().ok()?,
         scale: parts.next()?.parse().ok()?,

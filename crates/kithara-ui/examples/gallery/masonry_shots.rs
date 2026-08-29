@@ -14,7 +14,7 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     app::{Config, Ui},
     builtin,
-    capture::{Frame, Offscreen, read_frame, write_frame, write_png},
+    capture::{Geometry, Offscreen, read_geometry, write_geometry, write_png},
 };
 use num_traits::cast::AsPrimitive;
 
@@ -46,7 +46,7 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
         .text(builtin::text_doc())
         .kinds(&kinds)
         .build();
-    write_frame(dir, frame)?;
+    write_geometry(dir, frame)?;
     let film = Film::requested()?.unwrap_or_else(Film::stills);
     let mut written = 0;
     // One buffer for the whole set: every page is the same geometry, so the
@@ -85,8 +85,8 @@ fn capture(dir: &PathBuf) -> Result<usize, String> {
 /// The geometry to photograph at: whatever an iced capture already sitting in
 /// this directory used, so the two sets can be compared pixel for pixel.
 /// Falls back to the gallery's own logical size at 1x.
-fn frame(dir: &Path) -> Frame {
-    read_frame(dir).unwrap_or_else(|| Frame {
+fn frame(dir: &Path) -> Geometry {
+    read_geometry(dir).unwrap_or_else(|| Geometry {
         height: AsPrimitive::<u32>::as_(Consts::HEIGHT),
         scale: 1.0,
         width: AsPrimitive::<u32>::as_(Consts::WIDTH),

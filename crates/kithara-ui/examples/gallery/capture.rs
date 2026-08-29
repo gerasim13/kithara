@@ -1,7 +1,7 @@
 use std::{env, fs::create_dir_all, path::PathBuf};
 
 use iced::window::Screenshot;
-use kithara_ui::capture::{Frame, write_frame, write_png};
+use kithara_ui::capture::{Geometry, write_geometry, write_png};
 
 use super::sections::{ModuleDemo, Tab};
 
@@ -162,9 +162,9 @@ impl Capture {
     pub(super) fn save(&mut self, shot: Shot, screenshot: &Screenshot) -> Result<PathBuf, String> {
         create_dir_all(&self.dir)
             .map_err(|error| format!("create {}: {error}", self.dir.display()))?;
-        write_frame(
+        write_geometry(
             &self.dir,
-            Frame {
+            Geometry {
                 height: screenshot.size.height,
                 scale: f64::from(screenshot.scale_factor),
                 width: screenshot.size.width,

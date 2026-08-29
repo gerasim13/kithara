@@ -173,7 +173,8 @@ ui:
       KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-ui/examples/gallery/parity-budget.txt \
       "${gallery[@]}"
     KITHARA_STUDIO_CAPTURE="$dir/studio" \
-      cargo test -p kithara-app --lib --no-default-features --features masonry \
+      cargo test -p kithara-app --lib --no-default-features \
+        --features masonry,stretch-signalsmith \
         studio_capture_writes_both_hosts -- --nocapture
     KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
       KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-app/assets/ui/parity-budget.txt \

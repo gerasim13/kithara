@@ -7,7 +7,7 @@ use std::{
 
 use num_traits::cast::AsPrimitive;
 
-use super::frame::{read_frame, write_png};
+use super::geometry::{read_geometry, write_png};
 
 /// A channel difference below this is rasteriser noise: two hosts run
 /// different rasterisers, so antialiased edges never match bit for bit.
@@ -138,7 +138,7 @@ pub fn compare(
     masks: &Path,
     budget: Option<&Path>,
 ) -> Result<Report, String> {
-    match (read_frame(left), read_frame(right)) {
+    match (read_geometry(left), read_geometry(right)) {
         (Some(a), Some(b)) if a != b => {
             return Err(format!(
                 "the two sets were photographed differently — {}x{} at {}x versus {}x{} at {}x; \
@@ -384,7 +384,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{Image, PathBuf, compare, create_dir_all, difference, ink_disagreement, write_png};
-    use crate::capture::{Frame, write_frame};
+    use crate::capture::{Geometry, write_geometry};
 
     static DIR_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -441,13 +441,13 @@ mod tests {
         create_dir_all(&left_dir).unwrap();
         create_dir_all(&right_dir).unwrap();
 
-        let frame = Frame {
+        let frame = Geometry {
             height: 1,
             scale: 1.0,
             width: 10,
         };
-        write_frame(&left_dir, frame).unwrap();
-        write_frame(&right_dir, frame).unwrap();
+        write_geometry(&left_dir, frame).unwrap();
+        write_geometry(&right_dir, frame).unwrap();
 
         // Same pixels as ink_present_on_one_side_only: diff share is 0%, ink
         // share is 10%. A budget of 5% sits strictly between the two, so the

@@ -22,7 +22,7 @@ use iced_wgpu::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::frame::Frame;
+use super::geometry::Geometry;
 use crate::render::fonts::{FONT_BYTES, SANS};
 
 /// Photographs a page through iced with no window and no display.
@@ -86,7 +86,7 @@ impl Photographer {
         &mut self,
         element: Element<'_, Message, Theme, iced::Renderer>,
         theme: &Theme,
-        frame: Frame,
+        frame: Geometry,
     ) -> Result<Vec<u8>, String> {
         let scale = AsPrimitive::<f32>::as_(frame.scale);
         let logical = Size::new(

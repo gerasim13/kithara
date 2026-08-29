@@ -12,12 +12,12 @@
 #![cfg(feature = "capture")]
 
 pub mod diff;
-mod frame;
+mod geometry;
 mod photo;
 #[cfg(feature = "masonry")]
 mod scene;
 
-pub use frame::{Frame, read_frame, write_frame, write_png};
+pub use geometry::{Geometry, read_geometry, write_geometry, write_png};
 pub use photo::Photographer;
 #[cfg(feature = "masonry")]
 pub use scene::Offscreen;
