@@ -53,7 +53,7 @@
                     Include(id: "sprites", source: "nav/item.kmodule.ron", with: { "icon": "Orbit", "label": "SPRITES", "tab": "gallery.tab.sprites" }),
                     Include(id: "lottie", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "LOTTIE", "tab": "gallery.tab.lottie" }),
                     Include(id: "scene", source: "nav/item.kmodule.ron", with: { "icon": "Orbit", "label": "SCENE", "tab": "gallery.tab.scene" }),
-                    Include(id: "table_long", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TABLE (LONG)", "tab": "gallery.tab.table_long" }),
+                    Include(id: "table-long", source: "nav/item.kmodule.ron", with: { "icon": "Playlist", "label": "TABLE (LONG)", "tab": "gallery.tab.table-long" }),
                     Include(id: "custom", source: "nav/item.kmodule.ron", with: { "icon": "Disc", "label": "CUSTOM", "tab": "gallery.tab.custom" }),
                     Include(id: "skins", source: "nav/item.kmodule.ron", with: { "icon": "Gear", "label": "SKINS", "tab": "gallery.tab.skins" }),
                     ],

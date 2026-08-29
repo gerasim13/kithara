@@ -13,84 +13,9 @@ use kithara_ui::{
 
 use super::cache::DeckLayout;
 
-const DOCS: &[(&str, &str)] = &[
-    (
-        Package::MANIFEST,
-        include_str!("../../../assets/ui/package.kpackage.ron"),
-    ),
-    (
-        "app-en.ktext.ron",
-        include_str!("../../../assets/ui/app-en.ktext.ron"),
-    ),
-    (
-        "app.klayout.ron",
-        include_str!("../../../assets/ui/app.klayout.ron"),
-    ),
-    (
-        "app-single.klayout.ron",
-        include_str!("../../../assets/ui/app-single.klayout.ron"),
-    ),
-    (
-        "modules/app-bar.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-bar.kmodule.ron"),
-    ),
-    (
-        "modules/app-bar-micro.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-bar-micro.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-menu.kmodule.ron"),
-    ),
-    (
-        "modules/app-menu/window-row.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-menu/window-row.kmodule.ron"),
-    ),
-    (
-        "modules/app-deck.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-deck.kmodule.ron"),
-    ),
-    (
-        "modules/app-overview.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-overview.kmodule.ron"),
-    ),
-    (
-        "modules/app-overview-single.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-overview-single.kmodule.ron"),
-    ),
-    (
-        "modules/app-overview-row.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-overview-row.kmodule.ron"),
-    ),
-    (
-        "modules/app-mixer.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-mixer.kmodule.ron"),
-    ),
-    (
-        "modules/app-mixer-single.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-mixer-single.kmodule.ron"),
-    ),
-    (
-        "modules/app-strip/eq-mode-row.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-strip/eq-mode-row.kmodule.ron"),
-    ),
-    (
-        "modules/app-strip.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-strip.kmodule.ron"),
-    ),
-    (
-        "modules/app-strip/eq-3-band.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-strip/eq-3-band.kmodule.ron"),
-    ),
-    (
-        "modules/app-strip/eq-4-band.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-strip/eq-4-band.kmodule.ron"),
-    ),
-    (
-        "modules/app-library.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-library.kmodule.ron"),
-    ),
-];
+// `DOCS`: every document this application's own UI folder holds, read from the
+// folder at build time. See `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/ui_documents.rs"));
 
 /// What this application asks a package for, one role per deck arrangement.
 ///

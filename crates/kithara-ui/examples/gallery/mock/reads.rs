@@ -462,7 +462,7 @@ impl MockReads {
             "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
             "gallery.tab.lottie" => self.active_tab == Tab::Lottie,
             "gallery.tab.scene" => self.active_tab == Tab::Scene,
-            "gallery.tab.table_long" => self.active_tab == Tab::TableLong,
+            "gallery.tab.table-long" => self.active_tab == Tab::TableLong,
             "gallery.tab.skins" => self.active_tab == Tab::Skins,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
             "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,

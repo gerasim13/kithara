@@ -490,7 +490,7 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         "gallery.tab.sprites",
         "gallery.tab.lottie",
         "gallery.tab.scene",
-        "gallery.tab.table_long",
+        "gallery.tab.table-long",
         "gallery.tab.skins",
         "gallery.module.deck",
         "gallery.module.deck_micro",

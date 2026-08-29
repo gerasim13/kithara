@@ -786,7 +786,7 @@ mod tests {
                 ("gallery/titlebars/item", "activation"),
                 ("gallery/tokens/item", "activation"),
                 ("gallery/table/item", "activation"),
-                ("gallery/table_long/item", "activation"),
+                ("gallery/table-long/item", "activation"),
                 ("gallery/tree/item", "activation"),
                 ("gallery/typography/item", "activation"),
                 ("gallery/vis/item", "activation"),

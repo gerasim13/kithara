@@ -4035,7 +4035,7 @@ mod tests {
                 "gallery/sprites/item",
                 "gallery/lottie/item",
                 "gallery/scene/item",
-                "gallery/table_long/item",
+                "gallery/table-long/item",
                 "gallery/custom/item",
                 "gallery/skins/item",
             ]
