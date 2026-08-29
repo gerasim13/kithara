@@ -20,7 +20,6 @@ use tracing::{info, warn};
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
 pub(crate) const CHANNELS: u16 = 2;
 pub(crate) const FREQ_HZ: f64 = 440.0;
-pub(crate) const STREAM_FRAMES: u64 = (SAMPLE_RATE as u64) * 60;
 pub(crate) const TOLERANCE_SAMPLES: f64 = 0.5;
 /// Minimum fitted amplitude for a scan window to carry a meaningful phase.
 /// The test sine is full-scale (amp ≈ 1.0, ≥ 0.5 even through lossy AAC);

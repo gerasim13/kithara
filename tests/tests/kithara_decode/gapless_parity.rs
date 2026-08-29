@@ -8,7 +8,7 @@ use kithara::{
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
+    HlsFixtureBuilder, SignalAsset, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
 use reqwest::Client;
@@ -239,24 +239,17 @@ async fn fetch_bytes(client: &Client, url: String) -> Vec<u8> {
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
-#[case::mp3(SignalFormat::Mp3, "mp3", 48_000)]
-#[case::flac(SignalFormat::Flac, "flac", 48_000)]
+#[case::mp3(SignalAsset::MP3_SINE1K_48K_1S, 48_000)]
+#[case::flac(SignalAsset::FLAC_SINE1K_48K_1S, 48_000)]
 async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
-    #[case] format: SignalFormat,
-    #[case] hint: &'static str,
+    #[case] asset: SignalAsset,
     #[case] expected_frames: usize,
 ) {
     let server = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: GAPLESS_SAMPLE_RATE,
-        channels: GAPLESS_CHANNELS,
-        length: SignalSpecLength::Frames(expected_frames),
-        format,
-        bit_rate: None,
-    };
+    let hint = asset.ext();
 
     let bytes = Client::new()
-        .get(server.sine(&spec, 1_000.0).await)
+        .get(server.signal(asset))
         .send()
         .await
         .expect("fetch encoded signal")

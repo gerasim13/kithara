@@ -68,11 +68,10 @@ pub mod rfc6381;
 pub mod ring;
 pub mod rng;
 pub mod server_url;
+pub mod signal_asset;
 pub mod signal_pcm;
 pub mod signal_source;
 pub mod signal_source_utils;
-pub mod signal_spec;
-pub mod signal_url;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod swallow_detector;
@@ -112,10 +111,8 @@ pub use log_filter::rust_log_filter;
 pub use native::*;
 pub use rng::*;
 pub use server_url::join_server_url;
+pub use signal_asset::SignalAsset;
 pub use signal_source_utils::*;
-pub use signal_url::{
-    SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
-};
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, PrivateTestServer,

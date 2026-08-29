@@ -124,7 +124,9 @@ tracing-subscriber = { workspace = true }
 
 # HTTP/URL
 url = { workspace = true }
-uuid = { workspace = true }
+# `v4` for the random tokens the test server hands out; the workspace default
+# carries only `v5`.
+uuid = { workspace = true, features = ["v4"] }
 
 # `fdk-aac` decodes HE-AAC v1/v2, which the stock symphonia path reports as
 # LC-only; the rapid-scrub and stress-seek fixtures need it. Its vendored
@@ -166,7 +168,6 @@ memory-stats = { workspace = true }
 
 # Storage
 mmap-io = { workspace = true }
-moka = { workspace = true }
 
 # Seeded RNG for user-simulation e2e scenarios. Tests in
 # `tests/tests/kithara_queue/user_simulation/` need a deterministic
@@ -211,8 +212,9 @@ kithara = { workspace = true, features = [
     "tokio-rt-multi-thread",
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
-# Native-only while stage 1 is: its build script encodes through FFmpeg on the
-# host, and no wasm test takes a fixture yet.
+# Native-only: its build script encodes through FFmpeg on the host. The wasm
+# lane names assets through `SignalAsset` and fetches the bytes from the native
+# test server, so it never links the crate.
 kithara-fixtures = { workspace = true }
 kithara-stretch = { workspace = true, default-features = false, features = ["stretch-signalsmith"] }
 

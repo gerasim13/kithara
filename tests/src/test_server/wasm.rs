@@ -3,9 +3,9 @@ use url::Url;
 use crate::{
     hls_url::HlsSpec,
     server_url::join_server_url,
-    signal_url::{SignalKind, SignalSpec, signal_path},
+    signal_asset::SignalAsset,
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, post_token},
-    token_store::{TokenRequest, TokenRoute},
+    token_store::TokenRequest,
 };
 
 /// Client-side handle for the externally managed unified test server.
@@ -46,61 +46,15 @@ impl TestServerHelper {
         &self,
         spec: HlsSpec,
     ) -> Result<CreatedHls, CreateHlsError> {
-        let request = TokenRequest {
-            route: TokenRoute::Hls,
-            signal_kind: None,
-            signal_spec_with_ext: None,
-            hls_spec: Some(spec),
-        };
+        let request = TokenRequest { hls_spec: spec };
         let token = post_token(&self.base_url, &request).await?;
         Ok(CreatedHls::new(self.base_url.clone(), token))
     }
 
-    /// Build a URL for `/signal/sawtooth/...`.
+    /// URL of one build-time generated signal body.
     #[must_use]
-    pub async fn sawtooth(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::Sawtooth, spec).await
-    }
-
-    /// Build a URL for `/signal/sawtooth-desc/...`.
-    #[must_use]
-    pub async fn sawtooth_descending(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::SawtoothDescending, spec).await
-    }
-
-    async fn signal_url(&self, kind: SignalKind, spec: &SignalSpec) -> Url {
-        let path = signal_path(kind, spec);
-        let prefix = format!("/signal/{}/", kind.path_segment());
-        let spec_with_ext = path
-            .strip_prefix(&prefix)
-            .expect("signal path must match kind prefix");
-        let request = TokenRequest {
-            route: TokenRoute::Signal,
-            signal_kind: Some(kind.path_segment().to_string()),
-            signal_spec_with_ext: Some(spec_with_ext.to_string()),
-            hls_spec: None,
-        };
-        let token = post_token(&self.base_url, &request)
-            .await
-            .expect("signal token registration must succeed");
-        self.url(&format!(
-            "/signal/{}/{}.{}",
-            kind.path_segment(),
-            token,
-            spec.format.path_ext()
-        ))
-    }
-
-    /// Build a URL for `/signal/silence/...`.
-    #[must_use]
-    pub async fn silence(&self, spec: &SignalSpec) -> Url {
-        self.signal_url(SignalKind::Silence, spec).await
-    }
-
-    /// Build a URL for `/signal/sine/...`.
-    #[must_use]
-    pub async fn sine(&self, spec: &SignalSpec, freq_hz: f64) -> Url {
-        self.signal_url(SignalKind::Sine { freq_hz }, spec).await
+    pub fn signal(&self, asset: SignalAsset) -> Url {
+        self.url(&asset.path())
     }
 
     /// Build an arbitrary URL on this server.

@@ -144,6 +144,7 @@ fn materialize(namespace: &Path, resolved: &[(String, String, &'static AssetDef)
 fn codegen(namespace: &Path, resolved: &[(String, String, &'static AssetDef)]) -> String {
     let mut out = String::new();
     let mut manifest = String::new();
+    let mut by_name = String::new();
     for (name, id, def) in resolved {
         let entry = format!("ENTRY_{}", name.to_uppercase());
         let path = store::entry_path(namespace, id, def.ext);
@@ -178,11 +179,20 @@ fn codegen(namespace: &Path, resolved: &[(String, String, &'static AssetDef)]) -
              pub fn {name}() -> crate::asset::Asset {{\n{body}\n}}\n\n",
         );
         let _ = writeln!(manifest, "    &{entry},");
+        let _ = writeln!(
+            by_name,
+            "        {}{name:?} => Some({name}()),",
+            cfg.replace('\n', "\n        "),
+        );
     }
     let _ = write!(
         out,
         "/// Every asset this build materialized.\n\
-         pub static MANIFEST: &[&crate::asset::AssetEntry] = &[\n{manifest}];\n",
+         pub static MANIFEST: &[&crate::asset::AssetEntry] = &[\n{manifest}];\n\n\
+         /// The asset this build registered under `name`.\n\
+         #[must_use]\n\
+         pub fn by_name(name: &str) -> Option<crate::asset::Asset> {{\n    \
+         match name {{\n{by_name}        _ => None,\n    }}\n}}\n",
     );
     out
 }

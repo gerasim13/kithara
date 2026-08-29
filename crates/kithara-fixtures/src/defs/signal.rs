@@ -1,0 +1,368 @@
+use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
+use kithara_test_macros as kithara;
+
+use super::{pcm::Pcm, riff, tone};
+
+struct Consts;
+
+impl Consts {
+    /// Amplitude of every tone the signal route serves: full scale.
+    const FULL_SCALE_PEAK: i16 = i16::MAX;
+    const FRAMES_120MS_44K1: usize = 5_292;
+    const FRAMES_1S_44K1: usize = 44_100;
+    const FRAMES_1S_48K: usize = 48_000;
+    const FRAMES_240MS_44K1: usize = 10_584;
+    const FRAMES_2S_44K1: usize = 88_200;
+    const FRAMES_30S_44K1: usize = 1_323_000;
+    const FRAMES_60S_44K1: usize = 2_646_000;
+    const RATE_44K1: u32 = 44_100;
+    const RATE_48K: u32 = 48_000;
+    const STEREO: u16 = 2;
+    /// Offset of STREAMINFO's packed rate/channels/depth/sample-count field:
+    /// `fLaC` and the metablock header, then ten bytes into the body.
+    const STREAMINFO_COUNT_OFFSET: usize = 18;
+    /// The sample count occupies the low 36 bits of that field.
+    const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
+}
+
+/// Waveform one signal-route asset carries.
+#[derive(Clone, Copy)]
+enum Wave {
+    Sawtooth,
+    Silence,
+    Sine { hz: f64 },
+}
+
+impl Wave {
+    fn sample(self, frame: usize, sample_rate: u32) -> i16 {
+        match self {
+            Self::Sawtooth => tone::sawtooth(frame),
+            Self::Silence => 0,
+            Self::Sine { hz } => tone::sine(frame, sample_rate, hz, Consts::FULL_SCALE_PEAK),
+        }
+    }
+}
+
+/// Renders the waveform and hands it to one of the byte encoders.
+fn encode(
+    target: BytesEncodeTarget,
+    wave: Wave,
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bit_rate: Option<u64>,
+) -> Vec<u8> {
+    let pcm = Pcm::new(sample_rate, channels, total_frames, |frame| {
+        wave.sample(frame, sample_rate)
+    });
+    EncoderFactory::encode_bytes(BytesEncodeRequest {
+        pcm: &pcm,
+        target,
+        bit_rate,
+    })
+    .unwrap_or_else(|error| panic!("kithara-fixtures: {target:?} encode failed: {error}"))
+    .bytes
+}
+
+/// Writes the frame count into STREAMINFO, which the streaming encoder leaves
+/// at zero. A decoder that reads zero there reports an unknown duration.
+fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
+    let field = Consts::STREAMINFO_COUNT_OFFSET;
+    let Some(slot) = bytes.get_mut(field..field + size_of::<u64>()) else {
+        panic!("kithara-fixtures: FLAC output is too short to hold a STREAMINFO block");
+    };
+    let packed = u64::from_be_bytes(slot.try_into().expect("invariant: the slot is eight bytes"));
+    let count = u64::try_from(total_frames).expect("invariant: a fixture is under 2^64 frames");
+    let updated =
+        (packed & !Consts::STREAMINFO_COUNT_MASK) | (count & Consts::STREAMINFO_COUNT_MASK);
+    slot.copy_from_slice(&updated.to_be_bytes());
+}
+
+/// Uncompressed bodies the `/signal` route serves.
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::saw_1s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1
+)]
+#[case::silence_1s(
+    Wave::Silence,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1
+)]
+#[case::sine440_120ms(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_120MS_44K1
+)]
+#[case::sine440_60s(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1
+)]
+#[case::sine880_240ms(
+    Wave::Sine { hz: 880.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_240MS_44K1
+)]
+fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) -> Vec<u8> {
+    riff::wav(sample_rate, channels, total_frames, |frame| {
+        wave.sample(frame, sample_rate)
+    })
+}
+
+/// MPEG audio bodies the `/signal` route serves.
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
+#[case::saw_1s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1,
+    None
+)]
+#[case::saw_2s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_2S_44K1,
+    None
+)]
+#[case::saw_2s_64k(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_2S_44K1,
+    Some(64_000)
+)]
+#[case::saw_2s_320k(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_2S_44K1,
+    Some(320_000)
+)]
+#[case::sine1k_48k_1s(
+    Wave::Sine { hz: 1_000.0 },
+    Consts::RATE_48K,
+    Consts::STEREO,
+    Consts::FRAMES_1S_48K,
+    None
+)]
+#[case::sine440_60s(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    None
+)]
+#[case::sine440_60s_128k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(128_000)
+)]
+#[case::sine440_60s_192k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(192_000)
+)]
+#[case::sine440_60s_256k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(256_000)
+)]
+#[case::sine440_60s_320k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(320_000)
+)]
+#[case::sine880_30s(
+    Wave::Sine { hz: 880.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_30S_44K1,
+    None
+)]
+fn signal_mp3(
+    wave: Wave,
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bit_rate: Option<u64>,
+) -> Vec<u8> {
+    encode(
+        BytesEncodeTarget::Mp3,
+        wave,
+        sample_rate,
+        channels,
+        total_frames,
+        bit_rate,
+    )
+}
+
+/// FLAC bodies the `/signal` route serves.
+#[kithara::asset(ext = "flac", content_type = "audio/flac")]
+#[case::saw_1s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1
+)]
+#[case::sine1k_48k_1s(
+    Wave::Sine { hz: 1_000.0 },
+    Consts::RATE_48K,
+    Consts::STEREO,
+    Consts::FRAMES_1S_48K
+)]
+#[case::sine440_60s(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1
+)]
+fn signal_flac(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) -> Vec<u8> {
+    let mut bytes = encode(
+        BytesEncodeTarget::Flac,
+        wave,
+        sample_rate,
+        channels,
+        total_frames,
+        None,
+    );
+    backfill_flac_frame_count(&mut bytes, total_frames);
+    bytes
+}
+
+/// Raw AAC bodies the `/signal` route serves.
+#[kithara::asset(ext = "aac", content_type = "audio/aac")]
+#[case::saw_1s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1,
+    None
+)]
+#[case::sine440_60s(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    None
+)]
+#[case::sine440_60s_128k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(128_000)
+)]
+#[case::sine440_60s_192k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(192_000)
+)]
+#[case::sine440_60s_256k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(256_000)
+)]
+#[case::sine440_60s_320k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(320_000)
+)]
+fn signal_aac(
+    wave: Wave,
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bit_rate: Option<u64>,
+) -> Vec<u8> {
+    encode(
+        BytesEncodeTarget::Aac,
+        wave,
+        sample_rate,
+        channels,
+        total_frames,
+        bit_rate,
+    )
+}
+
+/// AAC-in-MP4 bodies the `/signal` route serves.
+#[kithara::asset(ext = "m4a", content_type = "audio/mp4")]
+#[case::saw_1s(
+    Wave::Sawtooth,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1,
+    None
+)]
+#[case::sine440_60s(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    None
+)]
+#[case::sine440_60s_128k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(128_000)
+)]
+#[case::sine440_60s_192k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(192_000)
+)]
+#[case::sine440_60s_256k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(256_000)
+)]
+#[case::sine440_60s_320k(
+    Wave::Sine { hz: 440.0 },
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    Some(320_000)
+)]
+fn signal_m4a(
+    wave: Wave,
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bit_rate: Option<u64>,
+) -> Vec<u8> {
+    encode(
+        BytesEncodeTarget::M4a,
+        wave,
+        sample_rate,
+        channels,
+        total_frames,
+        bit_rate,
+    )
+}

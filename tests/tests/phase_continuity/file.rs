@@ -10,15 +10,18 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
-use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
-};
+use kithara_integration_tests::{SignalAsset, TestServerHelper, TestTempDir};
 use tracing::info;
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
+use super::common::FREQ_HZ;
 use super::common::{
-    CHANNELS, FREQ_HZ, MIN_SIGNAL_AMP, PhaseDrift, READ_FRAMES_AFTER_SEEK, READ_PENDING_RETRIES,
-    SAMPLE_RATE, STREAM_FRAMES, SinePhaseSpec, TOLERANCE_SAMPLES, e2e_phase_scan,
-    measure_phase_rad_window, seek_phase_scan, wrap_pi,
+    CHANNELS, MIN_SIGNAL_AMP, PhaseDrift, READ_FRAMES_AFTER_SEEK, READ_PENDING_RETRIES,
+    SAMPLE_RATE, SinePhaseSpec, TOLERANCE_SAMPLES, e2e_phase_scan, measure_phase_rad_window,
+    seek_phase_scan, wrap_pi,
 };
 
 #[cfg(all(
@@ -26,16 +29,6 @@ use super::common::{
     any(target_os = "macos", target_os = "ios")
 ))]
 const APPLE_FUSED_HOST_RATE: u32 = 48_000;
-
-const fn format_ext(fmt: SignalFormat) -> Option<&'static str> {
-    match fmt {
-        SignalFormat::Mp3 => Some("mp3"),
-        SignalFormat::Aac => Some("aac"),
-        SignalFormat::M4a => Some("m4a"),
-        SignalFormat::Flac => Some("flac"),
-        SignalFormat::Wav => Some("wav"),
-    }
-}
 
 async fn open_audio(
     config: AudioConfig<File>,
@@ -47,25 +40,12 @@ async fn open_audio(
     worker.open(config).await
 }
 
-async fn run_case(
-    format: SignalFormat,
-    backend: DecoderBackend,
-    ephemeral: bool,
-    seek_count: usize,
-    bit_rate: Option<u64>,
-) {
+async fn run_case(asset: SignalAsset, backend: DecoderBackend, ephemeral: bool, seek_count: usize) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
-        format,
-        bit_rate,
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+    let url = helper.signal(asset);
 
     let temp_dir = TestTempDir::new();
     let region = Region::default();
@@ -96,7 +76,7 @@ async fn run_case(
                 .backend(backend)
                 .build(),
         )
-        .maybe_hint(format_ext(format).map(str::to_owned))
+        .maybe_hint(Some(asset.ext().to_owned()))
         .block_on_underrun(true)
         .build();
     let mut audio = open_audio(audio_config, &region)
@@ -108,7 +88,7 @@ async fn run_case(
         .map(|d| d.as_secs_f64())
         .expect("file fixture should report duration");
     info!(
-        ?format,
+        asset = asset.name(),
         ?backend,
         ephemeral,
         seek_count,
@@ -146,30 +126,31 @@ async fn run_case(
 
     assert!(
         drifts.is_empty(),
-        "phase continuity broken on {} scan(s) (format={format:?} backend={backend:?} seek_count={seek_count}): {drifts:?}",
+        "phase continuity broken on {} scan(s) (asset={} backend={backend:?} seek_count={seek_count}): {drifts:?}",
         drifts.len(),
+        asset.name(),
     );
 }
 
-/// Encode the sine fixture once (over the loopback test server, the only place
-/// the `pub(crate)` encoder is reachable from `tests/`) and persist the raw
-/// encoded bytes to a file inside `temp_dir`. This HTTP fetch is pure
-/// fixture-build setup on the real tokio runtime; the bytes then live on disk
-/// and the playback path under test (`FileSrc::Local`) never touches a socket.
+/// Fetch the build-time sine fixture over the loopback test server and persist
+/// its bytes to a file inside `temp_dir`. This HTTP fetch is pure fixture-build
+/// setup on the real tokio runtime; the bytes then live on disk and the
+/// playback path under test (`FileSrc::Local`) never touches a socket.
 async fn write_sine_fixture_to_disk(
-    spec: &SignalSpec,
+    asset: SignalAsset,
     temp_dir: &TestTempDir,
 ) -> std::path::PathBuf {
     let helper = TestServerHelper::new().await;
-    let url = helper.sine(spec, FREQ_HZ).await;
+    let url = helper.signal(asset);
     let bytes = reqwest::get(url)
         .await
         .expect("fetch encoded sine fixture")
         .bytes()
         .await
         .expect("read fixture body");
-    let ext = format_ext(spec.format).expect("known signal format extension");
-    let path = temp_dir.path().join(format!("sine_fixture.{ext}"));
+    let path = temp_dir
+        .path()
+        .join(format!("sine_fixture.{}", asset.ext()));
     let mut file = std::fs::File::create(&path).expect("create fixture file");
     file.write_all(&bytes).expect("write fixture bytes");
     file.sync_all().expect("flush fixture file");
@@ -182,20 +163,12 @@ async fn write_sine_fixture_to_disk(
 /// playback pipeline — storage waits, decode, resample — runs without any
 /// loopback transport. This is the path the `flash` quiescence engine can
 /// virtualize end to end. Asserts the identical phase-continuity contract.
-async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate: Option<u64>) {
+async fn local_run_case(asset: SignalAsset, backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
-        format,
-        bit_rate,
-    };
-
     let temp_dir = TestTempDir::new();
-    let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+    let fixture_path = write_sine_fixture_to_disk(asset, &temp_dir).await;
     let region = Region::default();
     let byte_pool = region.byte_pool();
 
@@ -214,7 +187,7 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
                 .backend(backend)
                 .build(),
         )
-        .maybe_hint(format_ext(format).map(str::to_owned))
+        .maybe_hint(Some(asset.ext().to_owned()))
         .build();
     let mut audio = open_audio(audio_config, &region)
         .await
@@ -224,7 +197,12 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
         .duration()
         .map(|d| d.as_secs_f64())
         .expect("local file fixture should report duration");
-    info!(?format, ?backend, total_secs, "local fixture ready");
+    info!(
+        asset = asset.name(),
+        ?backend,
+        total_secs,
+        "local fixture ready"
+    );
     assert!(
         total_secs > 30.0 && total_secs < 120.0,
         "fixture duration out of sane range: {total_secs:.1}s",
@@ -251,8 +229,9 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
 
     assert!(
         drifts.is_empty(),
-        "phase continuity broken on {} scan(s) over a local file (format={format:?} backend={backend:?}): {drifts:?}",
+        "phase continuity broken on {} scan(s) over a local file (asset={} backend={backend:?}): {drifts:?}",
         drifts.len(),
+        asset.name(),
     );
 }
 
@@ -263,18 +242,9 @@ async fn local_run_case(format: SignalFormat, backend: DecoderBackend, bit_rate:
 async fn local_apple_fused_run_case() {
     kithara_integration_tests::apple_warmup::warm_if_apple(DecoderBackend::Apple);
 
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(
-            usize::try_from(STREAM_FRAMES).expect("stream frames fit usize"),
-        ),
-        format: SignalFormat::M4a,
-        bit_rate: Some(320_000),
-    };
-
     let temp_dir = TestTempDir::new();
-    let fixture_path = write_sine_fixture_to_disk(&spec, &temp_dir).await;
+    let fixture_path =
+        write_sine_fixture_to_disk(SignalAsset::M4A_SINE440_60S_320K, &temp_dir).await;
     let region = Region::default();
     let byte_pool = region.byte_pool();
 
@@ -375,17 +345,16 @@ fn frames_for_duration_rounded(sample_rate: u32, duration: Duration) -> u64 {
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::mp3_symphonia(SignalFormat::Mp3, DecoderBackend::Symphonia, Some(320_000))]
+#[case::mp3_symphonia(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple(SignalFormat::Mp3, DecoderBackend::Apple, Some(320_000))
+    case::mp3_apple(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Apple)
 )]
 async fn phase_continuity_file_local_socket_free(
-    #[case] format: SignalFormat,
+    #[case] asset: SignalAsset,
     #[case] backend: DecoderBackend,
-    #[case] bit_rate: Option<u64>,
 ) {
-    local_run_case(format, backend, bit_rate).await;
+    local_run_case(asset, backend).await;
 }
 
 #[cfg(all(
@@ -404,24 +373,12 @@ async fn phase_continuity_file_apple_fused_src_44k_to_host_48k() {
     local_apple_fused_run_case().await;
 }
 
-async fn decode_pcm_seconds(
-    format: SignalFormat,
-    backend: DecoderBackend,
-    secs: f64,
-    bit_rate: Option<u64>,
-) -> Vec<f32> {
+async fn decode_pcm_seconds(asset: SignalAsset, backend: DecoderBackend, secs: f64) -> Vec<f32> {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
-        format,
-        bit_rate,
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+    let url = helper.signal(asset);
     let region = Region::default();
     let byte_pool = region.byte_pool();
     let store = AssetStore::builder()
@@ -440,7 +397,7 @@ async fn decode_pcm_seconds(
                 .backend(backend)
                 .build(),
         )
-        .maybe_hint(format_ext(format).map(str::to_owned))
+        .maybe_hint(Some(asset.ext().to_owned()))
         .block_on_underrun(true)
         .build();
     let mut audio = open_audio(audio_config, &region)
@@ -605,18 +562,11 @@ async fn dump_fixture_raw_bytes() {
     let helper = TestServerHelper::new().await;
     let dump = PathBuf::from("/tmp/aac_dump");
     std::fs::create_dir_all(&dump).expect("mkdir");
-    for (fmt, name) in [
-        (SignalFormat::Aac, "fixture_raw.aac"),
-        (SignalFormat::M4a, "fixture_raw.m4a"),
+    for (asset, name) in [
+        (SignalAsset::AAC_SINE440_60S, "fixture_raw.aac"),
+        (SignalAsset::M4A_SINE440_60S, "fixture_raw.m4a"),
     ] {
-        let spec = SignalSpec {
-            sample_rate: SAMPLE_RATE,
-            channels: CHANNELS,
-            length: SignalSpecLength::Frames((SAMPLE_RATE * 5) as usize),
-            format: fmt,
-            bit_rate: None,
-        };
-        let url = helper.sine(&spec, FREQ_HZ).await;
+        let url = helper.signal(asset);
         let bytes = reqwest::get(url)
             .await
             .expect("fetch")
@@ -661,13 +611,13 @@ async fn dump_aac_for_listening() {
         SAMPLE_RATE,
     );
 
-    for (fmt, name) in [
-        (SignalFormat::M4a, "02_decoded_m4a.wav"),
-        (SignalFormat::Aac, "03_decoded_aac_raw.wav"),
-        (SignalFormat::Mp3, "04_decoded_mp3.wav"),
-        (SignalFormat::Flac, "05_decoded_flac.wav"),
+    for (asset, name) in [
+        (SignalAsset::M4A_SINE440_60S, "02_decoded_m4a.wav"),
+        (SignalAsset::AAC_SINE440_60S, "03_decoded_aac_raw.wav"),
+        (SignalAsset::MP3_SINE440_60S, "04_decoded_mp3.wav"),
+        (SignalAsset::FLAC_SINE440_60S, "05_decoded_flac.wav"),
     ] {
-        let pcm = decode_pcm_seconds(fmt, DecoderBackend::Symphonia, secs, None).await;
+        let pcm = decode_pcm_seconds(asset, DecoderBackend::Symphonia, secs).await;
         let mono: Vec<f32> = (0..pcm.len() / chan).map(|f| pcm[f * chan]).collect();
         write_wav_mono_f32(
             &dump_dir.join(name),
@@ -710,28 +660,21 @@ async fn dump_aac_for_listening() {
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::aac_128k(SignalFormat::Aac, 128_000)]
-#[case::aac_192k(SignalFormat::Aac, 192_000)]
-#[case::aac_256k(SignalFormat::Aac, 256_000)]
-#[case::aac_320k(SignalFormat::Aac, 320_000)]
-#[case::m4a_128k(SignalFormat::M4a, 128_000)]
-#[case::m4a_192k(SignalFormat::M4a, 192_000)]
-#[case::m4a_256k(SignalFormat::M4a, 256_000)]
-#[case::m4a_320k(SignalFormat::M4a, 320_000)]
-#[case::mp3_128k(SignalFormat::Mp3, 128_000)]
-#[case::mp3_192k(SignalFormat::Mp3, 192_000)]
-#[case::mp3_256k(SignalFormat::Mp3, 256_000)]
-#[case::mp3_320k(SignalFormat::Mp3, 320_000)]
-async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_rate: u64) {
+#[case::aac_128k(SignalAsset::AAC_SINE440_60S_128K)]
+#[case::aac_192k(SignalAsset::AAC_SINE440_60S_192K)]
+#[case::aac_256k(SignalAsset::AAC_SINE440_60S_256K)]
+#[case::aac_320k(SignalAsset::AAC_SINE440_60S_320K)]
+#[case::m4a_128k(SignalAsset::M4A_SINE440_60S_128K)]
+#[case::m4a_192k(SignalAsset::M4A_SINE440_60S_192K)]
+#[case::m4a_256k(SignalAsset::M4A_SINE440_60S_256K)]
+#[case::m4a_320k(SignalAsset::M4A_SINE440_60S_320K)]
+#[case::mp3_128k(SignalAsset::MP3_SINE440_60S_128K)]
+#[case::mp3_192k(SignalAsset::MP3_SINE440_60S_192K)]
+#[case::mp3_256k(SignalAsset::MP3_SINE440_60S_256K)]
+#[case::mp3_320k(SignalAsset::MP3_SINE440_60S_320K)]
+async fn bit_rate_e2e_does_not_hang(#[case] asset: SignalAsset) {
     let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
-        format,
-        bit_rate: Some(bit_rate),
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+    let url = helper.signal(asset);
 
     let region = Region::default();
     let byte_pool = region.byte_pool();
@@ -750,7 +693,7 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
-        .maybe_hint(format_ext(format).map(str::to_owned))
+        .maybe_hint(Some(asset.ext().to_owned()))
         .build();
 
     let audio = open_audio(audio_config, &region)
@@ -762,37 +705,27 @@ async fn bit_rate_e2e_does_not_hang(#[case] format: SignalFormat, #[case] bit_ra
         .expect("duration should be available");
     assert!(
         duration_secs > 30.0 && duration_secs < 120.0,
-        "{format:?} @ {bit_rate}: duration {duration_secs} out of expected range"
+        "{}: duration {duration_secs} out of expected range",
+        asset.name()
     );
 }
 
-fn codec_label(format: SignalFormat, bit_rate: Option<u64>) -> String {
-    let base = match format {
-        SignalFormat::Wav => "WAV (lossless ref)",
-        SignalFormat::Flac => "FLAC (lossless)",
-        SignalFormat::Mp3 => "MP3 (lossy)",
-        SignalFormat::Aac => "AAC raw (lossy)",
-        SignalFormat::M4a => "M4A AAC (lossy)",
+fn codec_label(asset: SignalAsset) -> String {
+    let kind = match asset.ext() {
+        "wav" => "lossless ref",
+        "flac" => "lossless",
+        _ => "lossy",
     };
-    match bit_rate {
-        Some(br) => format!("{base} @ {}k", br / 1000),
-        None => base.to_string(),
-    }
+    format!("{} ({kind})", asset.name())
 }
 
-async fn run_codec_compare(
-    fmt_a: SignalFormat,
-    fmt_b: SignalFormat,
-    backend: DecoderBackend,
-    bit_rate_a: Option<u64>,
-    bit_rate_b: Option<u64>,
-) {
+async fn run_codec_compare(asset_a: SignalAsset, asset_b: SignalAsset, backend: DecoderBackend) {
     const READ_SECS: f64 = 2.0;
-    let pcm_a = decode_pcm_seconds(fmt_a, backend, READ_SECS, bit_rate_a).await;
-    let pcm_b = decode_pcm_seconds(fmt_b, backend, READ_SECS, bit_rate_b).await;
+    let pcm_a = decode_pcm_seconds(asset_a, backend, READ_SECS).await;
+    let pcm_b = decode_pcm_seconds(asset_b, backend, READ_SECS).await;
     let chan = CHANNELS as usize;
-    let label_a = codec_label(fmt_a, bit_rate_a);
-    let label_b = codec_label(fmt_b, bit_rate_b);
+    let label_a = codec_label(asset_a);
+    let label_b = codec_label(asset_b);
     println!("\n===== {backend:?} =====");
     for &(w, s) in &[
         (128usize, 1024usize),
@@ -817,104 +750,135 @@ async fn run_codec_compare(
     hang_timeout_secs(1),
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
-#[case::mp3_vs_wav_symphonia(SignalFormat::Mp3, SignalFormat::Wav, DecoderBackend::Symphonia, None)]
-#[case::aac_vs_wav_symphonia(SignalFormat::Aac, SignalFormat::Wav, DecoderBackend::Symphonia, None)]
-#[case::m4a_vs_wav_symphonia(SignalFormat::M4a, SignalFormat::Wav, DecoderBackend::Symphonia, None)]
+#[case::mp3_vs_wav_symphonia(
+    SignalAsset::MP3_SINE440_60S,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
+)]
+#[case::aac_vs_wav_symphonia(
+    SignalAsset::AAC_SINE440_60S,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
+)]
+#[case::m4a_vs_wav_symphonia(
+    SignalAsset::M4A_SINE440_60S,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
+)]
 #[case::flac_vs_wav_symphonia(
-    SignalFormat::Flac,
-    SignalFormat::Wav,
-    DecoderBackend::Symphonia,
-    None
+    SignalAsset::FLAC_SINE440_60S,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
 )]
 #[case::aac_320k_vs_wav_symphonia(
-    SignalFormat::Aac,
-    SignalFormat::Wav,
-    DecoderBackend::Symphonia,
-    Some(320_000)
+    SignalAsset::AAC_SINE440_60S_320K,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
 )]
 #[case::m4a_320k_vs_wav_symphonia(
-    SignalFormat::M4a,
-    SignalFormat::Wav,
-    DecoderBackend::Symphonia,
-    Some(320_000)
+    SignalAsset::M4A_SINE440_60S_320K,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
 )]
 #[case::mp3_320k_vs_wav_symphonia(
-    SignalFormat::Mp3,
-    SignalFormat::Wav,
-    DecoderBackend::Symphonia,
-    Some(320_000)
+    SignalAsset::MP3_SINE440_60S_320K,
+    SignalAsset::WAV_SINE440_60S,
+    DecoderBackend::Symphonia
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_vs_wav_apple(SignalFormat::Mp3, SignalFormat::Wav, DecoderBackend::Apple, None)
+    case::mp3_vs_wav_apple(
+        SignalAsset::MP3_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_vs_wav_apple(SignalFormat::Aac, SignalFormat::Wav, DecoderBackend::Apple, None)
+    case::aac_vs_wav_apple(
+        SignalAsset::AAC_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_vs_wav_apple(SignalFormat::M4a, SignalFormat::Wav, DecoderBackend::Apple, None)
+    case::m4a_vs_wav_apple(
+        SignalAsset::M4A_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::flac_vs_wav_apple(SignalFormat::Flac, SignalFormat::Wav, DecoderBackend::Apple, None)
+    case::flac_vs_wav_apple(
+        SignalAsset::FLAC_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
+    )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::aac_320k_vs_wav_apple(
-        SignalFormat::Aac,
-        SignalFormat::Wav,
-        DecoderBackend::Apple,
-        Some(320_000)
+        SignalAsset::AAC_SINE440_60S_320K,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::m4a_320k_vs_wav_apple(
-        SignalFormat::M4a,
-        SignalFormat::Wav,
-        DecoderBackend::Apple,
-        Some(320_000)
+        SignalAsset::M4A_SINE440_60S_320K,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::mp3_320k_vs_wav_apple(
-        SignalFormat::Mp3,
-        SignalFormat::Wav,
-        DecoderBackend::Apple,
-        Some(320_000)
+        SignalAsset::MP3_SINE440_60S_320K,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Apple
     )
 )]
 #[cfg_attr(
     target_os = "android",
-    case::mp3_vs_wav_android(SignalFormat::Mp3, SignalFormat::Wav, DecoderBackend::Android, None)
+    case::mp3_vs_wav_android(
+        SignalAsset::MP3_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Android
+    )
 )]
 #[cfg_attr(
     target_os = "android",
-    case::aac_vs_wav_android(SignalFormat::Aac, SignalFormat::Wav, DecoderBackend::Android, None)
+    case::aac_vs_wav_android(
+        SignalAsset::AAC_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Android
+    )
 )]
 #[cfg_attr(
     target_os = "android",
-    case::m4a_vs_wav_android(SignalFormat::M4a, SignalFormat::Wav, DecoderBackend::Android, None)
+    case::m4a_vs_wav_android(
+        SignalAsset::M4A_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Android
+    )
 )]
 #[cfg_attr(
     target_os = "android",
     case::flac_vs_wav_android(
-        SignalFormat::Flac,
-        SignalFormat::Wav,
-        DecoderBackend::Android,
-        None
+        SignalAsset::FLAC_SINE440_60S,
+        SignalAsset::WAV_SINE440_60S,
+        DecoderBackend::Android
     )
 )]
 async fn codec_distortion_profile(
-    #[case] codec: SignalFormat,
-    #[case] reference: SignalFormat,
+    #[case] codec: SignalAsset,
+    #[case] reference: SignalAsset,
     #[case] backend: DecoderBackend,
-    #[case] codec_bit_rate: Option<u64>,
 ) {
-    run_codec_compare(codec, reference, backend, codec_bit_rate, None).await;
+    run_codec_compare(codec, reference, backend).await;
 }
 
 #[kithara::test(
@@ -928,64 +892,76 @@ async fn codec_distortion_profile(
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
     case::sentinel_mp3_apple_eph_e2e(
-        SignalFormat::Mp3,
+        SignalAsset::MP3_SINE440_60S_320K,
         DecoderBackend::Apple,
         true,
-        0,
-        Some(320_000)
+        0
     )
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::mp3_apple_eph_10seek(SignalFormat::Mp3, DecoderBackend::Apple, true, 10, Some(320_000))
+    case::mp3_apple_eph_10seek(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Apple, true, 10)
 )]
-#[case::mp3_symphonia_eph_e2e(SignalFormat::Mp3, DecoderBackend::Symphonia, true, 0, Some(320_000))]
-#[case::mp3_symphonia_eph_10seek(
-    SignalFormat::Mp3,
+#[case::mp3_symphonia_eph_e2e(
+    SignalAsset::MP3_SINE440_60S_320K,
     DecoderBackend::Symphonia,
     true,
-    10,
-    Some(320_000)
+    0
+)]
+#[case::mp3_symphonia_eph_10seek(
+    SignalAsset::MP3_SINE440_60S_320K,
+    DecoderBackend::Symphonia,
+    true,
+    10
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_e2e(SignalFormat::M4a, DecoderBackend::Apple, true, 0, Some(320_000))
+    case::m4a_apple_eph_e2e(SignalAsset::M4A_SINE440_60S_320K, DecoderBackend::Apple, true, 0)
 )]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::m4a_apple_eph_10seek(SignalFormat::M4a, DecoderBackend::Apple, true, 10, Some(320_000))
+    case::m4a_apple_eph_10seek(SignalAsset::M4A_SINE440_60S_320K, DecoderBackend::Apple, true, 10)
 )]
-#[case::m4a_symphonia_eph_e2e(SignalFormat::M4a, DecoderBackend::Symphonia, true, 0, Some(320_000))]
+#[case::m4a_symphonia_eph_e2e(
+    SignalAsset::M4A_SINE440_60S_320K,
+    DecoderBackend::Symphonia,
+    true,
+    0
+)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::flac_apple_eph_e2e(SignalFormat::Flac, DecoderBackend::Apple, true, 0, None)
+    case::flac_apple_eph_e2e(SignalAsset::FLAC_SINE440_60S, DecoderBackend::Apple, true, 0)
 )]
-#[case::flac_symphonia_eph_e2e(SignalFormat::Flac, DecoderBackend::Symphonia, true, 0, None)]
+#[case::flac_symphonia_eph_e2e(SignalAsset::FLAC_SINE440_60S, DecoderBackend::Symphonia, true, 0)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::aac_apple_eph_e2e(SignalFormat::Aac, DecoderBackend::Apple, true, 0, Some(320_000))
+    case::aac_apple_eph_e2e(SignalAsset::AAC_SINE440_60S_320K, DecoderBackend::Apple, true, 0)
 )]
-#[case::aac_symphonia_eph_e2e(SignalFormat::Aac, DecoderBackend::Symphonia, true, 0, Some(320_000))]
+#[case::aac_symphonia_eph_e2e(
+    SignalAsset::AAC_SINE440_60S_320K,
+    DecoderBackend::Symphonia,
+    true,
+    0
+)]
 #[cfg_attr(
     target_os = "android",
-    case::mp3_android_eph_e2e(SignalFormat::Mp3, DecoderBackend::Android, true, 0, Some(320_000))
+    case::mp3_android_eph_e2e(SignalAsset::MP3_SINE440_60S_320K, DecoderBackend::Android, true, 0)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::m4a_android_eph_e2e(SignalFormat::M4a, DecoderBackend::Android, true, 0, Some(320_000))
+    case::m4a_android_eph_e2e(SignalAsset::M4A_SINE440_60S_320K, DecoderBackend::Android, true, 0)
 )]
 #[cfg_attr(
     target_os = "android",
-    case::flac_android_eph_e2e(SignalFormat::Flac, DecoderBackend::Android, true, 0, None)
+    case::flac_android_eph_e2e(SignalAsset::FLAC_SINE440_60S, DecoderBackend::Android, true, 0)
 )]
 async fn phase_continuity_file(
-    #[case] format: SignalFormat,
+    #[case] asset: SignalAsset,
     #[case] backend: DecoderBackend,
     #[case] ephemeral: bool,
     #[case] seek_count: usize,
-    #[case] bit_rate: Option<u64>,
 ) {
-    run_case(format, backend, ephemeral, seek_count, bit_rate).await;
+    run_case(asset, backend, ephemeral, seek_count).await;
 }
 
 /// Build an ephemeral AAC sine [`RegisteredAudio`] over a file source. Shared by the
@@ -995,14 +971,7 @@ async fn build_aac_sine_audio(backend: DecoderBackend) -> RegisteredAudio<Stream
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(usize::try_from(STREAM_FRAMES).unwrap_or(0)),
-        format: SignalFormat::Aac,
-        bit_rate: Some(320_000),
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+    let url = helper.signal(SignalAsset::AAC_SINE440_60S_320K);
     let temp_dir = TestTempDir::new();
     // Keep the temp dir alive for the lifetime of the returned Audio by
     // leaking it: the source reads from `url` (an HTTP path) and only uses
