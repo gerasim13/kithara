@@ -134,8 +134,11 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
             });
         entry.hits.push(Hit {
             file: m.file,
-            line: m.range.start.line,
-            column: m.range.start.column,
+            // ast-grep counts from zero and every reader of this report counts
+            // from one. Printing its own numbers sent each hit one line above
+            // the code it is about, which is a different statement.
+            line: m.range.start.line + 1,
+            column: m.range.start.column + 1,
         });
     }
 }
@@ -295,9 +298,11 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, process::Command};
+    use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 
     use tempfile::tempdir;
+
+    use super::parse_into;
 
     fn rule_hits_at(rule_file: &str, relative_path: &str, source: &str) -> usize {
         let temp = tempdir().expect("tempdir");
@@ -338,6 +343,22 @@ mod tests {
 
     fn primitive_pool_hits(source: &str) -> usize {
         rule_hits("perf.prefer-primitive-pool.yml", source)
+    }
+
+    #[test]
+    fn a_reported_hit_names_the_line_an_editor_calls_it() {
+        let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
+        let mut by_rule = BTreeMap::new();
+        parse_into(stdout, &mut by_rule);
+        let hit = &by_rule["perf.prefer-primitive-pool"].hits[0];
+        assert_eq!(
+            hit.line, 30,
+            "ast-grep counts lines from zero, a reader from one"
+        );
+        assert_eq!(
+            hit.column, 5,
+            "ast-grep counts columns from zero, a reader from one"
+        );
     }
 
     #[test]
