@@ -1,7 +1,7 @@
 #[cfg(feature = "analysis-waveform")]
 use std::num::NonZeroU32;
 
-use kithara_audio::AudioReader;
+use kithara_audio::{AudioObserveError, AudioReader};
 #[cfg(feature = "analysis-waveform")]
 use kithara_bufpool::SamplePool;
 #[cfg(feature = "analysis-beat")]
@@ -32,7 +32,7 @@ use crate::blob::to_bytes;
 #[cfg(feature = "analysis-waveform")]
 use crate::coverage::FrameRange;
 #[cfg(feature = "analysis-waveform")]
-use crate::producer::{AnalysisProducer, Offer, ring};
+use crate::producer::{AnalysisProducer, ring};
 #[cfg(feature = "analysis-waveform")]
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
 use crate::{BeatState, TrackAnalysis};
@@ -111,7 +111,7 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
     for (at, frames) in ranges {
         assert_eq!(
             producer.offer(&sine(*frames), super::fixtures::spec(), *at),
-            Offer::Taken,
+            Ok(()),
             "the transport takes a range on its own axis"
         );
     }
@@ -170,7 +170,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
 
     assert_eq!(
         producer.offer(&sine(1024), super::fixtures::spec(), 0),
-        Offer::Taken
+        Ok(())
     );
     for _ in 0..64 {
         let _ = fed_node.tick();
@@ -218,11 +218,14 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
 
     assert_eq!(
         producer.offer(&sine(1024), super::fixtures::spec(), 0),
-        Offer::Taken
+        Ok(())
     );
     assert_eq!(
         producer.offer(&sine(1024), foreign, 4096),
-        Offer::ForeignRate,
+        Err(AudioObserveError::UnsupportedSampleRate {
+            expected: rate,
+            actual: foreign.sample_rate,
+        }),
         "the mismatch is reported to the producer"
     );
 
@@ -274,7 +277,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
     for block in 0..BLOCKS {
         assert_eq!(
             producer.offer(&pcm, super::fixtures::spec(), block * BLOCK),
-            Offer::Taken,
+            Ok(()),
             "the worker keeps the transport drained"
         );
         for _ in 0..4 {
@@ -362,9 +365,9 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     let mut at = 0;
     let refused = loop {
         match producer.offer(&pcm, super::fixtures::spec(), at) {
-            Offer::Taken => at = at.saturating_add(BLOCK),
-            Offer::Full => break FrameRange::new(at, BLOCK),
-            other => panic!("a range on the pass axis is taken or refused, got {other:?}"),
+            Ok(()) => at = at.saturating_add(BLOCK),
+            Err(AudioObserveError::Full) => break FrameRange::new(at, BLOCK),
+            Err(other) => panic!("a range on the pass axis is taken or refused, got {other:?}"),
         }
     };
 
@@ -378,7 +381,7 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
                 super::fixtures::spec(),
                 refused.start() + block * BLOCK
             ),
-            Offer::Taken,
+            Ok(()),
             "a drained transport takes the next range"
         );
     }
@@ -388,7 +391,7 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
         }
         assert_eq!(
             producer.offer(&pcm, super::fixtures::spec(), refused.start()),
-            Offer::Taken,
+            Ok(()),
             "the transport has room for the range it refused"
         );
     }
@@ -476,7 +479,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
     for block in &order {
         assert_eq!(
             producer.offer(&pcm, super::fixtures::spec(), block * BLOCK),
-            Offer::Taken,
+            Ok(()),
             "the worker keeps the transport drained"
         );
         for _ in 0..4 {

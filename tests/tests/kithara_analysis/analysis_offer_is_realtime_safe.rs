@@ -3,7 +3,8 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisProducer, AnalysisWorker, AnalyzerBuilder, Offer},
+    analysis::{AnalysisProducer, AnalysisWorker, AnalyzerBuilder},
+    audio::AudioObserveError,
     bufpool::SamplePool,
     platform::CancelToken,
     resampler::NoResamplerBackend,
@@ -27,7 +28,12 @@ fn spec(rate: NonZeroU32) -> AudioSpec {
 /// a syscall, which is the whole assertion: the body is one downmix and one
 /// copy into a transport allocated when the pass opened.
 #[rtsan_forbid_blocking]
-fn offer_under_rt(producer: &mut AnalysisProducer, pcm: &[f32], spec: AudioSpec, at: u64) -> Offer {
+fn offer_under_rt(
+    producer: &mut AnalysisProducer,
+    pcm: &[f32],
+    spec: AudioSpec,
+    at: u64,
+) -> Result<(), AudioObserveError> {
     producer.offer(pcm, spec, at)
 }
 
@@ -51,12 +57,15 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates() {
 
     assert_eq!(
         offer_under_rt(&mut producer, &pcm, spec(rate), 0),
-        Offer::Taken,
+        Ok(()),
         "a range on the pass axis is taken"
     );
     assert_eq!(
         offer_under_rt(&mut producer, &pcm, foreign, 0),
-        Offer::ForeignRate,
+        Err(AudioObserveError::UnsupportedSampleRate {
+            expected: rate,
+            actual: foreign.sample_rate,
+        }),
         "and a range on another axis is refused, reported from the same region"
     );
 }

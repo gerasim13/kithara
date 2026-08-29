@@ -18,7 +18,7 @@ use num_traits::cast::ToPrimitive;
 use super::{
     super::{
         analyzer::{AnalyzerBuilder, BeatAnalysisConfig, TrackAnalysis},
-        producer::{AnalysisProducer, Offer, ring},
+        producer::{AnalysisProducer, ring},
         worker::{AnalysisNode, Job},
     },
     fixtures::{SR, chunk, sine_from, spec},
@@ -291,7 +291,7 @@ where
         let frames = frames.to_usize().unwrap_or(0);
         assert_eq!(
             self.producer.offer(&sine_from(at, frames), spec(), at),
-            Offer::Taken,
+            Ok(()),
             "the transport takes a range on its own axis"
         );
     }

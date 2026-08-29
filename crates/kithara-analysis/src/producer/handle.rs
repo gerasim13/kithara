@@ -8,18 +8,6 @@ use tracing::debug;
 use super::ring::Writer;
 use crate::analyzer::AnalysisToken;
 
-/// What a pass did with an offered range, as far as its producer can tell.
-/// Whether the range was already covered is the pass's business and is not
-/// reported here: the producer must not wait to find out.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Offer {
-    Taken,
-    Full,
-    ForeignRate,
-    Closed,
-}
-
 /// The producer side of one analysis pass, named once when the handle is made
 /// so offering costs no lookup. A track with no open pass has no handle.
 pub struct AnalysisProducer {
@@ -41,9 +29,17 @@ impl AnalysisProducer {
 
     /// Offer one interleaved range starting at source frame `at`, downmixed to
     /// mono by the channel mean. Never blocks, allocates, or retains `pcm`.
-    pub fn offer(&mut self, pcm: &[f32], spec: AudioSpec, at: u64) -> Offer {
+    ///
+    /// # Errors
+    /// Returns the same bounded-ingest errors as [`AudioObserver::try_observe`].
+    pub fn offer(
+        &mut self,
+        pcm: &[f32],
+        spec: AudioSpec,
+        at: u64,
+    ) -> Result<(), AudioObserveError> {
         if !self.ring.is_open() {
-            return Offer::Closed;
+            return Err(AudioObserveError::Closed);
         }
         if spec.sample_rate != self.rate {
             debug!(
@@ -52,7 +48,10 @@ impl AnalysisProducer {
                 rate = spec.sample_rate.get(),
                 "analysis ingest: range measured on another axis; refused"
             );
-            return Offer::ForeignRate;
+            return Err(AudioObserveError::UnsupportedSampleRate {
+                expected: self.rate,
+                actual: spec.sample_rate,
+            });
         }
 
         let channels = usize::from(spec.channels.max(1));
@@ -62,25 +61,16 @@ impl AnalysisProducer {
             .chunks_exact(channels)
             .map(move |frame| frame.iter().sum::<f32>() * inv);
 
-        if self.ring.push(at, frames, mono) {
-            Offer::Taken
-        } else {
-            Offer::Full
-        }
+        self.ring
+            .push(at, frames, mono)
+            .then_some(())
+            .ok_or(AudioObserveError::Full)
     }
 }
 
 impl AudioObserver for AnalysisProducer {
     fn try_observe(&mut self, chunk: &AudioChunk) -> Result<(), AudioObserveError> {
-        match self.offer(&chunk.samples, chunk.spec(), chunk.meta.frame_offset) {
-            Offer::Taken => Ok(()),
-            Offer::Full => Err(AudioObserveError::Full),
-            Offer::Closed => Err(AudioObserveError::Closed),
-            Offer::ForeignRate => Err(AudioObserveError::UnsupportedSampleRate {
-                expected: self.rate,
-                actual: chunk.spec().sample_rate,
-            }),
-        }
+        self.offer(&chunk.samples, chunk.spec(), chunk.meta.frame_offset)
     }
 }
 
@@ -88,11 +78,12 @@ impl AudioObserver for AnalysisProducer {
 mod tests {
     use std::num::NonZeroU32;
 
+    use kithara_audio::AudioObserveError;
     use kithara_bufpool::SamplePool;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
-    use super::{AnalysisProducer, Offer};
+    use super::AnalysisProducer;
     use crate::producer::ring;
 
     fn spec(rate: u32, channels: u16) -> AudioSpec {
@@ -118,7 +109,7 @@ mod tests {
         let pcm = [1.0_f32, 3.0, -2.0, 0.0];
         assert_eq!(
             producer.offer(&pcm, spec(44_100, 2), 512),
-            Offer::Taken,
+            Ok(()),
             "the pass axis matches"
         );
 
@@ -138,7 +129,10 @@ mod tests {
 
         assert_eq!(
             producer.offer(&[1.0, 1.0], spec(48_000, 2), 0),
-            Offer::ForeignRate
+            Err(AudioObserveError::UnsupportedSampleRate {
+                expected: NonZeroU32::new(44_100).expect("test rate is non-zero"),
+                actual: NonZeroU32::new(48_000).expect("test rate is non-zero"),
+            })
         );
         assert_eq!(reader.pop(&mut out), None, "nothing reached the transport");
     }
@@ -147,13 +141,10 @@ mod tests {
     fn a_full_transport_reports_the_range_untaken() {
         let (mut producer, _reader) = producer(2, 4);
 
-        assert_eq!(
-            producer.offer(&[1.0, 1.0], spec(44_100, 2), 0),
-            Offer::Taken
-        );
+        assert_eq!(producer.offer(&[1.0, 1.0], spec(44_100, 2), 0), Ok(()));
         assert_eq!(
             producer.offer(&[1.0, 1.0, 1.0, 1.0], spec(44_100, 2), 1),
-            Offer::Full,
+            Err(AudioObserveError::Full),
             "a range that does not fit is refused whole"
         );
     }
@@ -170,7 +161,7 @@ mod tests {
         chunk.ensure_len(16).expect("the test pool grows to 16");
         let before = pool.stats();
 
-        assert_eq!(producer.offer(&chunk, spec(44_100, 2), 0), Offer::Taken);
+        assert_eq!(producer.offer(&chunk, spec(44_100, 2), 0), Ok(()));
 
         let after = pool.stats();
         assert_eq!(
@@ -200,15 +191,12 @@ mod tests {
     #[kithara::test]
     fn a_pass_that_ended_refuses_as_closed() {
         let (mut producer, reader) = producer(64, 4);
-        assert_eq!(
-            producer.offer(&[1.0, 1.0], spec(44_100, 2), 0),
-            Offer::Taken
-        );
+        assert_eq!(producer.offer(&[1.0, 1.0], spec(44_100, 2), 0), Ok(()));
 
         drop(reader);
         assert_eq!(
             producer.offer(&[1.0, 1.0], spec(44_100, 2), 1),
-            Offer::Closed,
+            Err(AudioObserveError::Closed),
             "a pass that dropped its half cannot be written to"
         );
     }
@@ -220,7 +208,7 @@ mod tests {
         let mut out = pool.get_with(Vec::clear);
 
         let pcm = [0.25_f32, -0.5, 0.75];
-        assert_eq!(producer.offer(&pcm, spec(44_100, 1), 0), Offer::Taken);
+        assert_eq!(producer.offer(&pcm, spec(44_100, 1), 0), Ok(()));
 
         assert_eq!(reader.pop(&mut out), Some(0));
         assert_eq!(
