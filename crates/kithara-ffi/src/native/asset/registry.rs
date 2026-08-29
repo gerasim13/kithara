@@ -72,20 +72,10 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
 
+    use unimock::Unimock;
+
     use super::*;
     use crate::layout::{FfiAssetResource, FfiAssetSource};
-
-    struct FixedLayout;
-
-    impl FfiAssetLayout for FixedLayout {
-        fn path(&self, _resource: FfiAssetResource) -> String {
-            "resource".to_string()
-        }
-
-        fn root(&self, _source: FfiAssetSource) -> String {
-            "root".to_string()
-        }
-    }
 
     struct ReentrantLayout {
         dropped: Arc<AtomicBool>,
@@ -105,7 +95,7 @@ mod tests {
     impl Drop for ReentrantLayout {
         fn drop(&mut self) {
             if let Some(registry) = self.registry.upgrade() {
-                registry.register(FfiAssetLayoutTarget::Hls, Arc::new(FixedLayout));
+                registry.register(FfiAssetLayoutTarget::Hls, Arc::new(Unimock::new(())));
             }
             self.dropped.store(true, Ordering::Release);
         }
@@ -123,7 +113,7 @@ mod tests {
             }),
         );
 
-        registry.register(FfiAssetLayoutTarget::File, Arc::new(FixedLayout));
+        registry.register(FfiAssetLayoutTarget::File, Arc::new(Unimock::new(())));
 
         assert!(dropped.load(Ordering::Acquire));
     }
