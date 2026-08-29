@@ -153,11 +153,11 @@ e2e-resamplers *ARGS:
 # assert is that a run did the thing it claims to measure, so the numbers stay
 # a report and the censuses become a gate.
 #
-# The last step builds the example with the toolkit's default features - iced
-# alone, no retained host - and runs its own tests there. Everything above is
-# one feature set, so a page, a walk or a census that only holds when both
-# hosts are compiled in would pass all of it and fail the first consumer who
-# takes the toolkit without masonry.
+# The last step builds the gallery's suite with the toolkit's default features
+# - iced alone, no retained host - and runs it there. Everything above is one
+# feature set, so a page, a walk or a census that only holds when both hosts
+# are compiled in would pass all of it and fail the first consumer who takes
+# the toolkit without masonry.
 ui:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -179,7 +179,7 @@ ui:
     KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
       KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-app/assets/ui/parity-budget.txt \
       "${gallery[@]}"
-    cargo test -p kithara-ui --example gallery --features kithara-ui/capture --profile test-release
+    cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
 
 # The same pages through a real window, which is the only one of the three
 # captures that needs a display. Its job is to say whether the headless iced
