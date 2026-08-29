@@ -516,8 +516,7 @@ fn encode_packaged_variant(
     variant: &ResolvedPackagedVariant,
     segment_frames: usize,
 ) -> Result<EncodedTrack, EncodeError> {
-    let encoder = EncoderFactory::create_packaged(variant.codec)?;
-    let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
+    let frame_samples = EncoderFactory::frame_samples(variant.codec)?;
     let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
         packaged_frame_layout(packaged, frame_samples, segment_frames);
 
@@ -530,8 +529,8 @@ fn encode_packaged_variant(
     let content_length = Finite::new(content_frames);
 
     let encode = |pcm: &dyn PcmSource| {
-        encoder.encode_packaged(
-            PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        EncoderFactory::encode_packaged(
+            &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
                 .pcm(pcm)
                 .packets_per_segment(packets_per_segment)
                 .media_info(media_info.clone())

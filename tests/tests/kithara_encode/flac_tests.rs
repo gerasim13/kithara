@@ -34,7 +34,7 @@ fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
         .build();
 
     let encoded = EncoderFactory::encode_packaged(
-        PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
             .media_info(media_info)
             .pcm(&pcm)
             .timescale(SAMPLE_RATE)

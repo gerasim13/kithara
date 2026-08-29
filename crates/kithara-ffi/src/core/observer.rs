@@ -1,26 +1,15 @@
 use crate::types::{FfiItemEvent, FfiPlayerEvent};
 
-/// Local shim so `#[kithara::mock]` resolves on wasm, which does not
-/// depend on the `kithara` facade crate (only on `kithara-test-macros`).
-/// On native the real `kithara` crate is in scope and provides the macro,
-/// so the shim is wasm-only to avoid an ambiguous-name conflict.
-#[cfg(target_arch = "wasm32")]
-mod kithara {
-    pub(crate) use kithara_test_macros::mock;
-}
-
 /// Receives player-level state changes from Rust.
 ///
 /// All calls happen on an arbitrary background thread.
 /// Platform bindings must dispatch to the UI thread as needed.
-#[kithara::mock(api = PlayerObserverMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait PlayerObserver: Send + Sync {
     fn on_event(&self, event: FfiPlayerEvent);
 }
 
 /// Receives item-level state changes from Rust.
-#[kithara::mock(api = ItemObserverMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait ItemObserver: Send + Sync {
     fn on_event(&self, event: FfiItemEvent);
@@ -61,8 +50,6 @@ pub const AUTH_TOKEN_HEADER: &str = "X-Auth-Token";
 
 #[cfg(test)]
 mod tests {
-    use unimock::Unimock;
-
     use super::*;
 
     fn assert_send_sync<T: Send + Sync + ?Sized>() {}
@@ -72,12 +59,5 @@ mod tests {
         assert_send_sync::<dyn PlayerObserver>();
         assert_send_sync::<dyn ItemObserver>();
         assert_send_sync::<dyn SeekCallback>();
-    }
-
-    #[kithara::test]
-    fn observer_mock_apis_are_generated() {
-        let _ = PlayerObserverMock::on_event;
-        let _ = ItemObserverMock::on_event;
-        let _ = Unimock::new(());
     }
 }

@@ -254,14 +254,12 @@ fn encode_compressed_payload(
         spec.length,
     );
     let target = encode_target(format);
-    let encoder = EncoderFactory::create_bytes(target).ok()?;
-    let mut encoded = encoder
-        .encode_bytes(BytesEncodeRequest {
-            target,
-            pcm: &pcm,
-            bit_rate: spec.bit_rate,
-        })
-        .ok()?;
+    let mut encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        target,
+        pcm: &pcm,
+        bit_rate: spec.bit_rate,
+    })
+    .ok()?;
     if format == SignalFormat::Flac
         && let Some(total_frames) = spec.length.total_frames()
     {

@@ -102,11 +102,10 @@ streaming adapter used by beat analysis in `kithara-analysis`.
 
 `apple::AppleAudioConverterBackend` is a standalone CoreAudio `AudioConverter`
 backend compiled on macOS/iOS without a cargo feature. It advertises
-`FIXED_RATIO | REPORTS_LATENCY | STANDALONE` and takes an
-`AudioConverterFactory` through `apple::AppleAudioConverterConfig`;
-`apple::AudioToolboxConverterFactory` is the concrete factory and uses
-`kithara-apple` wrappers rather than local AudioToolbox FFI. The crate root
-denies unsafe code, so unavoidable Apple unsafe lives in `kithara-apple`.
+`FIXED_RATIO | REPORTS_LATENCY | STANDALONE`, has no configuration of its own,
+and builds `apple::AppleResampler` through `kithara-apple` wrappers rather than
+local AudioToolbox FFI. The crate root denies unsafe code, so unavoidable Apple
+unsafe lives in `kithara-apple`.
 Codec-embedded Apple decode remains in `kithara-decode` but uses the same shared
 Apple ABI crate.
 

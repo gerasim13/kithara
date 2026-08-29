@@ -18,7 +18,7 @@ fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
     ];
 
     for target in cases {
-        let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+        let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
             target,
             pcm: &pcm,
             bit_rate: None,
@@ -53,7 +53,7 @@ fn encode_bytes_honors_explicit_bit_rate_across_lossy_range() {
 
     for target in lossy_targets {
         for bit_rate in bit_rates {
-            let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+            let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
                 target,
                 pcm: &pcm,
                 bit_rate: Some(bit_rate),

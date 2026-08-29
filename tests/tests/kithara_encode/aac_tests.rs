@@ -21,7 +21,7 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
         .build();
 
     let encoded = EncoderFactory::encode_packaged(
-        PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
             .media_info(media_info)
             .pcm(&pcm)
             .timescale(SAMPLE_RATE)
@@ -80,7 +80,7 @@ fn encode_packaged_aac_he_reuses_injected_byte_pool() {
     let byte_pool = BytePool::new(1, 0);
     let encode = || {
         EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(byte_pool.clone(), SamplePool::default())
+            &PackagedEncodeRequest::for_pools(byte_pool.clone(), SamplePool::default())
                 .pcm(&pcm)
                 .media_info(
                     MediaInfo::builder()
@@ -125,7 +125,7 @@ fn encode_packaged_aac_lc_reuses_injected_conversion_pools() {
     let sample_pool = SamplePool::new(1, 0);
     let encode = || {
         EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(byte_pool.clone(), sample_pool.clone())
+            &PackagedEncodeRequest::for_pools(byte_pool.clone(), sample_pool.clone())
                 .pcm(&pcm)
                 .media_info(
                     MediaInfo::builder()

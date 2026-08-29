@@ -22,7 +22,7 @@ use super::{
 use crate::{
     HlsResult,
     config::{HlsConfig, SizeProbeMethod},
-    playlist::{PlaylistAccess, PlaylistState},
+    playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };
