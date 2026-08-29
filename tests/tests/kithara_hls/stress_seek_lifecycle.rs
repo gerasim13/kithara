@@ -404,8 +404,8 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
             let first_phase = phase_from_f32(buf[0]);
             if let Some(pp) = prev_phase {
-                let next_asc = (pp + 1) % SawWav::SAW_PERIOD;
-                let next_desc = (pp + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let next_asc = (pp + 1) % signal::SAW_PERIOD;
+                let next_desc = (pp + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if first_phase != next_asc && first_phase != next_desc {
                     continuity_breaks += 1;
                     if continuity_breaks <= 5 {
@@ -424,8 +424,8 @@ async fn stress_seek_lifecycle_with_zero_reset(
             for f in 1..frames {
                 let p0 = phase_from_f32(buf[(f - 1) * channels]);
                 let p1 = phase_from_f32(buf[f * channels]);
-                let next_asc = (p0 + 1) % SawWav::SAW_PERIOD;
-                let next_desc = (p0 + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let next_asc = (p0 + 1) % signal::SAW_PERIOD;
+                let next_desc = (p0 + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if p1 != next_asc && p1 != next_desc {
                     continuity_breaks += 1;
                     if continuity_breaks <= 5 {

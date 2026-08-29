@@ -76,12 +76,17 @@ fn main() {
     let mut hasher = DefaultHasher::new();
 
     // Hash ONLY the spec→bytes transformation code: the encoders, the fMP4
-    // muxer, the packaged-variant encode glue, and the signal encode route.
+    // muxer, the waveform vocabulary the glue renders from, the packaged-variant
+    // encode glue, and the signal encode route.
     // Spec changes flow into per-entry cache KEYS, and server delivery code
     // (routes/behavior, throttling, playlists) never changes encoded bytes —
     // hashing all of `src/native` forced a cold cache (and per-test ffmpeg
     // re-encodes blowing test budgets) on every test-server edit.
-    for dir in ["../crates/kithara-encode/src", "src/native/fmp4"] {
+    for dir in [
+        "../crates/kithara-encode/src",
+        "../crates/kithara-test-fixtures/src/signal",
+        "src/native/fmp4",
+    ] {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut hasher);
     }

@@ -399,7 +399,7 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
                     let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                    let expected = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                     if curr_phase != expected {
                         break_count += 1;
                     }
@@ -498,8 +498,8 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
                 for f in 1..frames {
                     let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
                     let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-                    let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                    let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
+                    let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                     if curr_phase != expected_asc && curr_phase != expected_desc {
                         continuity_errors += 1;
                         if continuity_errors <= 3 {

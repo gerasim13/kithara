@@ -1,4 +1,4 @@
-pub use kithara_test_fixtures::signal::SAW_PERIOD;
+use kithara_test_fixtures::signal;
 
 /// Detected direction of a saw-tooth signal in decoded PCM.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -18,11 +18,11 @@ pub fn phase_from_f32(sample: f32) -> usize {
     ((i16_val + 32768) & 0xFFFF) as usize
 }
 
-/// Circular distance between two phases modulo [`SAW_PERIOD`].
+/// Circular distance between two phases modulo [`signal::SAW_PERIOD`].
 #[must_use]
 pub fn phase_distance(a: usize, b: usize) -> usize {
     let d = a.abs_diff(b);
-    d.min(SAW_PERIOD - d)
+    d.min(signal::SAW_PERIOD - d)
 }
 
 /// Detect a saw-tooth direction from a buffer of interleaved `f32` samples.
@@ -40,8 +40,8 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
     for frame in 0..check_count {
         let current = phase_from_f32(samples[frame * channels]);
         let next = phase_from_f32(samples[(frame + 1) * channels]);
-        let expected_asc = (current + 1) % SAW_PERIOD;
-        let expected_desc = (current + SAW_PERIOD - 1) % SAW_PERIOD;
+        let expected_asc = (current + 1) % signal::SAW_PERIOD;
+        let expected_desc = (current + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
 
         if next == expected_asc {
             ascending_votes += 1;
@@ -68,7 +68,7 @@ mod tests {
     #[kithara::test]
     fn phase_helpers_work() {
         assert_eq!(phase_from_f32(-1.0), 0);
-        assert_eq!(phase_distance(0, SAW_PERIOD - 1), 1);
+        assert_eq!(phase_distance(0, signal::SAW_PERIOD - 1), 1);
         assert_eq!(
             detect_direction(&[-1.0, -1.0, -0.9999695, -0.9999695], 2),
             SignalDirection::Ascending

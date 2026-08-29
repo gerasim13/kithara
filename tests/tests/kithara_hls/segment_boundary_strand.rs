@@ -43,7 +43,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    SAW_PERIOD, TestTempDir,
+    TestTempDir,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
 };
@@ -55,7 +55,7 @@ use crate::common::test_defaults::frames_in_segments;
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 /// Smaller segments than the 200 KB default so the boundary is reached
-/// quickly and a single saw period (`SAW_PERIOD` frames) spans many
+/// quickly and a single saw period (`signal::SAW_PERIOD` frames) spans many
 /// segments — the saw never wraps within one decoded run, so a strand is
 /// unambiguous.
 const SEGMENT_SIZE: usize = 32_768;
@@ -242,7 +242,7 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
 
     // Reconstruct the decoded saw-tooth in emission order (one value per
     // frame, channel 0) and assert continuity: each frame's phase is the
-    // previous +1 mod SAW_PERIOD. A read-ahead strand swallows ~640 frames
+    // previous +1 mod signal::SAW_PERIOD. A read-ahead strand swallows ~640 frames
     // at the boundary, producing exactly one large phase jump.
     let channels = CHANNELS as usize;
     let mut samples: Vec<f32> = Vec::new();
@@ -261,11 +261,11 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     for w in samples.windows(2) {
         let prev = phase_from_f32(w[0]);
         let curr = phase_from_f32(w[1]);
-        let expected_asc = (prev + 1) % SAW_PERIOD;
+        let expected_asc = (prev + 1) % signal::SAW_PERIOD;
         if curr != expected_asc {
             breaks += 1;
             let jump = curr.abs_diff(prev);
-            worst_jump = worst_jump.max(jump.min(SAW_PERIOD - jump));
+            worst_jump = worst_jump.max(jump.min(signal::SAW_PERIOD - jump));
         }
     }
 

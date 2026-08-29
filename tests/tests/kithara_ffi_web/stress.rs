@@ -13,10 +13,11 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SAW_PERIOD, TestServerHelper, auto,
+    HlsFixtureBuilder, TestServerHelper, auto,
     fixture_protocol::{DataMode, InitMode},
     phase_distance, phase_from_f32,
 };
+use kithara_test_fixtures::signal;
 use tracing::{info, warn};
 use url::Url;
 
@@ -224,7 +225,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
             }
             let phase = phase_from_f32(buf[f * channels]);
             if let Some(prev) = prev_phase {
-                let expected = (prev + 1) % SAW_PERIOD;
+                let expected = (prev + 1) % signal::SAW_PERIOD;
                 if phase != expected {
                     discontinuities += 1;
                     if phase < prev {
@@ -360,7 +361,7 @@ async fn stress_read_samples_integrity() {
 
         if let Some(prev_phase) = prev_last_phase {
             let first_phase = phase_from_f32(buf[0]);
-            let expected = (prev_phase + 1) % SAW_PERIOD;
+            let expected = (prev_phase + 1) % signal::SAW_PERIOD;
             if first_phase != expected {
                 continuity_errors += 1;
                 if continuity_errors <= 3 {
@@ -376,7 +377,7 @@ async fn stress_read_samples_integrity() {
             for f in 1..frames {
                 let prev = phase_from_f32(buf[(f - 1) * channels]);
                 let curr = phase_from_f32(buf[f * channels]);
-                let expected = (prev + 1) % SAW_PERIOD;
+                let expected = (prev + 1) % signal::SAW_PERIOD;
                 if curr != expected {
                     continuity_errors += 1;
                     if continuity_errors <= 3 {
@@ -487,7 +488,7 @@ async fn stress_seek_and_read() {
                 for f in 1..frames {
                     let prev = phase_from_f32(buf[(f - 1) * channels]);
                     let curr = phase_from_f32(buf[f * channels]);
-                    if curr != (prev + 1) % SAW_PERIOD {
+                    if curr != (prev + 1) % signal::SAW_PERIOD {
                         continuity_errors += 1;
                     }
                 }
@@ -495,7 +496,7 @@ async fn stress_seek_and_read() {
 
             if !position_checked && frames > 0 {
                 let expected_frame = (pos_secs * spec.sample_rate.get() as f64).round() as usize;
-                let expected_phase = expected_frame % SAW_PERIOD;
+                let expected_phase = expected_frame % signal::SAW_PERIOD;
                 let actual_phase = phase_from_f32(buf[0]);
                 let dist = phase_distance(actual_phase, expected_phase);
                 if dist > 1200 {
@@ -624,7 +625,7 @@ async fn stress_rapid_seeks_must_not_stall() {
         let frames = n / channels;
         if frames > 0 {
             let expected_frame = (pos_secs * sample_rate as f64).round() as usize;
-            let expected_phase = expected_frame % SAW_PERIOD;
+            let expected_phase = expected_frame % signal::SAW_PERIOD;
             let actual_phase = phase_from_f32(buf[0]);
             let dist = phase_distance(actual_phase, expected_phase);
             if dist > 1200 {
@@ -797,7 +798,7 @@ async fn stress_seek_to_zero_after_pressure() {
 
         if let Some(prev_phase) = prev_last_phase {
             let first_phase = phase_from_f32(buf[0]);
-            if first_phase != (prev_phase + 1) % SAW_PERIOD {
+            if first_phase != (prev_phase + 1) % signal::SAW_PERIOD {
                 continuity_errors += 1;
             }
         }
@@ -806,7 +807,7 @@ async fn stress_seek_to_zero_after_pressure() {
             for f in 1..frames {
                 let prev = phase_from_f32(buf[(f - 1) * channels]);
                 let curr = phase_from_f32(buf[f * channels]);
-                if curr != (prev + 1) % SAW_PERIOD {
+                if curr != (prev + 1) % signal::SAW_PERIOD {
                     continuity_errors += 1;
                 }
             }
@@ -898,9 +899,9 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
         .expect("seek near start must succeed");
 
     let expected_frame = (near_start_secs * spec.sample_rate.get() as f64).round() as usize;
-    let expected_phase = expected_frame % SAW_PERIOD;
+    let expected_phase = expected_frame % signal::SAW_PERIOD;
     let seg1_start_frames = 200_000 / (channels * 2);
-    let seg1_start_phase = seg1_start_frames % SAW_PERIOD;
+    let seg1_start_phase = seg1_start_frames % signal::SAW_PERIOD;
 
     let mut checked = false;
     for _ in 0..200 {

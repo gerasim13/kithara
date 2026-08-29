@@ -17,9 +17,6 @@ impl SawWav {
     /// Bytes per mono PCM sample (16-bit signed).
     const BYTES_PER_SAMPLE: usize = 2;
 
-    /// Saw period in PCM frames.
-    pub const SAW_PERIOD: usize = signal::SAW_PERIOD;
-
     /// Standard defaults: 44.1 kHz stereo, 200 KB segments (native) / 32 KB (wasm).
     pub const DEFAULT: Self = Self {
         sample_rate: 44100,
