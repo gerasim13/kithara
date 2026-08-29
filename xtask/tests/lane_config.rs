@@ -146,10 +146,32 @@ fn xtask_pipeline_kind_names() -> Vec<String> {
         .collect()
 }
 
+fn xtask_lane_role_names() -> Vec<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let source = fs::read_to_string(root.join("xtask/src/config.rs"))
+        .expect("the xtask config source is readable");
+    let start = source
+        .find("pub(crate) const LANE_ROLES")
+        .expect("LANE_ROLES is declared");
+    let body = &source[start..];
+    // Skip past the `: [&str; 5]` type annotation first, so the brackets found
+    // below are the array literal's, not the type's.
+    let assigned = body.find('=').expect("LANE_ROLES is assigned a value");
+    let body = &body[assigned..];
+    let open = body.find('[').expect("LANE_ROLES is an array");
+    let close = body.find(']').expect("LANE_ROLES array is closed");
+    body[open + 1..close]
+        .split(',')
+        .map(|entry| entry.trim().trim_matches('"').to_owned())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
 // A lane naming a kind that no pipeline can be is a lane that never runs, and
 // nothing else would say so.
 #[test]
-#[ignore = "lanes gain roles in the declaration task"]
 fn every_declared_lane_names_a_known_role_and_known_kinds() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -162,7 +184,7 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
         .as_table()
         .expect("CI lanes are a table");
     let kinds = xtask_pipeline_kind_names();
-    let roles = ["gate", "platforms", "deep", "quality", "release"];
+    let roles = xtask_lane_role_names();
 
     for (name, lane) in lanes {
         let role = lane
@@ -170,7 +192,7 @@ fn every_declared_lane_names_a_known_role_and_known_kinds() {
             .and_then(toml::Value::as_str)
             .unwrap_or_else(|| panic!("lane `{name}` must name a role"));
         assert!(
-            roles.contains(&role),
+            roles.contains(&role.to_owned()),
             "lane `{name}` has unknown role `{role}`"
         );
         for field in ["kinds", "kinds_github"] {

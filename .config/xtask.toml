@@ -842,6 +842,10 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
 cache_group = "linux"
@@ -859,6 +863,10 @@ steps = [
     "shear",
   ], label = "unused crate dependencies" },
 ]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
 
 [ext.ci.lanes.deps-features]
 cache_group = "linux"
@@ -867,6 +875,10 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 180
 
 [ext.ci.lanes.deps-semver]
 cache_group = "linux"
@@ -875,6 +887,11 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+fetch_depth = 0
 
 # One browser per job: the two engines fail for unrelated reasons, and Chromium
 # owns the WebCodecs target while Firefox keeps the full integration suite. Both
@@ -902,6 +919,10 @@ steps = [
     "webcodecs",
   ], label = "Chromium WebCodecs tests" },
 ]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
 
 [ext.ci.lanes.web-firefox]
 cache_group = "linux"
@@ -910,6 +931,10 @@ os = "linux"
 tools = ["firefox", "geckodriver", "just"]
 program = "just"
 steps = [{ args = ["test", "wasm", "firefox"], label = "Firefox WASM tests" }]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
 
 [ext.ci.lanes.web-size]
 cache_group = "linux"
@@ -924,6 +949,11 @@ steps = [
     "size-check",
   ], label = "WASM size check" },
 ]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
+artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 
 [ext.ci.lanes.deep-rtsan]
 cache_group = "macos"
@@ -949,6 +979,10 @@ steps = [
     "rtsan-hls",
   ], label = "real-time sanitizer suite" },
 ]
+role = "gate"
+kinds = ["nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 120
 
 [ext.ci.lanes.deep-perf]
 cache_group = "macos"
@@ -965,6 +999,9 @@ steps = [
     "perf",
   ], label = "performance profile" },
 ]
+role = "deep"
+kinds = ["nightly"]
+timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
 cache_group = "macos"
@@ -973,6 +1010,9 @@ os = "macos"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
+role = "deep"
+kinds = ["nightly"]
+timeout_minutes = 120
 
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
@@ -1000,6 +1040,16 @@ steps = [
     "gitleaks-report.json",
   ], label = "repository secret scan" },
 ]
+role = "gate"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 15
 
 [ext.ci.lanes.linux-check]
 cache_group = "linux"
@@ -1008,6 +1058,16 @@ os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
+role = "gate"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 [ext.ci.lanes.linux-wasm]
 cache_group = "linux"
@@ -1016,6 +1076,16 @@ os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
+role = "gate"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 # Every Linux test lane caps Cargo at two build jobs. The container has five
 # CPUs and under eight gigabytes, so five compilations at once put the peak past
@@ -1036,6 +1106,10 @@ steps = [
     "ci",
   ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
 
 [ext.ci.lanes.linux-doc]
 cache_group = "linux"
@@ -1050,6 +1124,10 @@ steps = [
     "--lane=doc",
   ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-loom]
 cache_group = "linux"
@@ -1064,6 +1142,10 @@ steps = [
     "--lane=loom",
   ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
 cache_group = "linux"
@@ -1078,6 +1160,10 @@ steps = [
     "--lane=broadcast",
   ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-integration-regressions]
 cache_group = "linux"
@@ -1092,6 +1178,10 @@ steps = [
     "--lane=integration-regressions",
   ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 # The lane name is the only place the browser is decided; the harness lane it
 # calls carries that name into the run, so a run started here and a run started
@@ -1109,6 +1199,10 @@ steps = [
     "--lane=selenium-firefox",
   ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 # Instrumented test binaries are large and the workspace has twenty of them, so
 # Cargo reaches the link step with several `ld` processes at once. In a
@@ -1131,6 +1225,9 @@ steps = [
     "coverage",
   ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
+role = "deep"
+kinds = ["nightly"]
+timeout_minutes = 90
 
 # Every Windows lane sets the same two variables. `bungee-sys` builds through
 # the `cmake` crate, which asks for the Visual Studio generator and hard-codes
@@ -1171,6 +1268,9 @@ steps = [
     "aarch64-pc-windows-msvc",
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static", CFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h", CXXFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h" } },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 120
 
 [ext.ci.lanes.windows-x64]
 cache_group = "windows"
@@ -1192,6 +1292,9 @@ steps = [
     "x86_64-pc-windows-msvc",
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 120
 
 # The x86_64 suite used to run here too, on a host with no x86_64 in it: every
 # test reported on the emulator as much as on the commit, and took the time to
@@ -1224,6 +1327,9 @@ steps = [
     "x86_64-pc-windows-msvc",
   ], label = "Windows build", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 120
 
 [ext.ci.lanes.android-build]
 cache_group = "host"
@@ -1238,6 +1344,10 @@ steps = [
     "build",
   ], label = "Android native build" },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["nightly"]
+timeout_minutes = 45
 
 # The emulator, the connected suite, and the shutdown are one job: the tests
 # only mean anything while the device this job booted is still alive, and a
@@ -1269,6 +1379,10 @@ steps = [
     "--skip-build",
   ], label = "Android connected tests" },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["nightly"]
+timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a
 # predecessor. Each one is scheduled on its own and can be retried alone, so the
@@ -1306,6 +1420,17 @@ steps = [
     "fast",
   ] } },
 ]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 [ext.ci.lanes.apple-msrv]
 cache_group = "macos"
@@ -1324,6 +1449,9 @@ steps = [
     "workspace",
   ], label = "MSRV workspace check", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 60
 
 # A review ref asks the same question the default branch asks: what a reviewer
 # would have to fix anyway is cheaper to learn before merge. Quarantine keeps
@@ -1355,6 +1483,17 @@ steps = [
     "ci",
   ] } },
 ]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 # The off-flash suite owns its own target directory: the two gates differ by
 # feature, and sharing one directory makes each run rebuild what the other just
@@ -1379,6 +1518,9 @@ steps = [
     "ci",
   ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "target-flash-off" } },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 60
 
 # End-to-end playback across the resampler axis. Each lane pins one source-rate
 # conversion shape, and a change to decode, blending or output can break one of
@@ -1419,6 +1561,9 @@ steps = [
     "ci",
   ], label = "Apple end-to-end suite" },
 ]
+role = "platforms"
+kinds = ["branch", "merge-request", "nightly"]
+timeout_minutes = 90
 
 [ext.ci.lanes.apple-xcframework]
 cache_group = "macos"
@@ -1440,6 +1585,17 @@ steps = [
     "debug",
   ], label = "Apple XCFramework" },
 ]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 [ext.ci.lanes.apple-ios]
 cache_group = "macos"
@@ -1459,6 +1615,16 @@ steps = [
     "ios",
   ], label = "iOS Simulator build", env = { KITHARA_LOCAL_DEV = "1" } },
 ]
+role = "platforms"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 # Safari goes through the repository's own wasm recipe for the same reason the
 # other browsers do: the target rebuilds std for shared memory, and only the
@@ -1477,6 +1643,9 @@ steps = [
     "safari",
   ], label = "Safari WASM tests" },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 60
 
 
 [ext.publish]
