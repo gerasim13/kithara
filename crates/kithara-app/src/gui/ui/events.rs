@@ -385,7 +385,7 @@ mod tests {
         assert!(cache.menu.are_layouts_open());
 
         assert!(matches!(
-            press_menu(&mut cache, "layout-1"),
+            press_menu(&mut cache, "layout-1/apply"),
             Some(Message::PauseHiddenDecks)
         ));
         assert_eq!(cache.layout(), DeckLayout::Single);
@@ -394,7 +394,7 @@ mod tests {
             "applying a layout leaves the menu where it was"
         );
 
-        press_menu(&mut cache, "layout-2");
+        press_menu(&mut cache, "layout-2/apply");
         assert_eq!(cache.layout(), DeckLayout::Dual);
 
         press_menu(&mut cache, "layouts-head");

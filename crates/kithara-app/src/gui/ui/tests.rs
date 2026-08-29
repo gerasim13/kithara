@@ -1358,8 +1358,8 @@ fn the_bar_carries_the_app_menu() {
             ("bar/menu/burger", "ui.menu.toggle"),
             ("bar/menu/header-close", "ui.menu.close"),
             ("bar/menu/layouts-head", "ui.menu.toggle_group@group=lay"),
-            ("bar/menu/layout-1", "ui.layout.apply@layout=1"),
-            ("bar/menu/layout-2", "ui.layout.apply@layout=2"),
+            ("bar/menu/layout-1/apply", "ui.layout.apply@layout=1"),
+            ("bar/menu/layout-2/apply", "ui.layout.apply@layout=2"),
             ("bar/menu/full-screen", "ui.window.toggle_full_screen"),
             ("bar/menu/cast", "broadcast.toggle"),
         ] {

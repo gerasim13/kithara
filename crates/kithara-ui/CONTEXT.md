@@ -1706,8 +1706,6 @@ retained snapshot is unchanged, because iced clears its cached overlay on base c
 it only during revalidation. General retained layering and cross-backend base/popup ordering belong
 to the M7 root flip.
 
-## Shipped App Menu
-
 ## Shipped Documents
 
 `builtin::resolver()` answers for every document below, and each exists in exactly one copy.
@@ -1716,7 +1714,12 @@ to the M7 root flip.
   burger cell and the popover behind it. A host of `MICRO_PRESET` owes the window-manager endpoints
   the menu names: the window list, the per-window module flags and the saved layouts. Each row kind
   is one template taken as often as the menu needs through `Include`, and each instance's control
-  paths are `app-menu/<include id>/<node id>`, so a template's own ids stay plain.
+  paths are `app-menu/<include id>/<node id>`, so a template's own ids stay plain. `kithara-app`
+  ships a menu of its own rather than taking this one: it is a single-window host and names none of
+  the window-manager endpoints this menu needs, and a document naming an endpoint its host has not
+  registered is a hard `UnknownEndpoint`. The row templates are shared even so — the app's menu
+  includes `app-menu/layout-row.kmodule.ron` and `app-menu/module-cell.kmodule.ron` from here
+  through its overlay resolver — so the fork is the menu's shape, not its rows.
 - `assets/modules/deck-micro.kmodule.ron` is the `MICRO_PRESET` window and
   `assets/modules/deck-micro/bar.kmodule.ron` its bar: a `Column` measuring `Height` over a `Row`
   measuring `Width`, so the window takes the deck and the library as it grows taller and the bar
