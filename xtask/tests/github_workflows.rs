@@ -1105,7 +1105,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
 
 #[test]
 fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
-    let workflow = github_workflow("schedule.yml");
+    let workflow = github_workflow("dispatch.yml");
     let stress = workflow_job(workflow_jobs(&workflow), "stress");
     assert_eq!(
         mapping_field(stress, "uses").as_str(),
@@ -1117,11 +1117,101 @@ fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
-        "github.event.schedule == '0 3 * * *'",
+        "(inputs.kind || 'nightly') == 'nightly'",
     ] {
         assert!(
             condition.contains(contract),
             "scheduled stress omits `{contract}`"
+        );
+    }
+}
+
+/// Eleven crons fired the same workflow so that one job ran and ten skipped,
+/// and the collector then reported on each nearly-empty run. What a night runs
+/// is a property of the lanes, not of which cron fired, so there is one cron
+/// per cadence and the cadence is an input every job reads the same way.
+#[test]
+fn the_dispatcher_has_one_cron_per_cadence() {
+    let workflow = github_workflow("dispatch.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let triggers = mapping_field(root, "on")
+        .as_mapping()
+        .expect("on is a mapping");
+
+    let crons: Vec<&str> = mapping_field(triggers, "schedule")
+        .as_sequence()
+        .expect("schedule is a sequence")
+        .iter()
+        .map(|entry| {
+            mapping_field(
+                entry.as_mapping().expect("a schedule entry is a mapping"),
+                "cron",
+            )
+            .as_str()
+            .expect("a cron is a string")
+        })
+        .collect();
+    assert_eq!(crons, ["0 1 * * *", "0 8 * * 6"]);
+
+    // Started by hand, the cadence is chosen rather than inferred, and `only`
+    // is how one lane runs on its own instead of a role's whole selection.
+    let inputs = mapping_field(
+        mapping_field(triggers, "workflow_dispatch")
+            .as_mapping()
+            .expect("workflow_dispatch is a mapping"),
+        "inputs",
+    )
+    .as_mapping()
+    .expect("dispatch inputs are a mapping");
+    let kind = mapping_field(inputs, "kind")
+        .as_mapping()
+        .expect("kind is a mapping");
+    assert_eq!(mapping_field(kind, "type").as_str(), Some("choice"));
+    assert_eq!(
+        mapping_field(kind, "options")
+            .as_sequence()
+            .expect("kind options are a sequence")
+            .iter()
+            .map(|option| option.as_str().expect("an option is a string"))
+            .collect::<Vec<_>>(),
+        ["nightly", "weekly"]
+    );
+    assert!(inputs.contains_key("only"), "one lane runs on its own");
+
+    // Every role reaches the fleet through the one fan-out, and none of them
+    // reads the weekly cron differently from the others: a cadence resolved
+    // two ways is a night that half-runs.
+    let jobs = workflow_jobs(&workflow);
+    let cadence =
+        "${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}";
+    for role in ["gate", "platforms", "deep", "quality"] {
+        let job = workflow_job(jobs, role);
+        assert_eq!(
+            mapping_field(job, "uses").as_str(),
+            Some("./.github/workflows/run.yml"),
+            "role `{role}` runs through the fan-out"
+        );
+        let with = mapping_field(job, "with")
+            .as_mapping()
+            .expect("a role call passes inputs");
+        assert_eq!(mapping_field(with, "role").as_str(), Some(role));
+        assert_eq!(mapping_field(with, "kind").as_str(), Some(cadence));
+        assert_eq!(
+            mapping_field(with, "only").as_str(),
+            Some("${{ inputs.only || '' }}")
+        );
+    }
+
+    // A copy of the repository without the runners spends a scheduled run
+    // doing nothing, rather than a machine's night doing nothing.
+    for name in workflow_job_names(jobs) {
+        let job = workflow_job(jobs, &name);
+        let condition = mapping_field(job, "if")
+            .as_str()
+            .expect("every dispatched job names the pool it needs");
+        assert!(
+            condition.contains("RUNNER_LABELS != ''") || condition.contains("STRESS_ENABLED"),
+            "job `{name}` starts without checking that a pool serves it"
         );
     }
 }
@@ -1485,8 +1575,8 @@ fn block_value(block: &syn::Block) -> Option<&Expr> {
 }
 
 #[test]
-fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
-    let workflow = github_workflow("nightly-report.yml");
+fn the_dispatch_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
+    let workflow = github_workflow("report.yml");
     assert_no_key(&workflow, "continue-on-error");
     let root = workflow.as_mapping().expect("workflow is a mapping");
     let permissions = mapping_field(root, "permissions")
@@ -1522,29 +1612,29 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
     let collect = named_step(job, "Collect the source run jobs");
     let script = mapping_field(collect, "run")
         .as_str()
-        .expect("nightly collector is a script");
+        .expect("dispatch collector is a script");
     for contract in [
         "gh api \"repos/$REPOSITORY/actions/runs/$RUN_ID/jobs\"",
-        "target/nightly-report.md",
+        "target/dispatch-report.md",
         "$GITHUB_STEP_SUMMARY",
     ] {
         assert!(
             script.contains(contract),
-            "nightly report omits `{contract}`"
+            "dispatch report omits `{contract}`"
         );
     }
     assert!(!script.contains("exit 1"));
 
     assert_uploads(
-        named_step(job, "Upload the nightly report"),
-        &["target/nightly-report.md"],
+        named_step(job, "Upload the dispatch report"),
+        &["target/dispatch-report.md"],
     );
 
-    let text = github_workflow_text("nightly-report.yml");
+    let text = github_workflow_text("report.yml");
     for forbidden in ["gh issue", "issues: write"] {
         assert!(
             !text.contains(forbidden),
-            "nightly collector contains forbidden `{forbidden}`"
+            "dispatch collector contains forbidden `{forbidden}`"
         );
     }
 }

@@ -31,34 +31,42 @@
   <require tools> cargo java just sccache
   just platform android build
 # android-test / branch
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / platforms
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / merge-request
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / quarantine
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / main
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / nightly
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / weekly
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
 # android-test / release
+  <require os> macos
   <require tools> adb cargo emulator java just sccache
   <require left behind> android/lib/build/generated/jniLibs/arm64-v8a/libkithara_ffi.so android/lib/build/generated/uniffi/kotlin
   just platform android test --avd Kithara_CI_API_36 --skip-build
@@ -955,46 +963,70 @@
   <require os> linux
   <require tools> cargo just
   just deps semver
+# deps-shear / branch
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / platforms
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / main
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / nightly
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / weekly
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
+# deps-shear / release
+  <require os> linux
+  <require tools> cargo just
+  just deps shear
 # deps-unused / branch
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / platforms
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / merge-request
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / quarantine
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / main
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / nightly
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / weekly
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # deps-unused / release
   <require os> linux
   <require tools> cargo just
   just deps machete
-  just deps shear
 # linux-arch / branch
   <require os> linux
   <require tools> cargo just

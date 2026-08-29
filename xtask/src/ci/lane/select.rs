@@ -84,7 +84,7 @@ fn membership(lane: &CiLaneConfig, fleet: Fleet) -> &[String] {
 /// system is therefore not one GitHub schedules from the catalog, whatever its
 /// membership says - rendering it would run a macOS recipe on a Linux runner.
 fn reachable(lane: &CiLaneConfig, fleet: Fleet) -> bool {
-    fleet != Fleet::Github || lane.os.as_deref().is_none_or(|os| os == "linux")
+    fleet != Fleet::Github || lane.os.as_deref() == Some("linux")
 }
 
 /// A lane with the asked-for role that this pipeline kind schedules, or that
@@ -229,6 +229,7 @@ mod tests {
             needs: needs.iter().map(|need| (*need).to_owned()).collect(),
             timeout_minutes: 30,
             cache_group: "linux".to_owned(),
+            os: Some("linux".to_owned()),
             program: "just".to_owned(),
             ..CiLaneConfig::default()
         }

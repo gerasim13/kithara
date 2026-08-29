@@ -182,8 +182,18 @@ impl CiProjectConfig {
             if lane.steps.is_empty() {
                 bail!("ext.ci.lanes.{name} must declare at least one step");
             }
-            if lane.os.is_some() && lane.label.is_empty() {
-                bail!("ext.ci.lanes.{name} pins an OS, so it must carry a label to refuse under");
+            // Every lane names the machine it needs. The GitHub fan-out has one
+            // runner pool and it is Linux, so a lane that named none would be
+            // scheduled onto it by omission rather than by declaration, and run
+            // an emulator recipe with no emulator under it.
+            let Some(os) = lane.os.as_deref() else {
+                bail!("ext.ci.lanes.{name} must name the operating system it runs on");
+            };
+            if !matches!(os, "linux" | "macos" | "windows") {
+                bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
+            }
+            if lane.label.is_empty() {
+                bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
             for check in &lane.pinned {
                 if check.tool.is_empty() || check.pin.is_empty() {

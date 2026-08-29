@@ -50,7 +50,7 @@ pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{env, fs};
 
     use super::*;
     use crate::ci::config::{fixture, workspace_root};
@@ -113,6 +113,10 @@ mod tests {
             .write(&root.join("ci-pins.toml"))
             .expect("write fixture pins into the temporary workspace");
 
+        // The fixture runs here, so it names here: a lane refuses a machine
+        // that is not the one it declared, and that refusal is the subject of
+        // other tests, not of this one.
+        let os = env::consts::OS;
         let config_text = format!(
             r#"
 [ext.ci]
@@ -120,6 +124,8 @@ pins = "ci-pins.toml"
 
 [ext.ci.lanes.trivial]
 cache_group = "host"
+label = "fixture"
+os = "{os}"
 program = "{program}"
 role = "gate"
 timeout_minutes = 1

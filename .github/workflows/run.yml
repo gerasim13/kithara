@@ -87,11 +87,13 @@ jobs:
 
   # A lane that reads what the matrix produced. It runs under `always()` so a
   # report still describes a night in which one measurement failed - a report
-  # that only appears when everything passed is a report nobody needs.
+  # that only appears when everything passed is a report nobody needs. It does
+  # need the selection itself, though: a failed render leaves an empty output,
+  # and `always()` alone would hand `fromJSON` an empty string.
   dependent:
     name: ${{ matrix.lane }}
     needs: [select, run]
-    if: ${{ always() && needs.select.outputs.dependent != '[]' }}
+    if: ${{ always() && needs.select.result == 'success' && needs.select.outputs.dependent != '[]' }}
     strategy:
       fail-fast: false
       matrix:
