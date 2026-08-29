@@ -70,13 +70,18 @@ jobs:
   # Every lane's verdict, not the first one's: these answer independent
   # questions and a run that stops at the first red hides the rest.
   #
-  # Named after the lane at both levels. A `uses:` job renders the callee's
-  # name under its own, and an unnamed caller falls back to the job id plus
-  # every matrix value - `run (deep-rtsan-file, 120, 0, rtsan-junit-file,
-  # target/nextest/rtsan/junit.xml, always)` for one lane. The tree should
-  # answer what ran, not how it was parameterised.
+  # A static name here, and the lane's name from the callee. A `uses:` job
+  # renders the callee's name under its own, so the lane is named either way,
+  # and the caller has to be named at all only because an unnamed one falls
+  # back to the job id plus every matrix value - `run (deep-rtsan-file, 120,
+  # 0, rtsan-junit-file, target/nextest/rtsan/junit.xml, always)` for one
+  # lane. It must not be named from the matrix: a skipped job never expands
+  # one, and GitHub then prints the expression it could not evaluate, which
+  # is how a whole run tree came to end in a skipped `Gate / matrix.lane`.
+  # The callee is rendered only when the job runs, so this name is the whole
+  # name whenever it does not.
   run:
-    name: ${{ matrix.lane }}
+    name: lane
     needs: select
     if: ${{ needs.select.outputs.matrix != '[]' }}
     strategy:
@@ -99,7 +104,7 @@ jobs:
   # need the selection itself, though: a failed render leaves an empty output,
   # and `always()` alone would hand `fromJSON` an empty string.
   dependent:
-    name: ${{ matrix.lane }}
+    name: dependent lane
     needs: [select, run]
     if: ${{ always() && needs.select.result == 'success' && needs.select.outputs.dependent != '[]' }}
     strategy:

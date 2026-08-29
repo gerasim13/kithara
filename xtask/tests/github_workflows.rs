@@ -1779,19 +1779,26 @@ fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
     );
 }
 
-// The other half of the same tree. An unnamed calling job falls back to its id
-// plus every matrix value it passed, so the level above each lane reads
-// `run (deep-rtsan-file, 120, 0, rtsan-junit-file, ...)` - the parameters,
-// where the lane's name belongs.
+// The other half of the same tree. Each calling job has to be named, because
+// an unnamed one falls back to its id plus every matrix value it passed and
+// the level above each lane reads `run (deep-rtsan-file, 120, 0,
+// rtsan-junit-file, ...)` - the parameters, where a name belongs. The name may
+// not come from the matrix: a job skipped by its `if:` never expands one, and
+// GitHub prints the expression instead of a name, which is how a run tree came
+// to end in a skipped `Gate / matrix.lane`. The lane's own name comes from the
+// callee, which is rendered only when the job runs, so the caller's name has to
+// stand on its own when it does not.
 #[test]
-fn the_fan_out_names_each_branch_after_its_lane() {
+fn the_fan_out_names_each_branch_without_reading_the_matrix() {
     let workflow = github_workflow("run.yml");
     let jobs = workflow_jobs(&workflow);
-    for name in ["run", "dependent"] {
-        assert_eq!(
-            mapping_field(workflow_job(jobs, name), "name").as_str(),
-            Some("${{ matrix.lane }}"),
-            "`{name}` carries the lane's name"
+    for job in ["run", "dependent"] {
+        let name = mapping_field(workflow_job(jobs, job), "name")
+            .as_str()
+            .unwrap_or_else(|| panic!("`{job}` is named"));
+        assert!(
+            !name.contains("matrix."),
+            "`{job}` is named `{name}`, which a skipped job cannot resolve"
         );
     }
 }
