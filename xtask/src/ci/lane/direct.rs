@@ -164,6 +164,13 @@ args = {step_args}
             .split("#[cfg(test)]")
             .next()
             .expect("direct.rs has a production half before its test module");
+        // A census that scanned nothing would pass every assertion below. The
+        // split is a text match, so an earlier `#[cfg(test)]` would truncate
+        // the production half silently; this is what makes that loud.
+        assert!(
+            production.contains("fn run(args: &LaneArgs"),
+            "the production half must still hold the entrypoint being censused"
+        );
         for forbidden in ["CiConfig::load", "CiEnvironment", "KITHARA_CI_HOST_CONFIG"] {
             assert!(
                 !production.contains(forbidden),
