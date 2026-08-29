@@ -47,10 +47,6 @@ const DOCS: &[(&str, &str)] = &[
         include_str!("../../../assets/ui/modules/app-menu/window-row.kmodule.ron"),
     ),
     (
-        "modules/app-menu/module-cell.kmodule.ron",
-        include_str!("../../../assets/ui/modules/app-menu/module-cell.kmodule.ron"),
-    ),
-    (
         "modules/app-deck.kmodule.ron",
         include_str!("../../../assets/ui/modules/app-deck.kmodule.ron"),
     ),
