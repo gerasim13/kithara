@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use masonry::{
     core::{BoxConstraints, LayoutCtx, WidgetPod},
@@ -498,19 +498,16 @@ impl NodeControl for mount::Button {
 /// bar without holding one.
 pub(super) struct Viewport {
     bar: Bar,
-    view: Window,
+    view: Rc<RefCell<Window>>,
 }
 
 impl Viewport {
-    pub(super) const fn new(bar: Bar) -> Self {
-        Self {
-            bar,
-            view: Window::new(),
-        }
+    pub(super) const fn new(bar: Bar, view: Rc<RefCell<Window>>) -> Self {
+        Self { bar, view }
     }
 
     pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
-        self.view.indicate(bounds, self.bar, list);
+        self.view.borrow().indicate(bounds, self.bar, list);
     }
 
     pub(super) fn layout(
@@ -536,7 +533,7 @@ impl Viewport {
             let measured = ctx.run_layout(child, &box_constraints(inner));
             AsPrimitive::<f32>::as_(measured.height)
         });
-        let offset = self.view.measured(content, size.height);
+        let offset = self.view.borrow_mut().measured(content, size.height);
         if let Some(child) = children.first_mut() {
             ctx.place_child(child, Point::new(0.0, f64::from(-offset)));
         }
@@ -548,7 +545,7 @@ impl Viewport {
     }
 
     pub(super) fn wheel(&mut self, input: Input<'_>) -> bool {
-        self.view.wheel(input)
+        self.view.borrow_mut().wheel(input)
     }
 }
 

@@ -2571,3 +2571,99 @@ fn a_frame_that_moved_nothing_asks_for_no_frame_after_it() {
 
     assert!(!ui.complete_frame());
 }
+
+/// An application whose page list turns to another page, the way a gallery or
+/// a player does: every page is its own layout, and the list that turns to it
+/// stands in all of them.
+#[derive(Default)]
+struct Pager {
+    second: bool,
+}
+
+impl Reads for Pager {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        Some(ReadValue::Bool(false))
+    }
+}
+
+impl App for Pager {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
+    fn document(&self) -> &str {
+        if self.second {
+            "second.klayout.ron"
+        } else {
+            "first.klayout.ron"
+        }
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        if let UiEvent::Control { action, .. } = event
+            && action == ControlAction::Activate
+        {
+            self.second = true;
+        }
+    }
+}
+
+/// Two pages, each holding the same list of rows: turning from one to the
+/// other is a document swap, which is how a page list reaches another page.
+fn paged_list(rows: usize) -> MemResolver {
+    let mut resolver = page_list(rows);
+    for page in ["first", "second"] {
+        resolver.insert(
+            &format!("{page}.klayout.ron"),
+            &format!(
+                r#"(schema: "kithara.layout", version: 1, id: "{page}",
+                    root: Module(instance: "pages", source: "pages.kmodule.ron", size: (w: Fill, h: Fill)))"#
+            ),
+        );
+    }
+    resolver
+}
+
+/// A list scrolled down to reach a row stays where it was scrolled to once
+/// that row turns the window to another page.
+///
+/// Where a window is scrolled to is the host's, not the document's: a page
+/// swap builds another tree, and a list that starts over at the top throws the
+/// hand back to the first row every time it picks one of the last.
+#[kithara::test]
+fn a_list_scrolled_to_a_row_stays_there_when_the_row_turns_the_page() {
+    let rows = 20;
+    let last = format!("pages/row{}/item", rows - 1);
+    let endpoints = Tabs::default();
+    let resolver = paged_list(rows);
+    let mut scenario = Scenario::mount(
+        Pager::default(),
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 400),
+        1.0,
+    );
+    for _ in 0..8 {
+        scenario.wheel("pages/row9/item", -1.0);
+        scenario.scene();
+    }
+    let scrolled = scenario
+        .rect_of(&last)
+        .unwrap_or_else(|| panic!("the fixture must scroll {last} into the window"));
+
+    scenario.click(&last);
+    scenario.scene();
+
+    assert_eq!(
+        scenario.rect_of(&last),
+        Some(scrolled),
+        "the page the list turned to must show the list where it was scrolled to"
+    );
+}

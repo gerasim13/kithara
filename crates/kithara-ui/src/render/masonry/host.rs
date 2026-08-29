@@ -38,7 +38,7 @@ use crate::{
             Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
         },
         hosted_control_plan,
-        scroll::Bar,
+        scroll::{Bar, Window},
     },
     shaping::TextContext,
     size::SizeSpec,
@@ -64,6 +64,7 @@ pub struct MasonryState {
     #[cfg(test)]
     paths: Rc<RefCell<BTreeMap<String, WidgetId>>>,
     popovers: Rc<RefCell<BTreeMap<String, Rc<PopoverState>>>>,
+    windows: Rc<RefCell<BTreeMap<String, Rc<RefCell<Window>>>>>,
     pointer: Rc<Cell<Option<crate::draw::Pt>>>,
 }
 
@@ -92,6 +93,22 @@ impl MasonryState {
         );
         state.latch(open);
         state
+    }
+
+    /// The window one scroll of the document looks through.
+    ///
+    /// Where a window is scrolled to belongs to the host and not to the
+    /// document, and this host builds another tree whenever the application
+    /// turns to a different document. A window kept only by the tree would
+    /// start over at the top every time that happened, which throws the hand
+    /// back to the first row whenever it picks one of the last.
+    fn window(&self, path: &str) -> Rc<RefCell<Window>> {
+        Rc::clone(
+            self.windows
+                .borrow_mut()
+                .entry(path.to_owned())
+                .or_insert_with(|| Rc::new(RefCell::new(Window::new()))),
+        )
     }
 }
 
@@ -658,13 +675,14 @@ where
     /// the retained viewport has something to travel over.
     fn scroll(
         &mut self,
-        _id: InternId,
+        id: InternId,
         child: Self::Output,
         size: Option<SizeSpec>,
     ) -> Self::Output {
         let declared = size.map_or_else(|| child.declared(), declared);
+        let view = self.state.window(self.ctx.ui.resolve(id));
         MasonryNode::document(
-            NodeLayout::Scroll(Viewport::new(Bar::new(self.skin))),
+            NodeLayout::Scroll(Viewport::new(Bar::new(self.skin), view)),
             declared,
             vec![child],
             false,
