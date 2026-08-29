@@ -68,6 +68,22 @@ both load-bearing:
   in the library can synthesize an asset, which is the whole point: a test's
   deadline never contains an encode.
 
+## Where The Analyzers Cannot Follow
+
+Two workspace checks are told about this crate rather than worked around at the
+call site, because both misread it for the same reason: the code that consumes
+these exports is generated into `OUT_DIR` or lives in the build script, and a
+source scanner sees neither.
+
+- `dead_exports` (`.config/arch/thresholds.toml`) counts kithara-fixtures among
+  the test crates. Its exports are reached only from generated accessors and its
+  own build script, and a call it makes into a workspace API is a fixture, not a
+  shipped caller.
+- `perf.prefer-primitive-pool` skips this crate, alongside the other test
+  scaffolding. A generator returns one complete asset that crosses an ownership
+  boundary into the store; there is no pool in a build script to lease from, and
+  the rule itself exempts that shape.
+
 ## Transitional Coupling
 
 `tests/src/fixture_cache.rs` is the disk cache this store replaces. It is frozen

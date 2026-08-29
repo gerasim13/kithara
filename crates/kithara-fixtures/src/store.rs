@@ -13,6 +13,10 @@ pub const STORE_ENV: &str = "KITHARA_FIXTURE_CACHE";
 /// a path, wide enough that the build script's collision check never fires.
 const ASSET_ID_BYTES: usize = 16;
 
+/// Hex length of a build fingerprint (`u64`), shared by the build script that
+/// produces it and the contract test that checks the namespace layout.
+pub const FINGERPRINT_HEX_LEN: usize = 16;
+
 /// Stable identity of one asset case: `sha2-256(func || 0x00 || case)`.
 ///
 /// The pair is unique by construction — every accessor lands in one flat

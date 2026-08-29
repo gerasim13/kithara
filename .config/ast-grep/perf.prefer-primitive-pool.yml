@@ -30,6 +30,7 @@ files:
 ignores:
   - crates/kithara-bufpool/**
   - crates/kithara-devtools/**
+  - crates/kithara-fixtures/**
   - crates/kithara-test-macros/**
   - crates/kithara-test-utils/**
   - crates/kithara-workspace-hack/**

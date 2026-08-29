@@ -444,6 +444,11 @@ test_crates = [
   "kithara-test-utils",
   "kithara-test-macros",
   "kithara-fuzz",
+  # Build-time test assets. Its exports are consumed by code this scanner
+  # cannot read — accessors generated into OUT_DIR and its own build script —
+  # and a call it makes into a workspace API is a fixture, not a shipped
+  # caller.
+  "kithara-fixtures",
 ]
 # Ignored as export owners: build tooling and the cargo-hakari workspace-hack
 # shim own no production contract, so their definitions are never collected.

@@ -6,5 +6,8 @@
 //! and never enter the library. See `CONTEXT.md` for the store layout and the
 //! invalidation contract.
 
+pub mod asset;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
