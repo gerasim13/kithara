@@ -18,6 +18,7 @@ members = [
     "crates/kithara-events",
     "crates/kithara-ffi",
     "crates/kithara-file",
+    "crates/kithara-fixtures",
     "crates/kithara-hls",
     "crates/kithara-host",
     "crates/kithara-mpa",
@@ -53,6 +54,7 @@ default-members = [
     "crates/kithara-encode",
     "crates/kithara-events",
     "crates/kithara-file",
+    "crates/kithara-fixtures",
     "crates/kithara-hls",
     "crates/kithara-host",
     "crates/kithara-mpa",
@@ -209,6 +211,7 @@ kithara-encode = { path = "crates/kithara-encode", version = "0.0.1-alpha4", def
 kithara-events = { path = "crates/kithara-events", version = "0.0.1-alpha4" }
 kithara-ffi = { path = "crates/kithara-ffi" }
 kithara-file = { path = "crates/kithara-file", version = "0.0.1-alpha4", default-features = false }
+kithara-fixtures = { path = "crates/kithara-fixtures", version = "0.0.1-alpha4" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.0.1-alpha4", default-features = false }
 kithara-host = { path = "crates/kithara-host", version = "0.0.1-alpha4", default-features = false }
 kithara-mpa = { path = "crates/kithara-mpa", version = "0.0.1-alpha4" }
@@ -309,6 +312,10 @@ hotpath = "0.19.1"
 
 # UI frameworks
 iced = { version = "0.14", features = ["tokio", "svg", "canvas"] }
+
+# Link-time registry. The kithara-fixtures build script enumerates what its
+# `#[kithara::asset]` definitions submit; nothing links it into a product build.
+inventory = "0.3"
 
 # FFI
 jni = "0.22"

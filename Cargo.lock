@@ -4630,6 +4630,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-fixtures"
+version = "0.0.1-alpha4"
+dependencies = [
+ "hex",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
 name = "kithara-fuzz"
 version = "0.0.0"
 dependencies = [
