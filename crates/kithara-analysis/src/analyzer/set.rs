@@ -149,13 +149,11 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
-        super::{
-            session::{Ingest, TrackAnalyzers},
-            snapshot::GridState,
-        },
+        super::session::{Ingest, TrackAnalyzers},
         AnalyzerBuilder, BeatAnalysisConfig,
     };
     use crate::{
+        BeatState,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
         coverage::FrameRange,
     };
@@ -457,7 +455,7 @@ mod tests {
         assert!(
             early
                 .beat()
-                .is_none_or(|beat| beat.state() == GridState::Provisional),
+                .is_none_or(|beat| beat.state() == BeatState::Provisional),
             "a grid without a known extent cannot be final"
         );
 
@@ -466,7 +464,7 @@ mod tests {
         assert!(
             ended
                 .beat()
-                .is_none_or(|beat| beat.state() == GridState::Final),
+                .is_none_or(|beat| beat.state() == BeatState::Final),
             "the whole extent is covered, so the grid is final"
         );
         assert_eq!(

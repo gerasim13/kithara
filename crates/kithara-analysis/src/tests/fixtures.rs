@@ -18,6 +18,7 @@ use unimock::{MockFn, Unimock, matching};
 use crate::{
     analyzer::TrackAnalysis,
     beat::{BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
+    blob::to_bytes,
     waveform::bucket::Waveform,
 };
 
@@ -47,7 +48,7 @@ pub(super) fn artifacts(snapshot: &TrackAnalysis) -> Artifacts {
         snapshot.waveform().cloned().unwrap_or_default(),
         snapshot
             .beat()
-            .map(|beat| beat.grid().beats().to_vec())
+            .map(|beat| beat.artifact().beats().to_vec())
             .unwrap_or_default(),
     )
 }
@@ -55,8 +56,8 @@ pub(super) fn artifacts(snapshot: &TrackAnalysis) -> Artifacts {
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 pub(super) fn assert_agrees(want: &Artifacts, got: &Artifacts, what: &str) {
     assert_eq!(
-        Vec::<u8>::from(&got.0),
-        Vec::<u8>::from(&want.0),
+        to_bytes(&got.0),
+        to_bytes(&want.0),
         "{what}: the waveform must be identical"
     );
     assert_eq!(

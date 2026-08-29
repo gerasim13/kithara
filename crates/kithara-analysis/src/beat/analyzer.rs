@@ -10,7 +10,7 @@ use super::{
     grid::{GridParams, build_grid},
     runs::Runs,
 };
-use crate::{analyzer::BeatAnalysisConfig, coverage::FrameRange, waveform::BeatGrid};
+use crate::{BeatArtifact, analyzer::BeatAnalysisConfig, coverage::FrameRange};
 
 const BUDGET_WINDOWS: usize = 4;
 
@@ -101,7 +101,7 @@ where
         &mut self,
         detector: &mut dyn BeatDetector,
         ending: bool,
-    ) -> Result<BeatGrid, BeatDetectError> {
+    ) -> Result<BeatArtifact, BeatDetectError> {
         if let Some(e) = self.failure.take() {
             return Err(e);
         }
@@ -654,7 +654,7 @@ mod tests {
         assert_eq!(grid.downbeats()[1], 96_000, "downbeats are source frames");
         assert_eq!(grid.beats()[1], 24_000, "beats are source frames");
         assert!(
-            grid.segments().is_empty(),
+            grid.regions().is_empty(),
             "9 downbeats are below the stable window: tempo only"
         );
     }

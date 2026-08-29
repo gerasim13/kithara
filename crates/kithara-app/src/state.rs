@@ -123,8 +123,8 @@ impl UiState {
             .and_then(|a| {
                 a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
-                        frames_to_fractions(grid.grid().beats(), a.source_frames()),
-                        frames_to_fractions(grid.grid().downbeats(), a.source_frames()),
+                        frames_to_fractions(grid.artifact().beats(), a.source_frames()),
+                        frames_to_fractions(grid.artifact().downbeats(), a.source_frames()),
                     )
                 })
             })
@@ -328,7 +328,7 @@ impl StateController {
         let Some(beat) = analysis.beat() else {
             return;
         };
-        let grid = beat.grid();
+        let grid = beat.artifact();
         let source_frames = analysis.source_frames();
         let slot = SlotId::new(1);
         let mut beat_clock = self.beat_clock.lock();
@@ -378,7 +378,7 @@ fn bpm_info_from_state(
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<BpmInfo> {
-    let grid = beat.grid();
+    let grid = beat.artifact();
     let first_beat = *grid.beats().first()?;
     if source_frames == 0 || duration_secs <= 0.0 {
         return None;
@@ -543,7 +543,7 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::analysis::{BeatGrid, BeatSnapshot, GridState};
+    use ::kithara::analysis::{BeatArtifact, BeatSnapshot, BeatState};
     use kithara_test_utils::kithara;
 
     use super::{
@@ -552,8 +552,8 @@ mod tests {
 
     fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {
         BeatSnapshot::new(
-            BeatGrid::new(120.0, beats, Vec::new(), Vec::new()),
-            GridState::Provisional,
+            BeatArtifact::new(120.0, beats, Vec::new()),
+            BeatState::Provisional,
             Vec::new(),
         )
     }

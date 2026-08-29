@@ -1,10 +1,10 @@
 use num_traits::cast::ToPrimitive;
 
-use crate::waveform::{BeatGrid, MarkedBeat};
+use crate::{BeatArtifact, artifact::MarkedBeat};
 
 const FILL_THRESHOLD: f64 = 1.5;
 
-pub(crate) fn extend_over(grid: BeatGrid, extent: u64, source_rate: u32) -> BeatGrid {
+pub(crate) fn extend_over(grid: BeatArtifact, extent: u64, source_rate: u32) -> BeatArtifact {
     let Some(beat) = beat_period(grid.bpm(), source_rate) else {
         return grid;
     };
@@ -12,7 +12,7 @@ pub(crate) fn extend_over(grid: BeatGrid, extent: u64, source_rate: u32) -> Beat
     let bar = bar_period(grid.downbeats(), beat);
     let downbeats = spread(grid.downbeats(), grid.downbeat_confidence(), bar, extent);
 
-    BeatGrid::new(grid.bpm(), beats, downbeats, grid.segments().to_vec())
+    BeatArtifact::with_regions(grid.bpm(), beats, downbeats, grid.regions().to_vec())
 }
 
 fn beat_period(bpm: f64, source_rate: u32) -> Option<f64> {
@@ -112,18 +112,13 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::extend_over;
-    use crate::waveform::BeatGrid;
+    use crate::BeatArtifact;
 
     const RATE: u32 = 44_100;
 
-    fn grid(beats: Vec<u64>) -> BeatGrid {
+    fn grid(beats: Vec<u64>) -> BeatArtifact {
         let downbeats = beats.iter().step_by(4).map(detected).collect();
-        BeatGrid::new(
-            120.0,
-            beats.iter().map(detected).collect(),
-            downbeats,
-            Vec::new(),
-        )
+        BeatArtifact::new(120.0, beats.iter().map(detected).collect(), downbeats)
     }
 
     fn detected(frame: &u64) -> (u64, Option<f32>) {
@@ -206,10 +201,10 @@ mod tests {
 
     #[kithara::test]
     fn a_grid_with_nothing_to_go_on_is_left_alone() {
-        let empty = BeatGrid::new(120.0, Vec::new(), Vec::new(), Vec::new());
+        let empty = BeatArtifact::new(120.0, Vec::new(), Vec::new());
         assert!(extend_over(empty, 441_000, RATE).beats().is_empty());
 
-        let zero_tempo = BeatGrid::new(0.0, vec![(100, Some(0.9))], Vec::new(), Vec::new());
+        let zero_tempo = BeatArtifact::new(0.0, vec![(100, Some(0.9))], Vec::new());
         assert_eq!(
             extend_over(zero_tempo, 441_000, RATE).beats(),
             &[100],

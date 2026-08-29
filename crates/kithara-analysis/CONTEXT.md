@@ -16,6 +16,14 @@ The crate owns analysis state, scheduling, waveform/beat DSP, and pure versioned
 bytes. It does not own `AssetStore` I/O, cache-key policy, or eviction: the
 application persists and reads the composite `TrackAnalysis` bytes.
 
+`BeatArtifact` is identity-free detector output, not a live beat grid. The only
+live grid contract is `kithara-warp::BeatGrid`, whose owning Track/Player
+supplies identity and revision. This crate does not fabricate a
+`BeatGridSnapshot`: the current detector artifact has confidence and
+provenance, but no calibrated maximum frame error suitable for
+`FrameUncertainty`. A future adapter must consume that real fact rather than
+substitute zero or reinterpret confidence as timing error.
+
 ## Track analysis
 
 `AnalyzerBuilder<B>` is the public selector. `new(SamplePool)` requires the
@@ -28,7 +36,7 @@ crate-private per-track set; each analyzer is fed every decoded chunk once.
 extent, coverage, per-artifact fingerprint, waveform, and beat. It is
 self-contained by contract: a consumer holding only a snapshot can render the
 waveform, place markers on the source timeline, and tell how much of the track
-it is based on. `source_frames()` is the denominator that turns a `BeatGrid`
+it is based on. `source_frames()` is the denominator that turns a `BeatArtifact`
 frame into a fraction: the extent when known, `coverage.frontier()` otherwise.
 The frontier is the exclusive end of the highest covered range, not the sum of
 covered frames, so sparse out-of-order coverage keeps its source position.
@@ -38,7 +46,7 @@ accept further ranges and bumps a strictly increasing revision, so a consumer
 discards anything that does not outrank what it holds. `AnalysisTask` publishes
 every `PUBLISH_SECONDS` of newly covered source and once more at end of stream,
 keyed to decoded frames rather than wall-clock time. Only that last publication
-pins the extent, to the covered frontier. `GridState` is `Final` only once the
+pins the extent, to the covered frontier. `BeatState` is `Final` only once the
 whole known extent is one covered run.
 
 Identity is an opaque `AnalysisToken` the caller opens the pass with; this crate
@@ -193,7 +201,7 @@ Tunables live in `AnalysisParams`.
 
 ## Blob codec
 
-`Waveform`, `BeatGrid`, and composite `TrackAnalysis` use the crate-internal,
+`Waveform`, `BeatArtifact`, and composite `TrackAnalysis` use the crate-internal,
 domain-agnostic `blob` module for versioned little-endian bytes. `Blob` owns an
 artifact frame — `u32` `Blob::VERSION` then body — while each artifact implements
 its body. A decode cursor must consume exactly its bytes; trailing data is

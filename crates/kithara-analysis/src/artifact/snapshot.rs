@@ -1,11 +1,11 @@
 use num_traits::cast::ToPrimitive;
 
-use crate::{coverage::FrameRange, waveform::BeatGrid};
+use crate::{BeatArtifact, coverage::FrameRange};
 
-/// Whether a grid can still change.
+/// Whether a beat artifact can still change.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum GridState {
+pub enum BeatState {
     Provisional,
     Final,
 }
@@ -14,18 +14,18 @@ pub enum GridState {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct BeatSnapshot {
-    grid: BeatGrid,
-    state: GridState,
+    artifact: BeatArtifact,
+    state: BeatState,
     unanalysed: Vec<FrameRange>,
     confidence: Option<f32>,
 }
 
 impl BeatSnapshot {
     #[must_use]
-    pub fn new(grid: BeatGrid, state: GridState, unanalysed: Vec<FrameRange>) -> Self {
+    pub fn new(artifact: BeatArtifact, state: BeatState, unanalysed: Vec<FrameRange>) -> Self {
         Self {
-            confidence: grid_confidence(&grid),
-            grid,
+            confidence: artifact_confidence(&artifact),
+            artifact,
             state,
             unanalysed,
         }
@@ -40,16 +40,16 @@ impl BeatSnapshot {
     }
 
     #[must_use]
-    pub const fn grid(&self) -> &BeatGrid {
-        &self.grid
+    pub const fn artifact(&self) -> &BeatArtifact {
+        &self.artifact
     }
 
     #[must_use]
-    pub const fn state(&self) -> GridState {
+    pub const fn state(&self) -> BeatState {
         self.state
     }
 
-    /// Source ranges the pass could not analyse, so the grid claims nothing
+    /// Source ranges the pass could not analyse, so the artifact claims nothing
     /// about them.
     #[must_use]
     pub fn unanalysed(&self) -> &[FrameRange] {
@@ -57,13 +57,13 @@ impl BeatSnapshot {
     }
 }
 
-fn grid_confidence(grid: &BeatGrid) -> Option<f32> {
+fn artifact_confidence(artifact: &BeatArtifact) -> Option<f32> {
     let mut sum = 0.0_f64;
     let mut count = 0_u32;
-    for confidence in grid
+    for confidence in artifact
         .beat_confidence()
         .iter()
-        .chain(grid.downbeat_confidence().iter())
+        .chain(artifact.downbeat_confidence().iter())
         .flatten()
     {
         sum += f64::from(*confidence);
@@ -79,22 +79,22 @@ fn grid_confidence(grid: &BeatGrid) -> Option<f32> {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{BeatSnapshot, GridState};
-    use crate::waveform::BeatGrid;
+    use super::{BeatSnapshot, BeatState};
+    use crate::BeatArtifact;
 
-    fn snapshot(beats: Vec<(u64, Option<f32>)>, state: GridState) -> BeatSnapshot {
+    fn snapshot(beats: Vec<(u64, Option<f32>)>, state: BeatState) -> BeatSnapshot {
         BeatSnapshot::new(
-            BeatGrid::new(120.0, beats, Vec::new(), Vec::new()),
+            BeatArtifact::new(120.0, beats, Vec::new()),
             state,
             Vec::new(),
         )
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_grid_reports_the_mean_of_what_was_detected() {
+    fn an_artifact_reports_the_mean_of_what_was_detected() {
         let snapshot = snapshot(
             vec![(0, Some(0.4)), (100, Some(0.8)), (200, None)],
-            GridState::Provisional,
+            BeatState::Provisional,
         );
 
         let confidence = snapshot.confidence().expect("detected markers average");
@@ -105,29 +105,29 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_grid_with_nothing_detected_reports_nothing() {
+    fn an_artifact_with_nothing_detected_reports_nothing() {
         assert_eq!(
-            snapshot(vec![(0, None), (100, None)], GridState::Provisional).confidence(),
+            snapshot(vec![(0, None), (100, None)], BeatState::Provisional).confidence(),
             None,
-            "a grid built entirely by extrapolation claims nothing"
+            "an artifact built entirely by extrapolation claims nothing"
         );
         assert_eq!(
-            snapshot(Vec::new(), GridState::Final).confidence(),
+            snapshot(Vec::new(), BeatState::Final).confidence(),
             None,
-            "an empty grid claims nothing"
+            "an empty artifact claims nothing"
         );
     }
 
     #[kithara::test(native, flash(false))]
     fn a_final_grid_of_weak_markers_is_less_sure_than_a_provisional_strong_one() {
-        let weak = snapshot(vec![(0, Some(0.2)), (100, Some(0.3))], GridState::Final);
+        let weak = snapshot(vec![(0, Some(0.2)), (100, Some(0.3))], BeatState::Final);
         let strong = snapshot(
             vec![(0, Some(0.9)), (100, Some(0.95))],
-            GridState::Provisional,
+            BeatState::Provisional,
         );
 
-        assert_eq!(weak.state(), GridState::Final);
-        assert_eq!(strong.state(), GridState::Provisional);
+        assert_eq!(weak.state(), BeatState::Final);
+        assert_eq!(strong.state(), BeatState::Provisional);
         assert!(
             weak.confidence() < strong.confidence(),
             "confidence follows the markers, not the state"

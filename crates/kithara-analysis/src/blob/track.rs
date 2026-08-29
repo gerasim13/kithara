@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
 use crate::{
-    AnalysisFingerprint, BeatGrid, BeatSnapshot, Coverage, FrameRange, GridState, TrackAnalysis,
-    Waveform,
+    AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange,
+    TrackAnalysis, Waveform,
     blob::{BlobError, Reader, Writer},
 };
 
@@ -34,10 +34,10 @@ impl TrackAnalysis {
         let beat = self.beat();
         writer.write_section(|out| {
             if let Some(beat) = beat {
-                beat.grid().write_to(out);
+                beat.artifact().write_to(out);
             }
         })?;
-        writer.write_bool(beat.is_some_and(|beat| beat.state() == GridState::Final));
+        writer.write_bool(beat.is_some_and(|beat| beat.state() == BeatState::Final));
         write_ranges(&mut writer, beat.map_or(&[], BeatSnapshot::unanalysed))?;
         Ok(())
     }
@@ -81,13 +81,13 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .transpose()
             .map_err(|_| BlobError::Corrupt)?;
         let grid = (beat_ok && !grid_bytes.is_empty())
-            .then(|| BeatGrid::try_from(grid_bytes))
+            .then(|| BeatArtifact::try_from(grid_bytes))
             .transpose()
             .map_err(|_| BlobError::Corrupt)?;
         let state = if final_grid {
-            GridState::Final
+            BeatState::Final
         } else {
-            GridState::Provisional
+            BeatState::Provisional
         };
 
         let mut restored = Coverage::default();
@@ -142,9 +142,9 @@ mod tests {
 
     use kithara_bufpool::{ByteBuffer, BytePool};
     use kithara_test_utils::kithara;
-    use kithara_warp::GridSegment;
 
     use super::*;
+    use crate::artifact::FitRegion;
 
     struct Consts;
 
@@ -181,16 +181,20 @@ mod tests {
             .expect("hand-built blob is valid")
     }
 
-    fn grid() -> BeatGrid {
-        BeatGrid::new(
+    fn grid() -> BeatArtifact {
+        BeatArtifact::with_regions(
             128.0,
             vec![(0, Some(0.9)), (10_000, Some(0.75)), (20_000, None)],
             vec![(0, Some(0.9)), (40_000, None)],
-            vec![GridSegment::new(0, 40_000, 1.01)],
+            vec![FitRegion::new(0, 40_000, 1.01)],
         )
     }
 
-    fn analysis(beat: Option<BeatGrid>, waveform: Option<Waveform>, extent: u64) -> TrackAnalysis {
+    fn analysis(
+        beat: Option<BeatArtifact>,
+        waveform: Option<Waveform>,
+        extent: u64,
+    ) -> TrackAnalysis {
         let mut coverage = Coverage::default();
         coverage.insert(FrameRange::new(0, extent));
         TrackAnalysis::builder()
@@ -203,7 +207,7 @@ mod tests {
             .fingerprint(active())
             .maybe_waveform(waveform)
             .maybe_beat(beat.map(|grid| {
-                BeatSnapshot::new(grid, GridState::Provisional, vec![FrameRange::new(100, 50)])
+                BeatSnapshot::new(grid, BeatState::Provisional, vec![FrameRange::new(100, 50)])
             }))
             .build()
     }
@@ -244,7 +248,7 @@ mod tests {
             back.waveform().expect("waveform survives").buckets(),
             wave().buckets()
         );
-        assert_eq!(back.beat().expect("beat grid survives").grid(), &grid());
+        assert_eq!(back.beat().expect("beat grid survives").artifact(), &grid());
         assert_eq!(back.source_frames(), 1_234_567);
     }
 
@@ -261,7 +265,7 @@ mod tests {
         let bytes = encode(&analysis(Some(grid()), None, 0));
         let back = TrackAnalysis::try_from((&bytes[..], &active())).expect("decodes");
         assert!(back.waveform().is_none());
-        assert_eq!(back.beat().expect("beat grid survives").grid(), &grid());
+        assert_eq!(back.beat().expect("beat grid survives").artifact(), &grid());
     }
 
     #[kithara::test]
@@ -290,7 +294,7 @@ mod tests {
             .waveform(wave())
             .beat(BeatSnapshot::new(
                 grid(),
-                GridState::Provisional,
+                BeatState::Provisional,
                 vec![FrameRange::new(400, 200)],
             ))
             .build();
@@ -307,7 +311,7 @@ mod tests {
             got.beat().expect("beat survives"),
             want.beat().expect("beat fixture"),
         );
-        assert_eq!(got_beat.grid(), want_beat.grid());
+        assert_eq!(got_beat.artifact(), want_beat.artifact());
         assert_eq!(got_beat.state(), want_beat.state());
         assert_eq!(got_beat.unanalysed(), want_beat.unanalysed());
     }

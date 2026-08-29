@@ -22,17 +22,20 @@ use unimock::{MockFn, Unimock, matching};
 use super::super::beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats};
 use super::{
     super::{
-        analyzer::{AnalyzerBuilder, GridState, TrackAnalysis},
+        analyzer::AnalyzerBuilder,
         worker::{AnalysisNode, AnalysisStep, Job},
     },
     fixtures::{CH, FakeReader, SR, sine},
 };
+#[cfg(feature = "analysis-waveform")]
+use crate::blob::to_bytes;
 #[cfg(feature = "analysis-waveform")]
 use crate::coverage::FrameRange;
 #[cfg(feature = "analysis-waveform")]
 use crate::producer::{AnalysisProducer, Offer, ring};
 #[cfg(feature = "analysis-waveform")]
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
+use crate::{BeatState, TrackAnalysis};
 
 #[cfg(feature = "analysis-waveform")]
 const BUCKETS: usize = 64;
@@ -602,8 +605,8 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
         .cloned()
         .expect("waveform analyzer fills its slot");
     assert_eq!(
-        Vec::<u8>::from(&got),
-        Vec::<u8>::from(&want),
+        to_bytes(&got),
+        to_bytes(&want),
         "worker path must reproduce the direct analyzer output"
     );
 }
@@ -676,10 +679,10 @@ fn beat_slot_fills_the_beat_grid() {
         .iter()
         .filter_map(TrackAnalysis::beat)
         .find(|beat| {
-            beat.grid()
+            beat.artifact()
                 .beat_confidence()
                 .iter()
-                .chain(beat.grid().downbeat_confidence())
+                .chain(beat.artifact().downbeat_confidence())
                 .any(Option::is_some)
         })
         .expect("some publication carries a marker the detector reported");
@@ -694,7 +697,7 @@ fn beat_slot_fills_the_beat_grid() {
             .filter(|analysis| analysis.extent().is_none())
             .all(|analysis| analysis
                 .beat()
-                .is_none_or(|beat| beat.state() == GridState::Provisional)),
+                .is_none_or(|beat| beat.state() == BeatState::Provisional)),
         "a grid published mid-decode cannot claim to be final"
     );
     let last = out.last().expect("at least one publication");
@@ -708,13 +711,13 @@ fn beat_slot_fills_the_beat_grid() {
         .cloned()
         .expect("beat slot fills its slot in the final publication");
     assert!(
-        (grid.grid().bpm() - 120.0).abs() < 1e-6,
+        (grid.artifact().bpm() - 120.0).abs() < 1e-6,
         "2 s bars are 120 bpm, got {}",
-        grid.grid().bpm()
+        grid.artifact().bpm()
     );
     // The reported tempo must describe the markers riding the same
     // revision, not a value derived from something already replaced.
-    let downbeats = grid.grid().downbeats();
+    let downbeats = grid.artifact().downbeats();
     let mut gaps: Vec<u64> = downbeats
         .windows(2)
         .filter_map(|pair| pair[1].checked_sub(pair[0]))
@@ -724,12 +727,12 @@ fn beat_slot_fills_the_beat_grid() {
     let bar_seconds = bar_frames.to_f64().unwrap_or(1.0) / f64::from(SR);
     let bpm_from_marks = 4.0 * 60.0 / bar_seconds;
     assert!(
-        (bpm_from_marks - grid.grid().bpm()).abs() < 1e-6,
+        (bpm_from_marks - grid.artifact().bpm()).abs() < 1e-6,
         "bpm {} must describe the published markers ({bpm_from_marks} from bars)",
-        grid.grid().bpm()
+        grid.artifact().bpm()
     );
     assert_eq!(
-        grid.grid().downbeats()[1],
+        grid.artifact().downbeats()[1],
         u64::from(SR) * 2,
         "source frames"
     );

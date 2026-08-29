@@ -11,8 +11,9 @@ use super::{
     scratch::{GridBuffers, fill, retain},
 };
 use crate::{
+    BeatArtifact,
+    artifact::MarkedBeat,
     beat::detector::{BeatMark, RawBeats},
-    waveform::{BeatGrid, MarkedBeat},
 };
 
 #[cfg(feature = "beat-nn")]
@@ -76,7 +77,7 @@ pub(crate) fn build_grid(
     sample_rate: u32,
     params: &GridParams,
     pool: &SamplePool,
-) -> Result<BeatGrid, BudgetExhausted> {
+) -> Result<BeatArtifact, BudgetExhausted> {
     let mut buffers = GridBuffers::new(pool);
     build_grid_with(raw, sample_rate, params, &mut buffers)
 }
@@ -86,7 +87,7 @@ fn build_grid_with(
     sample_rate: u32,
     params: &GridParams,
     buffers: &mut GridBuffers,
-) -> Result<BeatGrid, BudgetExhausted> {
+) -> Result<BeatArtifact, BudgetExhausted> {
     let sr = f64::from(sample_rate);
     // Both lookups below binary-search these, and both asserts downstream
     // assume it. `normalize_marks` is what guarantees it on the live path.
@@ -129,11 +130,10 @@ fn build_grid_with(
     }
 
     if buffers.positions.len() < Consts::MIN_DOWNBEATS {
-        return Ok(BeatGrid::new(
+        return Ok(BeatArtifact::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
             marks_to_frames(&buffers.positions, &raw.downbeats, sr),
-            Vec::new(),
         ));
     }
     bar_gaps(&buffers.positions, &mut buffers.gaps)?;
@@ -150,11 +150,10 @@ fn build_grid_with(
         &mut buffers.sorted,
     )?
     else {
-        return Ok(BeatGrid::new(
+        return Ok(BeatArtifact::new(
             marks_bpm.unwrap_or(downbeat_bpm),
             beats,
             downbeats,
-            Vec::new(),
         ));
     };
 
@@ -169,7 +168,7 @@ fn build_grid_with(
     let fit = GridFitCtx::new(&buffers.positions, &buffers.outliers, sr, params);
     let segments = build_segments(&fit, anchor_idx, nominal_bar);
 
-    Ok(BeatGrid::new(
+    Ok(BeatArtifact::with_regions(
         marks_bpm.unwrap_or_else(|| bar_to_bpm(nominal_bar)),
         beats,
         downbeats,
@@ -344,7 +343,7 @@ mod tests {
         }
     }
 
-    fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatGrid {
+    fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatArtifact {
         super::build_grid(raw, sample_rate, params, &SamplePool::default())
             .expect("grid scratch fits the PCM pool budget")
     }
@@ -593,8 +592,8 @@ mod tests {
             "bpm from 2 s bars, got {}",
             grid.bpm()
         );
-        assert_eq!(grid.segments().len(), 1, "clean track is a single leaf");
-        let seg = grid.segments()[0];
+        assert_eq!(grid.regions().len(), 1, "clean track is a single leaf");
+        let seg = grid.regions()[0];
         assert!(
             (seg.ratio_correction() - 1.0).abs() < 2e-3,
             "on-grid leaf needs no correction, got {}",
@@ -623,14 +622,14 @@ mod tests {
         let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
 
         assert!(
-            grid.segments().len() >= 2,
+            grid.regions().len() >= 2,
             "tempo change must split the grid, got {} segments",
-            grid.segments().len()
+            grid.regions().len()
         );
         let corrections: Vec<f64> = grid
-            .segments()
+            .regions()
             .iter()
-            .map(kithara_warp::GridSegment::ratio_correction)
+            .map(crate::artifact::FitRegion::ratio_correction)
             .collect();
         let min = corrections.iter().copied().fold(f64::INFINITY, f64::min);
         let max = corrections
@@ -643,7 +642,7 @@ mod tests {
             max / min
         );
 
-        for pair in grid.segments().windows(2) {
+        for pair in grid.regions().windows(2) {
             let boundary = pair[0].end_frame();
             let idx = nearest_downbeat_idx(grid.downbeats(), boundary);
             let near = grid.downbeats()[idx].abs_diff(boundary);
@@ -653,7 +652,7 @@ mod tests {
             );
             assert_eq!(idx % 4, 0, "boundary bar {idx} must sit on a 4-bar phrase");
         }
-        for seg in grid.segments() {
+        for seg in grid.regions() {
             let bars = grid
                 .downbeats()
                 .iter()
@@ -677,8 +676,8 @@ mod tests {
             65,
             "spurious half-bar downbeats must be dropped"
         );
-        assert_eq!(grid.segments().len(), 1);
-        assert!((grid.segments()[0].ratio_correction() - 1.0).abs() < 2e-3);
+        assert_eq!(grid.regions().len(), 1);
+        assert!((grid.regions()[0].ratio_correction() - 1.0).abs() < 2e-3);
         assert!((grid.bpm() - 120.0).abs() < 0.2);
     }
 
@@ -692,14 +691,14 @@ mod tests {
         let grid = build_grid(&raw(db), Consts::SR, &GridParams::default());
 
         assert!((grid.bpm() - 120.0).abs() < 0.5, "bpm {}", grid.bpm());
-        for seg in grid.segments() {
+        for seg in grid.regions() {
             assert!(
                 (seg.ratio_correction() - 1.0).abs() < 0.05,
                 "outlier tail must not bend any segment, got {}",
                 seg.ratio_correction()
             );
         }
-        assert!(!grid.segments().is_empty());
+        assert!(!grid.regions().is_empty());
     }
 
     #[kithara::test(native, flash(false))]
@@ -716,7 +715,7 @@ mod tests {
 
         assert!((grid.bpm() - 120.0).abs() < 0.2, "bpm {}", grid.bpm());
         assert!(
-            grid.segments().is_empty(),
+            grid.regions().is_empty(),
             "no stable window means no trustworthy segments"
         );
         assert_eq!(grid.beats(), [22_050, 44_100, 66_150]);
@@ -737,7 +736,7 @@ mod tests {
         );
 
         assert!((grid.bpm() - 120.0).abs() < 0.2, "bpm {}", grid.bpm());
-        assert!(grid.segments().is_empty());
+        assert!(grid.regions().is_empty());
         assert!(grid.beats().is_empty());
         assert_eq!(grid.downbeats().len(), 9);
     }

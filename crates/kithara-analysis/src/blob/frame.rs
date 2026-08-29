@@ -23,7 +23,7 @@ pub enum BlobError {
 }
 
 /// An artifact with a versioned little-endian byte encoding. Implementors write
-/// and read only the body; [`to_bytes`]/[`write_to`]/[`from_bytes`] frame the
+/// and read only the body; [`write_to`]/[`from_bytes`] frame the
 /// version header.
 pub(crate) trait Blob: Sized {
     /// Wire/disk format version. Bump when the body encoding changes.
@@ -35,6 +35,7 @@ pub(crate) trait Blob: Sized {
 }
 
 /// Serialize to a versioned blob: the `u32` version, then the body.
+#[cfg(test)]
 pub(crate) fn to_bytes<T: Blob>(value: &T) -> Vec<u8> {
     let mut out = Vec::new();
     write_to(value, &mut out);
@@ -48,7 +49,7 @@ pub(crate) fn write_to<T: Blob>(value: &T, out: &mut Vec<u8>) {
     value.encode(&mut writer);
 }
 
-/// Parse a blob produced by [`to_bytes`], rejecting a stale version or a body
+/// Parses a blob produced by [`write_to`], rejecting a stale version or a body
 /// that does not consume the blob exactly.
 pub(crate) fn from_bytes<T: Blob>(bytes: &[u8]) -> Result<T, BlobError> {
     let mut reader = Reader::new(bytes);

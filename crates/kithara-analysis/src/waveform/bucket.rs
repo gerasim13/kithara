@@ -73,15 +73,7 @@ impl From<Vec<Bucket>> for Waveform {
     }
 }
 
-/// Serialize to a versioned little-endian blob: a `u32` version, then three
-/// `f32` band heights per bucket.
-impl From<&Waveform> for Vec<u8> {
-    fn from(wave: &Waveform) -> Self {
-        blob::to_bytes(wave)
-    }
-}
-
-/// Parse a blob produced by `Vec::<u8>::from(&Waveform)`. A version mismatch, a
+/// Parses the versioned bytes written by [`Waveform::write_to`]. A version mismatch, a
 /// body that is not a whole number of buckets, or a band height outside `[0, 1]`
 /// is a typed error the caller treats as a cache miss.
 ///
@@ -140,7 +132,7 @@ mod bytes_tests {
     use kithara_test_utils::kithara;
 
     use super::{Bucket, WAVEFORM_BYTES_VERSION, Waveform};
-    use crate::blob::BlobError;
+    use crate::blob::{BlobError, to_bytes};
 
     fn sample() -> Waveform {
         Waveform::from(vec![Bucket::new(0.1, 0.2, 0.3), Bucket::new(0.0, 1.0, 0.5)])
@@ -149,7 +141,7 @@ mod bytes_tests {
     #[kithara::test]
     fn round_trips() {
         let wave = sample();
-        let bytes = Vec::<u8>::from(&wave);
+        let bytes = to_bytes(&wave);
         let back = Waveform::try_from(bytes.as_slice()).expect("valid blob round-trips");
         assert_eq!(back.buckets(), wave.buckets());
     }
@@ -157,14 +149,14 @@ mod bytes_tests {
     #[kithara::test]
     fn empty_round_trips() {
         let wave = Waveform::from(Vec::new());
-        let bytes = Vec::<u8>::from(&wave);
+        let bytes = to_bytes(&wave);
         let back = Waveform::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert!(back.is_empty());
     }
 
     #[kithara::test]
     fn rejects_wrong_version() {
-        let mut bytes = Vec::<u8>::from(&sample());
+        let mut bytes = to_bytes(&sample());
         bytes[0] = bytes[0].wrapping_add(1);
         assert!(matches!(
             Waveform::try_from(bytes.as_slice()),
@@ -183,12 +175,12 @@ mod bytes_tests {
 
         assert!(corrupt(vec![0, 0]), "shorter than the version header");
 
-        let mut truncated = Vec::<u8>::from(&sample());
+        let mut truncated = to_bytes(&sample());
         truncated.pop();
         assert!(corrupt(truncated), "body not a whole number of buckets");
 
         let nan_at_end = |v: f32| {
-            let mut bytes = Vec::<u8>::from(&sample());
+            let mut bytes = to_bytes(&sample());
             let tail = bytes.len() - 4;
             bytes[tail..].copy_from_slice(&v.to_le_bytes());
             bytes

@@ -26,29 +26,31 @@ webcodecs = ["kithara-audio/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac"]
 
 [dependencies]
-kithara-audio = { workspace = true, default-features = false }
-kithara-beat = { workspace = true, optional = true }
-kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
-kithara-test-utils = { workspace = true }
-kithara-warp = { workspace = true, default-features = false }
 
 bon = { workspace = true }
 delegate = { workspace = true }
-derive_more = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
-realfft = { workspace = true, optional = true }
-ringbuf = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-unimock = { workspace = true, optional = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara-audio = { workspace = true, default-features = false }
+kithara-beat = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true }
+kithara-resampler = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+
+derive_more = { workspace = true }
+realfft = { workspace = true, optional = true }
+ringbuf = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+unimock = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-decode = { workspace = true, features = ["symphonia"] }

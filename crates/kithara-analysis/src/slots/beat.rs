@@ -4,10 +4,10 @@ use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
+    BeatArtifact,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
     beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
     coverage::FrameRange,
-    waveform::BeatGrid,
 };
 
 pub(crate) type Detector = Box<dyn BeatDetector>;
@@ -124,7 +124,7 @@ where
         detector: Option<&mut Detector>,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
         let (analyzer, detector) = (self.0.as_mut()?, detector?);
         analyzer.snapshot(detector.as_mut(), ending, extent)
     }

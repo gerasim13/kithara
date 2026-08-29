@@ -6,7 +6,7 @@ use super::{
     detector::BeatDetector,
     grid::extend_over,
 };
-use crate::{coverage::FrameRange, waveform::BeatGrid};
+use crate::{BeatArtifact, coverage::FrameRange};
 
 pub(crate) struct BeatPass<B>
 where
@@ -40,7 +40,7 @@ where
         detector: &mut dyn BeatDetector,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
         match self.analyzer.snapshot(detector, ending) {
             Ok(grid) => {
                 let rate = self.analyzer.source_rate();

@@ -1,7 +1,7 @@
-use kithara_warp::GridSegment;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::core::GridParams;
+use crate::artifact::FitRegion;
 
 struct Consts;
 
@@ -179,7 +179,7 @@ struct SegmentWriter<'a> {
     nominal_bar: f64,
     previous: Option<FitSpan>,
     previous_start: Option<f64>,
-    segments: Vec<GridSegment>,
+    segments: Vec<FitRegion>,
 }
 
 impl<'a> SegmentWriter<'a> {
@@ -237,7 +237,7 @@ impl<'a> SegmentWriter<'a> {
             return;
         };
         if end_frame > start_frame {
-            self.segments.push(GridSegment::new(
+            self.segments.push(FitRegion::new(
                 start_frame,
                 end_frame,
                 ratio_correction(self.nominal_bar, span.slope),
@@ -245,7 +245,7 @@ impl<'a> SegmentWriter<'a> {
         }
     }
 
-    fn finish(mut self) -> Vec<GridSegment> {
+    fn finish(mut self) -> Vec<FitRegion> {
         let Some(current) = self.current else {
             return self.segments;
         };
@@ -274,7 +274,7 @@ pub(super) fn build_segments(
     ctx: &GridFitCtx<'_>,
     anchor_idx: usize,
     nominal_bar: f64,
-) -> Vec<GridSegment> {
+) -> Vec<FitRegion> {
     let mut writer = SegmentWriter::new(ctx, nominal_bar);
     visit_anchored_leaves(ctx, anchor_idx, &mut |segment| writer.visit(segment));
     writer.finish()

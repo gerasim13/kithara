@@ -235,7 +235,7 @@ mod tests {
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
-            AnalysisFingerprint, BeatGrid, BeatSnapshot, Coverage, FrameRange, GridState,
+            AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange,
             TrackAnalysis, Waveform,
         },
         assets::{
@@ -245,7 +245,6 @@ mod tests {
         bufpool::BytePool,
         file::File,
         prelude::ResourceConfig,
-        warp::GridSegment,
     };
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
@@ -275,16 +274,19 @@ mod tests {
             .expect("hand-built blob is valid")
     }
 
-    fn grid() -> BeatGrid {
-        BeatGrid::new(
+    fn grid() -> BeatArtifact {
+        BeatArtifact::new(
             128.0,
             vec![(0, Some(0.9)), (10_000, Some(0.75)), (20_000, None)],
             vec![(0, Some(0.9)), (40_000, None)],
-            vec![GridSegment::new(0, 40_000, 1.01)],
         )
     }
 
-    fn analysis(beat: Option<BeatGrid>, waveform: Option<Waveform>, extent: u64) -> TrackAnalysis {
+    fn analysis(
+        beat: Option<BeatArtifact>,
+        waveform: Option<Waveform>,
+        extent: u64,
+    ) -> TrackAnalysis {
         let mut coverage = Coverage::default();
         coverage.insert(FrameRange::new(0, extent));
         TrackAnalysis::builder()
@@ -297,7 +299,7 @@ mod tests {
             .fingerprint(fp())
             .maybe_waveform(waveform)
             .maybe_beat(beat.map(|grid| {
-                BeatSnapshot::new(grid, GridState::Provisional, vec![FrameRange::new(100, 50)])
+                BeatSnapshot::new(grid, BeatState::Provisional, vec![FrameRange::new(100, 50)])
             }))
             .build()
     }
@@ -508,7 +510,10 @@ mod tests {
         let mut reader = analysis_cache();
         let cached = reader.get(&target).expect("disk analysis must load");
         assert_eq!(cached.waveform().expect("waveform persisted").len(), 1);
-        assert_eq!(cached.beat().expect("beat grid persisted").grid(), &grid());
+        assert_eq!(
+            cached.beat().expect("beat grid persisted").artifact(),
+            &grid()
+        );
     }
 
     #[kithara::test]
@@ -654,7 +659,7 @@ mod tests {
             .get(&target)
             .expect("a beat-only hit must survive a waveform resolution change");
         assert_eq!(
-            hit.beat().expect("the grid is still usable").grid(),
+            hit.beat().expect("the grid is still usable").artifact(),
             &grid()
         );
         assert!(

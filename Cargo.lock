@@ -4235,7 +4235,6 @@ dependencies = [
  "kithara-signal",
  "kithara-test-macros",
  "kithara-test-utils",
- "kithara-warp",
  "kithara-workspace-hack",
  "num-traits",
  "realfft",

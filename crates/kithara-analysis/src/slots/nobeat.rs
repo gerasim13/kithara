@@ -3,7 +3,7 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
 
-use crate::{BeatAnalysisConfig, coverage::FrameRange, waveform::BeatGrid};
+use crate::{BeatAnalysisConfig, BeatArtifact, coverage::FrameRange};
 
 pub(crate) type Detector = ();
 
@@ -53,7 +53,7 @@ where
         _detector: Option<&mut Detector>,
         _ending: bool,
         _extent: Option<u64>,
-    ) -> Option<(BeatGrid, Vec<FrameRange>)> {
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
         None
     }
 

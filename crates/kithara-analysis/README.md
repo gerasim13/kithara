@@ -47,8 +47,8 @@ consumer (currently `kithara-app`).
   per-track pass.
 - `AnalysisProducer` — non-blocking decoded-chunk ingress for an open pass.
 - `TrackAnalysis` — self-contained published snapshot: token, revision, source
-  axis, coverage, fingerprint, waveform, and beat grid.
-- `Waveform` / `BeatGrid` — analysis artifacts with versioned byte codecs.
+  axis, coverage, fingerprint, waveform, and beat artifact.
+- `Waveform` / `BeatArtifact` — analysis artifacts with versioned byte codecs.
 - `BlobError` — corruption/version error from the pure artifact and composite
   byte codecs.
 

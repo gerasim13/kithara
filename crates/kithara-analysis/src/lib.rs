@@ -23,9 +23,11 @@ mod waveform;
 #[cfg(not(target_arch = "wasm32"))]
 mod worker;
 
-pub use artifact::{AnalysisFingerprint, AnalysisToken, BeatSnapshot, GridState, TrackAnalysis};
+pub use artifact::{
+    AnalysisFingerprint, AnalysisToken, BeatArtifact, BeatSnapshot, BeatState, TrackAnalysis,
+};
 pub use blob::frame::BlobError;
 pub use coverage::{Coverage, FrameRange};
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::*;
-pub use waveform::{AnalysisParams, BeatGrid, Bucket, bucket::Waveform};
+pub use waveform::{AnalysisParams, Bucket, bucket::Waveform};

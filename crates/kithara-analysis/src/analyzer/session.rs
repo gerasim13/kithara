@@ -7,7 +7,7 @@ use tracing::warn;
 
 use super::{AnalysisFingerprint, AnalysisToken, TrackAnalysis};
 use crate::{
-    BeatSnapshot, GridState,
+    BeatSnapshot, BeatState,
     coverage::{Coverage, FrameRange},
     slots::{
         beat::{self, Slot},
@@ -138,7 +138,7 @@ where
         self.revision = self.revision.saturating_add(1);
 
         let waveform = waveform::snapshot(&mut self.waveform, self.extent);
-        let state = self.grid_state();
+        let state = self.beat_state();
         let beat = Slot::snapshot(&mut self.beat, detector, ending, self.extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
@@ -155,14 +155,14 @@ where
             .build()
     }
 
-    fn grid_state(&self) -> GridState {
+    fn beat_state(&self) -> BeatState {
         let covered = self
             .extent
             .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)));
         if covered {
-            GridState::Final
+            BeatState::Final
         } else {
-            GridState::Provisional
+            BeatState::Provisional
         }
     }
 }

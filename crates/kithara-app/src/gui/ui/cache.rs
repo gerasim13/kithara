@@ -233,7 +233,7 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
 }
 
 pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm = ui.analysis.as_ref()?.beat()?.grid().bpm();
+    let bpm = ui.analysis.as_ref()?.beat()?.artifact().bpm();
     bpm.is_finite().then(|| bpm.as_())
 }
 

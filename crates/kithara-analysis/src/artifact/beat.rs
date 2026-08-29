@@ -1,7 +1,6 @@
 use std::mem::size_of;
 
 use kithara_platform::sync::Arc;
-use kithara_warp::GridSegment;
 
 use crate::blob::{self, Blob, BlobError, MAX_PREALLOC, Reader, Writer};
 
@@ -20,23 +19,51 @@ impl Consts {
 /// detector saw it.
 pub(crate) type MarkedBeat = (u64, Option<f32>);
 
-/// Cleaned beat grid for one track. All positions are source frames
-/// (decoder/song time, `AudioChunkInfo.frame_offset` space) — never output/stretched
-/// time.
+/// One private tempo-fit region retained by the versioned artifact codec.
+///
+/// This is an analyzer result, not a `kithara-warp` map or render plan.
+#[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
+#[fieldwork(get, vis = "pub(crate)")]
+pub(crate) struct FitRegion {
+    start_frame: u64,
+    end_frame: u64,
+    ratio_correction: f64,
+}
+
+impl FitRegion {
+    pub(crate) const fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
+        Self {
+            start_frame,
+            end_frame,
+            ratio_correction,
+        }
+    }
+}
+
+/// Cleaned beat-analysis artifact for one track.
+///
+/// All positions use source frames (`AudioChunkInfo.frame_offset` space),
+/// never output, host-rate, or stretched time. This value carries no live grid
+/// identity or revision; those belong to `kithara-warp::BeatGrid` implementors.
 #[derive(Debug, Clone, PartialEq, fieldwork::Fieldwork)]
 #[non_exhaustive]
-#[fieldwork(get)]
-pub struct BeatGrid {
+#[fieldwork(opt_in, get)]
+pub struct BeatArtifact {
+    #[field(get)]
     beats: Arc<[u64]>,
+    #[field(get)]
     beat_confidence: Arc<[Option<f32>]>,
+    #[field(get)]
     downbeats: Arc<[u64]>,
+    #[field(get)]
     downbeat_confidence: Arc<[Option<f32>]>,
-    segments: Vec<GridSegment>,
+    regions: Vec<FitRegion>,
+    #[field(get, copy)]
     bpm: f64,
 }
 
-impl BeatGrid {
-    /// Construct from already-cleaned parts.
+impl BeatArtifact {
+    /// Constructs an artifact from already-cleaned detector facts.
     ///
     /// Markers arrive paired with their confidence so the two cannot be
     /// handed over misaligned: the grid never sees two lists to reconcile.
@@ -45,7 +72,15 @@ impl BeatGrid {
         bpm: f64,
         beats: Vec<(u64, Option<f32>)>,
         downbeats: Vec<(u64, Option<f32>)>,
-        segments: Vec<GridSegment>,
+    ) -> Self {
+        Self::with_regions(bpm, beats, downbeats, Vec::new())
+    }
+
+    pub(crate) fn with_regions(
+        bpm: f64,
+        beats: Vec<MarkedBeat>,
+        downbeats: Vec<MarkedBeat>,
+        regions: Vec<FitRegion>,
     ) -> Self {
         let beat_confidence = Arc::from_iter(beats.iter().map(|(_, confidence)| *confidence));
         let beats = Arc::from_iter(beats.into_iter().map(|(frame, _)| frame));
@@ -57,24 +92,23 @@ impl BeatGrid {
             beat_confidence,
             downbeats,
             downbeat_confidence,
-            segments,
+            regions,
             bpm,
         }
     }
 
-    /// Append the versioned grid encoding to caller-owned storage.
+    #[cfg(any(test, all(not(target_arch = "wasm32"), feature = "analysis-beat")))]
+    pub(crate) fn regions(&self) -> &[FitRegion] {
+        &self.regions
+    }
+
+    /// Appends the versioned artifact encoding to caller-owned storage.
     pub fn write_to(&self, out: &mut Vec<u8>) {
         blob::write_to(self, out);
     }
 }
 
-impl From<&BeatGrid> for Vec<u8> {
-    fn from(grid: &BeatGrid) -> Self {
-        blob::to_bytes(grid)
-    }
-}
-
-impl TryFrom<&[u8]> for BeatGrid {
+impl TryFrom<&[u8]> for BeatArtifact {
     type Error = BlobError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, BlobError> {
@@ -82,23 +116,23 @@ impl TryFrom<&[u8]> for BeatGrid {
     }
 }
 
-impl Blob for BeatGrid {
+impl Blob for BeatArtifact {
     const VERSION: u32 = Consts::VERSION;
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
         let bpm = read_finite(r)?;
         let beats = read_marks(r)?;
         let downbeats = read_marks(r)?;
-        let segment_count = r.read_len()?;
-        let mut segments: Vec<GridSegment> = Vec::with_capacity(segment_count.min(MAX_PREALLOC));
-        for _ in 0..segment_count {
-            segments.push(GridSegment::new(
+        let region_count = r.read_len()?;
+        let mut regions: Vec<FitRegion> = Vec::with_capacity(region_count.min(MAX_PREALLOC));
+        for _ in 0..region_count {
+            regions.push(FitRegion::new(
                 r.read_u64()?,
                 r.read_u64()?,
                 read_finite(r)?,
             ));
         }
-        Ok(Self::new(bpm, beats, downbeats, segments))
+        Ok(Self::with_regions(bpm, beats, downbeats, regions))
     }
 
     fn encode(&self, w: &mut Writer<'_>) {
@@ -106,16 +140,16 @@ impl Blob for BeatGrid {
             size_of::<f64>()
                 + Consts::LIST_COUNT * Consts::LEN_PREFIX_BYTES
                 + Consts::FRAME_BYTES * (self.beats.len() + self.downbeats.len())
-                + Consts::SEGMENT_BYTES * self.segments.len(),
+                + Consts::SEGMENT_BYTES * self.regions.len(),
         );
         w.write_f64(self.bpm);
         write_marks(w, &self.beats, &self.beat_confidence);
         write_marks(w, &self.downbeats, &self.downbeat_confidence);
-        w.write_len(self.segments.len());
-        for segment in &self.segments {
-            w.write_u64(segment.start_frame());
-            w.write_u64(segment.end_frame());
-            w.write_f64(segment.ratio_correction());
+        w.write_len(self.regions.len());
+        for region in &self.regions {
+            w.write_u64(region.start_frame());
+            w.write_u64(region.end_frame());
+            w.write_f64(region.ratio_correction());
         }
     }
 }
@@ -133,12 +167,29 @@ fn read_finite(r: &mut Reader<'_>) -> Result<f64, BlobError> {
 mod bytes_tests {
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
-    use kithara_warp::GridSegment;
 
-    use super::{BeatGrid, BlobError};
+    use super::{BeatArtifact, BlobError, FitRegion};
+    use crate::blob::to_bytes;
 
-    fn sample() -> BeatGrid {
-        BeatGrid::new(
+    const V2_FIXTURE: &[u8] = &[
+        0x02, 0x00, 0x00, 0x00, // version
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5e, 0x40, // 120 BPM
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // two beats
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 0
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, // observed, confidence 1
+        0x22, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 22_050
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // extrapolated
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // one downbeat
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 0
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, // observed, confidence 1
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // one fit region
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // start 0
+        0x44, 0xac, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // end 44_100
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, // ratio 1
+    ];
+
+    fn sample() -> BeatArtifact {
+        BeatArtifact::with_regions(
             123.5,
             // A mix on purpose: the codec must carry both a detected
             // confidence and the absence of one.
@@ -150,8 +201,8 @@ mod bytes_tests {
             ],
             vec![(0, Some(0.9)), (88_200, None)],
             vec![
-                GridSegment::new(0, 88_200, 1.02),
-                GridSegment::new(88_200, 176_400, 0.98),
+                FitRegion::new(0, 88_200, 1.02),
+                FitRegion::new(88_200, 176_400, 0.98),
             ],
         )
     }
@@ -159,9 +210,25 @@ mod bytes_tests {
     #[kithara::test]
     fn round_trips() {
         let grid = sample();
-        let bytes = Vec::<u8>::from(&grid);
-        let back = BeatGrid::try_from(bytes.as_slice()).expect("valid blob round-trips");
+        let bytes = to_bytes(&grid);
+        let back = BeatArtifact::try_from(bytes.as_slice()).expect("valid blob round-trips");
         assert_eq!(back, grid);
+    }
+
+    #[kithara::test]
+    fn frozen_v2_fixture_decodes_and_reencodes_identically() {
+        let artifact = BeatArtifact::try_from(V2_FIXTURE).expect("frozen v2 artifact decodes");
+
+        assert_eq!(artifact.bpm(), 120.0);
+        assert_eq!(artifact.beats(), [0, 22_050]);
+        assert_eq!(artifact.beat_confidence(), [Some(1.0), None]);
+        assert_eq!(artifact.downbeats(), [0]);
+        assert_eq!(artifact.downbeat_confidence(), [Some(1.0)]);
+        assert_eq!(artifact.regions(), [FitRegion::new(0, 44_100, 1.0)]);
+
+        let mut encoded = Vec::new();
+        artifact.write_to(&mut encoded);
+        assert_eq!(encoded, V2_FIXTURE);
     }
 
     #[kithara::test]
@@ -180,18 +247,18 @@ mod bytes_tests {
 
     #[kithara::test]
     fn degraded_grid_round_trips() {
-        let grid = BeatGrid::new(0.0, Vec::new(), Vec::new(), Vec::new());
-        let bytes = Vec::<u8>::from(&grid);
-        let back = BeatGrid::try_from(bytes.as_slice()).expect("empty blob round-trips");
+        let grid = BeatArtifact::new(0.0, Vec::new(), Vec::new());
+        let bytes = to_bytes(&grid);
+        let back = BeatArtifact::try_from(bytes.as_slice()).expect("empty blob round-trips");
         assert_eq!(back, grid);
     }
 
     #[kithara::test]
     fn rejects_wrong_version() {
-        let mut bytes = Vec::<u8>::from(&sample());
+        let mut bytes = to_bytes(&sample());
         bytes[0] = bytes[0].wrapping_add(1);
         assert!(matches!(
-            BeatGrid::try_from(bytes.as_slice()),
+            BeatArtifact::try_from(bytes.as_slice()),
             Err(BlobError::Version { .. })
         ));
     }
@@ -202,22 +269,22 @@ mod bytes_tests {
         // puts the first marker's present flag here.
         let flag = size_of::<u32>() + size_of::<f64>() + size_of::<u64>() + size_of::<u64>();
 
-        let mut bad_flag = Vec::<u8>::from(&sample());
+        let mut bad_flag = to_bytes(&sample());
         bad_flag[flag] = 7;
         assert!(
             matches!(
-                BeatGrid::try_from(bad_flag.as_slice()),
+                BeatArtifact::try_from(bad_flag.as_slice()),
                 Err(BlobError::Corrupt)
             ),
             "a present flag outside yes or no is corruption"
         );
 
-        let mut out_of_range = Vec::<u8>::from(&sample());
+        let mut out_of_range = to_bytes(&sample());
         out_of_range[flag + size_of::<u32>()..flag + size_of::<u32>() + size_of::<f32>()]
             .copy_from_slice(&2.0_f32.to_le_bytes());
         assert!(
             matches!(
-                BeatGrid::try_from(out_of_range.as_slice()),
+                BeatArtifact::try_from(out_of_range.as_slice()),
                 Err(BlobError::Corrupt)
             ),
             "a confidence above one is corruption"
@@ -226,14 +293,15 @@ mod bytes_tests {
 
     #[kithara::test]
     fn rejects_corrupt_blobs() {
-        let corrupt = |bytes: &[u8]| matches!(BeatGrid::try_from(bytes), Err(BlobError::Corrupt));
+        let corrupt =
+            |bytes: &[u8]| matches!(BeatArtifact::try_from(bytes), Err(BlobError::Corrupt));
         assert!(corrupt(&[0, 0]), "shorter than the version header");
 
-        let mut truncated = Vec::<u8>::from(&sample());
+        let mut truncated = to_bytes(&sample());
         truncated.pop();
         assert!(corrupt(&truncated), "truncated body");
 
-        let mut trailing = Vec::<u8>::from(&sample());
+        let mut trailing = to_bytes(&sample());
         trailing.push(0);
         assert!(corrupt(&trailing), "trailing garbage");
     }
