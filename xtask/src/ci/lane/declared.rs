@@ -5,7 +5,9 @@ use toml::Value;
 
 use crate::{
     ci::{config::CiPins, process::Process, run::PipelineKind},
-    config::{CiLaneConfig, CiLanePin, PIN_PREFIX, ROOT_PLACEHOLDER, SELF_PROGRAM},
+    config::{
+        CiLaneConfig, CiLanePin, PIN_PREFIX, ROOT_PLACEHOLDER, SELF_PROGRAM, TARGET_PLACEHOLDER,
+    },
 };
 
 /// Run a lane the way `.config/xtask.toml` declares it: the pipeline kinds it
@@ -60,10 +62,16 @@ fn kind_name(kind: PipelineKind) -> String {
     kind.name().to_owned()
 }
 
-/// Fill in the two things a lane cannot spell for itself: where the checkout
-/// is, and what a reviewed pin currently holds.
+/// Fill in the things a lane cannot spell for itself: where the checkout is,
+/// where its leased build cache lives, and what a reviewed pin currently
+/// holds.
 fn resolve(value: &str, process: &Process, pins: &CiPins) -> Result<String> {
-    let mut filled = value.replace(ROOT_PLACEHOLDER, &process.root().display().to_string());
+    let mut filled = value
+        .replace(ROOT_PLACEHOLDER, &process.root().display().to_string())
+        .replace(
+            TARGET_PLACEHOLDER,
+            &process.target_dir().display().to_string(),
+        );
     while let Some(start) = filled.find(PIN_PREFIX) {
         let tail = &filled[start + PIN_PREFIX.len()..];
         let end = tail

@@ -82,7 +82,8 @@ pub(crate) struct CiLaneStep {
     /// What the step needs the executor to be, rather than to run: a build-job
     /// cap the container cannot exceed, a target directory a gate owns, the
     /// browser a harness would otherwise guess. A value may name the checkout
-    /// with `{root}`, which is the only thing a lane cannot spell for itself.
+    /// with `{root}`, or the leased build-cache directory with `{target}` -
+    /// the two things a lane cannot spell for itself.
     pub(crate) env: BTreeMap<String, String>,
     /// The program for this step alone. A lane that installs a target before
     /// using it runs two, so the lane's own `program` is only the default.
@@ -137,6 +138,13 @@ pub(crate) const SELF_PROGRAM: &str = "<xtask>";
 /// The checkout a lane resolves in. A compiler flag that has to name a file in
 /// the repository needs an absolute path, and only the runner knows it.
 pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
+
+/// The build-cache directory the process leased, i.e. `CARGO_TARGET_DIR` as
+/// the executor set it, not `{root}/target`. A lane that writes its own build
+/// under a fixed `{root}`-relative path escapes the lease the eviction and
+/// reclaim machinery tracks; one that asks for `{target}` stays inside it the
+/// same way the process's own build does.
+pub(crate) const TARGET_PLACEHOLDER: &str = "{target}";
 
 /// A reviewed pin, by name: `{pin.msrv_toolchain}` is the value that key holds
 /// in `.config/ci-pins.toml`.
@@ -240,11 +248,14 @@ impl CiProjectConfig {
     }
 }
 
-/// `{root}` and `{pin.<key>}` are the whole substitution vocabulary. A typo
-/// that reached the runner would be passed through as a literal brace and fail
-/// as a missing header or an unknown toolchain rather than as a bad config.
+/// `{root}`, `{target}`, and `{pin.<key>}` are the whole substitution
+/// vocabulary. A typo that reached the runner would be passed through as a
+/// literal brace and fail as a missing header or an unknown toolchain rather
+/// than as a bad config.
 fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
-    let mut rest = value.replace(ROOT_PLACEHOLDER, "");
+    let mut rest = value
+        .replace(ROOT_PLACEHOLDER, "")
+        .replace(TARGET_PLACEHOLDER, "");
     while let Some(start) = rest.find(PIN_PREFIX) {
         let Some(end) = rest[start..].find('}') else {
             bail!("ext.ci.lanes.{lane} leaves {PIN_PREFIX} unclosed in {whose}: `{value}`");
@@ -253,8 +264,8 @@ fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
     }
     if rest.contains('{') {
         bail!(
-            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER} or \
-             {PIN_PREFIX}<key>}} in {whose}: `{value}`"
+            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER}, \
+             {TARGET_PLACEHOLDER}, or {PIN_PREFIX}<key>}} in {whose}: `{value}`"
         );
     }
     Ok(())
