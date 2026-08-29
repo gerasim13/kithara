@@ -19,7 +19,7 @@ struct Defaults;
 
 impl Defaults {
     #[cfg(not(target_arch = "wasm32"))]
-    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(6).unwrap();
     #[cfg(target_arch = "wasm32")]
     const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(32).unwrap();
     #[cfg(not(target_arch = "wasm32"))]
@@ -306,11 +306,11 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
-    fn config_defaults_keep_one_chunk_prefetched_in_a_two_chunk_ring() {
+    fn config_defaults_keep_one_chunk_prefetched_in_the_native_ring() {
         let config = test_config("https://example.com/song.mp3").unwrap();
 
         assert_eq!(config.preload_chunks.get(), 1);
-        assert_eq!(config.audio_buffer_chunks.get(), 2);
+        assert_eq!(config.audio_buffer_chunks.get(), 6);
     }
 
     #[cfg(target_arch = "wasm32")]
