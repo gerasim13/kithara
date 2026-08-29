@@ -65,7 +65,6 @@ mod tests {
         ids::SourceUri,
         render::Skin,
         skin::{PictureDoc, SheetDoc},
-        source::MemResolver,
     };
 
     fn doc(source: &str, columns: u32) -> PictureDoc {
@@ -81,15 +80,9 @@ mod tests {
         document
     }
 
-    fn resolver() -> MemResolver {
-        let mut resolver = MemResolver::default();
-        resolver.insert_bytes("sprites/spinner.png", builtin::SPINNER_SHEET);
-        resolver
-    }
-
     #[kithara::test]
     fn the_skin_answers_the_name_it_declared() {
-        let pictures = Pictures::load(&doc("sprites/spinner.png", 8), &resolver())
+        let pictures = Pictures::load(&doc("sprites/spinner.png", 8), &builtin::resolver())
             .unwrap_or_else(|error| panic!("a declared picture must load: {error}"));
 
         assert_eq!(pictures.sheet("spinner").map(|sheet| sheet.len()), Some(8));
@@ -99,7 +92,7 @@ mod tests {
     /// rather than standing in for it with one it did not ask for.
     #[kithara::test]
     fn a_name_the_skin_carries_nothing_for_answers_nothing() {
-        let pictures = Pictures::load(&doc("sprites/spinner.png", 8), &resolver())
+        let pictures = Pictures::load(&doc("sprites/spinner.png", 8), &builtin::resolver())
             .unwrap_or_else(|error| panic!("a declared picture must load: {error}"));
 
         assert!(pictures.sheet("no-such-picture").is_none());
@@ -109,7 +102,7 @@ mod tests {
     /// same frame drawn on the next are one picture to whatever uploads it.
     #[kithara::test]
     fn asking_twice_gives_back_the_same_cut() {
-        let pictures = Pictures::load(&doc("sprites/spinner.png", 8), &resolver())
+        let pictures = Pictures::load(&doc("sprites/spinner.png", 8), &builtin::resolver())
             .unwrap_or_else(|error| panic!("a declared picture must load: {error}"));
         let (first, again) = (pictures.sheet("spinner"), pictures.sheet("spinner"));
 
@@ -123,7 +116,8 @@ mod tests {
     /// skin with one drawing fewer.
     #[kithara::test]
     fn a_picture_the_resolver_cannot_answer_is_an_error() {
-        let error = Pictures::load(&doc("sprites/missing.png", 8), &resolver()).unwrap_err();
+        let error =
+            Pictures::load(&doc("sprites/missing.png", 8), &builtin::resolver()).unwrap_err();
 
         assert!(matches!(error, crate::error::UiDocError::NotFound { .. }));
     }
@@ -132,7 +126,8 @@ mod tests {
     /// rather than showing torn frames at every draw.
     #[kithara::test]
     fn a_grid_the_picture_does_not_divide_is_an_error() {
-        let error = Pictures::load(&doc("sprites/spinner.png", 7), &resolver()).unwrap_err();
+        let error =
+            Pictures::load(&doc("sprites/spinner.png", 7), &builtin::resolver()).unwrap_err();
 
         assert!(matches!(error, crate::error::UiDocError::Picture { .. }));
     }

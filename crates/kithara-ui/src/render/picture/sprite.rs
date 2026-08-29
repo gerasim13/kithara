@@ -132,11 +132,19 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::Sheet;
-    use crate::{builtin, draw::Image};
+    use crate::{builtin, draw::Image, source::SourceResolver};
+
+    /// The sheet the dark skin names, read the way a host reads it.
+    fn spinner() -> std::sync::Arc<[u8]> {
+        builtin::resolver()
+            .bytes(None, "sprites/spinner.png")
+            .expect("the shipped folder holds the spinner sheet")
+            .bytes
+    }
 
     #[kithara::test]
     fn the_builtin_sheet_cuts_into_the_frames_it_declares() {
-        let sheet = Sheet::cut("spinner", builtin::SPINNER_SHEET, 8, 1)
+        let sheet = Sheet::cut("spinner", &spinner(), 8, 1)
             .unwrap_or_else(|error| panic!("the embedded sheet must cut: {error}"));
 
         assert_eq!(sheet.len(), 8);
@@ -144,7 +152,7 @@ mod tests {
 
     #[kithara::test]
     fn every_frame_of_the_builtin_sheet_is_square() {
-        let sheet = Sheet::cut("spinner", builtin::SPINNER_SHEET, 8, 1)
+        let sheet = Sheet::cut("spinner", &spinner(), 8, 1)
             .unwrap_or_else(|error| panic!("the embedded sheet must cut: {error}"));
 
         for index in 0..sheet.len() {
@@ -159,7 +167,7 @@ mod tests {
     /// rasteriser keyed on identity would otherwise show the first everywhere.
     #[kithara::test]
     fn two_frames_of_one_sheet_are_two_pictures() {
-        let sheet = Sheet::cut("spinner", builtin::SPINNER_SHEET, 8, 1)
+        let sheet = Sheet::cut("spinner", &spinner(), 8, 1)
             .unwrap_or_else(|error| panic!("the embedded sheet must cut: {error}"));
 
         assert_ne!(sheet.frame(0).map(Image::id), sheet.frame(1).map(Image::id));
@@ -167,7 +175,7 @@ mod tests {
 
     #[kithara::test]
     fn frames_of_one_sheet_differ_in_their_pixels() {
-        let sheet = Sheet::cut("spinner", builtin::SPINNER_SHEET, 8, 1)
+        let sheet = Sheet::cut("spinner", &spinner(), 8, 1)
             .unwrap_or_else(|error| panic!("the embedded sheet must cut: {error}"));
 
         assert_ne!(
@@ -178,7 +186,7 @@ mod tests {
 
     #[kithara::test]
     fn a_running_index_wraps_back_to_the_first_frame() {
-        let sheet = Sheet::cut("spinner", builtin::SPINNER_SHEET, 8, 1)
+        let sheet = Sheet::cut("spinner", &spinner(), 8, 1)
             .unwrap_or_else(|error| panic!("the embedded sheet must cut: {error}"));
 
         assert_eq!(sheet.frame(8).map(Image::id), sheet.frame(0).map(Image::id));
@@ -186,7 +194,7 @@ mod tests {
 
     #[kithara::test]
     fn a_grid_that_does_not_divide_the_sheet_is_refused() {
-        assert!(Sheet::cut("spinner", builtin::SPINNER_SHEET, 7, 1).is_err());
+        assert!(Sheet::cut("spinner", &spinner(), 7, 1).is_err());
     }
 
     #[kithara::test]

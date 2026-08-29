@@ -9,125 +9,31 @@ use crate::{
     text::{TextDoc, parse_text},
 };
 
+// `ASSETS` and `PICTURES`: every document and picture the shipped folder holds,
+// read from the folder at build time. See `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/builtin_assets.rs"));
+
 pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
-pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
 pub const DARK_SKIN_PATH: &str = "kithara-dark.kskin.ron";
-/// Paper, neon and soft: three skins written over the dark one. Paper restates
-/// its palette and nothing else; neon and soft restate measurements and frames
-/// as well, which is where a skin stops being a colour scheme.
-pub const LIGHT_SKIN: &str = include_str!("../assets/kithara-light.kskin.ron");
-pub const LIGHT_SKIN_PATH: &str = "kithara-light.kskin.ron";
-pub const NEON_SKIN: &str = include_str!("../assets/kithara-neon.kskin.ron");
-pub const NEON_SKIN_PATH: &str = "kithara-neon.kskin.ron";
-pub const SOFT_SKIN: &str = include_str!("../assets/kithara-soft.kskin.ron");
-pub const SOFT_SKIN_PATH: &str = "kithara-soft.kskin.ron";
-/// Every skin this crate ships, in the order a picker offers them. The first
-/// is the one a host wears when it names none.
+/// Every skin this crate ships, in the order a picker offers them. The first is
+/// the one a host wears when it names none.
+///
+/// Paper, neon and soft are written over the dark one. Paper restates its
+/// palette and nothing else; neon and soft restate measurements and frames as
+/// well, which is where a skin stops being a colour scheme.
 pub const SKIN_PATHS: [&str; 4] = [
     DARK_SKIN_PATH,
-    LIGHT_SKIN_PATH,
-    NEON_SKIN_PATH,
-    SOFT_SKIN_PATH,
+    "kithara-light.kskin.ron",
+    "kithara-neon.kskin.ron",
+    "kithara-soft.kskin.ron",
 ];
-/// Eight frames of a growing arc, in one row, named by the dark skin for the
-/// sprite page and its cross-host proof.
-pub const SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner.png");
-pub const SPINNER_SHEET_PATH: &str = "sprites/spinner.png";
-/// The same eight frames drawn as a turning ring of dots, named by the neon
-/// skin over the arc it inherits: a skin carries drawings and not only colour.
-pub const NEON_SPINNER_SHEET: &[u8] = include_bytes!("../assets/sprites/spinner-neon.png");
-pub const NEON_SPINNER_SHEET_PATH: &str = "sprites/spinner-neon.png";
 pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 
+/// The shipped folder, resolved from memory, for a host with no checkout to
+/// read it from.
 #[must_use]
 pub fn resolver() -> MemResolver {
-    const ASSETS: &[(&str, &str)] = &[
-        (DARK_SKIN_PATH, DARK_SKIN),
-        (LIGHT_SKIN_PATH, LIGHT_SKIN),
-        (NEON_SKIN_PATH, NEON_SKIN),
-        (SOFT_SKIN_PATH, SOFT_SKIN),
-        (MICRO_PRESET, include_str!("../assets/micro.klayout.ron")),
-        (PLAYER_PRESET, include_str!("../assets/player.klayout.ron")),
-        (
-            "modules/deck-micro.kmodule.ron",
-            include_str!("../assets/modules/deck-micro.kmodule.ron"),
-        ),
-        (
-            "modules/deck-micro/bar.kmodule.ron",
-            include_str!("../assets/modules/deck-micro/bar.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu.kmodule.ron",
-            include_str!("../assets/modules/app-menu.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/hint-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/hint-row.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/layout-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/layout-row.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/module-cell.kmodule.ron",
-            include_str!("../assets/modules/app-menu/module-cell.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/toggle-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/toggle-row.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/window-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/window-row.kmodule.ron"),
-        ),
-        (
-            "modules/master-clock.kmodule.ron",
-            include_str!("../assets/modules/master-clock.kmodule.ron"),
-        ),
-        (
-            "modules/master-clock/surface.kmodule.ron",
-            include_str!("../assets/modules/master-clock/surface.kmodule.ron"),
-        ),
-        (
-            "modules/master-clock/source-row.kmodule.ron",
-            include_str!("../assets/modules/master-clock/source-row.kmodule.ron"),
-        ),
-        (
-            "modules/global-bar.kmodule.ron",
-            include_str!("../assets/modules/global-bar.kmodule.ron"),
-        ),
-        (
-            "modules/deck.kmodule.ron",
-            include_str!("../assets/modules/deck.kmodule.ron"),
-        ),
-        (
-            "modules/deck/transport.kmodule.ron",
-            include_str!("../assets/modules/deck/transport.kmodule.ron"),
-        ),
-        (
-            "modules/deck/quality.kmodule.ron",
-            include_str!("../assets/modules/deck/quality.kmodule.ron"),
-        ),
-        (
-            "modules/deck/quality/auto.kmodule.ron",
-            include_str!("../assets/modules/deck/quality/auto.kmodule.ron"),
-        ),
-        (
-            "modules/deck/quality/row.kmodule.ron",
-            include_str!("../assets/modules/deck/quality/row.kmodule.ron"),
-        ),
-        (
-            "modules/library.kmodule.ron",
-            include_str!("../assets/modules/library.kmodule.ron"),
-        ),
-    ];
-    /// Every picture the shipped skins name, read through the same resolver
-    /// their documents are.
-    const PICTURES: &[(&str, &[u8])] = &[
-        (SPINNER_SHEET_PATH, SPINNER_SHEET),
-        (NEON_SPINNER_SHEET_PATH, NEON_SPINNER_SHEET),
-    ];
     let mut resolver = MemResolver::default();
     for (path, text) in ASSETS {
         resolver.insert(path, text);

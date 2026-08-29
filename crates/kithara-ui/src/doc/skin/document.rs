@@ -448,8 +448,7 @@ mod tests {
     }
 
     fn chain(links: &[(&str, &str)]) -> MemResolver {
-        let mut resolver = MemResolver::default();
-        resolver.insert(builtin::DARK_SKIN_PATH, builtin::DARK_SKIN);
+        let mut resolver = builtin::resolver();
         for (path, text) in links {
             resolver.insert(path, text);
         }
