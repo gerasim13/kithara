@@ -1106,12 +1106,19 @@ exit 19
     fn an_unknown_lane_fails_with_the_names_it_could_have_been() {
         assert!(Cli::try_parse_from(["xtask", "ci", "run", "apple-lint"]).is_ok());
         assert!(
-            Cli::try_parse_from(["xtask", "ci", "run", "linux-test", "--kind", "quarantine"])
-                .is_ok()
+            Cli::try_parse_from([
+                "xtask",
+                "ci",
+                "run",
+                "linux-test-simulated-clock",
+                "--kind",
+                "quarantine"
+            ])
+            .is_ok()
         );
 
         let lanes = declared_lanes();
-        assert!(Lane::parse("linux-test", &lanes).is_ok());
+        assert!(Lane::parse("linux-test-simulated-clock", &lanes).is_ok());
         assert!(Lane::parse("verdict", &lanes).is_ok());
         let error = Lane::parse("apple", &lanes).unwrap_err().to_string();
         assert!(error.starts_with("`apple` is not a CI lane"), "{error}");

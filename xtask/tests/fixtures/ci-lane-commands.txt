@@ -1619,46 +1619,6 @@
   <require os> linux
   <require tools> cargo just
   just test run --touched
-# linux-test / branch
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / platforms
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / merge-request
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / quarantine
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / main
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / nightly
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / weekly
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
-# linux-test / release
-  <require os> linux
-  <require tools> cargo just sccache
-  just test run --profile ci
-    CARGO_BUILD_JOBS=2
 # linux-test-real-clock / branch
   <require os> linux
   <require tools> cargo just
@@ -1707,6 +1667,46 @@
   just test run --flash=off
     CARGO_TARGET_DIR=<root>/target/flash-off
     KITHARA_HANG_DUMP_DIR=<root>/target/hang
+# linux-test-simulated-clock / branch
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / platforms
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / merge-request
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / quarantine
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / main
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / nightly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / weekly
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
+# linux-test-simulated-clock / release
+  <require os> linux
+  <require tools> cargo just sccache
+  just test run --profile ci
+    CARGO_BUILD_JOBS=2
 # linux-tooling / branch
   <require os> linux
   <require tools> cargo just sccache

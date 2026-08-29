@@ -1251,7 +1251,7 @@ timeout_minutes = 60
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
 # twice in one second, and Cargo reported only "could not compile" with no
 # diagnostic, because the compiler never reached one.
-[ext.ci.lanes.linux-test]
+[ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
