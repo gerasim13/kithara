@@ -169,6 +169,44 @@ fn xtask_lane_role_names() -> Vec<String> {
         .collect()
 }
 
+// Every command a GitHub workflow runs has to exist as a lane before the
+// workflows can stop restating them. This names the lanes that must be there.
+#[test]
+fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("CI lanes are a table");
+
+    for name in [
+        "linux-lint",
+        "linux-arch",
+        "linux-msrv",
+        "linux-perf-memory",
+        "linux-test-real-clock",
+        "linux-support",
+        "deep-rtsan-fast",
+        "deep-rtsan-file",
+        "deep-rtsan-hls",
+        "deep-gpu",
+        "deep-miri",
+        "quality-assess",
+        "quality-similarity",
+        "quality-architecture",
+        "quality-coverage-risk",
+        "quality-health",
+        "quality-report",
+    ] {
+        assert!(lanes.contains_key(name), "lane `{name}` must be declared");
+    }
+}
+
 // A lane naming a kind that no pipeline can be is a lane that never runs, and
 // nothing else would say so.
 #[test]
