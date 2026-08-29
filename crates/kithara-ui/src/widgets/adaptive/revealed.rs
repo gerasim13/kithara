@@ -58,17 +58,6 @@ impl<'a, Message, Theme, Renderer> Revealed<'a, Message, Theme, Renderer> {
         }
     }
 
-    fn reached(&self, room: Size) -> Vec<bool> {
-        let value = match self.shape.measure {
-            MeasureAxis::Width => room.width,
-            MeasureAxis::Height => room.height,
-        };
-        self.bands
-            .iter()
-            .map(|(from, until)| stands(*from, *until, value))
-            .collect()
-    }
-
     fn flow(&self) -> flex::Axis {
         match self.shape.flow {
             Axis::Horizontal => flex::Axis::Horizontal,
@@ -149,8 +138,19 @@ where
         let declared = limits
             .width(self.shape.size.width)
             .height(self.shape.size.height);
-        let shown = self.reached(declared.max());
-        let moves = gather(&shown);
+        let room = declared.max();
+        let value = match self.shape.measure {
+            MeasureAxis::Width => room.width,
+            MeasureAxis::Height => room.height,
+        };
+        let shown = &mut tree.state.downcast_mut::<State>().shown;
+        shown.clear();
+        shown.extend(
+            self.bands
+                .iter()
+                .map(|(from, until)| stands(*from, *until, value)),
+        );
+        let moves = gather(shown);
         for (front, index) in moves.iter().copied() {
             self.children[front..=index].rotate_right(1);
             tree.children[front..=index].rotate_right(1);
@@ -181,7 +181,6 @@ where
         slots
             .zip(node.children())
             .for_each(|(slot, laid_out)| nodes[slot] = laid_out.clone());
-        tree.state.downcast_mut::<State>().shown = shown;
         LayoutNode::with_children(node.size(), nodes)
     }
 

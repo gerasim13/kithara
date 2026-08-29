@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use portable_atomic::{AtomicF64, AtomicU32};
+use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
 
@@ -25,6 +25,8 @@ pub struct PlaybackSnapshot {
     pub(crate) frontier: f64,
     /// Playback position in seconds.
     pub(crate) position: f64,
+    /// Effective media seconds consumed per output second; `0.0` while paused.
+    pub(crate) rate: f32,
     /// Current output sample rate.
     pub(crate) sample_rate: u32,
 }
@@ -43,6 +45,8 @@ pub struct PlaybackShared {
     pub frontier: AtomicF64,
     /// Playback position in seconds.
     pub position: AtomicF64,
+    /// Effective media seconds consumed per output second; `0.0` while paused.
+    pub(crate) rate: AtomicF32,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
@@ -97,6 +101,7 @@ impl PlaybackShared {
             frontier,
             cached: self.cached.load(Ordering::Relaxed),
             duration: self.duration.load(Ordering::Relaxed),
+            rate: self.rate.load(Ordering::Relaxed),
             sample_rate: self.sample_rate.load(Ordering::Relaxed),
             playing: self.playing.load(Ordering::Relaxed),
         }
@@ -118,6 +123,7 @@ mod tests {
         assert_eq!(playback.seek_epoch.load(Ordering::Relaxed), 0);
         assert_eq!(playback.position.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.duration.load(Ordering::Relaxed), 0.0);
+        assert_eq!(playback.rate.load(Ordering::Relaxed), 0.0);
         assert_eq!(playback.sample_rate.load(Ordering::Relaxed), 0);
     }
 
@@ -153,6 +159,7 @@ mod tests {
         playback.position.store(12.0, Ordering::Relaxed);
         playback.frontier.store(20.0, Ordering::Relaxed);
         playback.duration.store(180.0, Ordering::Relaxed);
+        playback.rate.store(1.25, Ordering::Relaxed);
         playback.sample_rate.store(48_000, Ordering::Relaxed);
 
         let snap = playback.snapshot();
@@ -160,6 +167,7 @@ mod tests {
         assert!((snap.position - 12.0).abs() < f64::EPSILON);
         assert!((snap.frontier - 20.0).abs() < f64::EPSILON);
         assert!((snap.duration - 180.0).abs() < f64::EPSILON);
+        assert!((snap.rate - 1.25).abs() < f32::EPSILON);
         assert_eq!(snap.sample_rate, 48_000);
     }
 

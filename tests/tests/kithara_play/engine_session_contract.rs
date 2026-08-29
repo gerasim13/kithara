@@ -1,22 +1,17 @@
 //! The engine lifecycle contract is the same whatever session drives the graph.
-//! The caller supplies that session because only a cpal output stream needs
-//! hardware, and that decides which suite owns the test.
+//! The caller supplies an EngineImpl; each fixture decides which session and
+//! backend it uses, and therefore which suite owns the test.
 
-use kithara::{
-    events::EventBus,
-    play::{EngineConfig, EngineImpl, PlayError},
-};
+use kithara::play::{EngineImpl, PlayError};
 
-pub(super) fn start_stop_roundtrip(config: EngineConfig) {
-    let engine = EngineImpl::new(config, EventBus::default());
+pub(super) fn start_stop_roundtrip(engine: &EngineImpl) {
     engine.start().unwrap();
     assert!(engine.is_running());
     engine.stop().unwrap();
     assert!(!engine.is_running());
 }
 
-pub(super) fn allocate_and_release_slot(config: EngineConfig) {
-    let engine = EngineImpl::new(config, EventBus::default());
+pub(super) fn allocate_and_release_slot(engine: &EngineImpl) {
     engine.start().unwrap();
 
     let slot_id = engine.allocate_slot().unwrap();
@@ -29,9 +24,8 @@ pub(super) fn allocate_and_release_slot(config: EngineConfig) {
     engine.stop().unwrap();
 }
 
-/// The supplied config must set `max_slots` to 1.
-pub(super) fn arena_full_error(config: EngineConfig) {
-    let engine = EngineImpl::new(config, EventBus::default());
+/// The supplied engine must set `max_slots` to 1.
+pub(super) fn arena_full_error(engine: &EngineImpl) {
     engine.start().unwrap();
 
     let _slot = engine.allocate_slot().unwrap();

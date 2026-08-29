@@ -2,8 +2,8 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
-    decode::{PcmChunk, PcmMeta},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -16,7 +16,9 @@ use kithara::{
         // expires while the run is still seconds of real work from a switch.
         time::{Duration, Instant, Instant as RealInstant, sleep},
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    signal::{AudioChunk, AudioChunkInfo},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     SignalDirection as Direction, TestTempDir, Xorshift64, auto, detect_direction,
@@ -42,13 +44,13 @@ impl Consts {
     const NEXT_CHUNK_TIMEOUT_MS: u64 = 3_000;
 }
 
-fn detect_chunk_direction(chunk: &PcmChunk) -> Direction {
+fn detect_chunk_direction(chunk: &AudioChunk) -> Direction {
     let channels = chunk.meta.spec.channels as usize;
     detect_direction(&chunk.samples, channels)
 }
 
 /// Format chunk metadata for diagnostic output.
-fn format_meta(meta: &PcmMeta, pcm_len: usize) -> String {
+fn format_meta(meta: &AudioChunkInfo, pcm_len: usize) -> String {
     format!(
         "frame_offset={}, samples={}, segment={:?}, variant={:?}, epoch={}",
         meta.frame_offset, pcm_len, meta.segment_index, meta.variant_index, meta.epoch
@@ -57,7 +59,7 @@ fn format_meta(meta: &PcmMeta, pcm_len: usize) -> String {
 
 /// Check saw-tooth continuity within a single chunk.
 /// Returns the number of breaks found.
-fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
+fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
     let channels = chunk.meta.spec.channels as usize;
     let frames = chunk.frames();
     if frames < 2 {
@@ -77,14 +79,14 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
     breaks
 }
 
-async fn next_chunk_with_timeout(
-    audio: &mut Audio<Stream<Hls>>,
+async fn next_chunk_with_timeout<R: AudioRead>(
+    audio: &mut R,
     timeout: Duration,
     stage: &str,
-) -> Option<PcmChunk> {
+) -> Option<AudioChunk> {
     let deadline = Instant::now() + timeout;
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
             Ok(ChunkOutcome::Eof { .. }) => return None,
             Ok(ChunkOutcome::Pending { .. }) => {}
@@ -174,18 +176,31 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let store = if ephemeral {
         AssetStore::builder()
             .backend(StorageBackend::Memory)
+            .pool(worker.byte_pool().clone())
             .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .pool(worker.byte_pool().clone())
+            .build()
     };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(worker.byte_pool().clone())
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -195,11 +210,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
@@ -381,7 +395,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         });
         audio.preload().expect("preload must succeed");
 
-        let mut prev_chunk_meta: Option<(PcmMeta, usize)> = None;
+        let mut prev_chunk_meta: Option<(AudioChunkInfo, usize)> = None;
         let mut prev_last_sample: Option<f32> = None;
 
         for c in 0..Consts::CHUNKS_PER_SEEK {

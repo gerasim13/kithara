@@ -1,0 +1,69 @@
+[package]
+name = "kithara-host"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multi-player audio session host and output graph for Kithara."
+keywords = ["audio", "player", "dj", "mixing", "synchronization"]
+categories = ["multimedia::audio"]
+
+[features]
+default = [
+    "backend-cpal",
+    "symphonia",
+    "resample-rubato",
+    "stretch-signalsmith",
+    "client-reqwest",
+    "tls-rustls",
+]
+backend-cpal = ["firewheel/cpal"]
+backend-web-audio = ["dep:firewheel-web-audio"]
+wasm-bindgen = ["firewheel/wasm-bindgen"]
+client-reqwest = ["kithara-play/client-reqwest"]
+client-wreq = ["kithara-play/client-wreq"]
+tls-rustls = ["kithara-play/tls-rustls"]
+tls-native = ["kithara-play/tls-native"]
+apple = ["kithara-play/apple"]
+apple-fused-src = ["kithara-play/apple-fused-src"]
+symphonia = ["kithara-play/symphonia"]
+webcodecs = ["kithara-play/webcodecs"]
+fdk-aac = ["kithara-play/fdk-aac"]
+resample-glide = ["kithara-play/resample-glide"]
+resample-rubato = ["kithara-play/resample-rubato"]
+stretch-signalsmith = ["kithara-play/stretch-signalsmith"]
+stretch-bungee = ["kithara-play/stretch-bungee"]
+probe = ["kithara-play/probe"]
+
+[dependencies]
+kithara-audio = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
+kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-play = { workspace = true, default-features = false }
+kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, default-features = false }
+
+arc-swap = { workspace = true }
+bon = { workspace = true }
+delegate = { workspace = true }
+fieldwork = { workspace = true }
+firewheel = { workspace = true }
+ringbuf = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+triple_buffer = { workspace = true }
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+firewheel-web-audio = { workspace = true, optional = true }
+
+[dev-dependencies]
+kithara-audio = { workspace = true, features = ["mock", "probe"] }
+kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+
+[lints]
+workspace = true

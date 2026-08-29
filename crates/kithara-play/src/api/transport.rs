@@ -1,6 +1,6 @@
-use std::num::NonZeroU64;
-
-use kithara_audio::{SessionAnchor, SessionBeat};
+use kithara_warp::{
+    BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch, TransportRevision,
+};
 
 const SECONDS_PER_MINUTE: f64 = 60.0;
 
@@ -33,7 +33,8 @@ impl Tempo {
         }
     }
 
-    pub(crate) fn beats_per_second(self) -> f64 {
+    #[must_use]
+    pub fn beats_per_second(self) -> f64 {
         self.0 / SECONDS_PER_MINUTE
     }
 }
@@ -58,44 +59,20 @@ pub struct TempoError {
     beats_per_minute: f64,
 }
 
-/// Monotonic generation of a committed session transport configuration.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::Display,
-    derive_more::Into,
-)]
-#[display("{_0}")]
-#[into(u64)]
-#[repr(transparent)]
-pub struct TransportRevision(NonZeroU64);
-
-impl TransportRevision {
-    pub(crate) const FIRST: Self = Self(NonZeroU64::MIN);
-
-    pub(crate) fn checked_next(self) -> Option<Self> {
-        self.0
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .map(Self)
-    }
-}
-
 /// The last session transport position processed by the audio graph.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionTransportSnapshot {
-    /// Returns the session-clock relation used by this observation.
-    #[field(get, copy)]
+    /// Session-clock relation used to construct the public session-grid view.
+    #[field(skip)]
     anchor: SessionAnchor,
+    /// Returns the session-grid generation defining the live frame axis.
+    #[field(get, copy)]
+    session_epoch: SessionEpoch,
+    /// Returns the exact session-grid identity and geometry revision.
+    #[field(get, copy)]
+    session_grid_stamp: BeatGridStamp,
     /// Returns the processed position on the session beat grid.
     #[field(get, copy)]
     position: SessionBeat,
@@ -111,20 +88,48 @@ pub struct SessionTransportSnapshot {
 }
 
 impl SessionTransportSnapshot {
-    pub(crate) const fn new(
+    #[must_use]
+    pub const fn new(
         position: SessionBeat,
         playing: bool,
         tempo: Tempo,
         revision: TransportRevision,
         anchor: SessionAnchor,
+        session_grid_stamp: BeatGridStamp,
+        session_epoch: SessionEpoch,
     ) -> Self {
         Self {
             anchor,
+            session_epoch,
+            session_grid_stamp,
             position,
             tempo,
             revision,
             playing,
         }
+    }
+
+    /// Builds a read-only session grid from this single atomic observation.
+    ///
+    /// Construction happens on the control side after reading the Copy-only
+    /// transport snapshot; the audio callback never publishes or drops an
+    /// allocated grid handle.
+    #[must_use]
+    pub fn session_grid(self) -> BeatGridSnapshot {
+        BeatGridSnapshot::session(
+            self.session_grid_stamp.grid_id(),
+            self.session_grid_stamp.revision(),
+            self.session_epoch,
+            self.anchor,
+            None,
+        )
+    }
+
+    /// Returns the exact session-clock anchor carried by this observation.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn anchor(self) -> SessionAnchor {
+        self.anchor
     }
 }
 
@@ -132,8 +137,11 @@ impl SessionTransportSnapshot {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_audio::{SessionAnchor, SessionBeat, SessionFrame};
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        BeatGridId, BeatGridRevision, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch,
+        SessionFrame,
+    };
 
     use super::{SessionTransportSnapshot, Tempo, TransportRevision};
 
@@ -150,8 +158,14 @@ mod tests {
             SessionBeat::new(8.0).expect("invariant: fixture position is finite"),
             true,
             Tempo::new(120.0).expect("invariant: fixture tempo is in range"),
-            TransportRevision::FIRST,
+            TransportRevision::first(),
             anchor,
+            BeatGridStamp::new(
+                BeatGridId::allocate()
+                    .expect("invariant: fixture grid identity space is available"),
+                BeatGridRevision::first(),
+            ),
+            SessionEpoch::new(0),
         );
         let target = SessionBeat::new(11.0).expect("invariant: fixture target is finite");
 

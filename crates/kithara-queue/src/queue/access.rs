@@ -1,12 +1,13 @@
+use kithara_audio::AudioObserver;
 use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
 
-use super::Queue;
+use super::QueueControl;
 use crate::{
     navigation::RepeatMode,
     track::{TrackEntry, TrackRecord, TrackSource},
 };
 
-impl Queue {
+impl QueueControl {
     /// The currently playing track entry, if any.
     ///
     /// Sourced from the navigation cursor (not the player) so the queue
@@ -21,15 +22,6 @@ impl Queue {
         self.lock_tracks().get(idx).map(TrackRecord::entry)
     }
 
-    /// ABR handle of the currently playing adaptive item, if any.
-    ///
-    /// Returned handle drives runtime variant/bandwidth control — FFI and
-    /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
-    #[must_use]
-    pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
-        self.player.current_abr_handle()
-    }
-
     /// The currently playing track's queue index (player-reported).
     #[must_use]
     pub fn current_index(&self) -> Option<usize> {
@@ -39,15 +31,19 @@ impl Queue {
 
     /// Set repeat mode.
     pub fn set_repeat(&self, mode: RepeatMode) {
-        self.lock_navigation_mut().set_repeat(mode);
-        self.bus.publish(QueueEvent::RepeatModeChanged {
-            mode: map_repeat_mode(mode),
+        self.command(|queue| {
+            queue.lock_navigation_mut().set_repeat(mode);
+            queue.bus.publish(QueueEvent::RepeatModeChanged {
+                mode: map_repeat_mode(mode),
+            });
         });
     }
 
     /// Enable or disable shuffle.
     pub fn set_shuffle(&self, on: bool) {
-        self.lock_navigation_mut().set_shuffle(on);
+        self.command(|queue| {
+            queue.lock_navigation_mut().set_shuffle(on);
+        });
     }
 
     /// Subscribe to the unified event stream:
@@ -75,6 +71,25 @@ impl Queue {
     }
 
     delegate::delegate! {
+        to self.loader {
+            /// Attach a bounded decoded-audio observer to `id`'s decoder.
+            ///
+            /// Attachment is nonblocking and works before, during, or after resource
+            /// loading. Only one observer is active for a track at a time.
+            pub fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O);
+        }
+        to self.player {
+            /// ABR handle of the currently playing adaptive item, if any.
+            ///
+            /// Returned handle drives runtime variant/bandwidth control — FFI and
+            /// GUI use it for `set_abr_mode` / `set_preferred_peak_bitrate`.
+            #[must_use]
+            pub fn current_abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            /// Rate the player's master bus runs at, and therefore the frame axis used
+            /// by decoded-audio observers attached to this queue.
+            #[must_use]
+            pub fn sample_rate(&self) -> u32;
+        }
         to self {
             /// Live variant metadata of the currently playing adaptive item.
             /// Pulled from the player's stashed ABR handle on every call so a

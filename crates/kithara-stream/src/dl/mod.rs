@@ -18,7 +18,9 @@ mod response;
 #[cfg(all(test, not(miri)))]
 mod tests;
 
-pub use cmd::{FetchCmd, OnCompleteFn, OnResponseFn, OnSlowFn, WriterFn, reject_html_response};
+pub use cmd::{
+    DemandFn, FetchCmd, OnCompleteFn, OnResponseFn, OnSlowFn, WriterFn, reject_html_response,
+};
 pub use config::DownloaderConfig;
 pub use downloader::Downloader;
 pub use kithara_events::{RequestMethod, RequestPriority};

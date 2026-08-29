@@ -3,6 +3,15 @@ use serde::Serialize;
 
 const WINDOW_MS: f64 = 5.0;
 
+/// Select a percentile from test-oracle samples after sorting them in place.
+#[must_use]
+pub fn percentile_f32(values: &mut [f32], numerator: usize, denominator: usize) -> f32 {
+    assert!(!values.is_empty(), "percentile input must not be empty");
+    values.sort_by(f32::total_cmp);
+    let index = values.len().saturating_sub(1).saturating_mul(numerator) / denominator;
+    values[index]
+}
+
 /// Cochlea measurements used by final-PCM acceptance tests and manifests.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -74,6 +83,26 @@ pub fn continuity_failures(
     candidate: &CochleaReport,
     control: &CochleaReport,
 ) -> Vec<String> {
+    cochlea_failures(label, candidate, control, true)
+}
+
+/// Compare invariant Cochlea fields during active stretching; granular onset
+/// changes are excluded and must be guarded by a separate frame-level oracle.
+#[must_use]
+pub fn time_stretch_failures(
+    label: &str,
+    candidate: &CochleaReport,
+    control: &CochleaReport,
+) -> Vec<String> {
+    cochlea_failures(label, candidate, control, false)
+}
+
+fn cochlea_failures(
+    label: &str,
+    candidate: &CochleaReport,
+    control: &CochleaReport,
+    compare_onsets: bool,
+) -> Vec<String> {
     let mut failures = Vec::new();
     if candidate.silent_segments > control.silent_segments {
         failures.push(format!(
@@ -81,7 +110,7 @@ pub fn continuity_failures(
             candidate.silent_segments, control.silent_segments,
         ));
     }
-    if candidate.onset_count() != control.onset_count() {
+    if compare_onsets && candidate.onset_count() != control.onset_count() {
         failures.push(format!(
             "{label}: onset count changed: candidate={}, control={}, candidate_times_ms={:?}, control_times_ms={:?}",
             candidate.onset_count(),

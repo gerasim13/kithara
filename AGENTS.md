@@ -22,7 +22,9 @@ Use it for repo-wide coding conventions, path routing, and stable coordination s
 
 - No speculative code. Do not add helpers, branches, or abstractions that are not used by the current task.
 - Workspace-first dependencies. Add versions only in the root workspace and reuse existing crates when possible.
-- Shared media types live in `kithara-stream`. Do not duplicate `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere.
+- Encoded/container media types live in `kithara-stream`. Do not duplicate
+  `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere. Decoded-audio
+  signal value types and pure sample/time math live in `kithara-signal`.
 - Do not use `unwrap()` or `expect()` in production code without a strong, explicit reason.
 - Name the canonical owner before changing shared state, shared types, or cross-crate contracts. If the owner is unclear, stop and clarify before implementation.
 - Do not introduce parallel mutable sources of truth without an explicit transition contract. When old and new state must coexist temporarily, use a staged ownership transfer in the task packet or plan.
@@ -194,7 +196,9 @@ Reject a design before coding when it:
 
 ### Shared types
 
-- Shared types such as `AudioCodec`, `ContainerFormat`, and `MediaInfo` live in `kithara-stream`.
+- Encoded/container types such as `AudioCodec`, `ContainerFormat`, and
+  `MediaInfo` live in `kithara-stream`; decoded-audio signal value types live
+  in `kithara-signal`.
 - Before introducing a new shared type, search the workspace and reuse an existing canonical type when possible.
 
 ## Loose Coupling And Modularity

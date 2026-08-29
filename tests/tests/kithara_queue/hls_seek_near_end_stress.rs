@@ -13,7 +13,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -128,13 +128,18 @@ fn build_queue_with_tick(
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::SamplePool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -176,8 +181,6 @@ async fn run_one_attempt(
     };
     let builder = ResourceConfig::for_src(src);
     let cfg = builder
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
         .store(store)
         .initial_abr_mode(AbrMode::Auto(None))
@@ -187,7 +190,17 @@ async fn run_one_attempt(
                 .build(),
         )
         .build();
-    let track_id = queue.append(TrackSource::Config(Box::new(cfg)));
+    let track_id = match queue.append(TrackSource::Config(Box::new(cfg))) {
+        Ok(track_id) => track_id,
+        Err(error) => {
+            tick_handle.abort();
+            return IterOutcome::Errored {
+                iter,
+                target: f64::NAN,
+                error: format!("queue.append failed: {error}"),
+            };
+        }
+    };
 
     // Subscribe before the action that drives loading/playback so no
     // status or progress event can slip between `select` and the first

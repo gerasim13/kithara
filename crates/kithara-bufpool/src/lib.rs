@@ -13,7 +13,7 @@ mod pool;
 mod region;
 
 pub use budget::ByteBudget;
-pub use global::{BytePool, PcmBuf, PcmPool};
+pub use global::{ByteBuffer, BytePool, SampleBuffer, SamplePool};
 pub use growth::BudgetExhausted;
 #[doc(hidden)]
 pub use pool::{Pool, PoolStats, Pooled, PooledOwned, Reuse, SharedPool};

@@ -11,7 +11,7 @@ use iced::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    bars,
+    bars::{self, CoveragePalette},
     zoom_math::{
         bar_bucket_range, bar_grid, max_bucket, norm_to_x, visible_mark_range, visible_marks,
         window_bounds,
@@ -27,6 +27,7 @@ pub(crate) struct HeroPalette {
     pub(crate) cue_badge: Color,
     pub(crate) cue_text: Color,
     pub(crate) base: RenderPalette,
+    pub(crate) coverage: CoveragePalette,
 }
 
 #[derive(Clone, Copy)]
@@ -35,6 +36,7 @@ pub(crate) struct HeroWave<'a> {
     pub(crate) beats: &'a [f32],
     pub(crate) cues: &'a [f32],
     pub(crate) downbeats: &'a [f32],
+    pub(crate) unready: &'a [[f32; 2]],
     pub(crate) loop_region: Option<[f32; 2]>,
     pub(crate) position: f32,
     pub(crate) zoom: f32,
@@ -56,6 +58,14 @@ pub(crate) fn draw(
         &window,
         metrics,
         palette.base,
+    );
+    bars::draw_coverage(
+        frame,
+        bounds,
+        data.unready,
+        |norm| norm_to_x(norm, &window, bounds.width),
+        metrics,
+        palette.coverage,
     );
     draw_grid(frame, bounds, data, &window, metrics, palette.base);
     if let Some(region) = data.loop_region {

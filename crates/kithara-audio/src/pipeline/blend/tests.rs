@@ -1,23 +1,24 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::PcmPool;
-use kithara_decode::{BlenderProfile, PcmChunk, PcmMeta, PcmSpec};
+use kithara_bufpool::SamplePool;
+use kithara_decode::BlenderProfile;
 use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::kithara;
 
-use super::PcmBlender;
+use super::GaplessBlender;
 
-fn spec(channels: u16, sample_rate: u32) -> PcmSpec {
-    PcmSpec::new(
+fn spec(channels: u16, sample_rate: u32) -> AudioSpec {
+    AudioSpec::new(
         channels,
         NonZeroU32::new(sample_rate).expect("test rate must be non-zero"),
     )
 }
 
-fn chunk(spec: PcmSpec, samples: Vec<f32>) -> PcmChunk {
+fn chunk(spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
     let frames = samples.len() / usize::from(spec.channels);
-    PcmChunk::new(
-        PcmMeta {
+    AudioChunk::new(
+        AudioChunkInfo {
             spec,
             end_timestamp: Duration::from_millis(42),
             timestamp: Duration::from_millis(21),
@@ -29,12 +30,12 @@ fn chunk(spec: PcmSpec, samples: Vec<f32>) -> PcmChunk {
             frame_offset: 9_876,
             source_bytes: 512,
         },
-        PcmPool::default().attach(samples),
+        SamplePool::default().attach(samples),
     )
 }
 
-fn blender(profile: BlenderProfile) -> PcmBlender {
-    PcmBlender::new(profile, &PcmPool::default())
+fn blender(profile: BlenderProfile) -> GaplessBlender {
+    GaplessBlender::new(profile, &SamplePool::default())
 }
 
 #[kithara::test]

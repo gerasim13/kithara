@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use kithara::audio::Waveform;
+use kithara::analysis::Waveform;
 use kithara_ui::render::WaveBucket;
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
@@ -233,7 +233,7 @@ fn loaded_deck_letters(entry: &CatalogEntry, decks: &Decks) -> String {
 }
 
 pub(in crate::gui) fn analysis_bpm(ui: &UiState) -> Option<f32> {
-    let bpm = ui.analysis.as_ref()?.beat()?.bpm();
+    let bpm = ui.analysis.as_ref()?.beat()?.artifact().bpm();
     bpm.is_finite().then(|| bpm.as_())
 }
 

@@ -6,7 +6,7 @@ use firewheel::{
     diff::{Diff, Patch},
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_platform::sync::{Arc, Mutex};
 
 use super::processor::{PlayerNodeProcessor, StreamShape};
@@ -26,16 +26,16 @@ pub struct PlayerNode {
     #[diff(skip)]
     inputs: Arc<Mutex<Option<NodeInputs>>>,
 
-    /// PCM buffer pool for scratch buffer allocation.
+    /// Sample pool for scratch buffer allocation.
     #[diff(skip)]
-    pcm_pool: PcmPool,
+    sample_pool: SamplePool,
 }
 
 impl PlayerNode {
     /// Create a player node wired to RT input channels.
-    pub fn new(inputs: NodeInputs, pcm_pool: PcmPool) -> Self {
+    pub fn new(inputs: NodeInputs, sample_pool: SamplePool) -> Self {
         Self {
-            pcm_pool,
+            sample_pool,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
         }
@@ -61,7 +61,7 @@ impl AudioNode for PlayerNode {
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        PlayerNodeProcessor::new(inputs, shape, &self.pcm_pool)
+        PlayerNodeProcessor::new(inputs, shape, &self.sample_pool)
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
@@ -84,7 +84,7 @@ mod tests {
 
     fn make_node() -> (PlayerNode, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, PcmPool::default());
+        let node = PlayerNode::new(inputs, SamplePool::default());
         (node, control)
     }
 

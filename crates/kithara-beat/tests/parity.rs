@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use common::{Score, f_measure, load_golden};
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
+use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
 
 const WINDOW: f64 = 0.070;
@@ -54,6 +55,7 @@ fn python_parity_small_model() {
     let mut bt = BeatThis::builder()
         .mel_model(MEL_MODEL_BYTES)
         .beat_model(BEAT_MODEL_BYTES)
+        .sample_pool(SamplePool::default())
         .build()
         .unwrap_or_else(|e| panic!("BeatThis::builder failed: {e}"));
     let raw = bt
@@ -62,8 +64,18 @@ fn python_parity_small_model() {
 
     let golden = load_golden(&fixture("golden_small.json"));
 
-    let beats = f_measure(&golden.beats, &raw.beats, WINDOW);
-    let downbeats = f_measure(&golden.downbeats, &raw.downbeats, WINDOW);
+    let detected: Vec<f32> = raw.beats.iter().map(|mark| mark.at).collect();
+    let detected_downbeats: Vec<f32> = raw.downbeats.iter().map(|mark| mark.at).collect();
+    assert!(
+        raw.beats
+            .iter()
+            .chain(raw.downbeats.iter())
+            .all(|mark| mark.confidence > 0.0 && mark.confidence < 1.0),
+        "every detected mark carries a probability, never a certainty"
+    );
+
+    let beats = f_measure(&golden.beats, &detected, WINDOW);
+    let downbeats = f_measure(&golden.downbeats, &detected_downbeats, WINDOW);
     report("beats", &beats);
     report("downbeats", &downbeats);
 

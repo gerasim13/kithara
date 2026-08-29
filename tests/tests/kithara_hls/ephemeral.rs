@@ -14,9 +14,11 @@ use kithara::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioRead, ReadOutcome},
+    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
@@ -135,13 +137,21 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let hls_config = HlsConfig::for_url(url)
         .store(
             AssetStore::builder()
                 .backend(StorageBackend::Memory)
+                .pool(worker.byte_pool().clone())
                 .build(),
         )
+        .pool(worker.byte_pool().clone())
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -151,11 +161,10 @@ async fn ephemeral_pipeline_no_disk_writes() {
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 

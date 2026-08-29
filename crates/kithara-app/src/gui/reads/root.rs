@@ -81,7 +81,7 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 
 #[cfg(test)]
 mod tests {
-    use ::kithara::audio::effects::eq::GainDb;
+    use ::kithara::play::effects::eq::GainDb;
     use iced::Size;
     use kithara_test_utils::kithara;
     use kithara_ui::render::{ReadValue, Reads, Walk};
@@ -101,7 +101,7 @@ mod tests {
             },
         },
         mix::MixState,
-        state::{AbrVariant, UiState},
+        state::{AbrVariant, UiState, covered},
     };
 
     const DERIVED: [&str; 5] = [
@@ -209,6 +209,31 @@ mod tests {
             ui.eq_bands = vec![GainDb::default(); mode.bands().len()];
         }
         fixture
+    }
+
+    /// The waveform read is where a renderer learns what the analysis has not
+    /// covered; a snapshot that holds the whole track leaves it empty.
+    #[kithara::test]
+    fn the_waveform_read_carries_what_the_snapshot_has_not_covered() {
+        let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
+        fixture.decks[0]
+            .0
+            .set_analysis(Some(covered(&[(0, 200), (400, 1_000)], Some(1_000))));
+        fixture.decks[1]
+            .0
+            .set_analysis(Some(covered(&[(0, 1_000)], Some(1_000))));
+        let root = fixture.root();
+        let walk = Walk::new(&root);
+
+        let Some(ReadValue::Waveform(partial)) = walk.get("deck.playback.waveform@deck=a") else {
+            panic!("the deck publishes a waveform");
+        };
+        assert_eq!(partial.unready, [[0.2, 0.4]]);
+
+        let Some(ReadValue::Waveform(whole)) = walk.get("deck.playback.waveform@deck=b") else {
+            panic!("the deck publishes a waveform");
+        };
+        assert!(whole.unready.is_empty(), "{:?}", whole.unready);
     }
 
     #[kithara::test]

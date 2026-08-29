@@ -18,19 +18,20 @@ Contracts and invariants for `kithara-queue`; the README is the overview.
 
 ## Construction and config
 
-`Queue::new(QueueConfig)`; `QueueConfig` is a `bon` builder (`QueueConfig::builder()`,
-`Default` = `builder().build()`).
+`Queue::new(QueueConfig)`; `QueueConfig` is a `bon` builder. Its required `player`
+field is an explicitly constructed `Arc<PlayerImpl>`; Queue never constructs a
+player, playback worker, or pool region.
 
 - `cancel`: `Some` threads the app master so the queue subtree cascades from one
   owner; `None` falls back to a fresh standalone root (test / library use only, never
-  the production app path). `Queue::drop` cancels it. A queue-built player gets this
-  token as `PlayerConfig::cancel`; a caller-supplied player owns its own master.
+  the production app path). `Queue::drop` cancels it. The caller owns the player's
+  cancellation and worker lifetime separately.
 - `store`: `None` builds an `AssetStore` on the player's byte pool.
   `TrackSource::Uri` resources share it; a caller-supplied `ResourceConfig` keeps its
   own.
 - `max_concurrent_loads` (default 3) sizes the prefetch lane only.
-- `prefetch_duration` (default 3.5) is applied to the player the queue drives — built
-  or caller-supplied — the same way `auto_advance_enabled` is.
+- `prefetch_duration` (default 3.5) is applied to the supplied player the queue drives,
+  the same way `auto_advance_enabled` is.
 - `max_history_size` (default 100) caps `NavigationState`'s history.
 - `should_autoplay` (default `true`) is consumed only by the
   `cfg(any(test, feature = "probe"))` harness. The production append / insert path
@@ -40,9 +41,10 @@ Contracts and invariants for `kithara-queue`; the README is the overview.
 ## Track sources
 
 - `TrackSource::Uri`: the loader parses with `ResourceConfig::parse_src`, then
-  `ResourceConfig::for_src(src).store(queue store).byte_pool(..).pcm_pool(..)`.
+  `ResourceConfig::for_src(src).store(queue store)`.
   `TrackSource::Config(Box<ResourceConfig>)` passes through untouched (DRM keys,
-  headers, format hints preserved). Both then run `PlayerImpl::prepare_config`; a
+  headers, format hints preserved). Both then run `PlayerImpl::prepare_config`, which
+  supplies the player's shared playback worker and its pools; a
   config with no bus gets the player bus `scoped_labeled` with the track id. An
   attempt requires `config.cancel()` to be `Some`; a missing per-track cancel fails
   the load with `QueueError::Resource`.
@@ -133,11 +135,21 @@ seeking — not from `PlayerImpl::current_index`.
 - `HandoverRequested` → `advance_loaded_successor`, which selects the successor only
   if it is already `Loaded`. The queue never consumes `PrefetchRequested` and never
   calls `arm_next` / `commit_next`.
-- `ItemDidPlayToEnd`: a non-empty `src` is the authoritative natural-EOF signal →
-  `advance_to_next(Crossfade, NaturalEof)`. An empty `src` falls back to the pos/dur
-  heuristic (advance when `pos >= dur - 1.0s`, else log a spurious crossfade fade-out).
+- `ItemDidPlayToEnd`: `PlayerImpl::process_notifications` walks every active slot, and one
+  slot holds more than one track, so the event names whichever track in the player's
+  arena hit EOF — an orphaned slot decoding ahead, or the outgoing half of a crossfade,
+  reaches its own end while the track being heard has minutes left. Advance
+  (`advance_to_next(Crossfade, NaturalEof)`) only on `item: ItemRole::Leading`.
+  That role is the player's own verdict (`kithara-play` owns it; see its `CONTEXT.md`),
+  and it is the only trustworthy one. Identity comes from `item.track().id`, never from
+  `src`: `src` is a rendered resource identifier, not a queue key — `file://` URLs arrive
+  as bare paths, and a playlist repeating a track gives two entries the same one, so
+  resolving by source picks a sibling.
 - `ItemDidFail` → status `Failed`, `TrackLoadFailed { auto_skipped: true }`, then
-  `advance_to_next(Transition::None, TrackFailed)`.
+  `advance_to_next(Transition::None, TrackFailed)` — gated on `item` for the same
+  reason as `ItemDidPlayToEnd`, and flagging the entry the event names by id. A
+  non-leading failure is dropped rather than flagged: the item that aborted is not the
+  one being heard. Load-time failures reach the queue through the loader, not this path.
 - Both handlers publish `QueueEnded` when `current()` is `None`: a stale EOF after
   queue end must not restart from the first track.
 - `tick()` → `maybe_arm_crossfade`: `should_arm_crossfade` requires `crossfade > 0`,
@@ -146,11 +158,14 @@ seeking — not from `PlayerImpl::current_index`.
   player's `current_index` actually moved; the later EOF for that track is then
   consumed (`consume_armed_advance`) instead of advancing twice. Cleared on
   `CurrentTrackChanged`.
-- Pause gate: every automatic path no-ops while `is_paused()`
-  (`PlayerImpl::rate() <= 0.0`). It reads the rate, not `is_playing()`, which a
-  natural end-of-track drops once the arena drains — that would wrongly block the
-  genuine advance, while the rate only reaches `0.0` on a deliberate `pause`. Explicit
+- Pause gate: every automatic path no-ops only while `PlayerImpl::is_paused()`
+  observes the explicit `Paused` phase. Effective rate and live output both become
+  inactive at natural EOF without turning that EOF into a user pause. Explicit
   `select` / `advance_to_next` / `return_to_previous` / `play` are never gated.
+- `CrossfadeStarted` is published only while the player's live playback snapshot
+  reports an active predecessor. This is independent of the pause gate: a transport
+  can retain playing intent after natural EOF, but completed audio cannot be the
+  audible predecessor of a crossfade.
 
 ## Position, playback view, and play()
 

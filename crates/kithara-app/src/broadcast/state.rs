@@ -1,16 +1,26 @@
-use std::{error::Error, mem};
+use std::error::Error;
 
-use kithara::play::SessionHandle;
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, Instant},
-    tokio::task,
-};
+use kithara::host::Host;
+use kithara_platform::{CancelToken, time::Duration};
+
+#[cfg(test)]
+mod absent;
+mod broadcaster;
+#[cfg(test)]
+mod fixture;
+#[cfg(test)]
+mod ready;
+#[cfg(test)]
+mod unmeasured;
+
+#[cfg(test)]
+use broadcaster::Phase;
+pub(crate) use broadcaster::{BroadcastStop, Broadcaster};
 
 pub(crate) type BroadcastResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 /// What the bar needs from a packager. `Live` has no values where the
-/// `broadcast` feature is off, which makes [`Phase::Running`] unconstructable.
+/// `broadcast` feature is off, which makes the running phase unconstructable.
 pub(crate) trait Packager: 'static {
     type Live: Send + 'static;
 
@@ -22,10 +32,13 @@ pub(crate) trait Packager: 'static {
 
     /// `Ok(None)`: no device rate measured yet, so the request stands.
     fn start(
-        session: &SessionHandle,
+        host: &Host,
         shutdown: &CancelToken,
         tap_lead: Duration,
     ) -> BroadcastResult<Option<Self::Live>>;
+
+    /// Releases the host mix tap before the packager drains.
+    fn release(host: &Host) -> BroadcastResult<()>;
 
     /// Drains the stream and shuts it down. Blocking.
     fn stop(live: Self::Live);
@@ -33,247 +46,33 @@ pub(crate) trait Packager: 'static {
     fn url(live: &Self::Live) -> &str;
 }
 
-pub(crate) struct Broadcaster<P: Packager> {
-    shutdown: CancelToken,
-    phase: Phase<P>,
-    session: SessionHandle,
-    tap_lead: Duration,
-}
-
-enum Phase<P: Packager> {
-    Off,
-    Requested,
-    Running { live: P::Live },
-    Stopping,
-}
-
-/// A stream handed over for shutdown; the drain runs off the frame loop.
-pub(crate) struct BroadcastStop<P: Packager>(P::Live);
-
-impl<P: Packager> Broadcaster<P> {
-    pub(crate) const fn new(
-        session: SessionHandle,
-        shutdown: CancelToken,
-        tap_lead: Duration,
-    ) -> Self {
-        Self {
-            session,
-            shutdown,
-            phase: Phase::Off,
-            tap_lead,
-        }
-    }
-
-    pub(crate) fn complete_stop(&mut self) {
-        if matches!(self.phase, Phase::Stopping) {
-            self.phase = Phase::Off;
-        }
-    }
-
-    pub(crate) const fn is_available() -> bool {
-        P::IS_AVAILABLE
-    }
-
-    /// Serving. A pending request and a draining stop are both off air.
-    pub(crate) const fn is_on_air(&self) -> bool {
-        matches!(self.phase, Phase::Running { .. })
-    }
-
-    pub(crate) fn poll(&mut self) {
-        if matches!(&self.phase, Phase::Running { live } if !P::is_live(live)) {
-            self.phase = Phase::Off;
-            return;
-        }
-        if !matches!(self.phase, Phase::Requested) {
-            return;
-        }
-        match P::start(&self.session, &self.shutdown, self.tap_lead) {
-            Ok(Some(live)) => {
-                tracing::info!(url = P::url(&live), "broadcast is live");
-                self.phase = Phase::Running { live };
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::error!(%error, "broadcast did not start");
-                self.phase = Phase::Off;
-            }
-        }
-    }
-
-    pub(crate) fn toggle(&mut self) -> Option<BroadcastStop<P>> {
-        match mem::replace(&mut self.phase, Phase::Off) {
-            Phase::Off => self.phase = Phase::Requested,
-            Phase::Requested => {}
-            Phase::Running { live } => {
-                self.phase = Phase::Stopping;
-                return Some(BroadcastStop(live));
-            }
-            Phase::Stopping => self.phase = Phase::Stopping,
-        }
-        None
-    }
-
-    pub(crate) fn url(&self) -> Option<&str> {
-        match &self.phase {
-            Phase::Running { live } => Some(P::url(live)),
-            Phase::Off | Phase::Requested | Phase::Stopping => None,
-        }
-    }
-}
-
-impl<P: Packager> BroadcastStop<P> {
-    pub(crate) async fn run(self) -> Option<Duration> {
-        let drain = task::spawn_blocking(move || {
-            let started = Instant::now();
-            P::stop(self.0);
-            started.elapsed()
-        });
-        match drain.await {
-            Ok(duration) => Some(duration),
-            Err(error) => {
-                tracing::error!(%error, "broadcast stop worker failed");
-                None
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    // The flag below is a `static`, and the platform alias resolves to loom's
-    // atomic on the lane that models concurrency, whose `new` is not const.
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use kithara::host::HostConfig;
 
-    use kithara::{
-        audio::ConsumerWakeMode,
-        play::{Cmd, PlayError, Reply, SessionDispatcher},
+    use super::{
+        CancelToken, Duration, Host, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
+        ready::Ready, unmeasured::Unmeasured,
     };
-    use kithara_platform::sync::Arc;
-
-    use super::*;
-
-    /// Fails loudly: only a packager may reach the session, never the phases.
-    struct NoSession;
-
-    impl SessionDispatcher for NoSession {
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
-        }
-
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            panic!("the state machine must not reach the session")
-        }
-    }
 
     /// The phase machine only carries the lead to its packager, so the
     /// value is arbitrary here; the sizing it drives is pinned in `live.rs`.
     fn broadcaster<P: Packager>() -> Broadcaster<P> {
-        Broadcaster::new(
-            SessionHandle::new(Arc::new(NoSession)),
-            CancelToken::root(),
-            Duration::from_secs(2),
-        )
+        Broadcaster::new(CancelToken::root(), Duration::from_secs(2))
     }
 
-    struct Stream(String);
-
-    /// Raised by `start`, so lowering it in one test cannot leak into the next.
-    static LIVE: AtomicBool = AtomicBool::new(true);
-
-    struct Ready;
-
-    impl Ready {
-        const URL: &str = "http://packager.test/master.m3u8";
-
-        fn stream() -> Stream {
-            Stream(Self::URL.to_owned())
-        }
-    }
-
-    impl Packager for Ready {
-        type Live = Stream;
-
-        const IS_AVAILABLE: bool = true;
-
-        fn is_live(_live: &Stream) -> bool {
-            LIVE.load(Ordering::Relaxed)
-        }
-
-        fn start(
-            _session: &SessionHandle,
-            _shutdown: &CancelToken,
-            _tap_lead: Duration,
-        ) -> BroadcastResult<Option<Stream>> {
-            LIVE.store(true, Ordering::Relaxed);
-            Ok(Some(Self::stream()))
-        }
-
-        fn stop(_live: Stream) {}
-
-        fn url(live: &Stream) -> &str {
-            &live.0
-        }
-    }
-
-    struct Unmeasured;
-
-    impl Packager for Unmeasured {
-        type Live = Stream;
-
-        const IS_AVAILABLE: bool = true;
-
-        fn is_live(_live: &Stream) -> bool {
-            true
-        }
-
-        fn start(
-            _session: &SessionHandle,
-            _shutdown: &CancelToken,
-            _tap_lead: Duration,
-        ) -> BroadcastResult<Option<Stream>> {
-            Ok(None)
-        }
-
-        fn stop(_live: Stream) {}
-
-        fn url(live: &Stream) -> &str {
-            &live.0
-        }
-    }
-
-    struct Absent;
-
-    impl Packager for Absent {
-        type Live = Stream;
-
-        const IS_AVAILABLE: bool = false;
-
-        fn is_live(_live: &Stream) -> bool {
-            true
-        }
-
-        fn start(
-            _session: &SessionHandle,
-            _shutdown: &CancelToken,
-            _tap_lead: Duration,
-        ) -> BroadcastResult<Option<Stream>> {
-            Err("no packager in this build".into())
-        }
-
-        fn stop(_live: Stream) {}
-
-        fn url(live: &Stream) -> &str {
-            &live.0
-        }
+    fn host() -> Host {
+        Host::new(HostConfig::builder().build()).expect("test host")
     }
 
     #[kithara::test]
     fn a_request_without_a_measured_rate_keeps_asking() {
         let mut bar = broadcaster::<Unmeasured>();
+        let host = host();
 
-        bar.toggle();
-        bar.poll();
-        bar.poll();
+        bar.toggle(&host);
+        bar.poll(&host);
+        bar.poll(&host);
 
         assert!(matches!(bar.phase, Phase::Requested));
     }
@@ -290,9 +89,10 @@ mod tests {
     #[kithara::test]
     fn a_request_no_packager_can_serve_returns_the_bar_to_off() {
         let mut bar = broadcaster::<Absent>();
+        let host = host();
 
-        bar.toggle();
-        bar.poll();
+        bar.toggle(&host);
+        bar.poll(&host);
 
         assert!(matches!(bar.phase, Phase::Off));
         assert!(!bar.is_on_air());
@@ -301,10 +101,11 @@ mod tests {
     #[kithara::test]
     fn a_served_request_puts_the_bar_on_air_with_the_stream_url() {
         let mut bar = broadcaster::<Ready>();
+        let host = host();
 
-        bar.toggle();
+        bar.toggle(&host);
         assert!(!bar.is_on_air(), "a request is not yet a stream");
-        bar.poll();
+        bar.poll(&host);
 
         assert!(bar.is_on_air());
         assert_eq!(bar.url(), Some(Ready::URL));
@@ -313,10 +114,13 @@ mod tests {
     #[kithara::test]
     fn stopping_hands_over_a_job_and_finishes_only_on_completion() {
         let mut bar = broadcaster::<Ready>();
-        bar.toggle();
-        bar.poll();
+        let host = host();
+        bar.toggle(&host);
+        bar.poll(&host);
 
-        let stop = bar.toggle().expect("a running stream hands over its stop");
+        let stop = bar
+            .toggle(&host)
+            .expect("a running stream hands over its stop");
         assert!(matches!(bar.phase, Phase::Stopping));
         assert!(!bar.is_on_air());
 
@@ -331,27 +135,18 @@ mod tests {
     }
 
     #[kithara::test]
-    fn a_stream_that_ends_on_its_own_is_noticed_by_the_next_poll() {
-        let mut bar = broadcaster::<Ready>();
-        bar.toggle();
-        bar.poll();
-        assert!(bar.is_on_air());
-
-        LIVE.store(false, Ordering::Relaxed);
-        bar.poll();
-
-        assert!(matches!(bar.phase, Phase::Off));
-    }
-
-    #[kithara::test]
     fn toggling_a_pending_request_withdraws_it() {
         let mut bar = broadcaster::<Unmeasured>();
-        bar.toggle();
+        let host = host();
+        bar.toggle(&host);
 
-        assert!(bar.toggle().is_none(), "there is no stream to stop yet");
+        assert!(
+            bar.toggle(&host).is_none(),
+            "there is no stream to stop yet"
+        );
         assert!(matches!(bar.phase, Phase::Off));
 
-        bar.poll();
+        bar.poll(&host);
         assert!(
             matches!(bar.phase, Phase::Off),
             "a withdrawn request must not start on the next frame"

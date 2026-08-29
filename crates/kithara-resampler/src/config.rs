@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use bon::Builder;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode};
 
@@ -19,26 +19,6 @@ pub enum ResamplerQuality {
 pub struct RatioGlide {
     pub frames: NonZeroU32,
     pub target_ratio: f64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Unit<B>(pub B);
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct Decode<B>(pub B);
-
-#[derive(Clone, Debug, PartialEq, Builder)]
-#[builder(state_mod(vis = "pub"))]
-#[non_exhaustive]
-pub struct Resample<S> {
-    pub target_sample_rate: NonZeroU32,
-    #[builder(default)]
-    pub options: ResamplerOptions,
-    #[builder(default)]
-    pub quality: ResamplerQuality,
-    pub scope: S,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Builder)]
@@ -64,7 +44,7 @@ impl Default for ResamplerOptions {
 #[non_exhaustive]
 pub struct ResamplerSettings {
     pub channels: NonZeroUsize,
-    pub pcm_pool: PcmPool,
+    pub sample_pool: SamplePool,
     pub mode: ResamplerMode,
     #[builder(default)]
     pub options: ResamplerOptions,
@@ -194,7 +174,7 @@ fn validate_ratio(resource: &'static str, ratio: f64) -> Result<(), ResamplerBui
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use kithara_bufpool::PcmPool;
+    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use crate::{
@@ -265,16 +245,6 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn resample_scope_keeps_backend_in_the_type() {
-        let resample = crate::Resample::builder()
-            .target_sample_rate(sample_rate(48_000))
-            .scope(crate::Unit(TestBackend::fixed()))
-            .build();
-
-        assert_eq!(resample.scope.0.name(), "test");
-    }
-
-    #[kithara::test(native, flash(false))]
     fn config_requires_positive_chunk_size() {
         let settings = ResamplerSettings::builder()
             .channels(stereo())
@@ -286,7 +256,7 @@ mod tests {
                 chunk_size: 0,
                 ..ResamplerOptions::default()
             })
-            .pcm_pool(PcmPool::new(4, 4_096))
+            .sample_pool(SamplePool::new(4, 4_096))
             .build();
         let config = ResamplerConfig::builder()
             .backend(TestBackend::fixed())
@@ -301,21 +271,21 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn standalone_config_uses_injected_pool() {
-        let pool = PcmPool::new(4, 4_096);
+        let pool = SamplePool::new(4, 4_096);
         let settings = ResamplerSettings::builder()
             .channels(stereo())
             .mode(ResamplerMode::FixedRatio {
                 source_sample_rate: sample_rate(44_100),
                 target_sample_rate: sample_rate(48_000),
             })
-            .pcm_pool(pool.clone())
+            .sample_pool(pool.clone())
             .build();
         let config = ResamplerConfig::builder()
             .backend(TestBackend::fixed())
             .settings(settings)
             .build();
 
-        assert_eq!(config.settings.pcm_pool.stats(), pool.stats());
+        assert_eq!(config.settings.sample_pool.stats(), pool.stats());
         assert!(config.validate().is_ok());
     }
 }

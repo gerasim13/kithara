@@ -3,7 +3,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt, stream};
 use kithara_net::{ByteStream, Headers, NetError};
 use kithara_platform::{CancelGroup, tokio};
@@ -71,11 +71,11 @@ impl BodyStream {
     /// Returns an error when the underlying stream yields a network
     /// error or the cancel token fires.
     pub async fn collect(mut self) -> Result<Bytes, NetError> {
-        let mut buf = Vec::new();
+        let mut buf = BytesMut::new();
         while let Some(chunk) = self.next().await {
             buf.extend_from_slice(&chunk?);
         }
-        Ok(Bytes::from(buf))
+        Ok(buf.freeze())
     }
 
     /// Empty body (for HEAD responses).

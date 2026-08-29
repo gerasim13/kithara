@@ -5,6 +5,7 @@ use kithara_assets::{AssetStore, StorageBackend};
 use kithara_bufpool::Region;
 use kithara_drm::{KeyRequest, KeyRequestFactory};
 use kithara_hls::KeyOptions;
+use kithara_host::wasm;
 use kithara_platform::{
     sync::{Arc, mpsc},
     thread::{assert_not_main_thread, keep_worker_alive},
@@ -14,9 +15,8 @@ use kithara_platform::{
 use kithara_play::{
     ResourceConfig,
     policy::{DomainKeyPolicy, DomainKeyRule},
-    wasm,
 };
-use kithara_queue::{Queue, QueueConfig, TrackId, TrackSource};
+use kithara_queue::{Queue, QueueConfig, QueueControl, TrackId, TrackSource};
 
 use crate::{
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
@@ -71,13 +71,10 @@ macro_rules! clog {
 
 /// Entry called inside a Web Worker thread (via `thread::spawn`).
 ///
-/// Creates and owns the [`Queue`] (mirroring
-/// [`NativeInner`](crate::native::inner::NativeInner)'s construction),
-/// spawns a periodic `tick` loop, then drives the command channel.
-pub(crate) fn worker_main(
-    cmd_rx: mpsc::Receiver<WorkerCmd>,
-    session_tx: mpsc::Sender<kithara_play::CmdMsg>,
-) {
+/// Inserts and owns one [`Queue`] member in the canonical Host (mirroring
+/// [`NativeInner`](crate::native::inner::NativeInner)'s construction), spawns
+/// a periodic `tick` loop, then drives the command channel.
+pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>, host_sender: wasm::HostSender) {
     /// Default crossfade window, in seconds. Mirrors the legacy worker.
     const CROSSFADE_SECONDS: f32 = 5.0;
 
@@ -89,29 +86,45 @@ pub(crate) fn worker_main(
     keep_worker_alive();
 
     task_spawn(async move {
-        let session = wasm::remote_session(session_tx);
+        let mut host = wasm::remote_host(host_sender);
         let state = BuildState::default();
-        let player = Arc::new(kithara_play::PlayerImpl::new(
-            kithara_play::PlayerConfig::builder()
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
-                .session(session.dispatcher())
-                .build(),
-        ));
-        let queue = Rc::new(Queue::new(
+        let worker = kithara_play::PlayWorker::new(
+            kithara_play::PlayWorkerConfig::for_pools(
+                state.region.byte_pool(),
+                state.region.sample_pool(),
+            )
+            .build(),
+        );
+        let queue_store = state.store.clone();
+        let player = kithara_play::PlayerImpl::new(
+            kithara_play::PlayerConfig::builder().worker(worker).build(),
+        );
+        let queue = Queue::new(
             QueueConfig::builder()
                 .player(player)
-                .store(state.store.clone())
+                .store(queue_store)
                 .build(),
-        ));
+        );
+        let owner = match host.insert(queue) {
+            Ok(owner) => owner,
+            Err(error) => {
+                clog!("[WORKER] host rejected queue insertion: {error}");
+                return;
+            }
+        };
+        let queue = owner.control().clone();
         queue.set_crossfade_duration(CROSSFADE_SECONDS);
 
         let build_state = Rc::new(RefCell::new(state));
-        spawn_tick_loop(Rc::clone(&queue));
+        spawn_tick_loop(queue.clone());
         crate::web::observer::source::spawn(&queue);
 
         while let Ok(cmd) = cmd_rx.recv_async().await {
             dispatch_cmd(cmd, &queue, &build_state);
+        }
+
+        if let Err(error) = host.remove(&owner) {
+            clog!("[WORKER] host queue removal failed: {error}");
         }
     });
 }
@@ -119,7 +132,7 @@ pub(crate) fn worker_main(
 /// Spawn the periodic `Queue::tick` loop. `tick` is synchronous; the
 /// loop awaits a `setTimeout`-backed `sleep` between ticks so it yields
 /// to the worker's task executor without busy-spinning.
-fn spawn_tick_loop(queue: Rc<Queue>) {
+fn spawn_tick_loop(queue: QueueControl) {
     /// Tick cadence for the queue's internal `tick()` loop, in
     /// milliseconds. Drives auto-advance / crossfade arming and drains
     /// engine events. Wall clock; not tied to the audio-thread process
@@ -128,6 +141,9 @@ fn spawn_tick_loop(queue: Rc<Queue>) {
 
     task_spawn(async move {
         loop {
+            if queue.is_closed() {
+                break;
+            }
             if let Err(err) = queue.tick() {
                 clog!("[WORKER] queue tick error: {err}");
             }
@@ -136,7 +152,7 @@ fn spawn_tick_loop(queue: Rc<Queue>) {
     });
 }
 
-fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<BuildState>>) {
+fn dispatch_cmd(cmd: WorkerCmd, queue: &QueueControl, build_state: &Rc<RefCell<BuildState>>) {
     /// Milliseconds per second.
     const MS_PER_SECOND: f64 = 1000.0;
 
@@ -161,7 +177,9 @@ fn dispatch_cmd(cmd: WorkerCmd, queue: &Rc<Queue>, build_state: &Rc<RefCell<Buil
         }
         WorkerCmd::Append { id, url } => {
             let source = build_source(&build_state.borrow(), url);
-            queue.append_with_id(id, source);
+            if let Err(error) = queue.append_with_id(id, source) {
+                clog!("[WORKER] append rejected for {id:?}: {error}");
+            }
         }
         WorkerCmd::Insert {
             id,
@@ -256,7 +274,7 @@ fn effective_cap(wifi_bps: f64, cellular_bps: f64) -> Option<u64> {
     Some(num_traits::cast(cap.trunc()).unwrap_or(u64::MAX))
 }
 
-fn apply_abr_mode(queue: &Rc<Queue>, variant_index: Option<u32>) {
+fn apply_abr_mode(queue: &QueueControl, variant_index: Option<u32>) {
     let Some(handle) = queue.current_abr_handle() else {
         return;
     };
@@ -268,7 +286,7 @@ fn apply_abr_mode(queue: &Rc<Queue>, variant_index: Option<u32>) {
     }
 }
 
-fn apply_peak_bitrate(queue: &Rc<Queue>, wifi_bps: f64, cellular_bps: f64) {
+fn apply_peak_bitrate(queue: &QueueControl, wifi_bps: f64, cellular_bps: f64) {
     if let Some(handle) = queue.current_abr_handle() {
         handle.set_max_bandwidth_bps(effective_cap(wifi_bps, cellular_bps));
     }
@@ -339,8 +357,6 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
             let config = ResourceConfig::for_src(src)
                 .keys(state.keys.clone())
                 .maybe_headers(headers.map(Into::into))
-                .byte_pool(state.region.byte_pool())
-                .pcm_pool(state.region.pcm_pool())
                 .store(state.store.clone())
                 .build();
             TrackSource::Config(Box::new(config))
@@ -362,7 +378,7 @@ struct ReplaceTrackArgs {
 /// insert the new track after the predecessor of `index`, then drop the
 /// old track at `index`.
 fn replace_track(
-    queue: &Rc<Queue>,
+    queue: &QueueControl,
     state: &BuildState,
     args: ReplaceTrackArgs,
 ) -> Result<(), String> {
@@ -382,7 +398,7 @@ fn replace_track(
     queue
         .insert_with_id(id, build_source(state, url), after)
         .map_err(|e| e.to_string())?;
-    let _ = queue.remove(old_id);
+    queue.remove(old_id).map_err(|e| e.to_string())?;
     Ok(())
 }
 

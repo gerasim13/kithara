@@ -4,7 +4,7 @@
 use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
     queue::{Queue, QueueConfig, TrackSource},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -33,13 +33,18 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let player = Arc::new(PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::for_pools(
+                    kithara::bufpool::BytePool::default(),
+                    kithara::bufpool::SamplePool::default(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder()
             .player(player)
@@ -62,14 +67,14 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let cfg = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
     )
-    .byte_pool(kithara::bufpool::BytePool::default())
-    .pcm_pool(kithara::bufpool::PcmPool::default())
     .downloader(downloader)
     .store(store)
     .build();
 
     let mut rx = queue.subscribe();
-    queue.append(TrackSource::Config(Box::new(cfg)));
+    queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append play-before-load track");
     queue.play();
 
     let position = wait_for_position_event(&mut rx, &queue, 0.2, Duration::from_secs(60))

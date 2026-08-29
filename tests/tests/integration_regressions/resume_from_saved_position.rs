@@ -1,6 +1,8 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
+    bufpool::{BytePool, Region},
     events::{AudioEvent, Event, TrackId},
     net::{HttpClient, NetOptions},
     platform::{
@@ -37,37 +39,42 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn new_queue() -> Arc<Queue> {
-    let player = Arc::new(PlayerImpl::new(
+fn new_queue(region: &Region, store: AssetStore) -> Arc<Queue> {
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .worker(kithara::play::PlayWorker::new(
+                kithara::play::PlayWorkerConfig::for_pools(
+                    region.byte_pool(),
+                    region.sample_pool(),
+                )
+                .build(),
+            ))
             .session(OfflineSession::arc_auto())
             .build(),
-    ));
-    Arc::new(Queue::new(QueueConfig::builder().player(player).build()))
+    );
+    Arc::new(Queue::new(
+        QueueConfig::builder().player(player).store(store).build(),
+    ))
 }
 
-fn new_downloader() -> Downloader {
+fn new_downloader(byte_pool: BytePool) -> Downloader {
     Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder().byte_pool(byte_pool).build(),
+            CancelToken::never(),
+        ))
+        .build(),
     )
 }
 
-fn append_track(
-    queue: &Queue,
-    url: &str,
-    downloader: &Downloader,
-    temp_dir: &TestTempDir,
-) -> TrackId {
+fn append_track(queue: &Queue, url: &str, downloader: &Downloader, store: &AssetStore) -> TrackId {
     let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .downloader(downloader.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store.clone())
         .build();
-    queue.append(TrackSource::Config(Box::new(cfg)))
+    queue
+        .append(TrackSource::Config(Box::new(cfg)))
+        .expect("append resume track")
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(90)))]
@@ -82,11 +89,19 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     };
     let url = helper.sine(&spec, FREQ_HZ).await;
 
-    let first_queue = new_queue();
-    let first_downloader = new_downloader();
+    let first_region = Region::default();
+    let first_byte_pool = first_region.byte_pool();
+    let first_store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(first_byte_pool.clone())
+        .build();
+    let first_queue = new_queue(&first_region, first_store.clone());
+    let first_downloader = new_downloader(first_byte_pool);
     let first_tick = spawn_ticker(Arc::clone(&first_queue));
     let mut first_rx = first_queue.subscribe();
-    let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &temp_dir);
+    let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
     first_queue
         .select(first_id, Transition::None)
         .expect("select first session track");
@@ -123,11 +138,24 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     drop(first_queue);
     drop(first_downloader);
 
-    let second_queue = new_queue();
-    let second_downloader = new_downloader();
+    let second_region = Region::default();
+    let second_byte_pool = second_region.byte_pool();
+    let second_store = AssetStore::builder()
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().into(),
+        })
+        .pool(second_byte_pool.clone())
+        .build();
+    let second_queue = new_queue(&second_region, second_store.clone());
+    let second_downloader = new_downloader(second_byte_pool);
     let second_tick = spawn_ticker(Arc::clone(&second_queue));
     let mut second_rx = second_queue.subscribe();
-    let second_id = append_track(&second_queue, url.as_str(), &second_downloader, &temp_dir);
+    let second_id = append_track(
+        &second_queue,
+        url.as_str(),
+        &second_downloader,
+        &second_store,
+    );
     second_queue
         .select(second_id, Transition::None)
         .expect("select second session track");

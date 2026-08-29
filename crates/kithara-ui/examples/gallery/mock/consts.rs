@@ -37,5 +37,13 @@ impl Consts {
     ];
     pub(super) const VIS_TICK_SECS: f64 = 0.016;
     pub(super) const WAVE_BUCKETS: u32 = 4_096;
+    /// Holes a pass spread over the track has not reached yet.
+    pub(super) const WAVE_UNREADY: [[f32; 2]; 5] = [
+        [0.09, 0.16],
+        [0.30, 0.37],
+        [0.44, 0.52],
+        [0.58, 0.66],
+        [0.79, 0.90],
+    ];
     pub(super) const ZOOM: f64 = 0.12;
 }

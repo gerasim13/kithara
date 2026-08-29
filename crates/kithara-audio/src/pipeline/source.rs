@@ -1,7 +1,8 @@
 use arc_swap::ArcSwap;
-use kithara_decode::{ChunkRetire, PcmChunk};
+use kithara_decode::ChunkRetire;
 use kithara_events::{AudioEvent, DecoderChangeCause, DeferredBus, Event, TrackFailureKind};
 use kithara_platform::sync::Arc;
+use kithara_signal::AudioChunk;
 use kithara_stream::{
     Activity, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SeekControl, SeekObserve,
     StreamType, VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
@@ -29,7 +30,7 @@ use crate::{
             self, CurrentFsm, Decoding, Track, TrackFailure, TrackStep, WaitContext, WaitingReason,
         },
     },
-    renderer::AudioWorkerSource,
+    traits::AudioSource,
 };
 
 /// Audio source for Stream with format change detection.
@@ -56,7 +57,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     pub(crate) decoder_backend: kithara_decode::DecoderBackend,
     /// Deferred sink for FSM lifecycle events ([`AudioEvent`]). The FSM runs on
     /// the produce core, so `emit_event` enqueues lock-free; the scheduler shell
-    /// flushes via [`flush_deferred`](AudioWorkerSource::flush_deferred) and on
+    /// flushes via [`finish_deferred`](AudioSource::finish_deferred) and on
     /// `Drop`, keeping the cross-thread `broadcast::send` (a `kevent`) off the
     /// forbid path. `None` for sources built without an event bus.
     #[field(with, option_set_some, vis = "pub(crate)")]
@@ -72,8 +73,8 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// `FormatBoundary` recreate neither flushes it nor bumps the seek epoch),
     /// so resuming at `committed` would re-emit them and rewind content. Stored
     /// as an exact frame plus the sample rate of that produced chunk, then
-    /// converted back with `duration_for_frames`; the demuxer quantizes the
-    /// seek landing to a sample and `frame_offset_for` rounds to the nearest
+    /// converted back with `AudioSpec::duration_for`; the demuxer quantizes the
+    /// seek landing to a sample and `AudioSpec::frame_at` rounds to the nearest
     /// frame, so the rebuilt decoder relabels its first chunk at this point. See
     /// `execute_recreation`.
     pub(crate) resume: ResumeCursor,
@@ -89,7 +90,7 @@ pub(crate) struct StreamAudioSource<T: StreamType> {
     /// backward one) never resumes against a stale forward target. See
     /// `execute_recreation`.
     /// Decode generations displaced on the produce core. They are dropped
-    /// from `flush_deferred`, outside the forbid-blocking region.
+    /// from `finish_deferred`, outside the forbid-blocking region.
     pub(crate) retired: Retired,
     pub(crate) seek_engine: SeekEngine,
     pub(crate) shared_stream: SharedStream<T>,
@@ -564,8 +565,8 @@ fn retire_completion(retired: &Retired, complete: DecoderBuildComplete) {
     }
 }
 
-impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
-    type Chunk = PcmChunk;
+impl<T: StreamType> AudioSource for StreamAudioSource<T> {
+    type Chunk = AudioChunk;
 
     fn decode_epoch(&self) -> u64 {
         // The epoch the current decode belongs to — stored when a seek is
@@ -580,13 +581,25 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         self.seek_engine.epoch()
     }
 
-    fn flush_deferred(&mut self) {
+    fn discontinuity(&self) -> Option<crate::SourceDiscontinuity> {
+        Some(self.decode.discontinuity())
+    }
+
+    fn prepare_deferred(&mut self) -> Option<kithara_signal::AudioSpec> {
         self.decode.flush_reader_signals();
         if let Some(chunk) = self.decode.take_rejected_chunk() {
             ChunkRetire::retire(&self.retired, chunk);
         }
         self.route_build_completions();
         self.progress_variant_transition();
+        Some(self.decode.active().blender_profile().spec())
+    }
+
+    fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
+        self.resume.commit_source_end(source_end, epoch);
+    }
+
+    fn finish_deferred(&mut self) {
         self.retired.drain();
         self.rebuild.submit();
         // Publish the FSM lifecycle events the produce core enqueued this pass,
@@ -606,7 +619,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         self.shared_stream.flush_demand();
     }
 
-    fn retire_chunk(&self, chunk: PcmChunk) {
+    fn retire_chunk(&self, chunk: AudioChunk) {
         ChunkRetire::retire(&self.retired, chunk);
     }
 
@@ -614,7 +627,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         Arc::clone(&self.seek_obs)
     }
 
-    fn step_track(&mut self) -> TrackStep<PcmChunk> {
+    fn step_track(&mut self) -> TrackStep<AudioChunk> {
         track::dispatch(self)
     }
 

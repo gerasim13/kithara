@@ -3,8 +3,9 @@
 use std::path::Path;
 
 use kithara::{
-    platform::{sync::Arc, time::Duration},
-    play::{PlayerEvent, PlayerImpl, Resource, ResourceConfig},
+    events::TrackId,
+    platform::time::Duration,
+    play::{PlayerEvent, Resource, ResourceConfig, player::PlayerControl},
 };
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
@@ -25,19 +26,16 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             .build(),
         SAMPLE_RATE,
     );
-    let first_id = Arc::<str>::from("item-1");
-    let second_id = Arc::<str>::from("item-2");
+    let first_id = TrackId::allocate();
+    let second_id = TrackId::allocate();
 
-    harness.player().insert(
-        make_signal_resource(harness.player(), &server, temp_dir.path(), 440.0, 0.12).await,
-        Some(Arc::clone(&first_id)),
-        None,
-    );
-    harness.player().insert(
-        make_signal_resource(harness.player(), &server, temp_dir.path(), 880.0, 0.24).await,
-        Some(Arc::clone(&second_id)),
-        None,
-    );
+    let first = make_signal_resource(harness.player(), &server, temp_dir.path(), 440.0, 0.12).await;
+    let second =
+        make_signal_resource(harness.player(), &server, temp_dir.path(), 880.0, 0.24).await;
+    harness.with_player(|player| {
+        player.insert(first, first_id, None);
+        player.insert(second, second_id, None);
+    });
 
     harness.player().play();
     let _ = harness.tick_and_drain();
@@ -62,8 +60,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
             first_item_finished = events.iter().find_map(|timed| {
                 matches!(
                     &timed.event,
-                    PlayerEvent::ItemDidPlayToEnd { item_id: Some(id), .. }
-                        if id.as_ref() == first_id.as_ref()
+                    PlayerEvent::ItemDidPlayToEnd { item } if item.id() == first_id
                 )
                 .then_some(timed.frame_end)
             });
@@ -112,7 +109,7 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
 }
 
 async fn make_signal_resource(
-    player: &PlayerImpl,
+    player: &PlayerControl,
     server: &TestServerHelper,
     cache_dir: &Path,
     freq_hz: f64,
@@ -130,10 +127,10 @@ async fn make_signal_resource(
         ResourceConfig::parse_src(url.as_str()).expect("valid signal fixture URL"),
     )
     .store(kithara_integration_tests::disk_asset_store(cache_dir))
-    .byte_pool(player.byte_pool().clone())
-    .pcm_pool(player.pcm_pool().clone())
     .build();
-    config = player.prepare_config(config);
+    config = player
+        .prepare_config(config)
+        .expect("prepare queue regression resource config");
 
     Resource::new(config)
         .await

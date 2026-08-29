@@ -16,7 +16,13 @@ crates = ["kithara-platform"]
 [[layer]]
 index = 2
 name = "infra"
-crates = ["kithara-bufpool", "kithara-drm", "kithara-events", "kithara-net"]
+crates = [
+  "kithara-bufpool",
+  "kithara-drm",
+  "kithara-events",
+  "kithara-net",
+  "kithara-signal",
+]
 
 [[layer]]
 index = 3
@@ -36,12 +42,12 @@ crates = ["kithara-decode", "kithara-encode", "kithara-file", "kithara-hls"]
 [[layer]]
 index = 6
 name = "engine"
-crates = ["kithara-audio"]
+crates = ["kithara-audio", "kithara-warp"]
 
 [[layer]]
 index = 7
 name = "playback"
-crates = ["kithara-play"]
+crates = ["kithara-analysis", "kithara-play"]
 
 [[layer]]
 index = 8

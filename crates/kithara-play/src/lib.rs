@@ -7,12 +7,15 @@ mod guard;
 
 pub mod api;
 pub mod bridge;
+pub mod effects;
 pub mod engine;
 pub mod player;
 pub mod policy;
 pub mod resource;
 pub mod rt;
 pub mod session;
+pub mod sync;
+pub mod worker;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -21,26 +24,34 @@ pub mod wasm;
 pub mod mock;
 
 pub use api::{
-    CrossfaderBus, DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus,
-    PlaybackDirection, PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat,
-    SessionDuckingMode, SessionEvent, SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo,
-    TempoError, TimeControlStatus, TimeRange, TrackBinding, TransportEvent, TransportRevision,
-    WaitingReason, crossfader_gain,
+    DjEvent, EngineEvent, Equalizer, InterruptionKind, ItemEvent, ItemStatus, PlaybackDirection,
+    PlayerEvent, PlayerStatus, RouteChangeReason, SessionBeat, SessionDuckingMode, SessionEvent,
+    SessionTransportSnapshot, SlotId, SyncUnavailable, Tempo, TempoError, TimeControlStatus,
+    TimeRange, TrackBinding, TransportEvent, TransportRevision, WaitingReason,
 };
 pub use bridge::{
-    AllocatedSlot, Cmd, CmdMsg, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot,
-    PlayerId, PlayerLevel, PlayerNotification, Reply, SessionDispatcher, SessionError,
-    SessionHandle, SessionSampleRate, SessionState, SharedEq, SlotControl, StartStreamFn,
-    TrackPlaybackStopReason, TrackState, TrackTransition, run_cmd,
+    AllocatedSlot, Cmd, MixTapWriter, NodeInputs, PlaybackShared, PlaybackSnapshot, PlayerId,
+    PlayerLevel, PlayerNotification, Reply, SessionBinding, SessionDispatcher, SessionError,
+    SessionHandle, SessionSampleRate, SharedEq, SlotControl, TrackPlaybackStopReason, TrackState,
+    TrackTransition,
 };
-pub use engine::{EngineConfig, EngineImpl, apply_mix};
+pub use effects::eq::EqBandConfig;
+#[cfg(any(test, feature = "probe"))]
+pub use engine::apply_mix;
+pub use engine::{EngineConfig, EngineImpl};
 pub use error::PlayError;
 pub use kithara_assets::{AssetLayout, DefaultLayout};
-pub use kithara_audio::{
-    AudioWorkerHandle, CoordinateError, EngineLoadSnapshot, EqBandConfig, SeekOutcome,
-    ServiceClass, StretchControls,
-};
+pub use kithara_audio::SeekOutcome;
 pub use kithara_net::Headers;
+pub use kithara_warp::{
+    BeatGrid, BeatGridId, BeatGridSnapshot, StretchControls, SyncAdmission, SyncApplied, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+};
 pub use player::{PlayerConfig, PlayerImpl, SelectTransition};
 pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
 pub use rt::PlayerNode;
+pub use sync::GroupState;
+pub use worker::{
+    EngineLoad, EngineLoadSnapshot, PlayWorker, PlayWorkerConfig, RegisteredAudio, ServiceClass,
+    TrackConfig,
+};

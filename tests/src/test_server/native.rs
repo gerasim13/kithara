@@ -188,7 +188,7 @@ impl TestServerHelper {
     /// Size-probes (`HEAD` + single-byte ranged `GET`) the server has served
     /// for one `(hls token, variant, segment)`. Always live (no gate needed),
     /// so a test can observe the up-front size-estimation storm at
-    /// `Audio::new()` versus the lazy per-segment resolve.
+    /// `PlayWorker::open` versus the lazy per-segment resolve.
     #[must_use]
     pub fn size_probe_count(&self, hls_token: &str, variant: usize, segment: usize) -> u64 {
         self.state.size_probe_count(hls_token, variant, segment)
@@ -199,7 +199,7 @@ impl TestServerHelper {
     /// releases it and reports how many init GETs it has parked. The matching
     /// init GET response is withheld until [`InitGateHandle::release`].
     ///
-    /// The off-RT blocking construction read (`Audio::new`, inside
+    /// The off-RT blocking preparation read (`PlayWorker::open`, inside
     /// `Resource::new`) reads the init body, so a held init gate parks that read
     /// and keeps the owning track's loader in `TrackStatus::Loading` — a
     /// release-driven lever (no timers, no wall-clock segment delays) for "this

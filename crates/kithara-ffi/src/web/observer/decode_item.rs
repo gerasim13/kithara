@@ -220,7 +220,7 @@ fn decode_variants(data: &JsValue, key: &str) -> Option<Vec<FfiVariant>> {
         .ok()?
         .dyn_into::<Array>()
         .ok()?;
-    let mut variants = Vec::with_capacity(arr.length() as usize);
+    let mut variants: Vec<FfiVariant> = Vec::with_capacity(arr.length() as usize);
     for value in arr.iter() {
         variants.push(decode_variant(&value)?);
     }
@@ -240,7 +240,7 @@ fn decode_time_ranges(data: &JsValue, key: &str) -> Option<Vec<FfiTimeRange>> {
         .ok()?
         .dyn_into::<Array>()
         .ok()?;
-    let mut ranges = Vec::with_capacity(arr.length() as usize);
+    let mut ranges: Vec<FfiTimeRange> = Vec::with_capacity(arr.length() as usize);
     for value in arr.iter() {
         ranges.push(decode_time_range(&value)?);
     }

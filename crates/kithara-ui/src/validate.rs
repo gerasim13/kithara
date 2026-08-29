@@ -200,8 +200,7 @@ fn check_layout_steps(
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
-    check_thresholds(id, &thresholds, path, origin)
+    check_thresholds(id, steps.iter().map(|step| step.from), path, origin)
 }
 
 pub(crate) fn check_block_path(path: &str, origin: &SourceUri) -> Result<(), UiDocError> {
@@ -430,25 +429,19 @@ fn check_adaptive_steps(
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    let thresholds: Vec<f32> = steps.iter().map(|step| step.from).collect();
-    check_thresholds(id, &thresholds, path, origin)
+    check_thresholds(id, steps.iter().map(|step| step.from), path, origin)
 }
 
 fn check_thresholds(
     id: &NodeId,
-    steps: &[f32],
+    steps: impl IntoIterator<Item = f32>,
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    if steps.is_empty() {
-        return Err(UiDocError::AdaptiveWithoutSteps {
-            origin: origin.clone(),
-            id: id.0.clone(),
-            path: path.render(),
-        });
-    }
+    let mut found = false;
     let mut below = f32::NEG_INFINITY;
-    for (index, from) in steps.iter().copied().enumerate() {
+    for (index, from) in steps.into_iter().enumerate() {
+        found = true;
         if from <= below || !from.is_finite() {
             return Err(UiDocError::AdaptiveStepOrder {
                 origin: origin.clone(),
@@ -458,6 +451,13 @@ fn check_thresholds(
             });
         }
         below = from;
+    }
+    if !found {
+        return Err(UiDocError::AdaptiveWithoutSteps {
+            origin: origin.clone(),
+            id: id.0.clone(),
+            path: path.render(),
+        });
     }
     Ok(())
 }

@@ -8,7 +8,7 @@ use kithara_platform::{
     tokio,
     tokio::sync::broadcast,
 };
-use kithara_queue::Queue;
+use kithara_queue::QueueControl;
 
 use crate::{
     item::AudioPlayerItem,
@@ -34,13 +34,12 @@ impl EventBridge {
 
     fn dispatch(
         observer: &Arc<dyn PlayerObserver>,
-        queue: &Arc<Queue>,
         items: &Arc<Mutex<ItemRegistry>>,
         last_current: &Mutex<Option<TrackId>>,
         event: &Event,
     ) {
         if let Event::Player(pe) = event {
-            Self::route_player_event_to_item(items, queue, last_current, pe);
+            Self::route_player_event_to_item(items, last_current, pe);
             let Some(ffi_event) = FfiPlayerEvent::try_from(pe).ok() else {
                 return;
             };
@@ -209,18 +208,17 @@ impl EventBridge {
     /// [`FfiItemEvent::DidStall`].
     fn route_player_event_to_item(
         items: &Arc<Mutex<ItemRegistry>>,
-        queue: &Arc<Queue>,
         last_current: &Mutex<Option<TrackId>>,
         event: &PlayerEvent,
     ) {
         let target = match event {
-            PlayerEvent::ItemDidPlayToEnd { .. } | PlayerEvent::ItemDidFail { .. } => {
-                *last_current.lock()
+            PlayerEvent::ItemDidPlayToEnd { item } | PlayerEvent::ItemDidFail { item } => {
+                Some(item.id())
             }
             PlayerEvent::TimeControlStatusChanged {
                 status: TimeControlStatus::WaitingToPlay,
                 ..
-            } => queue.current().map(|entry| entry.id),
+            } => *last_current.lock(),
             _ => return,
         };
         let Some(track_id) = target else { return };
@@ -277,7 +275,7 @@ impl EventBridge {
     pub(crate) fn spawn(
         rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        queue: Arc<Queue>,
+        queue: QueueControl,
         items: &Arc<Mutex<ItemRegistry>>,
         cancel: CancelToken,
     ) -> Self {
@@ -285,7 +283,6 @@ impl EventBridge {
         Self::spawn_event_task(
             rx,
             Arc::clone(&observer),
-            Arc::clone(&queue),
             Arc::clone(items),
             Arc::clone(&last_current),
             cancel.clone(),
@@ -307,7 +304,6 @@ impl EventBridge {
     fn spawn_event_task(
         mut rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        queue: Arc<Queue>,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
         cancel: CancelToken,
@@ -320,7 +316,6 @@ impl EventBridge {
                         match event {
                             Ok(Envelope { event: ev, .. }) => Self::dispatch(
                                 &observer,
-                                &queue,
                                 &items,
                                 &last_current,
                                 &ev,
@@ -339,7 +334,7 @@ impl EventBridge {
     /// instead of an async task to avoid blocking the single-threaded
     /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
-        queue: Arc<Queue>,
+        queue: QueueControl,
         observer: Arc<dyn PlayerObserver>,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
@@ -382,11 +377,16 @@ impl Drop for EventBridge {
 mod tests {
     use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
+    use kithara::{
+        bufpool::Region,
+        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    };
     use kithara_events::{
-        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, QueueEvent,
-        QueueRepeatMode, TrackId, TrackStatus,
+        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
+        QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
     };
     use kithara_platform::sync::{Arc, Mutex};
+    use kithara_queue::{Queue, QueueConfig, test_utils::QueueProbe};
 
     use super::*;
     use crate::{
@@ -462,6 +462,17 @@ mod tests {
             preferred_peak_bitrate: 0.0,
             preferred_peak_bitrate_expensive: 0.0,
         }
+    }
+
+    fn register_observed_item(
+        items: &Arc<Mutex<ItemRegistry>>,
+    ) -> (Arc<AudioPlayerItem>, Arc<CollectingItemObserver>) {
+        let item = AudioPlayerItem::new(item_config());
+        let observer = Arc::new(CollectingItemObserver::default());
+        let item_observer: Arc<dyn ItemObserver> = observer.clone();
+        item.set_observer(item_observer);
+        items.lock().insert(item.track_id(), item.clone());
+        (item, observer)
     }
 
     fn assert_protocol_failure_is_not_duplicated(event: Event, expected_error: &str) {
@@ -579,6 +590,81 @@ mod tests {
                 },
                 FfiItemEvent::Error { error },
             ] if error == "decoder refused the stream"
+        ));
+    }
+
+    #[kithara::test]
+    fn terminal_events_route_to_their_exact_item_when_sources_repeat() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let (delayed, delayed_observer) = register_observed_item(&items);
+        let (current, current_observer) = register_observed_item(&items);
+        assert_ne!(delayed.track_id(), current.track_id());
+
+        let last_current = Mutex::new(Some(current.track_id()));
+        let shared_src: Arc<str> = Arc::from("https://example.com/quiet-intro.flac");
+        EventBridge::route_player_event_to_item(
+            &items,
+            &last_current,
+            &PlayerEvent::ItemDidPlayToEnd {
+                item: ItemRole::Background(TrackRef::new(
+                    delayed.track_id(),
+                    SlotId::new(1),
+                    Arc::clone(&shared_src),
+                )),
+            },
+        );
+
+        assert!(matches!(
+            delayed_observer.take_events().as_slice(),
+            [FfiItemEvent::DidReachEnd]
+        ));
+        assert!(
+            current_observer.take_events().is_empty(),
+            "a delayed background EOF must not be delivered to the current item"
+        );
+
+        EventBridge::route_player_event_to_item(
+            &items,
+            &last_current,
+            &PlayerEvent::ItemDidFail {
+                item: ItemRole::Outgoing(TrackRef::new(
+                    delayed.track_id(),
+                    SlotId::new(0),
+                    shared_src,
+                )),
+            },
+        );
+
+        assert!(matches!(
+            delayed_observer.take_events().as_slice(),
+            [FfiItemEvent::DidFail]
+        ));
+        assert!(
+            current_observer.take_events().is_empty(),
+            "an outgoing failure must not be delivered to another item with the same source"
+        );
+    }
+
+    #[kithara::test]
+    fn event_without_item_identity_routes_to_last_current() {
+        let items = Arc::new(Mutex::new(ItemRegistry::default()));
+        let (_previous, previous_observer) = register_observed_item(&items);
+        let (current, current_observer) = register_observed_item(&items);
+        let last_current = Mutex::new(Some(current.track_id()));
+
+        EventBridge::route_player_event_to_item(
+            &items,
+            &last_current,
+            &PlayerEvent::TimeControlStatusChanged {
+                status: TimeControlStatus::WaitingToPlay,
+                reason: None,
+            },
+        );
+
+        assert!(previous_observer.take_events().is_empty());
+        assert!(matches!(
+            current_observer.take_events().as_slice(),
+            [FfiItemEvent::DidStall]
         ));
     }
 
@@ -747,7 +833,15 @@ mod tests {
     /// itself.
     #[kithara::test(tokio)]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
-        let queue = Arc::new(Queue::new(kithara_queue::QueueConfig::default()));
+        let region = Region::default();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+        );
+        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let owner = crate::native::session::insert(queue)
+            .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
+        let queue = owner.control().clone();
         let id = queue.register_for_test();
         queue.mark_played_for_test(id);
         queue.set_repeat(kithara_queue::RepeatMode::One);
@@ -757,14 +851,17 @@ mod tests {
         queue
             .bus()
             .publish(Event::Player(PlayerEvent::ItemDidPlayToEnd {
-                src: Arc::from(format!("test://memory/{}", id.as_u64())),
-                item_id: None,
+                item: ItemRole::Leading(TrackRef::new(
+                    id,
+                    SlotId::new(0),
+                    Arc::from(format!("test://memory/{}", id.as_u64())),
+                )),
             }));
 
         let cancel = CancelToken::root();
         let observer: Arc<dyn PlayerObserver> = Arc::new(CollectingPlayerObserver::default());
         let thread = EventBridge::spawn_time_thread(
-            Arc::clone(&queue),
+            queue.clone(),
             observer,
             Arc::new(Mutex::new(ItemRegistry::default())),
             Arc::new(Mutex::new(None)),
@@ -774,6 +871,8 @@ mod tests {
         let reload_started = wait_for_status(&mut events, id, TrackStatus::Pending, 2000).await;
         cancel.cancel();
         let joined = thread.join();
+        crate::native::session::remove(&owner)
+            .expect("INVARIANT: the FFI test Queue detaches from its Host");
 
         assert!(
             reload_started,

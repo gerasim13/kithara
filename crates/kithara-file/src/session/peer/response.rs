@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use kithara_assets::{ReadSide, WriterEpoch};
+use kithara_assets::WriterEpoch;
 use kithara_events::{FileError, FileEvent, TotalBytesSource};
 use kithara_net::{Headers, NetError, Retryability};
 use kithara_platform::{
@@ -97,18 +97,6 @@ impl FileInner {
         true
     }
 
-    fn commit_completed_epoch(&self, epoch: &WriterEpoch, final_len: u64) {
-        if let Some(result) = epoch.commit(Some(final_len)).current() {
-            if let Err(error) = result {
-                self.source.bus.publish(FileEvent::Error {
-                    error: FileError::Io(error.to_string()),
-                });
-            } else {
-                self.observe_committed();
-            }
-        }
-    }
-
     pub(super) fn complete_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
         if completion.invalid_response && !matches!(completion.error, Some(NetError::Cancelled)) {
             self.fail_current_epoch(
@@ -138,19 +126,30 @@ impl FileInner {
     /// Settle a fetch against its writer epoch and current byte coverage.
     /// Cancellation relinquishes; fatal or initial zero-progress errors fail.
     pub(super) fn finalize_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
+        if !completion.invalid_response
+            && matches!(completion.error, Some(NetError::Cancelled))
+            && self.commit_fetch_if_complete(epoch, completion)
+        {
+            return;
+        }
         if self.settle_fetch_error(epoch, completion) {
             return;
         }
+        let _ = self.commit_fetch_if_complete(epoch, completion);
+    }
+
+    fn commit_fetch_if_complete(
+        &self,
+        epoch: &WriterEpoch,
+        completion: FetchCompletion<'_>,
+    ) -> bool {
         if !epoch.is_current() {
-            return;
+            return false;
         }
         let Some(final_len) = self.resolved_final_len(completion) else {
-            return;
+            return false;
         };
-        if self.asset.reader.next_gap(0, final_len).is_some() {
-            return;
-        }
-        self.commit_completed_epoch(epoch, final_len);
+        self.commit_if_complete(epoch, final_len)
     }
 
     fn resolved_final_len(&self, completion: FetchCompletion<'_>) -> Option<u64> {

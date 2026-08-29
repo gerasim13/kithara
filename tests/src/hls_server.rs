@@ -691,7 +691,7 @@ impl PackagedTestServer {
     /// the segment's bytes are unaccounted-for in `total_bytes`. Models a seek
     /// that lands BEFORE the segment's size is known — the genuinely-immediate
     /// seek the body-only [`Self::with_segment_gate`] cannot model (a body
-    /// withhold would instead block `Audio::new()`, since estimation HEADs
+    /// withhold would instead block `PlayWorker::open`, since estimation HEADs
     /// every segment synchronously at construction).
     ///
     /// The body GET stays unblocked. The returned handle can `release_head()`

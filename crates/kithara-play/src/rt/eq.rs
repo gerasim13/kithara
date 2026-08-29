@@ -11,8 +11,9 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_audio::{EqBandConfig, IsolatorEq, effects::eq::GainDb};
 use kithara_test_utils::kithara;
+
+use crate::effects::eq::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
 
 #[derive(Diff, Patch, Debug, Clone, Copy, PartialEq)]
 pub(crate) struct MasterEqBand {
@@ -22,14 +23,17 @@ pub(crate) struct MasterEqBand {
     pub(crate) kind: u8,
 }
 
-#[derive(Diff, Patch, Debug, Clone, PartialEq)]
-pub(crate) struct MasterEqNode {
+#[derive(Diff, Patch, Debug, Clone)]
+pub struct MasterEqNode {
     pub(crate) bands: Vec<MasterEqBand>,
     pub(crate) enabled: bool,
+    #[diff(skip)]
+    config: EqConfig,
 }
 
 impl MasterEqNode {
-    pub(crate) fn new(layout: &[EqBandConfig]) -> Self {
+    #[must_use]
+    pub fn new(config: EqConfig, layout: &[EqBandConfig]) -> Self {
         let bands = layout
             .iter()
             .map(|band| MasterEqBand {
@@ -42,14 +46,20 @@ impl MasterEqNode {
 
         Self {
             bands,
+            config,
             enabled: true,
         }
     }
 
-    pub(crate) fn set_gain(&mut self, index: usize, gain_db: GainDb) {
+    pub fn set_gain(&mut self, index: usize, gain_db: GainDb) {
         if let Some(band) = self.bands.get_mut(index) {
             band.gain_db = f32::from(gain_db);
         }
+    }
+
+    #[must_use]
+    pub fn band_count(&self) -> usize {
+        self.bands.len()
     }
 }
 
@@ -84,8 +94,8 @@ struct MasterEqProcessor {
 impl MasterEqProcessor {
     fn new(params: MasterEqNode, sample_rate: NonZeroU32) -> Self {
         let bands = bands_from_params(&params);
-        let mut eq_l = IsolatorEq::new(&bands, sample_rate.get());
-        let mut eq_r = IsolatorEq::new(&bands, sample_rate.get());
+        let mut eq_l = IsolatorEq::new(&params.config, &bands, sample_rate.get());
+        let mut eq_r = IsolatorEq::new(&params.config, &bands, sample_rate.get());
 
         for (i, band) in params.bands.iter().enumerate() {
             eq_l.set_gain(i, GainDb::from(band.gain_db));

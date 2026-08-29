@@ -2,8 +2,9 @@
 
 use std::{ffi::c_void, num::NonZeroU32, ptr::NonNull};
 
-use kithara_bufpool::PcmBuf;
+use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
+use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
 
 use super::{
@@ -20,7 +21,7 @@ use crate::{
     codec::FrameCodec,
     demuxer::TrackInfo,
     error::{DecodeError, DecodeResult},
-    types::{DecoderTrackInfo, PcmSpec},
+    types::DecoderTrackInfo,
 };
 
 struct Consts;
@@ -41,7 +42,7 @@ pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
     track_info: DecoderTrackInfo,
     codec: OwnedCodec,
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl AndroidCodec {
@@ -104,7 +105,7 @@ impl FrameCodec for AndroidCodec {
         frame_data: &[u8],
         pts: Duration,
         _packet_desc: &[u8],
-        out: &mut PcmBuf,
+        out: &mut SampleBuffer,
     ) -> DecodeResult<u32> {
         if frame_data.is_empty() {
             out.clear();
@@ -176,7 +177,7 @@ impl FrameCodec for AndroidCodec {
         self.codec.flush().map_err(DecodeError::from)
     }
 
-    fn spec(&self) -> PcmSpec {
+    fn spec(&self) -> AudioSpec {
         self.spec
     }
 
@@ -237,7 +238,7 @@ fn build_format(
 
 fn read_output_format(
     codec: &OwnedCodec,
-) -> Result<(PcmSpec, AndroidPcmEncoding), AndroidBackendError> {
+) -> Result<(AudioSpec, AndroidPcmEncoding), AndroidBackendError> {
     let format = codec.output_format()?;
     let sample_rate = format.get_u32(KEY_SAMPLE_RATE)?.ok_or_else(|| {
         AndroidBackendError::operation("codec-output-format", "missing sample-rate")
@@ -252,10 +253,10 @@ fn read_output_format(
     };
     let nz_rate = NonZeroU32::new(sample_rate)
         .ok_or_else(|| AndroidBackendError::operation("codec-output-format", "zero sample-rate"))?;
-    Ok((PcmSpec::new(channels, nz_rate), pcm_encoding))
+    Ok((AudioSpec::new(channels, nz_rate), pcm_encoding))
 }
 
-fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
+fn decode_pcm16_into(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     let count = bytes.len() / 2;
     out.ensure_len(count)?;
     for (dst, chunk) in out.iter_mut().zip(bytes.chunks_exact(2)) {
@@ -266,7 +267,7 @@ fn decode_pcm16_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
     Ok(())
 }
 
-fn decode_pcm_float_into(bytes: &[u8], out: &mut PcmBuf) -> DecodeResult<()> {
+fn decode_pcm_float_into(bytes: &[u8], out: &mut SampleBuffer) -> DecodeResult<()> {
     let count = bytes.len() / 4;
     out.ensure_len(count)?;
     out.iter_mut()

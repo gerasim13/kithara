@@ -13,16 +13,7 @@ categories = ["multimedia::audio"]
 ignored = ["unimock"]
 
 [features]
-default = [
-    "backend-cpal",
-    "symphonia",
-    "resample-rubato",
-    "analysis-beat",
-    "analysis-waveform",
-    "client-reqwest",
-    "tls-rustls",
-]
-backend-cpal = ["firewheel/cpal"]
+default = ["symphonia", "resample-rubato", "stretch-signalsmith", "client-reqwest", "tls-rustls"]
 # HTTP backend forwarding to every kithara-net-reaching dep.
 client-reqwest = [
     "kithara-net/client-reqwest",
@@ -64,21 +55,19 @@ tls-native = [
     "kithara-events/tls-native",
     "kithara-abr/tls-native",
 ]
-backend-web-audio = ["dep:firewheel-web-audio", "symphonia"]
-wasm-bindgen = ["firewheel/wasm-bindgen"]
 apple = ["kithara-audio/apple", "kithara-decode/apple"]
 apple-fused-src = ["kithara-audio/apple-fused-src", "kithara-decode/apple"]
 # Software decoder pass-through. Required when not opting into a hardware
 # backend, since `kithara-decode`'s `DecoderBackend` enum needs at least
-# one variant available. `backend-web-audio` pulls it in transitively:
-# wasm has no hardware decoder (apple/android are native-only).
+# one variant available. WASM has no hardware decoder (apple/android are
+# native-only).
 symphonia = ["kithara-audio/symphonia", "kithara-decode/symphonia"]
 webcodecs = ["kithara-audio/webcodecs", "kithara-decode/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac", "kithara-decode/fdk-aac"]
 resample-glide = ["kithara-audio/resample-glide", "kithara-decode/resample-glide"]
 resample-rubato = ["kithara-audio/resample-rubato", "kithara-decode/resample-rubato"]
-analysis-beat = ["kithara-audio/analysis-beat"]
-analysis-waveform = ["kithara-audio/analysis-waveform"]
+stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
+stretch-bungee = ["kithara-warp/stretch-bungee"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
 probe = []
@@ -97,12 +86,15 @@ kithara-file = { workspace = true, default-features = false }
 kithara-hls = { workspace = true, default-features = false }
 kithara-net = { workspace = true, default-features = false }
 kithara-platform = { workspace = true }
+kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
+kithara-warp = { workspace = true, default-features = false, features = ["render"] }
 
 # Utilities
 arc-swap = { workspace = true }
+biquad = { workspace = true }
 bon = { workspace = true }
 delegate = { workspace = true }
 derive_more = { workspace = true }
@@ -110,17 +102,18 @@ fieldwork = { workspace = true }
 
 # Audio engine
 firewheel = { workspace = true }
+firewheel-core = { workspace = true }
 hex = { workspace = true }
 num-traits = { workspace = true }
 portable-atomic = { workspace = true }
 
 # Async & channels
 ringbuf = { workspace = true }
+serde = { workspace = true }
 sha2 = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-triple_buffer = { workspace = true }
 
 unimock = { workspace = true, optional = true }
 url = { workspace = true }
@@ -128,21 +121,13 @@ url = { workspace = true }
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-bevy_platform = { workspace = true }
-firewheel-web-audio = { workspace = true, optional = true }
-
 [dev-dependencies]
-kithara-audio = { workspace = true, features = ["probe"] }
-kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "probe"] }
+kithara-audio = { workspace = true, features = ["mock", "probe"] }
+kithara-play = { path = ".", default-features = false, features = ["probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 bytes = { workspace = true }
 unimock = { workspace = true }
-wasm-bindgen-test = { workspace = true }
-
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara-play = { path = ".", features = ["wasm-bindgen"] }
 
 [lints]
 workspace = true

@@ -82,6 +82,9 @@ impl DeferredWake {
 pub trait WorkerWake: Send + Sync {
     /// Wake the audio worker so it re-ticks the decoder now that data landed.
     fn wake(&self);
+
+    /// Coalesce a future worker pass without unparking from the real-time path.
+    fn defer(&self);
 }
 
 #[cfg(test)]

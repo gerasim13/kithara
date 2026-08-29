@@ -1,5 +1,5 @@
 use js_sys::Uint8Array;
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use kithara_platform::sync::{OnceLock, mpsc};
 use kithara_stream::AudioCodec;
 use wasm_bindgen::JsCast;
@@ -43,6 +43,7 @@ impl Support {
         0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
+    const FLAC_DESCRIPTION_LEN: usize = 42;
 
     fn set(&mut self, codec: AudioCodec, supported: bool) {
         match codec {
@@ -69,12 +70,12 @@ impl Support {
 
 /// Initialize the main-thread WebCodecs runtime and capability probe.
 #[doc(hidden)]
-pub fn spawn_webcodecs_probe(pcm_pool: PcmPool) {
+pub fn spawn_webcodecs_probe(sample_pool: SamplePool) {
     if host_cmd().get().is_some() {
         tracing::debug!("WebCodecs host was already initialized");
         return;
     }
-    let _ = host_cmd().set(spawn_host(pcm_pool));
+    let _ = host_cmd().set(spawn_host(sample_pool));
     drop(kithara_platform::tokio::task::spawn(async {
         let mut snapshot = Support::default();
         for codec in Support::CODECS {
@@ -122,13 +123,13 @@ async fn probe(codec: AudioCodec) -> bool {
     supported
 }
 
-fn probe_description(codec: AudioCodec) -> Option<Vec<u8>> {
+fn probe_description(codec: AudioCodec) -> Option<[u8; Support::FLAC_DESCRIPTION_LEN]> {
     match codec {
         AudioCodec::Flac => {
-            let mut description = Vec::with_capacity(4 + 4 + Support::FLAC_PROBE_STREAMINFO.len());
-            description.extend_from_slice(b"fLaC");
-            description.extend_from_slice(&[0x80, 0, 0, 34]);
-            description.extend_from_slice(&Support::FLAC_PROBE_STREAMINFO);
+            let mut description = [0; Support::FLAC_DESCRIPTION_LEN];
+            description[..4].copy_from_slice(b"fLaC");
+            description[4..8].copy_from_slice(&[0x80, 0, 0, 34]);
+            description[8..].copy_from_slice(&Support::FLAC_PROBE_STREAMINFO);
             Some(description)
         }
         _ => None,

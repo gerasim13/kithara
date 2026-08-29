@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use firewheel::{FirewheelConfig, FirewheelCtx, channel_config::ChannelCount};
 use kithara::{
-    audio::PcmReader,
+    audio::AudioReader,
     platform::sync::Arc,
     play::{
         PlayerNode, Resource, SharedEq, TrackTransition,
@@ -46,7 +46,7 @@ impl OfflinePlayer {
         let (inputs, control) = slot_channels(SharedEq::new(0));
         let playback = Arc::clone(&control.playback);
 
-        let player_node = PlayerNode::new(inputs, kithara::bufpool::PcmPool::default());
+        let player_node = PlayerNode::new(inputs, kithara::bufpool::SamplePool::default());
         let node_id = ctx.add_node(player_node, None);
         let graph_out = ctx.graph_out_node_id();
         ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
@@ -70,24 +70,26 @@ impl OfflinePlayer {
         let pr = PlayerResource::new(
             resource,
             Arc::clone(&src),
-            &kithara::bufpool::PcmPool::default(),
+            &kithara::bufpool::SamplePool::default(),
         );
         // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
         // does when a resource crosses to the audio thread. Without it a later `seek` would move
         // the media clock while the source stayed put.
-        if let Some(handle) = pr.seek_handle() {
-            self.control.bind_seek(Arc::clone(&src), handle);
-        }
+        let item_id = kithara::events::TrackId::allocate();
+        let seek = pr.seek_handle();
         self.control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
                 resource: Box::new(pr),
-                item_id: None,
+                item_id,
             })
             .expect("BUG: send LoadTrack");
+        if let Some(handle) = seek {
+            self.control.bind_seek(item_id, handle);
+        }
         self.control
             .cmd_tx
-            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(src)))
+            .try_push(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)))
             .expect("BUG: send FadeIn");
         self.control
             .cmd_tx
@@ -129,10 +131,13 @@ impl OfflinePlayer {
     /// Panics if the graph update or backend access fails.
     pub fn render(&mut self, frames: usize) -> Vec<f32> {
         self.ctx.update().expect("BUG: graph update");
-        self.ctx
+        let output = self
+            .ctx
             .active_backend_mut()
             .expect("BUG: backend active")
-            .render(frames)
+            .render(frames);
+        self.drain_trash();
+        output
     }
 
     /// Send a seek command to the processor.
@@ -174,10 +179,19 @@ impl OfflinePlayer {
                 N::Changed { .. } => NotificationKind::Changed,
                 N::FadingIn { .. } => NotificationKind::FadingIn,
                 N::FadingOut { .. } => NotificationKind::FadingOut,
+                N::RateChanged { .. } => continue,
             });
         }
-        while self.control.trash_rx.try_pop().is_some() {}
+        self.drain_trash();
         out
+    }
+
+    fn drain_trash(&mut self) {
+        while let Some(track) = self.control.trash_rx.try_pop() {
+            if let Some(seek) = track.seek_handle() {
+                self.control.unbind_seek(track.item_id(), &seek);
+            }
+        }
     }
 }
 
@@ -198,7 +212,7 @@ pub enum NotificationKind {
 /// Thin wrapper around [`Resource::from_reader`] for tests.
 pub fn resource_from_reader<R>(reader: R) -> Resource
 where
-    R: PcmReader + 'static,
+    R: AudioReader + 'static,
 {
     Resource::from_reader(reader, None)
 }
@@ -208,7 +222,7 @@ where
 /// on the bus.
 pub fn resource_from_reader_with_src<R, S>(reader: R, src: S) -> Resource
 where
-    R: PcmReader + 'static,
+    R: AudioReader + 'static,
     S: Into<Arc<str>>,
 {
     Resource::from_reader(reader, Some(src.into()))

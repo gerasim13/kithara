@@ -43,11 +43,12 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
+    audio::{AudioConfig, AudioRead, AudioSession, ChunkOutcome},
+    bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule,
@@ -97,18 +98,22 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .expect("create HLS fixture")
         .master_url();
 
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(64).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(worker.byte_pool().clone())
         .initial_abr_mode(auto(0))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -116,9 +121,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         )
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     // Clone the live ABR handle to read `current_variant` after the drain —
     // the `Arc<AbrState>` it holds outlives `audio` (dropped inside the
@@ -138,7 +141,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         let deadline = kithara::platform::time::Instant::now() + Consts::DRAIN_BUDGET;
         let mut chunks = 0usize;
         while chunks < Consts::MIN_CHUNKS && kithara::platform::time::Instant::now() < deadline {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => break,

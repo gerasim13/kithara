@@ -5,7 +5,7 @@ use std::{
 };
 
 use bon::Builder;
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::{BytePool, SamplePool};
 use kithara_platform::sync::Arc;
 #[cfg(all(test, feature = "resample-rubato"))]
 use kithara_resampler::rubato::RubatoBackend;
@@ -158,7 +158,7 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
     /// PCM buffer pool, propagated from the host.
-    pub pcm_pool: PcmPool,
+    pub sample_pool: SamplePool,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
@@ -171,11 +171,11 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
 impl DecoderConfig {
     pub(crate) fn test_builder() -> DecoderConfigBuilder<
         NoResamplerBackend,
-        decoder_config_builder::SetPcmPool<decoder_config_builder::SetBytePool>,
+        decoder_config_builder::SetSamplePool<decoder_config_builder::SetBytePool>,
     > {
         Self::builder()
             .byte_pool(BytePool::default())
-            .pcm_pool(PcmPool::default())
+            .sample_pool(SamplePool::default())
     }
 }
 
@@ -344,8 +344,9 @@ where
                 "fmp4_segment: dispatching to segment-aware WebCodecs path"
             );
             let gapless = config.gapless;
-            return build_fmp4_segment_decoder(source, layout, config, |track| {
-                WebCodecsCodec::open(track, gapless)
+            let byte_pool = config.byte_pool.clone();
+            return build_fmp4_segment_decoder(source, layout, config, move |track| {
+                WebCodecsCodec::open(track, gapless, byte_pool.clone())
             });
         }
         #[cfg(feature = "symphonia")]
@@ -411,8 +412,12 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let codec_impl = WebCodecsCodec::open(demuxer.track_info(), config.gapless)?;
-    let pool = config.pcm_pool.clone();
+    let codec_impl = WebCodecsCodec::open(
+        demuxer.track_info(),
+        config.gapless,
+        config.byte_pool.clone(),
+    )?;
+    let pool = config.sample_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -529,7 +534,7 @@ where
     }
     let codec_impl =
         AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
-    let pool = config.pcm_pool.clone();
+    let pool = config.sample_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -703,7 +708,7 @@ where
         _ => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
-    let pool = config.pcm_pool.clone();
+    let pool = config.sample_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -783,7 +788,7 @@ where
     } else {
         SymphoniaCodec::open_native(&demuxer.native_params)?
     };
-    let pool = config.pcm_pool.clone();
+    let pool = config.sample_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -868,7 +873,7 @@ where
 
     let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone())?;
     let codec = open_codec(demuxer.track_info())?;
-    let pool = config.pcm_pool.clone();
+    let pool = config.sample_pool.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
@@ -934,8 +939,9 @@ mod tests {
 mod apple_factory_tests {
     use std::{io::Cursor, num::NonZeroU32};
 
-    use kithara_bufpool::PcmBuf;
+    use kithara_bufpool::SampleBuffer;
     use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::{AudioChunk, AudioSpec};
     use kithara_stream::{AudioCodec, ByteMap, MediaInfo};
     use kithara_test_utils::kithara;
 
@@ -944,11 +950,10 @@ mod apple_factory_tests {
         track_with_output_domain_gapless,
     };
     use crate::{
-        DecodeError, DecoderChunkOutcome, DecoderTrackInfo, GaplessInfo, GaplessTrimmer, PcmSpec,
+        DecodeError, DecoderChunkOutcome, DecoderTrackInfo, GaplessInfo, GaplessTrimmer,
         codec::FrameCodec,
         composed::{ComposedDecoder, DecoderRuntime},
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
-        duration_for_frames,
         error::DecodeResult,
         fmp4::test_layout::{TestLayoutCodec, build_test_layout},
         traits::Decoder,
@@ -963,13 +968,25 @@ mod apple_factory_tests {
         packet_count: u64,
     }
 
+    impl PacketDemuxer {
+        fn source_spec(&self) -> AudioSpec {
+            AudioSpec::new(
+                self.track.channels,
+                NonZeroU32::new(self.source_rate).expect("test source rate is non-zero"),
+            )
+        }
+    }
+
     impl Demuxer for PacketDemuxer {
         fn duration(&self) -> Option<Duration> {
-            Some(duration_for_frames(
-                self.source_rate,
-                self.packet_count
-                    .saturating_mul(u64::from(self.packet_frames)),
-            ))
+            Some(
+                self.source_spec()
+                    .duration_for(
+                        self.packet_count
+                            .saturating_mul(u64::from(self.packet_frames)),
+                    )
+                    .expect("test duration is representable"),
+            )
         }
 
         fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
@@ -979,14 +996,16 @@ mod apple_factory_tests {
             let packet_idx = self.next_index;
             self.next_index = self.next_index.saturating_add(1);
             self.held = vec![1u8; 4];
+            let spec = self.source_spec();
             Ok(DemuxOutcome::Frame(Frame {
                 data: &self.held,
                 packet_desc: &[],
-                pts: duration_for_frames(
-                    self.source_rate,
-                    packet_idx.saturating_mul(u64::from(self.packet_frames)),
-                ),
-                duration: duration_for_frames(self.source_rate, u64::from(self.packet_frames)),
+                pts: spec
+                    .duration_for(packet_idx.saturating_mul(u64::from(self.packet_frames)))
+                    .expect("test timestamp is representable"),
+                duration: spec
+                    .duration_for(u64::from(self.packet_frames))
+                    .expect("test duration is representable"),
             }))
         }
 
@@ -1010,7 +1029,7 @@ mod apple_factory_tests {
 
     struct OutputDomainCodec {
         track_info: DecoderTrackInfo,
-        spec: PcmSpec,
+        spec: AudioSpec,
         frames_per_call: u32,
     }
 
@@ -1020,7 +1039,7 @@ mod apple_factory_tests {
             bytes: &[u8],
             _pts: Duration,
             _packet_desc: &[u8],
-            out: &mut PcmBuf,
+            out: &mut SampleBuffer,
         ) -> DecodeResult<u32> {
             if bytes.is_empty() {
                 out.clear();
@@ -1033,7 +1052,7 @@ mod apple_factory_tests {
             Ok(())
         }
 
-        fn spec(&self) -> PcmSpec {
+        fn spec(&self) -> AudioSpec {
             self.spec
         }
 
@@ -1042,7 +1061,11 @@ mod apple_factory_tests {
         }
     }
 
-    fn write_silent_frame(spec: PcmSpec, frames: u32, out: &mut PcmBuf) -> DecodeResult<u32> {
+    fn write_silent_frame(
+        spec: AudioSpec,
+        frames: u32,
+        out: &mut SampleBuffer,
+    ) -> DecodeResult<u32> {
         let samples = usize::try_from(frames)?
             .checked_mul(usize::from(spec.channels))
             .ok_or(DecodeError::InvalidData {
@@ -1067,7 +1090,7 @@ mod apple_factory_tests {
         }
     }
 
-    fn output_frames(chunks: impl IntoIterator<Item = crate::PcmChunk>) -> u64 {
+    fn output_frames(chunks: impl IntoIterator<Item = AudioChunk>) -> u64 {
         chunks
             .into_iter()
             .map(|chunk| u64::from(chunk.meta.frames))
@@ -1170,7 +1193,7 @@ mod apple_factory_tests {
         };
         let codec = OutputDomainCodec {
             frames_per_call,
-            spec: PcmSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
+            spec: AudioSpec::new(2, NonZeroU32::new(OUTPUT_RATE).expect("test rate")),
             track_info: DecoderTrackInfo {
                 gapless: Some(output_gapless),
                 ..DecoderTrackInfo::default()

@@ -1,43 +1,41 @@
-use std::num::NonZeroU32;
+use kithara_platform::sync::Arc;
+use kithara_signal::AudioSpec;
 
-use kithara_bufpool::PcmBuf;
-use kithara_platform::{sync::Arc, time::Duration};
-
-use crate::gapless::{GaplessInfo, GaplessTailCompensation};
+use crate::{
+    error::DecodeError,
+    gapless::{GaplessInfo, GaplessTailCompensation},
+};
 
 /// Decoder-owned per-track playback contract.
 ///
-/// `#[non_exhaustive]` because callers in this crate construct it by
-/// `..Default::default()` spread and additional fields (e.g. encoder
-/// delay metadata, container-level flags) are expected to land here in
-/// follow-up port commits.
+/// `#[non_exhaustive]` because callers construct it with
+/// `..Default::default()` and the decoder may add further track-level facts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DecoderTrackInfo {
     /// Gapless trim information applied by the engine pipeline.
     pub gapless: Option<GaplessInfo>,
-    /// Fused-SRC tail compensation contract for gapless trailing trim.
+    /// Fused sample-rate-conversion tail compensation.
     pub gapless_tail: Option<GaplessTailCompensation>,
 }
 
 /// Immutable decoder facts consumed when constructing a gapless trimmer.
 ///
-/// This profile references the existing [`GaplessInfo`] and
-/// [`GaplessTailCompensation`] contracts; it does not duplicate their frame
-/// counts or introduce a second source of truth.
+/// This profile references the existing gapless contracts instead of copying
+/// their frame counts into another source of truth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GaplessProfile {
     gapless: Option<GaplessInfo>,
     tail_compensation: Option<GaplessTailCompensation>,
-    spec: PcmSpec,
+    spec: AudioSpec,
     default_priming_frames: u64,
 }
 
 impl GaplessProfile {
     #[must_use]
     pub const fn new(
-        spec: PcmSpec,
+        spec: AudioSpec,
         gapless: Option<GaplessInfo>,
         tail_compensation: Option<GaplessTailCompensation>,
         default_priming_frames: u64,
@@ -61,7 +59,7 @@ impl GaplessProfile {
     }
 
     #[must_use]
-    pub const fn spec(self) -> PcmSpec {
+    pub const fn spec(self) -> AudioSpec {
         self.spec
     }
 
@@ -71,419 +69,47 @@ impl GaplessProfile {
     }
 }
 
-/// Construction-time PCM specification used to build a PCM blender.
+/// Construction-time decoded-audio specification for a gapless blender.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BlenderProfile {
-    spec: PcmSpec,
+    spec: AudioSpec,
 }
 
 impl BlenderProfile {
     #[must_use]
-    pub const fn new(spec: PcmSpec) -> Self {
+    pub const fn new(spec: AudioSpec) -> Self {
         Self { spec }
     }
 
     #[must_use]
-    pub const fn spec(self) -> PcmSpec {
+    pub const fn spec(self) -> AudioSpec {
         self.spec
     }
 }
 
-/// Audio track metadata extracted from Symphonia tags.
+/// Audio track metadata extracted from decoder tags.
 ///
-/// Intentionally without `#[non_exhaustive]` — this is a stable POD of
-/// optional tag fields, constructed via direct struct literal in
-/// downstream test/processor code; future additions go through
-/// `Default::default()` spread.
+/// Intentionally without `#[non_exhaustive]`: downstream fixtures and
+/// processors construct this stable optional-field value with struct literals.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
     /// Album name.
     pub album: Option<String>,
     /// Artist name.
     pub artist: Option<String>,
-    /// Album artwork (JPEG/PNG bytes).
+    /// Album artwork bytes.
     pub artwork: Option<Arc<Vec<u8>>>,
     /// Track title.
     pub title: Option<String>,
 }
 
-/// PCM specification - core audio format information
-///
-/// Intentionally without `#[non_exhaustive]`: this is a stable POD pair
-/// (`channels`, `sample_rate`) at the heart of every audio API in the
-/// workspace, constructed via direct struct literal at >100 call sites.
-/// Adding fields would force a workspace-wide migration regardless of
-/// non-exhaustiveness, so the marker buys nothing.
-///
-/// `Default` is intentionally absent — a zero sample rate is not a valid
-/// `PcmSpec`.
-#[derive(Clone, Copy, Debug, derive_more::Display, PartialEq, Eq)]
-#[display("{sample_rate} Hz, {channels} channels")]
-pub struct PcmSpec {
-    pub sample_rate: NonZeroU32,
-    pub channels: u16,
-}
-
-impl PcmSpec {
-    /// Production ctor from a validated non-zero rate.
-    #[must_use]
-    pub const fn new(channels: u16, sample_rate: NonZeroU32) -> Self {
-        Self {
-            sample_rate,
-            channels,
-        }
-    }
-
-    /// Validate a raw rate at a decode boundary.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::error::DecodeError::InvalidSampleRate`] when `raw_rate` is zero.
-    pub fn checked(
-        channels: u16,
-        raw_rate: u32,
-        resource: &'static str,
-    ) -> Result<Self, crate::error::DecodeError> {
-        let nz = NonZeroU32::new(raw_rate)
-            .ok_or(crate::error::DecodeError::InvalidSampleRate { resource })?;
-        Ok(Self::new(channels, nz))
-    }
-}
-
-impl From<&PcmMeta> for kithara_stream::ChunkPosition {
-    fn from(meta: &PcmMeta) -> Self {
-        Self {
-            frame_offset: meta.frame_offset,
-            frames: u64::from(meta.frames),
-            source_bytes: meta.source_bytes,
-            source_byte_offset: meta.source_byte_offset,
-            end_position_ns: u64::try_from(meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX),
-        }
-    }
-}
-
-/// Position metadata for a PCM chunk.
-///
-/// Combines audio format specification with position on the logical timeline.
-/// Each chunk gets unique timeline coordinates; `PcmSpec` is the static part.
-///
-/// Intentionally without `#[non_exhaustive]`: external crates construct
-/// it via `PcmMeta { spec, ..Default::default() }` for fixtures; the
-/// pattern survives field additions, and `non_exhaustive` would block
-/// the struct-literal idiom altogether.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PcmMeta {
-    /// Wall-clock position **after** this chunk's frames have played
-    /// out, computed by the decoder from its own frame counter. Used
-    /// by `PlayheadWrite::advance` to update the playhead
-    /// without re-doing `frames * 1e9 / sample_rate` arithmetic on the
-    /// consumer side. For frame-based decoders (MP3 / AAC) the last
-    /// chunk may legitimately push this a few ms past the rounded
-    /// `total_duration`; the timeline clamps to duration on write.
-    pub end_timestamp: Duration,
-    /// Timestamp of the first frame in this chunk.
-    pub timestamp: Duration,
-    /// Segment index within playlist (`None` for progressive files).
-    pub segment_index: Option<u32>,
-    /// Absolute byte offset of this chunk's source data within the input
-    /// stream, when the decoder reports it. Apple's `AudioFile` exposes
-    /// this via `AudioStreamPacketDescription.mStartOffset`; other
-    /// backends (Symphonia, Android `MediaExtractor`) do not surface
-    /// per-packet byte offsets through their public API and leave this
-    /// `None`. When present, downstream code can pin the chunk to an
-    /// exact byte range without recomputing rate × time.
-    pub source_byte_offset: Option<u64>,
-    /// Variant/quality level index (`None` for progressive files).
-    pub variant_index: Option<usize>,
-    /// Audio format (channels, sample rate).
-    pub spec: PcmSpec,
-    /// Number of audio frames this chunk represents (one frame =
-    /// `spec.channels` interleaved samples). Decoder fills it from the
-    /// output buffer length; consumer-side splits update it in place
-    /// when slicing a chunk into consumed/remaining halves.
-    pub frames: u32,
-    /// Decoder generation — increments on each ABR switch / decoder recreation.
-    pub epoch: u64,
-    /// Absolute frame offset from the start of the track.
-    pub frame_offset: u64,
-    /// Number of source-stream bytes that produced this chunk's PCM, as
-    /// reported by the underlying decoder packet (e.g. `Packet.data.len()`
-    /// for Symphonia, `mDataByteSize` for Apple `AudioConverter`,
-    /// `readSampleData` return for Android `MediaExtractor`).
-    ///
-    /// Lets the consumer correlate chunk frames with the source byte
-    /// position without recomputing rate × time externally — the decoder
-    /// already knows the exact mapping for variable-bitrate compressed
-    /// formats and arbitrary-sized PCM packets. `0` means "unknown" (mock
-    /// decoders, post-EOF flush chunks).
-    pub source_bytes: u64,
-}
-
-/// Placeholder rate for partially constructed default metadata.
-const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
-    Some(r) => r,
-    None => unreachable!(),
-};
-
-impl Default for PcmMeta {
-    fn default() -> Self {
-        Self {
-            spec: PcmSpec::new(0, PLACEHOLDER_RATE),
-            end_timestamp: Duration::ZERO,
-            timestamp: Duration::ZERO,
-            segment_index: None,
-            source_byte_offset: None,
-            variant_index: None,
-            frames: 0,
-            epoch: 0,
-            frame_offset: 0,
-            source_bytes: 0,
-        }
-    }
-}
-
-/// PCM chunk containing interleaved audio samples with automatic pool recycling.
-///
-/// The `samples` buffer is pool-backed via [`PcmBuf`]: when the chunk is dropped,
-/// the buffer returns to its originating PCM pool for reuse instead of being deallocated.
-///
-/// # Invariants
-/// - `samples.len() % channels == 0` (frame-aligned)
-/// - `spec.channels > 0` and `spec.sample_rate > 0`
-/// - All samples are f32 and interleaved (LRLRLR...)
-#[derive(Debug)]
-pub struct PcmChunk {
-    pub samples: PcmBuf,
-    pub meta: PcmMeta,
-}
-
-impl PcmChunk {
-    /// Create a new `PcmChunk` from a pool-backed buffer.
-    #[must_use]
-    pub const fn new(meta: PcmMeta, samples: PcmBuf) -> Self {
-        Self { samples, meta }
-    }
-
-    /// Number of audio frames in this chunk.
-    ///
-    /// A frame contains one sample per channel.
-    #[must_use]
-    pub fn frames(&self) -> usize {
-        let channels = self.meta.spec.channels as usize;
-        self.samples.len().checked_div(channels).unwrap_or(0)
-    }
-
-    /// Audio format specification.
-    #[must_use]
-    pub const fn spec(&self) -> PcmSpec {
-        self.meta.spec
-    }
-}
-
-impl AsRef<[f32]> for PcmChunk {
-    fn as_ref(&self) -> &[f32] {
-        &self.samples
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use kithara_bufpool::PcmPool;
-    use kithara_test_utils::kithara;
-
-    use super::*;
-
-    /// Build a [`PcmSpec`] from a plain `u32` Hz value for use in test fixtures.
-    ///
-    /// Panics if `hz` is zero — test rates must always be non-zero.
-    pub(super) fn pcm_spec(channels: u16, hz: u32) -> PcmSpec {
-        PcmSpec::new(
-            channels,
-            NonZeroU32::new(hz).expect("test rate must be non-zero"),
-        )
-    }
-
-    fn test_chunk(spec: PcmSpec, pcm: Vec<f32>) -> PcmChunk {
-        PcmChunk::new(
-            PcmMeta {
-                spec,
-                ..Default::default()
-            },
-            PcmPool::default().attach(pcm),
-        )
-    }
-
-    #[kithara::test]
-    #[case(44100, 2, "44100 Hz, 2 channels")]
-    #[case(48000, 1, "48000 Hz, 1 channels")]
-    #[case(96000, 6, "96000 Hz, 6 channels")]
-    #[case(192000, 8, "192000 Hz, 8 channels")]
-    fn test_pcm_spec_display(
-        #[case] sample_rate: u32,
-        #[case] channels: u16,
-        #[case] expected: &str,
-    ) {
-        let spec = pcm_spec(channels, sample_rate);
-        assert_eq!(format!("{}", spec), expected);
-    }
-
-    #[kithara::test]
-    fn test_pcm_spec_clone() {
-        let spec = pcm_spec(2, 44100);
-        let cloned = spec;
-        assert_eq!(spec, cloned);
-    }
-
-    #[kithara::test]
-    #[case(44100, 2, 44100, 2, true)]
-    #[case(44100, 2, 48000, 2, false)]
-    #[case(44100, 2, 44100, 1, false)]
-    fn test_pcm_spec_partial_eq(
-        #[case] sr1: u32,
-        #[case] ch1: u16,
-        #[case] sr2: u32,
-        #[case] ch2: u16,
-        #[case] should_equal: bool,
-    ) {
-        let spec1 = pcm_spec(ch1, sr1);
-        let spec2 = pcm_spec(ch2, sr2);
-        assert_eq!(spec1 == spec2, should_equal);
-    }
-
-    #[kithara::test]
-    fn test_pcm_spec_debug() {
-        let spec = pcm_spec(2, 44100);
-        let debug_str = format!("{:?}", spec);
-        assert!(debug_str.contains("PcmSpec"));
-        assert!(debug_str.contains("44100"));
-        assert!(debug_str.contains('2'));
-    }
-
-    #[kithara::test]
-    #[case(44100, 2)]
-    #[case(48000, 1)]
-    #[case(96000, 6)]
-    fn test_pcm_spec_copy_trait(#[case] sample_rate: u32, #[case] channels: u16) {
-        let spec = pcm_spec(channels, sample_rate);
-        let copied = spec;
-        assert_eq!(spec, copied);
-    }
-
-    #[kithara::test]
-    fn test_pcm_meta_default() {
-        let meta = PcmMeta::default();
-        assert_eq!(meta.frame_offset, 0);
-        assert_eq!(meta.frames, 0);
-        assert_eq!(meta.timestamp, Duration::ZERO);
-        assert_eq!(meta.segment_index, None);
-        assert_eq!(meta.variant_index, None);
-        assert_eq!(meta.epoch, 0);
-    }
-
-    #[kithara::test]
-    fn test_pcm_meta_copy() {
-        let meta = PcmMeta {
-            spec: pcm_spec(2, 44100),
-            frame_offset: 1000,
-            timestamp: Duration::from_millis(22),
-            end_timestamp: Duration::from_millis(22),
-            segment_index: Some(5),
-            variant_index: Some(2),
-            epoch: 3,
-            frames: 0,
-            source_bytes: 0,
-            source_byte_offset: None,
-        };
-        let copied = meta;
-        assert_eq!(meta, copied);
-    }
-
-    #[kithara::test]
-    fn test_pcm_meta_with_spec() {
-        let spec = pcm_spec(2, 48000);
-        let meta = PcmMeta {
-            spec,
-            ..Default::default()
-        };
-        assert_eq!(meta.spec, spec);
-        assert_eq!(meta.frame_offset, 0);
-    }
-
-    #[kithara::test]
-    fn test_pcm_meta_partial_eq() {
-        let a = PcmMeta {
-            spec: pcm_spec(2, 44100),
-            frame_offset: 100,
-            timestamp: Duration::from_millis(2),
-            end_timestamp: Duration::from_millis(2),
-            segment_index: Some(1),
-            variant_index: Some(0),
-            epoch: 1,
-            frames: 0,
-            source_bytes: 0,
-            source_byte_offset: None,
-        };
-        let mut b = a;
-        assert_eq!(a, b);
-        b.frame_offset = 200;
-        assert_ne!(a, b);
-    }
-
-    #[kithara::test]
-    fn test_pcm_chunk_new() {
-        let spec = pcm_spec(2, 44100);
-        let pcm = vec![0.1f32, 0.2, 0.3, 0.4];
-        let chunk = test_chunk(spec, pcm.clone());
-
-        assert_eq!(chunk.spec(), spec);
-        assert_eq!(&chunk.samples[..], &pcm[..]);
-    }
-
-    #[kithara::test]
-    #[case(vec![0.0, 1.0, 2.0, 3.0], 2, 2)]
-    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 3)]
-    #[case(vec![0.0], 1, 1)]
-    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 6, 1)]
-    #[case(vec![], 2, 0)]
-    fn test_frames_calculation(
-        #[case] pcm: Vec<f32>,
-        #[case] channels: u16,
-        #[case] expected_frames: usize,
-    ) {
-        let spec = pcm_spec(channels, 44100);
-        let chunk = test_chunk(spec, pcm);
-        assert_eq!(chunk.frames(), expected_frames);
-    }
-
-    #[kithara::test]
-    fn test_frames_zero_channels() {
-        // channels=0 is still valid for PcmSpec (only sample_rate is NonZeroU32)
-        let spec = PcmSpec::new(0, NonZeroU32::new(44100).expect("test rate"));
-        let chunk = test_chunk(spec, vec![0.0, 1.0, 2.0, 3.0]);
-        assert_eq!(chunk.frames(), 0);
-    }
-
-    #[kithara::test]
-    fn test_samples_access() {
-        let spec = pcm_spec(2, 44100);
-        let pcm = vec![0.1, 0.2, 0.3, 0.4];
-        let chunk = test_chunk(spec, pcm.clone());
-
-        let samples: &[f32] = &chunk.samples;
-        assert_eq!(samples.len(), 4);
-        assert_eq!(samples, &pcm[..]);
-    }
-
-    #[kithara::test]
-    fn test_pcm_chunk_debug() {
-        let spec = pcm_spec(2, 44100);
-        let pcm = vec![0.1f32, 0.2];
-        let chunk = test_chunk(spec, pcm);
-        let debug_str = format!("{:?}", chunk);
-
-        assert!(debug_str.contains("PcmChunk"));
-    }
+pub(crate) fn checked_audio_spec(
+    channels: u16,
+    sample_rate: u32,
+    resource: &'static str,
+) -> Result<AudioSpec, DecodeError> {
+    let sample_rate = std::num::NonZeroU32::new(sample_rate)
+        .ok_or(DecodeError::InvalidSampleRate { resource })?;
+    Ok(AudioSpec::new(channels, sample_rate))
 }

@@ -4,22 +4,34 @@ Contracts and invariants. The README owns overview, features, and type inventory
 
 ## Threads and transports
 
-Four contexts touch one track. **Consumer thread** — `Audio<S>` (`PcmRead` +
-`PcmSession` + `PcmControl`, umbrella `PcmReader`), normally the host audio
-callback: never allocates, frees, or locks. **Renderer worker** — one shared OS
-thread per `AudioWorkerHandle` running `runtime::Scheduler` over `Box<dyn Node>`
-slots; a track is exactly one node (`DecoderNode`), and effects are `AudioEffect`
-calls inside the node's step, never separate nodes with rings between them.
-**Off-RT rebuild** — `RebuildPort::submit` → `spawn_blocking_on` on the tokio
-handle captured in `Audio::new`. **Downloader** — owned by `kithara-stream`; this
-crate never spawns it and never reconstructs HLS/file protocol policy.
+Four contexts touch one track. **Consumer thread** — `Audio<S>` (`AudioRead` +
+`AudioSession` + `AudioControl`, umbrella `AudioReader`), normally the host audio
+callback: never allocates, frees, or locks. **Playback worker** — one shared OS
+thread and generic scheduler owned by `kithara_play::PlayWorker`.
+`kithara-play` owns task registration, `DecoderNode`, final producer admission,
+and the RAII lease; `Audio<S>` retains only a restricted wake capability. This
+crate ends at the still-concrete `AudioSource` plus `PreparedAudioLane` seam and
+contains no playback scheduler, Warp renderer, or playback effects. **Off-RT
+rebuild** — `RebuildPort::submit` → `spawn_blocking_on`
+on the tokio handle captured during audio preparation. **Downloader** — owned
+by `kithara-stream`; this crate never spawns it and never reconstructs HLS/file
+protocol policy.
 
-### Session coordinates
+### Musical-coordinate ownership
 
-`SessionAnchor` is the canonical relation between a continuous `SessionBeat`
-and an absolute `SessionFrame`. It carries the committed beat-rate slope and
-sample rate, and owns both `beat_at` and its inverse `frame_at`; consumers do
-not rebuild that arithmetic from a tempo scalar.
+`kithara-warp` is the canonical owner of beat maps, session coordinates, and
+the synchronization protocol. This crate publishes decoded signal facts only;
+`kithara-analysis` publishes analysis facts. Neither crate defines Warp
+coordinates nor converts between parallel map representations. The R7 audio seam
+does not advance a `WarpMap`, report runtime map progress, or acknowledge
+rendered/presented synchronization.
+
+`kithara-signal` is the canonical owner of decoded-signal values
+(`AudioSpec`, `AudioChunkInfo`, `AudioChunk`) and pure sample/time math;
+`kithara-bufpool` owns `SamplePool` and `SampleBuffer`. This crate owns the
+runtime `AudioReader`, `AudioSource`, and observer protocols that transport
+those values. It does not mirror their fields or re-export them through a
+decoder-specific compatibility layer.
 
 Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
 (`Outlet`/`Inlet`).
@@ -44,43 +56,29 @@ Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
   consumer known to run off the real-time thread. A seek-epoch drain coalesces
   all discarded entries into one wake after the drain rather than signaling per
   item.
-- **Trash ring.** The RT consumer must never `free`, so spent pooled `PcmChunk`s
-  go to a second ring drained by `DecoderNode::recycle` on the worker. Capacity
-  `pcm_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
+- **Trash ring.** The RT consumer must never `free`, so spent pooled `AudioChunk`s
+  go to a second ring drained by the play-owned `DecoderNode::recycle` on the
+  worker. Capacity
+  `audio_buffer_chunks + 2` absorbs a full forward-ring seek drain, making the RT
   push infallible.
 - **Off-RT deferral.** Signals the forbid-blocking core must not make are armed
-  on-core and flushed by the shell from `DecoderNode::recycle`. The outlet flush
+  on-core and flushed by the shell from the play-owned
+  `DecoderNode::recycle`. The outlet flush
   delivers the consumer output wake (`ReaderOutputWake`), while
-  `AudioWorkerSource::flush_deferred` owns FSM lifecycle events
-  (`DeferredBus<Event>`), the reader→peer wake
+  `AudioSource::prepare_deferred` resolves source format/state before the
+  play-owned effect service, while `AudioSource::finish_deferred` owns FSM
+  lifecycle events (`DeferredBus<Event>`), the reader→peer wake
   (`ReadinessGate::flush_peer_wake`), and retired state (`Retired::drain`).
   `StreamAudioSource::drop` keeps one teardown flush after the scheduler's final
   pass: terminal-slot removal performs no further pass.
 
-### Scheduler
+### Playback scheduling boundary
 
-`run_loop` is the unchecked shell (cancel/command drain, slot lifecycle,
-`Node::recycle`, the park). It recycles before producing, between burst ticks,
-and once after every pass before terminal-slot removal or parking. Only node
-ticks run through `produce_tick_rt`, which
-carries `#[kithara::rtsan_forbid_blocking]`; `RtPolicy::Heavy` nodes tick outside
-it via `produce_tick_heavy`. `Node::rt_policy()` defaults to `Rt`; `AnalysisNode`
-declares `Heavy`. `Node::warm_up` runs once at registration in the shell, before
-any checked tick, to pre-touch `arc_swap`'s per-thread debt node. Terminal,
-unregistered, and cancelled nodes get one final `Node::recycle` before removal,
-so deferred work armed by their last tick is delivered before the node is dropped.
-
-Park budgets: `Waiting`/`UpstreamPending`/`Backpressured` re-check after 10 ms,
-`Idle` after 100 ms; a `Produced` streak yields cooperatively every 16 passes
-instead of parking. Ticks slower than 10 ms raise `SchedulerEvent::SlowTick`.
-`TickResult` separates stalls for the hang watchdog: `Waiting` (watchdog ticks),
-`Backpressured` (watchdog must **not** tick, or an idle `Audio` handle panics),
-`UpstreamPending` (the source's own demand timeout owns the terminal).
-Consumer wake requests set a coalesced atomic level, so the RT path never calls
-`unpark` or enters the kernel. The scheduler consumes the level before parking
-and again after the bounded wait. Downloader readiness, register, unregister,
-shutdown, and rebuild-completion signals remain immediate off-RT `ThreadGate`
-wakes.
+The generic scheduler, its `run_loop`, task slots, service classes, and
+playback hang-watchdog policy belong to `kithara-play::PlayWorker`. This crate
+publishes worker-neutral `AudioSource` outcomes and immediate/deferred wake
+capabilities only. `kithara-analysis` owns its separate single-node runner; it
+does not expose or share the playback scheduler.
 
 ### Preload gate
 
@@ -89,10 +87,11 @@ wakes.
 cross-thread task `wake()`: it does a lock-free `signal_epoch(epoch)` (`Release`
 stores of `ready_epoch` then `ready`) and the awaiter polls with `Acquire`,
 re-arming its own runtime timer (`POLL_INTERVAL` = 2 ms) while closed.
-`DecoderNode` opens the gate at every preload terminal site — preload-chunk
-threshold with an empty overflow slot, EOF, `Failed`, `on_cancel` — from its
-cached runtime epoch, and `rearm()`s it in `sync_seek_epoch` (`Audio::seek`
-rearms consumer-side) so a post-seek wait blocks until that epoch refills.
+The play-owned `DecoderNode` opens the gate at every preload terminal site —
+preload-chunk threshold with an empty overflow slot, EOF, `Failed`, `on_cancel`
+— from its cached runtime epoch, and `rearm()`s it in `sync_seek_epoch`
+(`Audio::seek` rearms consumer-side) so a post-seek wait blocks until that epoch
+refills.
 
 **`block_on_underrun`.** The bool remains the independent empty-read policy;
 `ConsumerWakeMode` controls only how a successful drain wakes the worker. With
@@ -111,18 +110,38 @@ mutator of track state through `update_state`. Sub-owners never take
 `DecodeCtx`, `RouteCtx`) and return decision values for the coordinator to apply.
 
 - `SharedStream<T>` — byte-space ground truth (position, len, phase, byte map,
-  anchors, init range). No other owner clones byte-range policy.
+  anchors, init range). No other owner clones byte-range policy. Every RT
+  byte-space call — `phase`/`phase_at`, `position`/`set_position`, `len`,
+  `byte_map`, `probe_seek` — answers from the source's narrow `SourceProbe`
+  handle, and the fixed-at-open handles (`abr_handle`,
+  `format_change_segment_range`, `peer_wake`) from clones resolved once in
+  `SharedStream::new`; none of them take the control mutex. Off-RT holders (a
+  construction reader parked in `Stream::read`, a consumer query) hold that
+  mutex across waits, and a contended acquire on the forbid-blocking produce
+  core is an RTSan violation (`sched_yield` in `parking_lot`'s contended
+  path). The probe answers from the source's self-synchronizing state and
+  must not take locks a reader wait can hold. Three calls still lock on RT
+  frames — `probe_read` (steady-state `Read`), `media_info`, and
+  `seek_time_anchor` — which is safe only because the sole off-RT holder
+  that parks under the mutex is the replacement rebuild reader, and it
+  exists exclusively while the FSM sits in `RebuildingDecoder`, a phase
+  whose tick touches none of those calls. The same window is the only time
+  the off-RT reader moves the byte cursor, which keeps `probe_seek`'s
+  non-atomic load→resolve→store single-writer.
 - `ActiveDecode` — the authoritative active `DecoderGeneration`, the optional
-  `IncomingDecode`, the always-on `PcmBlender`, the effect chain, the EOF drain.
+  `IncomingDecode`, the always-on `GaplessBlender`, decoded-output accounting, and
+  the source observer.
   Each `DecoderGeneration` owns its decoder facts, base offset, install epoch,
   per-generation `GaplessStage`, and staged chunks.
 - `ReadinessGate` — the only owner of byte-range readiness calculations; gate and
   wait paths must resolve the same range for the same phase.
 - `SeekEngine` — `resume_target`, and the only writer of the producer decode
-  epoch (`commit_decode_epoch`). `ResumeCursor` — `decode_head` plus host/decoder
-  sample rates; resolves recreate resume positions and detects route changes.
+  epoch (`commit_decode_epoch`). `ResumeCursor` — separate raw-decode and
+  rendered-source heads plus host/decoder sample rates; the raw head owns ABR
+  cuts, while the rendered head resolves recreate positions after final output
+  admission. The same owner detects route changes.
 - `RebuildPort<T>` — the two-phase rebuild boundary: `prepare` produces a pending
-  job, `submit` (from `flush_deferred`) spawns it off-RT. The job constructs a
+  job, `submit` (from `finish_deferred`) spawns it off-RT. The job constructs a
   complete `DecoderGeneration`; installation only moves it.
 - `Retired` — off-RT drain for everything the produce core displaces but must not
   free: generations a rebuild replaced, and the chunks a seek flushed out of
@@ -142,6 +161,14 @@ stages per step: seek preemption (`preempt_target`), skipped while
 `RebuildingDecoder`, which records it into `RebuildState::superseded_seek`; route
 change (`start_route_change_recreate_if_needed`), skipped in
 recreate/rebuild/terminal phases; then the phase's own `step`.
+
+`AtEof` has exactly two owners, both semantic (PCM/timeline), never byte-space:
+the decode path's exhausted finalization (`decode/step.rs`) and a seek landing
+at-or-past `duration` (`SeekTransition::AtEof`). Byte-space `SourcePhase::Eof`
+is a readiness answer, not an end of track — the demuxer may still hold
+buffered frames past the last byte (a seek into the final segment parks the
+reader at the stream total with the tail undecoded) — so wait states resume
+into their `WaitContext` on it, exactly like `Ready`.
 
 `update_state` publishes the phase to the shared `Activity` PLAYING flag: every
 non-terminal phase keeps it set (the downloader peer's `priority()` reads it, and
@@ -194,11 +221,11 @@ decoder exists and cannot trigger the wake by reading.
 Recreation is two-phase and never builds a decoder on the produce core.
 `RecreatingDecoder` gates on `source_ready_for_recreate`, then
 `RebuildPort::prepare` `probe_seek`s to the recreate offset and stores a pending
-job — only one may be pending at a time. `flush_deferred` → `RebuildPort::submit`
+job — only one may be pending at a time. `finish_deferred` → `RebuildPort::submit`
 spawns it (`spawn_blocking_on`); the job builds the decoder, optionally seeks it
 to its landing time, pushes a `DecoderBuildComplete` onto the replacement or
 incoming completion queue (capacity 4 each), then wakes the worker. Shell-side
-`flush_deferred` drains the queues, retires stale completions, and caches the
+`prepare_deferred` drains the completion queues, retires stale completions, and caches the
 replacement matching the current `BuildId`; `RebuildingDecoder` only takes that
 cached replacement. A matching replacement first aborts any exact incoming
 transition: its landing and prepared blend belong to the generation being
@@ -229,15 +256,17 @@ factory panic becomes
   `RecreateNext::Seek`/`ApplySeek` returns to `SeekRequested`. Only a decode-only
   rebuild may continue into a fresh `FormatBoundary` recreate; dropping the
   carried request permanently starves the producer.
-- **Mid-playback recreate resumes at the decode head, not `committed`.** A
-  `FormatBoundary` + `RecreateNext::Decode` rebuild bumps no seek epoch and
-  flushes no outlet ring, so resuming at the lagging `committed_position` would
-  replay already-queued chunks backwards, so `ResumeCursor::resume_position`
-  resumes at the decode head and `resume_target` wins only while
-  `target > decode_head`. The decode head is an exact frame plus its rate,
-  converted with `duration_for_frames`; the demuxer quantizes the landing to a
-  sample and the decoder relabels its first chunk by rounding to the nearest
-  frame, consistent with head trimming.
+- **Mid-playback recreate resumes at the rendered source head, not raw decode
+  progress or `committed`.** A `FormatBoundary` + `RecreateNext::Decode`
+  rebuild bumps no seek epoch and flushes no outlet ring, so resuming at the
+  lagging `committed_position` would replay already-queued chunks, while raw
+  decode progress may skip source retained by Warp or a buffering effect.
+  `Fetch::source_end` carries the decoded-source endpoint represented by
+  rendered PCM; the play worker commits it only after final producer-port
+  admission, and `ResumeCursor::resume_position` reads that epoch-scoped frame
+  plus sample rate. `resume_target` wins only while
+  `target > rendered_source_head`. Raw decode progress remains the ABR
+  splice/promotion coordinate.
 - A **route change** keeps its container and resolves its origin through
   `anchor::recreate_offset` seeded with the running generation's `base_offset` —
   never a seek anchor, which would root an init-bearing demuxer on a media byte.
@@ -250,7 +279,7 @@ it requests a seek (`Audio::seek` → `SeekControl::begin`); and the **producer
 decode epoch** (`SeekEngine::epoch`), advanced only when the worker applies a
 seek, so it lags across the requested-but-not-applied window. Decoded chunks
 *and* terminal markers (EOF / failure) are tagged with the decode epoch via
-`AudioWorkerSource::decode_epoch()`, never the live seek-state epoch: a genuine
+`AudioSource::decode_epoch()`, never the live seek-state epoch: a genuine
 EOF reached after a newer seek bumped the seek-state epoch would otherwise pass
 the consumer's `EpochValidator` as the new seek's terminal.
 
@@ -288,7 +317,7 @@ fully before the target is dropped whole.
 A variant switch can also be spliced gap-free by running a second generation to
 overlap. `ActiveDecode::incoming` is an `IncomingDecode` FSM: `Preparing` →
 `Building { build }` → `Priming` (or `Failed`).
-`StreamAudioSource::progress_variant_transition` drives it from `flush_deferred`
+`StreamAudioSource::progress_variant_transition` drives it from `prepare_deferred`
 and only from `Decoding`, or `WaitingForSource` in `WaitContext::Playback` (the
 starved reader an urgent down-switch exists to rescue). Seek and recreate phases
 are excluded — they are about to replace the decoder a promotion would install.
@@ -308,7 +337,7 @@ intent that first surfaces after `AtEof` has already latched.
   span. The reader plan's exact or unavailable promotion frontier is latched in
   `Preparing` and carried through `Building` into the incoming generation;
   decoder build latency and later `ResumeCursor` movement cannot move that cut.
-  Once latched, outgoing publication stops at the cut. A same-`PcmSpec` active
+  Once latched, outgoing publication stops at the cut. A same-`AudioSpec` active
   generation may decode only until its bounded holdback covers the real 20 ms
   outgoing tail, while a cross-spec transition stops immediately. This lets the
   incoming catch one fixed cut instead of chasing an equal-rate outgoing stream.
@@ -326,8 +355,9 @@ intent that first surfaces after `AtEof` has already latched.
   A finished active generation still uses the unheld EOF drain. Gap, mixed-spec,
   malformed, or over-capacity PCM fails the decode and stays owned for shell
   retirement. `ResumeCursor` records each
-  post-skip, post-gapless chunk immediately before blending and effects, so a
-  buffering or frame-changing effect cannot move the raw cut. A generation marks
+  post-skip, post-gapless chunk immediately before blending and before the
+  decoded source crosses into the play-owned Warp/effect lane, so a buffering
+  or frame-changing playback effect cannot move the raw cut. A generation marks
   EOF once, disables holdback, and drains staged then gapless PCM without
   reflushing over pending tail data.
 - **Promotion proof** (`promotion_span`) is fail-closed and minted before
@@ -351,7 +381,7 @@ intent that first surfaces after `AtEof` has already latched.
   dropped on the produce core. Seek/reset cancels an active join; generation seek
   notification retires every staged chunk.
 
-**`PcmBlender`** is always on and owns the audible seam. It owns active and
+**`GaplessBlender`** is always on and owns the audible seam. It owns active and
 prepared reusable buffers; profile growth and resizing happen in the shell before
 `Priming`, while checked replacement and `process_active` only move or reuse
 state. For exactly 20 ms it combines real outgoing sample `i` with incoming
@@ -361,7 +391,7 @@ Ramp counters are `u16`, so the per-frame gain is an exact `f32::from`.
 
 ## Construction reads
 
-`Audio::new` builds the initial decoder **exactly once**
+`Audio::prepare` builds the initial decoder **exactly once**
 (`create_initial_decoder`, one `spawn_blocking`), with no retry loop and no
 readiness gate. The construction read goes through the **blocking** off-RT
 `Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,
@@ -389,37 +419,21 @@ a concurrent play-then-seek is applied by the post-construction seek path — a
 `VariantChange` surfacing here is a stream-layer state bug. Pinned by
 `tests/tests/kithara_hls/probe_not_ready_at_creation.rs`.
 
-## Effect chain and coordinate space
+## Prepared producer seam
 
-`create_effects` builds `[TimeStretchProcessor?, ..custom]`. There is no
-resampler stage in the chain — fixed-ratio conversion is decoder-owned — and the
-stretch slot exists only when a stretch backend is compiled in and
-`AudioConfig::stretch` is set; without one, including wasm, no speed DSP is
-inserted and PCM output is pinned to 1.0.
+`Audio::prepare` returns `PreparedAudio<Audio<Stream<T>>, StreamAudioSource<T>>`:
+the reader plus a still-concrete decoded source and `PreparedAudioLane`. The lane
+carries the source, ring ports, event publisher, playhead, preload gate, and
+service-class capability required by its consumer. It contains no
+`PlayWorker`, `DecoderNode`, playback effect, stretch processor, or engine-load
+meter.
 
-**Coordinate space.** The whole pipeline runs in decoder/song time
-(`PcmMeta.timestamp` / `end_timestamp` / `frame_offset`, the seek target, the UI
-playhead). A duration-changing `AudioEffect` is the sole timeline authority: it
-restamps only `spec` + `frames` and carries the consumed input's song-time meta
-forward, so there is no translation layer and no parallel frame counter.
-
-**Sample guard.** `sanitize_sample` (`kithara-decode`, which owns it) runs on the
-*input* of every stage taking untrusted samples: `IsolatorEq::process_sample`
-before it branches, `PeakLimiter::process_planar` before it takes the frame peak.
-Input is the only placement covering every branch. The limiter guards each sample
-rather than the peak, since `f32::max` returns its non-`NaN` operand. Bit-exact
-bypass holds for finite samples.
-
-`IsolatorEq`'s crossover is IIR, so its tail decays into the denormal range. Each
-biquad section flushes state and returns exact zero once **both** its input and
-output fall below `f32::MIN_POSITIVE`; the input half keeps a live signal through
-a deep cut from losing its history.
-
-**EOF drain.** At true EOF `EofDrain` drains the chain incrementally, one emitted
-chunk per FSM step: each stage is flushed to exhaustion only after the upstream
-stage's outputs pass through it, so a buffering effect's multi-pull tail survives
-and the produce core allocates no drain queue. `AudioEvent::EndOfStream` fires
-once, when the drain completes — not at source exhaustion.
+Decoded output remains in decoder/song coordinates
+(`AudioChunkInfo.timestamp` / `end_timestamp` / `frame_offset`). A source
+discontinuity publishes its revision and `AudioSpec` so the downstream owner can
+reset its own state. `kithara-play` consumes this seam, owns terminal effect
+drain and final output admission, and is the only layer that transforms frame
+count for playback.
 
 ## Sample-rate conversion
 
@@ -442,179 +456,19 @@ is a typed config decision, never a runtime fallback chain. Output capacity is a
 correctness invariant, not a knob: the backend reports `output_frames_for_input`
 in the ceil frame domain and the decoder adapter sizes buffers from that.
 
-## Time-stretch (speed and key-lock)
-
-Playback speed lives in the source-domain `TimeStretchProcessor`; the resampler
-plan is strictly fixed-ratio (source rate → host rate) and never carries speed.
-`StretchControls` is the single source of truth, shared (`Arc`) between the
-consumer/UI and the slot, and read **every chunk** — speed, key-lock, backend,
-and region plan all apply live, mid-track, with no reload:
-
-| key-lock | slot behaviour |
-|---|---|
-| on | `set_ratio(1/speed)`, `set_pitch(1.0)` — tempo moves, pitch held |
-| off | `set_ratio(1/speed)`, `set_pitch(speed)` — vinyl-style speed and pitch |
-
-Speed is floored at `MIN_SPEED` = 0.05. At speed 1.0 with no region plan the slot
-is a byte-identical passthrough and the backend is reset; `flush` is skipped in
-that state so its latency buffer is not emitted as trailing zeros. A live backend
-change, or a source `PcmSpec` change, rebuilds the backend in place. Key-lock
-defaults to **off** (`StretchControls::new`).
-
-**Backend seam.** `kithara-stretch` is the optional DSP backend crate, behind
-`stretch-signalsmith` / `stretch-bungee` (native only); it owns `StretchBackend`
-and its companion types. The trait is DSP-only (interleaved sample buffers), so
-all `PcmChunk`/pool/timeline plumbing stays here. `set_ratio` is the time factor
-(`output/input`, >1 = slower) and `set_pitch` is independent (1.0 = pitch
-locked) — the decoupling key-lock depends on. `StretchKind::all()` lists exactly
-the backends compiled into the current target (default `all()[0]`; discriminants
-are stable: 1 = Signalsmith, 2 = Bungee), so an absent backend is
-un-representable rather than a runtime error. With no `stretch-*` feature the
-dependency is not linked and the kind/backend/processor re-exports compile out;
-`StretchControls` still exposes speed and region-plan storage.
-
-**Region plan (beat-aligned stretch).** The pure region types live in
-`kithara_audio::region` and are re-exported unconditionally. Plans are sorted,
-non-overlapping `[start_frame, end_frame)` segments in **source frames**
-(`PcmMeta.frame_offset` space, never output time), each with a positive finite
-`ratio_correction`, validated in `RegionPlan::new`. The processor maps each
-chunk's `frame_offset` to its region (cached cursor, binary search on a miss
-after seek/swap), splits chunks at boundaries, and drives the backend at
-`1/speed * ratio_correction`. It `flush`es (tail drained at the old ratio) and
-`reset`s **only** when a boundary moves the effective ratio beyond `RATIO_EPS`
-(1e-4); equal-ratio boundaries and gaps between segments (correction 1.0) cost
-nothing, and live speed moves inside one region glide via `set_ratio` alone. An
-empty or absent plan is exactly the planless path. Prefer `signalsmith` for
-region work — `bungee`'s `flush` is a no-op and drops the tail at every real
-ratio boundary.
-
-**Timeline.** A stretch changes the output frame *count*, not the rate: each
-emitted chunk recomputes `meta.frames` and forces `meta.spec` to the live source
-spec, but preserves `timestamp`/`end_timestamp` verbatim, so the playhead stays
-in source-track time. A non-empty flush chunk must never carry the
-`PcmMeta::default()` sentinel spec (0 channels): downstream stages divide by
-`spec.channels`.
-
-## Engine load
-
-The worker measures its own cost into a shared `EngineLoad` (lock-free
-`portable_atomic::AtomicF32`s — safe on the forbid-blocking core, no allocation).
-Each chunk-producing `DecoderNode::tick` times `step_track` against the produced
-audio duration, EWMA-smoothed (`LOAD_ALPHA` = 0.2, seeded from the first sample).
-`EngineLoadSnapshot` exposes `realtime` (produced audio-seconds per CPU-second,
->1 = faster than realtime), `load` (`busy / audio`), and `ms` (wall time per
-chunk); `realtime == 0` means "no measurement yet" (`is_active()` false). The
-atomics double as the EWMA state and the worker thread is the only writer, so the
-read-blend-store needs no lock. The meter is created by the playback layer,
-threaded through `AudioConfig::engine_load` → `TrackRegistration` into every
-track's node, and republished as `AudioEvent::EngineLoad` at most every 500 ms
-(buffer health at most every 250 ms), reflecting whichever track is producing.
-
-## Track analysis
-
-`analysis/` owns the reusable per-track analysis engine, generic over
-`B: ResamplerBackend`. `AnalyzerBuilder<B>` is the public, `Default`-constructed
-selector (`with_waveform`, `with_beat` — which requires `B: Default` —
-`with_beat_config`, `with_pcm_pool`), and `is_empty()` lets callers skip
-scheduling a pass entirely. `TrackAnalyzers` is the crate-private per-track set;
-each analyzer is fed every decoded chunk once.
-`TrackAnalysis { beat, waveform, source_frames }` is the public artifact,
-`source_frames` being the denominator that turns a `BeatGrid` frame into a
-fraction.
-
-`BeatAnalysisConfig<B>` carries the implementation-affecting beat tunables and a
-standalone resampler backend handle. Defaults: 1024-frame mono resampler blocks,
-22 050 Hz detector input, 30-second detector windows with 2 seconds of overlap,
-`ResamplerQuality::High`. The analyzer never stores whole-track PCM: it
-downmixes/resamples into a bounded detector window, runs the detector as each
-window fills, offsets window-relative events, and keeps only raw event times for
-final grid cleanup. PCM windows and grid-cleanup scratch both come from the same
-`PcmPool` injected through `AnalyzerBuilder::with_pcm_pool`; grid cleanup does not
-construct or own a second pool.
-
-`AnalysisWorker<B>` / `AnalysisNode<B>` are a public handle over a second
-`runtime::Scheduler` named `kithara-analysis` with one long-lived `Idle`/`Heavy`
-node (absent on wasm32). Jobs carry caller-owned cancel tokens; `child_token()`
-hands out children of the worker's own job scope, so there is one cancel
-hierarchy, and the caller keeps at most one job in flight, cancelling the
-previous token to preempt. Results arrive on a `watch` channel: waveform first,
-then waveform+beat when a beat pass is configured; on failure or cancel the
-sender drops without a value. The node owns the job receiver, the task FSM, and
-the single `Box<dyn BeatDetector>` taken at construction — detector ownership is
-never shared or locked. `Decode` consumes at most one chunk per tick. The
-scheduler park is flash-visible and `analyze` wakes it after enqueueing; no
-sleep, backoff loop, or poll watcher. `AnalysisObserver` keeps the normal
-no-progress watchdog and separately classifies returned heavy ticks against a
-120-second budget; a detector call is indivisible, so an over-budget call can
-only be reported after it returns.
-
-**Feature seams.** There is no single `analysis` feature. Artifact types are
-unconditional, because region/stretch logic and cache keys use them even when a
-pass is absent. `analysis-waveform` gates the `realfft` analyzer (and
-`with_waveform`), `analysis-beat` gates the beat analyzer path, `beat-nn` is a
-detector backend on top of `analysis-beat`. Without `analysis-beat`,
-`with_beat()` is a compile-time no-op — `is_empty()` is the runtime signal.
-
-## Waveform
-
-Pure synchronous DSP turning decoded PCM into a `Waveform` for display. No async,
-I/O, cancel, or colour types here: band → colour mapping and orchestration belong
-to consumer crates. Tunables live in `AnalysisParams`.
-
-- **Source-only invariant**: analysis runs on the decoded SOURCE signal, never
-  post-EQ / post-timestretch / post-resample output. Playback-rate and mixer
-  transforms remap only the time axis and never re-run analysis.
-- **`Bucket { low, mid, high }`** are three independent band heights per bucket,
-  each normalized to `[0, 1]` on one shared scale — not a single bar plus a
-  colour. The deck paints them as concentric mirrored bars, so the tallest is the
-  outer hull. All-zero is silence, renders as nothing, never `NaN`.
-- **Normalized-position index**: buckets are indexed by normalized track position
-  `[0, 1]`, never wall-clock seconds. `bucketize` is the single home of that
-  mapping — bucket `b` folds the raw range `[b*R/N, (b+1)*R/N)` and always returns
-  exactly `N` values, filling an empty range with the supplied `empty`.
-  `WaveformAnalyzer::finalize` first clamps the request to the number of analysed
-  windows, so a short track yields fewer buckets rather than fabricated ones.
-- **PCM ↔ frequency boundary**: `WaveformAnalyzer::new` takes the track
-  `sample_rate` because band crossovers map to FFT bins via
-  `bin_hz = sample_rate / fft_size`. A constant sample rate per track is assumed;
-  build the analyzer once the first chunk's `PcmSpec` is known.
-- **Reduction**: per Hann window, band energy is summed into low/mid/high (DC bin
-  zeroed; windows below `energy_floor` RMS contribute nothing) and each band is
-  divided by its bin count — an energy DENSITY, without which the wide mid/high
-  bands outweigh the narrow low band by bin count alone. Windows hop by
-  `fft_size / 4` (75% overlap); only tracks shorter than one window fall back to
-  a single zero-padded window. `finalize` keeps each bucket's loudest window
-  (component-wise max), takes `sqrt` to magnitude, applies the per-band
-  perceptual `band_gain`, then divides all three by one shared global max —
-  shared, not per-band, so the loudness tilt survives.
-
-## Blob codec
-
-Analysis artifacts persisted to the on-disk cache (`Waveform`, `BeatGrid`) share
-one versioned little-endian encoding via the crate-internal, domain-agnostic
-`blob` module: the `Blob` trait owns the frame (a `u32` `Blob::VERSION` header
-then the body), each artifact implements only its body, and decoding requires the
-cursor to consume the blob exactly — trailing bytes are corruption.
-
-Each artifact owns its `VERSION`. A mismatch is `BlobError::Version`; a
-truncated, mis-sized, or out-of-range body is `BlobError::Corrupt`. Both are cache
-misses — the caller re-analyses and overwrites; there is no in-place migration.
-Speculative allocation from an untrusted length prefix is capped at
-`MAX_PREALLOC`. `BlobError` is the only piece crossing the crate boundary (the
-public `TryFrom<&[u8]>` error); `Blob`, `Reader`, `Writer` stay internal. The
-composite track-analysis blob (version + config fingerprint + per-artifact
-sections) is an app-layer concern owned by `kithara-app`.
-
 ## Agent guardrails
 
-- `kithara-audio` owns decoder lifecycle, seek/session state, effect reset timing,
-  and stale-chunk invalidation. It consumes source contracts and must not
-  reconstruct HLS or file policy from protocol-specific heuristics.
-- Playback nodes do not use `CancelToken`; unregistering a track drives
-  `Node::on_cancel()`. The long-lived `AnalysisNode` is the deliberate exception:
-  each queued job owns its scoped token, checked before every tick, while
-  scheduler shutdown still drives `on_cancel()` for the node itself.
+- `kithara-audio` owns decoder lifecycle, seek/session state, source
+  discontinuity publication, and stale decoded-chunk invalidation. It consumes
+  source contracts and must not reconstruct HLS or file policy from
+  protocol-specific heuristics.
+- Playback cancellation and scheduling policy belong to `kithara-play`; audio
+  sources observe only their scoped cancellation and wake contracts.
+- `kithara-analysis` consumes the decoded source through `AudioReader` and
+  `AudioObserver`; it owns progressive analysis, waveform/beat artifacts, and
+  pure analysis bytes. It does not move decoder, playback, or cache I/O policy
+  into this crate.
 - Prefer explicit FSM or session objects for multi-step control flow; do not
-  scatter new `pending_*` or shadow flags across worker, source, and consumer
-  layers. If a backpressure or rate-matching boundary is ever needed between
-  stages, introduce an explicit buffer `Node` — never smuggle one into an effect.
+  scatter new `pending_*` or shadow flags across source and consumer layers.
+  Playback effects and their reset/drain policy belong to `kithara-play`, not
+  to this source pipeline.

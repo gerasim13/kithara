@@ -97,9 +97,9 @@ platform.clock().now(); platform.sleep(d).await; platform.rng().next_u64();
 
 ```rust
 // bad
-let buf = kithara_bufpool::pcm_pool().get();          // ambient global accessor
+let buf = kithara_bufpool::SamplePool::default().get(); // ambient global accessor
 // good
-let buf = self.pcm_pool.get_with(|b| b.clear());      // pool passed through config
+let buf = self.sample_pool.get_with(|b| b.clear());     // pool passed through config
 ```
 
 *tier: hot; detector: `perf.no-global-pool-accessor` (ast-grep); already-enforced*

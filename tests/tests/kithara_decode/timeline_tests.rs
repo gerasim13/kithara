@@ -1,8 +1,9 @@
 use std::io::Cursor;
 
 use kithara::{
-    decode::{DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
 };
 use kithara_integration_tests::audio_fixture::EmbeddedAudio;
 #[kithara::test]
@@ -15,7 +16,7 @@ fn test_progressive_file_timeline_monotonic() {
         Some("wav"),
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .unwrap();
@@ -66,7 +67,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
         Some("wav"),
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .unwrap();
@@ -77,7 +78,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
 
     decoder.seek(Duration::from_millis(500)).unwrap();
 
-    let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
     let expected_frame = num_traits::cast::<f64, u64>(0.5 * 44100.0).unwrap_or(u64::MAX);
 
     let diff = (chunk.meta.frame_offset as i64 - expected_frame as i64).unsigned_abs();
@@ -152,7 +153,7 @@ mod hls_timeline {
             .build();
         let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .hint("wav")
             .maybe_byte_map(stream.byte_map())
             .build();

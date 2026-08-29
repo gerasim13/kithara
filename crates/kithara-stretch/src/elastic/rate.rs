@@ -1,11 +1,11 @@
 use std::ops::RangeInclusive;
 
-use num_traits::ToPrimitive;
-
 use super::{ElasticError, ElasticRequest};
 
-/// Supported source-frame advance per output frame. Every engine declares its
-/// own window; nothing outside the adapter knows which library is behind it.
+/// Supported source-frame advance per output frame.
+///
+/// The envelope is the configured playback-rate policy restricted to ratios
+/// representable by the prepared source and output frame limits.
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get)]
 #[non_exhaustive]
@@ -21,12 +21,8 @@ pub struct ElasticRateEnvelope {
 impl ElasticRateEnvelope {
     pub(crate) fn contains(self, request: ElasticRequest) -> bool {
         request
-            .source_frames()
-            .to_f64()
-            .zip(request.output_frames().to_f64())
-            .is_some_and(|(source_frames, output_frames)| {
-                self.contains_rate(source_frames / output_frames)
-            })
+            .source_frames_per_output()
+            .is_ok_and(|rate| self.contains_rate(rate))
     }
 
     /// Returns whether a continuous source advance is supported.

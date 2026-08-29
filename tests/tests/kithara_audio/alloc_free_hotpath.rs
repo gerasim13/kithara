@@ -3,27 +3,37 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
-    bufpool::PcmPool,
-    decode::{PcmChunk, PcmMeta, PcmSpec},
+    bufpool::SamplePool,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
+    signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
 
 #[cfg(debug_assertions)]
 #[global_allocator]
 static A: AllocDisabler = AllocDisabler;
 
-fn make_pool() -> PcmPool {
-    PcmPool::new(128, 200_000)
+fn make_pool() -> SamplePool {
+    SamplePool::new(128, 200_000)
 }
 
-fn make_chunk(pool: &PcmPool, frames: usize, channels: u16) -> PcmChunk {
+fn warp_renderer(
+    controls: kithara::platform::sync::Arc<StretchControls>,
+    spec: AudioSpec,
+    pool: SamplePool,
+) -> WarpRenderer {
+    let config = WarpConfig::builder().stretch(controls).build();
+    Warp::new((), &config).renderer(spec, pool)
+}
+
+fn make_chunk(pool: &SamplePool, frames: usize, channels: u16) -> AudioChunk {
     make_chunk_at(pool, frames, channels, 44100)
 }
 
-fn make_chunk_at(pool: &PcmPool, frames: usize, channels: u16, sample_rate: u32) -> PcmChunk {
+fn make_chunk_at(pool: &SamplePool, frames: usize, channels: u16, sample_rate: u32) -> AudioChunk {
     let samples = frames * channels as usize;
     let mut pcm = pool.get_with(|v| v.resize(samples, 0.0));
     for (i, s) in pcm.iter_mut().enumerate() {
@@ -34,11 +44,11 @@ fn make_chunk_at(pool: &PcmPool, frames: usize, channels: u16, sample_rate: u32)
         let val = (i as f32) * 0.001;
         *s = val;
     }
-    let meta = PcmMeta {
-        spec: PcmSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
+    let meta = AudioChunkInfo {
+        spec: AudioSpec::new(channels, NonZeroU32::new(sample_rate).expect("test rate")),
         ..Default::default()
     };
-    PcmChunk::new(meta, pcm)
+    AudioChunk::new(meta, pcm)
 }
 
 #[kithara::test]
@@ -80,7 +90,7 @@ fn test_pcm_chunk_access_allocation_free() {
     permit_alloc(|| drop(chunk));
 }
 
-fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl Resampler {
+fn build_resampler(pool: &SamplePool, source_rate: u32, target_rate: u32) -> impl Resampler {
     let settings = ResamplerSettings::builder()
         .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
         .mode(ResamplerMode::FixedRatio {
@@ -91,7 +101,7 @@ fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl R
         })
         .quality(ResamplerQuality::High)
         .options(ResamplerOptions::builder().chunk_size(4_096).build())
-        .pcm_pool(pool.clone())
+        .sample_pool(pool.clone())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -100,7 +110,7 @@ fn build_resampler(pool: &PcmPool, source_rate: u32, target_rate: u32) -> impl R
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
-fn planar_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] {
+fn planar_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
     let mut left = pool.get();
     let mut right = pool.get();
     left.ensure_len(frames)
@@ -120,7 +130,7 @@ fn planar_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] 
     [left, right]
 }
 
-fn output_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] {
+fn output_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
     let mut left = pool.get();
     let mut right = pool.get();
     left.ensure_len(frames)
@@ -133,8 +143,8 @@ fn output_block(pool: &PcmPool, frames: usize) -> [kithara::bufpool::PcmBuf; 2] 
 
 fn process_planar(
     resampler: &mut dyn Resampler,
-    input: &[kithara::bufpool::PcmBuf; 2],
-    output: &mut [kithara::bufpool::PcmBuf; 2],
+    input: &[kithara::bufpool::SampleBuffer; 2],
+    output: &mut [kithara::bufpool::SampleBuffer; 2],
 ) -> usize {
     let input_refs = [&input[0][..], &input[1][..]];
     let (left, right) = output.split_at_mut(1);
@@ -241,5 +251,120 @@ fn test_resampler_passthrough_allocation_free() {
     assert_no_alloc(|| {
         let frames = process_planar(&mut resampler, &input, &mut output);
         assert!(frames > 0);
+    });
+}
+
+#[kithara::test]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kind: StretchKind) {
+    const FRAMES: usize = 8_192;
+    let pool = make_pool();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    let (mut effect, first, second) = permit_alloc(|| {
+        let controls = StretchControls::new(0.5);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let mut effect = warp_renderer(controls, spec, pool.clone());
+        effect.prepare(spec);
+        let first = make_chunk(&pool, FRAMES, 2);
+        let second = make_chunk(&pool, FRAMES, 2);
+        (effect, first, second)
+    });
+
+    let misses = pool.stats().alloc_misses;
+    let first_output = assert_no_alloc(|| {
+        effect
+            .render(first)
+            .unwrap_or_else(|| panic!("active stretch must render"))
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        effect.prepare(spec);
+        drop(first_output);
+    });
+
+    let misses = pool.stats().alloc_misses;
+    let second_output = assert_no_alloc(|| {
+        effect
+            .render(second)
+            .unwrap_or_else(|| panic!("serviced stretch must render again"))
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        effect.prepare(spec);
+        drop(second_output);
+    });
+
+    let misses = pool.stats().alloc_misses;
+    let terminal = assert_no_alloc(|| effect.flush());
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        effect.prepare(spec);
+        drop(terminal);
+    });
+}
+
+#[kithara::test]
+#[case(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case(StretchKind::Bungee)
+)]
+fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: StretchKind) {
+    const FRAMES: usize = 8_192;
+    let pool = make_pool();
+    let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
+    let (mut maximum, input) = permit_alloc(|| {
+        let controls = StretchControls::new(0.05);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let mut maximum = warp_renderer(controls, spec, pool.clone());
+        maximum.prepare(spec);
+        let input = make_chunk(&pool, FRAMES, 2);
+        (maximum, input)
+    });
+    let misses = pool.stats().alloc_misses;
+    let maximum_output = assert_no_alloc(|| {
+        maximum
+            .render(input)
+            .unwrap_or_else(|| panic!("maximum prepared output must render"))
+    });
+    assert_eq!(maximum_output.frames(), 163_840);
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        maximum.prepare(spec);
+        drop(maximum_output);
+    });
+
+    let (mut pending, input) = permit_alloc(|| {
+        let controls = StretchControls::new(2.0);
+        controls.set_keylock(true);
+        controls.set_backend(kind);
+        let mut pending = warp_renderer(controls, spec, pool.clone());
+        pending.prepare(spec);
+        let input = make_chunk(&pool, 1, 2);
+        (pending, input)
+    });
+    let misses = pool.stats().alloc_misses;
+    assert_no_alloc(|| {
+        assert!(pending.render(input).is_none());
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| pending.prepare(spec));
+
+    let misses = pool.stats().alloc_misses;
+    let terminal = assert_no_alloc(|| {
+        pending
+            .flush()
+            .unwrap_or_else(|| panic!("pending frame plus terminal tail must render"))
+    });
+    assert_eq!(pool.stats().alloc_misses, misses);
+    permit_alloc(|| {
+        pending.prepare(spec);
+        drop(terminal);
     });
 }

@@ -6,28 +6,28 @@ use std::{
 };
 
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_bufpool::{BytePool, PcmPool};
+use kithara_bufpool::SamplePool;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
-    GaplessMode, GaplessProfile, PcmChunk, PcmMeta, PcmSpec, duration_for_frames,
-    frames_for_duration,
+    GaplessMode, GaplessProfile,
 };
 use kithara_events::{
     AudioEvent, DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus, TrackFailureKind,
 };
 use kithara_platform::{
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
     time::Duration,
     tokio::runtime::Handle as RuntimeHandle,
 };
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    Activity, AudioCodec, ByteMap, ChunkPosition, ContainerFormat, MediaInfo, OpenedReader,
+    Activity, AudioCodec, ByteMap, ContainerFormat, DeferredWake, MediaInfo, OpenedReader,
     OpenedVariantReader, PlayheadRead, PlayheadState, PlayheadWrite, PrerollHint, ReadOutcome,
     ReaderProfile, SeekControl, SeekObserve, SeekState, SegmentDescriptor, Source, SourceError,
-    SourcePhase, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType, VariantControl,
-    VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition, VariantTransitionId,
-    WorkerWake,
+    SourcePhase, SourceProbe, SourceSeekAnchor, Stream, StreamError, StreamResult, StreamType,
+    VariantControl, VariantPromotion, VariantReaderPlan, VariantReaderTake, VariantTransition,
+    VariantTransitionId, WorkerWake,
 };
 use kithara_test_utils::kithara;
 
@@ -38,7 +38,7 @@ use crate::{
             core::{DecodeInit, DecoderFactory},
             transition::OutgoingFrontier,
         },
-        fetch::Fetch,
+        fetch::{Fetch, SourceEnd},
         parts::SourceParts,
         rebuild::{
             DecoderBuildComplete, DecoderBuildPurpose, RebuildState, RecreateCause, RecreateNext,
@@ -54,11 +54,10 @@ use crate::{
             self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
         },
     },
-    renderer::AudioWorkerSource,
-    traits::AudioEffect,
+    traits::{AudioSource, AudioSourceExt},
 };
 
-pub(super) fn produced_data(fetch: Fetch<PcmChunk>) -> PcmChunk {
+pub(super) fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
     let Fetch::Data { data, .. } = fetch else {
         panic!("TrackStep::Produced must carry PCM data");
     };
@@ -73,6 +72,13 @@ impl Consts {
     const ROUTE_SAMPLE_RATE: u32 = 48_000;
     pub(super) const SAMPLE_RATE: u32 = 44_100;
     const TONE_HZ: f64 = 440.0;
+
+    pub(super) fn spec(sample_rate: u32) -> AudioSpec {
+        AudioSpec::new(
+            Self::CHANNELS,
+            NonZeroU32::new(sample_rate).expect("test sample rate is non-zero"),
+        )
+    }
 }
 
 pub(super) struct TestDecoder {
@@ -110,8 +116,8 @@ impl Decoder for TestDecoder {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
-        PcmSpec::new(2, NonZeroU32::MIN)
+    fn spec(&self) -> AudioSpec {
+        AudioSpec::new(2, NonZeroU32::MIN)
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -139,8 +145,8 @@ impl Decoder for FailingDecoder {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
-        PcmSpec::new(2, NonZeroU32::MIN)
+    fn spec(&self) -> AudioSpec {
+        AudioSpec::new(2, NonZeroU32::MIN)
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -173,8 +179,8 @@ impl Decoder for ProfileCountingDecoder {
         })
     }
 
-    fn spec(&self) -> PcmSpec {
-        PcmSpec::new(2, NonZeroU32::MIN)
+    fn spec(&self) -> AudioSpec {
+        AudioSpec::new(2, NonZeroU32::MIN)
     }
 
     fn update_byte_len(&self, _len: u64) {}
@@ -214,11 +220,8 @@ impl RouteSignalDecoder {
         self
     }
 
-    fn pcm_spec(&self) -> PcmSpec {
-        PcmSpec::new(
-            Consts::CHANNELS,
-            NonZeroU32::new(self.sample_rate).unwrap_or(NonZeroU32::MIN),
-        )
+    fn audio_spec(&self) -> AudioSpec {
+        Consts::spec(self.sample_rate)
     }
 }
 
@@ -240,10 +243,10 @@ impl Decoder for RouteSignalDecoder {
         if let Some(remaining) = self.remaining_chunks.as_mut() {
             *remaining = remaining.saturating_sub(1);
         }
-        let spec = self.pcm_spec();
+        let spec = self.audio_spec();
         let channels = usize::from(Consts::CHANNELS);
         let frames = Consts::ROUTE_CHUNK_FRAMES;
-        let mut samples = PcmPool::default().get();
+        let mut samples = SamplePool::default().get();
         samples
             .ensure_len(frames.saturating_mul(channels))
             .expect("route signal fixture fits PCM pool budget");
@@ -263,11 +266,15 @@ impl Decoder for RouteSignalDecoder {
         let start = self.next_frame;
         let end = start.saturating_add(u64::from(frame_count));
         self.next_frame = end;
-        Ok(DecoderChunkOutcome::Chunk(PcmChunk::new(
-            PcmMeta {
+        Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
+            AudioChunkInfo {
                 spec,
-                timestamp: duration_for_frames(self.sample_rate, start),
-                end_timestamp: duration_for_frames(self.sample_rate, end),
+                timestamp: spec
+                    .duration_for(start)
+                    .expect("route signal timestamp fits Duration"),
+                end_timestamp: spec
+                    .duration_for(end)
+                    .expect("route signal end timestamp fits Duration"),
                 frame_offset: start,
                 frames: frame_count,
                 ..Default::default()
@@ -277,22 +284,31 @@ impl Decoder for RouteSignalDecoder {
     }
 
     fn gapless_profile(&self, _codec: Option<AudioCodec>) -> GaplessProfile {
-        GaplessProfile::new(self.pcm_spec(), self.gapless, None, 0)
+        GaplessProfile::new(self.audio_spec(), self.gapless, None, 0)
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<DecoderSeekOutcome> {
-        let frame = u64::try_from(frames_for_duration(self.sample_rate, pos)).unwrap_or(u64::MAX);
+        let frame = u64::try_from(
+            self.audio_spec()
+                .frames_for(pos)
+                .expect("route signal seek fits frame count")
+                .get(),
+        )
+        .unwrap_or(u64::MAX);
         self.next_frame = frame;
         Ok(DecoderSeekOutcome::Landed {
-            landed_at: duration_for_frames(self.sample_rate, frame),
+            landed_at: self
+                .audio_spec()
+                .duration_for(frame)
+                .expect("route signal landing fits Duration"),
             landed_frame: frame,
             landed_byte: None,
             preroll: PrerollHint::NotNeeded,
         })
     }
 
-    fn spec(&self) -> PcmSpec {
-        self.pcm_spec()
+    fn spec(&self) -> AudioSpec {
+        self.audio_spec()
     }
 
     fn timeline_gap_frames(&self) -> u64 {
@@ -306,6 +322,8 @@ struct TestWake;
 
 impl WorkerWake for TestWake {
     fn wake(&self) {}
+
+    fn defer(&self) {}
 }
 
 #[derive(Default)]
@@ -321,6 +339,10 @@ impl CountingWake {
 
 impl WorkerWake for CountingWake {
     fn wake(&self) {
+        self.count.fetch_add(1, Ordering::Release);
+    }
+
+    fn defer(&self) {
         self.count.fetch_add(1, Ordering::Release);
     }
 }
@@ -521,9 +543,62 @@ impl VariantControl for TestControl {
     }
 }
 
+/// Optional park inside `wait_range`, letting a test hold the stream's
+/// control mutex the way a real construction read does: `Stream::read`
+/// enters `Source::wait_range` under the `SharedStream` mutex and stays
+/// there until data lands. Disarmed by default — no other test changes.
+#[derive(Default)]
+pub(super) struct WaitPark {
+    armed: AtomicBool,
+    state: Mutex<WaitParkState>,
+    condvar: Condvar,
+}
+
+#[derive(Default)]
+struct WaitParkState {
+    entered: bool,
+    released: bool,
+}
+
+impl WaitPark {
+    pub(super) fn arm(&self) {
+        self.armed.store(true, Ordering::Release);
+    }
+
+    /// Block until the holder is inside `wait_range` — i.e. the control
+    /// mutex is held by a parked blocking read.
+    pub(super) fn wait_entered(&self) {
+        let mut state = self.state.lock();
+        while !state.entered {
+            state = self.condvar.wait(state);
+        }
+    }
+
+    pub(super) fn release(&self) {
+        let mut state = self.state.lock();
+        state.released = true;
+        drop(state);
+        self.condvar.notify_all();
+    }
+
+    fn enter_if_armed(&self) {
+        if !self.armed.load(Ordering::Acquire) {
+            return;
+        }
+        let mut state = self.state.lock();
+        state.entered = true;
+        self.condvar.notify_all();
+        while !state.released {
+            state = self.condvar.wait(state);
+        }
+    }
+}
+
 pub(super) struct TestSource {
     byte_map: Arc<TestByteMap>,
     control: Arc<TestControl>,
+    park: Arc<WaitPark>,
+    peer: Option<Arc<DeferredWake>>,
     phase: Arc<Mutex<SourcePhase>>,
     playhead: Arc<PlayheadState>,
     position: Arc<AtomicU64>,
@@ -536,6 +611,8 @@ impl TestSource {
         Self {
             control,
             byte_map: Arc::new(TestByteMap),
+            park: Arc::new(WaitPark::default()),
+            peer: None,
             phase: Arc::new(Mutex::new(SourcePhase::Ready)),
             playhead: Arc::new(PlayheadState::new()),
             position: Arc::new(AtomicU64::new(0)),
@@ -544,9 +621,21 @@ impl TestSource {
         }
     }
 
+    /// Attach a reader→peer wake, as segmented sources vend one. Opt-in:
+    /// a `Some` peer changes `Stream`'s read-path unit clamping, so only
+    /// tests pinning the peer-wake contract install it.
+    pub(super) fn with_peer_wake(mut self, wake: Arc<DeferredWake>) -> Self {
+        self.peer = Some(wake);
+        self
+    }
+
     fn segmented(control: Arc<TestControl>) -> Self {
         control.enable_byte_map();
         Self::new(control)
+    }
+
+    pub(super) fn park_handle(&self) -> Arc<WaitPark> {
+        Arc::clone(&self.park)
     }
 
     pub(super) fn phase_handle(&self) -> Arc<Mutex<SourcePhase>> {
@@ -558,9 +647,52 @@ impl TestSource {
     }
 }
 
+/// Byte-space probe sharing the test source's scripted cells — the same
+/// phase, cursor, and byte-map gating as the `Source` impl below.
+struct SharedPhaseProbe {
+    phase: Arc<Mutex<SourcePhase>>,
+    position: Arc<AtomicU64>,
+    control: Arc<TestControl>,
+    byte_map: Arc<TestByteMap>,
+}
+
+impl SourceProbe for SharedPhaseProbe {
+    fn phase(&self) -> SourcePhase {
+        *self.phase.lock()
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        *self.phase.lock()
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(4096)
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        if self.control.byte_map_enabled.load(Ordering::Acquire) {
+            Some(self.byte_map.clone() as Arc<dyn ByteMap>)
+        } else {
+            None
+        }
+    }
+}
+
 impl Source for TestSource {
     fn activity(&self) -> Arc<dyn Activity> {
         Arc::clone(&self.seek) as Arc<dyn Activity>
+    }
+
+    fn peer_wake(&self) -> Option<Arc<DeferredWake>> {
+        self.peer.clone()
     }
 
     fn advance(&self, n: u64) {
@@ -585,6 +717,15 @@ impl Source for TestSource {
 
     fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
         *self.phase.lock()
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(SharedPhaseProbe {
+            phase: Arc::clone(&self.phase),
+            position: Arc::clone(&self.position),
+            control: Arc::clone(&self.control),
+            byte_map: Arc::clone(&self.byte_map),
+        })
     }
 
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
@@ -624,6 +765,7 @@ impl Source for TestSource {
         range: Range<u64>,
         _timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
+        self.park.enter_if_armed();
         self.waits.lock().push(range);
         match *self.phase.lock() {
             SourcePhase::Ready => Ok(WaitOutcome::Ready),
@@ -740,6 +882,7 @@ pub(super) struct RouteFixture {
     pub(super) control: Arc<TestControl>,
     pub(super) drops: Arc<Mutex<Vec<u64>>>,
     pub(super) host_sample_rate: Arc<AtomicU32>,
+    pub(super) phase: Arc<Mutex<SourcePhase>>,
     pub(super) source: StreamAudioSource<TestStream>,
 }
 
@@ -796,7 +939,6 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
-        byte_pool: BytePool::default(),
         decoder_factory,
         gapless_mode,
         decoder: Box::new(TestDecoder::new(1, drops.clone())),
@@ -804,10 +946,10 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
-        pcm_pool: PcmPool::default(),
+        sample_pool: SamplePool::default(),
         recreate_on_host_rate_change: true,
     }
-    .into_parts(Vec::new(), shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -841,25 +983,31 @@ struct RouteParams {
 }
 
 pub(super) async fn route_signal_source(initial_host_rate: u32) -> RouteFixture {
-    route_signal_source_with_effects(initial_host_rate, Vec::new()).await
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
+    .await
 }
 
-pub(super) async fn route_signal_source_with_effects(
+pub(super) async fn route_signal_source_with_eof(
     initial_host_rate: u32,
-    effects: Vec<Box<dyn AudioEffect>>,
+    chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        effects,
-    )
+    route_source(RouteParams {
+        chunks_before_eof: Some(chunks_before_eof),
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
@@ -867,18 +1015,15 @@ pub(super) async fn route_signal_source_with_gapless(
     initial_host_rate: u32,
     gapless: GaplessInfo,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: Some(gapless),
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: Some(gapless),
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
@@ -887,18 +1032,15 @@ pub(super) async fn route_signal_source_with_gapless_eof(
     gapless: GaplessInfo,
     chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: Some(chunks_before_eof),
-            gapless: Some(gapless),
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: Some(chunks_before_eof),
+        gapless: Some(gapless),
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
@@ -906,22 +1048,19 @@ pub(super) async fn route_signal_source_with_finite_incoming(
     initial_host_rate: u32,
     incoming_chunks_before_eof: usize,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: Some(incoming_chunks_before_eof),
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate,
+        segmented: false,
+    })
     .await
 }
 
-async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -> RouteFixture {
+async fn route_source(params: RouteParams) -> RouteFixture {
     let control = Arc::new(TestControl::new(media_info(0)));
     let drops = Arc::new(Mutex::new(Vec::new()));
     let host_sample_rate = Arc::new(AtomicU32::new(params.initial_host_rate));
@@ -931,12 +1070,14 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
     let active_timeline_gap = params.active_timeline_gap;
     let incoming_timeline_gap = params.incoming_timeline_gap;
     let segmented = params.segmented;
+    let test_source = if segmented {
+        TestSource::segmented(control.clone())
+    } else {
+        TestSource::new(control.clone())
+    };
+    let phase = test_source.phase_handle();
     let stream = match Stream::<TestStream>::new(TestConfig {
-        source: if segmented {
-            TestSource::segmented(control.clone())
-        } else {
-            TestSource::new(control.clone())
-        },
+        source: test_source,
     })
     .await
     {
@@ -973,7 +1114,6 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         Err(err) => panic!("test requires tokio runtime: {err}"),
     };
     let decode = DecodeInit {
-        byte_pool: BytePool::default(),
         decoder_factory,
         decoder: Box::new(
             RouteSignalDecoder::new(
@@ -994,10 +1134,10 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         host_sample_rate: host_sample_rate.clone(),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
-        pcm_pool: PcmPool::default(),
+        sample_pool: SamplePool::default(),
         recreate_on_host_rate_change: true,
     }
-    .into_parts(effects, shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch());
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -1012,6 +1152,7 @@ async fn route_source(params: RouteParams, effects: Vec<Box<dyn AudioEffect>>) -
         control,
         drops,
         host_sample_rate,
+        phase,
         source: StreamAudioSource::new(shared_stream, parts),
     }
 }
@@ -1020,18 +1161,15 @@ pub(super) async fn route_signal_source_with_gaps(
     active_timeline_gap: u64,
     incoming_timeline_gap: u64,
 ) -> RouteFixture {
-    route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap,
-            incoming_timeline_gap,
-            initial_host_rate: Consts::SAMPLE_RATE,
-            segmented: false,
-        },
-        Vec::new(),
-    )
+    route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap,
+        incoming_timeline_gap,
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: false,
+    })
     .await
 }
 
@@ -1040,7 +1178,7 @@ fn run_pending_rebuild_inline(source: &mut StreamAudioSource<TestStream>) {
     source.flush_deferred();
 }
 
-fn append_left_channel(left: &mut Vec<f32>, chunk: &PcmChunk) {
+fn append_left_channel(left: &mut Vec<f32>, chunk: &AudioChunk) {
     let channels = usize::from(chunk.meta.spec.channels);
     for frame in 0..chunk.frames() {
         left.push(chunk.samples[frame * channels]);
@@ -1065,7 +1203,25 @@ fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
 fn next_test_chunk(
     source: &mut StreamAudioSource<TestStream>,
     route_recreated: &mut bool,
-) -> PcmChunk {
+) -> AudioChunk {
+    let chunk = next_decoded_chunk(source, route_recreated);
+    source.commit_source_end(
+        SourceEnd::new(
+            chunk
+                .meta
+                .frame_offset
+                .saturating_add(u64::from(chunk.meta.frames)),
+            chunk.meta.spec.sample_rate,
+        ),
+        source.seek_engine.epoch(),
+    );
+    chunk
+}
+
+fn next_decoded_chunk(
+    source: &mut StreamAudioSource<TestStream>,
+    route_recreated: &mut bool,
+) -> AudioChunk {
     loop {
         run_pending_rebuild_inline(source);
         match source.step_track() {
@@ -1451,6 +1607,59 @@ async fn rebuilding_decoder_completion_installs_once() {
 }
 
 #[kithara::test(tokio)]
+async fn format_boundary_rebuild_rebases_decode_head_to_rendered_source() {
+    let RouteFixture {
+        control,
+        drops,
+        mut source,
+        ..
+    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    let mut route_recreated = false;
+    let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
+    let epoch = source.seek_obs.epoch();
+    let raw = source
+        .resume
+        .decode_head(epoch)
+        .expect("decoded chunk must advance the raw head");
+    let rendered_frame = chunk
+        .meta
+        .frame_offset
+        .saturating_add(u64::from(chunk.meta.frames / 2));
+    let rendered = (rendered_frame, chunk.meta.spec.sample_rate.get());
+    source.commit_source_end(
+        SourceEnd::new(rendered_frame, chunk.meta.spec.sample_rate),
+        epoch,
+    );
+    assert!(
+        raw.0 > rendered.0,
+        "fixture requires raw PCM ahead of output"
+    );
+
+    let build = BuildId::fixture(7);
+    control.set_media_info(media_info(1));
+    enter_rebuilding(&mut source, 7, recreate_state(1));
+    push_route_completion(&source, build, DecoderBuildPurpose::Replacement, 2, drops);
+    source.flush_deferred();
+
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    assert!(matches!(source.state, CurrentFsm::Decoding(_)));
+    assert_eq!(source.resume.rendered_source_head(epoch), Some(rendered));
+    assert_eq!(source.resume.decode_head(epoch), Some(rendered));
+
+    control.set_exact_plan(exact_incoming_plan());
+    source.flush_deferred();
+    assert_eq!(
+        control.landing(),
+        Some(
+            Consts::spec(rendered.1)
+                .duration_for(rendered.0)
+                .expect("rendered fixture landing fits Duration"),
+        ),
+        "the next ABR plan must start from the rebuilt rendered frontier"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn rebuilding_decoder_completion_emits_decoder_changed_cause() {
     let RebuildFixture {
         drops, mut source, ..
@@ -1542,6 +1751,57 @@ async fn route_change_host_rate_delta_starts_decoder_recreate() {
 }
 
 #[kithara::test(tokio)]
+async fn route_change_resumes_from_the_rendered_source_frontier() {
+    let RouteFixture {
+        host_sample_rate,
+        mut source,
+        ..
+    } = route_signal_source(Consts::SAMPLE_RATE).await;
+    let mut route_recreated = false;
+    let chunk = next_decoded_chunk(&mut source, &mut route_recreated);
+    let epoch = source.seek_engine.epoch();
+    let rendered_frame =
+        u64::try_from(Consts::ROUTE_CHUNK_FRAMES / 2).expect("rendered fixture frame fits u64");
+    let rendered = Consts::spec(Consts::SAMPLE_RATE)
+        .duration_for(rendered_frame)
+        .expect("rendered fixture position fits Duration");
+
+    assert_ne!(
+        source.resume.decode_head(epoch),
+        Some((rendered_frame, Consts::SAMPLE_RATE)),
+        "the fixture must distinguish raw decode progress from rendered progress"
+    );
+    assert_eq!(
+        chunk.meta.end_timestamp,
+        Consts::spec(Consts::SAMPLE_RATE)
+            .duration_for(
+                u64::try_from(Consts::ROUTE_CHUNK_FRAMES).expect("route chunk frames fit u64"),
+            )
+            .expect("route chunk duration fits Duration")
+    );
+    source.commit_source_end(
+        SourceEnd::new(
+            rendered_frame,
+            NonZeroU32::new(Consts::SAMPLE_RATE).expect("test sample rate is non-zero"),
+        ),
+        epoch,
+    );
+
+    host_sample_rate.store(Consts::ROUTE_SAMPLE_RATE, Ordering::Release);
+    assert!(matches!(source.step_track(), TrackStep::StateChanged));
+    let CurrentFsm::RecreatingDecoder(handle) = &source.state else {
+        panic!("expected route-change recreate");
+    };
+    let RecreateNext::ApplySeek(request) = &handle.data().next else {
+        panic!("route change must apply a seek");
+    };
+    assert_eq!(
+        request.seek.target, rendered,
+        "route recreation must resume at final rendered source progress"
+    );
+}
+
+#[kithara::test(tokio)]
 async fn route_change_recreate_preserves_position_and_output_rate_continuity_metric() {
     let RouteFixture {
         host_sample_rate,
@@ -1555,7 +1815,9 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
         let chunk = next_test_chunk(&mut source, &mut route_recreated);
         assert_eq!(chunk.meta.spec.sample_rate.get(), Consts::SAMPLE_RATE);
         append_left_channel(&mut left, &chunk);
-        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+        source
+            .playhead
+            .advance(&crate::audio::chunk_position(&chunk.meta));
     }
 
     let route_frame = left.len();
@@ -1571,7 +1833,9 @@ async fn route_change_recreate_preserves_position_and_output_rate_continuity_met
         }
         saw_new_rate |= chunk.meta.spec.sample_rate.get() == Consts::ROUTE_SAMPLE_RATE;
         append_left_channel(&mut left, &chunk);
-        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+        source
+            .playhead
+            .advance(&crate::audio::chunk_position(&chunk.meta));
     }
 
     assert!(
@@ -1617,24 +1881,23 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
         host_sample_rate,
         mut source,
         ..
-    } = route_source(
-        RouteParams {
-            chunks_before_eof: None,
-            gapless: None,
-            incoming_chunks_before_eof: None,
-            active_timeline_gap: 0,
-            incoming_timeline_gap: 0,
-            initial_host_rate: Consts::SAMPLE_RATE,
-            segmented: true,
-        },
-        Vec::new(),
-    )
+    } = route_source(RouteParams {
+        chunks_before_eof: None,
+        gapless: None,
+        incoming_chunks_before_eof: None,
+        active_timeline_gap: 0,
+        incoming_timeline_gap: 0,
+        initial_host_rate: Consts::SAMPLE_RATE,
+        segmented: true,
+    })
     .await;
 
     let mut route_recreated = false;
     for _ in 0..4 {
         let chunk = next_test_chunk(&mut source, &mut route_recreated);
-        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+        source
+            .playhead
+            .advance(&crate::audio::chunk_position(&chunk.meta));
     }
     let resume_anchor = source
         .shared_stream
@@ -1665,7 +1928,9 @@ async fn route_change_recreate_roots_the_demuxer_at_the_container_origin() {
     for _ in 0..4 {
         let chunk = next_test_chunk(&mut source, &mut route_recreated);
         saw_new_rate |= chunk.meta.spec.sample_rate.get() == Consts::ROUTE_SAMPLE_RATE;
-        source.playhead.advance(&ChunkPosition::from(&chunk.meta));
+        source
+            .playhead
+            .advance(&crate::audio::chunk_position(&chunk.meta));
     }
     assert!(
         saw_new_rate,

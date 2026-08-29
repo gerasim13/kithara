@@ -1,8 +1,9 @@
 use std::{fs, io::Cursor, process::Command};
 
 use kithara::{
-    decode::{DecoderBackend, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{DecoderBackend, DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
@@ -109,12 +110,12 @@ async fn test_signal_server_encoded_formats_are_decodable(
         Some(ext),
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .unwrap();
 
-    let chunk = PcmChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
+    let chunk = AudioChunk::try_from(decoder.next_chunk().unwrap()).unwrap();
     assert!(!chunk.samples.is_empty());
 }
 
@@ -154,7 +155,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
         Some(ext),
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
@@ -169,7 +170,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
         let outcome = decoder.next_chunk().unwrap_or_else(|error| {
             panic!("decode chunk {chunk_idx} failed for {format:?}: {error}")
         });
-        let Ok(chunk) = PcmChunk::try_from(outcome) else {
+        let Ok(chunk) = AudioChunk::try_from(outcome) else {
             break;
         };
         assert_eq!(chunk.spec().sample_rate.get(), 44_100);
@@ -476,7 +477,7 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
     let config = || {
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .backend(backend)
             .build()
     };
@@ -498,7 +499,7 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
         .next_chunk()
         .unwrap_or_else(|error| panic!("decode first probe chunk for packaged {label}: {error}"));
 
-    let chunk = PcmChunk::try_from(direct_chunk).unwrap_or_else(|_| {
+    let chunk = AudioChunk::try_from(direct_chunk).unwrap_or_else(|_| {
         if probe_chunk.is_chunk() {
             panic!(
                 "packaged {label} direct fmp4 decoder returned EOF, but probe-based decoder produced PCM; total_len={}, boxes={box_summaries:?}",

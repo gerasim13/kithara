@@ -13,8 +13,8 @@ use kithara::{
     platform::{sync::Arc, time::Duration, tokio::runtime::Runtime},
     storage::WaitOutcome,
     stream::{
-        Activity, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
-        SeekObserve, SeekState, Source, SourcePhase, Stream, StreamResult, StreamType,
+        Activity, ByteMap, PlayheadRead, PlayheadState, PlayheadWrite, ReadOutcome, SeekControl,
+        SeekObserve, SeekState, Source, SourcePhase, SourceProbe, Stream, StreamResult, StreamType,
     },
 };
 
@@ -103,8 +103,47 @@ impl Source for MockSource {
         SourcePhase::Ready
     }
 
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(ReadyProbe {
+            len: self.reported_len,
+            position: Arc::clone(&self.position),
+        })
+    }
+
     fn len(&self) -> Option<u64> {
         Some(self.reported_len)
+    }
+}
+
+/// Always-ready byte-space probe sharing `MockSource`'s cursor and length.
+struct ReadyProbe {
+    len: u64,
+    position: Arc<AtomicU64>,
+}
+
+impl SourceProbe for ReadyProbe {
+    fn phase(&self) -> SourcePhase {
+        SourcePhase::Ready
+    }
+
+    fn phase_at(&self, _range: Range<u64>) -> SourcePhase {
+        SourcePhase::Ready
+    }
+
+    fn position(&self) -> u64 {
+        self.position.load(Ordering::Acquire)
+    }
+
+    fn set_position(&self, pos: u64) {
+        self.position.store(pos, Ordering::Release);
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(self.len)
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        None
     }
 }
 

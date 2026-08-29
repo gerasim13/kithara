@@ -1,8 +1,13 @@
+#[cfg(test)]
+use std::num::NonZeroU32;
+
+#[cfg(test)]
+use kithara::analysis::Coverage;
 use kithara::{
     abr::AbrHandle,
-    audio::effects::eq::GainDb,
+    analysis::FrameRange,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
-    play::StretchControls,
+    play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
     stream::AudioCodec,
 };
@@ -12,7 +17,7 @@ use kithara_platform::{
     time::Duration,
     tokio::task,
 };
-use kithara_queue::{Queue, QueueEvent, TrackEntry};
+use kithara_queue::{QueueControl, QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{config::AppConfig, waveform::TrackAnalysis};
@@ -27,6 +32,9 @@ pub struct UiState {
     pub beat_marks: Arc<[f32]>,
     /// Downbeat positions as track fractions in `[0, 1]`, derived from `analysis.beat`.
     pub downbeat_marks: Arc<[f32]>,
+    /// Ranges the analysis has not covered, as track fractions in `[0, 1]`,
+    /// derived from `analysis.coverage`.
+    pub unready_ranges: Arc<[[f32; 2]]>,
     pub engine_load: EngineLoadSnapshot,
     /// Source analysis of the current track; `None` until analysed.
     pub analysis: Option<TrackAnalysis>,
@@ -48,10 +56,12 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &Queue) -> Self {
+    fn new(queue: &QueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
+        let beat_marks = empty_marks();
+        let downbeat_marks = empty_marks();
 
         Self {
             tracks,
@@ -67,8 +77,9 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
-            beat_marks: Arc::from(Vec::new()),
-            downbeat_marks: Arc::from(Vec::new()),
+            beat_marks,
+            downbeat_marks,
+            unready_ranges: Arc::default(),
             is_seeking: false,
             seek_position: 0.0,
             engine_load: EngineLoadSnapshot::default(),
@@ -78,6 +89,8 @@ impl UiState {
     /// Bare default state for unit tests.
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
+        let beat_marks = empty_marks();
+        let downbeat_marks = empty_marks();
         Self {
             current_track_index: None,
             selected_variant: None,
@@ -87,8 +100,9 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
-            beat_marks: Arc::from(Vec::new()),
-            downbeat_marks: Arc::from(Vec::new()),
+            beat_marks,
+            downbeat_marks,
+            unready_ranges: Arc::default(),
             abr_mode_is_auto: true,
             is_seeking: false,
             playing: false,
@@ -102,40 +116,94 @@ impl UiState {
 
     /// Set the analysis and re-derive `beat_marks`/`downbeat_marks` from its
     /// beat grid, keeping them in sync with their single source.
+    ///
     pub(crate) fn set_analysis(&mut self, analysis: Option<TrackAnalysis>) {
         let (beats, downbeats) = analysis
             .as_ref()
             .and_then(|a| {
                 a.beat().filter(|_| a.source_frames() > 0).map(|grid| {
                     (
-                        frames_to_fractions(grid.beats(), a.source_frames()),
-                        frames_to_fractions(grid.downbeats(), a.source_frames()),
+                        frames_to_fractions(grid.artifact().beats(), a.source_frames()),
+                        frames_to_fractions(grid.artifact().downbeats(), a.source_frames()),
                     )
                 })
             })
-            .unwrap_or_else(|| (Arc::from(Vec::new()), Arc::from(Vec::new())));
+            .unwrap_or_else(|| (empty_marks(), empty_marks()));
         self.beat_marks = beats;
         self.downbeat_marks = downbeats;
+        self.unready_ranges = analysis.as_ref().map_or_else(Arc::default, unready_ranges);
         self.analysis = analysis;
     }
+}
+
+/// Map one source frame to a track fraction in `[0, 1]`, clamping past the end.
+fn fraction(frame: u64, total: f64) -> f32 {
+    let frame_f: f64 = frame.as_();
+    let frac: f32 = (frame_f / total).clamp(0.0, 1.0).as_();
+    frac
 }
 
 /// Map source-frame positions to track fractions in `[0, 1]`, clamping
 /// out-of-range frames to `1.0`. Empty input or `total == 0` yields empty.
 fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
-    if frames.is_empty() || total == 0 {
-        return Arc::from(Vec::new());
+    if total == 0 {
+        return empty_marks();
     }
     let total_f: f64 = total.as_();
-    let out: Vec<f32> = frames
-        .iter()
-        .map(|&frame| {
-            let frame_f: f64 = frame.as_();
-            let frac: f32 = (frame_f / total_f).clamp(0.0, 1.0).as_();
-            frac
-        })
-        .collect();
-    Arc::from(out)
+    Arc::from_iter(frames.iter().map(|&frame| fraction(frame, total_f)))
+}
+
+fn empty_marks() -> Arc<[f32]> {
+    Arc::default()
+}
+
+/// Map source-frame ranges to track fractions in `[0, 1]`. Empty input or
+/// `total == 0` yields empty, and an empty range is dropped.
+fn ranges_to_fractions(ranges: &[FrameRange], total: u64) -> Arc<[[f32; 2]]> {
+    if ranges.is_empty() || total == 0 {
+        return Arc::default();
+    }
+    let total_f: f64 = total.as_();
+    Arc::from_iter(
+        ranges
+            .iter()
+            .filter(|range| !range.is_empty())
+            .map(|range| {
+                [
+                    fraction(range.start(), total_f),
+                    fraction(range.end(), total_f),
+                ]
+            }),
+    )
+}
+
+/// A snapshot covering `runs` of a track `extent` frames long, or of unknown
+/// length when `extent` is `None`.
+#[cfg(test)]
+pub(crate) fn covered(runs: &[(u64, u64)], extent: Option<u64>) -> TrackAnalysis {
+    let mut coverage = Coverage::default();
+    for &(start, end) in runs {
+        coverage.insert(FrameRange::new(start, end - start));
+    }
+    TrackAnalysis::builder()
+        .token("track".into())
+        .revision(1)
+        .source_sample_rate(NonZeroU32::new(44_100).expect("a positive rate"))
+        .maybe_extent(extent)
+        .coverage(coverage)
+        .build()
+}
+
+/// The ranges a snapshot has not covered, as track fractions.
+///
+/// Empty once the coverage holds the whole extent, and empty while the extent
+/// is unknown: with no known length there is no rest of the track to be
+/// missing, so a live source claims nothing rather than guessing.
+fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
+    if analysis.extent().is_none() || analysis.is_complete() {
+        return Arc::default();
+    }
+    ranges_to_fractions(&analysis.missing(), analysis.source_frames())
 }
 
 /// Owns the canonical [`UiState`] and bridges queue events to it.
@@ -155,7 +223,7 @@ fn frames_to_fractions(frames: &[u64], total: u64) -> Arc<[f32]> {
 pub struct StateController {
     beat_clock: Arc<Mutex<BeatClockState>>,
     #[field(get, deref = false)]
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
@@ -172,19 +240,14 @@ impl StateController {
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
     pub fn new(
-        queue: Arc<Queue>,
+        queue: QueueControl,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancelToken,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(
-            Arc::clone(&queue),
-            Arc::clone(&state),
-            config,
-            cancel.clone(),
-        );
+        spawn_listener(queue.clone(), Arc::clone(&state), config, cancel.clone());
 
         Self {
             queue,
@@ -262,14 +325,15 @@ impl StateController {
         let Some(analysis) = state.analysis.as_ref() else {
             return;
         };
-        let Some(grid) = analysis.beat() else {
+        let Some(beat) = analysis.beat() else {
             return;
         };
+        let grid = beat.artifact();
         let source_frames = analysis.source_frames();
         let slot = SlotId::new(1);
         let mut beat_clock = self.beat_clock.lock();
         if beat_clock.published_track != Some(current_index)
-            && let Some(info) = bpm_info_from_state(grid, source_frames, state.duration)
+            && let Some(info) = bpm_info_from_state(beat, source_frames, state.duration)
         {
             self.queue
                 .bus()
@@ -306,18 +370,22 @@ impl StateController {
     }
 }
 
+/// Takes the whole beat artifact, not just its grid: tempo and how sure the
+/// detector was are two answers about the same markers, and passing them
+/// separately is how they come to disagree.
 fn bpm_info_from_state(
-    grid: &kithara::audio::BeatGrid,
+    beat: &kithara::analysis::BeatSnapshot,
     source_frames: u64,
     duration_secs: f64,
 ) -> Option<BpmInfo> {
+    let grid = beat.artifact();
     let first_beat = *grid.beats().first()?;
     if source_frames == 0 || duration_secs <= 0.0 {
         return None;
     }
     Some(BpmInfo::new(
         grid.bpm(),
-        None,
+        beat.confidence(),
         Duration::from_secs_f64(
             (u64_to_f64(first_beat) / u64_to_f64(source_frames)) * duration_secs,
         ),
@@ -346,7 +414,7 @@ impl Drop for StateController {
 }
 
 fn spawn_listener(
-    queue: Arc<Queue>,
+    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -357,13 +425,13 @@ fn spawn_listener(
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
 /// active slot are no-ops; the master EQ persists once a slot accepts them.
-fn reapply_eq(queue: &Queue, eq_bands: &[GainDb]) {
+fn reapply_eq(queue: &QueueControl, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
         let _ = queue.set_eq_gain(band, f32::from(gain));
     }
 }
 
-pub(crate) fn apply_event(event: &Event, queue: &Queue, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiState>) {
     match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
@@ -475,9 +543,45 @@ fn variant_short_label(v: &VariantInfo) -> String {
 
 #[cfg(test)]
 mod tests {
+    use ::kithara::analysis::{BeatArtifact, BeatSnapshot, BeatState};
     use kithara_test_utils::kithara;
 
-    use super::{codec_label, frames_to_fractions};
+    use super::{
+        UiState, bpm_info_from_state, codec_label, covered, frames_to_fractions, unready_ranges,
+    };
+
+    fn beat(beats: Vec<(u64, Option<f32>)>) -> BeatSnapshot {
+        BeatSnapshot::new(
+            BeatArtifact::new(120.0, beats, Vec::new()),
+            BeatState::Provisional,
+            Vec::new(),
+        )
+    }
+
+    /// The event carries a confidence slot; leaving it empty when the grid
+    /// knows the answer is the gap this closes.
+    #[kithara::test(native, flash(false))]
+    fn a_published_tempo_carries_the_confidence_its_grid_reports() {
+        let detected = beat(vec![(0, Some(0.4)), (22_050, Some(0.8))]);
+        let info = bpm_info_from_state(&detected, 44_100, 1.0).expect("a grid names a tempo");
+
+        assert!((info.bpm - 120.0).abs() < f64::EPSILON);
+        let confidence = info.confidence.expect("detected markers name a confidence");
+        assert!(
+            (confidence - 0.6).abs() < 1e-6,
+            "the published confidence is the grid's own: {confidence}"
+        );
+    }
+
+    /// A grid built entirely by extrapolation has a tempo but nothing to
+    /// stand behind it, and must say so rather than report a zero.
+    #[kithara::test(native, flash(false))]
+    fn a_tempo_with_nothing_detected_publishes_no_confidence() {
+        let guessed = beat(vec![(0, None), (22_050, None)]);
+        let info = bpm_info_from_state(&guessed, 44_100, 1.0).expect("a grid names a tempo");
+
+        assert_eq!(info.confidence, None);
+    }
 
     #[kithara::test(native, flash(false))]
     fn frames_to_fractions_maps_and_clamps() {
@@ -501,6 +605,71 @@ mod tests {
             "over-range clamps: {clamped:?}"
         );
         assert!(clamped[0] < clamped[1], "ascending preserved");
+    }
+
+    /// A snapshot that holds the whole track has nothing left to mark, and
+    /// must say so before any range is derived.
+    #[kithara::test(native, flash(false))]
+    fn a_fully_covered_track_has_no_unready_ranges() {
+        let full = covered(&[(0, 1_000)], Some(1_000));
+
+        assert!(unready_ranges(&full).is_empty());
+    }
+
+    /// Coverage spread over the track leaves holes between the runs and after
+    /// the last one, each reported on the track's own fraction axis.
+    #[kithara::test(native, flash(false))]
+    fn a_partly_covered_track_names_the_holes_it_left() {
+        let partial = covered(&[(0, 200), (400, 600), (800, 900)], Some(1_000));
+
+        let ranges = unready_ranges(&partial);
+
+        assert_eq!(ranges.len(), 3, "{ranges:?}");
+        assert_eq!(ranges[0], [0.2, 0.4], "{ranges:?}");
+        assert_eq!(ranges[1], [0.6, 0.8], "{ranges:?}");
+        assert_eq!(ranges[2], [0.9, 1.0], "{ranges:?}");
+    }
+
+    /// Without an extent there is no rest of the track to be missing, so a
+    /// live source claims nothing rather than guessing a length.
+    #[kithara::test(native, flash(false))]
+    fn a_track_of_unknown_length_claims_nothing_unready() {
+        let live = covered(&[(0, 200), (400, 600)], None);
+
+        assert!(unready_ranges(&live).is_empty());
+    }
+
+    /// A revision carries the whole coverage, so a growing analysis only ever
+    /// takes ranges out of the unready set; one coming back would mean a
+    /// revision had contradicted an earlier one.
+    #[kithara::test(native, flash(false))]
+    fn growing_coverage_only_shrinks_the_unready_set() {
+        let revisions = [
+            &[(0, 200)][..],
+            &[(0, 200), (600, 800)][..],
+            &[(0, 400), (600, 800)][..],
+            &[(0, 1_000)][..],
+        ];
+        let mut ui = UiState::empty();
+        let mut previous: Option<Vec<[f32; 2]>> = None;
+
+        for runs in revisions {
+            ui.set_analysis(Some(covered(runs, Some(1_000))));
+            let unready = ui.unready_ranges.to_vec();
+            if let Some(previous) = previous {
+                for range in &unready {
+                    assert!(
+                        previous
+                            .iter()
+                            .any(|was| was[0] <= range[0] && range[1] <= was[1]),
+                        "{range:?} was ready in {previous:?}"
+                    );
+                }
+            }
+            previous = Some(unready);
+        }
+
+        assert!(ui.unready_ranges.is_empty(), "the last revision covers all");
     }
 
     #[kithara::test(native, flash(false))]

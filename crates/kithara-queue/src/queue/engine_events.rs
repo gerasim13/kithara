@@ -1,19 +1,18 @@
 use std::sync::PoisonError;
 
 use kithara_events::{
-    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, PlayerEvent, QueueEvent, TrackId,
-    TrackStatus,
+    AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
+    TrackId, TrackStatus,
 };
-use kithara_platform::{sync::Arc, tokio::sync::broadcast::error::TryRecvError};
+use kithara_platform::tokio::sync::broadcast::error::TryRecvError;
 use tracing::debug;
 
 use super::{
-    Queue,
+    QueueControl,
     types::{CachedPosition, CrossfadeArm, Transition},
 };
-use crate::track::TrackSource;
 
-impl Queue {
+impl QueueControl {
     pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
         let Some(next) = self.next_selectable_entry() else {
             return;
@@ -37,15 +36,7 @@ impl Queue {
     /// If an advance was already armed from `tick()`, consume it and
     /// return `true` — the engine's trailing `ItemDidPlayToEnd` for
     /// the same track must not advance again.
-    pub(super) fn consume_armed_advance(
-        &self,
-        ended_id: Option<TrackId>,
-        pos: f64,
-        dur: f64,
-    ) -> bool {
-        let Some(ended_id) = ended_id else {
-            return false;
-        };
+    pub(super) fn consume_armed_advance(&self, ended_id: TrackId, pos: f64, dur: f64) -> bool {
         if self.take_armed_for_if_matches(ended_id) {
             debug!(
                 track_id = ended_id.as_u64(),
@@ -54,21 +45,6 @@ impl Queue {
             true
         } else {
             false
-        }
-    }
-
-    /// Either treat the EOF as a real end-of-track and advance, or log
-    /// it as a spurious signal (decoder-failure pos stamp, crossfade
-    /// fade-out on previous track).
-    pub(super) fn dispatch_real_or_spurious(&self, pos: f64, dur: f64) {
-        /// Threshold for filtering spurious `PlayerEvent::ItemDidPlayToEnd`
-        /// events emitted by crossfade fade-outs of non-current tracks.
-        const ITEM_END_POSITION_TOLERANCE_SECONDS: f64 = 1.0;
-
-        if dur > 0.0 && pos >= dur - ITEM_END_POSITION_TOLERANCE_SECONDS {
-            let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
-        } else {
-            debug!(pos, dur, "filtered spurious ItemDidPlayToEnd");
         }
     }
 
@@ -113,81 +89,81 @@ impl Queue {
         self.advance_loaded_successor(entry.id, Transition::Crossfade);
     }
 
-    pub(super) fn handle_item_did_fail(&self, src: &Arc<str>) {
+    /// Gated on `item` for the same reason as
+    /// [`Self::handle_item_did_play_to_end`]: the player reports the item
+    /// that aborted, not the one being heard. Only a leading item's
+    /// failure may skip and flag, and it flags the entry the event names —
+    /// never one merely sharing its source, which a playlist repeating a
+    /// track would take out of selection for the rest of the session.
+    pub(super) fn handle_item_did_fail(&self, item: &ItemRole) {
+        let track = item.track();
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
-        debug!(%src, pos, dur, "ItemDidFail received — track aborted mid-stream");
+        debug!(%track, pos, dur, "ItemDidFail received — track aborted mid-stream");
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
             return;
         }
         if self.is_paused() {
-            debug!(%src, "paused: not auto-advancing on ItemDidFail");
+            debug!(%track, "paused: not auto-advancing on ItemDidFail");
             return;
         }
-        let ended_id = self.track_id_for_src(src);
-        if self.consume_armed_advance(ended_id, pos, dur) {
+        if self.consume_armed_advance(track.id, pos, dur) {
             return;
         }
-        if let Some(id) = ended_id {
-            self.set_status(
-                id,
-                TrackStatus::Failed("mid-stream engine failure".to_string()),
-            );
-            self.bus.publish(QueueEvent::TrackLoadFailed {
-                id,
-                reason: "mid-stream engine failure".to_string(),
-                auto_skipped: true,
-            });
+        if !item.is_leading() {
+            debug!(%track, pos, dur, ?item, "not the leading item: not failing the queue entry");
+            return;
         }
-        let _ = self.advance_to_next(Transition::None, AdvanceReason::TrackFailed);
+        self.set_status(
+            track.id,
+            TrackStatus::Failed("mid-stream engine failure".to_string()),
+        );
+        self.bus.publish(QueueEvent::TrackLoadFailed {
+            id: track.id,
+            reason: "mid-stream engine failure".to_string(),
+            auto_skipped: true,
+        });
+        let _ = self.advance_to_next_inner(Transition::None, AdvanceReason::TrackFailed);
     }
 
-    /// Decide whether `ItemDidPlayToEnd` advances the queue or is
-    /// filtered as a stale crossfade fade-out signal.
-    ///
-    /// `src` identifies the underlying audio source of the track that
-    /// just hit EOF. The player only emits `TrackPlaybackStopped` from
-    /// its natural-EOF path (`handle_eof`), so a non-empty `src` is the
-    /// authoritative end-of-track signal: advance unconditionally
-    /// (subject to crossfade pre-arm consumption).
-    ///
-    /// The empty-`src` arm preserves backward compatibility for
-    /// pre-PR-#64 callers and acts as a defensive fallback when the
-    /// player has not yet wired the src through; it falls back to the
-    /// pos/dur tolerance heuristic to filter spurious events.
-    pub(super) fn handle_item_did_play_to_end(&self, src: &Arc<str>) {
+    /// `item` is the player's verdict on which item in its arena ended.
+    /// The player drains every active slot, and one slot holds more than
+    /// one item, so an end says nothing on its own: an orphaned slot or
+    /// the outgoing half of a crossfade reports its own end while the
+    /// item being heard has minutes left. Only `Leading` advances.
+    pub(super) fn handle_item_did_play_to_end(&self, item: &ItemRole) {
+        let track = item.track();
         let snap = self.player.playback_snapshot();
         let pos = snap.map_or(0.0, |s| s.position());
         let dur = snap.map_or(0.0, |s| s.duration());
-        debug!(%src, pos, dur, "ItemDidPlayToEnd received");
+        debug!(%track, pos, dur, "ItemDidPlayToEnd received");
         if self.current().is_none() {
             self.bus.publish(QueueEvent::QueueEnded);
             return;
         }
         if self.is_paused() {
-            debug!(%src, pos, dur, "paused: not auto-advancing on ItemDidPlayToEnd");
+            debug!(%track, pos, dur, "paused: not auto-advancing on ItemDidPlayToEnd");
             return;
         }
-        let ended_id = self.track_id_for_src(src);
-        if self.consume_armed_advance(ended_id, pos, dur) {
+        if self.consume_armed_advance(track.id, pos, dur) {
             return;
         }
-        if src.is_empty() {
-            self.dispatch_real_or_spurious(pos, dur);
-        } else {
-            let _ = self.advance_to_next(Transition::Crossfade, AdvanceReason::NaturalEof);
+        if !item.is_leading() {
+            debug!(%track, pos, dur, ?item, "not the leading item: not advancing");
+            return;
         }
+        let _ = self.advance_to_next_inner(Transition::Crossfade, AdvanceReason::NaturalEof);
     }
 
     pub(super) fn process_player_event(&self, ev: &Event) {
         match ev {
-            Event::Player(PlayerEvent::ItemDidPlayToEnd { src, .. }) => {
-                self.handle_item_did_play_to_end(src);
+            Event::Player(PlayerEvent::ItemDidPlayToEnd { item }) => {
+                self.handle_item_did_play_to_end(item);
             }
-            Event::Player(PlayerEvent::ItemDidFail { src, .. }) => {
-                self.handle_item_did_fail(src);
+            Event::Player(PlayerEvent::ItemDidFail { item }) => {
+                self.handle_item_did_fail(item);
             }
             Event::Player(PlayerEvent::CurrentItemChanged) => {
                 self.handle_current_item_changed();
@@ -204,16 +180,6 @@ impl Queue {
             _ => {}
         }
     }
-
-    pub(super) fn track_id_for_src(&self, src: &str) -> Option<TrackId> {
-        self.lock_tracks().iter().find_map(|record| {
-            let matches = match &record.source {
-                TrackSource::Uri(uri) => uri == src,
-                TrackSource::Config(config) => config.source().to_string() == src,
-            };
-            matches.then_some(record.id)
-        })
-    }
 }
 
 #[cfg(test)]
@@ -226,7 +192,7 @@ mod tests {
     #[kithara::test(tokio)]
     async fn lagged_player_events_resynchronize_current_track() {
         let queue = make_queue();
-        let id = queue.register_for_test();
+        let id = queue.probe_register();
 
         for _ in 0..=DEFAULT_EVENT_BUS_CAPACITY {
             queue

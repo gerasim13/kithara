@@ -1,35 +1,34 @@
 use std::num::NonZeroUsize;
 
-use fast_interleave::deinterleave_variable;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::time::Duration;
-use kithara_stream::{ChunkPosition, PlayheadWrite};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView};
+use kithara_stream::PlayheadWrite;
 use kithara_test_utils::kithara;
 
 use super::{
-    ConsumerPhase, DecodeError, PendingReason, ReadOutcome,
+    ConsumerPhase, DecodeError, PendingReason, ReadOutcome, chunk_position,
     event::AudioEvents,
     ring::{RecvCtx, RingConsumer},
 };
 
 #[derive(Clone, Copy)]
 pub(super) struct CursorRead {
-    pub(super) last_output_meta: Option<PcmMeta>,
+    pub(super) last_output_meta: Option<AudioChunkInfo>,
     pub(super) outcome: ReadOutcome,
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct ChunkCursor {
-    interleaved: Option<PcmBuf>,
+    interleaved: Option<SampleBuffer>,
     #[field(get, vis = "pub(super)", copy)]
-    spec: PcmSpec,
+    spec: AudioSpec,
     current_chunk_consumed_frames: u64,
 }
 
 impl ChunkCursor {
-    pub(super) fn new(pool: &PcmPool, spec: PcmSpec) -> Self {
+    pub(super) fn new(pool: &SamplePool, spec: AudioSpec) -> Self {
         let channels = usize::from(spec.channels).max(2);
         let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
@@ -47,7 +46,7 @@ impl ChunkCursor {
         }
     }
 
-    pub(super) const fn begin_chunk(&mut self, chunk: &PcmChunk) {
+    pub(super) const fn begin_chunk(&mut self, chunk: &AudioChunk) {
         self.spec = chunk.spec();
         self.current_chunk_consumed_frames = 0;
     }
@@ -58,7 +57,7 @@ impl ChunkCursor {
 
     fn copy_into(
         &mut self,
-        chunk: &PcmChunk,
+        chunk: &AudioChunk,
         output: &mut [f32],
         playhead: &dyn PlayheadWrite,
     ) -> Result<CopyOutcome, DecodeError> {
@@ -89,7 +88,7 @@ impl ChunkCursor {
         self.current_chunk_consumed_frames = consumed_total;
         let finished = take_frames == remaining_frames;
         if finished {
-            playhead.advance(&ChunkPosition::from(&chunk.meta));
+            playhead.advance(&chunk_position(&chunk.meta));
         } else {
             playhead.advance_partial(interpolated_position(chunk.meta, consumed_total));
         }
@@ -114,7 +113,7 @@ impl ChunkCursor {
                 return Ok(eof(playhead));
             }
             ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::pcm_stream("cursor read", source));
+                return Err(DecodeError::audio_stream("cursor read", source));
             }
             _ => {}
         }
@@ -172,7 +171,7 @@ impl ChunkCursor {
         Ok(match ring.phase {
             ConsumerPhase::AtEof => eof(playhead),
             ConsumerPhase::Failed { source } => {
-                return Err(DecodeError::pcm_stream("cursor read", source));
+                return Err(DecodeError::audio_stream("cursor read", source));
             }
             ConsumerPhase::SeekPending { .. } => pending(playhead, PendingReason::SeekInProgress),
             _ => pending(playhead, PendingReason::Buffering),
@@ -188,11 +187,17 @@ impl ChunkCursor {
         output: &'a mut [&'a mut [f32]],
     ) -> Result<CursorRead, DecodeError> {
         let channels = output.len();
-        let Some(num_channels) = NonZeroUsize::new(channels) else {
+        if channels == 0 {
             return Ok(pending(playhead, PendingReason::Buffering));
-        };
+        }
         let frames = output[0].len();
-        let total_samples = frames * channels;
+        let total_samples =
+            frames
+                .checked_mul(channels)
+                .ok_or_else(|| DecodeError::SampleCountOverflow {
+                    frames: u64::try_from(frames).unwrap_or(u64::MAX),
+                    channels: u64::try_from(channels).unwrap_or(u64::MAX),
+                })?;
         let Some(mut interleaved) = self.interleaved.take() else {
             return Err(DecodeError::ScratchDetached);
         };
@@ -205,7 +210,12 @@ impl ChunkCursor {
                 if let ReadOutcome::Frames { count, position } = read.outcome {
                     let actual_frames = count.get() / channels;
                     debug_assert!(actual_frames <= frames);
-                    deinterleave_variable(&interleaved[..], num_channels, output, 0..actual_frames);
+                    let input = InterleavedView::new(
+                        &interleaved[..count.get()],
+                        self.spec,
+                        FrameCount::new(actual_frames),
+                    )?;
+                    input.deinterleave_channels_into(output)?;
                     read.outcome = NonZeroUsize::new(actual_frames).map_or(
                         ReadOutcome::Pending {
                             position,
@@ -233,7 +243,7 @@ fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
         .map_err(|_| DecodeError::SampleCountOverflow { frames, channels })
 }
 
-fn interpolated_position(meta: PcmMeta, consumed_frames: u64) -> Duration {
+fn interpolated_position(meta: AudioChunkInfo, consumed_frames: u64) -> Duration {
     let total_frames = u64::from(meta.frames).max(1);
     let start_ns = u64::try_from(meta.timestamp.as_nanos()).unwrap_or(u64::MAX);
     let end_ns = u64::try_from(meta.end_timestamp.as_nanos()).unwrap_or(u64::MAX);
@@ -267,8 +277,8 @@ fn eof(playhead: &dyn PlayheadWrite) -> CursorRead {
 mod tests {
     use std::{num::NonZeroU32, sync::atomic::AtomicU64};
 
-    use kithara_decode::{PcmMeta, PcmSpec};
     use kithara_platform::{sync::Arc, time::Duration};
+    use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
@@ -280,7 +290,7 @@ mod tests {
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let duration = Duration::from_nanos(36_360_000_000);
         let chunk = timed_chunk(
             spec,
@@ -288,11 +298,11 @@ mod tests {
             duration.saturating_sub(Duration::from_millis(2)),
             duration.saturating_add(Duration::from_millis(2)),
         );
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(4, None);
-        let (trash_tx, _trash_rx) = connect::<PcmChunk>(8, None);
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
+        let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
-            pcm_rx: data_rx,
+            audio_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
@@ -305,7 +315,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let pool = PcmPool::default();
+        let pool = SamplePool::default();
         let mut cursor = ChunkCursor::new(&pool, spec);
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
@@ -332,12 +342,12 @@ mod tests {
 
     #[kithara::test]
     fn read_buffer_shorter_than_frame_preserves_current_chunk() {
-        let spec = PcmSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
-        let (mut data_tx, data_rx) = connect::<Fetch<PcmChunk>>(1, None);
-        let (trash_tx, mut trash_rx) = connect::<PcmChunk>(3, None);
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
+        let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(1, None);
+        let (trash_tx, mut trash_rx) = connect::<AudioChunk>(3, None);
         let mut ring = RingConsumer::new(RingParts {
             trash_tx,
-            pcm_rx: data_rx,
+            audio_rx: data_rx,
             reader_wake: Arc::new(ThreadWake::default()),
             epoch: Arc::new(AtomicU64::new(0)),
             block_on_underrun: false,
@@ -350,7 +360,7 @@ mod tests {
                 0,
             ))
             .expect("chunk reaches test ring");
-        let pool = PcmPool::default();
+        let pool = SamplePool::default();
         let mut cursor = ChunkCursor::new(&pool, spec);
         let mut events = AudioEvents::test();
         let mut output = [0.0];
@@ -374,19 +384,19 @@ mod tests {
         assert!(trash_rx.try_pop().is_none());
     }
 
-    fn timed_chunk(spec: PcmSpec, frames: u32, start: Duration, end: Duration) -> PcmChunk {
+    fn timed_chunk(spec: AudioSpec, frames: u32, start: Duration, end: Duration) -> AudioChunk {
         let channels = usize::from(spec.channels.max(1));
         let frame_count = usize::try_from(frames).expect("test frame count fits usize");
         let samples = vec![0.5; frame_count * channels];
-        PcmChunk::new(
-            PcmMeta {
+        AudioChunk::new(
+            AudioChunkInfo {
                 spec,
                 timestamp: start,
                 end_timestamp: end,
                 frames,
                 ..Default::default()
             },
-            PcmPool::default().attach(samples),
+            SamplePool::default().attach(samples),
         )
     }
 }

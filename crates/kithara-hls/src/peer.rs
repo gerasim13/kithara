@@ -77,6 +77,12 @@ impl WorkerWake for PeerPollWake {
             peer.wake_poll();
         }
     }
+
+    fn defer(&self) {
+        if let Some(peer) = self.0.upgrade() {
+            peer.reader_advanced.arm();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -377,7 +383,7 @@ impl Peer for HlsPeer {
                 .broadcast_eviction(&outcome.ctx, &key, outcome.seg_at_reader);
         }
 
-        let mut cmds = Vec::new();
+        let mut cmds: Vec<FetchCmd> = Vec::new();
         if outcome.ctx.config.prefetch_budget > 0 {
             let has_incoming = outcome.coord.has_incoming();
             if has_incoming && outcome.ctx.config.prefetch_budget == 1 {
@@ -626,7 +632,7 @@ impl HlsTrackState {
     /// Drain the eviction channel into a local buffer so the broadcast
     /// can run after the state lock drops.
     fn drain_evictions(&mut self) -> Vec<ResourceKey> {
-        let mut out = Vec::new();
+        let mut out: Vec<ResourceKey> = Vec::new();
         while let Ok(key) = self.eviction_rx.try_recv() {
             out.push(key);
         }

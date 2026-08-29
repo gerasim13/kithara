@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kithara::{
-    audio::{Audio, AudioConfig},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioSession},
+    bufpool::Region,
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -10,7 +12,8 @@ use kithara::{
         time::Duration,
         tokio::task::{spawn, spawn_blocking},
     },
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    play::{PlayWorker, PlayWorkerConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     TestTempDir, abr_fast, auto,
@@ -98,6 +101,12 @@ async fn abr_auto_switch_during_playback(
     info!(%url, "HLS server ready with 2 variants");
 
     let cancel = CancelToken::never();
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let bus = EventBus::new(32);
     let switches = Arc::new(AtomicUsize::new(0));
@@ -122,7 +131,15 @@ async fn abr_auto_switch_during_playback(
     });
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .pool(worker.byte_pool().clone())
+                .build(),
+        )
+        .pool(worker.byte_pool().clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -133,12 +150,11 @@ async fn abr_auto_switch_during_playback(
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .events(bus)
         .media_info(wav_info)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
+    let mut audio = worker
+        .open(config)
         .await
         .expect("create Audio<Stream<Hls>>");
 

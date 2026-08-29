@@ -1,5 +1,5 @@
-use kithara_decode::{PcmChunk, PcmSpec};
 use kithara_platform::time::Duration;
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::StreamType;
 use num_traits::cast::ToPrimitive;
 use tracing::debug;
@@ -12,7 +12,7 @@ impl Consts {
     const NANOS_PER_SEC: u128 = 1_000_000_000;
 }
 
-pub(crate) fn duration(spec: PcmSpec, frames: usize) -> Duration {
+pub(crate) fn duration(spec: AudioSpec, frames: usize) -> Duration {
     let nanos = (frames as u128)
         .saturating_mul(Consts::NANOS_PER_SEC)
         .saturating_div(u128::from(spec.sample_rate.get()));
@@ -20,7 +20,7 @@ pub(crate) fn duration(spec: PcmSpec, frames: usize) -> Duration {
     Duration::from_nanos(nanos)
 }
 
-pub(crate) fn frames(spec: PcmSpec, duration: Duration) -> usize {
+pub(crate) fn frames(spec: AudioSpec, duration: Duration) -> usize {
     let frames = duration
         .as_nanos()
         .saturating_mul(u128::from(spec.sample_rate.get()))
@@ -55,10 +55,10 @@ pub(crate) fn estimate_target_byte<T: StreamType>(
 }
 
 pub(crate) fn apply(
-    mut chunk: PcmChunk,
+    mut chunk: AudioChunk,
     epoch: u64,
     resume: Option<&mut ResumeState>,
-) -> Option<PcmChunk> {
+) -> Option<AudioChunk> {
     let Some(resume) = resume else {
         return Some(chunk);
     };
@@ -93,7 +93,7 @@ pub(crate) fn apply(
     Some(chunk)
 }
 
-pub(crate) fn apply_frames(mut chunk: PcmChunk, remaining: &mut u64) -> Option<PcmChunk> {
+pub(crate) fn apply_frames(mut chunk: AudioChunk, remaining: &mut u64) -> Option<AudioChunk> {
     if *remaining == 0 {
         return Some(chunk);
     }
@@ -108,7 +108,7 @@ pub(crate) fn apply_frames(mut chunk: PcmChunk, remaining: &mut u64) -> Option<P
     Some(chunk)
 }
 
-fn trim_start(chunk: &mut PcmChunk, drop_frames: usize) {
+fn trim_start(chunk: &mut AudioChunk, drop_frames: usize) {
     let spec = chunk.spec();
     let channels = usize::from(spec.channels.max(1));
     let drop_samples = drop_frames.saturating_mul(channels);

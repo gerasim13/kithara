@@ -1,3 +1,4 @@
+#![cfg_attr(all(rtsan, not(rtsan_standalone)), feature(sanitize))]
 #![forbid(unsafe_code)]
 #![expect(
     clippy::unwrap_used,
@@ -13,6 +14,7 @@ mod gapless_common;
 
 mod browser_runner_smoke;
 mod events;
+mod kithara_analysis;
 mod kithara_assets;
 mod kithara_audio;
 mod kithara_bufpool;
@@ -54,6 +56,8 @@ mod kithara_file {
     mod html_error_cleanup;
     #[cfg(not(target_arch = "wasm32"))]
     mod resume_stall_budget;
+    #[cfg(not(target_arch = "wasm32"))]
+    mod seek_issues_range_request;
     #[cfg(not(target_arch = "wasm32"))]
     mod shared_download;
     #[cfg(not(target_arch = "wasm32"))]

@@ -65,7 +65,7 @@ impl FileSegmentIndex {
         let init_range = 0..first_moof_start;
 
         let total = u64::try_from(bytes.len()).ok()?;
-        let mut segments = Vec::with_capacity(mp4.moofs.len());
+        let mut segments: Vec<SegmentDescriptor> = Vec::with_capacity(mp4.moofs.len());
         let mut cumulative_decode_time: Option<u64> = None;
 
         for (idx, moof) in mp4.moofs.iter().enumerate() {

@@ -110,9 +110,9 @@ impl FileCoord {
     /// peer has landed in the asset store. Doubles as a USDT probe point
     /// (`#[kithara::probe]`) for download-progress observability.
     ///
-    /// The peer always fetches forward from the first gap, so this position is
-    /// the cached prefix — the playhead turns it into the timeline span a host
-    /// progress bar reads.
+    /// This is the write cursor of the running fetch, which after a seek
+    /// re-anchors on the new reader position — the playhead turns it into the
+    /// timeline span a host progress bar reads.
     #[kithara::probe(value)]
     pub(crate) fn set_download_pos(&self, value: u64) {
         if let Some(total) = self.total_bytes() {

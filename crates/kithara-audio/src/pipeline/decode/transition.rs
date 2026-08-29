@@ -1,14 +1,17 @@
 #[path = "transition_promotion.rs"]
 mod promotion;
 
-use kithara_decode::{DecoderChunkOutcome, PcmSpec, duration_for_frames, frames_for_duration};
+use std::num::NonZeroU32;
+
+use kithara_decode::DecoderChunkOutcome;
 use kithara_platform::time::Duration;
+use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{PendingReason, VariantTransition};
 use tracing::{debug, trace};
 
 use super::generation::DecoderGeneration;
 use crate::pipeline::{
-    blend::PcmBlender,
+    blend::GaplessBlender,
     rebuild::state::BuildId,
     seek::skip::{apply as apply_skip, apply_frames},
 };
@@ -97,7 +100,7 @@ enum PromotionJoin {
     Blend {
         frames: u64,
         outgoing_first: u64,
-        spec: PcmSpec,
+        spec: AudioSpec,
     },
 }
 
@@ -223,7 +226,7 @@ impl super::core::ActiveDecode {
     }
 
     #[cfg(test)]
-    pub(crate) fn incoming_staged_span(&self) -> Option<(u64, u64, PcmSpec)> {
+    pub(crate) fn incoming_staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
         let IncomingDecode::Priming { generation, .. } = self.incoming.as_ref()? else {
             return None;
         };
@@ -460,7 +463,7 @@ impl super::core::ActiveDecode {
 
 fn promotion_readiness(
     active: &DecoderGeneration,
-    blender: &PcmBlender,
+    blender: &GaplessBlender,
     generation: &DecoderGeneration,
     outgoing_frontier: OutgoingFrontier,
     outgoing_origin: u64,
@@ -619,9 +622,9 @@ fn resolve_frontier(
 
 fn same_spec_join(
     active: &DecoderGeneration,
-    blender: &PcmBlender,
+    blender: &GaplessBlender,
     generation: &DecoderGeneration,
-    spec: PcmSpec,
+    spec: AudioSpec,
     incoming_next: u64,
     outgoing_first: u64,
     outgoing_next: Duration,
@@ -701,11 +704,19 @@ fn staged_ahead(
 
 fn content_time(rate: u32, frame: u64, origin_rate: u32, origin: u64) -> Option<Duration> {
     if rate == origin_rate {
-        return frame
-            .checked_sub(origin)
-            .map(|frames| duration_for_frames(rate, frames));
+        let spec = timeline_spec(rate)?;
+        return frame.checked_sub(origin).map(|frames| {
+            spec.duration_for(frames)
+                .unwrap_or(Duration::from_nanos(u64::MAX))
+        });
     }
-    duration_for_frames(rate, frame).checked_sub(duration_for_frames(origin_rate, origin))
+    let frame_time = timeline_spec(rate)?
+        .duration_for(frame)
+        .unwrap_or(Duration::from_nanos(u64::MAX));
+    let origin_time = timeline_spec(origin_rate)?
+        .duration_for(origin)
+        .unwrap_or(Duration::from_nanos(u64::MAX));
+    frame_time.checked_sub(origin_time)
 }
 
 fn observed_frontier_is_later(
@@ -737,11 +748,21 @@ fn observed_frontier_is_later(
 }
 
 fn frame_at_or_after(rate: u32, origin: u64, time: Duration) -> Option<u64> {
-    let mut frame = u64::try_from(frames_for_duration(rate, time)).ok()?;
-    if duration_for_frames(rate, frame) < time {
+    let spec = timeline_spec(rate)?;
+    let frames = spec.frames_for(time).unwrap_or(FrameCount::new(usize::MAX));
+    let mut frame = u64::try_from(frames.get()).ok()?;
+    if spec
+        .duration_for(frame)
+        .unwrap_or(Duration::from_nanos(u64::MAX))
+        < time
+    {
         frame = frame.checked_add(1)?;
     }
     origin.checked_add(frame)
+}
+
+fn timeline_spec(sample_rate: u32) -> Option<AudioSpec> {
+    NonZeroU32::new(sample_rate).map(|sample_rate| AudioSpec::new(1, sample_rate))
 }
 
 fn trim_staged_head(generation: &mut DecoderGeneration, overlap: OverlapSpan) -> bool {

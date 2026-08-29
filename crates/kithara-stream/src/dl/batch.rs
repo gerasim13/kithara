@@ -211,7 +211,7 @@ impl BatchGroup {
             .max_concurrent
             .saturating_sub(inner.inflight.load(Ordering::Relaxed));
         let mut dispatched = 0;
-        let mut pending = Vec::new();
+        let mut pending: Vec<SlotEntry> = Vec::new();
         for SlotEntry { cmd, peer_cancel } in self.entries {
             if cmd.cancel.is_cancelled() {
                 deliver_cancelled_with_event(cmd, &peer_cancel);

@@ -1,5 +1,6 @@
 use kithara::{
     self,
+    bufpool::{BytePool, SamplePool},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest, normalize_flac_codec_config};
@@ -32,15 +33,17 @@ fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
         .container(ContainerFormat::Fmp4)
         .build();
 
-    let encoded = EncoderFactory::encode_packaged(PackagedEncodeRequest {
-        media_info,
-        pcm: &pcm,
-        timescale: SAMPLE_RATE,
-        bit_rate: 512_000,
-        packets_per_segment: 2,
-        encoder_delay: 0,
-        trailing_delay: 0,
-    })
+    let encoded = EncoderFactory::encode_packaged(
+        PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+            .media_info(media_info)
+            .pcm(&pcm)
+            .timescale(SAMPLE_RATE)
+            .bit_rate(512_000)
+            .packets_per_segment(2)
+            .encoder_delay(0)
+            .trailing_delay(0)
+            .build(),
+    )
     .unwrap_or_else(|error| panic!("encode_packaged(Flac) failed: {error}"));
 
     assert_eq!(encoded.media_info.codec, Some(AudioCodec::Flac));

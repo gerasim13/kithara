@@ -1,5 +1,6 @@
-use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass, PcmChunk};
+use kithara_decode::{DecodeError, DecoderChunkOutcome, ErrorClass};
 use kithara_events::{AudioEvent, DecoderEvent, SeekLifecycleStage, SegmentLocation};
+use kithara_signal::AudioChunk;
 use kithara_stream::{PendingReason, StreamType};
 use kithara_test_utils::kithara;
 
@@ -76,12 +77,6 @@ pub(crate) fn tick<T: StreamType>(
             {
                 return DecodeAction::StartRecreate(recreate);
             }
-            if let Some(chunk) = core.next_drain() {
-                return produced(chunk, epoch, &mut ctx);
-            }
-            if let Some(emit) = ctx.emit {
-                emit.enqueue(AudioEvent::EndOfStream.into());
-            }
             return DecodeAction::Eof;
         }
         match core.next_chunk(ctx.stream.position()) {
@@ -99,7 +94,7 @@ pub(crate) fn tick<T: StreamType>(
                     continue;
                 }
                 hang_reset!();
-                core.track(&chunk, ctx.playhead, ctx.emit);
+                core.track(&chunk, ctx.emit);
                 if let Err(error) = core.push(chunk) {
                     return decode_failed(core, error, &ctx);
                 }
@@ -154,7 +149,7 @@ fn decode_failed<T: StreamType>(
 }
 
 pub(crate) fn produced<T: StreamType>(
-    chunk: PcmChunk,
+    chunk: AudioChunk,
     epoch: u64,
     ctx: &mut DecodeCtx<'_, T>,
 ) -> DecodeAction {

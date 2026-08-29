@@ -1,10 +1,13 @@
 use std::{fs::File as FsFile, io::Write};
 
 use kithara::{
-    audio::{Audio, AudioConfig, ReadOutcome},
-    decode::PcmSpec,
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    bufpool::Region,
     file::{File, FileConfig, FileSrc},
     platform::{time::Duration, tokio::task::spawn_blocking},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
+    signal::AudioSpec,
     stream::Stream,
 };
 use kithara_integration_tests::{TestTempDir, Xorshift64, wav::create_test_wav};
@@ -22,10 +25,10 @@ struct SeekStats {
 }
 
 fn run_seek_iterations(
-    audio: &mut Audio<Stream<File>>,
+    audio: &mut RegisteredAudio<Stream<File>>,
     buf: &mut [f32],
     seek_positions: &[f64],
-    spec: PcmSpec,
+    spec: AudioSpec,
 ) -> SeekStats {
     let SeekStats {
         mut successful_reads,
@@ -102,7 +105,7 @@ fn run_seek_iterations(
 }
 
 fn read_final_tail(
-    audio: &mut Audio<Stream<File>>,
+    audio: &mut RegisteredAudio<Stream<File>>,
     buf: &mut [f32],
     final_seek_secs: f64,
 ) -> (u64, bool) {
@@ -167,17 +170,25 @@ async fn stress_random_seek_read_synthetic_wav() {
     .expect("write WAV data");
 
     let cache = TestTempDir::new();
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let file_config = FileConfig::for_src(FileSrc::Local(tmp.path().to_path_buf()))
-        .store(kithara_integration_tests::disk_asset_store(cache.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: cache.path().into(),
+                })
+                .pool(byte_pool.clone())
+                .build(),
+        )
+        .pool(byte_pool.clone())
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint("wav".to_string())
         .build();
-    let mut audio = Audio::<Stream<File>>::new(config)
-        .await
-        .expect("create audio pipeline");
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let mut audio = worker.open(config).await.expect("create audio pipeline");
 
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();

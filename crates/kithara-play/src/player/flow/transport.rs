@@ -1,12 +1,14 @@
 use std::sync::atomic::Ordering;
 
 use kithara_audio::SeekOutcome;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
+#[cfg(test)]
 use super::super::core::PlayerImpl;
+use super::super::core::PlayerRuntime;
 use crate::{
-    api::{PlayerEvent, PlayerStatus},
+    api::{PlayerStatus, TrackId},
     bridge::{PlayerCmd, TrackTransition},
     error::PlayError,
 };
@@ -20,14 +22,7 @@ pub struct SelectTransition {
     pub crossfade_seconds: f32,
 }
 
-impl PlayerImpl {
-    /// Apply autoplay: resume at the default rate (and move to `Playing`) or
-    /// hold at rate 0 (and move to `Paused`).
-    ///
-    /// Resuming goes through [`Self::set_rate`] rather than a bare value
-    /// store: the default rate has to reach the stretch slot and the
-    /// processor's media clock, or the player reports a rate it is not
-    /// playing at.
+impl PlayerRuntime {
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
@@ -35,13 +30,8 @@ impl PlayerImpl {
             self.enter_playing();
             self.set_status(PlayerStatus::ReadyToPlay);
         } else {
-            self.core.params.set_paused_rate();
             let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
             self.enter_paused();
-            self.core
-                .engine
-                .bus()
-                .publish(PlayerEvent::RateChanged { rate: 0.0 });
         }
     }
 
@@ -65,30 +55,24 @@ impl PlayerImpl {
     /// processor and the item is not current.
     fn load_current_item(&self) -> bool {
         let index = self.current_index();
-        let Some((src, duration_seconds)) = self.enqueue_to_processor(index) else {
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index) else {
             return false;
         };
         self.publish_current_track_snapshot(duration_seconds);
-        self.start_playback(src);
+        self.start_playback(item_id);
         true
     }
 
-    /// Pause playback (sets rate to 0.0).
+    /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
     pub fn pause(&self) {
-        self.core.params.set_paused_rate();
         let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
         self.enter_paused();
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate: 0.0 });
         debug!(phase = ?self.phase_kind(), "pause");
     }
 
-    /// Start playback at the configured default rate.
+    /// Start playback from the configured default-rate target.
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.params.set_rate_value(rate);
         self.core.timestretch.set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
@@ -116,10 +100,6 @@ impl PlayerImpl {
         if loaded {
             self.announce_current_item(self.current_index());
         }
-        self.core
-            .engine
-            .bus()
-            .publish(PlayerEvent::RateChanged { rate });
         debug!(rate, phase = ?self.phase_kind(), "play");
     }
 
@@ -240,6 +220,10 @@ impl PlayerImpl {
             return Err(PlayError::ItemConsumed { index });
         }
 
+        if autoplay {
+            self.core.timestretch.set_speed(self.default_rate());
+        }
+
         self.ensure_engine_started()?;
         self.ensure_slot()?;
 
@@ -259,28 +243,41 @@ impl PlayerImpl {
         Ok(())
     }
 
-    pub(crate) fn start_playback(&self, src: Arc<str>) {
-        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(src)));
+    pub(crate) fn start_playback(&self, item_id: TrackId) {
+        let _ = self.send_to_slot(PlayerCmd::Transition(TrackTransition::FadeIn(item_id)));
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::player::PlayerConfig;
+    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
+
+    fn player() -> PlayerImpl {
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+        );
+        PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .session(testing::test_session())
+                .build(),
+        )
+    }
 
     #[kithara::test]
     fn seek_seconds_without_slot_returns_not_ready() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = player();
         let err = player.seek_seconds(1.0).expect_err("must error");
         assert!(matches!(err, PlayError::NotReady));
     }
 
     #[kithara::test]
     fn select_item_out_of_range_returns_typed_error() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = player();
         let err = player
             .select_item_with_crossfade(
                 5,
@@ -302,7 +299,7 @@ mod tests {
     /// `CurrentItemChanged` while the old audio keeps playing.
     #[kithara::test]
     fn select_item_on_consumed_slot_errors_without_bookkeeping() {
-        let player = PlayerImpl::new(PlayerConfig::test_builder().build());
+        let player = player();
         player.reserve_slots(2);
         let result = player.select_item_with_crossfade(
             1,

@@ -2,12 +2,12 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
-    audio::{Audio, AudioConfig, AudioWorkerHandle},
+    audio::AudioConfig,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
-    platform::{CancelToken, sync::Arc, time::Duration},
-    play::Resource,
-    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+    platform::{sync::Arc, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig, Resource},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::offline::resource_from_reader;
 use tracing::info;
@@ -56,37 +56,35 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
         ..Default::default()
     })
     .await;
+    let byte_pool = kithara::bufpool::BytePool::default();
+    let sample_pool = kithara::bufpool::SamplePool::default();
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .cache_capacity(std::num::NonZeroUsize::new(4).expect("nonzero"))
         .max_assets(8)
         .build();
     let hls_url = hls_server.url("/master.m3u8");
 
-    let worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, sample_pool).build());
     let mut player = OfflinePlayer::new(Consts::SR);
 
     let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
 
-    let make_mp3 = |w: AudioWorkerHandle| {
+    let make_mp3 = |w: PlayWorker| {
         let p = local_mp3.clone();
         let store = store.clone();
         async move {
             let file_cfg = FileConfig::for_src(FileSrc::Local(p)).store(store).build();
             let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .hint("mp3".to_string())
-                .worker(w)
                 .build();
-            let audio = Audio::<Stream<FileSource>>::new(audio_cfg)
-                .await
-                .expect("create local MP3 audio");
+            let audio = w.open(audio_cfg).await.expect("create local MP3 audio");
             resource_from_reader(audio)
         }
     };
 
-    let make_hls = |w: AudioWorkerHandle, s: AssetStore| {
+    let make_hls = |w: PlayWorker, s: AssetStore| {
         let u = hls_url.clone();
         async move {
             let wav_info = MediaInfo::builder()
@@ -95,14 +93,9 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
                 .build();
             let cfg = HlsConfig::for_url(u).store(s).build();
             let audio_cfg = AudioConfig::<Hls>::for_stream(cfg)
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
                 .media_info(wav_info)
-                .worker(w)
                 .build();
-            let audio = Audio::<Stream<Hls>>::new(audio_cfg)
-                .await
-                .expect("create HLS audio");
+            let audio = w.open(audio_cfg).await.expect("create HLS audio");
             let mut r: Resource = resource_from_reader(audio);
             time::timeout(Consts::READ_TIMEOUT, r.preload())
                 .await

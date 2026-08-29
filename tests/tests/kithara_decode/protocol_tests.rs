@@ -2,8 +2,9 @@ use std::io::Cursor;
 
 use kithara::{
     self,
-    decode::{Decoder, DecoderConfig, DecoderFactory, PcmChunk},
+    decode::{Decoder, DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -35,7 +36,7 @@ impl Backend {
         let source = Cursor::new(bytes);
         let config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .backend(self.to_choice())
             .build();
         DecoderFactory::create_from_media_info(source, info, config)
@@ -201,7 +202,7 @@ fn seek_then_first_chunk_timestamp_is_after_target() {
         let mut dec = backend.make_mp3();
         dec.seek(TARGET).expect("seek should succeed");
         let outcome = dec.next_chunk().expect("next_chunk after seek");
-        let chunk = PcmChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
+        let chunk = AudioChunk::try_from(outcome).expect("at least one chunk after a 0.5s seek");
 
         let ts = chunk.meta.timestamp;
         assert!(

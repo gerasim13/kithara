@@ -30,7 +30,7 @@ locality and add jitter to latency-critical code.
 The fix is usually one of:
 - Hoist the allocation out of the loop.
 - Reuse a buffer (`Vec::clear()` + `extend(...)` or `write!(&mut buf, ...)`).
-- Use a pool — `kithara_bufpool::{BytePool, PcmPool}` for byte/PCM buffers.
+- Use a pool - `kithara_bufpool::{BytePool, SamplePool}` for byte/sample buffers.
 - Pre-size once with `Vec::with_capacity(N)` outside the loop so growth is amortised.
 
 ❌  for sample in chunk.frames() { let label = format!(\"frame-{}\", sample.id); log_debug(&label); }

@@ -5,16 +5,23 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
-    audio::{Bucket, analysis::BeatAnalysisConfig},
-    bufpool::{BytePool, PcmPool},
+    analysis::{BeatAnalysisConfig, Bucket},
+    bufpool::{BytePool, SamplePool},
     platform::{CancelToken, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig},
     prelude::ResourceConfig,
 };
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
 use kithara_integration_tests::{
     SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, memory_asset_store,
 };
+
+/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
+/// nothing is resampled on the way in.
+const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 
 fn silence_wav_spec() -> SignalSpec {
     SignalSpec {
@@ -24,6 +31,10 @@ fn silence_wav_spec() -> SignalSpec {
         sample_rate: 44_100,
         bit_rate: None,
     }
+}
+
+fn worker() -> PlayWorker {
+    PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build())
 }
 
 /// Run one analysis through the production runner and await its result.
@@ -36,9 +47,9 @@ async fn run_analysis(
         master,
         buckets,
         BeatAnalysisConfig::default(),
-        PcmPool::default(),
+        SamplePool::default(),
     );
-    let mut rx = runner.analyze(config);
+    let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).
     let mut last = None;
@@ -56,8 +67,7 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
         ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
     .store(memory_asset_store())
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker())
     .build();
 
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
@@ -91,8 +101,7 @@ async fn runner_returns_nothing_when_cancelled_upfront() {
         ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
     .store(memory_asset_store())
-    .byte_pool(BytePool::default())
-    .pcm_pool(PcmPool::default())
+    .worker(worker())
     .build();
 
     let master = CancelToken::never();

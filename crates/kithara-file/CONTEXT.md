@@ -38,6 +38,41 @@ in-flight fetches.
   resource total. If a server ignores the initial bounded range and returns a full `200` without
   `Content-Range`, that full response's `Content-Length` is the resource total.
 
+## Fetch targeting
+
+`FilePeer` targets one fetch at a time, and it targets it at the reader cursor
+(`kithara_stream::Source::position`). `Stream<File>::probe_seek` moves that cursor and arms the
+peer precisely so the peer re-targets around the new position.
+
+- The next fetch starts at the first gap **at or after** the cursor. Only when nothing is missing
+  ahead of the cursor does the peer fall back to the first gap from byte 0. That second lookup is
+  not a state-resolution fallback: both lookups are correct answers to different questions, and the
+  order is the priority. The listener is blocked on the bytes under the cursor, so those come
+  first; the earlier span still has to land for the resource to commit, so it is filled next. Drop
+  the cursor lookup and a forward seek waits for the whole skipped span; drop the byte-0 lookup and
+  a seeked-over span never lands and the resource never commits.
+- A fetch streams forward from where it started, so a cursor that sits inside the fetch's span
+  past the bytes it has landed can no longer be served by it — that fetch would deliver the whole
+  skipped span first. The peer cancels it. Stored bytes decide where the fetch has got to (the
+  first gap at or after its start), not a write offset the fetch publishes: that offset lands
+  after `write_at`, and the landing is what wakes the reader, so a reader that consumed the bytes
+  in between sat ahead of the offset without being ahead of the fetch and got its own fetch
+  cancelled. Cancellation relinquishes the writer epoch, the completion path wakes the peer, and
+  the next plan re-elects a writer and anchors on the new cursor. A fetch whose span ends before
+  the cursor is a backfill: it starts behind the cursor by construction and never promised it
+  anything, so it runs to completion.
+- A plan that finds no gap over a known extent commits the resource from the peer. A cancelled
+  fetch relinquishes without committing, and when it had already landed everything its replacement
+  has nothing to fetch; parking there would leave every consumer waiting on a complete resource.
+- The cursor steers nothing until the resource extent is known, and nothing once it sits outside
+  it. A range request needs an extent: before the first response answers how long the resource is,
+  a cursor past the end is indistinguishable from one inside it, and anchoring there would both ask
+  for bytes that do not exist and cancel the one request that reports the real length. Both cases
+  leave the head fetch to establish the resource. This is why a seek past the end of a not-yet-sized
+  resource still terminates.
+- Because fetches follow the cursor, stored bytes are sparse and `FileCoord::set_download_pos`
+  reports the running fetch's write cursor, not a contiguous prefix.
+
 ## Sources
 
 `FileSrc::Local(path)` requires an existing absolute path, opens it through `AssetStore` with an
@@ -85,8 +120,9 @@ derived artifacts while the original media file stays untouched. `FileSrc::Remot
 - Each fetch uses a child of the writer cancel token. Source cancellation cancels only that fetch
   child; the peer holds non-owning wake guards for both source and session cancellation. Either
   cancellation wakes a parked peer before its next readiness check. Session cancellation ends the
-  peer and forbids writer re-election, while source cancellation relinquishes only this source's
-  epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
+  peer and forbids writer re-election. Source cancellation that races after a valid response has
+  landed every advertised byte commits the canonical resource; otherwise it relinquishes only this
+  source's epoch. `NetError::Cancelled` never emits `FileEvent::Error`. A fatal error, or an initial
   zero-progress error, fails the current epoch. Other transient completions keep partial coverage
   active, but may commit when every advertised byte already landed. Late stale callbacks cannot
   write, commit, fail, or publish File events for a successor. The peer clears its in-flight flag

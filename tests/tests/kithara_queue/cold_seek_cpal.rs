@@ -3,18 +3,19 @@
 use kithara::{
     decode::DecoderBackend,
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         sync::Arc,
-        time::{Duration, Instant, timeout},
+        time::{self, Duration, Instant, timeout},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_integration_tests::{kithara, temp_dir, waits::wait_for_position_at_least};
+use kithara_integration_tests::{kithara, temp_dir};
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -30,7 +31,7 @@ fn install_tracing() {
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl,
     id: TrackId,
     target: TrackStatus,
     deadline: Duration,
@@ -60,6 +61,26 @@ async fn wait_for_status(
         }
     }
     Err("timeout".into())
+}
+
+async fn wait_for_position_at_least(
+    queue: &QueueControl,
+    target: f64,
+    deadline: Duration,
+) -> Result<f64, String> {
+    let start = Instant::now();
+    while start.elapsed() < deadline {
+        if let Some(position) = queue.position_seconds()
+            && position >= target
+        {
+            return Ok(position);
+        }
+        time::sleep(Duration::from_millis(50)).await;
+    }
+    Err(format!(
+        "position did not reach {target:.2}s within {deadline:?}; last={:?}",
+        queue.position_seconds()
+    ))
 }
 
 /// Real-network reproduction against silvercomet's HLS — the exact
@@ -94,13 +115,17 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
     );
 
-    let player = Arc::new(PlayerImpl::new(
-        PlayerConfig::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .build(),
-    ));
-    let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(
+            kithara::bufpool::BytePool::default(),
+            kithara::bufpool::SamplePool::default(),
+        )
+        .build(),
+    );
+    let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
+    let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+    let queue = Queue::new(QueueConfig::builder().player(player).build());
+    let queue = Arc::new(host.insert(queue).expect("attach queue to playback host"));
     queue.set_volume(kithara_integration_tests::e2e::volume());
 
     let queue_for_tick = Arc::clone(&queue);
@@ -115,8 +140,6 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
 
     let cfg =
         ResourceConfig::for_src(ResourceConfig::parse_src(URL).expect("valid silvercomet URL"))
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store)
             .decoder(
@@ -128,10 +151,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();
-    let id = queue.append(source);
+    let id = queue.append(source).expect("append silvercomet HLS track");
     wait_for_status(
         &mut rx,
-        &queue,
+        queue.control(),
         id,
         TrackStatus::Loaded,
         Duration::from_secs(30),
@@ -142,7 +165,7 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     queue.select(id, Transition::None).expect("select");
     queue.play();
 
-    let pos_before = wait_for_position_at_least(&queue, 2.0, Duration::from_secs(45))
+    let pos_before = wait_for_position_at_least(queue.control(), 2.0, Duration::from_secs(45))
         .await
         .expect("silvercomet track never played past 2s");
     eprintln!("[silvercomet] pre-seek pos={pos_before:.3}s");
@@ -234,6 +257,9 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     );
 
     tick_handle.abort();
+    let _ = tick_handle.await;
+    host.remove(queue.as_ref())
+        .expect("detach queue from playback host");
     drop(queue);
     drop(downloader);
     drop(temp);

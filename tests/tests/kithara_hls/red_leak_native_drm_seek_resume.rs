@@ -4,13 +4,15 @@ use std::{error::Error as StdError, num::NonZeroUsize};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, AudioWorkerHandle, ChunkOutcome, PcmControl, PcmRead, PcmSession},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    bufpool::Region,
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
         time::{self, Duration},
     },
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::{
         Stream,
         dl::{Downloader, DownloaderConfig},
@@ -25,10 +27,10 @@ impl Consts {
     const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
 }
 
-async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
+async fn next_chunk_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &str) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) | Ok(ChunkOutcome::Eof { .. }) => return,
             Ok(ChunkOutcome::Pending { .. }) => {}
             Err(e) => panic!("next_chunk decode error at `{label}`: {e}"),
@@ -41,43 +43,40 @@ async fn next_chunk_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
     }
 }
 
-async fn preload_or_timeout(audio: &mut Audio<Stream<Hls>>, label: &str) {
-    if let Some(gate) = PcmSession::preload_gate(audio) {
+async fn preload_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &str) {
+    if let Some(gate) = AudioSession::preload_gate(audio) {
         time::timeout(Duration::from_secs(3), gate.wait())
             .await
             .unwrap_or_else(|_| panic!("preload timeout at `{label}`"));
     }
 
-    PcmControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
+    AudioControl::preload(audio).unwrap_or_else(|err| panic!("preload failed at `{label}`: {err}"));
 }
 
 async fn run_drm_seek_resume_cycle(
     server: &TestServerHelper,
     downloader: &Downloader,
-    shared_worker: &AudioWorkerHandle,
+    shared_worker: &PlayWorker,
     iter_idx: usize,
 ) {
     let url = server.asset("drm/master.m3u8");
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(shared_worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(shared_worker.byte_pool().clone())
         .downloader(downloader.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut audio = Audio::<Stream<Hls>>::new(
-        AudioConfig::<Hls>::for_stream(hls_config)
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
-            .worker(shared_worker.clone())
-            .build(),
-    )
-    .await
-    .expect("audio creation");
+    let mut audio = shared_worker
+        .open(AudioConfig::<Hls>::for_stream(hls_config).build())
+        .await
+        .expect("audio creation");
     preload_or_timeout(&mut audio, &format!("iter_{iter_idx}_preload")).await;
 
     for w in 0..4 {
@@ -107,7 +106,7 @@ async fn run_drm_seek_resume_cycle(
 }
 
 /// RED test: after N DRM+seek+resume cycles against a shared Downloader
-/// and shared `AudioWorkerHandle`, the count of kithara-named threads must
+/// and shared `PlayWorker`, the count of kithara-named threads must
 /// be bounded. Each iteration leaks at most a constant number of threads;
 /// iteration-over-iteration growth indicates a real thread/task leak tied
 /// to the DRM seek path.
@@ -120,12 +119,23 @@ async fn run_drm_seek_resume_cycle(
 async fn red_leak_native_drm_seek_resume_thread_budget()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServerHelper::new().await;
-    let shared_worker = AudioWorkerHandle::with_cancel(CancelToken::never());
+    let cancel = CancelToken::never();
+    let region = Region::default();
+    let shared_worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+            .cancel(cancel.clone())
+            .build(),
+    );
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(CancelToken::never())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::builder()
+                .byte_pool(shared_worker.byte_pool().clone())
+                .build(),
+            cancel.clone(),
+        ))
+        .cancel(cancel)
+        .build(),
     );
 
     run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, 0).await;
@@ -159,6 +169,6 @@ async fn red_leak_native_drm_seek_resume_thread_budget()
         threads_after,
     );
 
-    shared_worker.shutdown();
+    drop(shared_worker);
     Ok(())
 }

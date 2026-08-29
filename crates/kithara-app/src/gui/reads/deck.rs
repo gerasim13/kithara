@@ -1,4 +1,4 @@
-use kithara::audio::effects::eq::GainDb;
+use kithara::play::effects::eq::GainDb;
 use kithara_ui::render::{Node, ReadValue, Scope, WaveformView};
 use num_traits::cast::AsPrimitive;
 
@@ -119,6 +119,7 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
                 buckets: &self.cache.wave,
                 beats: &self.ui.beat_marks,
                 downbeats: &self.ui.downbeat_marks,
+                unready: &self.ui.unready_ranges,
                 bpm: analysis_bpm(self.ui),
                 r#loop: None,
                 cues: &[],

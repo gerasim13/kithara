@@ -3,10 +3,12 @@ use std::num::NonZeroUsize;
 use kithara::{
     self,
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use url::Url;
@@ -24,26 +26,31 @@ async fn the_production_client_plays_the_stopped_broadcast() {
     origin.advance_to(SEGMENTS).await;
     origin.handle.stop();
 
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .build();
     let master = Url::parse(origin.handle.url()).expect("the handle reports a URL");
     let hls_config = HlsConfig::for_url(master)
         .store(store)
+        .pool(byte_pool.clone())
         .cancel(CancelToken::never())
         .build();
     let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
         .build();
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
 
-    let mut audio = Audio::<Stream<Hls>>::new(audio_config)
+    let mut audio = worker
+        .open(audio_config)
         .await
         .expect("open the stopped broadcast as HLS");
     audio.preload().expect("preload the VOD tail");
@@ -64,7 +71,7 @@ async fn the_production_client_plays_the_stopped_broadcast() {
     );
 }
 
-fn read_left_channel(audio: &mut Audio<Stream<Hls>>, samples: usize) -> Vec<f32> {
+fn read_left_channel(audio: &mut RegisteredAudio<Stream<Hls>>, samples: usize) -> Vec<f32> {
     let channels = usize::from(audio.spec().channels);
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut left = Vec::new();

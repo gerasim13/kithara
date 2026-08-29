@@ -1,10 +1,8 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_decode::{
-    DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode, PcmChunk, duration_for_frames,
-    frames_for_duration,
-};
+use kithara_decode::{DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
 use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
+use kithara_signal::AudioChunk;
 use kithara_stream::{
     AudioCodec, ContainerFormat, MediaInfo, OutgoingDisposition, VariantPromotion,
     VariantReaderPlan, VariantTransition, VariantTransitionId,
@@ -13,9 +11,8 @@ use kithara_test_utils::kithara;
 
 use super::rebuild::{
     Consts, RouteFixture, TestDecoder, media_info, produced_data, route_signal_source,
-    route_signal_source_with_effects, route_signal_source_with_finite_incoming,
-    route_signal_source_with_gapless, route_signal_source_with_gapless_eof,
-    route_signal_source_with_gaps,
+    route_signal_source_with_finite_incoming, route_signal_source_with_gapless,
+    route_signal_source_with_gapless_eof, route_signal_source_with_gaps,
 };
 use crate::{
     pipeline::{
@@ -23,41 +20,8 @@ use crate::{
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
         track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
     },
-    renderer::AudioWorkerSource,
-    traits::AudioEffect,
+    traits::{AudioSource, AudioSourceExt},
 };
-
-struct BufferThenHalveFrames {
-    buffered: bool,
-}
-
-impl AudioEffect for BufferThenHalveFrames {
-    fn flush(&mut self) -> Option<PcmChunk> {
-        None
-    }
-
-    fn process(&mut self, mut chunk: PcmChunk) -> Option<PcmChunk> {
-        if !self.buffered {
-            self.buffered = true;
-            return None;
-        }
-        let frames = chunk.meta.frames / 2;
-        let samples = usize::try_from(frames)
-            .ok()?
-            .checked_mul(usize::from(chunk.meta.spec.channels))?;
-        chunk.samples.truncate(samples);
-        chunk.meta.frames = frames;
-        chunk.meta.end_timestamp = duration_for_frames(
-            chunk.meta.spec.sample_rate.get(),
-            chunk.meta.frame_offset.saturating_add(u64::from(frames)),
-        );
-        Some(chunk)
-    }
-
-    fn reset(&mut self) {
-        self.buffered = false;
-    }
-}
 
 fn incoming_plan() -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -66,14 +30,21 @@ fn incoming_plan() -> VariantReaderPlan {
 
 fn incoming_plan_at(frame: u64) -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
-    request_incoming_plan_at(&abr, duration_for_frames(Consts::SAMPLE_RATE, frame))
+    request_incoming_plan_at(
+        &abr,
+        Consts::spec(Consts::SAMPLE_RATE)
+            .duration_for(frame)
+            .expect("incoming fixture landing fits Duration"),
+    )
 }
 
 fn abandoned_incoming_plan_at(frame: u64) -> VariantReaderPlan {
     let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
     request_incoming_plan_with_disposition(
         &abr,
-        duration_for_frames(Consts::SAMPLE_RATE, frame),
+        Consts::spec(Consts::SAMPLE_RATE)
+            .duration_for(frame)
+            .expect("abandoned fixture landing fits Duration"),
         OutgoingDisposition::Abandoned,
     )
 }
@@ -115,7 +86,7 @@ fn request_incoming_plan_with_disposition(
     VariantReaderPlan::new(transition, media_info(1), landing)
 }
 
-fn assert_route_signal(chunk: &PcmChunk, expected_offset: u64) {
+fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
     assert_eq!(chunk.meta.frame_offset, expected_offset);
     for (frame, samples) in chunk.samples.chunks_exact(2).enumerate() {
         let absolute = expected_offset.saturating_add(u64::try_from(frame).unwrap_or(u64::MAX));
@@ -270,36 +241,48 @@ async fn exact_incoming_build_pending_keeps_outgoing_pcm_running() {
 }
 
 #[kithara::test(tokio)]
-async fn raw_decode_head_ignores_buffering_and_frame_changing_effect_output() {
-    let effect = BufferThenHalveFrames { buffered: false };
-    let mut fixture =
-        route_signal_source_with_effects(Consts::SAMPLE_RATE, vec![Box::new(effect)]).await;
+async fn raw_decode_head_is_independent_of_downstream_frame_shape() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
 
-    let TrackStep::Produced(fetch) = fixture.source.step_track() else {
-        panic!("the second raw chunk must pass the buffering effect");
+    let TrackStep::Produced(first) = fixture.source.step_track() else {
+        panic!("raw source must produce its first chunk");
     };
-    let output = produced_data(fetch);
+    let _ = produced_data(first);
+    let TrackStep::Produced(second) = fixture.source.step_track() else {
+        panic!("raw source must produce its second chunk");
+    };
+    let mut transformed = produced_data(second);
+    transformed.meta.frames /= 2;
+    let samples = usize::try_from(transformed.meta.frames)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(usize::from(transformed.meta.spec.channels));
+    transformed.samples.truncate(samples);
+
     let epoch = fixture.source.seek_obs.epoch();
     let raw_head = fixture
         .source
         .resume
         .decode_head(epoch)
         .expect("raw decode must advance the sole resume cursor");
-    let effect_head = output
+    let transformed_end = transformed
         .meta
         .frame_offset
-        .saturating_add(u64::from(output.meta.frames));
+        .saturating_add(u64::from(transformed.meta.frames));
     let raw_frames =
         u64::try_from(Consts::ROUTE_CHUNK_FRAMES.saturating_mul(2)).unwrap_or(u64::MAX);
 
     assert_eq!(raw_head, (raw_frames, Consts::SAMPLE_RATE));
-    assert_ne!(raw_head.0, effect_head);
+    assert_ne!(raw_head.0, transformed_end);
     assert_eq!(
         fixture.source.decode.landing_for(OutgoingFrontier::Exact {
             frame: raw_head.0,
             rate: raw_head.1,
         }),
-        Some(duration_for_frames(Consts::SAMPLE_RATE, raw_frames))
+        Some(
+            Consts::spec(Consts::SAMPLE_RATE)
+                .duration_for(raw_frames)
+                .expect("raw fixture landing fits Duration"),
+        )
     );
 }
 
@@ -389,10 +372,12 @@ async fn same_spec_priming_retains_the_full_join_after_the_emitted_frontier() {
         .meta
         .frame_offset
         .saturating_add(u64::from(chunk.meta.frames));
-    let join_frames = u64::try_from(frames_for_duration(
-        Consts::SAMPLE_RATE,
-        Duration::from_millis(20),
-    ))
+    let join_frames = u64::try_from(
+        Consts::spec(Consts::SAMPLE_RATE)
+            .frames_for(Duration::from_millis(20))
+            .expect("join fixture duration fits frame count")
+            .get(),
+    )
     .unwrap_or(u64::MAX);
     let (retained_first, retained_end, retained_spec) = fixture
         .source
@@ -474,7 +459,11 @@ async fn retained_reader_plan_keeps_promotion_cut_open_before_decoder_build() {
     assert!(fixture.source.decode.incoming_is_preparing(transition));
     assert_eq!(
         fixture.control.landing(),
-        Some(duration_for_frames(Consts::SAMPLE_RATE, cut))
+        Some(
+            Consts::spec(Consts::SAMPLE_RATE)
+                .duration_for(cut)
+                .expect("retained fixture landing fits Duration"),
+        )
     );
     assert_eq!(
         fixture.source.decode.incoming_frontier(),
@@ -503,10 +492,15 @@ async fn finite_incoming_latches_cut_while_outgoing_fills_the_join_tail() {
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
     assert!(fixture.source.decode.active().staged_span().is_none());
     let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
-    let incoming_first = u64::try_from(frames_for_duration(
-        Consts::SAMPLE_RATE,
-        duration_for_frames(Consts::SAMPLE_RATE, cut),
-    ))
+    let spec = Consts::spec(Consts::SAMPLE_RATE);
+    let incoming_first = u64::try_from(
+        spec.frames_for(
+            spec.duration_for(cut)
+                .expect("finite fixture cut fits Duration"),
+        )
+        .expect("finite fixture landing fits frame count")
+        .get(),
+    )
     .unwrap_or(u64::MAX);
     assert_eq!(incoming_first, 255);
     assert!(incoming_first < cut);
@@ -614,7 +608,9 @@ async fn abandoned_incoming_hard_cuts_without_outgoing_join_pcm() {
     assert_eq!(produced_data(first_outgoing).meta.frame_offset, 0);
     assert!(fixture.source.decode.active().staged_span().is_none());
     let cut = u64::try_from(Consts::ROUTE_CHUNK_FRAMES).unwrap_or(u64::MAX);
-    let landing = duration_for_frames(Consts::SAMPLE_RATE, cut);
+    let landing = Consts::spec(Consts::SAMPLE_RATE)
+        .duration_for(cut)
+        .expect("abandoned fixture landing fits Duration");
     let plan = abandoned_incoming_plan_at(cut);
     let transition = plan.transition();
     assert_eq!(

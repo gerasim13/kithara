@@ -120,7 +120,7 @@ audio-artifacts OUTPUT:
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-integration-tests --test suite_light \
         --run-ignored=only \
-        -E 'test(=kithara_audio::no_sync_passthrough::record_no_sync_unity_playback_artifacts)'
+        -E 'test(/kithara_audio::no_sync_passthrough::record_no_sync_(unity_playback|active_keylock)_artifacts/)'
     KITHARA_AUDIO_ARTIFACT_DIR="$output" \
       just test run -p kithara-integration-tests --test suite_heavy \
         --run-ignored=only \
@@ -352,7 +352,9 @@ rtsan-async FILTER="no_block": (_rtsan "suite_light" "no-block" FILTER ".config/
 
 # `rt_metrics` drives `process()` directly: decode error, underrun, eviction,
 # and the on-core seek re-base. `mix_tap` drives the post-limiter PCM sink.
-rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap": (_rtsan "suite_light" "apple-fused-src" FILTER)
+# `analysis_offer_is_realtime_safe` puts the analysis offer where a decode tick
+# makes it.
+rtsan FILTER="offline_harness kithara_play::rt_metrics kithara_play::mix_tap kithara_audio::analysis_offer_is_realtime_safe": (_rtsan "suite_light" "apple-fused-src" FILTER)
 
 rtsan-file FILTER="phase_continuity::file": (_rtsan "suite_stress" "apple-fused-src" FILTER)
 

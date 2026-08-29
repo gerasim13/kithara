@@ -110,7 +110,7 @@ impl Kithara {
         const SUBSCRIPTION_CAPACITY: usize = 4;
         let playing = self.decks.iter().any(|deck| deck.ui.playing);
         let cfg = subscription_config(playing);
-        let mut subs = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
+        let mut subs: Vec<Subscription<Message>> = Vec::with_capacity(SUBSCRIPTION_CAPACITY);
         subs.push(
             iced_time::every(Duration::from_millis(cfg.tick_interval_ms)).map(|_| Message::Tick),
         );
@@ -136,5 +136,11 @@ impl Kithara {
     /// Window title.
     pub(crate) fn title(_state: &Self, _window: window::Id) -> String {
         "Kithara".to_string()
+    }
+}
+
+impl Drop for Kithara {
+    fn drop(&mut self) {
+        self.broadcast.release(self.session.host());
     }
 }

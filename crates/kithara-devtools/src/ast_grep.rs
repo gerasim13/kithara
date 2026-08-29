@@ -288,11 +288,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    fn rule_hits(rule_file: &str, source: &str) -> usize {
+    fn rule_hits_at(rule_file: &str, relative_path: &str, source: &str) -> usize {
         let temp = tempdir().expect("tempdir");
-        let source_path = temp
-            .path()
-            .join("crates/kithara-audio/src/analysis/fixture.rs");
+        let source_path = temp.path().join(relative_path);
         fs::create_dir_all(source_path.parent().expect("fixture parent"))
             .expect("create fixture directory");
         fs::write(&source_path, source).expect("write fixture");
@@ -304,10 +302,7 @@ mod tests {
             .current_dir(temp.path())
             .args(["scan", "--rule"])
             .arg(rule)
-            .args([
-                "--json=stream",
-                "crates/kithara-audio/src/analysis/fixture.rs",
-            ])
+            .args(["--json=stream", relative_path])
             .output()
             .expect("run ast-grep");
         let stdout = String::from_utf8(output.stdout).expect("ast-grep stdout");
@@ -322,6 +317,14 @@ mod tests {
             .count()
     }
 
+    fn rule_hits(rule_file: &str, source: &str) -> usize {
+        rule_hits_at(
+            rule_file,
+            "crates/kithara-audio/src/analysis/fixture.rs",
+            source,
+        )
+    }
+
     fn primitive_pool_hits(source: &str) -> usize {
         rule_hits("perf.prefer-primitive-pool.yml", source)
     }
@@ -331,16 +334,16 @@ mod tests {
         let source = r#"
 fn component() {
     let bytes = BytePool::new(32, 0);
-    let pcm = PcmPool::new(128, 200_000);
+    let samples = SamplePool::new(128, 200_000);
     let scratch = SharedPool::new(4, 65_536);
     let typed = SharedPool::<4, Vec<f32>>::new(4, 65_536);
-    let qualified = kithara_bufpool::PcmPool::new(128, 200_000);
+    let qualified = kithara_bufpool::SamplePool::new(128, 200_000);
 }
 
 #[cfg(test)]
 mod tests {
     fn fixture() {
-        let pool = PcmPool::new(4, 1024);
+        let pool = SamplePool::new(4, 1024);
     }
 }
 "#;
@@ -349,6 +352,161 @@ mod tests {
             rule_hits("perf.no-component-pool-construction.yml", source),
             5
         );
+    }
+
+    #[test]
+    fn global_pool_rule_ignores_inline_test_fixtures() {
+        let source = r#"
+fn component() {
+    let pool = SamplePool::default();
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() {
+        let pool = SamplePool::default();
+    }
+}
+"#;
+
+        assert_eq!(rule_hits("perf.no-global-pool-accessor.yml", source), 1);
+    }
+
+    #[test]
+    fn global_pool_rule_rejects_inferred_default_forms() {
+        let source = r#"
+struct Config {
+    sample_pool: SamplePool,
+}
+
+fn component() {
+    let bytes: BytePool = Default::default();
+    let samples: kithara_bufpool::SamplePool = Default::default();
+    let config = Builder::new().sample_pool(Default::default());
+    let config = Config {
+        sample_pool: Default::default(),
+    };
+}
+"#;
+
+        assert_eq!(rule_hits("perf.no-global-pool-accessor.yml", source), 4);
+    }
+
+    #[test]
+    fn pool_rules_cover_product_crates_and_ignore_pool_infrastructure() {
+        let primitive = "fn scratch() { let values: Vec<f32> = vec![0.0; 8]; }";
+        let global = "fn component() { let pool = SamplePool::default(); }";
+        let local = "fn component() { let pool = SamplePool::new(4, 1024); }";
+
+        for path in [
+            "crates/kithara-beat/src/fixture.rs",
+            "crates/kithara-encode/src/fixture.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.prefer-primitive-pool.yml", path, primitive),
+                1,
+                "primitive allocation at {path}"
+            );
+            assert_eq!(
+                rule_hits_at("perf.no-global-pool-accessor.yml", path, global),
+                1,
+                "global pool at {path}"
+            );
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", path, local),
+                1,
+                "local pool at {path}"
+            );
+        }
+
+        let infrastructure = "crates/kithara-bufpool/src/fixture.rs";
+        assert_eq!(
+            rule_hits_at("perf.prefer-primitive-pool.yml", infrastructure, primitive),
+            0
+        );
+        assert_eq!(
+            rule_hits_at("perf.no-global-pool-accessor.yml", infrastructure, global),
+            0
+        );
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-component-pool-construction.yml",
+                infrastructure,
+                local
+            ),
+            0
+        );
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-global-pool-accessor.yml",
+                "crates/kithara-host/src/session/testing.rs",
+                global
+            ),
+            0
+        );
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-component-pool-construction.yml",
+                "crates/kithara-play/src/session/testing.rs",
+                local
+            ),
+            0
+        );
+        assert_eq!(
+            rule_hits_at(
+                "perf.prefer-primitive-pool.yml",
+                "crates/kithara-host/src/session/testing.rs",
+                primitive
+            ),
+            0
+        );
+
+        for (rule, source) in [
+            ("perf.prefer-primitive-pool.yml", primitive),
+            ("perf.no-global-pool-accessor.yml", global),
+            ("perf.no-component-pool-construction.yml", local),
+        ] {
+            assert_eq!(
+                rule_hits_at(rule, "crates/kithara-audio/src/testing.rs", source),
+                1,
+                "only the two explicit test facades may be ignored by {rule}"
+            );
+        }
+    }
+
+    #[test]
+    fn pool_rules_allow_test_impls_and_wasm_composition_root() {
+        let source = r#"
+#[cfg(test)]
+impl Fixture {
+    fn pool() {
+        let pool = SamplePool::default();
+        let local = SamplePool::new(4, 1024);
+        let values: Vec<f32> = vec![0.0; 8];
+    }
+}
+
+#[cfg(test)]
+fn fixture() {
+    let pool = SamplePool::default();
+    let local = SamplePool::new(4, 1024);
+    let values: Vec<f32> = vec![0.0; 8];
+}
+
+#[wasm_bindgen(start)]
+fn setup() {
+    let pool = SamplePool::default();
+    let local = SamplePool::new(4, 1024);
+    let values: Vec<f32> = vec![0.0; 8];
+}
+"#;
+
+        assert_eq!(rule_hits("perf.no-global-pool-accessor.yml", source), 0);
+        assert_eq!(
+            rule_hits("perf.no-component-pool-construction.yml", source),
+            0
+        );
+        assert_eq!(primitive_pool_hits(source), 1);
     }
 
     #[test]
@@ -365,11 +523,25 @@ fn scratch(values: &[f64], count: usize) {
     let empty = Vec::<u64>::new();
     let reserved = Vec::<usize>::with_capacity(count);
     let converted = Vec::<u32>::from([1_u32, 2]);
-    let inferred = values.iter().copied().collect::<Vec<_>>();
+}
+
+fn inferred(values: &[f64]) -> Vec<f64> {
+    values.iter().copied().collect::<Vec<_>>()
 }
 "#;
 
         assert_eq!(primitive_pool_hits(source), 11);
+    }
+
+    #[test]
+    fn primitive_pool_rule_rejects_inferred_vec_returns() {
+        let source = r#"
+fn vector(values: &[f32]) -> Vec<f32> {
+    values.iter().copied().collect()
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 1);
     }
 
     #[test]
@@ -391,18 +563,74 @@ fn scratch(bytes: &[u8], count: usize) {
     let mut flags: Vec<bool> = Default::default();
     flags.resize(count, false);
 }
+
+fn samples(sample: f32) {
+    let mut copied = Vec::new();
+    copied.push(sample);
+}
 "#;
 
-        assert_eq!(primitive_pool_hits(source), 5);
+        assert_eq!(primitive_pool_hits(source), 6);
     }
 
     #[test]
-    fn primitive_pool_rule_allows_non_primitive_vectors() {
+    fn primitive_pool_rule_rejects_all_inferred_growth_forms() {
+        let source = r#"
+struct Item;
+
+fn owner(items: &[Item], count: usize) {
+    let mut pushed = Vec::new();
+    pushed.push(Item);
+
+    let mut resized = Vec::default();
+    resized.resize(count, Item);
+
+    let mut extended = Default::default();
+    extended.extend(items.iter());
+
+    let mut copied = Vec::with_capacity(count);
+    copied.extend_from_slice(items);
+
+    let mut reserved = Vec::new();
+    reserved.reserve(count);
+
+    let mut reserved_exact = Vec::new();
+    reserved_exact.reserve_exact(count);
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 6);
+    }
+
+    #[test]
+    fn primitive_pool_rule_requires_explicit_non_primitive_collection_types() {
         let source = r#"
 struct Item;
 
 fn owner(count: usize) {
-    let values: Vec<Item> = Vec::with_capacity(count);
+    let mut values: Vec<Item> = Vec::with_capacity(count);
+    values.push(Item);
+    let explicit = std::iter::repeat_with(|| Item)
+        .take(count)
+        .collect::<Vec<Item>>();
+    let inferred = std::iter::repeat_with(|| Item).take(count).collect::<Vec<_>>();
+}
+"#;
+
+        assert_eq!(primitive_pool_hits(source), 1);
+    }
+
+    #[test]
+    fn primitive_pool_rule_allows_documented_durable_output() {
+        let source = r#"
+struct EncodedAccessUnit {
+    bytes: Vec<u8>,
+}
+
+fn access_unit(output: &[u8]) -> EncodedAccessUnit {
+    EncodedAccessUnit {
+        bytes: output.to_vec(),
+    }
 }
 "#;
 

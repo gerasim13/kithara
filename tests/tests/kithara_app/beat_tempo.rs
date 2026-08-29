@@ -4,15 +4,22 @@
 
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::num::NonZeroU32;
+
 use kithara::{
-    audio::{BeatGrid, analysis::BeatAnalysisConfig},
-    bufpool::{BytePool, PcmPool},
+    analysis::{BeatAnalysisConfig, BeatArtifact},
+    bufpool::{BytePool, SamplePool},
     platform::{CancelToken, time::Duration},
+    play::{PlayWorker, PlayWorkerConfig},
     prelude::ResourceConfig,
 };
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
 use kithara_integration_tests::memory_asset_store;
 use num_traits::ToPrimitive;
+
+/// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
+/// nothing is resampled on the way in.
+const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 
 struct Consts;
 
@@ -52,21 +59,23 @@ fn records() -> Vec<(String, f64)> {
 }
 
 async fn analyse(path: &str) -> TrackAnalysis {
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+    );
     let src = ResourceConfig::parse_src(path)
         .unwrap_or_else(|error| panic!("{path} must name a source: {error}"));
     let config = ResourceConfig::for_src(src)
         .store(memory_asset_store())
-        .byte_pool(BytePool::default())
-        .pcm_pool(PcmPool::default())
+        .worker(worker)
         .build();
 
     let mut runner = TrackAnalysisRunner::new(
         &CancelToken::never(),
         Consts::BUCKETS,
         BeatAnalysisConfig::default(),
-        PcmPool::default(),
+        SamplePool::default(),
     );
-    let mut rx = runner.analyze(config);
+    let mut rx = runner.analyze(config, "integration-track".into(), RATE, drop);
 
     // The runner emits the envelope before the beat grid.
     let mut last = None;
@@ -76,19 +85,17 @@ async fn analyse(path: &str) -> TrackAnalysis {
     last.unwrap_or_else(|| panic!("{path} produced no analysis at all"))
 }
 
-async fn grid_of(path: &str) -> (BeatGrid, f64) {
+async fn grid_of(path: &str) -> (BeatArtifact, f64) {
     let analysis = analyse(path).await;
-    let rate = analysis
-        .source_sample_rate()
-        .unwrap_or_else(|| panic!("{path} carries no source rate"));
+    let rate = analysis.source_sample_rate();
     let grid = analysis
         .beat()
         .unwrap_or_else(|| panic!("{path} produced no beat grid"))
         .clone();
-    (grid, f64::from(rate.get()))
+    (grid.artifact().clone(), f64::from(rate.get()))
 }
 
-fn marker_tempo(grid: &BeatGrid, rate: f64) -> Option<f64> {
+fn marker_tempo(grid: &BeatArtifact, rate: f64) -> Option<f64> {
     let beats = grid.beats();
     let bpm = grid.bpm();
     if !rate.is_finite() || rate <= 0.0 || !bpm.is_finite() || bpm <= 0.0 {
@@ -117,10 +124,14 @@ fn marker_tempo(grid: &BeatGrid, rate: f64) -> Option<f64> {
 
 #[kithara::test]
 fn missing_marker_counts_as_multiple_beat_spans() {
-    let grid = BeatGrid::new(
+    let grid = BeatArtifact::new(
         120.0,
-        vec![0, 22_050, 66_150, 88_200],
-        Vec::new(),
+        vec![
+            (0, Some(0.9)),
+            (22_050, Some(0.9)),
+            (66_150, Some(0.9)),
+            (88_200, Some(0.9)),
+        ],
         Vec::new(),
     );
 
@@ -130,10 +141,14 @@ fn missing_marker_counts_as_multiple_beat_spans() {
 
 #[kithara::test]
 fn scalar_tempo_disagrees_with_retained_marker_ordinals() {
-    let grid = BeatGrid::new(
+    let grid = BeatArtifact::new(
         100.0,
-        vec![0, 22_050, 66_150, 88_200],
-        Vec::new(),
+        vec![
+            (0, Some(0.9)),
+            (22_050, Some(0.9)),
+            (66_150, Some(0.9)),
+            (88_200, Some(0.9)),
+        ],
         Vec::new(),
     );
 

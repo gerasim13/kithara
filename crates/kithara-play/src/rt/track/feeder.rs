@@ -1,18 +1,17 @@
 use std::{num::NonZeroU32, ops::Range};
 
-use kithara_audio::ServiceClass;
-use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_decode::Frames;
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
+use kithara_signal::FrameCount;
 
 #[rustfmt::skip]
 use crate::resource::Resource;
-use crate::bridge::RtMetrics;
+use crate::{bridge::RtMetrics, worker::ServiceClass};
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
 /// Wraps a [`Resource`] and maintains per-channel scratch buffers
-/// that are filled from the underlying `PcmReader`. The audio thread
+/// that are filled from the underlying `AudioReader`. The audio thread
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
 #[derive(fieldwork::Fieldwork)]
@@ -21,7 +20,7 @@ pub struct PlayerResource {
     #[field(get, deref = false)]
     src: Arc<str>,
     resource: WasmSend<Resource>,
-    channel_buffers: [PcmBuf; Self::STEREO_CHANNELS],
+    channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
     eof_seen: bool,
     failed: bool,
     write_len: usize,
@@ -33,7 +32,7 @@ pub struct PlayerResource {
 pub enum ReadOutcome {
     /// The requested range was filled completely.
     ///
-    /// `frames` counts real PCM frames copied out of the wrapped reader or
+    /// `frames` counts real audio frames copied out of the wrapped reader or
     /// scratch buffer. The remainder may be zero-filled during a non-terminal
     /// underrun and must not advance playback position.
     Full { frames: usize },
@@ -60,16 +59,16 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    const fn scratch_frames(sample_rate: u32) -> Frames {
-        Frames::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+    const fn scratch_frames(sample_rate: u32) -> FrameCount {
+        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two per-channel scratch buffers from the given PCM pool, each holding
+    /// Allocates two per-channel scratch buffers from the given sample pool, each holding
     /// [`Self::scratch_frames`] frames.
     #[must_use]
-    pub fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
+    pub fn new(resource: Resource, src: Arc<str>, pool: &SamplePool) -> Self {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
 
         let channel_buffers = std::array::from_fn(|_| {
@@ -161,7 +160,7 @@ impl PlayerResource {
         self.eof_seen.then_some(self.write_len)
     }
 
-    /// Read PCM frames into the output buffers for the given range.
+    /// Read audio frames into the output buffers for the given range.
     ///
     /// Fills internal scratch buffers from the underlying resource as needed,
     /// then copies the requested frames into `output`. Shifts any remaining
@@ -268,18 +267,23 @@ impl PlayerResource {
             pub fn duration(&self) -> f64;
             /// Set the target sample rate of the audio host.
             pub(crate) fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-            /// Set the playback rate for the active stretch controls.
-            pub(crate) fn set_playback_rate(&self, rate: f32);
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
+    }
+
+    pub(crate) fn playback_rate(&self) -> f32 {
+        self.resource.get().playback_rate()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZeroUsize;
-
+    use kithara_signal::{AudioSpec, SampleCount};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -291,15 +295,17 @@ mod tests {
     fn scratch_holds_200ms_of_frames(#[case] sample_rate: u32, #[case] expected: usize) {
         assert_eq!(
             PlayerResource::scratch_frames(sample_rate),
-            Frames::new(expected)
+            FrameCount::new(expected)
         );
     }
 
     #[kithara::test]
     fn an_interleaved_length_is_not_a_frame_count() {
-        const STEREO: NonZeroUsize = NonZeroUsize::new(2).expect("2 is non-zero");
-
+        let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate is non-zero"));
         let frames = PlayerResource::scratch_frames(48_000);
-        assert_eq!(frames.samples(STEREO).get(), frames.get() * 2);
+        assert_eq!(
+            spec.sample_count(frames),
+            Ok(SampleCount::new(frames.get() * 2))
+        );
     }
 }

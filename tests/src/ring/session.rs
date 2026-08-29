@@ -3,13 +3,15 @@ use std::{any::Any, num::NonZeroU32};
 use firewheel::FirewheelCtx;
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::PcmPool,
+    bufpool::SamplePool,
     events::EventBus,
+    host::testing::GraphSession,
     platform::{
         sync::{Mutex, mpsc},
         thread::{JoinHandle, spawn_named},
     },
-    play::{Cmd, PlayError, Reply, SessionDispatcher, SessionError, SessionState, run_cmd},
+    play::{Cmd, PlayError, Reply, SessionDispatcher, SessionError},
+    warp::{BeatGridId, BeatGridIdAllocationError},
 };
 
 use super::{
@@ -56,6 +58,8 @@ impl Default for ManualRingConfig {
 #[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum RingSessionError {
+    #[error(transparent)]
+    GridId(#[from] BeatGridIdAllocationError),
     #[error(transparent)]
     Session(#[from] SessionError),
     #[error(transparent)]
@@ -328,7 +332,7 @@ fn ring_session_thread(
     setup: RingSetup,
 ) {
     let mut backend_config = Some(backend_config);
-    let mut state = SessionState::<RingBackend>::new(move |ctx, _sample_rate| {
+    let mut state = GraphSession::<RingBackend>::new(move |ctx, _sample_rate| {
         let config = backend_config
             .take()
             .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
@@ -355,7 +359,7 @@ fn ring_session_thread(
     for message in cmd_rx.iter() {
         match message {
             RingMsg::Cmd { cmd, reply_tx } => {
-                let _ = reply_tx.send(run_cmd(&mut state, cmd));
+                let _ = reply_tx.send(state.exec(cmd));
             }
             RingMsg::Credit { blocks, reply_tx } => {
                 let _ = reply_tx.send(credit_blocks(&mut state, blocks));
@@ -366,30 +370,26 @@ fn ring_session_thread(
 }
 
 fn bootstrap(
-    state: &mut SessionState<RingBackend>,
+    state: &mut GraphSession<RingBackend>,
     session_rate: NonZeroU32,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
-    let player_id = match run_cmd(
-        state,
-        Cmd::RegisterPlayer {
-            bus: EventBus::default(),
-            eq_layout: Vec::new(),
-            pcm_pool: PcmPool::default(),
-        },
-    ) {
+    let player_id = match state.exec(Cmd::RegisterPlayer {
+        grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
+        bus: EventBus::default(),
+        eq_layout: Vec::new(),
+        sample_pool: SamplePool::default(),
+        sample_rate: session_rate.get(),
+    }) {
         Reply::PlayerRegistered(player_id) => player_id,
         Reply::Err(error) => return Err(error.into()),
         _ => return Err(RingSessionError::Protocol("register anchor player reply")),
     };
-    match run_cmd(
-        state,
-        Cmd::StartPlayer {
-            master_volume: 1.0,
-            player_id,
-            sample_rate: session_rate.get(),
-        },
-    ) {
+    match state.exec(Cmd::StartPlayer {
+        master_volume: 1.0,
+        player_id,
+        sample_rate: session_rate.get(),
+    }) {
         Reply::Ok => {}
         Reply::Err(error) => return Err(error.into()),
         _ => return Err(RingSessionError::Protocol("start anchor player reply")),
@@ -398,7 +398,7 @@ fn bootstrap(
     setup(ctx)
 }
 
-fn credit_blocks(state: &mut SessionState<RingBackend>, blocks: usize) -> CreditReply {
+fn credit_blocks(state: &mut GraphSession<RingBackend>, blocks: usize) -> CreditReply {
     let mut latest = match snapshot(state) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -432,7 +432,7 @@ fn credit_blocks(state: &mut SessionState<RingBackend>, blocks: usize) -> Credit
 }
 
 fn render_transaction(
-    state: &mut SessionState<RingBackend>,
+    state: &mut GraphSession<RingBackend>,
 ) -> Result<RingSnapshot, RingSessionError> {
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     ctx.update()
@@ -446,7 +446,7 @@ fn render_transaction(
     snapshot_from_ctx(ctx)
 }
 
-fn snapshot(state: &mut SessionState<RingBackend>) -> Result<RingSnapshot, RingSessionError> {
+fn snapshot(state: &mut GraphSession<RingBackend>) -> Result<RingSnapshot, RingSessionError> {
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     snapshot_from_ctx(ctx)
 }

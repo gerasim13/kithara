@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::SamplePool;
 use rubato::{
     Async, Fft, FixedAsync, FixedSync, PolynomialDegree, ResampleError,
     Resampler as RubatoResamplerTrait, ResamplerConstructionError, SincInterpolationParameters,
@@ -25,7 +25,7 @@ impl RubatoEngine {
         target_rate: u32,
         channels: NonZeroUsize,
         options: ResamplerOptions,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
         match config.algorithm {
             RubatoAlgorithm::Async => Self::new_async(
@@ -34,10 +34,10 @@ impl RubatoEngine {
                 target_rate,
                 channels,
                 options,
-                pcm_pool,
+                sample_pool,
             ),
             RubatoAlgorithm::Fft => {
-                Self::new_fft(source_rate, target_rate, channels, options, pcm_pool)
+                Self::new_fft(source_rate, target_rate, channels, options, sample_pool)
             }
         }
     }
@@ -48,7 +48,7 @@ impl RubatoEngine {
         target_rate: u32,
         channels: NonZeroUsize,
         options: ResamplerOptions,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
         let ratio = ratio_for_target(source_rate, target_rate);
         match quality {
@@ -61,7 +61,7 @@ impl RubatoEngine {
                     channels.get(),
                     FixedAsync::Input,
                 )?;
-                Self::with_inner(Box::new(poly), channels, pcm_pool)
+                Self::with_inner(Box::new(poly), channels, sample_pool)
             }
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
@@ -72,7 +72,7 @@ impl RubatoEngine {
                     channels.get(),
                     FixedAsync::Input,
                 )?;
-                Self::with_inner(Box::new(sinc), channels, pcm_pool)
+                Self::with_inner(Box::new(sinc), channels, sample_pool)
             }
         }
     }
@@ -82,7 +82,7 @@ impl RubatoEngine {
         target_rate: u32,
         channels: NonZeroUsize,
         options: ResamplerOptions,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
         let fft = Fft::<f32>::new(
             source_rate as usize,
@@ -92,7 +92,7 @@ impl RubatoEngine {
             channels.get(),
             FixedSync::Input,
         )?;
-        Self::with_inner(Box::new(fft), channels, pcm_pool)
+        Self::with_inner(Box::new(fft), channels, sample_pool)
     }
 
     pub(super) fn process_into_buffer(
@@ -142,12 +142,12 @@ impl RubatoEngine {
     fn with_inner(
         inner: Box<dyn RubatoResamplerTrait<f32>>,
         channels: NonZeroUsize,
-        pcm_pool: PcmPool,
+        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
         let output_frames = inner.output_frames_max();
         Ok(Self {
             inner,
-            output_scratch: PooledScratch::new(pcm_pool, channels, output_frames)?,
+            output_scratch: PooledScratch::new(sample_pool, channels, output_frames)?,
         })
     }
 
@@ -166,14 +166,14 @@ impl RubatoEngine {
 
 #[derive(fieldwork::Fieldwork)]
 struct PooledScratch {
-    pool: PcmPool,
+    pool: SamplePool,
     #[field(get, get_mut, deref = "[Vec<f32>]", vis = "")]
     buffers: SmallVec<[Vec<f32>; 8]>,
 }
 
 impl PooledScratch {
     fn new(
-        pool: PcmPool,
+        pool: SamplePool,
         channels: NonZeroUsize,
         frames: usize,
     ) -> Result<Self, ResamplerConstructionError> {

@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
-use kithara_decode::PcmChunk;
 use kithara_platform::time::Duration;
+use kithara_signal::AudioChunk;
 
 /// Reason a [`ReadOutcome::Pending`] / [`ChunkOutcome::Pending`] was
 /// returned — i.e. why the reader did not advance this call. Each
@@ -24,7 +24,7 @@ pub enum PendingReason {
     StreamBackpressure,
 }
 
-/// Result of a PCM read.
+/// Result of a decoded-audio read.
 ///
 /// Each variant carries distinct caller semantics — the type system
 /// guarantees forward progress in `Frames` (via [`NonZeroUsize`]),
@@ -84,7 +84,7 @@ pub enum SeekOutcome {
 #[derive(Debug)]
 pub enum ChunkOutcome {
     /// Next decoded chunk.
-    Chunk(PcmChunk),
+    Chunk(AudioChunk),
     /// Reader is alive but has no chunk ready this tick. See
     /// [`PendingReason`] for the precise cause; callers may sleep,
     /// yield, or retry depending on the reason.

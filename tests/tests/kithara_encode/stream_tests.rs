@@ -75,7 +75,7 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
             .build(),
         DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
             .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
+            .sample_pool(kithara::bufpool::SamplePool::default())
             .build(),
     )
     .expect("create the fMP4 AAC-LC decoder");

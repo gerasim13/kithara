@@ -1,4 +1,4 @@
-use kithara_audio::{AudioConfig, ResamplerBackend};
+use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
@@ -8,6 +8,7 @@ use kithara_stream::dl::{Downloader, DownloaderConfig};
 use url::Url;
 
 use super::{ResourceConfig, ResourceSrc};
+use crate::PlayWorker;
 
 fn derive_remote_file_hint(url: &Url) -> Option<String> {
     url.path_segments()
@@ -28,8 +29,12 @@ where
     B: Default + ResamplerBackend,
 {
     /// Build an `AudioConfig<File>` from this resource configuration.
-    pub(crate) fn build_file_config(self) -> AudioConfig<kithara_file::File, B> {
-        let byte_pool = self.byte_pool.clone();
+    pub(crate) fn build_file_config(
+        self,
+        worker: &PlayWorker,
+        observer: Option<Box<dyn AudioObserver>>,
+    ) -> AudioConfig<kithara_file::File, B> {
+        let byte_pool = worker.byte_pool().clone();
         let (file_src, derived_hint) = match self.src {
             ResourceSrc::Url(ref url) => {
                 (FileSrc::Remote(url.clone()), derive_remote_file_hint(url))
@@ -66,22 +71,21 @@ where
         AudioConfig::<kithara_file::File, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
-            .byte_pool(byte_pool)
-            .pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
+            .maybe_observer(observer)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
-            .maybe_playback_rate(self.playback_rate)
-            .maybe_stretch(self.stretch)
-            .maybe_engine_load(self.engine_load)
-            .maybe_worker(self.worker)
             .consumer_wake_mode(self.consumer_wake_mode)
             .build()
     }
 
     /// Build an `AudioConfig<Hls>` from this resource configuration.
-    pub(crate) fn build_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls, B>, DecodeError> {
-        let byte_pool = self.byte_pool.clone();
+    pub(crate) fn build_hls_config(
+        self,
+        worker: &PlayWorker,
+        observer: Option<Box<dyn AudioObserver>>,
+    ) -> Result<AudioConfig<kithara_hls::Hls, B>, DecodeError> {
+        let byte_pool = worker.byte_pool().clone();
         let url = match self.src {
             ResourceSrc::Url(ref url) => url.clone(),
             ResourceSrc::Path(_) => {
@@ -107,15 +111,10 @@ where
         Ok(AudioConfig::<kithara_hls::Hls, B>::for_stream(hls_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(self.hint)
-            .byte_pool(byte_pool)
-            .pcm_pool(self.pcm_pool)
             .maybe_host_sample_rate(self.host_sample_rate)
+            .maybe_observer(observer)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
-            .maybe_playback_rate(self.playback_rate)
-            .maybe_stretch(self.stretch)
-            .maybe_engine_load(self.engine_load)
-            .maybe_worker(self.worker)
             .consumer_wake_mode(self.consumer_wake_mode)
             .build())
     }

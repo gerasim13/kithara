@@ -1,7 +1,10 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::{
+    num::NonZeroU32,
+    sync::atomic::{AtomicU32, Ordering},
+};
 
-use kithara_decode::{PcmChunk, duration_for_frames};
 use kithara_platform::{sync::Arc, time::Duration};
+use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::StreamType;
 
 use crate::pipeline::{
@@ -16,6 +19,7 @@ use crate::pipeline::{
 pub(crate) struct ResumeCursor {
     host_rate: Arc<AtomicU32>,
     decode_head: Option<(u64, u64, u32)>,
+    rendered_source_head: Option<(u64, u64, u32)>,
     #[field(get = recreates_on_route, vis = "pub(crate)")]
     recreate_on_route: bool,
     decoder_rate: u32,
@@ -40,11 +44,18 @@ impl ResumeCursor {
             recreate_on_route,
             decoder_rate,
             decode_head: None,
+            rendered_source_head: None,
         }
     }
 
     pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
         self.decode_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
+    }
+
+    pub(crate) fn rendered_source_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.rendered_source_head
             .filter(|&(head_epoch, _, _)| head_epoch == epoch)
             .map(|(_, frame, rate)| (frame, rate))
     }
@@ -58,7 +69,7 @@ impl ResumeCursor {
         self.host_rate.load(Ordering::Acquire)
     }
 
-    pub(crate) fn record(&mut self, chunk: &PcmChunk, epoch: u64) {
+    pub(crate) fn record(&mut self, chunk: &AudioChunk, epoch: u64) {
         self.decode_head = Some((
             epoch,
             chunk
@@ -69,6 +80,17 @@ impl ResumeCursor {
         ));
     }
 
+    pub(crate) fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
+        self.rendered_source_head =
+            Some((epoch, source_end.frame(), source_end.sample_rate().get()));
+    }
+
+    pub(crate) fn rebase_decode_to_rendered(&mut self, epoch: u64) {
+        self.decode_head = self
+            .rendered_source_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch);
+    }
+
     pub(crate) fn resume_position(
         &self,
         epoch: u64,
@@ -76,8 +98,14 @@ impl ResumeCursor {
         resume_target: Option<(u64, Duration)>,
     ) -> Duration {
         let head = self
-            .decode_head(epoch)
-            .map(|(frame, rate)| duration_for_frames(rate, frame))
+            .rendered_source_head(epoch)
+            .and_then(|(frame, rate)| {
+                NonZeroU32::new(rate).map(|sample_rate| {
+                    let spec = AudioSpec::new(1, sample_rate);
+                    spec.duration_for(frame)
+                        .unwrap_or(Duration::from_nanos(u64::MAX))
+                })
+            })
             .filter(|&position| position > committed)
             .unwrap_or(committed);
         match resume_target {
@@ -112,12 +140,16 @@ impl ResumeCursor {
         // A route change keeps the container, so the rebuilt demuxer must start
         // where the container starts — not at the byte the resume time maps to.
         // Seeking the anchor by time lands past the init and the demuxer never
-        let offset = anchor::recreate_offset(
-            ctx.stream,
-            media_info.container,
-            false,
-            ctx.active.base_offset(),
-        )?;
+        let offset = if ctx.stream.has_variant_surface() {
+            anchor::recreate_offset(
+                ctx.stream,
+                media_info.container,
+                false,
+                ctx.active.base_offset(),
+            )?
+        } else {
+            ctx.active.base_offset()
+        };
         let epoch = ctx.seek.epoch();
         let target = self.resume_position(epoch, ctx.committed, None);
         self.decoder_rate = host_rate;

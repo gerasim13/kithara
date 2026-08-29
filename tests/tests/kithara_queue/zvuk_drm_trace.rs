@@ -2,7 +2,7 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, PcmPool},
+    bufpool::{BytePool, SamplePool},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -12,12 +12,12 @@ use kithara::{
         tokio,
         tokio::sync::OnceCell,
     },
-    play::{PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
     queue::{Queue, QueueConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{baked, config::AppConfig, sources::build_source};
-use kithara_integration_tests::{TestTempDir, kithara};
+use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use tracing_subscriber::EnvFilter;
 
 /// Real-network DRM trace harness. Loads a single zvq.me DRM master
@@ -41,7 +41,7 @@ async fn zvuk_drm_master_playlist_trace() {
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
-    let track_id = ctx.queue.append(source);
+    let track_id = ctx.queue.append(source).expect("append DRM trace track");
     tracing::info!(%url, ?track_id, "DRM trace: track appended");
 
     match wait_for_terminal(&mut rx, &ctx.queue, track_id, Duration::from_secs(20)).await {
@@ -59,13 +59,16 @@ static CTX: OnceCell<Ctx> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
-        let net = NetOptions::builder().is_insecure(true).build();
+        let byte_pool = BytePool::default();
+        let net = NetOptions::builder()
+            .byte_pool(byte_pool.clone())
+            .is_insecure(true)
+            .build();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let shutdown = CancelToken::never();
-        let byte_pool = BytePool::default();
         let store = AssetStore::builder()
             .cancel(shutdown.child())
             .backend(StorageBackend::default())
@@ -73,19 +76,23 @@ async fn shared_ctx() -> &'static Ctx {
             .flush_hub(flush_hub)
             .layouts(baked::build_baked_asset_layouts())
             .build();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+                .cancel(shutdown.child())
+                .build(),
+        );
         let config = AppConfig::builder()
             .downloader(downloader)
             .shutdown(shutdown)
-            .byte_pool(byte_pool)
-            .pcm_pool(PcmPool::default())
+            .worker(worker.clone())
             .store(store)
             .build();
-        let player = Arc::new(PlayerImpl::new(
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(BytePool::default())
-                .pcm_pool(PcmPool::default())
+                .session(OfflineSession::arc_auto())
+                .worker(worker)
                 .build(),
-        ));
+        );
         let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
 
         let q = Arc::clone(&queue);

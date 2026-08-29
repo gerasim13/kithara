@@ -1,6 +1,6 @@
 use std::sync::{
     Weak,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use bitflags::bitflags;
@@ -57,6 +57,12 @@ pub(crate) struct SegmentSlotState {
     /// requeue — that is the whole point — and is cleared the moment an
     /// acquire succeeds.
     acquire_failures: AtomicU8,
+    /// Whether a parked read needs the in-flight fetch's bytes. Set only
+    /// while `DOWNLOADING`, cleared by every terminal transition, read back
+    /// by the command's live demand probe. Kept beside the flags for the
+    /// same reason as `acquire_failures`: a bit packed in there would break
+    /// the claim CAS.
+    reader_demand: AtomicBool,
 }
 
 impl SegmentSlotState {
@@ -64,19 +70,21 @@ impl SegmentSlotState {
         SlotFlags::from_bits_truncate(self.flags.load(Ordering::Acquire))
     }
 
+    fn settle(&self, state: SlotFlags) {
+        self.flags.store(state.bits(), Ordering::Release);
+        self.reader_demand.store(false, Ordering::Release);
+    }
+
     pub(crate) fn mark_failed(&self) {
-        self.flags
-            .store(SlotFlags::FAILED.bits(), Ordering::Release);
+        self.settle(SlotFlags::FAILED);
     }
 
     pub(crate) fn mark_loaded(&self) {
-        self.flags
-            .store(SlotFlags::LOADED.bits(), Ordering::Release);
+        self.settle(SlotFlags::LOADED);
     }
 
     pub(crate) fn mark_missing(&self) {
-        self.flags
-            .store(SlotFlags::empty().bits(), Ordering::Release);
+        self.settle(SlotFlags::empty());
     }
 
     /// Mark the in-flight fetch slow (the `on_slow` hook fired). Idempotent;
@@ -86,10 +94,25 @@ impl SegmentSlotState {
             .fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
     }
 
+    /// File a parked read on the in-flight fetch. A slot that is not
+    /// `DOWNLOADING` is left alone: a planned one is owed, and the owed
+    /// dispatch stamps it `High` at emit.
+    pub(crate) fn note_reader_demand(&self) {
+        if self.is_downloading() {
+            self.reader_demand.store(true, Ordering::Release);
+        }
+    }
+
+    /// True while a parked read needs the current in-flight fetch's bytes.
+    pub(crate) fn is_reader_demanded(&self) -> bool {
+        self.is_downloading() && self.reader_demand.load(Ordering::Acquire)
+    }
+
     pub(crate) fn missing() -> Arc<Self> {
         Arc::new(Self {
             flags: AtomicU8::new(SlotFlags::empty().bits()),
             acquire_failures: AtomicU8::new(0),
+            reader_demand: AtomicBool::new(false),
         })
     }
 

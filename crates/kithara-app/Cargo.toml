@@ -48,7 +48,7 @@ stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 kithara = { workspace = true, default-features = false, features = ["file", "hls", "resample-rubato"] }
 kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
-kithara-queue = { workspace = true, default-features = false, features = ["backend-cpal"] }
+kithara-queue = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 kithara-ui = { workspace = true, features = ["render"], optional = true }
 

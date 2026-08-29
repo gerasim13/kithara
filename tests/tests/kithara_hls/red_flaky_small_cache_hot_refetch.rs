@@ -4,10 +4,11 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
+    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
-    stream::Stream,
+    play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{TestServerHelper, auto, flash_pace::virtual_pace};
 use tracing::info;
@@ -35,13 +36,19 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
+    let region = Region::default();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    );
     let store = AssetStore::builder()
         .backend(StorageBackend::Memory)
+        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pool(worker.byte_pool().clone())
         .initial_abr_mode(auto(0))
         .build();
 
@@ -49,13 +56,9 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     // so the loops need no wall-clock deadlines — a hot-refetch livelock
     // becomes a permanent park caught by the hang watchdog / timeout.
     let config = AudioConfig::<Hls>::for_stream(hls_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .block_on_underrun(true)
         .build();
-    let mut audio = Audio::<Stream<Hls>>::new(config)
-        .await
-        .expect("audio creation");
+    let mut audio = worker.open(config).await.expect("audio creation");
 
     // The blocking read phase must NOT run on the test runtime thread: with
     // block_on_underrun the read parks the thread, and on the current-thread
@@ -66,7 +69,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         info!("warmup: reading {} chunks", Consts::WARMUP_CHUNKS);
         let mut chunks_read = 0usize;
         while chunks_read < Consts::WARMUP_CHUNKS {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => chunks_read += 1,
                 Ok(ChunkOutcome::Eof { .. }) => break,
                 Ok(ChunkOutcome::Pending { .. }) => {
@@ -80,7 +83,7 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         let mut drained = 0usize;
         let mut reached_eof = false;
         while drained < Consts::DRAIN_CHUNKS && !reached_eof {
-            match PcmRead::next_chunk(&mut audio) {
+            match AudioRead::next_chunk(&mut audio) {
                 Ok(ChunkOutcome::Chunk(_)) => {
                     drained += 1;
                     // Load-bearing pacing: the reader must lag the network so

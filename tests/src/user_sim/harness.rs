@@ -2,7 +2,7 @@ use std::path::Path;
 
 use kithara::{
     abr::AbrHandle,
-    assets::AssetStore,
+    assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
@@ -16,8 +16,11 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome,
+        SessionDispatcher, player::PlayerControlSource,
+    },
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use url::Url;
@@ -63,7 +66,7 @@ const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
 /// watchdog false-fires. Off the `flash` feature the macro is a no-op, so
 /// the driver is a plain real-time tick exactly as before.
 #[kithara::flash(true)]
-async fn run_tick_driver(queue: Arc<Queue>) {
+async fn run_tick_driver(queue: QueueControl) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -77,7 +80,8 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// plus a tokio tick task; callers drive it with `Action`s and the
 /// harness asserts the per-action invariants from the plan.
 pub struct SimHarness {
-    queue: Arc<Queue>,
+    queue: QueueControl,
+    queue_owner: Queue,
     session: Arc<OfflineSession>,
     tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
@@ -128,15 +132,31 @@ impl SimHarness {
     /// to the scenario via `enter_track`.
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
         let session = Arc::new(OfflineSession::new());
-        let player = Arc::new(PlayerImpl::new(
+        let region = kithara::bufpool::Region::default();
+        let byte_pool = region.byte_pool();
+        let store = AssetStore::builder()
+            .backend(StorageBackend::Disk {
+                root: cache_path.into(),
+            })
+            .pool(byte_pool.clone())
+            .build();
+        let worker = PlayWorker::new(
+            PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool()).build(),
+        );
+        let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .pcm_pool(kithara::bufpool::PcmPool::default())
+                .worker(worker)
                 .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                 .build(),
-        ));
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
-        let queue_for_tick = Arc::clone(&queue);
+        );
+        let queue_owner = Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        );
+        let queue = queue_owner.control();
+        let queue_for_tick = queue.clone();
         // Spawn through the platform chokepoint, NOT raw `tokio::spawn`: under
         // flash this installs the quiescence poll-wrapper + ambient gate so the
         // driver participates in the virtual clock. The active flag that makes
@@ -147,20 +167,17 @@ impl SimHarness {
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::default(),
+                NetOptions::builder().byte_pool(byte_pool).build(),
                 CancelToken::never(),
             ))
             .build(),
         );
-        let store = crate::disk_asset_store(cache_path);
 
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
             let cfg = ResourceConfig::for_src(
                 ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
             )
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .pcm_pool(kithara::bufpool::PcmPool::default())
             .downloader(downloader.clone())
             .store(store.clone())
             .decoder(
@@ -170,12 +187,15 @@ impl SimHarness {
             )
             .initial_abr_mode(spec.abr_mode)
             .build();
-            let id = queue.append(TrackSource::Config(Box::new(cfg)));
+            let id = queue
+                .append(TrackSource::Config(Box::new(cfg)))
+                .expect("queue is open while the harness is being built");
             track_ids.push(id);
         }
 
         Self {
             queue,
+            queue_owner,
             session,
             tick,
             _downloader: downloader,
@@ -185,7 +205,7 @@ impl SimHarness {
         }
     }
 
-    pub const fn queue(&self) -> &Arc<Queue> {
+    pub const fn queue(&self) -> &QueueControl {
         &self.queue
     }
 
@@ -244,6 +264,7 @@ impl SimHarness {
         self.tick.abort();
         let _ = self.tick.await;
         drop(self.queue);
+        drop(self.queue_owner);
         drop(self.session);
         drop(self._downloader);
     }
@@ -470,7 +491,12 @@ impl SimHarness {
 
     async fn do_select_prev(&mut self) {
         let mut rx = self.queue.subscribe();
-        if self.queue.return_to_previous(Transition::None).is_some() {
+        if self
+            .queue
+            .return_to_previous(Transition::None)
+            .expect("queue stays open during the scenario")
+            .is_some()
+        {
             self.await_current_changed(&mut rx).await;
             self.last_known_codec = self.current_codec();
         }
@@ -481,6 +507,7 @@ impl SimHarness {
         if self
             .queue
             .advance_to_next(Transition::None, AdvanceReason::UserNext)
+            .expect("queue stays open during the scenario")
             .is_some()
         {
             self.await_current_changed(&mut rx).await;
@@ -999,7 +1026,7 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// the events the wait then resolves on.
 async fn await_progress(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &QueueControl,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
 ) -> Result<f64, String> {
@@ -1033,7 +1060,11 @@ async fn await_progress(
     }
 }
 
-pub async fn wait_for_loaded(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
+pub async fn wait_for_loaded(
+    queue: &QueueControl,
+    id: TrackId,
+    deadline: Duration,
+) -> Result<(), String> {
     if let Some(entry) = queue.track(id) {
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
@@ -1077,7 +1108,7 @@ pub async fn wait_for_loaded(queue: &Queue, id: TrackId, deadline: Duration) -> 
 }
 
 pub async fn wait_for_position_at_least(
-    queue: &Queue,
+    queue: &QueueControl,
     min_secs: f64,
     deadline: Duration,
 ) -> Result<(), String> {

@@ -1,9 +1,12 @@
 use kithara::{
-    audio::{Audio, AudioConfig, ChunkOutcome, PcmRead},
+    assets::{AssetStore, StorageBackend},
+    audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
+    bufpool::Region,
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventBus},
     file::{File, FileConfig},
     platform::time::{self, Duration},
+    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
@@ -20,14 +23,22 @@ async fn open_test_mp3(
     temp_dir: &TestTempDir,
     backend: DecoderBackend,
     events: Option<EventBus>,
-) -> Audio<Stream<File>> {
+) -> RegisteredAudio<Stream<File>> {
     let url = server.asset("test.mp3");
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
     let file_config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder()
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().into(),
+                })
+                .pool(byte_pool.clone())
+                .build(),
+        )
+        .pool(byte_pool.clone())
         .build();
     let config = AudioConfig::<File>::for_stream(file_config)
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .pcm_pool(kithara::bufpool::PcmPool::default())
         .hint(String::from("mp3"))
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -36,7 +47,9 @@ async fn open_test_mp3(
         )
         .maybe_events(events)
         .build();
-    Audio::<Stream<File>>::new(config).await.unwrap()
+    let worker =
+        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    worker.open(config).await.unwrap()
 }
 
 /// Nonblocking re-poll loop: these tests are browser-portable (async body,
@@ -46,9 +59,9 @@ async fn open_test_mp3(
 /// deadline. `flash(true)` keeps the re-poll sleep on the virtual clock
 /// when called from a flash test.
 #[kithara::flash(true)]
-async fn next_chunk(audio: &mut Audio<Stream<File>>, stage: &str) {
+async fn next_chunk(audio: &mut RegisteredAudio<Stream<File>>, stage: &str) {
     loop {
-        match PcmRead::next_chunk(audio) {
+        match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(_)) => return,
             Ok(ChunkOutcome::Eof { .. }) => {
                 panic!("unexpected EOF while waiting for {stage}");

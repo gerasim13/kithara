@@ -1,14 +1,13 @@
 #[cfg(not(feature = "gui"))]
 compile_error!("`kithara` binary requires the `gui` feature");
 
-use std::sync::OnceLock;
-
 use clap::Parser;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::Region,
+    host::{Host, HostConfig},
     net::{HttpClient, NetOptions},
-    play::SessionHandle,
+    play::{PlayWorker, PlayWorkerConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -36,12 +35,6 @@ struct Args {
 type AppError = Box<dyn std::error::Error + Send + Sync>;
 type AppResult<T = ()> = Result<T, AppError>;
 
-static APP_SESSION: OnceLock<SessionHandle> = OnceLock::new();
-
-fn app_session_handle() -> SessionHandle {
-    APP_SESSION.get_or_init(SessionHandle::spawn_native).clone()
-}
-
 /// Suppress noisy macOS system logs (`OpenGL` `dlsym`, `WindowTab`, etc.)
 /// at program start before any threads are spawned. No-op on other targets.
 #[cfg(target_os = "macos")]
@@ -63,10 +56,16 @@ fn main() -> AppResult {
 
     // App master root held for the whole process: it goes into `AppConfig` and
     // every subsystem derives from `shutdown.child()`, so a frontend
-    // `config.shutdown.cancel()` propagates down the shutdown subtree to all of
+    // `config.shutdown.cancel()` propagates through the whole app subtree.
     let shutdown = CancelToken::root();
     let region = Region::default();
     let byte_pool = region.byte_pool();
+    let sample_pool = region.sample_pool();
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
+            .cancel(shutdown.child())
+            .build(),
+    );
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(baked::BAKED_COMPRESSION)
@@ -86,21 +85,21 @@ fn main() -> AppResult {
     let config = AppConfig::builder()
         .downloader(downloader)
         .shutdown(shutdown.clone())
-        .byte_pool(byte_pool)
-        .pcm_pool(region.pcm_pool())
+        .worker(worker)
         .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
         .build();
 
-    let session = app_session_handle();
-    let mut deck_set = DeckSet::new(vec![
-        Deck::build(DeckId(0), &config, &session),
-        Deck::build(DeckId(1), &config, &session),
-    ]);
+    let mut host = Host::new(HostConfig::builder().build())?;
+    let decks = vec![
+        Deck::build(DeckId(0), &config, &mut host)?,
+        Deck::build(DeckId(1), &config, &mut host)?,
+    ];
+    let mut deck_set = DeckSet::new(host, decks);
     deck_set.commit(deck_set.mix().clone())?;
     let mut frontend = GuiFrontend::new(&config)?;
-    frontend.attach_broadcast(session, shutdown.clone());
+    frontend.attach_broadcast(shutdown.clone());
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;
     frontend.shutdown()?;

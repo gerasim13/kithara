@@ -211,7 +211,7 @@ where
     Message: Clone + 'a,
 {
     let metrics = skin.chrome;
-    let mut children = Vec::with_capacity(5 + assign.len());
+    let mut children: Vec<Element<'a, Message>> = Vec::with_capacity(5 + assign.len());
     if let Some(chip) = chip {
         children.push(header_chip(chip, skin));
     }

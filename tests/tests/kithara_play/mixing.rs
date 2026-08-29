@@ -7,16 +7,17 @@ use std::{
 
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, PcmPool},
-    decode::PcmSpec,
+    bufpool::{BytePool, SamplePool},
+    events::TrackId,
     platform::{
         sync::Arc,
         time::{self, Duration},
     },
     play::{
-        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, SelectTransition, SessionDispatcher,
-        apply_mix,
+        Cmd, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply,
+        SelectTransition, SessionDispatcher, apply_mix,
     },
+    signal::AudioSpec,
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
@@ -96,9 +97,13 @@ impl MixHarness {
         let players = (0..count)
             .map(|_| {
                 let config = PlayerConfig::builder()
-                    .byte_pool(BytePool::default())
-                    .pcm_pool(PcmPool::default())
-                    .sample_rate(SAMPLE_RATE)
+                    .worker(PlayWorker::new(
+                        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default())
+                            .build(),
+                    ))
+                    .sample_rate(
+                        NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero"),
+                    )
                     .crossfade_duration(0.0)
                     .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
                     .build();
@@ -109,11 +114,11 @@ impl MixHarness {
     }
 
     fn play(&self, values: &[f32]) {
-        let spec = PcmSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
+        let spec = AudioSpec::new(2, NonZeroU32::new(SAMPLE_RATE).expect("sample rate"));
         for (player, &value) in self.players.iter().zip(values) {
             player.insert(
                 resource_from_reader(TestPcmReader::with_value(spec, TRACK_SECS, value)),
-                None,
+                TrackId::allocate(),
                 None,
             );
             player

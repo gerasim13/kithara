@@ -1,7 +1,7 @@
 use std::{fmt::Write, num::NonZeroU16};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use kithara_platform::sync::Mutex;
@@ -77,14 +77,14 @@ async fn error_body(resp: Response, inactivity: Duration) -> String {
 #[kithara::flash(io)]
 async fn body_bytes(resp: Response, inactivity: Duration) -> Result<Bytes, NetError> {
     let mut stream = resp.bytes_stream();
-    let mut buf = Vec::new();
+    let mut buf = BytesMut::new();
     while let Some(chunk) = timeout(inactivity, stream.next())
         .await
         .map_err(|_| NetError::Timeout)?
     {
         buf.extend_from_slice(&chunk.map_err(NetError::from)?);
     }
-    Ok(Bytes::from(buf))
+    Ok(buf.freeze())
 }
 
 fn status_error(url: Url, status: u16, body: String) -> NetError {

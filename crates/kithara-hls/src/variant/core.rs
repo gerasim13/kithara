@@ -354,7 +354,7 @@ impl HlsVariant {
         };
         let bandwidth_bps = playlist_state.variant_bandwidth_bps(variant_idx);
         let mut decode_time = Duration::ZERO;
-        let mut entries = Vec::with_capacity(num);
+        let mut entries: Vec<Segment> = Vec::with_capacity(num);
         for seg_idx in 0..num {
             let Some(url) = playlist_state.segment_url(variant_idx, seg_idx) else {
                 break;

@@ -270,7 +270,7 @@ impl Core {
         clock.store(min);
         #[cfg(test)]
         self.sched.advance_log.push(min);
-        let mut woken = Vec::new();
+        let mut woken: Vec<Wake> = Vec::new();
         while let Some((&(d, _), _)) = self.sched.timed.iter().next() {
             if d != min {
                 break;
@@ -587,7 +587,7 @@ impl FlashInner {
             .map(|(&k, _)| k)
             .collect();
 
-        let mut woken = Vec::new();
+        let mut woken: Vec<Wake> = Vec::new();
         for key in timed_keys {
             if !all && !woken.is_empty() {
                 break;
@@ -872,7 +872,7 @@ impl FlashInner {
             .filter(|(_, e)| e.kind == WaitKind::Condvar(cvid))
             .map(|(&k, _)| k)
             .collect();
-        let mut woken = Vec::new();
+        let mut woken: Vec<Wake> = Vec::new();
         for key in keys {
             if !all && !woken.is_empty() {
                 break;
@@ -902,7 +902,7 @@ impl FlashInner {
             .iter()
             .find(|(_, e)| e.kind == WaitKind::Condvar(cvid))
             .map(|(&k, _)| k);
-        let mut woken = Vec::new();
+        let mut woken: Vec<Wake> = Vec::new();
         if let Some(key) = woken_key
             && let Some(entry) = s.sched.indef.remove(&key)
         {

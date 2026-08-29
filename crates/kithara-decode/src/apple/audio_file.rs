@@ -1,6 +1,10 @@
 use std::{
     cell::Cell,
     io::{Error, ErrorKind, Read, Seek, SeekFrom},
+    sync::{
+        OnceLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use kithara_apple::audio_toolbox::{
@@ -10,6 +14,7 @@ use kithara_apple::audio_toolbox::{
     AudioFilePacketRead, AudioStreamBasicDescription, AudioStreamPacketDescription, OSStatus,
     PARAM_ERR, SInt64, UInt32,
 };
+use kithara_platform::sync::Arc;
 
 use super::consts::os_status_to_string;
 use crate::{
@@ -44,6 +49,15 @@ struct CallbackCtx {
     /// `DecodeError::Backend` with the chain intact.
     last_error: Cell<Option<Error>>,
     size: SizeMode,
+    byte_len: OnceLock<Arc<AtomicU64>>,
+    terminal_short_read: Cell<Option<TerminalShortRead>>,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+struct TerminalShortRead {
+    position: u64,
+    request: usize,
+    end: u64,
 }
 
 /// Safe wrapper around an Apple `AudioFile` handle backed by an
@@ -109,6 +123,8 @@ impl AppleAudioFile {
             source,
             size,
             last_error: Cell::new(None),
+            byte_len: OnceLock::new(),
+            terminal_short_read: Cell::new(None),
         };
         let handle = AudioFile::open_with_callbacks(ctx, hint, has_size).map_err(|status| {
             DecodeError::BackendStatus {
@@ -229,6 +245,19 @@ impl AppleAudioFile {
         DecodeError::backend(io_err)
     }
 
+    pub(crate) fn set_byte_len_handle(&self, handle: Option<Arc<AtomicU64>>) {
+        let Some(handle) = handle else {
+            return;
+        };
+        let byte_len = &self.handle.callbacks().byte_len;
+        if let Some(current) = byte_len.get() {
+            debug_assert!(Arc::ptr_eq(current, &handle));
+        } else {
+            let installed = byte_len.set(handle).is_ok();
+            debug_assert!(installed, "byte-length handle is installed once");
+        }
+    }
+
     /// Read one VBR packet at `starting_packet` into `buf`. Returns
     /// `Ok(Some((bytes_written, packet_desc)))` or `Ok(None)` at EOF.
     /// Use for codecs whose decoder needs per-packet descriptors
@@ -241,7 +270,9 @@ impl AppleAudioFile {
         let mut packets: UInt32 = 1;
         let mut desc = AudioStreamPacketDescription::default();
         let starting_packet = SInt64::try_from(starting_packet).map_err(DecodeError::backend)?;
-        self.handle.callbacks().last_error.set(None);
+        let callbacks = self.handle.callbacks();
+        callbacks.last_error.set(None);
+        callbacks.terminal_short_read.set(None);
         let read =
             self.handle
                 .read_packet_data(starting_packet, Some(&mut desc), &mut packets, buf);
@@ -283,7 +314,9 @@ impl AppleAudioFile {
     ) -> DecodeResult<(u32, u32)> {
         let mut packets: UInt32 = max_packets;
         let starting_packet = SInt64::try_from(starting_packet).map_err(DecodeError::backend)?;
-        self.handle.callbacks().last_error.set(None);
+        let callbacks = self.handle.callbacks();
+        callbacks.last_error.set(None);
+        callbacks.terminal_short_read.set(None);
         let read = self
             .handle
             .read_packet_data(starting_packet, None, &mut packets, buf);
@@ -354,18 +387,51 @@ impl AudioFileCallbacks for CallbackCtx {
         if matches!(self.size, SizeMode::Unknown) && position >= UNKNOWN_SIZE_TAIL_PROBE_MIN {
             return Ok(0);
         }
+        let request = buffer.len();
+        if let Some(previous) = self.terminal_short_read.get()
+            && previous.position == pos
+            && previous.request == request
+            && self
+                .byte_len
+                .get()
+                .is_some_and(|byte_len| byte_len.load(Ordering::Acquire) == previous.end)
+        {
+            return Ok(0);
+        }
         if let Err(err) = self.source.seek(SeekFrom::Start(pos)) {
+            self.terminal_short_read.set(None);
             self.last_error.set(Some(err));
             return Err(PARAM_ERR);
         }
         let n = match self.source.read(buffer) {
             Ok(n) => n,
             Err(err) => {
+                self.terminal_short_read.set(None);
                 self.last_error.set(Some(err));
                 return Err(PARAM_ERR);
             }
         };
+        let end = u64::try_from(n).ok().and_then(|read| pos.checked_add(read));
+        let terminal_short_read = match end {
+            Some(end)
+                if n > 0
+                    && n < request
+                    && self
+                        .byte_len
+                        .get()
+                        .is_some_and(|byte_len| byte_len.load(Ordering::Acquire) == end) =>
+            {
+                Some(TerminalShortRead {
+                    position: pos,
+                    request,
+                    end,
+                })
+            }
+            _ => None,
+        };
+        self.terminal_short_read.set(terminal_short_read);
         let Ok(n_u32) = UInt32::try_from(n) else {
+            self.terminal_short_read.set(None);
             self.last_error.set(Some(Error::other(
                 "AppleAudioFile read_callback: bytes read > u32::MAX",
             )));

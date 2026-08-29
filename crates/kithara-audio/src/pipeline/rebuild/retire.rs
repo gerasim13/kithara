@@ -4,13 +4,14 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{ChunkRetire, PcmChunk};
+use kithara_decode::ChunkRetire;
+use kithara_signal::AudioChunk;
 use tracing::warn;
 
 use crate::pipeline::decode::DecoderGeneration;
 
 pub(crate) struct Retired {
-    chunks: ArrayQueue<PcmChunk>,
+    chunks: ArrayQueue<AudioChunk>,
     generations: ArrayQueue<DecoderGeneration>,
     overflowed: AtomicBool,
 }
@@ -51,7 +52,7 @@ impl Retired {
 }
 
 impl ChunkRetire for Retired {
-    fn retire(&self, chunk: PcmChunk) {
+    fn retire(&self, chunk: AudioChunk) {
         if let Err(chunk) = self.chunks.push(chunk) {
             self.overflowed.store(true, Ordering::Release);
             mem::forget(chunk);

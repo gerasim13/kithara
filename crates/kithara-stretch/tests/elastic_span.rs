@@ -1,8 +1,7 @@
-#![cfg(feature = "stretch-signalsmith")]
-
+use kithara_bufpool::SamplePool;
 use kithara_stretch::{
-    ElasticConfig, ElasticCursor, ElasticEngine, ElasticError, ElasticSpan, ElasticSpanConfig,
-    ElasticSpanPlan, SignalsmithElastic,
+    ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticSpan,
+    ElasticSpanConfig, ElasticSpanPlan, build_engine,
 };
 use kithara_test_utils::kithara;
 
@@ -12,16 +11,23 @@ const MAX_OUTPUT_FRAMES: usize = 480;
 /// The planner reads capabilities, never an engine, so one declared window is
 /// enough to pin its quantization; every engine renders what it plans, which
 /// the conformance suite covers.
-fn capabilities() -> kithara_stretch::ElasticCapabilities {
-    let config = ElasticConfig::try_from((44_100, 2, 960, MAX_OUTPUT_FRAMES))
+fn capabilities() -> ElasticCapabilities {
+    let config = ElasticConfig::builder()
+        .pool(SamplePool::default())
+        .sample_rate(44_100)
+        .channels(2)
+        .max_source_frames(960)
+        .max_output_frames(MAX_OUTPUT_FRAMES)
+        .build()
         .expect("invariant: static exact-span config");
-    SignalsmithElastic::prepare(config)
-        .expect("signalsmith exact-span engine")
+    build_engine(config)
+        .expect("the configured exact-span engine prepares")
         .capabilities()
 }
 
 fn span_config() -> ElasticSpanConfig {
-    ElasticSpanConfig::try_from((CONTINUITY_EPSILON, 1.0, 1.0))
+    ElasticSpanConfig::builder()
+        .build()
         .expect("invariant: static span policy")
 }
 
@@ -42,8 +48,10 @@ fn source_cursor(source: f64) -> ElasticCursor {
 
 #[kithara::test]
 fn configured_phase_limit_rejects_a_larger_cursor_error() {
-    let config =
-        ElasticSpanConfig::try_from((1.0e-6, 0.25, 1.0)).expect("finite positive span policy");
+    let config = ElasticSpanConfig::builder()
+        .max_phase_error(0.25)
+        .build()
+        .expect("finite positive span policy");
     let error = ElasticSpanPlan::new(
         [span(0.5, 480.5, MAX_OUTPUT_FRAMES)],
         Some(source_cursor(0.0)),
@@ -144,9 +152,9 @@ fn one_frame_error_is_continuous_but_larger_error_requires_relocation() {
 }
 
 #[kithara::test]
-fn correction_respects_backend_rate_headroom() {
+fn correction_respects_configured_rate_headroom() {
     let cursor = Some(source_cursor(0.0));
-    let error = plan(&[span(0.75, 160.75, 120)], cursor)
+    let error = plan(&[span(0.75, 4.75, 1)], cursor)
         .expect_err("maximum nominal rate has no positive headroom");
     assert!(matches!(
         error,
@@ -154,12 +162,12 @@ fn correction_respects_backend_rate_headroom() {
             if (error - 0.75).abs() <= CONTINUITY_EPSILON
     ));
 
-    let corrected = plan(&[span(0.75, 160.65, 120)], cursor)
-        .expect("partial headroom permits partial correction");
+    let corrected =
+        plan(&[span(0.75, 4.749, 1)], cursor).expect("partial headroom permits partial correction");
     let segment = corrected.segments()[0];
-    assert_eq!(segment.source_end() - segment.source_start(), 160);
-    assert_close(corrected.cursor().continuous(), 160.0);
-    assert_close(160.65 - corrected.cursor().continuous(), 0.65);
+    assert_eq!(segment.source_end() - segment.source_start(), 4);
+    assert_close(corrected.cursor().continuous(), 4.0);
+    assert_close(4.749 - corrected.cursor().continuous(), 0.749);
 }
 
 #[kithara::test]
