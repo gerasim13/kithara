@@ -38,17 +38,15 @@ impl Shot {
         )
     }
 
+    /// The page's own name, which is the slug its nav item, its document and
+    /// its reading already answer to. It carried the page's position before,
+    /// so inserting a page renamed every page after it and left the parity
+    /// budget pricing files nothing writes.
     pub(super) fn name(self) -> String {
-        let tab = format!("{:?}", self.tab).to_lowercase();
+        let tab = self.tab.slug();
         self.module.map_or_else(
-            || format!("{:02}-{tab}", self.tab.index()),
-            |module| {
-                format!(
-                    "{:02}-{tab}-{}",
-                    self.tab.index(),
-                    format!("{module:?}").to_lowercase()
-                )
-            },
+            || tab.to_owned(),
+            |module| format!("{tab}-{}", module.slug()),
         )
     }
 }
@@ -253,17 +251,14 @@ mod tests {
 
     #[kithara::test]
     fn a_page_photographed_once_keeps_the_name_a_still_set_gives_it() {
-        assert_eq!(
-            film("motion:1x1").file(shot(Tab::Motion), 0),
-            "23-motion.png"
-        );
+        assert_eq!(film("motion:1x1").file(shot(Tab::Motion), 0), "motion.png");
     }
 
     #[kithara::test]
     fn a_page_photographed_more_than_once_numbers_its_photographs() {
         assert_eq!(
             film("motion:2x1").file(shot(Tab::Motion), 1),
-            "23-motion-001.png"
+            "motion-001.png"
         );
     }
 
