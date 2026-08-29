@@ -459,6 +459,7 @@ impl Reads for CensusReads {
                 revision: 0,
                 cues: &[],
                 downbeats: &[],
+                unready: &[],
                 bpm: None,
                 r#loop: None,
             })),

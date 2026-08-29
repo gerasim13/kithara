@@ -24,7 +24,6 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 # host's feature set, so a build that draws at all draws every control.
 render = [
     "dep:kithara-bufpool",
-    "dep:kithara-platform",
     "dep:lucide-icons",
     "dep:naga",
     "dep:num-traits",
@@ -36,19 +35,11 @@ render = [
     "dep:velato",
 ]
 iced = ["render", "dep:iced", "iced/advanced"]
-vello = [
-    "render",
-    "dep:kithara-platform",
-    "dep:lucide-icons",
-    "dep:num-traits",
-    "dep:parley",
-    "dep:tracing",
-    "dep:vello",
-]
+vello = ["render", "dep:lucide-icons", "dep:num-traits", "dep:parley", "dep:tracing", "dep:vello"]
 
 [dependencies]
 kithara-bufpool = { workspace = true, optional = true }
-kithara-platform = { workspace = true, optional = true }
+kithara-platform = { workspace = true }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
