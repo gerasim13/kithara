@@ -1,5 +1,4 @@
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioChunk;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -9,38 +8,6 @@ use super::{
     renderer, sine, spec,
 };
 use crate::{GridSegment, RegionPlan};
-
-fn finish_unity_transition(
-    renderer: &mut WarpRenderer,
-    first: AudioChunk,
-) -> (Vec<f32>, AudioChunk, Vec<usize>) {
-    let mut tail = Vec::new();
-    let mut quanta = Vec::new();
-    let mut output = first;
-    for _ in 1..64 {
-        if !renderer.transition_pending() {
-            return (tail, output, quanta);
-        }
-        assert!(output.frames() > 0, "a tail quantum contains real samples");
-        quanta.push(output.frames());
-        tail.extend_from_slice(&output.samples);
-        assert!(
-            renderer.transition_pending(),
-            "queued unity remains owned after a tail quantum"
-        );
-        output = flush_serviced(renderer).expect("the next transition quantum emits samples");
-    }
-    panic!("active-to-unity transition must converge");
-}
-
-#[cfg(feature = "stretch-signalsmith")]
-fn mean_square(samples: &[f32]) -> f64 {
-    samples
-        .iter()
-        .map(|sample| f64::from(*sample).powi(2))
-        .sum::<f64>()
-        / f64_of(samples.len()).max(1.0)
-}
 
 #[kithara::test]
 fn exact_output_frames_do_not_drift_across_partitions() {
@@ -84,6 +51,34 @@ fn exact_output_frames_do_not_drift_across_partitions() {
     });
     assert_eq!(outputs, [0, 0, 0, 1]);
     assert_eq!(remainder, 0.0);
+
+    let mut remainder = 0.0;
+    let outputs = [1.6, 0.25, 1.0].map(|stretch| {
+        let (output, next_remainder) = WarpRenderer::output_frames(1, stretch, remainder)
+            .expect("negative rounding debt remains exact across rate changes");
+        remainder = next_remainder;
+        output
+    });
+    assert_eq!(outputs, [2, 0, 0]);
+    assert_eq!(remainder.round() as usize, 1);
+    assert_eq!(outputs.into_iter().sum::<usize>() + 1, 3);
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn source_quantum_rejects_a_stationary_terminal_coordinate(#[case] backend: StretchKind) {
+    let controls = StretchControls::new(0.5);
+    controls.set_backend(backend);
+    let mut fx = renderer(controls);
+    let mut meta = chunk(&sine(1)).meta;
+    meta.frame_offset = u64::MAX;
+
+    assert!(fx.prepare_quantum(meta, 1).is_none());
+    assert_eq!(fx.prepared_quantum_speed, None);
 }
 
 #[kithara::test]
@@ -240,7 +235,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: StretchKind) {
+fn pending_span_is_committed_before_resident_unity_render(#[case] backend: StretchKind) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -258,34 +253,12 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     unity.meta.frame_offset = 1;
     unity.meta.timestamp = Duration::from_millis(10);
     unity.meta.end_timestamp = Duration::from_millis(20);
-    let transition =
+    let output =
         render_serviced(&mut fx, unity).expect("rounded pending frame precedes the unity frame");
-    assert!(fx.transition_pending());
-    assert!(transition.frames() > 1, "pending frame starts the tail");
-    assert_eq!(transition.meta.frame_offset, 0);
-    let (tail, unity, tail_quanta) = finish_unity_transition(&mut fx, transition);
-    assert!(
-        !tail_quanta.is_empty(),
-        "the backend emits at least one retained tail quantum"
-    );
-    assert!(
-        !tail.is_empty(),
-        "the pending frame and backend tail emit samples"
-    );
-    assert_eq!(
-        &unity.samples[..],
-        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
-        "unity frame follows the complete backend tail byte-for-byte"
-    );
-    assert_eq!(unity.meta.frame_offset, 1);
-    assert_eq!(unity.meta.end_timestamp, Duration::from_millis(20));
-
-    let mut next = chunk(&source[2 * usize::from(Consts::CH)..]);
-    next.meta.frame_offset = 2;
-    let next_samples = next.samples.to_vec();
-    let passthrough = render_serviced(&mut fx, next).expect("unity remains zero-copy");
-    assert_eq!(&passthrough.samples[..], &next_samples);
-    assert!(flush_serviced(&mut fx).is_none());
+    assert_eq!(output.frames(), 2, "pending fractional span is committed");
+    assert_eq!(output.meta.frame_offset, 0);
+    assert!(fx.active, "the backend remains resident at exact unity");
+    assert_eq!(fx.pending_frames(usize::from(Consts::CH)), 0);
 }
 
 #[kithara::test]
@@ -294,124 +267,48 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind) {
+fn active_engine_remains_resident_at_live_unity(#[case] backend: StretchKind) {
     const ACTIVE_FRAMES: usize = 4096;
     const UNITY_FRAMES: usize = 1024;
 
     let source = vec![0.25; (ACTIVE_FRAMES + UNITY_FRAMES) * usize::from(Consts::CH)];
     let split = ACTIVE_FRAMES * usize::from(Consts::CH);
 
-    let reference_controls = StretchControls::new(0.5);
-    reference_controls.set_keylock(true);
-    reference_controls.set_backend(backend);
-    let mut reference = renderer(Arc::clone(&reference_controls));
-    let reference_active = render_serviced(&mut reference, chunk(&source[..split]))
-        .expect("non-unity span emits samples");
-    let held_frontier = reference
+    let controls = StretchControls::new(0.5);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let mut live = renderer(Arc::clone(&controls));
+    render_serviced(&mut live, chunk(&source[..split])).expect("non-unity span emits samples");
+    let held_frontier = live
         .rendered_source_end()
         .expect("active render publishes its source frontier");
+
+    controls.set_speed(1.0);
+    let mut unity = chunk(&source[split..]);
+    unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
+    let input_ptr = unity.samples.as_ptr();
+    let output =
+        render_serviced(&mut live, unity).expect("resident engine immediately renders exact unity");
+
+    assert!(live.active, "exact unity keeps the existing engine active");
+    assert_eq!(output.frames(), UNITY_FRAMES);
+    assert_ne!(output.samples.as_ptr(), input_ptr);
+    assert!(output.samples.iter().all(|sample| sample.is_finite()));
     assert!(
-        held_frontier.0 < u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64"),
-        "active backend retains declared source latency"
+        live.rendered_source_end()
+            .is_some_and(|frontier| frontier.0 > held_frontier.0),
+        "unity render advances the source frontier without a transition drain"
     );
 
-    let mut reference_tail = Vec::new();
-    let mut reference_quanta = Vec::new();
-    while let Some(tail) = flush_serviced(&mut reference) {
-        reference_quanta.push(tail.frames());
-        reference_tail.extend_from_slice(&tail.samples);
-        assert!(reference_quanta.len() < 64, "terminal drain must converge");
+    let mut tail_chunks = 0;
+    while let Some(tail) = flush_serviced(&mut live) {
+        assert!(tail.samples.iter().all(|sample| sample.is_finite()));
+        tail_chunks += 1;
+        assert!(tail_chunks < 64, "terminal EOF drain must converge");
     }
     assert!(
-        !reference_quanta.is_empty(),
-        "active backend exposes a terminal tail"
-    );
-    assert!(
-        !reference_tail.is_empty(),
-        "active backend tail contains samples"
-    );
-    assert_eq!(
-        reference.rendered_source_end(),
-        Some((
-            u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64"),
-            spec().sample_rate,
-        )),
-        "completed tail releases the held source frontier"
-    );
-
-    reference_controls.set_speed(1.0);
-    let mut reference_unity = chunk(&source[split..]);
-    reference_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
-    let reference_unity = render_serviced(&mut reference, reference_unity)
-        .expect("unity span follows the drained tail");
-    assert_eq!(&reference_unity.samples[..], &source[split..]);
-
-    let live_controls = StretchControls::new(0.5);
-    live_controls.set_keylock(true);
-    live_controls.set_backend(backend);
-    let mut live = renderer(Arc::clone(&live_controls));
-    let live_active =
-        render_serviced(&mut live, chunk(&source[..split])).expect("non-unity span emits samples");
-    assert_eq!(live_active.frames(), reference_active.frames());
-    assert_eq!(live.rendered_source_end(), Some(held_frontier));
-
-    live_controls.set_speed(1.0);
-    let mut live_unity = chunk(&source[split..]);
-    live_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
-    let unity_ptr = live_unity.samples.as_ptr();
-    let first_tail = render_serviced(&mut live, live_unity)
-        .expect("live transition emits its first retained tail quantum");
-    assert!(
-        live.transition_pending(),
-        "unity remains queued after the first tail quantum"
-    );
-    let (live_tail, live_unity, tail_quanta) = finish_unity_transition(&mut live, first_tail);
-
-    assert_eq!(
-        tail_quanta, reference_quanta,
-        "live transition preserves explicit per-quantum progression"
-    );
-    assert!(
-        live_tail.iter().any(|sample| sample.abs() > f32::EPSILON),
-        "the retained backend tail contains audible samples"
-    );
-    assert!(
-        live_tail.iter().all(|sample| sample.is_finite()),
-        "the retained backend tail contains only finite samples"
-    );
-    assert_eq!(live_tail.len(), reference_tail.len());
-    #[cfg(feature = "stretch-bungee")]
-    if backend == StretchKind::Bungee {
-        assert_eq!(
-            live_tail, reference_tail,
-            "Bungee incremental live drain equals an explicit drain exactly"
-        );
-    }
-    #[cfg(feature = "stretch-signalsmith")]
-    if backend == StretchKind::Signalsmith {
-        let live_energy = mean_square(&live_tail);
-        let peak = live_tail
-            .iter()
-            .map(|sample| sample.abs())
-            .fold(0.0_f32, f32::max);
-        assert!(
-            live_energy > 0.0 && live_energy <= 1.0,
-            "Signalsmith live tail energy stays finite and normalized: energy={live_energy}"
-        );
-        assert!(
-            peak <= 1.0,
-            "Signalsmith live tail remains within normalized sample bounds: peak={peak}"
-        );
-    }
-    assert_eq!(
-        &live_unity.samples[..],
-        &source[split..],
-        "unity samples follow the retained tail byte-for-byte"
-    );
-    assert_eq!(
-        live_unity.samples.as_ptr(),
-        unity_ptr,
-        "queued unity samples return without copying"
+        tail_chunks > 0,
+        "terminal EOF still drains the backend tail"
     );
     assert_eq!(
         live.rendered_source_end(),
@@ -419,76 +316,7 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
             u64::try_from(ACTIVE_FRAMES + UNITY_FRAMES).expect("fixture fits u64"),
             spec().sample_rate,
         )),
-        "the source frontier advances only after tail and unity samples are emitted"
-    );
-    assert!(flush_serviced(&mut live).is_none());
-}
-
-#[kithara::test]
-#[cfg_attr(
-    feature = "stretch-signalsmith",
-    case::signalsmith(StretchKind::Signalsmith)
-)]
-#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: StretchKind) {
-    let source = sine(3);
-    let reference_controls = StretchControls::new(1.0);
-    reference_controls.set_keylock(true);
-    reference_controls.set_backend(backend);
-    reference_controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![GridSegment::new(0, 1, 2.0)]).expect("fixture region is valid"),
-    )));
-    let mut reference = renderer(Arc::clone(&reference_controls));
-    let reference_first =
-        render_serviced(&mut reference, chunk(&source[..usize::from(Consts::CH)]))
-            .expect("the no-debt span emits two frames");
-    assert_eq!(reference_first.frames(), 2);
-    reference_controls.set_region_plan(None);
-    let mut reference_unity = chunk(&source[2 * usize::from(Consts::CH)..]);
-    reference_unity.meta.frame_offset = 2;
-    let reference_transition = render_serviced(&mut reference, reference_unity)
-        .expect("the no-debt transition starts its tail");
-    let (reference_tail, reference_unity, _) =
-        finish_unity_transition(&mut reference, reference_transition);
-    let mut reference_samples = reference_first.samples.to_vec();
-    reference_samples.extend_from_slice(&reference_tail);
-    reference_samples.extend_from_slice(&reference_unity.samples);
-
-    let controls = StretchControls::new(1.0);
-    controls.set_keylock(true);
-    controls.set_backend(backend);
-    controls.set_region_plan(Some(Arc::new(
-        RegionPlan::new(vec![
-            GridSegment::new(0, 1, 1.6),
-            GridSegment::new(1, 2, 0.25),
-        ])
-        .expect("fixture regions are contiguous"),
-    )));
-    let mut fx = renderer(Arc::clone(&controls));
-    let first = render_serviced(&mut fx, chunk(&source[..usize::from(Consts::CH)]))
-        .expect("the first span rounds to two frames");
-    assert_eq!(first.frames(), 2);
-
-    let mut debt = chunk(&source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)]);
-    debt.meta.frame_offset = 1;
-    assert!(render_serviced(&mut fx, debt).is_none());
-
-    controls.set_region_plan(None);
-    let mut unity = chunk(&source[2 * usize::from(Consts::CH)..]);
-    unity.meta.frame_offset = 2;
-    let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
-    let (tail, unity, _) = finish_unity_transition(&mut fx, transition);
-    let mut actual_samples = first.samples.to_vec();
-    actual_samples.extend_from_slice(&tail);
-    actual_samples.extend_from_slice(&unity.samples);
-    assert_eq!(
-        actual_samples.len() / usize::from(Consts::CH),
-        reference_samples.len() / usize::from(Consts::CH),
-        "negative rounding debt adds no output frame"
-    );
-    assert_eq!(
-        actual_samples, reference_samples,
-        "negative rounding debt adds no samples to the complete transition"
+        "terminal EOF drain releases the complete source frontier"
     );
 }
 

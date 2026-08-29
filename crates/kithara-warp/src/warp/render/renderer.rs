@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::{sync::Arc, time::Duration};
@@ -28,6 +28,8 @@ pub struct WarpRenderer {
     /// Region covering the playhead - the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     pub(super) region: Option<ActiveRegion>,
+    /// Speed sampled with the source quantum prepared by the scheduler shell.
+    pub(super) prepared_quantum_speed: Option<f32>,
     pub(super) sample_pool: SamplePool,
     pub(super) spec: AudioSpec,
     /// Engine kind currently prepared by the scheduler shell.
@@ -38,8 +40,8 @@ pub struct WarpRenderer {
     /// Consumed input retained until the scheduler shell can resize or recycle
     /// it outside the checked render core.
     pub(super) deferred_scratch: Option<SampleBuffer>,
-    /// Whether previous input ran through the backend. Drives a clean backend
-    /// reset when the renderer returns to unity passthrough.
+    /// Whether previous input ran through the backend. Once active, the
+    /// resident engine also owns exact-unity rendering.
     pub(super) active: bool,
     /// Last pitch factor pushed to the backend; avoids redundant updates.
     pub(super) applied_pitch: f64,
@@ -50,15 +52,12 @@ pub struct WarpRenderer {
     pub(super) pending_source: Option<SampleBuffer>,
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<AudioChunkInfo>,
-    /// Unity chunk retained while the active backend drains its tail.
-    /// Its samples occupy `pending_source` without a copy.
-    pub(super) pending_unity_meta: Option<AudioChunkInfo>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
     pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
     /// Source frames admitted since the last renderer reset.
     pub(super) source_frames_admitted: u64,
-    /// Reset requested by seek or a return to unity passthrough. The scheduler
-    /// shell performs it outside the checked render core.
+    /// Reset requested by a timeline discontinuity. The scheduler shell
+    /// performs it outside the checked render core.
     pub(super) reset_pending: bool,
     /// One scheduler-shell rebuild requested after a checked engine failure.
     /// The intent is consumed even when preparation fails.
@@ -69,6 +68,7 @@ impl WarpRenderer {
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
     pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
+    pub(super) const RENDER_QUANTUM_FRAMES: NonZeroUsize = NonZeroUsize::new(512).unwrap();
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
@@ -88,12 +88,12 @@ impl WarpRenderer {
             controls,
             sample_pool,
             spec,
+            prepared_quantum_speed: None,
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
             pending_source: target.pending_source,
             pending_meta: None,
-            pending_unity_meta: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
             reset_pending: false,
@@ -126,7 +126,6 @@ impl WarpRenderer {
             source.clear();
         }
         self.pending_meta = None;
-        self.pending_unity_meta = None;
     }
 
     pub(super) fn retire_engine(&mut self) {
@@ -144,6 +143,7 @@ impl WarpRenderer {
         self.output_start_meta = None;
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
+        self.prepared_quantum_speed = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
         self.active = false;
@@ -191,31 +191,23 @@ impl WarpRenderer {
         self.plan.is_none() && (speed - 1.0).abs() <= f32::EPSILON
     }
 
+    pub(super) fn can_passthrough(&self, speed: f32) -> bool {
+        let channels = usize::from(self.spec.channels.max(1));
+        !self.active && self.pending_frames(channels) == 0 && self.unity_passthrough(speed)
+    }
+
     pub(super) fn pending_frames(&self, channels: usize) -> usize {
-        if self.transition_pending() {
-            return 0;
-        }
         self.pending_source
             .as_deref()
             .map_or(0, |source| source.len() / channels)
-    }
-
-    /// Whether a live active-to-unity transition still owns queued samples.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn transition_pending(&self) -> bool {
-        self.pending_unity_meta.is_some()
     }
 
     /// Whether the renderer can accept another source chunk without dropping it.
     #[doc(hidden)]
     #[must_use]
     pub fn accepts_input(&self) -> bool {
-        !self.transition_pending()
-            && (self.unity_passthrough(self.controls.speed())
-                || (self.engine.is_some()
-                    && self.pending_source.is_some()
-                    && self.scratch.is_some()))
+        self.can_passthrough(self.controls.speed())
+            || (self.engine.is_some() && self.pending_source.is_some() && self.scratch.is_some())
     }
 
     pub(super) fn held_source_frames(&self) -> u64 {

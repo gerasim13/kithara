@@ -1,6 +1,7 @@
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
+use tracing::warn;
 
 use super::renderer::WarpRenderer;
 
@@ -173,6 +174,81 @@ impl WarpRenderer {
         self.output_remainder = 0.0;
         self.active = true;
         Ok(())
+    }
+
+    pub(super) fn source_frames_for_quantum(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+        speed: f32,
+    ) -> Result<usize, ElasticError> {
+        if remaining == 0 {
+            return Err(ElasticError::EmptySource);
+        }
+        if self.can_passthrough(speed) {
+            return Ok(remaining.min(Self::RENDER_QUANTUM_FRAMES.get()));
+        }
+
+        let channels = usize::from(self.spec.channels.max(1));
+        let region = self.region_for(meta.frame_offset);
+        let region_frames = usize::try_from(
+            region
+                .end()
+                .checked_sub(meta.frame_offset)
+                .ok_or(ElasticError::SampleCountOverflow)?
+                .min(u64::try_from(remaining).map_err(|_| ElasticError::SampleCountOverflow)?),
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        if region_frames == 0 {
+            return Err(ElasticError::StationarySourceSpan);
+        }
+        let stretch = (1.0 / f64::from(speed)) * region.correction();
+        let capabilities = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.capabilities())
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        let output_limit = capabilities
+            .max_output_frames()
+            .min(Self::RENDER_QUANTUM_FRAMES.get());
+        let source_limit =
+            Self::source_block_limit(stretch, capabilities.max_source_frames(), output_limit)?;
+        let pending_frames = self.pending_frames(channels);
+        let available =
+            source_limit
+                .checked_sub(pending_frames)
+                .ok_or(ElasticError::SourceFrameLimit {
+                    frames: pending_frames,
+                    limit: source_limit,
+                })?;
+        if available == 0 {
+            return Err(ElasticError::InvalidRate(stretch.recip()));
+        }
+        Ok(region_frames.min(available))
+    }
+
+    /// Return the next source span that fits the fixed output quantum.
+    ///
+    /// The playback scheduler uses this workspace-internal seam to prepare an
+    /// owning pooled subchunk outside the checked render core.
+    #[doc(hidden)]
+    pub fn prepare_quantum(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+    ) -> Option<FrameCount> {
+        let speed = self.controls.speed();
+        match self.source_frames_for_quantum(meta, remaining, speed) {
+            Ok(frames) => {
+                self.prepared_quantum_speed = Some(speed);
+                Some(FrameCount::new(frames))
+            }
+            Err(error) => {
+                self.prepared_quantum_speed = None;
+                warn!(%error, "time-stretch source quantum sizing failed");
+                None
+            }
+        }
     }
 
     pub(super) fn render_active(

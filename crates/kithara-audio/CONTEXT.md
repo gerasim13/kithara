@@ -33,14 +33,18 @@ runtime `AudioReader`, `AudioSource`, and observer protocols that transport
 those values. It does not mirror their fields or re-export them through a
 decoder-specific compatibility layer.
 
-Transport (`runtime/ports.rs`): SPSC `ringbuf::HeapRb` plus a one-slot overflow
-(`Outlet`/`Inlet`).
+Transport (`runtime/ports.rs`): generic SPSC `ringbuf::HeapRb` plus a one-slot
+overflow (`Outlet`/`Inlet`). The playback-facing `ProducerPort` uses the same
+bounded ring but deliberately bypasses that overflow.
 
-- **Backpressure.** `Outlet::try_push` parks one item in the overflow slot when
-  the ring is full, so a producer emitting ≤1 chunk per tick treats it as
-  infallible. Each tick starts with `Outlet::flush()`; if still full the node
-  returns `TickResult::Backpressured` *without* ticking the FSM — every internal
-  transition, seeks included, pauses until the consumer drains.
+- **Generic outlet overflow.** `Outlet::try_push` first flushes an older parked
+  item, then parks the new item when the ring is full; it returns `Err` only
+  while both the ring and overflow slot remain saturated.
+- **Final playback backpressure.** `DecoderNode` checks
+  `ProducerPort::can_push_direct` before processing the source and returns
+  `TickResult::Backpressured` while the final ring is full.
+  `ProducerPort::push_direct` then admits the item under that reserved-capacity
+  invariant; it never parks final playback output in the generic overflow slot.
 - **Wake.** A producer→reader ring push arms a coalesced atomic wake;
   empty-to-non-empty also enqueues `on_data_available`. The produce core never
   calls `ThreadWake::wake` or enters the kernel. The scheduler shell delivers
@@ -88,10 +92,10 @@ cross-thread task `wake()`: it does a lock-free `signal_epoch(epoch)` (`Release`
 stores of `ready_epoch` then `ready`) and the awaiter polls with `Acquire`,
 re-arming its own runtime timer (`POLL_INTERVAL` = 2 ms) while closed.
 The play-owned `DecoderNode` opens the gate at every preload terminal site —
-preload-chunk threshold with an empty overflow slot, EOF, `Failed`, `on_cancel`
-— from its cached runtime epoch, and `rearm()`s it in `sync_seek_epoch`
-(`Audio::seek` rearms consumer-side) so a post-seek wait blocks until that epoch
-refills.
+preload-chunk threshold after direct final-ring admission, EOF, `Failed`,
+`on_cancel` — from its cached runtime epoch, and `rearm()`s it in
+`sync_seek_epoch` (`Audio::seek` rearms consumer-side) so a post-seek wait blocks
+until that epoch refills.
 
 **`block_on_underrun`.** The bool remains the independent empty-read policy;
 `ConsumerWakeMode` controls only how a successful drain wakes the worker. With

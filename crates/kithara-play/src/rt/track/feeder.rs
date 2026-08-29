@@ -110,7 +110,8 @@ impl PlayerResource {
         let mut eof_reached = self.eof_seen;
 
         while target_frames > self.write_len && !eof_reached {
-            let avail = self.channel_buffers[0].len() - self.write_pos;
+            let needed = target_frames - self.write_len;
+            let avail = (self.channel_buffers[0].len() - self.write_pos).min(needed);
             if avail == 0 {
                 break;
             }

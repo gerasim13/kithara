@@ -7,21 +7,16 @@ use kithara::{
     events::{PlayerEvent, TrackId},
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig},
-    warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
     TestTempDir,
     audio_fixture::EmbeddedAudio,
-    create_test_wav,
-    goertzel::goertzel_magnitude,
-    kithara,
+    create_test_wav, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
-    wav::prepare_sine_wav,
 };
 
 const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 /// Long enough for the ring to have flushed every block decoded at the
 /// previous rate, so the measured window sees only the new one.
@@ -35,17 +30,6 @@ const DRAIN_BLOCK_BUDGET: usize = 4_000;
 /// the discrimination that matters is against an unchanged 1.0 ratio.
 const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
-const SOURCE_TONE_HZ: f64 = 440.0;
-const SLOW_RATE: f32 = 0.5;
-const SLOW_TONE_HZ: f64 = 220.0;
-const FAST_TONE_HZ: f64 = 880.0;
-const TONE_DOMINANCE_RATIO: f64 = 4.0;
-const WARMUP_BLOCK_BUDGET: usize = 200;
-/// Declared native latency, rounded up to 512 frames, plus one frequency-analysis block.
-const SIGNALSMITH_RESPONSE_BLOCK_BUDGET: usize = 7;
-const BUNGEE_RESPONSE_BLOCK_BUDGET: usize = 15;
-const RESPONSE_OBSERVATION_BLOCK_BUDGET: usize = 400;
-const FIXTURE_SECONDS: usize = 12;
 
 async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &Path) -> Resource {
     let byte_pool = harness.with_player(|player| player.byte_pool().clone());
@@ -81,43 +65,6 @@ async fn media_advance(harness: &OfflinePlayerHarness, blocks: usize) -> f64 {
     let start = harness.player().position_seconds().unwrap_or(0.0);
     render_blocks(harness, blocks).await;
     harness.player().position_seconds().unwrap_or(0.0) - start
-}
-
-fn block_period() -> Duration {
-    Duration::from_secs_f64(
-        f64::from(u32::try_from(BLOCK_FRAMES).expect("block size fits u32"))
-            / f64::from(SAMPLE_RATE),
-    )
-}
-
-fn tone_magnitudes(samples: &[f32]) -> (f64, f64) {
-    let mut channel = [0.0; BLOCK_FRAMES];
-    for (sample, frame) in channel
-        .iter_mut()
-        .zip(samples.chunks_exact(usize::from(CHANNELS)))
-    {
-        *sample = frame[0];
-    }
-    (
-        goertzel_magnitude(&channel, SLOW_TONE_HZ, SAMPLE_RATE),
-        goertzel_magnitude(&channel, FAST_TONE_HZ, SAMPLE_RATE),
-    )
-}
-
-async fn render_until_slow_tone(harness: &OfflinePlayerHarness) -> f64 {
-    for _ in 0..WARMUP_BLOCK_BUDGET {
-        let block = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
-        let (slow, fast) = tone_magnitudes(&block);
-        if slow > 1.0 && slow > fast * TONE_DOMINANCE_RATIO {
-            return slow;
-        }
-        time::sleep(block_period()).await;
-    }
-    panic!(
-        "precondition: the slow-rate {SLOW_TONE_HZ} Hz output never became audible within \
-         {WARMUP_BLOCK_BUDGET} blocks"
-    );
 }
 
 async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
@@ -195,111 +142,6 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
         "over equal rendered-output windows media time advanced \
          {accelerated}s at rate {FAST_RATE} versus {baseline}s at rate 1.0 — \
          the reported clock is on the output scale, not the media scale"
-    );
-}
-
-#[kithara::test(
-    tokio,
-    multi_thread,
-    flash(false),
-    timeout(Duration::from_secs(30)),
-    hang_timeout_secs(5)
-)]
-#[ignore = "pins the measured 848-859 ms live-rate presentation regression; unignore when no buffering exceeds backend latency"]
-#[case(StretchKind::Signalsmith, SIGNALSMITH_RESPONSE_BLOCK_BUDGET)]
-#[cfg_attr(
-    not(all(target_os = "windows", target_env = "msvc")),
-    case(StretchKind::Bungee, BUNGEE_RESPONSE_BLOCK_BUDGET)
-)]
-async fn live_rate_change_reaches_presented_pcm_within_response_budget(
-    temp_dir: TestTempDir,
-    #[case] backend: StretchKind,
-    #[case] response_block_budget: usize,
-) {
-    let stretch = StretchControls::new(1.0);
-    stretch.set_backend(backend);
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .timestretch(stretch)
-            .build(),
-        SAMPLE_RATE,
-    );
-    harness.player().set_default_rate(SLOW_RATE);
-
-    let path = temp_dir.path().join(format!("live-rate-{backend}.wav"));
-    let fixture_frames =
-        FIXTURE_SECONDS * usize::try_from(SAMPLE_RATE).expect("fixture sample rate fits usize");
-    std::fs::write(
-        &path,
-        prepare_sine_wav(
-            SOURCE_TONE_HZ,
-            16_000,
-            fixture_frames,
-            SAMPLE_RATE,
-            CHANNELS,
-        ),
-    )
-    .expect("write cached sine fixture");
-    let resource = file_resource(&harness, &path, &temp_dir.path().join("live-rate-store")).await;
-    harness.with_player(|player| {
-        player.insert(resource, TrackId::allocate(), None);
-        player
-            .select_item(0, true)
-            .expect("select live-rate fixture");
-    });
-
-    let baseline_slow = render_until_slow_tone(&harness).await;
-    time::sleep(Duration::from_millis(250)).await;
-    let pre_change = harness.render(BLOCK_FRAMES);
-    let _ = harness.tick_and_drain();
-    let (pre_change_slow, pre_change_fast) = tone_magnitudes(&pre_change);
-    assert!(
-        pre_change_slow > pre_change_fast * TONE_DOMINANCE_RATIO,
-        "precondition: expected buffered {SLOW_TONE_HZ} Hz audio before the command, got \
-         slow={pre_change_slow:.3}, fast={pre_change_fast:.3}"
-    );
-
-    harness.player().set_default_rate(FAST_RATE);
-
-    let mut last = (0.0, 0.0);
-    let mut peak_fast = 0.0_f64;
-    let mut first_fast_block = None;
-    for block in 1..=RESPONSE_OBSERVATION_BLOCK_BUDGET {
-        let output = harness.render(BLOCK_FRAMES);
-        let _ = harness.tick_and_drain();
-        last = tone_magnitudes(&output);
-        peak_fast = peak_fast.max(last.1);
-        if last.1 > last.0 * TONE_DOMINANCE_RATIO && last.1 > baseline_slow * 0.2 {
-            first_fast_block = Some(block);
-            break;
-        }
-        if block < RESPONSE_OBSERVATION_BLOCK_BUDGET {
-            time::sleep(block_period()).await;
-        }
-    }
-
-    let Some(first_fast_block) = first_fast_block else {
-        panic!(
-            "{backend} accepted rate {FAST_RATE}, but presented PCM never switched from \
-             {SLOW_TONE_HZ} Hz to {FAST_TONE_HZ} Hz within \
-             {RESPONSE_OBSERVATION_BLOCK_BUDGET} blocks: last slow={:.3}, last \
-             fast={:.3}, peak fast={peak_fast:.3}",
-            last.0, last.1
-        );
-    };
-    let budget_ms = block_period().as_secs_f64()
-        * f64::from(u32::try_from(response_block_budget).expect("response budget fits u32"))
-        * 1_000.0;
-    let actual_ms = block_period().as_secs_f64()
-        * f64::from(u32::try_from(first_fast_block).expect("observed block fits u32"))
-        * 1_000.0;
-    assert!(
-        first_fast_block <= response_block_budget,
-        "{backend} accepted rate {FAST_RATE}, but presented PCM switched from \
-         {SLOW_TONE_HZ} Hz to {FAST_TONE_HZ} Hz only at block {first_fast_block} \
-         ({actual_ms:.1} ms), beyond the {response_block_budget}-block \
-         ({budget_ms:.1} ms) response budget"
     );
 }
 

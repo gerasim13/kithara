@@ -33,13 +33,17 @@ impl WarpRenderer {
     }
 
     #[doc(hidden)]
-    pub const fn transition_pending(&self) -> bool {
-        false
+    pub const fn accepts_input(&self) -> bool {
+        true
     }
 
     #[doc(hidden)]
-    pub const fn accepts_input(&self) -> bool {
-        true
+    pub fn prepare_quantum(
+        &mut self,
+        _meta: kithara_signal::AudioChunkInfo,
+        remaining: usize,
+    ) -> Option<kithara_signal::FrameCount> {
+        (remaining > 0).then(|| kithara_signal::FrameCount::new(remaining))
     }
 
     #[doc(hidden)]
@@ -52,6 +56,11 @@ impl WarpRenderer {
             chunk.meta.spec.sample_rate,
         ));
         Some(chunk)
+    }
+
+    #[doc(hidden)]
+    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        self.render(chunk)
     }
 
     #[doc(hidden)]

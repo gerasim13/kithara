@@ -137,7 +137,6 @@ where
         seek_obs,
         service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
         source,
-        retired_chunk: None,
         runtime: DecoderRuntime {
             seek_epoch,
             ..Default::default()
@@ -232,7 +231,7 @@ fn worker_skips_not_ready_tracks() {
 }
 
 #[kithara::test]
-fn worker_overflow_on_full_ringbuf() {
+fn worker_resumes_after_consumer_frees_ring_capacity() {
     let handle = test_scheduler();
     let (node, mut pop, _) = make_node(MockSource::new(5), 1, 1);
     let _id = register(&handle, node);
@@ -240,7 +239,10 @@ fn worker_overflow_on_full_ringbuf() {
     thread_sleep(Duration::from_millis(50));
     assert!(pop().is_some(), "should have at least one chunk");
     thread_sleep(Duration::from_millis(50));
-    assert!(pop().is_some(), "overflow slot should have been flushed");
+    assert!(
+        pop().is_some(),
+        "producer should resume after capacity returns"
+    );
 }
 
 #[kithara::test]

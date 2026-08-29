@@ -83,6 +83,7 @@ impl PlayWorker {
                 effects,
                 drain,
                 spec,
+                self.sample_pool().clone(),
             );
             (warp, source)
         });

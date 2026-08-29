@@ -15,8 +15,18 @@ use url::Url;
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
 use crate::{EngineLoad, PlayWorker};
 
-/// Default number of preload chunks.
-const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+struct Defaults;
+
+impl Defaults {
+    #[cfg(not(target_arch = "wasm32"))]
+    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+    #[cfg(target_arch = "wasm32")]
+    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(32).unwrap();
+    #[cfg(not(target_arch = "wasm32"))]
+    const PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+    #[cfg(target_arch = "wasm32")]
+    const PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+}
 
 /// Unified configuration for opening an audio resource.
 #[derive(Clone, Builder)]
@@ -39,8 +49,11 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     #[builder(default)]
     pub(crate) keys: KeyOptions,
     /// Number of chunks to buffer before signaling preload readiness.
-    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
+    #[builder(default = Defaults::PRELOAD_CHUNKS)]
     pub(crate) preload_chunks: NonZeroUsize,
+    /// Minimum final PCM ring depth. Preload depth raises this when larger.
+    #[builder(default = Defaults::AUDIO_BUFFER_CHUNKS)]
+    pub(crate) audio_buffer_chunks: NonZeroUsize,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
@@ -282,11 +295,31 @@ mod tests {
                 .hint("mp3")
                 .discriminator("test")
                 .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
+                .audio_buffer_chunks(NonZeroUsize::new(2).expect("BUG: 2 > 0"))
                 .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.discriminator.as_deref(), Some("test"));
         assert_eq!(config.preload_chunks.get(), 5);
+        assert_eq!(config.audio_buffer_chunks.get(), 2);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn config_defaults_keep_one_chunk_prefetched_in_a_two_chunk_ring() {
+        let config = test_config("https://example.com/song.mp3").unwrap();
+
+        assert_eq!(config.preload_chunks.get(), 1);
+        assert_eq!(config.audio_buffer_chunks.get(), 2);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[kithara::test]
+    fn config_defaults_preserve_the_wasm_buffer_horizon() {
+        let config = test_config("https://example.com/song.mp3").unwrap();
+
+        assert_eq!(config.preload_chunks.get(), 3);
+        assert_eq!(config.audio_buffer_chunks.get(), 32);
     }
 
     #[kithara::test]

@@ -116,18 +116,12 @@ impl WarpRenderer {
     /// scheduler shell, never from the checked render core.
     pub(super) fn service_target(&mut self, spec: AudioSpec) {
         drop(self.retired_engine.take());
-        if self.transition_pending() && spec == self.spec {
-            self.service_scratch();
-            return;
-        }
         self.sync_plan();
 
         let kind = self.controls.backend();
         let channels = usize::from(self.spec.channels.max(1));
-        let entering_unity = spec == self.spec
-            && (self.active || self.pending_frames(channels) > 0)
-            && self.unity_passthrough(self.controls.speed());
-        if entering_unity {
+        let holds_source = self.active || self.pending_frames(channels) > 0;
+        if kind != self.current_kind && spec == self.spec && !self.rebuild_pending && holds_source {
             self.service_scratch();
             return;
         }

@@ -67,6 +67,11 @@ There is one chain and one final output path:
 
 `decoded source -> WarpRenderer -> custom effects -> final output ring`
 
+`DecoderNode` admits each produced chunk or terminal marker directly into the
+bounded final ring. A full ring returns `TickResult::Backpressured` before
+another source step; final playback output is never parked in the generic
+`Outlet` overflow slot.
+
 The Warp wrapper is resident even when synchronization is off, so passthrough
 does not select a second implementation. R7 does not yet evaluate `WarpMap`,
 advance a runtime map cursor, apply non-identity alignment, or call
@@ -75,9 +80,14 @@ that a device callback presented those frames.
 
 `WarpRenderer::prepare` services format/backend changes and retired engine
 state between checked ticks. `AudioEffect::service_deferred` then prepares
-post-Warp effects. At true source EOF, `WarpSource` drains the Warp tail through
-the effect chain before `EffectDrain` flushes the effects themselves, preserving
-multi-pull tails before
+post-Warp effects. With an elastic backend, live input is split into the
+fixed internal render quantum of 512 output frames; controls are sampled
+for each quantum and `WarpSource` advances only its matching source span. The
+identity/no-backend renderer preserves whole-chunk passthrough. The elastic
+quantum bounds live control response and source processing even when the
+decoder yields a larger chunk. It does not bound terminal output: at true source
+EOF, `WarpSource` drains the Warp tail according to the backend tail contract
+before `EffectDrain` flushes the effects themselves, preserving multi-pull tails before
 `DecoderNode` publishes the decode-epoch-tagged diagnostic
 `AudioEvent::EndOfStream`. That raw event is not a user-visible playback-end
 signal: `PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`
@@ -96,11 +106,16 @@ finite unity/bypass samples remain bit-exact.
 `PlayerConfig.timestretch`) owns the requested playback target.
 `prepare_config` carries that handle into `ResourceConfig`; `Resource` puts the
 same allocation in `TrackConfig::warp`, and resident `Warp<S>` keeps it beside
-the reader while its `kithara-warp::WarpRenderer` reads it each chunk. It always
-carries `speed` + `region_plan`; with a native backend compiled by
-`kithara-play` (`stretch-signalsmith` / `stretch-bungee`) it also carries
-`keylock` and `backend`. `Queue` delegates the target to the player; key-lock
-and backend are set directly on the same handle.
+the reader while its `kithara-warp::WarpRenderer` reads it for each live render
+quantum. It always carries `speed` + `region_plan`; with a native backend
+compiled by `kithara-play` (`stretch-signalsmith` / `stretch-bungee`) it also
+carries `keylock` and `backend`. `Queue` delegates the target to the player;
+key-lock and backend are set directly on the same handle.
+
+Backend kind is configuration, not a live musical control. A change requested
+while the resident engine still holds source is applied at the next
+reset/discontinuity, spec change, or failed-engine rebuild; it never discards a
+live backend tail.
 
 The canonical controls are seeded before a track is loaded; the native
 `WarpRenderer` does not cache a second requested target. With a native backend,
@@ -117,11 +132,17 @@ With a backend compiled in, `WarpRenderer` runs at `ratio = 1/speed`, and:
 - **key-lock off** (the constructed default): `pitch = speed` - speed shifts pitch, vinyl-style.
 - **key-lock on**: `pitch = 1.0` - speed preserves pitch.
 
-At speed 1.0 with no region plan the slot bypasses. Without a backend - including every wasm build -
-the same Warp slot remains in the producer chain as an exact identity renderer; no speed DSP is
-inserted and decoded-audio output stays pinned to 1.0. With a native backend the controls are read each chunk,
-so **speed, key-lock, and backend all apply live, mid-track - no reload.** Switching backend
-rebuilds the DSP backend; returning to unity passthrough resets buffered stretch state.
+Before the first active stretch, exact speed 1.0 with no region plan can use
+zero-copy passthrough. Once an active stretch has been created, later exact 1.0
+stays in the resident engine and does not return to passthrough or reset/drain
+its buffered history. Engine reset/rebuild boundaries are seek, source
+discontinuity, and spec/backend lifecycle; terminal EOF tail drain is separate.
+Without a backend - including every wasm build - the same Warp slot remains in
+the producer chain as an exact identity renderer; no speed DSP is inserted and
+decoded-audio output stays pinned to 1.0. With a native backend, speed and
+key-lock controls are read for each live render quantum. A requested backend
+kind becomes current only at a reset, spec-change, or failed-engine rebuild
+boundary, so changing it never discards buffered source history.
 
 Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use the codec-embedded
 placement, other builds the standalone decode-adapter resampler.
