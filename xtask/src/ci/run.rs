@@ -141,6 +141,25 @@ pub(crate) enum PipelineKind {
     Release,
 }
 
+impl PipelineKind {
+    /// The name a pipeline sets `KITHARA_PIPELINE_KIND` to, which is also the
+    /// name a lane's `kinds` entry uses. Spelled here rather than derived from
+    /// clap so it borrows for the program's life; `lane_config.rs` pins it
+    /// against `PIPELINE_KINDS`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Branch => "branch",
+            Self::Platforms => "platforms",
+            Self::MergeRequest => "merge-request",
+            Self::Quarantine => "quarantine",
+            Self::Main => "main",
+            Self::Nightly => "nightly",
+            Self::Weekly => "weekly",
+            Self::Release => "release",
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct RunArgs {
     /// CI lane to execute, as `.config/xtask.toml` and the pipeline name it.

@@ -99,3 +99,91 @@ fn the_coverage_bar_is_declared_once_and_enforced_where_it_is_declared() {
         "exactly one lane runs the coverage recipe that carries the bar"
     );
 }
+
+// The catalog validates pipeline kinds by name, the way it already validates
+// cache groups by name. Two lists that must agree are one edit away from
+// disagreeing silently, so the enum the executor reads and the names the
+// catalog accepts are checked against each other here.
+#[test]
+fn the_catalog_accepts_exactly_the_pipeline_kinds_the_executor_knows() {
+    let listed: Vec<String> = xtask_pipeline_kind_names();
+    assert_eq!(
+        listed,
+        vec![
+            "branch",
+            "platforms",
+            "merge-request",
+            "quarantine",
+            "main",
+            "nightly",
+            "weekly",
+            "release",
+        ],
+        "PIPELINE_KINDS and PipelineKind must name the same kinds"
+    );
+}
+
+fn xtask_pipeline_kind_names() -> Vec<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let source = fs::read_to_string(root.join("xtask/src/config.rs"))
+        .expect("the xtask config source is readable");
+    let start = source
+        .find("pub(crate) const PIPELINE_KINDS")
+        .expect("PIPELINE_KINDS is declared");
+    let body = &source[start..];
+    // Skip past the `: [&str; 8]` type annotation first, so the brackets found
+    // below are the array literal's, not the type's.
+    let assigned = body.find('=').expect("PIPELINE_KINDS is assigned a value");
+    let body = &body[assigned..];
+    let open = body.find('[').expect("PIPELINE_KINDS is an array");
+    let close = body.find(']').expect("PIPELINE_KINDS array is closed");
+    body[open + 1..close]
+        .split(',')
+        .map(|entry| entry.trim().trim_matches('"').to_owned())
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
+// A lane naming a kind that no pipeline can be is a lane that never runs, and
+// nothing else would say so.
+#[test]
+#[ignore = "lanes gain roles in the declaration task"]
+fn every_declared_lane_names_a_known_role_and_known_kinds() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("CI lanes are a table");
+    let kinds = xtask_pipeline_kind_names();
+    let roles = ["gate", "platforms", "deep", "quality", "release"];
+
+    for (name, lane) in lanes {
+        let role = lane
+            .get("role")
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| panic!("lane `{name}` must name a role"));
+        assert!(
+            roles.contains(&role),
+            "lane `{name}` has unknown role `{role}`"
+        );
+        for field in ["kinds", "kinds_github"] {
+            let Some(listed) = lane.get(field).and_then(toml::Value::as_array) else {
+                continue;
+            };
+            for kind in listed {
+                let kind = kind.as_str().expect("a kind is a string");
+                assert!(
+                    kinds.contains(&kind.to_owned()),
+                    "lane `{name}`.{field} names unknown kind `{kind}`"
+                );
+            }
+        }
+    }
+}

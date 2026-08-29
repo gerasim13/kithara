@@ -57,8 +57,7 @@ pub(crate) fn run(
 }
 
 fn kind_name(kind: PipelineKind) -> String {
-    clap::ValueEnum::to_possible_value(&kind)
-        .map_or_else(|| "unknown".to_owned(), |value| value.get_name().to_owned())
+    kind.name().to_owned()
 }
 
 /// Fill in the two things a lane cannot spell for itself: where the checkout

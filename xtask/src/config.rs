@@ -51,6 +51,27 @@ pub(crate) struct CiLaneConfig {
     /// scheduled in a pipeline never reaches this; one that is scheduled and
     /// declines has to say so where the schedule can be read against it.
     pub(crate) kinds_refused: BTreeMap<String, String>,
+    /// Which role workflow schedules this lane. Roles are a field rather than
+    /// a workflow each, because five workflows differing by one string is the
+    /// duplication this catalog exists to remove.
+    pub(crate) role: String,
+    /// Pipeline kinds this lane runs in. Empty means the lane is reachable
+    /// only by name, through a dispatch that asks for it.
+    pub(crate) kinds: Vec<String>,
+    /// The GitHub fleet's answer where it honestly differs from `kinds`: 25
+    /// runners on one host buy a check per push that a single Mac mini can
+    /// only afford weekly. Empty means both fleets agree.
+    pub(crate) kinds_github: Vec<String>,
+    pub(crate) timeout_minutes: u32,
+    /// Checkout depth. Zero is full history, which a lane comparing against a
+    /// base revision needs and a shallow clone does not carry.
+    pub(crate) fetch_depth: u32,
+    pub(crate) artifact: Option<CiLaneArtifact>,
+    /// The concurrency group a lane wanting the whole host queues in.
+    pub(crate) queue: Option<String>,
+    /// Lanes whose artifacts this one consumes. A lane with needs runs after
+    /// them and only when at least one of them was selected.
+    pub(crate) needs: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -71,6 +92,41 @@ pub(crate) struct CiLaneStep {
     /// run deliberately asks a narrower one.
     pub(crate) args_by_kind: BTreeMap<String, Vec<String>>,
 }
+
+/// What a lane leaves for a human or a later lane to read.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CiLaneArtifact {
+    pub(crate) name: String,
+    pub(crate) path: String,
+    #[serde(default)]
+    pub(crate) when: ArtifactWhen,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ArtifactWhen {
+    #[default]
+    Always,
+    Failure,
+}
+
+/// The pipeline kinds a lane may name. Kept beside the cache groups, which the
+/// catalog already validates by name for the same reason: the executor's enum
+/// lives in `ci::run`, and a lane is refused at configuration load, before any
+/// executor is consulted. `lane_config.rs` pins the two lists together.
+pub(crate) const PIPELINE_KINDS: [&str; 8] = [
+    "branch",
+    "platforms",
+    "merge-request",
+    "quarantine",
+    "main",
+    "nightly",
+    "weekly",
+    "release",
+];
+
+pub(crate) const LANE_ROLES: [&str; 5] = ["gate", "platforms", "deep", "quality", "release"];
 
 /// The lane's own executable. A Windows job runs the binary it started as
 /// rather than `cargo xtask`, which would rebuild it - and Windows refuses to
@@ -136,6 +192,33 @@ impl CiProjectConfig {
                 let by_kind = step.args_by_kind.values().flatten();
                 for value in step.args.iter().chain(by_kind) {
                     validate_substitutions(name, "an argument", value)?;
+                }
+            }
+            if !LANE_ROLES.contains(&lane.role.as_str()) {
+                bail!(
+                    "ext.ci.lanes.{name}.role must be one of {}, got `{}`",
+                    LANE_ROLES.join(", "),
+                    lane.role
+                );
+            }
+            for (field, listed) in [("kinds", &lane.kinds), ("kinds_github", &lane.kinds_github)] {
+                for kind in listed {
+                    if !PIPELINE_KINDS.contains(&kind.as_str()) {
+                        bail!("ext.ci.lanes.{name}.{field} names unknown kind `{kind}`");
+                    }
+                }
+            }
+            if lane.timeout_minutes == 0 {
+                bail!("ext.ci.lanes.{name} must declare a non-zero timeout_minutes");
+            }
+        }
+        for (name, lane) in &self.lanes {
+            for needed in &lane.needs {
+                if !self.lanes.contains_key(needed) {
+                    bail!("ext.ci.lanes.{name}.needs names `{needed}`, which is not a lane");
+                }
+                if needed == name {
+                    bail!("ext.ci.lanes.{name} cannot need itself");
                 }
             }
         }
