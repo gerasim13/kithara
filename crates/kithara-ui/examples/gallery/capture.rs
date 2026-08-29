@@ -3,7 +3,7 @@ use std::{env, fs::create_dir_all, path::PathBuf};
 use iced::window::Screenshot;
 use kithara_ui::capture::{Geometry, write_geometry, write_png};
 
-use super::sections::{ModuleDemo, Tab};
+use crate::sections::{ModuleDemo, Tab};
 
 /// One page to photograph: a tab, and for the modules tab the demo shown in it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -106,7 +106,10 @@ name = "gallery"
 # `capture` carries. A build without it has no gallery rather than a gallery
 # that cannot answer the question it exists for.
 required-features = ["capture"]
-test = true
+# The gallery is the program; what checks it is `tests/gallery.rs`, which takes
+# these same modules by path. Building the example as a test target too would
+# run every one of those checks twice.
+test = false
 
 [[example]]
 name = "masonry_host"

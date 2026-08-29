@@ -23,7 +23,13 @@ use kithara_ui::{
 use masonry::vello::peniko::Color;
 use num_traits::cast::AsPrimitive;
 
-use crate::{Consts, capture::Shot, custom, host::Gallery, mock, resolver};
+use crate::{
+    capture::Shot,
+    custom,
+    fixture::{Consts, resolver},
+    host::Gallery,
+    mock,
+};
 
 #[kithara::test]
 fn every_page_paints_over_the_whole_window() {

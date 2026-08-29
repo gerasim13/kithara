@@ -47,6 +47,16 @@ page, and the example holds roles only, never file names. A census asserts every
 declares is a page some tab turns to, so a document added to the folder and left unreachable is
 caught rather than going stale unseen.
 
+`examples/gallery` is the program and nothing else: the window, the state behind it, the fake
+readings the pages are drawn from, and the three harnesses that step in front of the window when
+their environment variable asks. Everything that checks the gallery is `tests/gallery.rs`, which
+mounts those same modules through `#[path]` rather than copying them - the idiom the measurement
+harnesses beside it already use - so one gallery is both run and checked. The example is therefore
+not a test target, and the split is load-bearing in one direction: an item only the program uses
+belongs in `main.rs`, because a file mounted in both targets reports whatever the other target does
+not reach as dead. The window's own entry points are pinned by tests that assert each harness
+declines when nobody asked for it, which is the property that keeps a plain run showing the gallery.
+
 ## Package Ownership
 
 A package is a folder with a manifest at its root, `PackageDoc`, parsed by `package::load_package`.

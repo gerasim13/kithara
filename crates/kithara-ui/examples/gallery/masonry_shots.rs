@@ -18,7 +18,13 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::{Consts, capture::Film, custom, host::Gallery, mock, resolver};
+use crate::{
+    capture::Film,
+    custom,
+    fixture::{Consts, resolver},
+    host::Gallery,
+    mock,
+};
 
 /// Walks every gallery page through the Masonry host. Returns `false` when the
 /// environment variable is absent, so the caller falls through to the window.

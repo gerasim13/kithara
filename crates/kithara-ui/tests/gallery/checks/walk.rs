@@ -54,7 +54,7 @@ use iced_tiny_skia::Renderer as TinySkiaRenderer;
 use kithara_test_utils::kithara;
 use kithara_ui::render::fonts::{FONT_BYTES, SANS};
 
-use crate::{Message, capture::Shot, sections::Tab};
+use crate::{app::Message, capture::Shot, sections::Tab};
 
 /// How many frames a page is given to stop asking.
 ///
@@ -120,12 +120,12 @@ mod immediate {
     /// loop settles, and that answer is the same on either backend, so a
     /// machine with no graphics device is not a reason to skip the walk.
     pub(super) fn walk(page: Shot) -> Walked {
-        let mut gallery = crate::Gallery::mounted();
+        let mut gallery = crate::app::Gallery::mounted();
         gallery.select(page);
         let animates = gallery.compiled().animates;
-        let theme = crate::theme(gallery.skin());
+        let theme = crate::app::theme(gallery.skin());
         let text_color = theme.base().text_color;
-        let logical = crate::window_size();
+        let logical = crate::app::window_size();
         let mut renderer = renderer();
         let mut cache = Cache::default();
         let mut asking = true;
@@ -135,10 +135,10 @@ mod immediate {
             // measured moving on the strength of the harness rather than of
             // the page.
             if gallery.moves() {
-                drop(crate::update(&mut gallery, Message::Tick));
+                drop(crate::app::update(&mut gallery, Message::Tick));
             }
             let mut interface = UserInterface::build(
-                crate::view(&gallery, window::Id::unique()),
+                crate::app::view(&gallery, window::Id::unique()),
                 logical,
                 mem::take(&mut cache),
                 &mut renderer,
@@ -192,7 +192,12 @@ mod retained {
     };
 
     use super::{FRAMES, Shot, Walked};
-    use crate::{Consts, custom, host::Gallery, mock, resolver};
+    use crate::{
+        custom,
+        fixture::{Consts, resolver},
+        host::Gallery,
+        mock,
+    };
 
     /// The gallery with its own clock held unless the page says it moves.
     ///

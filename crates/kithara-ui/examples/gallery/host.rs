@@ -12,7 +12,13 @@ use kithara_ui::{
     render::{Reads, Skin, UiEvent},
 };
 
-use super::{Consts, Tab, capture::Shot, custom, mock, resolver};
+use crate::{
+    capture::Shot,
+    custom,
+    fixture::{Consts, resolver},
+    mock,
+    sections::Tab,
+};
 
 /// Runs the gallery in a window when asked. Returns `false` when the
 /// environment variable is absent, so the caller falls through.
