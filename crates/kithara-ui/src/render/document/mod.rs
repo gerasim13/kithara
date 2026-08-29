@@ -4,6 +4,7 @@ mod facade;
 mod group;
 mod host;
 mod module;
+mod placed;
 mod popover;
 #[cfg(feature = "masonry")]
 mod poses;
@@ -18,6 +19,7 @@ pub(crate) use facade::render_engine_subtree;
 pub use group::Group;
 pub use host::Host;
 pub use module::Module;
+pub use placed::{PlacedMount, Snap};
 pub use popover::Popover;
 #[cfg(feature = "masonry")]
 pub(crate) use poses::placements;

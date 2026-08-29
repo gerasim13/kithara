@@ -1,3 +1,5 @@
+use crate::draw::Pt;
+
 /// Stereo levels and volume exposed to renderers.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct StereoLevels {
@@ -172,6 +174,7 @@ pub enum ReadValue<'a> {
     Text(&'a str),
     Bool(bool),
     Scalar(f64),
+    Point(Pt),
     Stereo(StereoLevels),
     Waveform(WaveformView<'a>),
     PortalMap(PortalMapView<'a>),

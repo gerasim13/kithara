@@ -140,6 +140,7 @@ const fn kind_of(value: ReadValue<'_>) -> &'static str {
         ReadValue::Text(_) => "Text",
         ReadValue::Bool(_) => "Bool",
         ReadValue::Scalar(_) => "Scalar",
+        ReadValue::Point(_) => "Point",
         ReadValue::Stereo(_) => "Stereo",
         ReadValue::PortalMap(_) => "PortalMap",
         ReadValue::Range(_) => "Range",

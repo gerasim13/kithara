@@ -3,7 +3,7 @@ use kithara_ui::render::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::data::CATALOG;
+use crate::mock::data::CATALOG;
 
 struct PivotConsts;
 
@@ -68,7 +68,7 @@ struct SelectedView {
     none: String,
 }
 
-pub(super) struct PivotState {
+pub(crate) struct PivotState {
     portals: Vec<Portal>,
     targets: Vec<PortalTarget>,
     selected: Option<usize>,
@@ -105,7 +105,7 @@ impl Default for PivotState {
 }
 
 impl PivotState {
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         if !path.contains("pivot") {
             return false;
         }
@@ -135,7 +135,7 @@ impl PivotState {
         true
     }
 
-    pub(super) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
+    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
         if !path.contains("pivot") || !value.is_finite() {
             return false;
         }
@@ -152,7 +152,7 @@ impl PivotState {
         true
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let portal_index = scope_index(scope, "portal");
         let portal = portal_index.and_then(|index| self.portals.get(index));

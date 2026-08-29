@@ -85,6 +85,7 @@ fn walk(
         }
         ExpandedNode::Object { child, .. }
         | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Scroll { child, .. } => walk(child, path, skin, origin),
         // Every layer of a stage is handed the first one's box, so that is the

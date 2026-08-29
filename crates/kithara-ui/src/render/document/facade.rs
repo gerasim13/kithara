@@ -1,10 +1,12 @@
 use num_traits::cast::AsPrimitive;
 
-use super::{Band, Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount};
+use super::{
+    Band, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, Snap, SplitMount,
+};
 use crate::{
     compile::{CompiledNode, CompiledUi, SplitCell},
-    draw::Transform,
-    expand::{Binding, ExpandedNode, MeasureSpec, SurfaceSpec},
+    draw::{Pt, Transform},
+    expand::{Binding, ExpandedNode, MagnetSpec, MeasureSpec, SurfaceSpec},
     ids::InternId,
     layout::{Axis, FrameCorners, FrameSides},
     module::{ChromeStyle, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, TextAlign},
@@ -522,8 +524,12 @@ where
     let snapshot: &dyn Snapshot = &ctx;
     match node {
         // A reveal says when its child stands, not what it is: the band is read
-        // by the flow that holds it, and the child mounts as itself.
-        ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
+        // by the flow that holds it, and the child mounts as itself. A placement
+        // outside a stage has no scene to snap onto and nothing that places it,
+        // so it mounts as its child too.
+        ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
+        | ExpandedNode::Reveal { child, .. } => {
             expanded(child, &child_address(address, 0), branch, ctx, host)
         }
         ExpandedNode::Adaptive {
@@ -581,7 +587,21 @@ where
             host.slot(mounted, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Stage { children, .. } => {
-            let mounted = expanded_children(children, address, branch, snapshot, ctx, host);
+            let scene = Scene::of(children, ctx);
+            let mounted = children
+                .iter()
+                .enumerate()
+                .map(|(index, child)| {
+                    mount_staged(
+                        child,
+                        &child_address(address, index),
+                        branch,
+                        &scene,
+                        ctx,
+                        host,
+                    )
+                })
+                .collect();
             host.stage(mounted, effective_size(node, ctx.skin, snapshot))
         }
         ExpandedNode::Object {
@@ -814,6 +834,88 @@ where
         },
         ctx,
         host,
+    )
+}
+
+/// Where every placement of one stage stands this frame.
+///
+/// A magnet names placements, and what it needs of them is the point each is
+/// on now, so the stage answers that once for all its children rather than
+/// every carried placement asking the document again.
+struct Scene {
+    at: Vec<(InternId, Pt)>,
+}
+
+impl Scene {
+    fn of(children: &[ExpandedNode], ctx: Ctx<'_, '_>) -> Self {
+        Self {
+            at: children
+                .iter()
+                .filter_map(|child| match child {
+                    ExpandedNode::Placed { id, at, read, .. } => {
+                        Some((*id, point(*at, read.as_ref(), ctx)))
+                    }
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+
+    fn snap(&self, magnet: &MagnetSpec) -> Snap {
+        Snap {
+            to: magnet
+                .to
+                .iter()
+                .filter_map(|target| {
+                    self.at
+                        .iter()
+                        .find_map(|(id, at)| (id == target).then_some(*at))
+                })
+                .collect(),
+            within: magnet.within,
+        }
+    }
+}
+
+/// Where a placement stands: the point its endpoint answers, or the one the
+/// document wrote when nothing answers.
+fn point(at: (f32, f32), read: Option<&Binding>, ctx: Ctx<'_, '_>) -> Pt {
+    ctx.point(read).unwrap_or(Pt { x: at.0, y: at.1 })
+}
+
+fn mount_staged<H>(
+    node: &ExpandedNode,
+    address: &[usize],
+    branch: Branch,
+    scene: &Scene,
+    ctx: Ctx<'_, '_>,
+    host: &mut H,
+) -> H::Output
+where
+    H: Host,
+{
+    let ExpandedNode::Placed {
+        path,
+        at,
+        read,
+        write,
+        magnet,
+        child,
+        ..
+    } = node
+    else {
+        return expanded(node, address, branch, ctx, host);
+    };
+    let mounted = expanded(child, &child_address(address, 0), branch, ctx, host);
+    host.placed(
+        PlacedMount {
+            path: *path,
+            at: point(*at, read.as_ref(), ctx),
+            read: read.as_ref(),
+            write: write.as_ref(),
+            snap: magnet.as_ref().map(|magnet| scene.snap(magnet)),
+        },
+        mounted,
     )
 }
 

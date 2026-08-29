@@ -730,6 +730,21 @@ where
                         shown
                     });
                 }
+                Watched::Spot { id, binding } => {
+                    let Some(at) = ctx.point(Some(binding)) else {
+                        continue;
+                    };
+                    moved |= self.root.edit_widget(*id, |mut widget| {
+                        let mut node = widget.downcast::<Node>();
+                        // The point is where the stage lays this node out, so
+                        // the stage above it is what has to run again.
+                        let moved = node.widget.move_spot(at);
+                        if moved {
+                            node.ctx.request_layout();
+                        }
+                        moved
+                    });
+                }
                 Watched::Placed { .. } => {}
             }
         }

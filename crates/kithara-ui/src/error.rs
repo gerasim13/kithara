@@ -287,6 +287,30 @@ pub enum UiDocError {
         "{origin}: Object at {path} declares both phase and motion; a motion computes the phase, so one pose cannot carry both"
     )]
     ObjectDrivenTwice { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Placed at {path} is not a child of a Stage; a placement is a point inside a scene"
+    )]
+    PlacedOutsideStage { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Placed at {path} declares write without read; a placement publishes where a drag left it and reads back the point it stands on"
+    )]
+    PlacedUnread { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Placed at {path} declares a magnet without write; a magnet acts on a placement the pointer carries"
+    )]
+    MagnetUncarried { origin: SourceUri, path: String },
+    #[error("{origin}: Placed at {path} snaps onto {target:?}, which is no placement of its stage")]
+    MagnetUnknown {
+        origin: SourceUri,
+        path: String,
+        target: String,
+    },
+    #[error("{origin}: Placed at {path} snaps within {within}, which no distance is under")]
+    MagnetReach {
+        origin: SourceUri,
+        path: String,
+        within: f32,
+    },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,

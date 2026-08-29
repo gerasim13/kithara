@@ -1,0 +1,83 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-scene-tab",
+    root: Column(
+        gap: Some(16.0),
+        pad: Some(22.0),
+        children: [
+            Text(id: "title", style: Section, label: "SCENE", size: (w: Fill, h: Fixed(22.0))),
+            Text(
+                id: "note",
+                style: Body,
+                color: TextDim,
+                label: "A PLACEMENT PUTS ITS CHILD AT A POINT OF THE STAGE, SO THE BOX THAT ANSWERS THE POINTER TRAVELS WITH THE PICTURE. DRAG THE SPRITES; PRESS THE ARTWORK.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Text(
+                id: "magnet-note",
+                style: Body,
+                color: TextDim,
+                label: "A MAGNET NAMES PLACEMENTS OF ITS OWN STAGE, WHATEVER EACH ONE HOLDS: A DOCK, AN ARTWORK, OR THE OTHER SPRITE.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Stage(
+                id: "scene",
+                size: (w: Fill, h: Fixed(304.0)),
+                children: [
+                    Placed(
+                        id: "dock-left",
+                        at: (16.0, 208.0),
+                        child: Chip(id: "dock-left-mark", label: "DOCK A", size: (w: Fixed(112.0), h: Fixed(44.0))),
+                    ),
+                    Placed(
+                        id: "dock-right",
+                        at: (432.0, 208.0),
+                        child: Chip(id: "dock-right-mark", label: "DOCK B", size: (w: Fixed(112.0), h: Fixed(44.0))),
+                    ),
+                    Placed(
+                        id: "artwork",
+                        at: (232.0, 24.0),
+                        child: Pressable(
+                            id: "switch",
+                            press: Command(id: "gallery.scene.switch"),
+                            child: Lottie(
+                                id: "played",
+                                artwork: "pulse",
+                                active_artwork: "spark",
+                                active: Model(id: "gallery.scene.sparked"),
+                                seconds: 2.0,
+                                read: Model(id: "ui.clock.seconds"),
+                                size: (w: Fixed(112.0), h: Fixed(112.0)),
+                            ),
+                        ),
+                    ),
+                    Placed(
+                        id: "carry-one",
+                        at: (16.0, 32.0),
+                        read: Model(id: "gallery.scene.one"),
+                        write: Parameter(id: "gallery.scene.one"),
+                        magnet: (to: ["dock-left", "dock-right", "artwork"], within: 64.0),
+                        child: Sprite(id: "one", sheet: "spinner", seconds: 1.6, read: Model(id: "ui.clock.seconds"), size: (w: Fixed(96.0), h: Fixed(96.0))),
+                    ),
+                    Placed(
+                        id: "carry-two",
+                        at: (432.0, 32.0),
+                        read: Model(id: "gallery.scene.two"),
+                        write: Parameter(id: "gallery.scene.two"),
+                        magnet: (to: ["dock-left", "dock-right", "artwork", "carry-one"], within: 64.0),
+                        child: Sprite(id: "two", sheet: "spinner", seconds: 2.4, read: Model(id: "ui.clock.seconds"), size: (w: Fixed(96.0), h: Fixed(96.0))),
+                    ),
+                ],
+            ),
+            Text(
+                id: "limit",
+                style: Body,
+                color: TextDim,
+                label: "THE POINT IS THE APPLICATION'S: A PLACEMENT PUBLISHES WHERE A DRAG LEFT IT AND READS BACK WHERE IT NOW STANDS.",
+                size: (w: Fill, h: Fixed(18.0)),
+            ),
+            Slot(id: "space", size: (w: Fill, h: Fill)),
+        ],
+    ),
+)

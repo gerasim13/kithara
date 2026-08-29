@@ -9,15 +9,18 @@ use kithara_ui::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    clock::ClockState,
     consts::Consts,
     data::CATALOG,
-    menu::{ContextState, MenuState},
-    mixer::MixerState,
-    pivot::PivotState,
+    pages::{
+        clock::ClockState,
+        menu::{ContextState, MenuState},
+        mixer::MixerState,
+        pivot::PivotState,
+        scene::SceneState,
+        stress::StressState,
+        transport::DeckTransport,
+    },
     quality::QualityState,
-    stress::StressState,
-    transport::DeckTransport,
 };
 use crate::sections::{ModuleDemo, Tab};
 
@@ -46,7 +49,7 @@ impl Feed {
             Tab::Stress => Some(Self::Bench),
             Tab::Vis => Some(Self::Vis),
             Tab::Objects => Some(Self::Phase),
-            Tab::Motion | Tab::Sprites | Tab::Lottie => Some(Self::Clock),
+            Tab::Motion | Tab::Sprites | Tab::Lottie | Tab::Scene => Some(Self::Clock),
             _ => None,
         }
     }
@@ -66,6 +69,7 @@ pub(crate) struct MockReads {
     #[field(get, vis = "pub(crate)", copy)]
     active_module: ModuleDemo,
     quality: QualityState,
+    scene: SceneState,
     stress: StressState,
     #[field(set, vis = "pub(crate)")]
     library_query: String,
@@ -149,6 +153,7 @@ impl Default for MockReads {
             pivot: PivotState::default(),
             mixer: MixerState::default(),
             quality: QualityState::default(),
+            scene: SceneState::default(),
             segmented_index: 2.0,
             stress: StressState::default(),
             toggle_off: false,
@@ -195,6 +200,9 @@ impl MockReads {
             return;
         }
         if self.context.activate(path) {
+            return;
+        }
+        if self.scene.activate(path) {
             return;
         }
         if self.quality.activate(path) {
@@ -254,6 +262,9 @@ impl MockReads {
             ControlAction::Activate => self.activate(path),
             ControlAction::SecondaryActivate => self.context.secondary(path),
             ControlAction::SelectIndex(index) => self.select_index(path, *index),
+            ControlAction::Place(at) => {
+                self.scene.place(path, *at);
+            }
             ControlAction::StepScalar(steps) if path.contains("clock") => {
                 self.clock.step(f64::from(*steps) * 0.01);
             }
@@ -450,6 +461,7 @@ impl MockReads {
             "gallery.tab.motion" => self.active_tab == Tab::Motion,
             "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
             "gallery.tab.lottie" => self.active_tab == Tab::Lottie,
+            "gallery.tab.scene" => self.active_tab == Tab::Scene,
             "gallery.tab.table_long" => self.active_tab == Tab::TableLong,
             "gallery.tab.skins" => self.active_tab == Tab::Skins,
             "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
@@ -551,6 +563,9 @@ impl Reads for MockReads {
             return Some(value);
         }
         if let Some(value) = self.pivot.get(endpoint) {
+            return Some(value);
+        }
+        if let Some(value) = self.scene.get(endpoint) {
             return Some(value);
         }
         // The gallery hosts one virtual deck: every scope suffix resolves to

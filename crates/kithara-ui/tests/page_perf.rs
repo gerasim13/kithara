@@ -460,6 +460,19 @@ const PAGES: &[Page] = &[
         retained_guard: "vello.gallery-lottie",
     },
     Page {
+        name: "gallery-scene",
+        group: Group::Pages,
+        entry: "gallery-scene.klayout.ron",
+        tab: Tab::Scene,
+        frames: 120,
+        program: Program::Tick,
+        moving: Some("gallery.motion.clock"),
+        pointer_at: Pt { x: 700.0, y: 400.0 },
+        fenced: false,
+        immediate_guard: "iced.gallery-scene",
+        retained_guard: "vello.gallery-scene",
+    },
+    Page {
         name: "perf-scroll-vis",
         group: Group::Scroll,
         entry: SCROLL_VIS_LAYOUT,
@@ -1583,10 +1596,12 @@ fn ui_page_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &
 #[case("iced", Host::Immediate, "gallery-motion")]
 #[case("iced", Host::Immediate, "gallery-sprites")]
 #[case("iced", Host::Immediate, "gallery-lottie")]
+#[case("iced", Host::Immediate, "gallery-scene")]
 #[case("vello", Host::Retained, "gallery-objects")]
 #[case("vello", Host::Retained, "gallery-motion")]
 #[case("vello", Host::Retained, "gallery-sprites")]
 #[case("vello", Host::Retained, "gallery-lottie")]
+#[case("vello", Host::Retained, "gallery-scene")]
 fn ui_motion_perf(#[case] label: &'static str, #[case] host: Host, #[case] page: &'static str) {
     measure_one(label, host, Group::Pages, page);
 }

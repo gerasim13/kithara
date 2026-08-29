@@ -122,6 +122,7 @@ fn walk_includes(
         }
         ControlNode::Object { child, .. }
         | ControlNode::Optional { child, .. }
+        | ControlNode::Placed { child, .. }
         | ControlNode::Pressable { child, .. }
         | ControlNode::Reveal { child, .. }
         | ControlNode::Scroll { child, .. } => {

@@ -21,6 +21,7 @@ use super::{
     leaf::{Leaf, cursor_icon},
     mount::NodeLayout,
     picker::{HostedEngine, local_ime_area, sync_ime_area},
+    spot::Spot,
 };
 use crate::{
     atoms::design::corner::{corner_frame, corner_path},
@@ -93,6 +94,9 @@ pub(crate) struct Node {
     /// The stepping surface this flow declares over itself, where it declares
     /// one.
     detent: Option<Detent>,
+    /// Where this node stands in the stage that holds it, when it is one of
+    /// its placements.
+    spot: Option<Spot>,
     transform: Transform,
 }
 
@@ -120,6 +124,7 @@ impl Node {
             leaf_holds: false,
             engine: None,
             detent: None,
+            spot: None,
             transform: Transform::IDENTITY,
         }
     }
@@ -134,6 +139,13 @@ impl Node {
             node.limits = Some(limits);
             raw.request_layout();
         }
+    }
+
+    /// The point a child of a stage is laid out at: its own, when the child
+    /// is a placement, and the stage's origin otherwise.
+    pub(crate) fn child_spot(ctx: &mut LayoutCtx<'_>, child: &mut WidgetPod<Self>) -> Option<Pt> {
+        let (node, _raw) = ctx.get_raw_mut(child);
+        node.spot_at()
     }
 
     fn queue_pointer(&self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
@@ -163,6 +175,14 @@ impl Node {
         ctx.submit_action::<HostAction>(action);
         ctx.set_handled();
         true
+    }
+
+    /// Offers the input to the grip a placement carries, answering whether
+    /// the grip took it.
+    fn carry_spot(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
+        self.spot
+            .as_mut()
+            .is_some_and(|spot| spot.carry(ctx, input, hit))
     }
 
     fn leaf_input(
@@ -481,6 +501,22 @@ impl Node {
         self.detent = Some(detent);
     }
 
+    /// Where this placement of a stage stands, and what carries it.
+    pub(super) fn set_spot(&mut self, spot: Spot) {
+        self.spot = Some(spot);
+    }
+
+    /// The point the stage lays this node out at, when it is a placement.
+    pub(crate) fn spot_at(&self) -> Option<Pt> {
+        self.spot.as_ref().map(Spot::at)
+    }
+
+    /// Moves a placement to the point its endpoint now answers, saying whether
+    /// that is somewhere else than it stood.
+    pub(crate) fn move_spot(&mut self, at: Pt) -> bool {
+        self.spot.as_mut().is_some_and(|spot| spot.move_to(at))
+    }
+
     /// Whether this node draws through a pass of its own rather than into the
     /// scene, which is what makes it something the host has to declare.
     pub(super) const fn is_native(&self) -> bool {
@@ -517,6 +553,9 @@ impl Widget for Node {
         if self.layout.wheel(input) {
             ctx.set_handled();
             ctx.request_layout();
+            return;
+        }
+        if self.carry_spot(ctx, input, &hit) {
             return;
         }
         if self.step_surface(ctx, input, &hit) {
@@ -689,6 +728,7 @@ impl Widget for Node {
         self.primary.is_some()
             || self.secondary.is_some()
             || self.detent.is_some()
+            || self.spot.as_ref().is_some_and(Spot::grips)
             || self.layout.accepts_input()
             || self.layout.reads_pointer()
     }
@@ -720,6 +760,12 @@ impl Widget for Node {
                 h: size.height.as_(),
             },
         );
+        if let Some(spot) = &self.spot
+            && spot.grips()
+            && hit.over()
+        {
+            return cursor_icon(spot.cursor());
+        }
         let leaf = match &self.layout {
             NodeLayout::Leaf(leaf) => leaf.cursor(&hit),
             NodeLayout::Flex(_)

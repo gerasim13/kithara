@@ -132,6 +132,7 @@ fn spec(ui: &CompiledUi) -> ShaderSpec {
             } => Some(spec.clone()),
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Placed { child, .. }
             | ExpandedNode::Pressable { child, .. }
             | ExpandedNode::Reveal { child, .. }
             | ExpandedNode::Scroll { child, .. } => find(child),

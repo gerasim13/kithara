@@ -67,7 +67,7 @@ fn collect_expanded<'u>(node: &ExpandedNode, ui: &'u CompiledUi, into: &mut BTre
             collect_expanded(anchor, ui, into);
             collect_expanded(content, ui, into);
         }
-        ExpandedNode::Pressable { path, child, .. } => {
+        ExpandedNode::Placed { path, child, .. } | ExpandedNode::Pressable { path, child, .. } => {
             into.insert(ui.resolve(*path));
             collect_expanded(child, ui, into);
         }

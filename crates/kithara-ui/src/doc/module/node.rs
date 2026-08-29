@@ -190,6 +190,30 @@ pub enum ControlNode {
         motion: Option<Motion<BindingRef>>,
         child: Box<Self>,
     },
+    /// Puts its child at a point inside the stage that holds it.
+    ///
+    /// Where an `Object` offsets what is drawn and leaves the layout alone,
+    /// this places the child: the box that answers the pointer travels with
+    /// the picture, which is what a placement the pointer may carry needs. A
+    /// placement with somewhere to write publishes the point a drag leaves it
+    /// on, and a magnet pulls that point onto the placements it names.
+    Placed {
+        id: NodeId,
+        /// Where the child stands while nothing else says otherwise.
+        #[serde(default)]
+        at: (f32, f32),
+        /// The point endpoint that says where the child stands, over `at`.
+        #[serde(default)]
+        read: Option<BindingRef>,
+        /// Where a drag publishes the point it ends on. Without one the child
+        /// stays wherever it was put.
+        #[serde(default)]
+        write: Option<BindingRef>,
+        /// The placements this one snaps onto while it is carried.
+        #[serde(default)]
+        magnet: Option<Magnet>,
+        child: Box<Self>,
+    },
     /// Gives every child the whole box, in document order.
     ///
     /// Where a row or column decides *where* a child goes, this decides
@@ -472,10 +496,17 @@ pub enum ControlNode {
         #[serde(default)]
         size: Option<SizeSpec>,
         artwork: String,
+        /// The artwork shown instead while `active` reads true, for a control
+        /// whose document answers a press with another drawing.
+        #[serde(default)]
+        active_artwork: Option<String>,
         #[serde(default)]
         read: Option<BindingRef>,
         #[serde(default)]
         write: Option<BindingRef>,
+        /// The flag that says which of the two artworks stands.
+        #[serde(default)]
+        active: Option<BindingRef>,
         seconds: f32,
     },
     /// One frame of a named sheet, chosen by how far its own reading has run.
@@ -741,6 +772,17 @@ impl Measure {
     }
 }
 
+/// What a placement snaps onto while the pointer carries it: the placements in
+/// its own stage it names, and how near their centres must come before one of
+/// them takes it.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Magnet {
+    pub to: Vec<NodeId>,
+    pub within: f32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
@@ -782,7 +824,8 @@ impl ControlNode {
             | Self::Swatch { .. }
             | Self::Custom { .. }
             | Self::Shader { .. } => (None, None),
-            Self::DeckSummary { read, write, .. }
+            Self::Placed { read, write, .. }
+            | Self::DeckSummary { read, write, .. }
             | Self::Brand { read, write, .. }
             | Self::Spacer { read, write, .. }
             | Self::Meter { read, write, .. }
@@ -827,6 +870,7 @@ impl ControlNode {
             Self::Include { .. }
             | Self::Object { .. }
             | Self::Optional { .. }
+            | Self::Placed { .. }
             | Self::Popover { .. }
             | Self::Pressable { .. }
             | Self::Reveal { .. } => None,

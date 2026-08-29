@@ -7,7 +7,7 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::MockRegistry;
+use crate::mock::MockRegistry;
 
 struct Consts;
 
@@ -16,7 +16,7 @@ impl Consts {
     const WAVE_BUCKETS: u16 = 8_192;
 }
 
-pub(super) struct StressState {
+pub(crate) struct StressState {
     last_tick: Option<Instant>,
     fps: String,
     frame_ms_avg: String,
@@ -46,7 +46,7 @@ impl StressState {
     /// The count is a parameter because it is the page's own weight: a
     /// measurement that sweeps it separates a frame slow from drawing from a
     /// frame slow from folding buckets into the same columns.
-    pub(super) fn new(buckets: u16) -> Self {
+    pub(crate) fn new(buckets: u16) -> Self {
         Self {
             fader: 0.7,
             frame_ms: VecDeque::with_capacity(Consts::FRAME_WINDOW),
@@ -62,7 +62,7 @@ impl StressState {
         }
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
             "bench.fps" => ReadValue::Text(&self.fps),
             "bench.frame_ms_avg" => ReadValue::Text(&self.frame_ms_avg),
@@ -129,11 +129,11 @@ impl StressState {
         self.frame_ms_p99 = format!("{p99:.2}");
     }
 
-    pub(super) const fn reset_clock(&mut self) {
+    pub(crate) const fn reset_clock(&mut self) {
         self.last_tick = None;
     }
 
-    pub(super) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
+    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
         if path != "stress/master" {
             return false;
         }
@@ -141,7 +141,7 @@ impl StressState {
         true
     }
 
-    pub(super) fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         let now = Instant::now();
         if let Some(previous) = self.last_tick.replace(now) {
             self.record_frame(now.duration_since(previous).as_secs_f64() * 1_000.0);
@@ -150,7 +150,7 @@ impl StressState {
     }
 }
 
-pub(super) fn insert_endpoints(registry: &mut MockRegistry) {
+pub(crate) fn insert_endpoints(registry: &mut MockRegistry) {
     for id in ["bench.fps", "bench.frame_ms_avg", "bench.frame_ms_p99"] {
         registry.insert(
             EndpointCategory::Model,

@@ -19,7 +19,10 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
         Clock, InputOwner, ReadValue, Reads,
-        document::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount, render},
+        document::{
+            Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount,
+            render,
+        },
     },
     size::SizeSpec,
     source::UiConfig,
@@ -81,6 +84,12 @@ impl Host for Spy<'_> {
             anchor.extend(content(self));
         }
         anchor
+    }
+
+    /// A placement carries no pose of its own: it moves the box its child is
+    /// laid out in, which this counts nothing of.
+    fn placed(&mut self, _placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        child
     }
 
     fn pressable(

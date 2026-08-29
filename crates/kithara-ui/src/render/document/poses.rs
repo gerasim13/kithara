@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use super::{Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount, render};
+use super::{
+    Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover, SplitMount, render,
+};
 use crate::{
     compile::CompiledNode,
     draw::Transform,
@@ -69,6 +71,10 @@ impl Host for &mut Poses {
             content(self);
         }
     }
+
+    /// A placement is laid out where its point puts it rather than offset
+    /// from where it stands, so there is no pose here to collect.
+    fn placed(&mut self, _placement: PlacedMount<'_>, _child: Self::Output) {}
 
     fn pressable(&mut self, _path: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}
 

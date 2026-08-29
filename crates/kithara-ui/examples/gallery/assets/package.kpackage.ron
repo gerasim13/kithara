@@ -24,6 +24,7 @@
         "gallery-motion": "gallery-motion.klayout.ron",
         "gallery-objects": "gallery-objects.klayout.ron",
         "gallery-pivot": "gallery-pivot.klayout.ron",
+        "gallery-scene": "gallery-scene.klayout.ron",
         "gallery-shader": "gallery-shader.klayout.ron",
         "gallery-sizes": "gallery-sizes.klayout.ron",
         "gallery-skins": "gallery-skins.klayout.ron",

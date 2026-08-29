@@ -23,9 +23,9 @@ use crate::{
         Viewport, WheelSurface, Widget,
         document::{
             Band, Ctx, Group, GroupMount, Host as DocumentHost, Measured as MeasuredPlan,
-            Module as DocumentModule, Popover as DocumentPopover, SplitMount,
+            Module as DocumentModule, PlacedMount, Popover as DocumentPopover, SplitMount,
         },
-        window_layers,
+        placed, window_layers,
     },
     size::{Dim, SizeSpec},
 };
@@ -215,6 +215,19 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         )
         .into();
         apply_size(Rendered::leading(element), popover.size())
+    }
+
+    /// A placement is its own widget rather than a padded container: the
+    /// pointer has to reach the child where it stands, and a container would
+    /// have to take the whole scene to offer that room.
+    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        placed(
+            self.ctx.ui.resolve(placement.path).to_owned(),
+            placement.at,
+            placement.write.is_some(),
+            placement.snap,
+            child,
+        )
     }
 
     fn pressable(

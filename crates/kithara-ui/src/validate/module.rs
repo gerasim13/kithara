@@ -7,6 +7,7 @@ use super::{
         check_measured_box, check_reveal, walk_branches,
     },
     path::{NodePath, check_block_id, check_id},
+    placed::{check_placement, placements},
 };
 use crate::{
     error::UiDocError,
@@ -72,6 +73,49 @@ pub(super) fn record_block(
 ) -> Result<(), UiDocError> {
     check_block_id(&id.0, origin)?;
     claim(&id.0, path, origin, seen)
+}
+
+/// A stage and what stands in it.
+///
+/// A placement is named, checked against the scene its magnet may name, and
+/// walked; anything else in a stage is walked where the document put it.
+fn walk_stage(
+    id: &NodeId,
+    children: &[ControlNode],
+    path: &NodePath,
+    origin: &SourceUri,
+    seen: &mut BTreeSet<String>,
+) -> Result<(), UiDocError> {
+    let here = path.push(format!("Stage({id})"));
+    record(&id.0, &here, origin, seen)?;
+    let scene = placements(children);
+    for (index, child) in children.iter().enumerate() {
+        let at = here.push(format!("[{index}]"));
+        let ControlNode::Placed {
+            id,
+            read,
+            write,
+            magnet,
+            child,
+            ..
+        } = child
+        else {
+            walk_module(child, &at, origin, seen, Sibling::Among)?;
+            continue;
+        };
+        let here = at.push(format!("Placed({id})"));
+        record(&id.0, &here, origin, seen)?;
+        check_placement(
+            read.as_ref(),
+            write.as_ref(),
+            magnet.as_ref(),
+            &scene,
+            &here,
+            origin,
+        )?;
+        walk_module(child, &here, origin, seen, Sibling::Only)?;
+    }
+    Ok(())
 }
 
 pub(super) fn walk_module(
@@ -186,20 +230,11 @@ pub(super) fn walk_module(
             single_box(transform, to.as_ref(), child, &here, origin)?;
             walk_module(child, &here, origin, seen, Sibling::Only)
         }
-        ControlNode::Stage { id, children, .. } => {
-            let here = path.push(format!("Stage({id})"));
-            record(&id.0, &here, origin, seen)?;
-            for (index, child) in children.iter().enumerate() {
-                walk_module(
-                    child,
-                    &here.push(format!("[{index}]")),
-                    origin,
-                    seen,
-                    Sibling::Among,
-                )?;
-            }
-            Ok(())
-        }
+        ControlNode::Stage { id, children, .. } => walk_stage(id, children, path, origin, seen),
+        ControlNode::Placed { id, .. } => Err(UiDocError::PlacedOutsideStage {
+            origin: origin.clone(),
+            path: path.push(format!("Placed({id})")).render(),
+        }),
         ControlNode::Slot { id, default, .. } => {
             let here = path.push(format!("Slot({id})"));
             record(&id.0, &here, origin, seen)?;
@@ -311,6 +346,7 @@ pub(super) const fn control_id(node: &ControlNode) -> Option<&NodeId> {
         | ControlNode::Optional { .. }
         | ControlNode::Reveal { .. }
         | ControlNode::Popover { .. }
+        | ControlNode::Placed { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Scroll { .. }
         | ControlNode::Stage { .. }

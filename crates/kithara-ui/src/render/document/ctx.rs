@@ -4,6 +4,7 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     atoms::wave::zoom_math::DEFAULT_ZOOM,
     compile::CompiledUi,
+    draw::Pt,
     expand::{Binding, BindingKind, BlockSpec},
     registry::SECONDS,
     render::{ReadValue, Reads, custom::CustomKinds},
@@ -141,6 +142,16 @@ impl<'a, 'r> Ctx<'a, 'r> {
             binding.and_then(|binding| self.read(binding)),
             Some(ReadValue::Bool(true))
         )
+    }
+
+    /// The point one binding answers with, or nothing when there is no
+    /// binding, no answer, or an answer that is not a point.
+    #[must_use]
+    pub fn point(self, binding: Option<&Binding>) -> Option<Pt> {
+        match self.read(binding?)? {
+            ReadValue::Point(at) if at.x.is_finite() && at.y.is_finite() => Some(at),
+            _ => None,
+        }
     }
 
     /// The scope argument a binding carries after its endpoint id.

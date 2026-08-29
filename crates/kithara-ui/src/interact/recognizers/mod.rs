@@ -1,3 +1,4 @@
+mod carry;
 pub(crate) mod click;
 mod crossing;
 mod double_click;
@@ -7,6 +8,7 @@ mod span;
 mod stepper;
 pub(crate) mod wheel;
 
+pub(crate) use carry::Carry;
 pub(crate) use crossing::Crossing;
 pub(crate) use double_click::DoubleClick;
 pub(crate) use item::{DragEvent, ItemDrag};

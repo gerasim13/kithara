@@ -103,6 +103,21 @@ pub enum ExpandedNode {
         press: Binding,
         child: Box<Self>,
     },
+    /// Puts its child at a point in the stage that holds it.
+    ///
+    /// The point moves the child's box, not only what it draws, so the region
+    /// that answers the pointer travels with the picture. `write` is where a
+    /// drag publishes the point it ends on, and `magnet` names the placements
+    /// of the same stage that take it while it is carried.
+    Placed {
+        path: InternId,
+        id: InternId,
+        at: (f32, f32),
+        read: Option<Binding>,
+        write: Option<Binding>,
+        magnet: Option<MagnetSpec>,
+        child: Box<Self>,
+    },
     /// Offers every child the same box, in document order.
     Stage {
         id: InternId,
@@ -197,6 +212,9 @@ pub enum ControlSpec {
     /// how long `seconds` says one pass through the artwork takes.
     Lottie {
         artwork: InternId,
+        /// The artwork shown instead while `active` reads true.
+        active_artwork: Option<InternId>,
+        active: Option<Binding>,
         seconds: f32,
     },
     /// One frame of a named sheet, chosen by how far its reading has run and
@@ -307,6 +325,16 @@ pub(crate) struct ExpandedModule {
 pub(crate) struct ExpandedInclude {
     pub(crate) address: Box<[usize]>,
     pub(crate) module: InternId,
+}
+
+/// What a placement snaps onto while a drag carries it: the placements of its
+/// own stage it names, and how near their centres must come before one of them
+/// takes it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct MagnetSpec {
+    pub to: Vec<InternId>,
+    pub within: f32,
 }
 
 /// A block the host may hide: the path that addresses it, and the Bool it
@@ -501,6 +529,7 @@ pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
             anchor, content, ..
         } => motion_of(anchor).or(motion_of(content)),
         ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => motion_of(child),

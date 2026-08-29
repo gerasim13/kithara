@@ -1,6 +1,6 @@
 use bon::Builder;
 
-use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
+use crate::{expand::Binding, ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 
 /// One frame of a named artwork, played by whatever answers its endpoint.
 ///
@@ -9,13 +9,18 @@ use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 /// binds it to something else scrubs the artwork by hand from the same field.
 /// This is the sheet contract with a drawing in place of a picture.
 #[derive(Builder)]
-pub(crate) struct Lottie {
+pub(crate) struct Lottie<'a> {
+    /// The flag that says which of the two artworks stands. It is an endpoint
+    /// of its own rather than the control's value, which carries seconds.
+    pub(crate) active: Option<&'a Binding>,
+    /// The artwork shown while `active` reads true.
+    pub(crate) active_artwork: Option<InternId>,
     pub(crate) artwork: InternId,
     /// How long one pass through the whole artwork takes.
     pub(crate) seconds: f32,
 }
 
-impl Control for Lottie {
+impl Control for Lottie<'_> {
     fn size(&self, skin: &SkinDoc) -> SizeSpec {
         skin.vis.size
     }
@@ -30,14 +35,15 @@ mod host {
     use crate::render::controls::DataRefresh;
     use crate::{
         atoms::picture::lottie::{Lottie as Face, Standing},
+        expand::Binding,
         lottie::builtin_artwork,
         render::{
-            ReadValue, Skin,
+            Ctx, ReadValue, Skin,
             controls::{Draws, Reading},
         },
     };
 
-    impl Draws for Lottie {
+    impl Draws for Lottie<'_> {
         type Painter = Face;
 
         fn painter(&self, _skin: &Skin) -> Face {
@@ -45,8 +51,13 @@ mod host {
         }
 
         fn data(&self, read: Reading<'_>) -> Option<Standing> {
+            let name = self
+                .active_artwork
+                .filter(|_| active(self.active, read.ctx))
+                .unwrap_or(self.artwork);
+
             Some(standing(
-                read.ctx.ui.resolve(self.artwork),
+                read.ctx.ui.resolve(name),
                 self.seconds,
                 seconds(read.value),
             ))
@@ -62,17 +73,34 @@ mod host {
             endpoint: Option<&str>,
         ) -> Option<DataRefresh<Standing>> {
             let artwork = read.ctx.ui.resolve(self.artwork).to_owned();
+            let active_artwork = self
+                .active_artwork
+                .map(|name| read.ctx.ui.resolve(name).to_owned());
+            let flag = read.ctx.endpoint(self.active).map(ToOwned::to_owned);
             let endpoint = endpoint?.to_owned();
             let pass = self.seconds;
             Some(Box::new(move |data, ctx| {
-                let next = standing(&artwork, pass, seconds(ctx.get(&endpoint).as_ref()));
-                if (next.frame - data.frame).abs() < f64::EPSILON {
+                let showing = active_artwork
+                    .as_deref()
+                    .filter(|_| flag.as_deref().is_some_and(|flag| flagged(ctx.get(flag))))
+                    .unwrap_or(&artwork);
+                let next = standing(showing, pass, seconds(ctx.get(&endpoint).as_ref()));
+                if next == *data {
                     return false;
                 }
                 *data = next;
                 true
             }))
         }
+    }
+
+    /// Which artwork stands, as the flag's own endpoint says.
+    fn active(binding: Option<&Binding>, ctx: Ctx<'_, '_>) -> bool {
+        binding.is_some_and(|binding| flagged(ctx.read(binding)))
+    }
+
+    fn flagged(value: Option<ReadValue<'_>>) -> bool {
+        matches!(value, Some(ReadValue::Bool(true)))
     }
 
     /// How far the artwork has run, as its endpoint says.

@@ -1,4 +1,4 @@
-use super::{Group, GroupMount, Measured, Module, Popover, SplitMount};
+use super::{Group, GroupMount, Measured, Module, PlacedMount, Popover, SplitMount};
 use crate::{
     draw::Transform,
     expand::{Binding, ControlSpec, ExpandedNode},
@@ -90,6 +90,14 @@ pub trait Host {
 
     /// Mounts a vertical slot of visible children.
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
+
+    /// Mounts one placement of a stage around the subtree it holds.
+    ///
+    /// The host puts that subtree at the placement's point and, where the
+    /// placement has somewhere to write, lets the pointer carry it: what a
+    /// drag publishes is [`Snap::take`] of where it was left, so the magnet
+    /// answers the same in both hosts.
+    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output;
 
     /// Mounts children that all share one box, in document order.
     ///

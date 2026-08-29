@@ -27,13 +27,14 @@ pub(super) enum Tab {
     Motion,
     Sprites,
     Lottie,
+    Scene,
     TableLong,
     Custom,
     Skins,
 }
 
 impl Tab {
-    pub(super) const ALL: [Self; 28] = [
+    pub(super) const ALL: [Self; 29] = [
         Self::Atoms,
         Self::Buttons,
         Self::Faders,
@@ -59,6 +60,7 @@ impl Tab {
         Self::Motion,
         Self::Sprites,
         Self::Lottie,
+        Self::Scene,
         Self::TableLong,
         Self::Custom,
         Self::Skins,
@@ -94,6 +96,7 @@ impl Tab {
             Self::Motion => "gallery-motion",
             Self::Sprites => "gallery-sprites",
             Self::Lottie => "gallery-lottie",
+            Self::Scene => "gallery-scene",
             Self::TableLong => "gallery-table-long",
             Self::Custom => "gallery-custom",
             Self::Skins => "gallery-skins",
@@ -127,9 +130,10 @@ impl Tab {
             Self::Motion => 22,
             Self::Sprites => 23,
             Self::Lottie => 24,
-            Self::TableLong => 25,
-            Self::Custom => 26,
-            Self::Skins => 27,
+            Self::Scene => 25,
+            Self::TableLong => 26,
+            Self::Custom => 27,
+            Self::Skins => 28,
         }
     }
 }
@@ -168,6 +172,7 @@ impl TryFrom<&str> for Tab {
             "motion" => Ok(Self::Motion),
             "sprites" => Ok(Self::Sprites),
             "lottie" => Ok(Self::Lottie),
+            "scene" => Ok(Self::Scene),
             "table_long" => Ok(Self::TableLong),
             "custom" => Ok(Self::Custom),
             "skins" => Ok(Self::Skins),

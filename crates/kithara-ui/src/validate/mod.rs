@@ -4,6 +4,7 @@ mod layout;
 mod measure;
 mod module;
 mod path;
+mod placed;
 #[cfg(test)]
 mod tests;
 

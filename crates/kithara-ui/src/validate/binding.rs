@@ -58,6 +58,9 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
+        // A placement reads the point it stands on and publishes the point a
+        // drag leaves it on, which is the same point either way round.
+        ControlNode::Placed { .. } => (Some(ValueKind::Point), Some(ValueKind::Point)),
         ControlNode::Include { .. }
         | ControlNode::Reveal { .. }
         | ControlNode::Scroll { .. }

@@ -15,7 +15,8 @@ use kithara_ui::{
     render::{
         InputOwner, Reads,
         document::{
-            Clock, Ctx, Group, GroupMount, Host, Measured, Module, Popover, SplitMount, render,
+            Clock, Ctx, Group, GroupMount, Host, Measured, Module, PlacedMount, Popover,
+            SplitMount, render,
         },
     },
     size::SizeSpec,
@@ -116,6 +117,10 @@ impl Host for WaveHost<'_> {
             anchor.extend(content(self));
         }
         anchor
+    }
+
+    fn placed(&mut self, _placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        child
     }
 
     fn pressable(

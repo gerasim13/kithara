@@ -4,7 +4,7 @@ use serde::de::DeserializeOwned;
 
 use super::{
     Binding, BlockSpec, Budget, ControlSite, ControlSpec, ControlVisitor, DropSpec,
-    ExpandedInclude, ExpandedModule, ExpandedNode, MeasureSpec, SurfaceSpec,
+    ExpandedInclude, ExpandedModule, ExpandedNode, MagnetSpec, MeasureSpec, SurfaceSpec,
     binding_subst::{
         intern_binding, intern_module_text, intern_module_text_opt, intern_optional_binding,
         resolve_optional_param, resolve_param, substitute_binding,
@@ -17,8 +17,8 @@ use crate::{
     error::UiDocError,
     ids::{InternId, Interner, NodeId, SourceUri},
     module::{
-        AdaptiveStep, BindingRef, ControlNode, Measure, Motion, PopoverAlign, PopoverAt, Pose,
-        TableColumn,
+        AdaptiveStep, BindingRef, ControlNode, Magnet, Measure, Motion, PopoverAlign, PopoverAt,
+        Pose, TableColumn,
     },
     param::Param,
     registry::EndpointRegistry,
@@ -564,6 +564,88 @@ fn expand_object(
     })
 }
 
+/// A placement keeps its point, its endpoints and its magnet through
+/// expansion: where it stands is answered per frame, and which placements take
+/// it is answered by the stage that holds them all.
+fn expand_placed(
+    context: &Context<'_>,
+    node: &ControlNode,
+    depth: usize,
+    machine: &mut Expander<'_, '_>,
+) -> Result<ExpandedNode, UiDocError> {
+    let ControlNode::Placed {
+        id,
+        at,
+        read,
+        write,
+        magnet,
+        child,
+    } = node
+    else {
+        unreachable!("expand_placed is called only for a placement")
+    };
+    machine.budget.charge(&context.origin)?;
+    let path = child_path(&context.prefix, id);
+    let read = read
+        .as_ref()
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    let write = write
+        .as_ref()
+        .map(|binding| context.substitute(binding, &path))
+        .transpose()?;
+    (machine.visitor)(
+        ControlSite {
+            path: &path,
+            control: node,
+            read: read.as_ref(),
+            write: write.as_ref(),
+            columns: &[],
+            columns_state: None,
+            query: None,
+            scope: None,
+            zoom: None,
+            active: None,
+        },
+        &context.origin,
+    )?;
+    let magnet = magnet
+        .as_ref()
+        .map(|magnet| intern_magnet(machine, magnet, &context.origin))
+        .transpose()?;
+    Ok(ExpandedNode::Placed {
+        path: machine.interner.intern(&path, &context.origin)?,
+        id: machine.interner.intern(&id.0, &context.origin)?,
+        at: *at,
+        read: read
+            .as_ref()
+            .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+            .transpose()?,
+        write: write
+            .as_ref()
+            .map(|binding| intern_binding(machine.interner, binding, &context.origin))
+            .transpose()?,
+        magnet,
+        child: Box::new(walk_child(context, child, 0, depth, machine)?),
+    })
+}
+
+fn intern_magnet(
+    machine: &mut Expander<'_, '_>,
+    magnet: &Magnet,
+    origin: &SourceUri,
+) -> Result<MagnetSpec, UiDocError> {
+    let to = magnet
+        .to
+        .iter()
+        .map(|target| machine.interner.intern(&target.0, origin))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(MagnetSpec {
+        to,
+        within: magnet.within,
+    })
+}
+
 fn expand_stage(
     context: &Context<'_>,
     id: &NodeId,
@@ -673,6 +755,7 @@ pub(super) fn walk(
         ControlNode::Stage { id, size, children } => {
             expand_stage(context, id, *size, children, depth, machine)
         }
+        placed @ ControlNode::Placed { .. } => expand_placed(context, placed, depth, machine),
         ControlNode::Slot { id, size, default } => {
             expand_slot(context, id, *size, default, depth, machine)
         }

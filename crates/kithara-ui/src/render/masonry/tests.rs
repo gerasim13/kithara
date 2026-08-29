@@ -2988,6 +2988,7 @@ mod gesture_census {
             } => Some((*path, spec, read.as_ref())),
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Placed { child, .. }
             | ExpandedNode::Pressable { child, .. }
             | ExpandedNode::Reveal { child, .. }
             | ExpandedNode::Scroll { child, .. } => find_control(child),
@@ -5253,4 +5254,188 @@ fn the_chevron_cell_takes_the_width_the_skin_gives_it() {
         cell_size.width,
         f64::from(builtin::skin().chrome.chevron_size)
     );
+}
+
+/// Where the application says the carried placement now stands.
+struct ScenePoint {
+    at: Cell<Option<Pt>>,
+}
+
+impl Reads for ScenePoint {
+    fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+        if endpoint == "scene.at" {
+            return self.at.get().map(ReadValue::Point);
+        }
+        None
+    }
+}
+
+/// A dock, a sprite that snaps onto it, and a marker standing at the stage's
+/// own origin so a test measures a placement against the scene rather than
+/// against whatever the window put around it.
+const SCENE: &str = r#"Stage(id: "stage", size: (w: Fill, h: Fill), children: [
+    Spacer(id: "mark", size: Some((w: Fixed(10.0), h: Fixed(10.0)))),
+    Placed(id: "dock", at: (100.0, 24.0),
+        child: Spacer(id: "post", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    Placed(id: "carry", at: (40.0, 24.0),
+        read: Model(id: "scene.at"),
+        write: Parameter(id: "scene.at"),
+        magnet: (to: ["dock"], within: 64.0),
+        child: Spacer(id: "sprite", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+])"#;
+
+fn scene_root(reads: &ScenePoint) -> (CompiledUi, MasonryState, MasonryRoot<UiEvent>) {
+    let mut registry = fixture_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    let ui = fixture_ui("scene-fixture", SCENE, &registry);
+    let state = MasonryState::default();
+    let output = document::render(
+        &ui.root,
+        ctx(&ui, reads),
+        MasonryHost::new(ctx(&ui, reads), builtin::skin()).with_state(state.clone()),
+    );
+    let mut root = masonry_root(output, 300, 200);
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the scene fixture must compose: {error}"));
+    (ui, state, root)
+}
+
+fn window_origin(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Point {
+    let id = state
+        .widget_id(path)
+        .unwrap_or_else(|| panic!("`{path}` must stay addressable"));
+    root.root()
+        .get_widget(id)
+        .unwrap_or_else(|| panic!("`{path}` must stay mounted"))
+        .ctx()
+        .window_origin()
+}
+
+/// Where a placement stands in its own stage, which is what the document names
+/// and what the window around it must not change.
+fn stands_at(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Point {
+    let origin = window_origin(root, state, path);
+    let stage = window_origin(root, state, "demo/mark");
+    Point::new(origin.x - stage.x, origin.y - stage.y)
+}
+
+/// Presses the middle of a placement's child and pulls it that far, leaving it
+/// there.
+fn carry(root: &mut MasonryRoot<UiEvent>, from: Point, by: (f64, f64)) -> Vec<UiEvent> {
+    let to = Point::new(from.x + by.0, from.y + by.1);
+    root.handle_pointer_event(pointer_move(from.x, from.y))
+        .unwrap_or_else(|error| panic!("the hover must route: {error}"));
+    root.handle_pointer_event(pointer_down(from.x, from.y))
+        .unwrap_or_else(|error| panic!("the press must route: {error}"));
+    root.handle_pointer_event(pointer_move(to.x, to.y))
+        .unwrap_or_else(|error| panic!("the move must route: {error}"));
+    root.handle_pointer_event(pointer_up(to.x, to.y))
+        .unwrap_or_else(|error| panic!("the release must route: {error}"));
+    root.take_actions()
+}
+
+/// The middle of the box a placement's child was laid out into.
+fn middle(root: &MasonryRoot<UiEvent>, state: &MasonryState, path: &str) -> Point {
+    let origin = window_origin(root, state, path);
+    Point::new(origin.x + 20.0, origin.y + 10.0)
+}
+
+/// Where the last publication left the carried placement.
+fn published_point(published: &[UiEvent]) -> Option<Pt> {
+    published.iter().rev().find_map(|event| match event {
+        UiEvent::Control {
+            action: ControlAction::Place(at),
+            path,
+        } if path == "demo/carry" => Some(*at),
+        _ => None,
+    })
+}
+
+#[kithara::test]
+fn a_placement_stands_at_the_point_the_document_wrote() {
+    let reads = ScenePoint {
+        at: Cell::new(None),
+    };
+    let (_, state, root) = scene_root(&reads);
+
+    assert_eq!(
+        stands_at(&root, &state, "demo/sprite"),
+        Point::new(40.0, 24.0)
+    );
+}
+
+/// What the retained host has to do that a rebuild used to: the point is the
+/// application's, so a placement that reads one stands where the endpoint now
+/// answers rather than where it was mounted.
+#[kithara::test]
+fn a_point_that_moves_moves_the_placement_on_a_refresh() {
+    let reads = ScenePoint {
+        at: Cell::new(None),
+    };
+    let (ui, state, mut root) = scene_root(&reads);
+
+    reads.at.set(Some(Pt { x: 120.0, y: 60.0 }));
+    root.refresh(ctx(&ui, &reads));
+    root.redraw()
+        .unwrap_or_else(|error| panic!("the moved scene must compose: {error}"));
+
+    assert_eq!(
+        stands_at(&root, &state, "demo/sprite"),
+        Point::new(120.0, 60.0)
+    );
+}
+
+/// A placement nothing carries holds still under the same drag, which is what
+/// makes the drag below a measurement rather than a harness that moves whatever
+/// it touches.
+#[kithara::test]
+fn a_placement_the_document_gave_nowhere_to_write_publishes_nothing() {
+    let reads = ScenePoint {
+        at: Cell::new(None),
+    };
+    let (_, state, mut root) = scene_root(&reads);
+    let from = middle(&root, &state, "demo/post");
+
+    let published = carry(&mut root, from, (0.0, 60.0));
+
+    assert_eq!(published_point(&published), None);
+}
+
+/// The pointer carries the placement, and where it left it is published for the
+/// application to answer with next frame.
+#[kithara::test]
+fn carrying_a_placement_publishes_where_the_drag_left_it() {
+    let reads = ScenePoint {
+        at: Cell::new(None),
+    };
+    let (_, state, mut root) = scene_root(&reads);
+    let from = middle(&root, &state, "demo/sprite");
+
+    let published = carry(&mut root, from, (-30.0, 60.0));
+
+    assert_eq!(published_point(&published), Some(Pt { x: 10.0, y: 84.0 }));
+}
+
+/// A drag that ends in reach of a target the magnet names is published at that
+/// target, not where the pointer left it.
+#[kithara::test]
+fn a_magnet_takes_a_drag_that_ends_in_reach() {
+    let reads = ScenePoint {
+        at: Cell::new(None),
+    };
+    let (_, state, mut root) = scene_root(&reads);
+    let from = middle(&root, &state, "demo/sprite");
+
+    let published = carry(&mut root, from, (50.0, 0.0));
+
+    assert_eq!(published_point(&published), Some(Pt { x: 100.0, y: 24.0 }));
 }

@@ -5,7 +5,7 @@ mod common;
 use std::{borrow::Cow, env, fmt::Write as _, fs, path::Path};
 
 use iced::{
-    Pixels, Size,
+    Pixels, Rectangle, Size,
     advanced::{
         graphics::text::font_system,
         layout::{Layout, Limits},
@@ -19,8 +19,10 @@ use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compile},
     expand::ExpandedNode,
+    geom::Pt,
     ids::SourceUri,
     module::ChromeStyle,
+    registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{
         Clock, ReadValue, Reads, Skin, StereoLevels, TableCell, TableRow, WaveBucket, WaveformView,
         fonts::{FONT_BYTES, SANS},
@@ -32,6 +34,9 @@ use kithara_ui::{
 
 struct FixtureReads {
     beats: [f32; 4],
+    /// Where the application says a carried placement stands, for the fixtures
+    /// that have one; nothing answers for the rest.
+    placed: Option<Pt>,
     buckets: [WaveBucket; 6],
     cues: [f32; 2],
     downbeats: [f32; 2],
@@ -42,6 +47,7 @@ impl Default for FixtureReads {
     fn default() -> Self {
         Self {
             beats: [0.125, 0.375, 0.625, 0.875],
+            placed: None,
             buckets: [
                 WaveBucket {
                     low: 0.25,
@@ -149,6 +155,7 @@ impl Reads for FixtureReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
         match id {
+            "scene.at" => self.placed.map(ReadValue::Point),
             "deck.playback.tempo" => Some(ReadValue::Text("128.0")),
             "deck.track.title" => Some(ReadValue::Text("Midnight Circuit")),
             "deck.playback.playing" | "deck.playback.looping" | "deck.playback.synced" => {
@@ -1043,4 +1050,105 @@ fn committed_layout_fixture_corpus_needs_no_fallback_face() {
             );
         }
     }
+}
+
+/// Every box of exactly this size in the laid-out tree.
+///
+/// A placement is not addressable in a layout the way a widget is, so a test
+/// gives the picture one box of a size nothing else has and finds it by that.
+fn boxes_of(layout: Layout<'_>, size: Size) -> Vec<Rectangle> {
+    let bounds = layout.bounds();
+    let mut found = if bounds.width == size.width && bounds.height == size.height {
+        vec![bounds]
+    } else {
+        Vec::new()
+    };
+    for child in layout.children() {
+        found.extend(boxes_of(child, size));
+    }
+    found
+}
+
+/// Where the one box of that size stands.
+///
+/// A sized cell reaches iced as a container around the widget it sizes, so one
+/// box of the picture is several nodes of the layout, all in the same place.
+fn stands_at(layout: Layout<'_>, size: Size, role: &str) -> (f32, f32) {
+    let mut found = boxes_of(layout, size)
+        .into_iter()
+        .map(|bounds| (bounds.x, bounds.y))
+        .collect::<Vec<_>>();
+    found.dedup();
+    let [only] = found.as_slice() else {
+        panic!("the scene must lay out one {role}, not {found:?}");
+    };
+    *only
+}
+
+const SCENE: &str = r#"(schema: "kithara.module", version: 1, id: "scene", chrome: Plain,
+    root: Stage(id: "stage", size: (w: Fill, h: Fill), children: [
+        Spacer(id: "mark", size: Some((w: Fixed(10.0), h: Fixed(10.0)))),
+        Placed(id: "carry", at: (40.0, 24.0),
+            read: Model(id: "scene.at"),
+            write: Parameter(id: "scene.at"),
+            child: Spacer(id: "sprite", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    ]))"#;
+
+/// Where a placement's child ended up in the scene around it, measured against
+/// the marker that stands at the stage's own origin.
+fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
+    let mut registry = common::player_registry();
+    for category in [EndpointCategory::Model, EndpointCategory::Parameter] {
+        registry.insert(category, "scene.at", EndpointDesc::new(ValueKind::Point));
+    }
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron",
+                size: (w: Fill, h: Fill)))"#,
+    );
+    resolver.insert("scene.kmodule.ron", SCENE);
+    let ui = compile(
+        "scene.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect("the scene document must compile");
+    let skin = fixture_skin();
+    let renderer = headless_renderer();
+    let mut element = tree::render(&ui.root, &ui, reads, &skin, Clock::default(), None);
+    let mut tree = Tree::new(element.as_widget());
+    let node = element.as_widget_mut().layout(
+        &mut tree,
+        &renderer,
+        &Limits::new(Size::ZERO, Size::new(300.0, 200.0)),
+    );
+    let layout = Layout::new(&node);
+    let sprite = stands_at(layout, Size::new(40.0, 20.0), "sprite");
+    let stage = stands_at(layout, Size::new(10.0, 10.0), "marker");
+    (sprite.0 - stage.0, sprite.1 - stage.1)
+}
+
+/// A placement moves the box its child is laid out in, so the immediate host
+/// puts the child where the document says rather than drawing it there and
+/// leaving the box that answers the pointer behind.
+#[kithara::test]
+fn a_placement_lays_its_child_out_at_the_point_the_document_wrote() {
+    assert_eq!(scene_placement(&FixtureReads::default()), (40.0, 24.0));
+}
+
+/// And the point is the application's: the same compiled document lays the
+/// child out where the endpoint now answers.
+#[kithara::test]
+fn a_placement_lays_its_child_out_at_the_point_its_endpoint_answers() {
+    let reads = FixtureReads {
+        placed: Some(Pt { x: 120.0, y: 60.0 }),
+        ..FixtureReads::default()
+    };
+
+    assert_eq!(scene_placement(&reads), (120.0, 60.0));
 }

@@ -208,7 +208,7 @@ impl ViewControl for mount::Custom {
     }
 }
 
-impl ViewControl for mount::Lottie {
+impl ViewControl for mount::Lottie<'_> {
     fn view<'a>(&self, cx: &Cx<'a, '_, '_>) -> Rendered<'a> {
         painted(self, cx)
     }

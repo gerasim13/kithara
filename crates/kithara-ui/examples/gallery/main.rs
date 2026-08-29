@@ -363,6 +363,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use kithara_ui::{
         compile::CompiledNode,
+        draw::Pt,
         expand::{Binding, BindingKind, ControlSpec, ExpandedNode},
         lottie::builtin_artwork,
         module::{ButtonStyle, ChromeStyle, IconName, Motion, Pose, WaveStyle},
@@ -778,6 +779,7 @@ mod tests {
                 ("gallery/motion/item", "activation"),
                 ("gallery/objects/item", "activation"),
                 ("gallery/pivot/item", "activation"),
+                ("gallery/scene/item", "activation"),
                 ("gallery/shader/item", "activation"),
                 ("gallery/sprites/item", "activation"),
                 ("gallery/sizes/item", "activation"),
@@ -885,6 +887,7 @@ mod tests {
                 }
                 ExpandedNode::Object { child, .. }
                 | ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Placed { child, .. }
                 | ExpandedNode::Pressable { child, .. }
                 | ExpandedNode::Reveal { child, .. }
                 | ExpandedNode::Scroll { child, .. } => walk(child, visit),
@@ -935,6 +938,7 @@ mod tests {
                 }
                 ExpandedNode::Object { child, .. }
                 | ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Placed { child, .. }
                 | ExpandedNode::Pressable { child, .. }
                 | ExpandedNode::Reveal { child, .. }
                 | ExpandedNode::Scroll { child, .. } => {
@@ -1157,6 +1161,7 @@ mod tests {
                     walk(child, ui, found);
                 }
                 ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Placed { child, .. }
                 | ExpandedNode::Pressable { child, .. }
                 | ExpandedNode::Scroll { child, .. } => walk(child, ui, found),
                 ExpandedNode::Row { children, .. }
@@ -1445,20 +1450,33 @@ mod tests {
         assert!(posed >= 2, "{posed} object(s) carry a sprite");
     }
 
-    /// Every artwork the artwork page declares: the one it names, how long one
-    /// pass through it takes, and the endpoint it reads its seconds from.
-    fn artwork_sites(ui: &CompiledUi) -> Vec<(&str, f32, Option<&str>)> {
+    /// Every artwork a page declares: the one it names, the one it switches to,
+    /// how long one pass through it takes, and the endpoint it reads its
+    /// seconds from.
+    fn artwork_sites(ui: &CompiledUi) -> Vec<ArtworkSite<'_>> {
         let mut found = Vec::new();
         each_control_read(ui, &mut |spec, read| {
-            if let ControlSpec::Lottie { artwork, seconds } = spec {
-                found.push((
-                    ui.resolve(*artwork),
-                    *seconds,
-                    read.map(|binding| ui.resolve(binding.key)),
-                ));
+            if let ControlSpec::Lottie {
+                artwork,
+                active_artwork,
+                ..
+            } = spec
+            {
+                found.push(ArtworkSite {
+                    artwork: ui.resolve(*artwork),
+                    active: active_artwork.map(|name| ui.resolve(name)),
+                    read: read.map(|binding| ui.resolve(binding.key)),
+                });
             }
         });
         found
+    }
+
+    /// One Lottie site of a page, as the document declared it.
+    struct ArtworkSite<'a> {
+        artwork: &'a str,
+        active: Option<&'a str>,
+        read: Option<&'a str>,
     }
 
     /// A page that names an artwork nothing ships draws an empty box, and the
@@ -1469,7 +1487,8 @@ mod tests {
 
         let missing: Vec<&str> = artwork_sites(&ui)
             .iter()
-            .map(|(artwork, _, _)| *artwork)
+            .flat_map(|site| [Some(site.artwork), site.active])
+            .flatten()
             .filter(|artwork| builtin_artwork(artwork).is_none())
             .collect();
 
@@ -1486,7 +1505,7 @@ mod tests {
 
         let host_clock: Vec<&str> = artwork_sites(&ui)
             .iter()
-            .filter_map(|(_, _, read)| *read)
+            .filter_map(|site| site.read)
             .filter(|endpoint| reads.get(endpoint).is_none())
             .collect();
 
@@ -1502,7 +1521,7 @@ mod tests {
 
         let played = artwork_sites(&ui)
             .iter()
-            .filter(|(_, _, read)| *read == Some(SECONDS))
+            .filter(|site| site.read == Some(SECONDS))
             .count();
 
         assert!(played >= 1, "{played} artwork(s) run off the host's clock");
@@ -1520,6 +1539,188 @@ mod tests {
             .count();
 
         assert!(posed >= 2, "{posed} object(s) carry an artwork");
+    }
+
+    /// Every placement the scene page declares, in document order: the path it
+    /// publishes on, where it reads its point, where a drag publishes it, and
+    /// what its magnet names.
+    fn placements(ui: &CompiledUi) -> Vec<Placement<'_>> {
+        fn walk<'a>(node: &'a ExpandedNode, ui: &'a CompiledUi, found: &mut Vec<Placement<'a>>) {
+            match node {
+                ExpandedNode::Placed {
+                    path,
+                    read,
+                    write,
+                    magnet,
+                    child,
+                    ..
+                } => {
+                    found.push(Placement {
+                        path: ui.resolve(*path),
+                        read: read.as_ref().map(|binding| ui.resolve(binding.key)),
+                        write: write.as_ref().map(|binding| ui.resolve(binding.key)),
+                        magnet: magnet.as_ref().map(|magnet| {
+                            (
+                                magnet.to.iter().map(|target| ui.resolve(*target)).collect(),
+                                magnet.within,
+                            )
+                        }),
+                    });
+                    walk(child, ui, found);
+                }
+                ExpandedNode::Object { child, .. }
+                | ExpandedNode::Optional { child, .. }
+                | ExpandedNode::Pressable { child, .. }
+                | ExpandedNode::Scroll { child, .. } => walk(child, ui, found),
+                ExpandedNode::Row { children, .. }
+                | ExpandedNode::Column { children, .. }
+                | ExpandedNode::Slot { children, .. }
+                | ExpandedNode::Stage { children, .. } => {
+                    for child in children {
+                        walk(child, ui, found);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut found = Vec::new();
+        let mut stack = vec![&ui.root];
+        while let Some(node) = stack.pop() {
+            match node {
+                CompiledNode::Split { children, .. } => {
+                    stack.extend(children.iter().map(|cell| &cell.node));
+                }
+                CompiledNode::Optional { child, .. } => stack.push(child),
+                CompiledNode::Module { root, .. } => walk(root, ui, &mut found),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// One placement of the scene page, as the document declared it.
+    struct Placement<'a> {
+        path: &'a str,
+        read: Option<&'a str>,
+        write: Option<&'a str>,
+        magnet: Option<(Vec<&'a str>, f32)>,
+    }
+
+    /// A placement the pointer may carry has to read its point back, or the
+    /// drag would publish somewhere the picture never follows.
+    #[kithara::test]
+    fn every_carried_placement_of_the_scene_reads_the_point_it_publishes() {
+        let ui = page(Tab::Scene);
+
+        let unread: Vec<&str> = placements(&ui)
+            .iter()
+            .filter(|placement| placement.write.is_some() && placement.read.is_none())
+            .map(|placement| placement.path)
+            .collect();
+
+        assert_eq!(unread, [""; 0]);
+    }
+
+    /// The point a drag publishes is the application's, so the mock has to
+    /// answer every placement that reads one.
+    #[kithara::test]
+    fn the_mock_answers_the_point_every_placement_reads() {
+        let ui = page(Tab::Scene);
+        let reads = MockReads::default();
+
+        let unanswered: Vec<&str> = placements(&ui)
+            .iter()
+            .filter_map(|placement| placement.read)
+            .filter(|endpoint| !matches!(reads.get(endpoint), Some(ReadValue::Point(_))))
+            .collect();
+
+        assert_eq!(unanswered, [""; 0]);
+    }
+
+    /// The magnet is the page's whole point: a carried placement names the
+    /// others it snaps onto, whatever each of them holds.
+    #[kithara::test]
+    fn the_scene_magnets_name_placements_of_the_same_stage() {
+        let ui = page(Tab::Scene);
+        let placed = placements(&ui);
+        let names: Vec<&str> = placed
+            .iter()
+            .filter_map(|placement| placement.path.rsplit('/').next())
+            .collect();
+
+        let magnets: Vec<&str> = placed
+            .iter()
+            .filter_map(|placement| placement.magnet.as_ref())
+            .flat_map(|(to, _)| to.iter().copied())
+            .filter(|target| !names.contains(target))
+            .collect();
+
+        assert_eq!(magnets, [""; 0]);
+    }
+
+    #[kithara::test]
+    fn the_scene_carries_more_than_one_placement() {
+        let ui = page(Tab::Scene);
+
+        let carried = placements(&ui)
+            .iter()
+            .filter(|placement| placement.magnet.is_some())
+            .count();
+
+        assert!(carried >= 2, "{carried} placement(s) may be carried");
+    }
+
+    /// The press on the artwork switches which drawing stands, so the page has
+    /// to name a second artwork and the toolkit has to ship it.
+    #[kithara::test]
+    fn the_scene_switches_between_two_artworks_the_toolkit_ships() {
+        let ui = page(Tab::Scene);
+
+        let switched: Vec<(&str, &str)> = artwork_sites(&ui)
+            .iter()
+            .filter_map(|site| Some((site.artwork, site.active?)))
+            .collect();
+
+        assert!(!switched.is_empty(), "no artwork on the page switches");
+        for (artwork, active) in switched {
+            assert_ne!(artwork, active);
+            assert!(
+                builtin_artwork(artwork).is_some(),
+                "{artwork} is not shipped"
+            );
+            assert!(builtin_artwork(active).is_some(), "{active} is not shipped");
+        }
+    }
+
+    /// The flag the artwork switches on is the application's, and a press is
+    /// what turns it.
+    #[kithara::test]
+    fn the_press_on_the_scene_artwork_turns_the_flag_it_switches_on() {
+        let mut reads = MockReads::default();
+
+        assert_eq!(
+            reads.get("gallery.scene.sparked"),
+            Some(ReadValue::Bool(false))
+        );
+        reads.apply("scene/switch", &ControlAction::Activate);
+
+        assert_eq!(
+            reads.get("gallery.scene.sparked"),
+            Some(ReadValue::Bool(true))
+        );
+    }
+
+    /// A drag publishes where it left a placement, and the placement reads it
+    /// back from the same endpoint.
+    #[kithara::test]
+    fn a_published_point_is_where_the_scene_placement_then_stands() {
+        let mut reads = MockReads::default();
+        let at = Pt { x: 260.0, y: 150.0 };
+
+        reads.apply("scene/carry-one", &ControlAction::Place(at));
+
+        assert_eq!(reads.get("gallery.scene.one"), Some(ReadValue::Point(at)));
     }
 
     /// The one fader a page carries, under the path the document gives it.

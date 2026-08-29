@@ -1476,7 +1476,9 @@ mod tests {
                 _ => {}
             },
             ExpandedNode::Popover { anchor, .. } => claimed_components(anchor, components),
-            ExpandedNode::Pressable { child, .. } => claimed_components(child, components),
+            ExpandedNode::Placed { child, .. } | ExpandedNode::Pressable { child, .. } => {
+                claimed_components(child, components);
+            }
         }
     }
 
@@ -3980,7 +3982,7 @@ mod tests {
         assert_eq!(ui.resolve(*module), "gallery-nav");
         let mut components = Vec::new();
         claimed_components(root, &mut components);
-        assert_eq!(components, ["activation"; 28]);
+        assert_eq!(components, ["activation"; 29]);
 
         let full = super::super::node::render_compiled(&ui.root, ctx(&ui, &reads), builtin::skin());
         let full_tree = Tree::new(full.as_widget());
@@ -4032,6 +4034,7 @@ mod tests {
                 "gallery/motion/item",
                 "gallery/sprites/item",
                 "gallery/lottie/item",
+                "gallery/scene/item",
                 "gallery/table_long/item",
                 "gallery/custom/item",
                 "gallery/skins/item",

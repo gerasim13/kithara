@@ -151,12 +151,7 @@ pub(super) fn control_spec(
         ControlNode::Custom { kind, .. } => ControlSpec::Custom {
             kind: machine.interner.intern(kind, &context.origin)?,
         },
-        ControlNode::Lottie {
-            artwork, seconds, ..
-        } => ControlSpec::Lottie {
-            artwork: intern_text(context, machine.interner, artwork, path, &context.origin)?,
-            seconds: *seconds,
-        },
+        lottie @ ControlNode::Lottie { .. } => lottie_spec(context, machine, lottie, extra, path)?,
         ControlNode::Sprite { sheet, seconds, .. } => ControlSpec::Sprite {
             sheet: intern_text(context, machine.interner, sheet, path, &context.origin)?,
             seconds: *seconds,
@@ -282,6 +277,38 @@ pub(super) fn control_spec(
     Ok(Some(spec))
 }
 
+/// The artwork a document names, the one a press shows instead, and the flag
+/// that says which of them stands.
+fn lottie_spec(
+    context: &Context<'_>,
+    machine: &mut Expander<'_, '_>,
+    control: &ControlNode,
+    extra: &ExtraBindings,
+    path: &str,
+) -> Result<ControlSpec, UiDocError> {
+    let ControlNode::Lottie {
+        artwork,
+        active_artwork,
+        seconds,
+        ..
+    } = control
+    else {
+        unreachable!("lottie_spec is called only for an artwork")
+    };
+    Ok(ControlSpec::Lottie {
+        artwork: intern_text(context, machine.interner, artwork, path, &context.origin)?,
+        active_artwork: intern_optional_text(
+            context,
+            machine.interner,
+            active_artwork.as_deref(),
+            path,
+            &context.origin,
+        )?,
+        active: optional_binding(context, machine, extra.active.as_ref())?,
+        seconds: *seconds,
+    })
+}
+
 /// Specs for controls that need no context; the match stays exhaustive so a new
 /// `ControlNode` has to be classified here rather than falling through silently.
 fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
@@ -320,6 +347,7 @@ fn fixed_control_spec(control: &ControlNode) -> Option<ControlSpec> {
         | ControlNode::Optional { .. }
         | ControlNode::Popover { .. }
         | ControlNode::Reveal { .. }
+        | ControlNode::Placed { .. }
         | ControlNode::Pressable { .. }
         | ControlNode::Stage { .. }
         | ControlNode::Slot { .. }

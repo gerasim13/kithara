@@ -86,7 +86,7 @@ impl MenuWindow {
     }
 }
 
-pub(super) struct MenuState {
+pub(crate) struct MenuState {
     group: MenuGroup,
     count_label: String,
     modules_count: String,
@@ -126,7 +126,7 @@ impl Default for MenuState {
 }
 
 impl MenuState {
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         let Some(id) = path.strip_prefix("app-menu/") else {
             return false;
         };
@@ -169,7 +169,7 @@ impl MenuState {
         true
     }
 
-    pub(super) const fn set_open(&mut self, open: bool) {
+    pub(crate) const fn set_open(&mut self, open: bool) {
         self.open = open;
     }
 
@@ -207,7 +207,7 @@ impl MenuState {
         }
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let value = match id {
             "ui.menu.open" => ReadValue::Bool(self.open),
@@ -328,7 +328,7 @@ impl MenuState {
     }
 }
 
-pub(super) struct ContextState {
+pub(crate) struct ContextState {
     open: Option<usize>,
     action: String,
     selected: usize,
@@ -345,7 +345,7 @@ impl Default for ContextState {
 }
 
 impl ContextState {
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         let Some((row, action)) = track_address(path) else {
             return false;
         };
@@ -364,7 +364,7 @@ impl ContextState {
         true
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         if endpoint == "gallery.menu.action" {
             return Some(ReadValue::Text(&self.action));
         }
@@ -388,7 +388,7 @@ impl ContextState {
         self.open = None;
     }
 
-    pub(super) fn secondary(&mut self, path: &str) {
+    pub(crate) fn secondary(&mut self, path: &str) {
         if let Some((row, "row")) = track_address(path) {
             self.open = Some(row);
         }

@@ -3,10 +3,6 @@ use std::sync::LazyLock;
 use num_traits::cast::AsPrimitive;
 use velato::Composition;
 
-/// The artwork the toolkit ships, named the way a document names a sprite
-/// sheet.
-const PULSE: &str = "pulse";
-
 /// One artwork, read once.
 ///
 /// Reading a Lottie is parsing a document, so it is done at most once per name
@@ -50,23 +46,50 @@ impl Artwork {
 /// control does everywhere else.
 #[must_use]
 pub fn builtin_artwork(name: &str) -> Option<&'static Artwork> {
-    static ARTWORK: LazyLock<Option<Artwork>> = LazyLock::new(|| {
-        Composition::from_slice(include_str!("../../assets/lottie/pulse.json").as_bytes())
-            .inspect_err(|error| tracing::error!(%error, "the built-in artwork did not read"))
-            .ok()
-            .map(|composition| Artwork { composition })
-    });
-    (name == PULSE).then(|| ARTWORK.as_ref()).flatten()
+    /// The artwork the toolkit ships, named the way a document names a sprite
+    /// sheet.
+    const PULSE: &str = "pulse";
+    /// The second artwork, so a document that switches between two of them has
+    /// two to switch between.
+    const SPARK: &str = "spark";
+
+    static PULSE_ARTWORK: LazyLock<Option<Artwork>> =
+        LazyLock::new(|| read(include_str!("../../assets/lottie/pulse.json")));
+    static SPARK_ARTWORK: LazyLock<Option<Artwork>> =
+        LazyLock::new(|| read(include_str!("../../assets/lottie/spark.json")));
+
+    match name {
+        PULSE => PULSE_ARTWORK.as_ref(),
+        SPARK => SPARK_ARTWORK.as_ref(),
+        _ => None,
+    }
+}
+
+fn read(text: &str) -> Option<Artwork> {
+    Composition::from_slice(text.as_bytes())
+        .inspect_err(|error| tracing::error!(%error, "the built-in artwork did not read"))
+        .ok()
+        .map(|composition| Artwork { composition })
 }
 
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{PULSE, builtin_artwork};
+    use super::builtin_artwork;
 
     fn shipped() -> &'static super::Artwork {
-        builtin_artwork(PULSE).unwrap_or_else(|| panic!("the toolkit ships one artwork"))
+        builtin_artwork("pulse").unwrap_or_else(|| panic!("the toolkit ships the pulse artwork"))
+    }
+
+    /// A document that switches artwork on a flag needs two that read, and two
+    /// that are not the same drawing.
+    #[kithara::test]
+    fn the_two_shipped_artworks_are_two_drawings() {
+        let spark = builtin_artwork("spark")
+            .unwrap_or_else(|| panic!("the toolkit ships the spark artwork"));
+
+        assert!(!std::ptr::eq(shipped(), spark));
     }
 
     #[kithara::test]

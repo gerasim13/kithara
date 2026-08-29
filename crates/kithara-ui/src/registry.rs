@@ -8,6 +8,8 @@ pub enum ValueKind {
     Trigger,
     Bool,
     Scalar,
+    /// A point in the box of whatever reads it, in points from its corner.
+    Point,
     Stereo,
     Text,
     Waveform,

@@ -156,13 +156,23 @@
 # noise every page carries, plus the curve edges velato emits.
 24-lottie.png               2
 
+# Scene, 2026-08-28, at 1.1% of pixels and 0.6% of ink, the band the objects
+# page reads. The page is a stage of five placements: two docks, an artwork a
+# press switches for another, and two sprites the pointer carries onto whatever
+# the magnet on each names. A placement moves the box its child is laid out in
+# and the point is resolved in the neutral facade, so both hosts put the same
+# child in the same place; the mask was read before this number was written
+# down, and every sprite, dock and artwork stands on the same pixels in both
+# captures with only its outline and the page's text disagreeing.
+25-scene.png                2
+
 # The long table, 2026-08-23, at 2.2% of pixels and 1.1% of ink - the widest
 # gap in the set, and the reason is that it is the densest text in the set:
 # twenty visible rows of eight columns, where the short table page draws eleven.
 # The mask is glyph edges and nothing else; the rows, the columns, the energy
 # bars and the scroll thumb land on the same pixels in both hosts, so what is
 # priced here is text gamma at the count this page carries.
-25-tablelong.png            3
+26-tablelong.png            3
 
 # Application-drawn content, 2026-08-27. The page holds two of the same
 # registered extension - one filling the box the document gave it, one sized by
@@ -170,10 +180,10 @@
 # edge on the pixel grid itself, so the two hosts agree about the fills; what is
 # priced here is the caption text and the nav beside it, the edge-and-text noise
 # every page in this set carries.
-26-custom.png               1
+27-custom.png               1
 
 # The skin picker, 2026-08-27, at 0.7% of pixels and 0.3% of ink. The page is a
 # row of nav items and two rows of swatches: flat fills both hosts land on the
 # same pixels, so what is priced here is the label text on them and the nav
 # beside it, the edge-and-text noise every page in this set carries.
-27-skins.png                1
+28-skins.png                1

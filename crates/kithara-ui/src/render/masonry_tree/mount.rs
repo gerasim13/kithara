@@ -233,7 +233,7 @@ impl NodeControl for mount::Custom {
     }
 }
 
-impl NodeControl for mount::Lottie {
+impl NodeControl for mount::Lottie<'_> {
     fn leaf<A>(&self, host: &MasonryHost<'_, A>, cx: &Cx<'_>) -> MasonryNode<A>
     where
         A: std::fmt::Debug + Send + 'static,
@@ -655,7 +655,13 @@ fn stage(
     for child in children {
         Node::set_child_limits(ctx, child, loose);
         ctx.run_layout(child, &box_constraints(loose));
-        ctx.place_child(child, Point::ORIGIN);
+        // A placement carries the point it stands at; every other child of a
+        // stage stands at its origin, and is moved, if at all, by an object
+        // offsetting what it draws.
+        let at = Node::child_spot(ctx, child).map_or(Point::ORIGIN, |at| {
+            Point::new(f64::from(at.x), f64::from(at.y))
+        });
+        ctx.place_child(child, at);
     }
     size
 }

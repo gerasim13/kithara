@@ -1,5 +1,7 @@
 #[path = "../masonry_tree/built.rs"]
 mod built;
+#[path = "../masonry_tree/chrome.rs"]
+mod chrome;
 mod controls;
 mod custom;
 mod flex;
@@ -18,6 +20,8 @@ mod projected;
 mod root;
 #[path = "../masonry_control/shader.rs"]
 mod shader;
+#[path = "../masonry_tree/spot.rs"]
+mod spot;
 #[cfg(test)]
 mod tests;
 #[path = "../masonry_control/vis.rs"]

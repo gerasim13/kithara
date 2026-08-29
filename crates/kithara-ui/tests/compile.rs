@@ -2492,3 +2492,155 @@ fn a_document_compiled_after_the_first_joins_the_same_family() {
 
     assert_eq!(second.draw_pool_stats(), config.draw_pools.stats());
 }
+
+/// A stage whose children the caller writes, so a test says only what it is
+/// about: what the placements of one scene declare.
+fn stage_resolver(children: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "scene",
+            root: Stage(id: "stage", children: [{children}]))"#
+        ),
+    );
+    resolver
+}
+
+fn compile_stage(children: &str) -> Result<CompiledUi, UiDocError> {
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    compile(
+        "scene.klayout.ron",
+        &stage_resolver(children),
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+}
+
+/// The point of a carried placement is the application's, so one that publishes
+/// a drag has to read the point back or it stands still while the model moves.
+#[kithara::test]
+fn a_placement_that_writes_without_reading_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "carry", at: (0.0, 0.0),
+            write: Parameter(id: "scene.at"),
+            child: Knob(id: "one"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::PlacedUnread { path, .. } if path == "root/Stage(stage)/[0]/Placed(carry)"),
+        "{error:?}"
+    );
+}
+
+/// A magnet pulls where a drag ends, so a placement no pointer carries never
+/// has an occasion to snap.
+#[kithara::test]
+fn a_magnet_on_a_placement_nobody_carries_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "dock", at: (0.0, 0.0), child: Knob(id: "one")),
+        Placed(id: "still", at: (40.0, 0.0),
+            magnet: (to: ["dock"], within: 64.0),
+            child: Knob(id: "two"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::MagnetUncarried { path, .. } if path == "root/Stage(stage)/[1]/Placed(still)"),
+        "{error:?}"
+    );
+}
+
+/// A magnet names placements of its own stage; anything else names nothing that
+/// stands anywhere.
+#[kithara::test]
+fn a_magnet_naming_no_placement_of_the_stage_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "carry", at: (0.0, 0.0),
+            read: Model(id: "scene.at"),
+            write: Parameter(id: "scene.at"),
+            magnet: (to: ["absent"], within: 64.0),
+            child: Knob(id: "one"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::MagnetUnknown { path, target, .. }
+            if path == "root/Stage(stage)/[0]/Placed(carry)" && target == "absent"),
+        "{error:?}"
+    );
+}
+
+/// A reach no distance is under is a magnet that never pulls, whichever way the
+/// document wrote it.
+#[kithara::test]
+fn a_magnet_reach_no_distance_is_under_is_rejected() {
+    for within in ["0.0", "-1.0"] {
+        let error = compile_stage(&format!(
+            r#"Placed(id: "dock", at: (0.0, 0.0), child: Knob(id: "one")),
+            Placed(id: "carry", at: (40.0, 0.0),
+                read: Model(id: "scene.at"),
+                write: Parameter(id: "scene.at"),
+                magnet: (to: ["dock"], within: {within}),
+                child: Knob(id: "two"))"#
+        ))
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::MagnetReach { path, .. } if path == "root/Stage(stage)/[1]/Placed(carry)"),
+            "`{within}`: {error:?}"
+        );
+    }
+}
+
+/// A placement is a point inside a scene, so it means nothing under a container
+/// that puts its children where it likes.
+#[kithara::test]
+fn a_placement_outside_a_stage_is_rejected() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "scene",
+            root: Column(children: [
+                Placed(id: "loose", at: (0.0, 0.0), child: Knob(id: "one")),
+            ]))"#,
+    );
+
+    let error = compile(
+        "scene.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::PlacedOutsideStage { path, .. } if path == "root/[0]/Placed(loose)"),
+        "{error:?}"
+    );
+}

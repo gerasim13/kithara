@@ -4,9 +4,9 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use super::MockRegistry;
+use crate::mock::MockRegistry;
 
-pub(super) struct MixerState {
+pub(crate) struct MixerState {
     fx: [[bool; 2]; 2],
     standard: [[f64; 4]; 2],
     xone: [[f64; 4]; 2],
@@ -41,7 +41,7 @@ impl MixerState {
     const MID: usize = 1;
     const XONE_LO: usize = 3;
 
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         let target = match path {
             "mixer-standard/a-cue" | "mixer-xone/a-cue" => Some(&mut self.cue[Self::A]),
             "mixer-standard/b-cue" | "mixer-xone/b-cue" => Some(&mut self.cue[Self::B]),
@@ -58,7 +58,7 @@ impl MixerState {
         true
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
             "mixer.standard.a.hi" => ReadValue::Scalar(self.standard[Self::A][Self::HI]),
             "mixer.standard.a.mid" => ReadValue::Scalar(self.standard[Self::A][Self::MID]),
@@ -105,7 +105,7 @@ impl MixerState {
         }
     }
 
-    pub(super) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
+    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
         let value = value.clamp(0.0, 1.0);
         let target = match path {
             "mixer-standard/a-hi" => Some(&mut self.standard[Self::A][Self::HI]),
@@ -137,7 +137,7 @@ impl MixerState {
     }
 }
 
-pub(super) fn insert_endpoints(registry: &mut MockRegistry) {
+pub(crate) fn insert_endpoints(registry: &mut MockRegistry) {
     for id in [
         "mixer.standard.a.hi",
         "mixer.standard.a.mid",

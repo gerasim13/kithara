@@ -40,7 +40,7 @@ impl Source {
     }
 }
 
-pub(super) struct ClockState {
+pub(crate) struct ClockState {
     bpm_label: String,
     source: usize,
     family_step: bool,
@@ -75,11 +75,11 @@ impl Default for ClockState {
 }
 
 impl ClockState {
-    pub(super) const fn set_open(&mut self, open: bool) {
+    pub(crate) const fn set_open(&mut self, open: bool) {
         self.open = open;
     }
 
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         if path.contains("key-lock/") {
             match path.rsplit('/').next() {
                 Some("toggle") => self.key_locked = !self.key_locked,
@@ -119,7 +119,7 @@ impl ClockState {
         true
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let source = scope_value(scope, "source")
             .and_then(|id| SOURCES.iter().find(|source| source.id == id));
@@ -154,7 +154,7 @@ impl ClockState {
         Some(value)
     }
 
-    pub(super) fn step(&mut self, steps: f64) {
+    pub(crate) fn step(&mut self, steps: f64) {
         self.set_bpm(self.bpm + steps);
     }
 

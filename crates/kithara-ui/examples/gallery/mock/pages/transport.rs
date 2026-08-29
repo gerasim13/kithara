@@ -2,21 +2,21 @@ use num_traits::cast::AsPrimitive;
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(super) struct DeckTransport {
-    #[field(get, vis = "pub(super)", copy)]
+pub(crate) struct DeckTransport {
+    #[field(get, vis = "pub(crate)", copy)]
     loop_region: Option<[f32; 2]>,
-    #[field(get, vis = "pub(super)")]
+    #[field(get, vis = "pub(crate)")]
     cues: Vec<f32>,
-    #[field(get, vis = "pub(super)")]
+    #[field(get, vis = "pub(crate)")]
     playing: bool,
-    #[field(get, vis = "pub(super)")]
+    #[field(get, vis = "pub(crate)")]
     reverse: bool,
     loop_anchor: f32,
     bpm: f64,
     duration_secs: f64,
-    #[field(get, vis = "pub(super)")]
+    #[field(get, vis = "pub(crate)")]
     position_secs: f64,
-    #[field(get, vis = "pub(super)")]
+    #[field(get, vis = "pub(crate)")]
     zoom: f64,
 }
 
@@ -29,7 +29,7 @@ impl DeckTransport {
     const SECS_PER_MINUTE: f64 = 60.0;
     const ZOOM_FACTOR: f64 = 0.7;
 
-    pub(super) fn new(
+    pub(crate) fn new(
         bpm: f32,
         cues: &[f32],
         duration_secs: f64,
@@ -50,7 +50,7 @@ impl DeckTransport {
         }
     }
 
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         let action = path.rsplit('/').next();
         if !path.contains("/transport/") {
             return false;
@@ -73,11 +73,11 @@ impl DeckTransport {
         self.position_secs = (self.position_secs + delta).clamp(0.0, self.duration_secs);
     }
 
-    pub(super) fn position_normalized(&self) -> f64 {
+    pub(crate) fn position_normalized(&self) -> f64 {
         self.position_secs / self.duration_secs
     }
 
-    pub(super) fn seek_normalized(&mut self, position: f64) {
+    pub(crate) fn seek_normalized(&mut self, position: f64) {
         self.position_secs = position.clamp(0.0, 1.0) * self.duration_secs;
     }
 
@@ -90,16 +90,16 @@ impl DeckTransport {
         }
     }
 
-    pub(super) fn set_loop_end(&mut self, end: f64) {
+    pub(crate) fn set_loop_end(&mut self, end: f64) {
         self.loop_region = normalized_loop(self.loop_anchor, end.clamp(0.0, 1.0).as_());
     }
 
-    pub(super) fn set_loop_start(&mut self, start: f64) {
+    pub(crate) fn set_loop_start(&mut self, start: f64) {
         self.loop_anchor = start.clamp(0.0, 1.0).as_();
         self.loop_region = None;
     }
 
-    pub(super) const fn set_zoom(&mut self, zoom: f64) {
+    pub(crate) const fn set_zoom(&mut self, zoom: f64) {
         self.zoom = zoom.clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
     }
 
@@ -115,7 +115,7 @@ impl DeckTransport {
         self.loop_region = Some([start.as_(), end.as_()]);
     }
 
-    pub(super) const fn toggle_play(&mut self) {
+    pub(crate) const fn toggle_play(&mut self) {
         self.playing = !self.playing;
     }
 }

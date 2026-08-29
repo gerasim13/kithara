@@ -280,9 +280,13 @@ impl HostedLayout {
                 sized: effective_size(node, skin, snapshot).is_some(),
                 child: Box::new(Self::new(child, ctx, skin)),
             },
-            ExpandedNode::Scroll { child, .. } => Self::Scroll {
-                child: Box::new(Self::new(child, ctx, skin)),
-            },
+            // A placement keeps a layout node of its own and puts the child one
+            // level down in it, the way a viewport does.
+            ExpandedNode::Placed { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                Self::Scroll {
+                    child: Box::new(Self::new(child, ctx, skin)),
+                }
+            }
         }
     }
 

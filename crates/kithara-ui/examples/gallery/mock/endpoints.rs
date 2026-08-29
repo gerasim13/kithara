@@ -6,7 +6,10 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };
 
-use super::{consts::Consts, mixer, stress};
+use super::{
+    consts::Consts,
+    pages::{mixer, stress},
+};
 
 #[derive(Default)]
 pub(crate) struct MockRegistry {
@@ -407,6 +410,28 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
             EndpointDesc::new(ValueKind::Text),
         );
     }
+    for id in ["gallery.scene.one", "gallery.scene.two"] {
+        registry.insert(
+            EndpointCategory::Model,
+            id,
+            EndpointDesc::new(ValueKind::Point),
+        );
+        registry.insert(
+            EndpointCategory::Parameter,
+            id,
+            EndpointDesc::new(ValueKind::Point),
+        );
+    }
+    registry.insert(
+        EndpointCategory::Model,
+        "gallery.scene.sparked",
+        EndpointDesc::new(ValueKind::Bool),
+    );
+    registry.insert(
+        EndpointCategory::Command,
+        "gallery.scene.switch",
+        EndpointDesc::new(ValueKind::Trigger),
+    );
     registry.insert(
         EndpointCategory::Model,
         "gallery.motion.phase",
@@ -464,6 +489,7 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         "gallery.tab.motion",
         "gallery.tab.sprites",
         "gallery.tab.lottie",
+        "gallery.tab.scene",
         "gallery.tab.table_long",
         "gallery.tab.skins",
         "gallery.module.deck",

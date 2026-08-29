@@ -12,6 +12,7 @@ use super::{
     node::{Detent, Node},
     picker::{EngineTarget, HostedEngine},
     popover::PopoverState,
+    spot::Spot,
 };
 use crate::{
     draw::{Pt, Rgba, Transform},
@@ -103,6 +104,13 @@ pub(crate) enum Watched {
     Placed {
         id: WidgetId,
         path: InternId,
+    },
+    /// A placement of a stage whose point an endpoint answers. The point moves
+    /// the box the child stands in, so the answer is a layout rather than a
+    /// repaint.
+    Spot {
+        id: WidgetId,
+        binding: Binding,
     },
 }
 /// Where one node stands, as the root reads it out of the tree.
@@ -311,6 +319,8 @@ impl<Action> MasonryNode<Action> {
             pub(crate) fn place(&mut self, transform: Transform) -> bool;
             /// The stepping surface this flow carries over itself.
             pub(crate) fn set_detent(&mut self, detent: Detent);
+            /// Where this placement of a stage stands, and what carries it.
+            pub(crate) fn set_spot(&mut self, spot: Spot);
         }
         to self.layers {
             #[call(push)]
@@ -406,6 +416,15 @@ impl<Action> MasonryNode<Action> {
     /// re-read into the mounted tree instead of rebuilding the tree to show it.
     pub(crate) fn watch(&mut self, binding: &Binding) {
         self.watched.push(Watched::Read {
+            id: self.widget.id(),
+            binding: binding.clone(),
+        });
+    }
+
+    /// Remembers that this placement reads its point from an endpoint, so the
+    /// stage lays it out again where the point moves.
+    pub(crate) fn watch_spot(&mut self, binding: &Binding) {
+        self.watched.push(Watched::Spot {
             id: self.widget.id(),
             binding: binding.clone(),
         });

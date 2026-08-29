@@ -18,6 +18,7 @@ mod owner;
 mod parity;
 mod picker;
 pub mod picture;
+mod placed;
 pub(crate) mod scroll;
 pub mod shader;
 pub mod skin;
@@ -31,7 +32,7 @@ pub mod vis;
 mod window;
 
 pub use address::{Node, Scope, Walk};
-pub use document::{Clock, Ctx};
+pub use document::{Clock, Ctx, PlacedMount, Snap};
 pub use event::{ControlAction, DragPhase, UiEvent, WindowCommand, WindowEdge};
 pub(crate) use event::{control_event, span_event};
 pub(crate) use hosted::{HostedControlPlan, Resolving};
@@ -59,6 +60,7 @@ pub(crate) use {
     },
     layer::{draw_host_layer, window_layer, window_layers},
     picker::{hosted_picker_overlay, scope_picker, sync_picker},
+    placed::placed,
     skin::IcedSkin,
     table::{sync_table_scroll, table},
     text_input::{search_input, sync_text_input},

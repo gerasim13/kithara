@@ -1,4 +1,4 @@
-use crate::interact::recognizers::Edge;
+use crate::{draw::Pt, interact::recognizers::Edge};
 #[cfg(feature = "masonry")]
 use crate::{engine::EngineEvent, interact::recognizers::DragEvent};
 
@@ -58,6 +58,9 @@ pub enum ControlAction {
     Activate,
     SecondaryActivate,
     SetScalar(f64),
+    /// Where a placement the pointer carried has come to rest, in the box of
+    /// the stage that holds it.
+    Place(Pt),
     StepScalar(f32),
     SelectIndex(usize),
     Drag(DragPhase),

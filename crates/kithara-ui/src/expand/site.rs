@@ -69,6 +69,7 @@ impl ExtraBindings {
         let active = match control {
             ControlNode::Text { active, .. }
             | ControlNode::Glyph { active, .. }
+            | ControlNode::Lottie { active, .. }
             | ControlNode::StatusDot { active, .. } => substituted(active.as_ref(), context, path)?,
             _ => None,
         };

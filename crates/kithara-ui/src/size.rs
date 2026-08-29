@@ -185,6 +185,7 @@ pub(crate) fn has_blocks(node: &ExpandedNode) -> bool {
         }
         ExpandedNode::Popover { anchor, .. } => has_blocks(anchor),
         ExpandedNode::Object { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => has_blocks(child),
@@ -275,6 +276,7 @@ pub(crate) fn effective_size(
         }
         ExpandedNode::Object { child, .. }
         | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. } => {
             return effective_size(child, skin, snapshot);
@@ -315,6 +317,7 @@ pub(crate) fn compute_size(
     let override_size = match node {
         ExpandedNode::Object { .. }
         | ExpandedNode::Optional { .. }
+        | ExpandedNode::Placed { .. }
         | ExpandedNode::Popover { .. }
         | ExpandedNode::Pressable { .. }
         | ExpandedNode::Reveal { .. } => None,
@@ -339,6 +342,7 @@ pub(crate) fn compute_size(
         } => compute_size(branch(measure, base, steps, snapshot), skin, snapshot),
         ExpandedNode::Object { child, .. }
         | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => compute_size(child, skin, snapshot),
@@ -416,6 +420,7 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
         }
         ExpandedNode::Object { child, .. }
         | ExpandedNode::Optional { child, .. }
+        | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. } => min_size(child, skin),
         ExpandedNode::Popover { anchor, .. } => min_size(anchor, skin),
