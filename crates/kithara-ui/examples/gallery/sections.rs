@@ -87,7 +87,12 @@ impl Tab {
     /// the id the document states, and which file that role lives in is the
     /// manifest's to say.
     pub(super) fn entry(self) -> &'static str {
-        fixture::document(&format!("gallery-{}", Self::PAGES[self.index()].1))
+        fixture::document(&format!("gallery-{}", self.slug()))
+    }
+
+    /// What a nav item, a page and the reading behind both call this page.
+    pub(super) fn slug(self) -> &'static str {
+        Self::PAGES[self.index()].1
     }
 
     /// Where this tab stands among the pages, which is the order they were
@@ -126,14 +131,15 @@ pub(super) enum ModuleDemo {
 }
 
 impl ModuleDemo {
-    /// The module pages, in the order the demo offers them, each with the role
-    /// the package answers for it.
-    const PAGES: [(Self, &'static str); 5] = [
-        (Self::Deck, "gallery-modules"),
-        (Self::DeckMicro, "gallery-modules-deck-micro"),
-        (Self::GlobalBar, "gallery-modules-global-bar"),
-        (Self::Telemetry, "gallery-modules-telemetry"),
-        (Self::Layout, "gallery-modules-layout"),
+    /// The module pages, in the order the demo offers them, each with the slug
+    /// the reading behind its tab is named by and the role the package answers
+    /// for it.
+    const PAGES: [(Self, &'static str, &'static str); 5] = [
+        (Self::Deck, "deck", "gallery-modules"),
+        (Self::DeckMicro, "deck-micro", "gallery-modules-deck-micro"),
+        (Self::GlobalBar, "global-bar", "gallery-modules-global-bar"),
+        (Self::Telemetry, "telemetry", "gallery-modules-telemetry"),
+        (Self::Layout, "layout", "gallery-modules-layout"),
     ];
 
     pub(super) const ALL: [Self; Self::PAGES.len()] = {
@@ -147,13 +153,20 @@ impl ModuleDemo {
     };
 
     pub(super) fn entry(self) -> &'static str {
-        fixture::document(Self::PAGES[self.index()].1)
+        let (_, _, role) = Self::PAGES[self.index()];
+        fixture::document(role)
+    }
+
+    /// What the tab offering this page, and the reading behind it, call it.
+    pub(super) fn slug(self) -> &'static str {
+        let (_, slug, _) = Self::PAGES[self.index()];
+        slug
     }
 
     pub(super) fn index(self) -> usize {
         Self::PAGES
             .iter()
-            .position(|(demo, _)| *demo == self)
+            .position(|(demo, ..)| *demo == self)
             .expect("every module page stands in the list")
     }
 }

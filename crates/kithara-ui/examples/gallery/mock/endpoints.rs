@@ -10,6 +10,7 @@ use super::{
     consts::Consts,
     pages::{mixer, stress},
 };
+use crate::sections::{ModuleDemo, Tab};
 
 #[derive(Default)]
 pub(crate) struct MockRegistry {
@@ -463,40 +464,6 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         );
     }
     for id in [
-        "gallery.tab.atoms",
-        "gallery.tab.buttons",
-        "gallery.tab.faders",
-        "gallery.tab.modules",
-        "gallery.tab.typography",
-        "gallery.tab.cells",
-        "gallery.tab.sizes",
-        "gallery.tab.tokens",
-        "gallery.tab.micro",
-        "gallery.tab.mixer",
-        "gallery.tab.vis",
-        "gallery.tab.chrome",
-        "gallery.tab.titlebars",
-        "gallery.tab.table",
-        "gallery.tab.tree",
-        "gallery.tab.library2",
-        "gallery.tab.stress",
-        "gallery.tab.menu",
-        "gallery.tab.clock",
-        "gallery.tab.pivot",
-        "gallery.tab.shader",
-        "gallery.tab.custom",
-        "gallery.tab.objects",
-        "gallery.tab.motion",
-        "gallery.tab.sprites",
-        "gallery.tab.lottie",
-        "gallery.tab.scene",
-        "gallery.tab.table-long",
-        "gallery.tab.skins",
-        "gallery.module.deck",
-        "gallery.module.deck_micro",
-        "gallery.module.global_bar",
-        "gallery.module.telemetry",
-        "gallery.module.layout",
         "mock.toggle.on",
         "mock.toggle.off",
         "mock.checkbox.on",
@@ -514,8 +481,24 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    // Named from the shipped skins themselves, so the page offering a choice
-    // and the endpoints answering it cannot come to differ.
+    // Named from the pages themselves, so the nav offering a page and the
+    // reading answering for it cannot come to differ.
+    for id in Tab::ALL
+        .iter()
+        .map(|tab| format!("gallery.tab.{}", tab.slug()))
+        .chain(
+            ModuleDemo::ALL
+                .iter()
+                .map(|demo| format!("gallery.module.{}", demo.slug())),
+        )
+    {
+        registry.insert(
+            EndpointCategory::Model,
+            &id,
+            EndpointDesc::new(ValueKind::Bool),
+        );
+    }
+    // Named from the shipped skins themselves, for the same reason.
     for skin in builtin::skins() {
         registry.insert(
             EndpointCategory::Model,

@@ -435,40 +435,12 @@ impl MockReads {
 
     fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
-            "gallery.tab.atoms" => self.active_tab == Tab::Atoms,
-            "gallery.tab.buttons" => self.active_tab == Tab::Buttons,
-            "gallery.tab.faders" => self.active_tab == Tab::Faders,
-            "gallery.tab.modules" => self.active_tab == Tab::Modules,
-            "gallery.tab.typography" => self.active_tab == Tab::Typography,
-            "gallery.tab.cells" => self.active_tab == Tab::Cells,
-            "gallery.tab.sizes" => self.active_tab == Tab::Sizes,
-            "gallery.tab.tokens" => self.active_tab == Tab::Tokens,
-            "gallery.tab.micro" => self.active_tab == Tab::Micro,
-            "gallery.tab.mixer" => self.active_tab == Tab::Mixer,
-            "gallery.tab.vis" => self.active_tab == Tab::Vis,
-            "gallery.tab.chrome" => self.active_tab == Tab::Chrome,
-            "gallery.tab.titlebars" => self.active_tab == Tab::Titlebars,
-            "gallery.tab.table" => self.active_tab == Tab::Table,
-            "gallery.tab.tree" => self.active_tab == Tab::Tree,
-            "gallery.tab.library2" => self.active_tab == Tab::Library2,
-            "gallery.tab.stress" => self.active_tab == Tab::Stress,
-            "gallery.tab.menu" => self.active_tab == Tab::Menu,
-            "gallery.tab.clock" => self.active_tab == Tab::Clock,
-            "gallery.tab.pivot" => self.active_tab == Tab::Pivot,
-            "gallery.tab.shader" => self.active_tab == Tab::Shader,
-            "gallery.tab.custom" => self.active_tab == Tab::Custom,
-            "gallery.tab.objects" => self.active_tab == Tab::Objects,
-            "gallery.tab.motion" => self.active_tab == Tab::Motion,
-            "gallery.tab.sprites" => self.active_tab == Tab::Sprites,
-            "gallery.tab.lottie" => self.active_tab == Tab::Lottie,
-            "gallery.tab.scene" => self.active_tab == Tab::Scene,
-            "gallery.tab.table-long" => self.active_tab == Tab::TableLong,
-            "gallery.tab.skins" => self.active_tab == Tab::Skins,
-            "gallery.module.deck" => self.active_module == ModuleDemo::Deck,
-            "gallery.module.deck_micro" => self.active_module == ModuleDemo::DeckMicro,
-            "gallery.module.global_bar" => self.active_module == ModuleDemo::GlobalBar,
-            "gallery.module.telemetry" => self.active_module == ModuleDemo::Telemetry,
-            "gallery.module.layout" => self.active_module == ModuleDemo::Layout,
+            endpoint if let Some(slug) = endpoint.strip_prefix("gallery.tab.") => {
+                self.active_tab.slug() == slug
+            }
+            endpoint if let Some(slug) = endpoint.strip_prefix("gallery.module.") => {
+                self.active_module.slug() == slug
+            }
             endpoint if let Some(skin) = endpoint.strip_prefix("gallery.skin.") => {
                 builtin::skins()[self.active_skin].id() == skin
             }
