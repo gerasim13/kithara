@@ -20,16 +20,12 @@ use crate::{
     producer::{AnalysisProducer, ring},
 };
 
-pub struct AnalysisWorker<B>
-where
-    B: ResamplerBackend,
-{
+pub struct AnalysisWorker {
     active: bool,
     fingerprint: AnalysisFingerprint,
-    job_scope: JobScope,
+    job_scope: CancelToken,
     runner: AnalysisRunner,
     jobs: mpsc::Sender<Job>,
-    _backend: std::marker::PhantomData<B>,
 }
 
 /// An analysis pass opened before either decoder starts.
@@ -43,14 +39,6 @@ pub struct AnalysisPass {
     rate: NonZeroU32,
     token: AnalysisToken,
     tx: watch::Sender<Option<TrackAnalysis>>,
-}
-
-struct JobScope(CancelToken);
-
-impl JobScope {
-    fn child(&self) -> CancelToken {
-        self.0.child()
-    }
 }
 
 impl AnalysisPass {
@@ -129,14 +117,14 @@ impl AnalysisRunner {
     }
 }
 
-impl<B> AnalysisWorker<B>
-where
-    B: ResamplerBackend,
-{
+impl AnalysisWorker {
     #[must_use]
-    pub fn new(parent: &CancelToken, builder: AnalyzerBuilder<B>) -> Self {
+    pub fn new<B>(parent: &CancelToken, builder: AnalyzerBuilder<B>) -> Self
+    where
+        B: ResamplerBackend,
+    {
         let cancel = parent.child();
-        let job_scope = JobScope(cancel.child());
+        let job_scope = cancel.child();
         let (jobs, receiver) = mpsc::channel();
         let node = AnalysisNode::new(builder, receiver);
         let (fingerprint, active) = node.effective();
@@ -147,7 +135,6 @@ where
             job_scope,
             runner,
             jobs,
-            _backend: std::marker::PhantomData,
         }
     }
 
@@ -231,10 +218,7 @@ where
     }
 }
 
-impl<B> Drop for AnalysisWorker<B>
-where
-    B: ResamplerBackend,
-{
+impl Drop for AnalysisWorker {
     fn drop(&mut self) {
         self.runner.shutdown();
     }

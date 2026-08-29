@@ -28,25 +28,7 @@ pub(super) fn validate_topology_candidate<G: SyncGroup<NestedGroup = G>>(
         .map(|member| member.snapshot_for(grid))
         .collect::<Result<_, _>>()?;
 
-    for operation in operations {
-        match operation {
-            TopologyOperation::Attach { member } => {
-                let snapshot = validate_incoming_member(grid, member, member_kind)?;
-                candidate.push(snapshot);
-            }
-            TopologyOperation::Detach { member } => {
-                let index = member_index(grid.id(), &candidate, *member)?;
-                candidate.remove(index);
-            }
-            TopologyOperation::Replace {
-                member,
-                replacement,
-            } => {
-                let index = member_index(grid.id(), &candidate, *member)?;
-                candidate[index] = validate_incoming_member(grid, replacement, member_kind)?;
-            }
-        }
-    }
+    apply_snapshot_operations(grid, &mut candidate, operations, member_kind)?;
 
     SyncGroupSnapshot::try_new(grid.clone(), revision, candidate)?;
     Ok(())
@@ -100,6 +82,33 @@ fn member_index(
         })
 }
 
+fn apply_snapshot_operations<G: SyncGroup<NestedGroup = G>>(
+    parent: &BeatGridSnapshot,
+    members: &mut Vec<SyncMemberSnapshot>,
+    operations: &[TopologyOperation<G>],
+    member_kind: SyncMemberKind,
+) -> Result<(), SyncError> {
+    for operation in operations {
+        match operation {
+            TopologyOperation::Attach { member } => {
+                members.push(validate_incoming_member(parent, member, member_kind)?);
+            }
+            TopologyOperation::Detach { member } => {
+                let index = member_index(parent.id(), members, *member)?;
+                members.remove(index);
+            }
+            TopologyOperation::Replace {
+                member,
+                replacement,
+            } => {
+                let index = member_index(parent.id(), members, *member)?;
+                members[index] = validate_incoming_member(parent, replacement, member_kind)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn apply_topology_operations<G: SyncGroup<NestedGroup = G>>(
     members: &mut Vec<SyncMember<G>>,
     operations: Box<[TopologyOperation<G>]>,
@@ -146,29 +155,7 @@ pub(super) fn preview_topology<G: SyncGroup<NestedGroup = G>>(
 
         let revision = next_topology_revision(base.group_id(), base.revision())?;
         let mut members = topology.members().to_vec();
-        for operation in operations {
-            match operation {
-                TopologyOperation::Attach { member } => {
-                    members.push(validate_incoming_member(
-                        topology.group_grid(),
-                        member,
-                        member_kind,
-                    )?);
-                }
-                TopologyOperation::Detach { member } => {
-                    let index = member_index(base.group_id(), &members, *member)?;
-                    members.remove(index);
-                }
-                TopologyOperation::Replace {
-                    member,
-                    replacement,
-                } => {
-                    let index = member_index(base.group_id(), &members, *member)?;
-                    members[index] =
-                        validate_incoming_member(topology.group_grid(), replacement, member_kind)?;
-                }
-            }
-        }
+        apply_snapshot_operations(topology.group_grid(), &mut members, operations, member_kind)?;
         let candidate =
             SyncGroupSnapshot::try_new(topology.group_grid().clone(), revision, members)?;
         return Ok((candidate, true));

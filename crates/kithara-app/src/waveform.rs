@@ -20,7 +20,6 @@ use kithara_platform::{
 };
 use tracing::warn;
 
-type AppAnalysisWorker = AnalysisWorker<PlaybackResamplerBackend>;
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
 type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 
@@ -31,7 +30,7 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
-    worker: Arc<AppAnalysisWorker>,
+    worker: Arc<AnalysisWorker>,
     current: Option<RunHandle>,
     /// What this configuration produces, per artifact: the cache keys off it.
     fingerprint: AnalysisFingerprint,
@@ -132,7 +131,7 @@ impl Drop for TrackAnalysisRunner {
 
 /// Open `config` and start the already-open pass on the shared worker.
 async fn run_analysis(
-    worker: Arc<AppAnalysisWorker>,
+    worker: Arc<AnalysisWorker>,
     config: AppResourceConfig,
     cancel: CancelToken,
     rate: NonZeroU32,

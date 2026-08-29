@@ -52,7 +52,7 @@ impl AnalysisFingerprint {
         }
     }
 
-    /// Beat backend, model and grid semantics.
+    /// Beat backend, model, and artifact semantics.
     #[must_use]
     pub fn beat(&self) -> Option<&str> {
         self.beat.as_deref()
@@ -109,7 +109,7 @@ impl TrackAnalysis {
     }
 
     /// Whether the whole known extent sits in one covered run. This is the
-    /// same predicate the beat grid uses to call itself final.
+    /// same predicate the beat artifact uses to call itself final.
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.extent
@@ -139,7 +139,7 @@ impl TrackAnalysis {
         self.revision
     }
 
-    /// The denominator that turns a grid frame into a fraction: the extent
+    /// The denominator that turns an artifact frame into a fraction: the extent
     /// when known, and the covered frontier otherwise - the same "what is
     /// known to exist" rule [`missing`](Self::missing) uses. Counting covered
     /// frames instead would put a marker past the end of a coverage set that

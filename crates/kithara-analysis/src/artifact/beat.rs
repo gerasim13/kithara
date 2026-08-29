@@ -14,8 +14,8 @@ impl Consts {
     const VERSION: u32 = 2;
 }
 
-/// One grid marker: its source frame, and the confidence the detector
-/// reported for it - `None` where the grid placed it by extrapolation and no
+/// One artifact marker: its source frame, and the confidence the detector
+/// reported for it - `None` where analysis placed it by extrapolation and no
 /// detector saw it.
 pub(crate) type MarkedBeat = (u64, Option<f32>);
 
@@ -66,7 +66,7 @@ impl BeatArtifact {
     /// Constructs an artifact from already-cleaned detector facts.
     ///
     /// Markers arrive paired with their confidence so the two cannot be
-    /// handed over misaligned: the grid never sees two lists to reconcile.
+    /// handed over misaligned: consumers never see two lists to reconcile.
     #[must_use]
     pub fn new(
         bpm: f64,
@@ -209,10 +209,10 @@ mod bytes_tests {
 
     #[kithara::test]
     fn round_trips() {
-        let grid = sample();
-        let bytes = to_bytes(&grid);
+        let artifact = sample();
+        let bytes = to_bytes(&artifact);
         let back = BeatArtifact::try_from(bytes.as_slice()).expect("valid blob round-trips");
-        assert_eq!(back, grid);
+        assert_eq!(back, artifact);
     }
 
     #[kithara::test]
@@ -233,24 +233,27 @@ mod bytes_tests {
 
     #[kithara::test]
     fn clone_shares_immutable_marker_storage() {
-        let grid = sample();
-        let cloned = grid.clone();
+        let artifact = sample();
+        let cloned = artifact.clone();
 
-        assert!(Arc::ptr_eq(&grid.beats, &cloned.beats));
-        assert!(Arc::ptr_eq(&grid.beat_confidence, &cloned.beat_confidence));
-        assert!(Arc::ptr_eq(&grid.downbeats, &cloned.downbeats));
+        assert!(Arc::ptr_eq(&artifact.beats, &cloned.beats));
         assert!(Arc::ptr_eq(
-            &grid.downbeat_confidence,
+            &artifact.beat_confidence,
+            &cloned.beat_confidence
+        ));
+        assert!(Arc::ptr_eq(&artifact.downbeats, &cloned.downbeats));
+        assert!(Arc::ptr_eq(
+            &artifact.downbeat_confidence,
             &cloned.downbeat_confidence
         ));
     }
 
     #[kithara::test]
     fn degraded_grid_round_trips() {
-        let grid = BeatArtifact::new(0.0, Vec::new(), Vec::new());
-        let bytes = to_bytes(&grid);
+        let artifact = BeatArtifact::new(0.0, Vec::new(), Vec::new());
+        let bytes = to_bytes(&artifact);
         let back = BeatArtifact::try_from(bytes.as_slice()).expect("empty blob round-trips");
-        assert_eq!(back, grid);
+        assert_eq!(back, artifact);
     }
 
     #[kithara::test]

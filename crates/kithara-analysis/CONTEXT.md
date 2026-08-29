@@ -144,15 +144,16 @@ complete, regardless of arrival order. Markers therefore agree across arrival
 orders within the resampler's splice tolerance.
 
 A run reaching `detector_min_window_seconds` is detected immediately, then
-re-detected when its full window fills. Once the extent is known, the grid is
+re-detected when its full window fills. Once the extent is known, the artifact is
 spread across it at its own tempo while retaining detected marker positions. Run
 mono comes from the injected `SamplePool`; all runs share a four-detector-window
 mono budget. Detection consumes a run front-first. Reclaimed spans remain
 covered for every other consumer but are reported as no longer beat-analyzable.
 Grid-cleanup scratch uses that same injected pool; it never constructs another.
 
-`AnalysisWorker<B>` is the public handle over the private `AnalysisRunner` and
-one long-lived `AnalysisNode<B>` (absent on wasm32). It neither constructs nor
+`AnalysisWorker` is the public handle over the private `AnalysisRunner` and one
+long-lived `AnalysisNode<B>` (absent on wasm32). The backend type is consumed by
+`new` and stays inside that node rather than leaking into the handle. The worker neither constructs nor
 shares the playback scheduler. `open` gives every pass a child of the worker's
 job scope; callers may clone that pass token for the reader before submitting
 the pass. Results arrive on a `watch` channel: waveform first, then waveform plus

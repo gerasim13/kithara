@@ -16,7 +16,9 @@ crate the owner of the live Host, playback session, audio graph, or worker.
 
 ## Boundaries
 
-- `kithara-beat` owns beat-analysis algorithms and analyzed beat output data.
+- `kithara-beat` owns neural beat detection and its raw model output.
+- `kithara-analysis` owns progressive analysis and the cleaned, identity-free
+  `BeatArtifact` consumed by a future calibrated grid adapter.
 - `kithara-audio` owns decoded-audio source lifecycle, decoder-side sample-rate
   conversion, readiness, and the prepared producer seam.
 - `kithara-stretch` owns backend DSP engines and their exact-span contract.
