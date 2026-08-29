@@ -1143,13 +1143,19 @@ queue = "heavy-linux"
 timeout_minutes = 240
 
 # Mutation testing, scoped by `.config/mutation-suites.toml` rather than by the
-# workspace: four suites, each naming one package, the production files it may
+# workspace: ten suites, each naming one package, the production files it may
 # mutate, and the `test()` filters that must kill the mutants, run against
 # `--lib` alone. A workspace-wide run was measured at three days and killed
 # nothing - integration suites cover behaviour, not lines, so a mutant either
-# survives every one of them or is caught by fifty at once. The curated run
-# takes eight minutes; the timeout is the headroom for a hung mutant, not a
-# budget the suites are expected to spend.
+# survives every one of them or is caught by fifty at once.
+#
+# The four original suites are 88 mutants and took eight minutes. Six more,
+# added over the decision-dense files that carry their own unit tests, are 535:
+# `stream::coord` 132, `waveform::analyzer` 125, `size` 122, `worker::scheduler`
+# 76, `track` 42, `media` 38. Seven times the work, and six package baselines
+# instead of three, so this is an hour rather than a coffee. The timeout is
+# still headroom for a hung mutant, but it is now roughly double the expected
+# run rather than fifteen times it.
 [ext.ci.lanes.deep-mutants]
 cache_group = "linux"
 label = "Linux"

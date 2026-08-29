@@ -44,3 +44,62 @@ package = "kithara-stream"
 files = ["crates/kithara-stream/src/transition.rs"]
 test_filters = ["test(/transition::tests::/)"]
 timeout_seconds = 120
+
+# Segment coordination decides which variant a switch lands on and when a
+# request is still worth issuing. Thirty-six unit tests sit next to it, which
+# is what makes a surviving mutant here a statement rather than a gap.
+[[suite]]
+name = "hls-coordinator"
+package = "kithara-hls"
+files = ["crates/kithara-hls/src/stream/coord.rs"]
+test_filters = ["test(/stream::coord::tests::/)"]
+timeout_seconds = 180
+
+# The worker scheduler is ordering and nothing else: which command runs next,
+# which deadline has passed, which wake is redundant.
+[[suite]]
+name = "worker-scheduler"
+package = "kithara-play"
+files = ["crates/kithara-play/src/worker/scheduler/core.rs"]
+test_filters = ["test(/worker::scheduler::core::tests::/)"]
+timeout_seconds = 180
+
+# Durations, byte ranges and container boundaries: arithmetic whose off-by-one
+# is a wrong answer the reader accepts rather than a panic it reports.
+[[suite]]
+name = "media-bounds"
+package = "kithara-stream"
+files = ["crates/kithara-stream/src/media.rs"]
+test_filters = ["test(/media::tests::/)"]
+timeout_seconds = 120
+
+# Waveform windows: sample counts, bucket edges and the peak reduction. Every
+# mutation-friendly shape at once, and the output is a picture nobody diffs.
+# The module is behind `analysis-waveform`, which is not a default feature:
+# without it the analyzer is not compiled, the filter selects nothing, and
+# every mutant survives a suite that ran no test at all.
+[[suite]]
+name = "waveform-analyzer"
+package = "kithara-analysis"
+files = ["crates/kithara-analysis/src/waveform/analyzer.rs"]
+features = ["analysis-waveform"]
+test_filters = ["test(/waveform::analyzer::tests::/)"]
+timeout_seconds = 180
+
+# Layout arithmetic. A constraint solved one pixel wrong lays out, renders, and
+# passes every test that only asks whether a frame was produced.
+[[suite]]
+name = "ui-size"
+package = "kithara-ui"
+files = ["crates/kithara-ui/src/size.rs"]
+test_filters = ["test(/size::tests::/)"]
+timeout_seconds = 180
+
+# The queue's own state transitions: which track is current, what an advance
+# does at the ends, and which of them is a no-op.
+[[suite]]
+name = "queue-track"
+package = "kithara-queue"
+files = ["crates/kithara-queue/src/track.rs"]
+test_filters = ["test(/track::tests::/)"]
+timeout_seconds = 120
