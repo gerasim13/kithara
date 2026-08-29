@@ -1,13 +1,12 @@
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_test_macros as kithara;
 
-use super::{pcm::Pcm, riff, tone};
+use crate::signal::{Pcm, Wave, wav};
 
 struct Consts;
 
 impl Consts {
     /// Amplitude of every tone the signal route serves: full scale.
-    const FULL_SCALE_PEAK: i16 = i16::MAX;
     const FRAMES_120MS_44K1: usize = 5_292;
     const FRAMES_1S_44K1: usize = 44_100;
     const FRAMES_1S_48K: usize = 48_000;
@@ -25,24 +24,6 @@ impl Consts {
     const STREAMINFO_COUNT_MASK: u64 = 0x0000_000F_FFFF_FFFF;
 }
 
-/// Waveform one signal-route asset carries.
-#[derive(Clone, Copy)]
-enum Wave {
-    Sawtooth,
-    Silence,
-    Sine { hz: f64 },
-}
-
-impl Wave {
-    fn sample(self, frame: usize, sample_rate: u32) -> i16 {
-        match self {
-            Self::Sawtooth => tone::sawtooth(frame),
-            Self::Silence => 0,
-            Self::Sine { hz } => tone::sine(frame, sample_rate, hz, Consts::FULL_SCALE_PEAK),
-        }
-    }
-}
-
 /// Renders the waveform and hands it to one of the byte encoders.
 fn encode(
     target: BytesEncodeTarget,
@@ -52,9 +33,7 @@ fn encode(
     total_frames: usize,
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
-    let pcm = Pcm::new(sample_rate, channels, total_frames, |frame| {
-        wave.sample(frame, sample_rate)
-    });
+    let pcm = Pcm::new(sample_rate, channels, total_frames, wave);
     EncoderFactory::encode_bytes(BytesEncodeRequest {
         pcm: &pcm,
         target,
@@ -93,27 +72,25 @@ fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
     Consts::FRAMES_1S_44K1
 )]
 #[case::sine440_120ms(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_120MS_44K1
 )]
 #[case::sine440_60s(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1
 )]
 #[case::sine880_240ms(
-    Wave::Sine { hz: 880.0 },
+    Wave::sine(880.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_240MS_44K1
 )]
 fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) -> Vec<u8> {
-    riff::wav(sample_rate, channels, total_frames, |frame| {
-        wave.sample(frame, sample_rate)
-    })
+    wav(sample_rate, channels, total_frames, wave)
 }
 
 /// MPEG audio bodies the `/signal` route serves.
@@ -147,49 +124,49 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Some(320_000)
 )]
 #[case::sine1k_48k_1s(
-    Wave::Sine { hz: 1_000.0 },
+    Wave::sine(1_000.0),
     Consts::RATE_48K,
     Consts::STEREO,
     Consts::FRAMES_1S_48K,
     None
 )]
 #[case::sine440_60s(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     None
 )]
 #[case::sine440_60s_128k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(128_000)
 )]
 #[case::sine440_60s_192k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(192_000)
 )]
 #[case::sine440_60s_256k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(256_000)
 )]
 #[case::sine440_60s_320k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(320_000)
 )]
 #[case::sine880_30s(
-    Wave::Sine { hz: 880.0 },
+    Wave::sine(880.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_30S_44K1,
@@ -221,13 +198,13 @@ fn signal_mp3(
     Consts::FRAMES_1S_44K1
 )]
 #[case::sine1k_48k_1s(
-    Wave::Sine { hz: 1_000.0 },
+    Wave::sine(1_000.0),
     Consts::RATE_48K,
     Consts::STEREO,
     Consts::FRAMES_1S_48K
 )]
 #[case::sine440_60s(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1
@@ -255,35 +232,35 @@ fn signal_flac(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize)
     None
 )]
 #[case::sine440_60s(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     None
 )]
 #[case::sine440_60s_128k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(128_000)
 )]
 #[case::sine440_60s_192k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(192_000)
 )]
 #[case::sine440_60s_256k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(256_000)
 )]
 #[case::sine440_60s_320k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
@@ -316,35 +293,35 @@ fn signal_aac(
     None
 )]
 #[case::sine440_60s(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     None
 )]
 #[case::sine440_60s_128k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(128_000)
 )]
 #[case::sine440_60s_192k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(192_000)
 )]
 #[case::sine440_60s_256k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,
     Some(256_000)
 )]
 #[case::sine440_60s_320k(
-    Wave::Sine { hz: 440.0 },
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_60S_44K1,

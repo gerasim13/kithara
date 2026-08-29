@@ -9,11 +9,10 @@ use kithara::{
 };
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
-use kithara_integration_tests::{create_test_wav, decode_ext::DecoderChunkOutcomeTestExt};
+use kithara_integration_tests::decode_ext::DecoderChunkOutcomeTestExt;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_test_fixtures::assets::alac_silence_1s;
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
@@ -56,10 +55,11 @@ impl Backend {
     }
 
     fn make_wav(self) -> Box<dyn Decoder> {
-        let bytes = create_test_wav(
-            Consts::WAV_FRAMES,
+        let bytes = signal::wav(
             Consts::WAV_SAMPLE_RATE,
             Consts::WAV_CHANNELS,
+            Consts::WAV_FRAMES,
+            signal::TONE,
         );
         let info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
@@ -313,10 +313,11 @@ impl StandaloneCase {
 /// that the device misdecodes — the pinned contract for that regression.
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn synth_native_flac_1s() -> Vec<u8> {
-    let pcm = SawtoothPcmFixture::new(
-        Consts::WAV_FRAMES / 2,
+    let pcm = Pcm::new(
         Consts::WAV_SAMPLE_RATE,
         Consts::WAV_CHANNELS,
+        Consts::WAV_FRAMES / 2,
+        Wave::Sawtooth,
     );
     let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
         pcm: &pcm,

@@ -11,12 +11,12 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64, create_wav_exact_bytes,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::PcmPattern,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_distance, phase_from_f32,
-    signal_pcm::signal,
 };
+use kithara_test_fixtures::signal::{self, Wave};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 use tracing::info;
 
@@ -397,11 +397,11 @@ async fn stress_seek_audio_hls(
         .then(|| Consts::expected_duration_secs(segment_count));
     let (url, counter) = match fixture {
         SeekAudioFixture::WavFileLike => {
-            let wav_data = create_wav_exact_bytes(
-                signal::Sawtooth,
+            let wav_data = signal::wav_of_size(
                 Consts::D.sample_rate,
                 Consts::D.channels,
                 Consts::total_bytes(segment_count),
+                Wave::Sawtooth,
             );
             if let Some(expected_dur) = expected_dur {
                 info!(

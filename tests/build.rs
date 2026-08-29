@@ -85,13 +85,8 @@ fn main() {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut hasher);
     }
-    // The encode glue and the PCM signal generator also determine the bytes.
-    for file in [
-        "src/native/hls_stream.rs",
-        "src/native/routes/signal.rs",
-        "src/signal_pcm.rs",
-        "src/wav.rs",
-    ] {
+    // The encode glue also determines the bytes.
+    for file in ["src/native/hls_stream.rs", "src/native/routes/signal.rs"] {
         if let Ok(bytes) = fs::read(file) {
             bytes.hash(&mut hasher);
         }

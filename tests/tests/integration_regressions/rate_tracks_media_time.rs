@@ -11,10 +11,11 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     audio_fixture::EmbeddedAudio,
-    create_test_wav, kithara,
+    kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::signal;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -77,7 +78,8 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     let tag = format!("rate-{rate}");
     let path = temp_dir.path().join(format!("{tag}.wav"));
     let frames = DRAIN_FIXTURE_SECS * SAMPLE_RATE as usize;
-    std::fs::write(&path, create_test_wav(frames, SAMPLE_RATE, 2)).expect("write wav fixture");
+    std::fs::write(&path, signal::wav(SAMPLE_RATE, 2, frames, signal::TONE))
+        .expect("write wav fixture");
     let resource = file_resource(
         &harness,
         &path,

@@ -10,9 +10,14 @@ publish = false
 
 [dependencies]
 hex = { workspace = true }
+num-traits = { workspace = true }
 sha2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `PcmSource` only. The crate refuses to build with no backend, and `ffmpeg` is
+# the one the build script already pulls in, so this adds no compilation.
+kithara-encode = { workspace = true, default-features = false, features = ["client-reqwest", "ffmpeg", "tls-rustls"] }
+
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 [build-dependencies]

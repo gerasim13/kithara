@@ -1,6 +1,6 @@
 use kithara_test_macros as kithara;
 
-use super::{riff, tone};
+use crate::signal::{Wave, wav, wav_from_fn};
 
 struct Consts;
 
@@ -19,11 +19,14 @@ impl Consts {
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
 #[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK)]
 fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
-    riff::wav(
+    wav(
         Consts::SAMPLE_RATE,
         Consts::CHANNELS,
         total_frames,
-        |frame| tone::sine(frame, Consts::SAMPLE_RATE, Consts::TONE_HZ, peak),
+        Wave::Sine {
+            hz: Consts::TONE_HZ,
+            peak,
+        },
     )
 }
 
@@ -31,7 +34,7 @@ fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
 #[kithara::asset(ext = "wav", content_type = "audio/wav", embed)]
 #[case::a440_6s(Consts::SOURCE_FRAMES, Consts::TONE_PEAK, Consts::MARKER_PEAK)]
 fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> {
-    riff::wav(
+    wav_from_fn(
         Consts::SAMPLE_RATE,
         Consts::CHANNELS,
         total_frames,
@@ -40,7 +43,11 @@ fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> 
                 .iter()
                 .any(|start| frame >= *start && frame < start + Consts::MARKER_FRAMES);
             let peak = if in_marker { marker_peak } else { peak };
-            tone::sine(frame, Consts::SAMPLE_RATE, Consts::TONE_HZ, peak)
+            Wave::Sine {
+                hz: Consts::TONE_HZ,
+                peak,
+            }
+            .sample(frame, Consts::SAMPLE_RATE)
         },
     )
 }

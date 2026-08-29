@@ -20,13 +20,12 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::read_to_eof,
-    signal_pcm::{Finite, SignalPcm, signal},
     temp_dir,
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -35,21 +34,20 @@ impl Consts {
 }
 
 fn create_wav_init_segment() -> Vec<u8> {
-    create_wav_header(Consts::D.sample_rate, Consts::D.channels, None)
+    signal::header(Consts::D.sample_rate, Consts::D.channels, None)
 }
 
 fn create_pcm_segments() -> Vec<u8> {
-    SignalPcm::new(
-        signal::Sawtooth,
+    Vec::from(Pcm::new(
         Consts::D.sample_rate,
         Consts::D.channels,
-        Finite::from_segments(
+        frames_in_segments(
             Consts::SEGMENT_COUNT,
             Consts::D.segment_size,
             Consts::D.channels,
         ),
-    )
-    .into_vec()
+        Wave::Sawtooth,
+    ))
 }
 
 /// ABR must switch variant at least once during HLS playback.

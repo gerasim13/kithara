@@ -236,7 +236,8 @@ fn check_against_previous(
         return None;
     }
     // The source is mono: both channels carry the same sine
-    // (`signal_pcm`), so the timeline this asserts on is the channel mean.
+    // (`kithara_test_fixtures::signal`), so the timeline this asserts on is the
+    // channel mean.
     // Reading one channel measures the decoder's stereo synthesis as well:
     // HE-AAC v2 reconstructs L and R from a mono core plus quantised spatial
     // parameters, and that reconstruction error is antisymmetric between the

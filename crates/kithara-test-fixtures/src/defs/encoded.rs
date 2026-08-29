@@ -1,7 +1,7 @@
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_test_macros as kithara;
 
-use super::{pcm::Pcm, tone};
+use crate::signal::{Pcm, Wave};
 
 struct Consts;
 
@@ -22,7 +22,10 @@ fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
         Consts::SAMPLE_RATE,
         Consts::CHANNELS,
         total_frames,
-        |frame| tone::sine(frame, Consts::SAMPLE_RATE, Consts::TONE_HZ, peak),
+        Wave::Sine {
+            hz: Consts::TONE_HZ,
+            peak,
+        },
     );
     EncoderFactory::encode_bytes(BytesEncodeRequest {
         pcm: &pcm,
@@ -42,7 +45,7 @@ fn alac(total_frames: usize) -> Vec<u8> {
         Consts::SAMPLE_RATE,
         Consts::CHANNELS,
         total_frames,
-        |_frame| 0,
+        Wave::Silence,
     );
     EncoderFactory::encode_bytes(BytesEncodeRequest {
         pcm: &pcm,

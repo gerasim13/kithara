@@ -1,9 +1,8 @@
 use std::num::NonZeroU32;
 
 use kithara::stream::AudioCodec;
+use kithara_test_fixtures::signal::Wave;
 use serde::{Deserialize, Serialize};
-
-use crate::{signal_pcm::signal, wav::create_wav_header};
 
 /// Serde for [`AudioCodec`] as `snake_case` strings (matches the former
 /// `derive(Serialize)` on the enum).
@@ -93,12 +92,12 @@ pub enum PcmPattern {
     ShiftedAscending,
 }
 
-impl signal::SignalFn for PcmPattern {
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        match self {
-            Self::Ascending => signal::Sawtooth.sample(frame, sample_rate),
-            Self::Descending => signal::SawtoothDescending.sample(frame, sample_rate),
-            Self::ShiftedAscending => signal::SawtoothShifted.sample(frame, sample_rate),
+impl From<PcmPattern> for Wave {
+    fn from(pattern: PcmPattern) -> Self {
+        match pattern {
+            PcmPattern::Ascending => Self::Sawtooth,
+            PcmPattern::Descending => Self::SawtoothDescending,
+            PcmPattern::ShiftedAscending => Self::SawtoothShifted,
         }
     }
 }
@@ -421,15 +420,10 @@ pub fn expected_byte_at_test_pattern(
     }
 }
 
-/// Create a 44-byte WAV init segment header (streaming mode: sizes = 0xFFFFFFFF).
-#[must_use]
-pub fn create_wav_init_header(sample_rate: u32, channels: u16) -> Vec<u8> {
-    create_wav_header(sample_rate, channels, None)
-}
-
 #[cfg(test)]
 mod tests {
     use kithara;
+    use kithara_test_fixtures::signal;
 
     use super::*;
 
@@ -548,7 +542,7 @@ mod tests {
 
     #[kithara::test]
     fn wav_init_header_is_44_bytes() {
-        let header = create_wav_init_header(44100, 2);
+        let header = signal::header(44100, 2, None);
         assert_eq!(header.len(), 44);
         assert!(header.starts_with(b"RIFF"));
     }

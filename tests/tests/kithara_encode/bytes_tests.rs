@@ -1,7 +1,6 @@
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-use kithara_integration_tests::{
-    encode_ext::BytesEncodeTargetExt, encode_test_pcm::SawtoothPcmFixture,
-};
+use kithara_integration_tests::encode_ext::BytesEncodeTargetExt;
+use kithara_test_fixtures::signal::{Pcm, Wave};
 
 #[kithara::test]
 fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
@@ -9,7 +8,7 @@ fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
     const CHANNELS: u16 = 2;
     const AAC_FRAME_SAMPLES: usize = 1024;
 
-    let pcm = SawtoothPcmFixture::new(4 * AAC_FRAME_SAMPLES, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * AAC_FRAME_SAMPLES, Wave::Sawtooth);
     let cases = [
         BytesEncodeTarget::Mp3,
         BytesEncodeTarget::Flac,
@@ -43,7 +42,7 @@ fn encode_bytes_honors_explicit_bit_rate_across_lossy_range() {
     const CHANNELS: u16 = 2;
     const PCM_FRAMES: usize = SAMPLE_RATE as usize;
 
-    let pcm = SawtoothPcmFixture::new(PCM_FRAMES, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, PCM_FRAMES, Wave::Sawtooth);
 
     let bit_rates = [96_000u64, 128_000, 192_000, 256_000, 320_000];
     let lossy_targets = [

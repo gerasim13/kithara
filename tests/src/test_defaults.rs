@@ -1,6 +1,7 @@
 use kithara::platform::{sync::Arc, time::Duration};
+use kithara_test_fixtures::signal;
 
-use crate::{audio_fixture::EmbeddedAudio, wav::create_test_wav};
+use crate::audio_fixture::EmbeddedAudio;
 
 /// Default audio parameters for generated WAV test fixtures.
 ///
@@ -13,13 +14,11 @@ pub struct SawWav {
 }
 
 impl SawWav {
-    /// Standard RIFF/WAVE header size.
-    const WAV_HEADER_SIZE: usize = 44;
     /// Bytes per mono PCM sample (16-bit signed).
     const BYTES_PER_SAMPLE: usize = 2;
 
-    /// Saw period in PCM frames (matches generated saw-tooth cycle length).
-    pub const SAW_PERIOD: usize = 65536;
+    /// Saw period in PCM frames.
+    pub const SAW_PERIOD: usize = signal::SAW_PERIOD;
 
     /// Standard defaults: 44.1 kHz stereo, 200 KB segments (native) / 32 KB (wasm).
     pub const DEFAULT: Self = Self {
@@ -48,15 +47,21 @@ impl SawWav {
     }
 
     /// Generate a WAV blob sized to `segments * segment_size` bytes.
-    ///
-    /// Uses [`create_test_wav`] with a sine wave; frame count is derived so
-    /// the header + PCM body fit within the total byte budget.
     pub fn build_wav(&self, segments: usize) -> Arc<Vec<u8>> {
-        let total = self.total_bytes(segments);
-        let bytes_per_frame = self.channels as usize * Self::BYTES_PER_SAMPLE;
-        let frames = (total - Self::WAV_HEADER_SIZE) / bytes_per_frame;
-        Arc::new(create_test_wav(frames, self.sample_rate, self.channels))
+        Arc::new(signal::wav_of_size(
+            self.sample_rate,
+            self.channels,
+            self.total_bytes(segments),
+            signal::TONE,
+        ))
     }
+}
+
+/// Frames of interleaved 16-bit PCM that fill `segments` segments of
+/// `segment_size` bytes.
+#[must_use]
+pub const fn frames_in_segments(segments: usize, segment_size: usize, channels: u16) -> usize {
+    segments * segment_size / (channels as usize * size_of::<i16>())
 }
 
 impl Default for SawWav {

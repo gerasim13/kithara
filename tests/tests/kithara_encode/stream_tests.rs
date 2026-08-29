@@ -7,11 +7,9 @@ use kithara::{
 };
 use kithara_encode::{EncodedTrack, StreamBackend, StreamEncoder};
 use kithara_integration_tests::{
-    encode_ext::mux_fmp4_bytes,
-    fixture_protocol::GaplessEncoding,
-    goertzel::goertzel_magnitude,
-    signal_pcm::signal::{SignalFn, SineWave},
+    encode_ext::mux_fmp4_bytes, fixture_protocol::GaplessEncoding, goertzel::goertzel_magnitude,
 };
+use kithara_test_fixtures::signal::Wave;
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
@@ -22,7 +20,7 @@ const BIT_RATE: u64 = 128_000;
 const PRIMING_SKIP_FRAMES: usize = 4_800;
 
 fn sine(frames: usize) -> Vec<f32> {
-    let tone = SineWave(TONE_HZ);
+    let tone = Wave::sine(TONE_HZ);
     let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
     for frame in 0..frames {
         let value = f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0;

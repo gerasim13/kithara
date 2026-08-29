@@ -25,12 +25,11 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::{info, warn};
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -110,37 +109,31 @@ async fn next_chunk_with_timeout<R: AudioRead>(
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
-    let init_segment = Arc::new(create_wav_header(
+    let init_segment = Arc::new(signal::header(
         Consts::D.sample_rate,
         Consts::D.channels,
         None,
     ));
-    let v0_pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            Consts::D.sample_rate,
+    let v0_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
-    let v1_pcm = Arc::new(
-        SignalPcm::new(
-            signal::SawtoothDescending,
-            Consts::D.sample_rate,
+        ),
+        Wave::Sawtooth,
+    )));
+    let v1_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
+        ),
+        Wave::SawtoothDescending,
+    )));
 
     info!(
         init_size = init_segment.len(),

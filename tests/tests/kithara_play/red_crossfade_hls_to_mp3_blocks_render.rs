@@ -10,6 +10,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::offline::resource_from_reader;
+use kithara_test_fixtures::signal::{self, Wave};
 use tracing::info;
 
 use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};
@@ -30,10 +31,8 @@ impl Consts {
 async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     use kithara::assets::{AssetStore, StorageBackend};
     use kithara_integration_tests::{
-        create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
         offline::OfflinePlayer,
-        signal_pcm::signal,
     };
 
     const HLS_SEGMENT_COUNT: usize = 3;
@@ -44,11 +43,11 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
 
     let segment_duration = HLS_SEGMENT_SIZE as f64 / (HLS_SAMPLE_RATE * HLS_CHANNELS * 2.0);
     let hls_server = HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(create_wav_exact_bytes(
-            signal::Sawtooth,
+        custom_data: Some(Arc::new(signal::wav_of_size(
             44_100u32,
             2u16,
             HLS_TOTAL_BYTES,
+            Wave::Sawtooth,
         ))),
         segment_duration_secs: segment_duration,
         segment_size: HLS_SEGMENT_SIZE,

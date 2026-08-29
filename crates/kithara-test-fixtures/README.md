@@ -20,6 +20,8 @@ encoded inside a test's wall-clock deadline.
 
 - `src/defs/` — generator bodies, one function per asset, each carrying its
   cases. These compile into the build script only, never into the library.
+- `src/signal/` — waveforms, PCM buffers, and the RIFF writer. The workspace's
+  one way to make a signal, at build time or at run time.
 - `build.rs` — resolves every declared case against the store, produces what is
   missing, and writes the accessor module.
 - `src/store.rs` — the store itself: identity, namespace, atomic writes, and the
@@ -52,5 +54,10 @@ if let Some(bytes) = store::read_entry(&namespace, &id, "wav") {
   write; an empty file counts as a miss.
 - `store::lock_entry` — the exclusive producer lock for one entry.
 
+- `signal::Wave` — the waveform vocabulary.
+- `signal::Pcm` — interleaved 16-bit PCM in memory.
+- `signal::wav` / `signal::header` — the RIFF writer.
+
 See [CONTEXT.md](CONTEXT.md) for the store layout, the invalidation contract,
-and why the generators stay out of the library.
+and why the generators stay out of the library while the signal primitives do
+not.

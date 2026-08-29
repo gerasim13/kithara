@@ -1,4 +1,4 @@
-pub use crate::signal_pcm::SAW_PERIOD;
+pub use kithara_test_fixtures::signal::SAW_PERIOD;
 
 /// Detected direction of a saw-tooth signal in decoded PCM.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

@@ -23,13 +23,12 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
-    create_wav_exact_bytes,
     fixture_protocol::PackagedSignal,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     offline::{OfflineSession, resource_from_reader},
-    signal_pcm::signal,
     temp_dir,
 };
+use kithara_test_fixtures::signal::{self, Wave};
 use tracing::info;
 
 use crate::{
@@ -315,11 +314,11 @@ async fn open_audio_hls_server() -> HlsTestServer {
     let segment_duration =
         Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(create_wav_exact_bytes(
-            signal::Sawtooth,
+        custom_data: Some(Arc::new(signal::wav_of_size(
             44_100u32,
             2u16,
             Consts::HLS_TOTAL_BYTES,
+            Wave::Sawtooth,
         ))),
         segment_duration_secs: segment_duration,
         segment_size: Consts::HLS_SEGMENT_SIZE,

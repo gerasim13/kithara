@@ -78,12 +78,42 @@ Consequences, in the order they matter:
 `src/defs/` is reached only through `#[path]` from `build.rs`. Two consequences,
 both load-bearing:
 
-- The encoding stack (`kithara-encode` and the FFmpeg / fdk-aac it links) is a
-  **build-dependency**. It never enters a target build, so it costs nothing on
-  wasm, on iOS, or in any product binary.
+- Encoding is a **build-dependency**. `kithara-encode` enters the target build
+  for its `PcmSource` trait alone, with FFmpeg's encoder features off the
+  library's own default path; nothing in a target build calls an encoder.
 - Generation happens exactly once per fingerprint, in the build script. Nothing
   in the library can synthesize an asset, which is the whole point: a test's
   deadline never contains an encode.
+
+## One Way To Make A Signal
+
+`src/signal/` is the exception, and the only one: it is the library's, and the
+build script reaches it through `#[path]` exactly as it reaches `src/store.rs`.
+The same source file, two roots, one visibility.
+
+It exists because a waveform is needed on both sides of the build line. `defs/`
+renders assets from it before the tests start; the integration suite renders
+the bodies its HTTP fixtures serve from it while they run. Two implementations
+of a sine would drift, and a test that asserts on decoded samples cannot tell
+which one it is asserting against.
+
+- `Wave` — the waveform vocabulary. One enum, one `sample(frame, sample_rate)`.
+  `TONE` names the 440 Hz full-scale sine that a fixture carries unless it says
+  otherwise.
+- `Pcm` — interleaved 16-bit PCM in memory; `PcmSource` off wasm.
+- `wav` / `wav_of_size` / `header` — the RIFF writer, including the streaming
+  header whose size fields say `0xFFFFFFFF` because the total is not known when
+  it is written.
+
+`Pcm::new` and `wav` take a `Wave`; `Pcm::from_fn` and `wav_from_fn` take a
+per-frame closure, for the bodies no single waveform describes.
+
+This is the workspace's only route to a generated signal. `tests/src/wav.rs`
+and `tests/src/signal_pcm.rs` were the other two — a `SignalFn` trait with one
+struct per waveform, a lazy renderer with an `Infinite` length nothing asked
+for, and a second RIFF writer. They are gone, and nothing may grow back beside
+`signal`: a suite that asserts on decoded samples has to know which sine it is
+asserting against.
 
 ## What A Build Costs
 

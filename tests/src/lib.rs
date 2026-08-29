@@ -36,8 +36,6 @@ pub mod e2e;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_ext;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod encode_test_pcm;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
 pub mod fixtures;
@@ -68,7 +66,6 @@ pub mod ring;
 pub mod rng;
 pub mod server_url;
 pub mod signal_asset;
-pub mod signal_pcm;
 pub mod signal_source_utils;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
@@ -85,7 +82,6 @@ pub mod token_store;
 pub mod user_sim;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod waits;
-pub mod wav;
 
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};
 #[cfg(not(target_arch = "wasm32"))]
@@ -116,4 +112,3 @@ pub use test_server::{
     SegmentGateHandle,
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
-pub use wav::{create_test_wav, create_wav_exact_bytes};

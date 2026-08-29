@@ -213,9 +213,6 @@ kithara = { workspace = true, features = [
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
 kithara-stretch = { workspace = true, default-features = false, features = ["stretch-signalsmith"] }
-# Native-only: its build script encodes through FFmpeg on the host. The wasm
-# lane names assets through `SignalAsset` and fetches the bytes from the native
-# test server, so it never links the crate.
 kithara-test-fixtures = { workspace = true }
 
 # --- WASM-only dependencies ---
@@ -239,6 +236,11 @@ kithara = { workspace = true, default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
+
+# Only `signal` reaches wasm: the store and its accessors are a host
+# filesystem, and the wasm lane names assets through `SignalAsset` instead,
+# fetching their bytes from the native test server.
+kithara-test-fixtures = { workspace = true }
 
 console_error_panic_hook = { workspace = true }
 gloo-timers = { workspace = true }
