@@ -12,9 +12,10 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
+    offline::OfflineSession, temp_dir,
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 #[derive(Default)]
 struct Transfer {
@@ -116,7 +117,7 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
         .map(|_| {
             helper.register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
-                    bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+                    bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
                 delivery: Delivery::Throttle {

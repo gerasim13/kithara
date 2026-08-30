@@ -6,7 +6,7 @@ import Testing
 extension IntegrationRegressionsIOS {
     @Test("Loaded ranges cover a fully downloaded fixture")
     func loadedRangesCoverDownloadedFixture() async throws {
-        let fixtureURL = try TestServerFixture.asset("test.mp3")
+        let fixtureURL = try TestServerFixture.signal("signal_mp3_track_sine440_187s.mp3")
         let bodyLength = try await fixtureContentLength(at: fixtureURL)
         try #require(
             bodyLength > 0,

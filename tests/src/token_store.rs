@@ -3,18 +3,9 @@ use uuid::Uuid;
 
 use crate::hls_url::HlsSpec;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum TokenRoute {
-    Signal,
-    Hls,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct TokenRequest {
-    pub hls_spec: Option<HlsSpec>,
-    pub signal_kind: Option<String>,
-    pub signal_spec_with_ext: Option<String>,
-    pub route: TokenRoute,
+    pub hls_spec: HlsSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

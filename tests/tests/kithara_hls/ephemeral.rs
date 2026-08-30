@@ -23,10 +23,8 @@ use kithara::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_integration_tests::create_wav_exact_bytes;
-#[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
-use kithara_integration_tests::signal_pcm::signal;
+use kithara_test_fixtures::signal::{self, Wave};
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 use url::Url;
@@ -115,11 +113,11 @@ async fn ephemeral_pipeline_no_disk_writes() {
     const SEGMENT_COUNT: usize = 3;
     const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-    let wav_data = create_wav_exact_bytes(
-        signal::Sawtooth,
+    let wav_data = signal::wav_of_size(
         SawWav::DEFAULT.sample_rate,
         SawWav::DEFAULT.channels,
         TOTAL_BYTES,
+        Wave::Sawtooth,
     );
     info!(total_bytes = TOTAL_BYTES, "Generated saw-tooth WAV");
 

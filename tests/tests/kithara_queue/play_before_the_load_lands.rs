@@ -11,6 +11,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, kithara, offline::OfflineSession, temp_dir, waits::wait_for_position_event,
 };
+use kithara_test_fixtures::SignalAsset;
 
 /// `play()` issued before the current track's load has landed must still
 /// start that track once the load completes.
@@ -29,7 +30,7 @@ use kithara_integration_tests::{
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let helper = TestServerHelper::new().await;
-    let url = helper.asset("track.mp3");
+    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());

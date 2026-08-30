@@ -20,7 +20,6 @@ use tracing::{info, warn};
 pub(crate) const SAMPLE_RATE: u32 = 44_100;
 pub(crate) const CHANNELS: u16 = 2;
 pub(crate) const FREQ_HZ: f64 = 440.0;
-pub(crate) const STREAM_FRAMES: u64 = (SAMPLE_RATE as u64) * 60;
 pub(crate) const TOLERANCE_SAMPLES: f64 = 0.5;
 /// Minimum fitted amplitude for a scan window to carry a meaningful phase.
 /// The test sine is full-scale (amp ≈ 1.0, ≥ 0.5 even through lossy AAC);
@@ -237,7 +236,8 @@ fn check_against_previous(
         return None;
     }
     // The source is mono: both channels carry the same sine
-    // (`signal_pcm`), so the timeline this asserts on is the channel mean.
+    // (`kithara_test_fixtures::signal`), so the timeline this asserts on is the
+    // channel mean.
     // Reading one channel measures the decoder's stereo synthesis as well:
     // HE-AAC v2 reconstructs L and R from a mono core plus quantised spatial
     // parameters, and that reconstruction error is antisymmetric between the
