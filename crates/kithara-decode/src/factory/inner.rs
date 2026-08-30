@@ -21,9 +21,25 @@ use super::probe::{
 };
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::GaplessInfo;
+#[cfg(all(feature = "android", target_os = "android"))]
+use crate::android::{AndroidCodec, AndroidMediaExtractorDemuxer};
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode};
+#[cfg(any(
+    feature = "symphonia",
+    all(feature = "apple", any(target_os = "macos", target_os = "ios"))
+))]
+use crate::gapless::scoped_probe;
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::gapless::scoped_startup_probe;
+#[cfg(feature = "symphonia")]
+use crate::symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 use crate::{
     Decoder,
+    composed::{ComposedDecoder, DecoderRuntime},
+    demuxer::Demuxer,
     error::{DecodeError, DecodeResult},
+    fmp4::Fmp4SegmentDemuxer,
     mp4::sniff_mp4_codec,
     traits::BoxedSource,
 };
@@ -312,7 +328,7 @@ impl DecoderFactory {
                     .codec
                     .is_some_and(|codec| segment_aware_container(codec, media_info.container)) =>
             {
-                <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
+                <Fmp4SegmentDemuxer as Demuxer>::required_input()
             }
             _ if matches!(media_info.container, Some(ContainerFormat::Wav)) => {
                 ReaderInput::InitOnly
@@ -382,13 +398,7 @@ fn build_webcodecs_standalone<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        gapless::scoped_probe,
-        symphonia::{FileOpen, SymphoniaDemuxer},
-        webcodecs::codec::WebCodecsCodec,
-    };
+    use crate::webcodecs::codec::WebCodecsCodec;
 
     tracing::debug!(
         ?codec,
@@ -442,8 +452,6 @@ fn create_apple<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::apple::AppleCodec;
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -468,7 +476,7 @@ where
         }
     }
 
-    if crate::apple::AppleAudioFileDemuxer::supports(codec, container) {
+    if AppleAudioFileDemuxer::supports(codec, container) {
         tracing::debug!(
             ?codec,
             ?container,
@@ -496,12 +504,6 @@ fn build_apple_standalone_decoder<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        gapless::{scoped_probe, scoped_startup_probe},
-    };
     let startup_probe = scoped_startup_probe(&mut *source, codec, &config.byte_pool)?;
     let probed_gapless = if config.gapless {
         if matches!(codec, AudioCodec::Mp3) {
@@ -629,8 +631,6 @@ fn create_android<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::android::AndroidCodec;
-
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
@@ -690,11 +690,6 @@ fn build_android_standalone_decoder<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        android::{AndroidCodec, AndroidMediaExtractorDemuxer},
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-    };
     let demuxer = match (codec, container) {
         (AudioCodec::Pcm, Some(ContainerFormat::Wav)) => {
             AndroidMediaExtractorDemuxer::open_wav(source)?
@@ -751,13 +746,6 @@ fn create_file_symphonia_universal<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::{
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        gapless::scoped_probe,
-        symphonia::{FileOpen, SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer},
-    };
-
     tracing::debug!(
         ?codec,
         ?container,
@@ -833,8 +821,6 @@ fn create_fmp4_segment_symphonia<B>(
 where
     B: ResamplerBackend,
 {
-    use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
-
     tracing::debug!(
         ?codec,
         "fmp4_segment: dispatching to segment-aware Symphonia path"
@@ -865,12 +851,6 @@ where
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
     B: ResamplerBackend,
 {
-    use crate::{
-        composed::{ComposedDecoder, DecoderRuntime},
-        demuxer::Demuxer,
-        fmp4::Fmp4SegmentDemuxer,
-    };
-
     let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone())?;
     let codec = open_codec(demuxer.track_info())?;
     let pool = config.sample_pool.clone();

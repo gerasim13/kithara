@@ -350,6 +350,42 @@ mod tests {
     }
 
     #[test]
+    fn local_use_rule_only_reports_production_functions() {
+        let source = r#"
+fn production() {
+    use std::fmt::Write;
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() {
+        use std::fmt::Write;
+    }
+}
+
+#[kithara::test]
+fn macro_test() {
+    use std::fmt::Write;
+}
+
+#[cfg(test)]
+fn cfg_test() {
+    use std::fmt::Write;
+}
+
+#[cfg(target_arch = "wasm32")]
+fn target_function() {
+    use std::fmt::Write;
+}
+"#;
+
+        assert_eq!(
+            rule_hits("style.no-local-use-in-prod-functions.yml", source),
+            1
+        );
+    }
+
+    #[test]
     fn default_rule_ignores_types_that_already_implement_default() {
         let source = r#"
 struct Existing;
