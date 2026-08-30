@@ -120,6 +120,14 @@ impl<'a, 'r> Ctx<'a, 'r> {
             BindingKind::View { .. } => Some(ReadValue::Bool(
                 self.view.flag(self.ui.resolve(binding.key)),
             )),
+            // Whether the page this binding names is the page standing, which
+            // is how a nav item lights the page it turns to.
+            BindingKind::Page { name } => Some(ReadValue::Bool(
+                self.ui
+                    .views()
+                    .standing(self.view, self.ui.resolve(binding.key))
+                    == Some(self.ui.resolve(name)),
+            )),
             _ => self.get(self.ui.resolve(binding.key)),
         }
     }
@@ -134,7 +142,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         read.filter(|binding| {
             !matches!(
                 binding.kind,
-                BindingKind::Command | BindingKind::View { .. }
+                BindingKind::Command | BindingKind::View { .. } | BindingKind::Page { .. }
             )
         })
         .map(|binding| self.ui.resolve(binding.key))

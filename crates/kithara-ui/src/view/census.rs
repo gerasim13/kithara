@@ -5,6 +5,7 @@ use crate::{
     expand::ControlSite,
     ids::SourceUri,
     module::{BindingRef, ControlNode, ViewSet},
+    view::ViewState,
 };
 
 /// What one press writes into the state it names.
@@ -78,6 +79,15 @@ impl ViewWrites {
     #[must_use]
     pub const fn pages(&self) -> &BTreeMap<String, PageStanding> {
         &self.pages
+    }
+
+    /// The page one state stands at on this screen: the page the view was
+    /// turned to, or the one the document calls initial while it has been
+    /// turned nowhere.
+    #[must_use]
+    pub fn standing<'a>(&'a self, view: &'a ViewState, state: &str) -> Option<&'a str> {
+        let at = self.pages.get(state)?;
+        Some(view.page(state).unwrap_or(&at.initial))
     }
 }
 

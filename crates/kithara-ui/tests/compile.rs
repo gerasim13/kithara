@@ -9,9 +9,13 @@ use kithara_ui::{
     layout::FrameCorners,
     module::{ChromeStyle, IconName, PopoverAt},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
+    render::{
+        ReadValue, Reads,
+        document::{Clock, Ctx},
+    },
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
-    view,
+    view::{self, ViewState},
 };
 
 fn resolver() -> MemResolver {
@@ -2698,10 +2702,9 @@ fn tabbed(tabs: &str) -> MemResolver {
     resolver.insert(
         "nav.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "nav",
-            root: Row(children: [
-                Pressable(id: "two", press: Page(id: "/shown", name: "two"),
-                    child: Spacer(id: "two-hit", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
-            ]))"#,
+            root: NavItem(id: "two", label: "TWO", icon: "Disc",
+                read: Page(id: "/shown", name: "two"),
+                write: Page(id: "/shown", name: "two")))"#,
     );
     for (source, id) in [("one.kmodule.ron", "one"), ("two.kmodule.ron", "two")] {
         resolver.insert(
@@ -2808,4 +2811,60 @@ fn a_press_refuses_a_state_no_tabs_follows() {
             if id == "shown" && page == "two"),
         "{error}"
     );
+}
+
+/// A nav item lights the page standing: the read side of a `Page` binding
+/// answers whether the page it names is the one the screen shows, so the light
+/// under a tab costs the application no endpoint either.
+#[kithara::test]
+fn a_page_binding_reads_whether_its_page_stands() {
+    let ui = compile(
+        "tabbed.klayout.ron",
+        &tabbed(TABS),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected split root");
+    };
+    let CompiledNode::Module { root, .. } = &children[0].node else {
+        panic!("expected the nav module");
+    };
+    let ExpandedNode::Control {
+        read: Some(binding),
+        ..
+    } = &**root
+    else {
+        panic!("expected the nav item");
+    };
+    let clock = Clock::default();
+
+    assert_eq!(
+        Ctx::new(&ui, &Silent, &view::EMPTY, builtin::skin_doc(), clock).read(binding),
+        Some(ReadValue::Bool(false)),
+        "a screen standing at its initial page must not light the tab of another"
+    );
+
+    let mut turned = ViewState::default();
+    turned.stand("shown", "two");
+
+    assert_eq!(
+        Ctx::new(&ui, &Silent, &turned, builtin::skin_doc(), clock).read(binding),
+        Some(ReadValue::Bool(true)),
+        "the tab of the page standing must be the one lit"
+    );
+}
+
+/// An application that answers nothing at all, so a tab lit below is lit by the
+/// screen's own state rather than something the test quietly supplied.
+struct Silent;
+
+impl Reads for Silent {
+    fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
+        None
+    }
 }

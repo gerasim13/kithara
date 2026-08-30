@@ -9,10 +9,11 @@ use crate::{compile::CompiledUi, view::ViewState};
 /// just mounted and one turned back to its first page are one screen rather
 /// than two.
 fn fits(view: &ViewState, ui: &CompiledUi) -> bool {
-    ui.views()
+    let views = ui.views();
+    views
         .pages()
         .iter()
-        .all(|(state, at)| view.page(state).unwrap_or(at.initial.as_str()) == at.shown.as_str())
+        .all(|(state, at)| views.standing(view, state) == Some(at.shown.as_str()))
 }
 
 /// The compiled screens one host keeps while its document turns between pages.
