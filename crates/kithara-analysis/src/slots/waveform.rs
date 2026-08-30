@@ -3,7 +3,9 @@ use std::num::NonZeroU32;
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use tracing::warn;
 
-use crate::{analyzer::WaveformPass, waveform::bucket::Waveform};
+use crate::{
+    BlobError, analyzer::WaveformPass, progress::WaveformResume, waveform::bucket::Waveform,
+};
 
 pub(crate) type Config = Option<usize>;
 pub(crate) type Slot = Option<WaveformPass>;
@@ -48,6 +50,29 @@ where
 
 pub(crate) fn snapshot(slot: &mut Slot, extent: Option<u64>) -> Option<Waveform> {
     slot.as_mut().map(|analyzer| analyzer.snapshot(extent))
+}
+
+pub(crate) fn write_resume(slot: &Slot) -> Option<Vec<u8>> {
+    slot.as_ref().map(|analyzer| {
+        let mut out = Vec::new();
+        analyzer.write_resume(&mut out);
+        out
+    })
+}
+
+pub(crate) fn restore<S>(
+    slot: &mut Slot,
+    pools: &PoolRegion<S>,
+    resume: Option<WaveformResume>,
+) -> Result<(), BlobError>
+where
+    S: HasPool<f32>,
+{
+    match (slot.as_mut(), resume) {
+        (Some(analyzer), Some(resume)) => analyzer.restore(pools, resume),
+        (None, None) => Ok(()),
+        (Some(_), None) | (None, Some(_)) => Err(BlobError::Corrupt),
+    }
 }
 
 pub(crate) const fn with_buckets(config: &mut Config, buckets: usize) {

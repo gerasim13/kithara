@@ -44,13 +44,13 @@ const TRACK_COUNT: usize = 2;
 /// Holds the first `StartPlayer` until the test releases it, standing in for
 /// the audio-device stream start that makes the window wide on a real device.
 struct StartGatedSession {
-    inner: Arc<dyn SessionDispatcher>,
+    inner: Arc<dyn SessionDispatcher<TestPools>>,
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl StartGatedSession {
     fn new(
-        inner: Arc<dyn SessionDispatcher>,
+        inner: Arc<dyn SessionDispatcher<TestPools>>,
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) -> Self {
@@ -61,8 +61,8 @@ impl StartGatedSession {
     }
 }
 
-impl SessionDispatcher for StartGatedSession {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl SessionDispatcher<TestPools> for StartGatedSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         if matches!(cmd, Cmd::StartPlayer { .. })
             && let Some((entered, release)) = self.gate.lock().take()
         {

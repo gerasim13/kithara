@@ -63,22 +63,15 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
+    /// Per-track cancel guard, declared first so reader teardown observes
+    /// cancellation. Disarmed when the live reader moves into analysis.
+    cancel: CancelGuard,
     pub(crate) inner: Box<dyn AudioReader>,
     priority: Option<TrackPriority>,
     #[field(with)]
     playback_rate: PlaybackRate,
     #[field(get, deref = false)]
     src: Arc<str>,
-    /// Drop guard for the per-track cancel — the token passed as
-    /// `ResourceConfig.cancel`, whose subtree covers BOTH the inner stream
-    /// (File/Hls) and the `Audio` pipeline (each a `child()` of it). Declared
-    /// first so it drops before `inner`: a mid-session unload tears down the
-    /// whole track subtree — not just the `Audio` half `Audio::Drop` would
-    /// reach under propagate-down — while the stream's fetch loops still
-    /// observe the cancel as `Audio` drops. `None` for custom-reader resources;
-    /// disarmed by the `From<Resource>` reader unwrap when the live reader
-    /// passes to the analysis worker.
-    cancel: CancelGuard,
     #[field(get = event_bus)]
     bus: EventBus,
 }
@@ -372,7 +365,7 @@ impl From<Resource> for Box<dyn AudioReader> {
 mod tests {
     use std::{
         num::{NonZeroU32, NonZeroUsize},
-        sync::atomic::Ordering,
+        sync::atomic::{AtomicU8, Ordering},
     };
 
     use firewheel::{
@@ -409,12 +402,37 @@ mod tests {
         const SAMPLE_RATE: u32 = 44_100;
     }
 
+    struct DropState;
+
+    impl DropState {
+        const NOT_DROPPED: u8 = 0;
+        const BEFORE_CANCEL: u8 = 1;
+        const AFTER_CANCEL: u8 = 2;
+    }
+
+    struct DropProbe {
+        cancel: CancelToken,
+        state: Arc<AtomicU8>,
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            let state = if self.cancel.is_cancelled() {
+                DropState::AFTER_CANCEL
+            } else {
+                DropState::BEFORE_CANCEL
+            };
+            self.state.store(state, Ordering::SeqCst);
+        }
+    }
+
     struct EofReader {
         bus: EventBus,
         spec: AudioSpec,
         meta: TrackMetadata,
         position_frames: usize,
         total_frames: usize,
+        _drop_probe: Option<DropProbe>,
     }
 
     impl Default for EofReader {
@@ -428,6 +446,7 @@ mod tests {
                 ),
                 position_frames: 0,
                 total_frames: 0,
+                _drop_probe: None,
             }
         }
     }
@@ -436,6 +455,13 @@ mod tests {
         fn with_frames(total_frames: usize) -> Self {
             Self {
                 total_frames,
+                ..Self::default()
+            }
+        }
+
+        fn with_drop_probe(cancel: CancelToken, state: Arc<AtomicU8>) -> Self {
+            Self {
+                _drop_probe: Some(DropProbe { cancel, state }),
                 ..Self::default()
             }
         }
@@ -726,5 +752,37 @@ mod tests {
     fn drop_without_cancel_is_passive() {
         let resource = Resource::from_reader(EofReader::default(), None);
         drop(resource);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn drop_cancels_before_inner_reader_teardown() {
+        let track = CancelToken::never();
+        let state = Arc::new(AtomicU8::new(DropState::NOT_DROPPED));
+        let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
+        let mut resource = Resource::from_reader(reader, None);
+        resource.cancel = CancelGuard(Some(track));
+
+        drop(resource);
+
+        assert_eq!(state.load(Ordering::SeqCst), DropState::AFTER_CANCEL);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn reader_unwrap_disarms_resource_cancel() {
+        let track = CancelToken::never();
+        let state = Arc::new(AtomicU8::new(DropState::NOT_DROPPED));
+        let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
+        let mut resource = Resource::from_reader(reader, None);
+        resource.cancel = CancelGuard(Some(track.clone()));
+
+        let reader: Box<dyn AudioReader> = resource.into();
+
+        assert!(!track.is_cancelled());
+        assert_eq!(state.load(Ordering::SeqCst), DropState::NOT_DROPPED);
+
+        drop(reader);
+
+        assert!(!track.is_cancelled());
+        assert_eq!(state.load(Ordering::SeqCst), DropState::BEFORE_CANCEL);
     }
 }

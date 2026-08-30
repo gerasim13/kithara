@@ -28,7 +28,7 @@ mod kithara_play {
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_queue {
     mod source_helper;
-    use source_helper::app_track_source;
+    pub(crate) use source_helper::app_track_source;
 
     mod cold_seek_cpal;
     mod zvuk_drm_trace;

@@ -1,19 +1,21 @@
 use std::{
     collections::{HashMap, VecDeque},
-    io::{Error as IoError, ErrorKind},
+    num::NonZeroU32,
 };
 
 use kithara::{
-    analysis::{AnalysisFingerprint, AnalysisToken, TrackAnalysis},
-    assets::{
-        AcquisitionResult, AssetResource, AssetResourceState, AssetsError, ReadSide, ResourceKey,
-        WriteSide,
-    },
+    analysis::{AnalysisFile, AnalysisFingerprint, AnalysisProgress, AnalysisToken},
+    assets::{AssetResource, AssetResourceState, ReadSide, ResourceKey},
     decode::DecodeError,
 };
+use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
 use crate::pools::{AppResourceConfig, AppStore, Pools};
+
+pub(crate) mod persistence;
+
+pub(crate) use persistence::{AnalysisPersistence, AnalysisPersistenceError};
 
 /// Tunables for the analysis cache, grouped to keep the module surface small.
 struct Consts;
@@ -51,7 +53,7 @@ impl AnalysisTarget {
 
 struct MemoryEntry {
     target: AnalysisTarget,
-    analysis: TrackAnalysis,
+    progress: AnalysisProgress,
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -60,6 +62,7 @@ struct MemoryEntry {
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
     pools: Pools,
+    chunk_duration: Duration,
     mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration, per artifact: a stored artifact whose
     /// tag differs is dropped on its own, so a waveform resolution change no
@@ -71,9 +74,14 @@ pub(crate) struct TrackAnalysisCache {
 }
 
 impl TrackAnalysisCache {
-    pub(crate) fn new(fingerprint: AnalysisFingerprint, pools: Pools) -> Self {
+    pub(crate) fn new(
+        fingerprint: AnalysisFingerprint,
+        pools: Pools,
+        chunk_seconds: NonZeroU32,
+    ) -> Self {
         Self {
             pools,
+            chunk_duration: Duration::from_secs(u64::from(chunk_seconds.get())),
             fingerprint,
             mem: HashMap::new(),
             order: VecDeque::new(),
@@ -83,7 +91,8 @@ impl TrackAnalysisCache {
     /// Whether a cached snapshot carries every artifact the active
     /// configuration expects. A stored artifact whose tag moved is dropped on
     /// read, so a hit can be real and still need the pass to run.
-    pub(crate) fn is_sufficient(&self, analysis: &TrackAnalysis) -> bool {
+    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
+        let analysis = progress.analysis();
         let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
         let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
         waveform && beat
@@ -91,21 +100,32 @@ impl TrackAnalysisCache {
 
     /// Look up a cached analysis: memory first, then the scope resource.
     /// `None` on a miss or an unreadable blob.
-    pub(crate) fn get(&mut self, target: &AnalysisTarget) -> Option<TrackAnalysis> {
-        if let Some(analysis) = self.mem.get(&target.key).and_then(|entries| {
+    pub(crate) fn get(
+        &mut self,
+        target: &AnalysisTarget,
+        source_sample_rate: NonZeroU32,
+    ) -> Option<AnalysisProgress> {
+        if let Some(progress) = self.mem.get(&target.key).and_then(|entries| {
             entries
                 .iter()
-                .find(|entry| entry.target.is_same(target))
-                .map(|entry| entry.analysis.clone())
+                .find(|entry| {
+                    entry.target.is_same(target)
+                        && entry.progress.analysis().source_sample_rate() == source_sample_rate
+                })
+                .map(|entry| entry.progress.clone())
         }) {
-            return Some(analysis);
+            return Some(progress);
         }
-        let analysis = self.load_disk(target)?;
-        self.remember(target.clone(), analysis.clone());
-        Some(analysis)
+        let progress = self.load_disk(target, source_sample_rate)?;
+        self.remember(target.clone(), progress.clone());
+        Some(progress)
     }
 
-    fn load_disk(&self, target: &AnalysisTarget) -> Option<TrackAnalysis> {
+    fn load_disk(
+        &self,
+        target: &AnalysisTarget,
+        source_sample_rate: NonZeroU32,
+    ) -> Option<AnalysisProgress> {
         let resource = &target.key;
         // Side-effect-free probe first: opening a missing key would create it.
         match target.store.resource_state(resource).ok()? {
@@ -115,55 +135,47 @@ impl TrackAnalysisCache {
         let reader = target.store.open_resource(resource, None).ok()?;
         let mut bytes = self.pools.get::<u8>();
         reader.read_into(&mut bytes).ok()?;
-        match TrackAnalysis::try_from((&bytes[..], &self.fingerprint)) {
-            Ok(analysis) => {
+        match AnalysisFile::parse(&bytes, &self.fingerprint) {
+            Ok(file)
+                if file.spec().source_sample_rate() == source_sample_rate
+                    && file.spec().matches_chunk_duration(self.chunk_duration) =>
+            {
                 debug!("track analysis cache: disk hit");
-                Some(analysis)
+                Some(file.into())
             }
+            Ok(_) => None,
             Err(e) => {
-                warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable blob");
+                warn!(%e, ?resource, "track analysis cache: ignoring stale/unreadable progress");
                 None
             }
         }
     }
 
-    /// Store freshly derived track analysis in both tiers.
-    pub(crate) fn put(&mut self, target: AnalysisTarget, analysis: TrackAnalysis) {
+    /// Store the latest publication in the bounded memory tier.
+    pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
+        let analysis = progress.analysis();
         // An analysis with no meaningful slots would be served forever as
         // emptiness on later hits; skip memoizing it in either tier.
-        if analysis.waveform().is_none() && analysis.beat().is_none() {
+        if analysis.waveform().is_none() && analysis.beat().is_none() && !progress.is_resumable() {
             return;
         }
-        // A pass publishes while it decodes, so a run cut short leaves a
-        // partial snapshot behind. Caching it would serve that partial result
-        // as the whole track on every later hit. A pass that ran out of
-        // reachable ranges is not that: what it holds is what the content
-        // gives, gaps the source refuses included.
-        if !analysis.is_settled() {
-            debug!(
-                completeness = ?analysis.waveform_completeness(),
-                "track analysis cache: unsettled snapshot left uncached"
-            );
-            return;
-        }
-        self.store_disk(&target, &analysis);
-        self.remember(target, analysis);
+        self.remember(target, progress);
     }
 
     /// Insert into the bounded memory tier, evicting the oldest entry past
     /// [`Consts::MAX_MEM_ENTRIES`]. Evicted entries are still served from disk.
-    fn remember(&mut self, target: AnalysisTarget, analysis: TrackAnalysis) {
+    fn remember(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let entries = self.mem.entry(target.key.clone()).or_default();
         if let Some(entry) = entries
             .iter_mut()
             .find(|entry| entry.target.is_same(&target))
         {
-            entry.analysis = analysis;
+            entry.progress = progress;
             return;
         }
 
         entries.push(MemoryEntry {
-            analysis,
+            progress,
             target: target.clone(),
         });
         self.order.push_back(target);
@@ -180,39 +192,6 @@ impl TrackAnalysisCache {
             }
         }
     }
-
-    fn store_disk(&self, target: &AnalysisTarget, analysis: &TrackAnalysis) {
-        let resource = &target.key;
-        let mut bytes = self.pools.get::<u8>();
-        if let Err(e) = analysis.write_to_buffer(&mut bytes) {
-            warn!(%e, ?resource, "track analysis cache: encode failed");
-            return;
-        }
-        if let Err(e) = write_resource(&target.store, resource, &bytes) {
-            warn!(%e, ?resource, "track analysis cache: blob write failed");
-        }
-    }
-}
-
-fn write_resource(
-    store: &AppStore,
-    resource: &ResourceKey,
-    bytes: &[u8],
-) -> Result<(), AssetsError> {
-    let writer = match store.acquire_resource(resource, None)? {
-        AcquisitionResult::Pending(writer) => writer,
-        AcquisitionResult::Ready(reader) => reader.reactivate()?,
-        _ => return Ok(()),
-    };
-    writer.write_at(0, bytes)?;
-    let final_len = u64::try_from(bytes.len()).map_err(|_| {
-        AssetsError::Io(IoError::new(
-            ErrorKind::InvalidInput,
-            "track analysis blob length does not fit u64",
-        ))
-    })?;
-    writer.commit(Some(final_len))?;
-    Ok(())
 }
 
 /// The token a stored blob carries: derived from the resource key the blob
@@ -230,24 +209,20 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, path::Path};
+    use std::num::NonZeroU32;
 
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
-            AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange,
-            TrackAnalysis, Waveform,
+            AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,
+            FrameRange, TrackAnalysis, Waveform,
         },
-        assets::{
-            AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
-            StorageBackend,
-        },
+        assets::{AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, StorageBackend},
         file::File,
         prelude::ResourceSrc,
     };
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
-    use url::Url;
 
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};
     use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
@@ -268,8 +243,16 @@ mod tests {
         NonZeroU32::new(44_100).expect("fixture rate is non-zero")
     }
 
+    fn chunk_seconds() -> NonZeroU32 {
+        NonZeroU32::new(16).expect("fixture chunk duration is non-zero")
+    }
+
     fn test_pools() -> Pools {
         pools::build().expect("valid app pool policy")
+    }
+
+    fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
+        AnalysisProgress::try_from(analysis).expect("settled fixture is valid progress")
     }
 
     fn wave() -> Waveform {
@@ -312,12 +295,6 @@ mod tests {
         analysis(Some(grid()), Some(wave()), 1_234_567)
     }
 
-    fn store_in(dir: &Path) -> AppStore {
-        AppStore::builder(test_pools())
-            .backend(StorageBackend::Disk { root: dir.into() })
-            .build()
-    }
-
     fn memory_store() -> AppStore {
         AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
@@ -348,7 +325,7 @@ mod tests {
     }
 
     fn analysis_cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fp(), test_pools())
+        TrackAnalysisCache::new(fp(), test_pools(), chunk_seconds())
     }
 
     #[kithara::test]
@@ -429,11 +406,14 @@ mod tests {
         let store = memory_store();
         let target = target(&store, "root_a");
         let mut cache = analysis_cache();
-        assert!(cache.get(&target).is_none());
-        cache.put(target.clone(), full_analysis());
-        let cached = cache.get(&target).expect("analysis must be cached");
-        assert_eq!(cached.waveform().expect("waveform cached").len(), 1);
-        assert!(cached.beat().is_some(), "beat grid rides along");
+        assert!(cache.get(&target, rate()).is_none());
+        cache.put(target.clone(), progress(full_analysis()));
+        let cached = cache.get(&target, rate()).expect("analysis must be cached");
+        assert_eq!(
+            cached.analysis().waveform().expect("waveform cached").len(),
+            1
+        );
+        assert!(cached.analysis().beat().is_some(), "beat grid rides along");
     }
 
     #[kithara::test]
@@ -447,20 +427,22 @@ mod tests {
         assert!(!first.is_same(&second));
 
         let mut cache = analysis_cache();
-        cache.put(first.clone(), analysis(None, Some(wave()), 111));
-        cache.put(second.clone(), analysis(None, Some(wave()), 222));
+        cache.put(first.clone(), progress(analysis(None, Some(wave()), 111)));
+        cache.put(second.clone(), progress(analysis(None, Some(wave()), 222)));
 
         assert_eq!(
             cache
-                .get(&first)
+                .get(&first, rate())
                 .expect("first store entry")
+                .analysis()
                 .source_frames(),
             111
         );
         assert_eq!(
             cache
-                .get(&second)
+                .get(&second, rate())
                 .expect("second store entry")
+                .analysis()
                 .source_frames(),
             222
         );
@@ -473,21 +455,23 @@ mod tests {
         let store = memory_store();
         let target = target(&store, "root_empty");
         let mut cache = analysis_cache();
-        cache.put(target.clone(), analysis(None, None, 0));
+        cache.put(target.clone(), progress(analysis(None, None, 0)));
         assert!(
-            cache.get(&target).is_none(),
+            cache.get(&target, rate()).is_none(),
             "an analysis with no slots must not be served from the cache"
         );
     }
 
     #[kithara::test]
-    fn memory_tier_is_bounded_with_disk_fallback() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = store_in(dir.path());
+    fn memory_tier_is_bounded() {
+        let store = memory_store();
         let mut cache = analysis_cache();
         let oldest = target(&store, "root_0");
         for i in 0..=Consts::MAX_MEM_ENTRIES {
-            cache.put(target(&store, &format!("root_{i}")), full_analysis());
+            cache.put(
+                target(&store, &format!("root_{i}")),
+                progress(full_analysis()),
+            );
         }
         assert!(
             cache.order.len() <= Consts::MAX_MEM_ENTRIES,
@@ -497,108 +481,11 @@ mod tests {
             !cache.mem.contains_key(oldest.key()),
             "oldest entry evicted"
         );
-        assert!(
-            cache.get(&oldest).is_some(),
-            "evicted entry is still served from the disk tier"
-        );
+        assert!(cache.get(&oldest, rate()).is_none());
     }
 
     #[kithara::test]
-    fn disk_survives_a_fresh_cache_instance() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = store_in(dir.path());
-        let target = target(&store, "root_b");
-        let mut writer = analysis_cache();
-        writer.put(target.clone(), full_analysis());
-
-        // A new cache with an empty memory tier must still find the blob.
-        let mut reader = analysis_cache();
-        let cached = reader.get(&target).expect("disk analysis must load");
-        assert_eq!(cached.waveform().expect("waveform persisted").len(), 1);
-        assert_eq!(
-            cached.beat().expect("beat grid persisted").artifact(),
-            &grid()
-        );
-    }
-
-    #[kithara::test]
-    fn artifact_is_a_scope_resource_and_dies_with_the_asset() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = store_in(dir.path());
-        let url = Url::parse("https://analysis.test.invalid/track.mp3").expect("valid test URL");
-        let discriminator = "track_root";
-        let target = target_for(&store, url.as_str(), Some(discriminator));
-        let mut cache = analysis_cache();
-        cache.put(target.clone(), full_analysis());
-
-        assert!(
-            matches!(
-                store.resource_state(target.key()),
-                Ok(AssetResourceState::Committed { .. })
-            ),
-            "analysis blob must be a committed resource under the track scope"
-        );
-        // Deleting the asset takes the analysis with it.
-        let source = AssetSource::Remote {
-            url,
-            discriminator: Some(discriminator.to_string()),
-        };
-        let scope = store
-            .scope::<File<AppPools>>(&source)
-            .expect("valid analysis scope");
-        scope.delete_asset().expect("asset deletes");
-        let mut fresh = analysis_cache();
-        assert!(
-            fresh.get(&target).is_none(),
-            "analysis must follow the track asset's lifecycle"
-        );
-    }
-
-    /// A stored blob carries the tags of whatever produced it, so a snapshot
-    /// from another configuration is what makes the read a miss.
-    fn stored_under(fingerprint: AnalysisFingerprint) -> TrackAnalysis {
-        let stored = full_analysis();
-        TrackAnalysis::builder()
-            .token(stored.token().clone())
-            .revision(stored.revision())
-            .source_sample_rate(stored.source_sample_rate())
-            .maybe_extent(stored.extent())
-            .settled(stored.is_settled())
-            .coverage(stored.coverage().clone())
-            .fingerprint(fingerprint)
-            .maybe_waveform(stored.waveform().cloned())
-            .maybe_beat(stored.beat().cloned())
-            .build()
-    }
-
-    #[kithara::test]
-    fn stale_fingerprint_blob_is_re_analysed() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = store_in(dir.path());
-        let target = target(&store, "root_fp");
-        let mut old = analysis_cache();
-        old.put(
-            target.clone(),
-            stored_under(fingerprint("other-wave", "other-beat")),
-        );
-
-        let mut current = analysis_cache();
-        assert!(
-            current.get(&target).is_none(),
-            "a blob from another analysis config must be a miss"
-        );
-        // Overwriting with the current config works.
-        current.put(target.clone(), full_analysis());
-        let mut fresh = analysis_cache();
-        assert!(fresh.get(&target).is_some());
-    }
-
-    #[kithara::test]
-    fn a_partial_snapshot_is_not_cached() {
-        let store = memory_store();
-        let target = target(&store, "root_partial");
-        let mut cache = analysis_cache();
-
+    fn an_unsettled_snapshot_without_resume_state_is_rejected() {
         let mut coverage = Coverage::default();
         coverage.insert(FrameRange::new(0, 500));
         let partial = TrackAnalysis::builder()
@@ -610,12 +497,11 @@ mod tests {
             .fingerprint(fp())
             .waveform(wave())
             .build();
-        assert_eq!(partial.waveform_completeness(), Some(0.5));
-
-        cache.put(target.clone(), partial);
+        assert_eq!(partial.coverage().frames(), 500);
+        assert_eq!(partial.extent(), Some(1_000));
         assert!(
-            cache.get(&target).is_none(),
-            "half a track must not be memoized as the whole of it"
+            AnalysisProgress::try_from(partial).is_err(),
+            "partial cache entries must carry opaque analyzer resume state"
         );
     }
 
@@ -641,37 +527,10 @@ mod tests {
             .build();
         assert!(!settled.is_complete(), "a gap is left at the head");
 
-        cache.put(target.clone(), settled);
+        cache.put(target.clone(), progress(settled));
         assert!(
-            cache.get(&target).is_some(),
+            cache.get(&target, rate()).is_some(),
             "a pass with nothing left to reach must not be re-run every launch"
-        );
-    }
-
-    #[kithara::test]
-    fn a_bucket_count_change_keeps_the_stored_beat_grid() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = store_in(dir.path());
-        let target = target(&store, "root_split");
-        let mut stored = analysis_cache();
-        stored.put(target.clone(), full_analysis());
-
-        // Only the waveform resolution moved: its own tag changes, the beat
-        // backend's does not.
-        let mut current = TrackAnalysisCache::new(
-            fingerprint("wave:native:max3000:v1", BEAT_TAG),
-            test_pools(),
-        );
-        let hit = current
-            .get(&target)
-            .expect("a beat-only hit must survive a waveform resolution change");
-        assert_eq!(
-            hit.beat().expect("the grid is still usable").artifact(),
-            &grid()
-        );
-        assert!(
-            hit.waveform().is_none(),
-            "the waveform was analysed at another resolution and must be dropped"
         );
     }
 }

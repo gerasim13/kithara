@@ -3,9 +3,24 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 
-use crate::{BeatAnalysisConfig, BeatArtifact, coverage::FrameRange};
+use crate::{
+    BeatAnalysisConfig, BeatArtifact, BlobError, coverage::FrameRange, progress::BeatResume,
+};
 
 pub(crate) type Detector = ();
+
+pub(crate) struct DetectionRequest;
+pub(crate) struct DetectionOutput;
+
+impl DetectionRequest {
+    pub(crate) fn detect(self, _detector: &mut Detector) -> DetectionOutput {
+        DetectionOutput
+    }
+}
+
+pub(crate) fn detect(request: DetectionRequest, detector: &mut Detector) -> DetectionOutput {
+    request.detect(detector)
+}
 
 pub(crate) struct Config<B>(PhantomData<B>);
 
@@ -54,12 +69,16 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn snapshot(
+    pub(crate) fn snapshot<S>(
         _slot: &mut Self,
+        _pools: &PoolRegion<S>,
         _detector: Option<&mut Detector>,
         _ending: bool,
         _extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    where
+        S: HasPool<f32>,
+    {
         None
     }
 
@@ -73,5 +92,37 @@ where
     ) where
         S: HasPool<f32>,
     {
+    }
+
+    pub(crate) fn prepare_detection<S>(
+        &mut self,
+        _pools: &PoolRegion<S>,
+        _trailing: bool,
+    ) -> Option<DetectionRequest>
+    where
+        S: HasPool<f32>,
+    {
+        None
+    }
+
+    pub(crate) fn apply_detection(&mut self, _output: DetectionOutput) {}
+
+    pub(crate) const fn write_resume(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub(crate) fn restore<S>(
+        &mut self,
+        _pools: &PoolRegion<S>,
+        resume: Option<BeatResume>,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        if resume.is_none() {
+            Ok(())
+        } else {
+            Err(BlobError::Corrupt)
+        }
     }
 }

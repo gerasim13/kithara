@@ -70,7 +70,9 @@ fn build_resampler(
         .backend(RubatoBackend::new())
         .settings(settings)
         .build();
-    create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
+    Box::new(
+        create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}")),
+    )
 }
 
 fn process_stereo(
@@ -144,8 +146,12 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             ];
 
             for quality in qualities {
-                let mut resampler =
-                    build_resampler(input_spec.sample_rate, output_rate, quality, test_frames);
+                let mut resampler = build_resampler(
+                    input_spec.sample_rate.get(),
+                    output_rate,
+                    quality,
+                    test_frames,
+                );
                 let input = create_planar(test_frames);
                 let mut output = create_output(&*resampler);
 
@@ -165,8 +171,8 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
         PerfScenario::PassthroughDetection => {
             let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
             let mut resampler = build_resampler(
-                spec.sample_rate,
-                spec.sample_rate,
+                spec.sample_rate.get(),
+                spec.sample_rate.get(),
                 ResamplerQuality::Good,
                 2048,
             );
@@ -224,7 +230,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
 
             for &size in &chunk_sizes {
                 let mut resampler = build_resampler(
-                    input_spec.sample_rate,
+                    input_spec.sample_rate.get(),
                     output_rate,
                     ResamplerQuality::High,
                     size,

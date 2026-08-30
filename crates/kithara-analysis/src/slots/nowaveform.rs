@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 
-use crate::waveform::bucket::Waveform;
+use crate::{BlobError, progress::WaveformResume, waveform::bucket::Waveform};
 
 #[derive(Default)]
 pub(crate) struct Config;
@@ -42,4 +42,23 @@ pub(crate) fn push<S>(
 
 pub(crate) fn snapshot(_slot: &mut Slot, _extent: Option<u64>) -> Option<Waveform> {
     None
+}
+
+pub(crate) const fn write_resume(_slot: &Slot) -> Option<Vec<u8>> {
+    None
+}
+
+pub(crate) fn restore<S>(
+    _slot: &mut Slot,
+    _pools: &PoolRegion<S>,
+    resume: Option<WaveformResume>,
+) -> Result<(), BlobError>
+where
+    S: HasPool<f32>,
+{
+    if resume.is_none() {
+        Ok(())
+    } else {
+        Err(BlobError::Corrupt)
+    }
 }

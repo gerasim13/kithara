@@ -20,7 +20,10 @@ use kithara_platform::{
 use kithara_queue::{QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
-use crate::{config::AppConfig, pools::AppQueueControl, waveform::TrackAnalysis};
+use crate::{
+    config::AppConfig, pools::AppQueueControl, wave_cache::AnalysisPersistence,
+    waveform::TrackAnalysis,
+};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -235,19 +238,26 @@ impl StateController {
     /// Build a controller and start the listener task that mirrors
     /// queue events into [`UiState`].
     ///
-    /// `cancel` must be a child of the app master, so the listener task
-    /// stops when the app shuts down.
+    /// `cancel` must be a child of the deck master, so the listener task
+    /// stops with its deck or the whole app.
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
-    pub fn new(
+    pub(crate) fn new(
         queue: AppQueueControl,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancelToken,
+        persistence: AnalysisPersistence,
     ) -> Self {
         let state = Arc::new(Mutex::new(UiState::new(&queue)));
 
-        spawn_listener(queue.clone(), Arc::clone(&state), config, cancel.clone());
+        spawn_listener(
+            queue.clone(),
+            Arc::clone(&state),
+            config,
+            cancel.clone(),
+            persistence,
+        );
 
         Self {
             queue,
@@ -418,9 +428,17 @@ fn spawn_listener(
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
+    persistence: AnalysisPersistence,
 ) {
     let rx = queue.subscribe();
-    task::spawn(crate::analysis::listen(queue, state, config, cancel, rx));
+    task::spawn(crate::analysis::listen(
+        queue,
+        state,
+        config,
+        cancel,
+        rx,
+        persistence,
+    ));
 }
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no

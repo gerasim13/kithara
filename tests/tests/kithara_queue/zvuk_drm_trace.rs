@@ -41,7 +41,7 @@ async fn zvuk_drm_master_playlist_trace() {
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
     let mut config = ctx.config.clone();
-    config.store = super::app_disk_asset_store(&ctx.config, cache.path());
+    config.store = super::source_helper::app_disk_asset_store(&ctx.config, cache.path());
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();

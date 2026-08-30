@@ -11,12 +11,10 @@ use kithara_platform::{
 use kithara_signal::{AudioChunk, AudioChunkInfo};
 use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState};
 use kithara_test_utils::kithara;
+use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Worker, WorkerConfig};
 
 use super::*;
-use crate::{
-    test_pools::sample_buffer,
-    worker::scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, TaskId},
-};
+use crate::{test_pools::sample_buffer, worker::scheduler::ServiceClass};
 
 fn empty_chunk() -> AudioChunk {
     AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]))
@@ -134,7 +132,6 @@ where
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         preload_gate: Arc::clone(&preload_gate),
         seek_obs,
-        service_class: Arc::new(AtomicServiceClass::new(ServiceClass::Audible)),
         source,
         retired_chunk: None,
         runtime: DecoderRuntime {
@@ -165,6 +162,44 @@ fn wait_for_chunks(
     received
 }
 
+struct PlaybackScheduler {
+    dispatcher: Dispatcher,
+    _worker: Worker,
+}
+
+impl PlaybackScheduler {
+    fn start(name: String, cancel: CancelToken, capacity: std::num::NonZeroUsize) -> Self {
+        let worker = Worker::new(WorkerConfig::new().with_cancel(cancel));
+        let dispatcher = worker.dispatcher(
+            DispatcherConfig::new(name)
+                .with_capacity(capacity)
+                .with_observer(crate::worker::scheduler::PlaybackObserver::default()),
+        );
+        Self {
+            dispatcher,
+            _worker: worker,
+        }
+    }
+
+    fn register<S>(&self, node: DecoderNode<S>) -> Result<TaskHandle, kithara_worker::TaskError>
+    where
+        S: AudioSource<Chunk = AudioChunk>,
+    {
+        self.dispatcher.register(
+            TaskConfig::new().with_priority(ServiceClass::Audible.into()),
+            |_| node,
+        )
+    }
+
+    fn unregister(&self, task: TaskHandle) {
+        drop(task);
+    }
+
+    fn wake_handle(&self) -> kithara_worker::Wake {
+        self.dispatcher.wake_handle()
+    }
+}
+
 fn test_scheduler() -> PlaybackScheduler {
     PlaybackScheduler::start(
         "kithara-play-worker-test".into(),
@@ -181,7 +216,7 @@ fn scheduler_with_capacity(capacity: usize) -> PlaybackScheduler {
     )
 }
 
-fn register<S>(handle: &PlaybackScheduler, node: DecoderNode<S>) -> TaskId
+fn register<S>(handle: &PlaybackScheduler, node: DecoderNode<S>) -> TaskHandle
 where
     S: AudioSource<Chunk = AudioChunk>,
 {

@@ -593,7 +593,7 @@ const RENDER_POLL: Duration = Duration::from_millis(20);
 /// window, and only silence lasting [`ENGINE_PROGRESS_BUDGET`] is the
 /// stall this scenario hunts.
 async fn render_audio_frames(
-    session: &OfflineSession,
+    session: &OfflineSession<AppPools>,
     queue: &Queue<AppPools>,
     target_frames: usize,
     label: &str,
@@ -625,7 +625,7 @@ async fn render_audio_frames(
 /// than by an iteration count: a render block costs microseconds here
 /// (see [`render_audio_frames`]), so counting blocks bounds nothing.
 async fn wait_for_handover(
-    session: &OfflineSession,
+    session: &OfflineSession<AppPools>,
     queue: &Queue<AppPools>,
     track_id: kithara::events::TrackId,
     label: &str,
@@ -712,11 +712,11 @@ async fn run_multi_track_select_seek_end_hang(urls: &[&str], label: &str) {
     use kithara::play::{SeekOutcome, SessionDispatcher};
 
     let prod = build_prod_ctx();
-    let session = Arc::new(OfflineSession::new_manual());
+    let session = Arc::new(OfflineSession::<AppPools>::new_manual());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(prod.config.worker.clone())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<AppPools>>)
             .build(),
     );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));

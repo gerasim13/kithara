@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
@@ -8,8 +8,9 @@ use tracing::warn;
 
 use super::{AnalysisFingerprint, AnalysisToken, TrackAnalysis};
 use crate::{
-    BeatSnapshot, BeatState,
+    AnalysisProgress, BeatSnapshot, BeatState, BlobError,
     coverage::{Coverage, FrameRange},
+    progress::{AnalysisResume, ResumeState},
     slots::{
         beat::{self, Slot},
         waveform,
@@ -24,8 +25,6 @@ pub(crate) enum Ingest {
     OutOfExtent,
 }
 
-#[derive(fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
 pub(crate) struct TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
@@ -37,7 +36,7 @@ where
     pub(super) extent: Option<u64>,
     pub(super) revision: u64,
     pub(super) settled: bool,
-    #[field(get, copy, vis = "pub(crate)")]
+    pub(super) ended: bool,
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) token: AnalysisToken,
     pub(super) pools: PoolRegion<S>,
@@ -65,6 +64,14 @@ where
 
     pub(crate) fn covered_frames(&self) -> u64 {
         self.coverage.frames()
+    }
+
+    pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectionRequest> {
+        self.beat.prepare_detection(&self.pools, trailing)
+    }
+
+    pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput) {
+        self.beat.apply_detection(output);
     }
 
     pub(crate) fn push(
@@ -104,7 +111,7 @@ where
         range: FrameRange,
         detector: Option<&mut beat::Detector>,
     ) -> Ingest {
-        if self.extent.is_some_and(|extent| range.end() > extent) {
+        if self.ended && self.extent.is_some_and(|extent| range.end() > extent) {
             warn!(
                 start = range.start(),
                 end = range.end(),
@@ -112,6 +119,9 @@ where
                 "analysis: range lies beyond the source extent; dropped"
             );
             return Ingest::OutOfExtent;
+        }
+        if self.extent.is_some_and(|extent| range.end() > extent) {
+            self.extent = Some(range.end());
         }
         if self.coverage.contains(range) {
             return Ingest::Covered;
@@ -150,12 +160,13 @@ where
                 self.extent
                     .map_or(frontier, |planned| planned.max(frontier)),
             );
+            self.ended = true;
         }
         self.revision = self.revision.saturating_add(1);
 
         let waveform = waveform::snapshot(&mut self.waveform, self.extent);
         let state = self.beat_state();
-        let beat = Slot::snapshot(&mut self.beat, detector, ending, self.extent)
+        let beat = Slot::snapshot(&mut self.beat, &self.pools, detector, ending, self.extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
         TrackAnalysis::builder()
@@ -169,6 +180,52 @@ where
             .maybe_waveform(waveform)
             .maybe_beat(beat)
             .build()
+    }
+
+    pub(crate) fn progress(
+        &mut self,
+        detector: Option<&mut beat::Detector>,
+        ending: bool,
+        chunk_frames: NonZeroU64,
+    ) -> AnalysisProgress {
+        let analysis = self.snapshot(detector, ending);
+        let resume = if analysis.is_settled() {
+            None
+        } else {
+            let waveform = waveform::write_resume(&self.waveform);
+            let beat = self.beat.write_resume();
+            Some(AnalysisResume::capture(
+                chunk_frames,
+                waveform.as_deref(),
+                beat.as_deref(),
+            ))
+        };
+        AnalysisProgress::new(analysis, resume)
+    }
+
+    pub(crate) fn restore(
+        &mut self,
+        analysis: &TrackAnalysis,
+        resume: ResumeState,
+        chunk_frames: NonZeroU64,
+    ) -> Result<(), BlobError> {
+        if analysis.is_settled()
+            || analysis.extent().is_none()
+            || analysis.source_sample_rate() != self.source_sample_rate
+            || analysis.token() != &self.token
+            || analysis.fingerprint() != &self.fingerprint
+            || resume.chunk_frames != chunk_frames
+        {
+            return Err(BlobError::Corrupt);
+        }
+        waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
+        self.beat.restore(&self.pools, resume.beat)?;
+        self.coverage = analysis.coverage().clone();
+        self.extent = analysis.extent();
+        self.revision = analysis.revision();
+        self.settled = false;
+        self.ended = false;
+        Ok(())
     }
 
     fn beat_state(&self) -> BeatState {

@@ -7,7 +7,7 @@ use kithara::{
         effects::eq::generate_log_spaced_bands,
     },
 };
-use kithara_platform::sync::Arc;
+use kithara_platform::{CancelToken, sync::Arc};
 use kithara_queue::QueueConfig;
 
 use crate::{
@@ -80,8 +80,9 @@ fn midpoint(low: GainDb, high: GainDb) -> GainDb {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeckId(pub usize);
 
-/// One app deck: its own player, queue and tempo controls.
+/// One app deck: its own cancellation subtree, player, queue and tempo controls.
 pub struct Deck {
+    cancel: CancelToken,
     pub queue: HostOwned<AppQueue>,
     pub timestretch: Arc<StretchControls>,
     pub id: DeckId,
@@ -95,10 +96,11 @@ impl Deck {
     /// # Errors
     /// Returns [`PlayError`] when the Host rejects the new deck.
     pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
+        let cancel = config.shutdown.child();
         let timestretch = StretchControls::new(1.0);
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .cancel(config.shutdown.child())
+                .cancel(cancel.clone())
                 .crossfade_duration(config.crossfade_seconds)
                 .eq_layout(generate_log_spaced_bands(config.eq_bands))
                 .timestretch(Arc::clone(&timestretch))
@@ -109,16 +111,27 @@ impl Deck {
             QueueConfig::builder()
                 .player(player)
                 .store(config.store.clone())
-                .cancel(config.shutdown.child())
+                .cancel(cancel.clone())
                 .build(),
         );
         let queue = host.insert(queue)?;
 
         Ok(Self {
+            cancel,
             queue,
             timestretch,
             id,
         })
+    }
+
+    pub(crate) fn cancel_child(&self) -> CancelToken {
+        self.cancel.child()
+    }
+}
+
+impl Drop for Deck {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 
@@ -299,16 +312,33 @@ mod tests {
     use crate::pools::{self, AppWorker};
 
     fn one_deck(id: DeckId, host: &mut AppHost, worker: &AppWorker) -> Deck {
+        one_deck_under(id, host, worker, &CancelToken::root())
+    }
+
+    fn one_deck_under(
+        id: DeckId,
+        host: &mut AppHost,
+        worker: &AppWorker,
+        parent: &CancelToken,
+    ) -> Deck {
+        let cancel = parent.child();
         let timestretch = StretchControls::new(1.0);
         let player = PlayerImpl::new(
             PlayerConfig::builder()
+                .cancel(cancel.clone())
                 .timestretch(Arc::clone(&timestretch))
                 .worker(worker.clone())
                 .build(),
         );
-        let queue = AppQueue::new(QueueConfig::builder().player(player).build());
+        let queue = AppQueue::new(
+            QueueConfig::builder()
+                .player(player)
+                .cancel(cancel.clone())
+                .build(),
+        );
         let queue = host.insert(queue).expect("host accepts the test deck");
         Deck {
+            cancel,
             queue,
             timestretch,
             id,
@@ -430,6 +460,25 @@ mod tests {
         assert_eq!(levels.len(), 2);
         // Deck 2 kept its trim and moved onto the B bus (position 1).
         assert_eq!(set.mix().strips[1].trim, 0.25);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn removing_a_deck_cancels_only_its_subtree() {
+        let app = CancelToken::root();
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
+        let worker = worker();
+        let decks = (0..2)
+            .map(|index| one_deck_under(DeckId(index), &mut host, &worker, &app))
+            .collect();
+        let mut set = DeckSet::new(host, decks);
+        let removed = set.decks()[0].cancel_child();
+        let survivor = set.decks()[1].cancel_child();
+
+        set.remove(DeckId(0)).expect("remove deck 0");
+
+        assert!(removed.is_cancelled());
+        assert!(!survivor.is_cancelled());
+        assert!(!app.is_cancelled());
     }
 
     #[kithara::test(native, flash(false))]

@@ -14,9 +14,8 @@ publication remain in `kithara-audio`; playback scheduling and effects remain in
 
 The crate owns analysis state, scheduling, waveform/beat DSP, and pure versioned
 bytes. It does not own `AssetStore` I/O, cache-key policy, or eviction: the
-application persists and reads the composite `TrackAnalysis` bytes. The
-caller-owned `Vec<u8>` writer remains available, while `write_to_buffer` reports
-checked `ByteBuffer` growth failures through `BlobError`.
+application persists and reads the composite `TrackAnalysis` bytes through the
+caller-owned `Vec<u8>` writer.
 
 `BeatArtifact` is identity-free detector output, not a live beat grid. The only
 live grid contract is `kithara-warp::BeatGrid`, whose owning Track/Player
@@ -161,20 +160,24 @@ reported as no longer beat-analyzable. Downmix and grid-cleanup scratch stay as
 guards for the pass lifetime; no lower component constructs or stores another
 pool facade.
 
-`AnalysisWorker` is the public handle over the private `AnalysisRunner` and one
-long-lived `AnalysisNode<B, S>` (absent on wasm32). The backend and pool-schema
-types are consumed by `new` and stay inside that node rather than leaking into
-the handle. The worker neither constructs nor shares the playback scheduler.
-`open` gives every pass a child of the worker's
-job scope; callers may clone that pass token for the reader before submitting
-the pass. Results arrive on a `watch` channel: waveform first, then waveform plus
-beat when configured; on failure or cancellation the sender drops without a
-value. The node owns its job receiver, task FSM, and one
-`Box<dyn BeatDetector>` — detector ownership is never shared or locked. `Decode`
-consumes at most one chunk per tick. The runner park is flash-visible and
-`analyze` wakes it after enqueueing; there is no sleep, backoff loop, or poll
-watcher. `AnalysisObserver` retains the no-progress watchdog and classifies
-returned heavy ticks against a 120-second budget.
+`AnalysisWorker` owns one `kithara-worker` dispatcher and one long-lived domain
+`AnalysisNode<B, S>` task (absent on wasm32). `AnalysisWorkerConfig` carries the
+analyzer builder, parent cancellation, optional shared base `Worker`, dispatcher
+budgets, task priority, and task compute budget. Without a supplied base it
+creates and retains a standalone base worker. With a supplied base, analysis
+cancellation is OR-composed only onto its dispatcher, so it cannot cancel sibling
+domain dispatchers. The backend and pool-schema types are consumed by `new` and
+stay inside the node rather than leaking into the handle.
+
+`open` gives every pass a child of the long-lived task token; callers may clone
+that pass token for the reader before submitting the pass. Results arrive on a
+`watch` channel: waveform first, then waveform plus beat when configured; on
+failure or cancellation the sender drops without a value. The node owns its job
+receiver, task FSM, and one `Box<dyn BeatDetector>` — detector ownership is never
+shared or locked. `Decode` consumes at most one chunk per tick. `analyze` wakes
+the dispatcher after enqueueing; there is no sleep, backoff loop, or poll
+watcher. `AnalysisObserver` consumes dispatcher events, retains the no-progress
+watchdog, and classifies returned heavy ticks against a 120-second budget.
 
 **Feature seams.** There is no single `analysis` feature. Artifact types are
 unconditional because analysis and cache keys use them even when a pass is
@@ -226,6 +229,36 @@ migration. Untrusted length prefixes are bounded by `MAX_PREALLOC`. `BlobError`
 is the public error; `Blob`, `Reader`, and `Writer` stay internal. This codec is
 pure bytes: `kithara-app` owns `AssetStore` reads/writes, cache identity, and
 policy.
+
+## Progressive analysis file
+
+`AnalysisFile` is the durable, bounded container for one track's progressive
+`TrackAnalysis`. `kithara-analysis` owns only the byte layout, validation, and
+an ordered `AnalysisFileUpdate`; it owns no filesystem, `AssetStore`, writer
+thread, cancellation, or observability. The application owns those lifecycle
+boundaries.
+
+- The fixed header records format version, source rate, stable extent, fixed
+  chunk size, analyzer fingerprints, latest revision/settled state, and the
+  exact payload bounds. A one-byte-per-chunk completion index follows it.
+- Exactly one current v6 `TrackAnalysis` payload follows the index at a fixed
+  offset. A newer generation replaces that payload and commits its exact new
+  length; it does not retain unread historical snapshots.
+- An update writes initial header/index bytes only for a new resource, writes
+  the complete payload, applies newly completed index bytes, and patches the
+  header last. A replacement update first seeds its fixed header/index prefix
+  from the prior committed generation; old payload bytes are not copied.
+  Publication is the application's successful atomic
+  `AssetStore` commit at `final_len`, never an intermediate write. Production
+  USDT observation belongs after that commit and is not a correctness signal.
+- A fixed index requires a known stable extent. Until a worker publication has
+  that extent, `AnalysisFileSpec::for_analysis` returns `UnknownExtent` and the
+  snapshot remains memory-only.
+- Restore requires the active analyzer fingerprint. The validated header then
+  supplies the stored axis, extent, and chunk frames; the application must use
+  `AnalysisFileSpec::matches_chunk_duration` to reject a coherent file created
+  under another configured duration, and validate axis/extent once current
+  source metadata is available.
 
 ## Guardrails
 

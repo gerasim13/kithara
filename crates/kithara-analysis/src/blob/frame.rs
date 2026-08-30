@@ -16,8 +16,8 @@ pub enum BlobError {
     /// A length cannot be represented by the on-disk format.
     #[error("analysis blob is too large")]
     TooLarge,
-    /// The checked pooled output buffer could not grow.
-    #[error("analysis blob buffer allocation failed: {0}")]
+    /// A pooled analysis buffer could not grow under its region budget.
+    #[error("analysis buffer allocation failed: {0}")]
     Pool(#[from] kithara_bufpool::PoolError),
     /// Truncated, mis-sized, trailing garbage, or carrying an invalid value.
     #[error("blob is corrupt")]

@@ -87,6 +87,10 @@ One position indexes every list a deck appears in: `Decks` is built from `DeckSe
 `ViewCache::refresh` resizes against `Decks`, so the address tree joins them by position alone. Changing the
 session's deck list means rebuilding the view model with it; no key survives them drifting apart.
 
+Each `Deck` owns one cancellation token below the app shutdown token. Its player and queue receive independent
+children; its state controller and analysis listener share a third child. Dropping a deck cancels that subtree
+without cancelling the app root or a sibling deck.
+
 The first segment of a control path names a layout instance and `gui::ui::events::route` is the host's own list
 of them, held against the documents by unit test, so an instance the documents mint cannot go unanswered.
 
@@ -199,30 +203,37 @@ it to `iced` as `min_size`.
 ## Track analysis cache
 
 Progressive source analysis derives the coloured waveform and an optional beat grid / BPM estimate from decoded
-ranges, so the combined result is memoized (`wave_cache.rs`). Each deck's `StateController`
-spawns one `analysis::listen` task owning one `AnalysisController` and one `TrackAnalysisCache`, so the cache
-needs no synchronization. Two identity spaces are kept separate on purpose:
+ranges, so each deck's `StateController` owns one `AnalysisController` and one in-memory
+`TrackAnalysisCache`. The GUI frontend creates one app-wide `AnalysisPersistence` actor and clones its handle
+into every controller. The actor serializes a bounded stream of writes through `AssetStore`; controllers never
+write analysis resources themselves. Two identity spaces are kept separate on purpose:
 
 - **`TrackId`** (session-scoped, from `kithara-events` via the queue) — stale guard for an in-flight run and the
   "still current" check at publish. Never persisted.
 - **`AnalysisTarget`** (the track's `AssetStore` plus the `ResourceKey` derived by `ResourceConfig::asset_key`)
   — cross-session cache identity. `is_same` compares key *and* store, so one key in two stores is two entries.
 
-`plan_analysis` returns `Skip` when the target is already displayed, `Serve` on a cache hit, and `Decode` only
-on a genuine miss; only a `Decode` on the current track wipes the visible analysis first. `pump` refuses to
-start a second run while one is in flight and clears the pending queue outright when the runner has no
-analyzers. `on_track_changed` puts the current track at the front and preempts an in-flight background run;
-`pending_order` is current-track-first, then list order. `AnalysisController::commit` caches the finished run
-under its target and only then publishes it if the run's `TrackId` is still current — a stale run still lands in
-the cache. A track whose source yields no `ResourceConfig` is skipped, and so is a source whose layout rejects the derived
-key — after clearing the visible analysis when it is the current track. The `Option<AnalysisTarget>` seam means
-an unkeyable run is decoded only while its track is current and is never cached.
+`plan_analysis` returns `Serve` for a memory or disk hit and `Decode` for a genuine miss. A resumable or
+configuration-incomplete hit is served immediately and then refilled from its missing ranges; only a current
+track without a served result clears the visible analysis. `pump` starts no second run while the controller is
+active and clears the pending queue when the runner has no analyzers. `on_track_changed` puts the current track
+first and preempts a different running pass. The old pass stays in `Running` until its result channel closes,
+then its last checkpoint is cached and published if still current. The controller enters `Committing` and does
+not start the next pass until durable persistence acknowledges that checkpoint. Intermediate checkpoints update
+memory and the current deck immediately and are offered to persistence without blocking; a full queue may drop
+only that intermediate write.
+
+`pending_order` is current-track-first, then list order. A track whose source yields no `ResourceConfig` is
+skipped, and so is a source whose layout rejects the derived key. The `Option<AnalysisTarget>` seam means an
+unkeyable run is decoded only while its track is current and is never cached or persisted.
 
 The memory tier is bounded by `Consts::MAX_MEM_ENTRIES` (64) in insertion order; evicted entries are still
-served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier — it would
-otherwise be served forever as emptiness. Disk reads probe `AssetStore::resource_state` first, because opening a
-missing key would create it. The disk tier stores one blob per track as a resource of the track's asset scope
-(`analysis/track.analysis`), so the artifact is evicted, moved and deleted together with the cached audio bytes.
+served from disk. An analysis with neither waveform nor beat grid is memoized in neither tier. Disk reads probe
+`AssetStore::resource_state` first, because opening a missing key would create it. The disk tier stores one
+progressive `AnalysisFile` per track in the track's asset scope (`analysis/track.analysis`), so the artifact is
+evicted, moved and deleted with the cached audio bytes. Its fixed header and completion index identify covered
+chunks, while each committed generation replaces the current payload. Restore validates the analyzer
+fingerprint, source rate, extent, and configured chunk duration before resuming only missing ranges.
 
 Invalidation has two levers. The composite codec version in `kithara-analysis` must be bumped whenever its framing
 or the waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written

@@ -1,4 +1,4 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, num::NonZeroU32, path::PathBuf};
 
 use bon::Builder;
 use kithara::{
@@ -7,6 +7,7 @@ use kithara::{
 };
 use kithara_drm::KeyProcessorRegistry;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
+use kithara_worker::Worker;
 use url::Url;
 
 use crate::{
@@ -65,8 +66,15 @@ pub struct AppConfig {
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
+    /// Fixed source duration covered by one progressive analysis chunk.
+    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
+    pub analysis_chunk_seconds: NonZeroU32,
     /// One playback worker shared by every deck in this app session.
     pub worker: AppWorker,
+    /// Optional base runtime shared by playback, analysis, and app-owned
+    /// background dispatchers. Production supplies one; focused consumers may
+    /// let each domain worker own its standalone base.
+    pub base_worker: Option<Worker>,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
@@ -131,6 +139,10 @@ impl fmt::Debug for AppConfig {
             .field("tracks", &self.tracks)
             .field("worker", &self.worker)
             .field(
+                "base_worker_cancelled",
+                &self.base_worker.as_ref().map(Worker::is_cancelled),
+            )
+            .field(
                 "should_accept_invalid_certs",
                 &self.should_accept_invalid_certs,
             )
@@ -139,6 +151,7 @@ impl fmt::Debug for AppConfig {
             .field("waveform_max_buckets", &self.waveform_max_buckets)
             .field("eq_bands", &self.eq_bands)
             .field("beat_analysis", &self.beat_analysis)
+            .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
             .field("size_probe_method", &self.size_probe_method)
             .finish_non_exhaustive()
     }

@@ -96,7 +96,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
     super::app_track_source(
         url,
         &ctx.config,
-        super::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        super::source_helper::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         AbrMode::Auto(None),
         None,

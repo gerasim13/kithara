@@ -109,7 +109,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
             .worker(kithara::play::PlayWorker::new(
                 kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
             .build(),
     );
     let queue = Queue::new(

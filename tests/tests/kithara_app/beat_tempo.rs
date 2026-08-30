@@ -22,6 +22,7 @@ use num_traits::ToPrimitive;
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
 /// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
+const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
 struct Consts;
 
@@ -75,10 +76,13 @@ async fn analyse(path: &str) -> TrackAnalysis {
 
     let mut runner = TrackAnalysisRunner::new(
         &CancelToken::never(),
+        None,
+        CHUNK_SECONDS,
         Consts::BUCKETS,
         BeatAnalysisConfig::default(),
         pools,
-    );
+    )
+    .unwrap_or_else(|error| panic!("analysis runner task was not admitted: {error}"));
     let mut rx = runner.analyze(config, "integration-track".into(), RATE, drop);
 
     // The runner emits the envelope before the beat grid.
@@ -87,6 +91,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         last = rx.borrow().clone();
     }
     last.unwrap_or_else(|| panic!("{path} produced no analysis at all"))
+        .into()
 }
 
 async fn grid_of(path: &str) -> (BeatArtifact, f64) {

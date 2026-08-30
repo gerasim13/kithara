@@ -1,11 +1,12 @@
-use std::error::Error;
+use std::{error::Error, num::NonZeroUsize};
 
 use iced::{Size, window::Settings};
 use kithara_platform::{
     sync::{Arc, Mutex},
-    tokio,
+    time::Duration,
 };
 use kithara_ui::render::fonts;
+use kithara_worker::{DispatcherConfig, TaskConfig};
 #[cfg(feature = "masonry")]
 use num_traits::cast::AsPrimitive;
 
@@ -19,6 +20,7 @@ use crate::{
     config::AppConfig,
     deck::{DeckId, DeckSet},
     state::StateController,
+    wave_cache::{AnalysisPersistence, persistence::AnalysisPersistenceConfig},
 };
 
 /// Error returned by the GUI frontend.
@@ -166,9 +168,18 @@ impl GuiFrontend {
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
         let config = self.config.clone();
         let ui = AppUi::new(Package::load(config.ui_package.as_deref())?)?;
-
-        let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
-        let _guard = rt.enter();
+        let base_worker = config
+            .base_worker
+            .clone()
+            .ok_or("GUI analysis persistence requires the app base worker")?;
+        let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
+            base_worker,
+            config.worker.pools().clone(),
+            NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+            Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
+            DispatcherConfig::new("kithara-analysis-persistence"),
+            TaskConfig::new(),
+        ))?;
 
         // The CLI tracks start on the first deck; every deck gets its own
         // controller, listener and analysis worker.
@@ -185,7 +196,8 @@ impl GuiFrontend {
                     deck.queue.control().clone(),
                     Arc::clone(&deck.timestretch),
                     config.clone(),
-                    config.shutdown.child(),
+                    deck.cancel_child(),
+                    persistence.clone(),
                 ));
                 (deck.id, controller)
             })

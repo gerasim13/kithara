@@ -404,14 +404,14 @@ pub(super) fn trace_stream_info<B: AudioBackend, S>(
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    };
+    use std::{num::NonZeroU32, sync::atomic::AtomicBool};
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
     use kithara_events::EventBus;
-    use kithara_platform::sync::Arc;
+    use kithara_platform::sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    };
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};

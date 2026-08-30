@@ -2265,6 +2265,10 @@ open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
     }
     /**
      * Create an asset store rooted at `root` with a snapshot of `layouts`.
+     *
+     * # Panics
+     *
+     * Panics if Kithara's built-in FFI buffer pools cannot be initialized.
      */
 public convenience init(root: String?, layouts: FfiAssetLayoutRegistry) {
     let handle =
@@ -8656,7 +8660,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 1980) {
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 56225) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {

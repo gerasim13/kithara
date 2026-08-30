@@ -43,14 +43,14 @@ consumer (currently `kithara-app`).
 
 ## Key types
 
-- `AnalyzerBuilder` / `AnalysisWorker` — configure and run a progressive
-  per-track pass.
+- `AnalyzerBuilder` / `AnalysisWorkerConfig` / `AnalysisWorker` — configure
+  analysis and run progressive per-track passes on a domain dispatcher.
 - `AnalysisProducer` — non-blocking decoded-chunk ingress for an open pass.
 - `TrackAnalysis` — self-contained published snapshot: token, revision, source
   axis, coverage, fingerprint, waveform, and beat artifact.
 - `Waveform` / `BeatArtifact` — analysis artifacts with versioned byte codecs.
-- `BlobError` - format, corruption, and checked pooled-growth errors from the
-  artifact and composite byte codecs.
+- `BlobError` - format, corruption, and pooled restore errors from the artifact
+  and composite byte codecs.
 
 ## Ownership
 
@@ -62,8 +62,8 @@ pool is rejected at compile time. Analysis scratch and
 `kithara-resampler::MonoStream` buffers therefore compete under the same hard
 region budget as the rest of the application instead of receiving a separate
 pool. Persisting a `TrackAnalysis` through `AssetStore`, choosing cache keys,
-and eviction policy remain application responsibilities. `write_to` preserves
-caller-owned `Vec<u8>` output; `write_to_buffer` keeps growth under pool policy.
+and eviction policy remain application responsibilities. `write_to` appends to
+caller-owned `Vec<u8>` output.
 
 See [CONTEXT.md](CONTEXT.md) for the scheduling, ingest, waveform, and codec
 contracts.

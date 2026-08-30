@@ -31,7 +31,7 @@ mod kithara_play {
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_queue {
     mod source_helper;
-    use source_helper::app_track_source;
+    pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 
     mod false_eof_rapid_scrub;
     mod real_playlist;

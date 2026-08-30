@@ -3,7 +3,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisProducer, AnalysisWorker, AnalyzerBuilder},
+    analysis::{AnalysisProducer, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     audio::AudioObserveError,
     platform::CancelToken,
     resampler::NoResamplerBackend,
@@ -48,9 +48,13 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates() {
     let rate = NonZeroU32::new(RATE).expect("test rate is non-zero");
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
-        &cancel,
-        AnalyzerBuilder::<NoResamplerBackend, TestPools>::new(pools()).with_waveform(64),
-    );
+        AnalysisWorkerConfig::for_builder(
+            AnalyzerBuilder::<NoResamplerBackend, TestPools>::new(pools()).with_waveform(64),
+        )
+        .cancel(cancel)
+        .build(),
+    )
+    .expect("analysis worker task is admitted");
     let (_analysis, mut producer) =
         worker.analyze(stalled_reader(spec(rate)), "rt-track".into(), rate);
 

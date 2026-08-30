@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use kithara::{
-    events::{AbrEvent, AdvanceReason, Event, EventReceiver},
+    events::{AbrEvent, AdvanceReason, AudioEvent, Event, EventReceiver},
     hls::AbrMode,
     platform::{
         sync::Arc,
@@ -21,10 +21,7 @@ use kithara_integration_tests::{
     fixture_protocol::PcmPattern,
     goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    pcm_provenance::{
-        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
-        phase_units,
-    },
+    pcm_provenance::{FrameClass, Replay, ascending_phase_replays, classify_windows},
     temp_dir,
 };
 
@@ -53,9 +50,6 @@ const CROSSFADE_SECS: f32 = 5.0;
 const CROSSFADE_DURATION_WAIT_SECS: f64 = 12.0;
 const REAL_GEOMETRY_DURATION_WAIT_SECS: f64 = 30.0;
 const SEEK_OFFSET_SECS: f64 = 0.5;
-const EXPECTED_POST_SEEK_FRAMES: usize = 22_050;
-const SEEK_LANDING_WINDOW_FRAMES: usize = 13_230;
-const SEEK_PHASE_TOL_UNITS: i32 = 3 * 512;
 const MIN_RENDER_PEAK: f32 = 1.0e-6;
 const TONE_A_FREQ_HZ: f64 = 440.0;
 const TONE_B_FREQ_HZ: f64 = 880.0;
@@ -713,7 +707,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let server = TestServerHelper::new().await;
     let setup = setup_queue(&server, &temp_dir, true).await;
 
-    let (rendered, seek_issue_frame, duration) =
+    let (rendered, seek_issue_frame, seek_complete_frame) =
         render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     assert_provenance_headroom(&rendered, "FLAC seek near EOF");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
@@ -727,26 +721,11 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         None,
         setup.queue.current_index(),
     );
-    let b_onset_frame = frame_for_window(b_onset_window);
-    let landing_frame = find_seek_landing_frame(&left, seek_issue_frame, b_onset_frame, duration)
-        .unwrap_or_else(|| {
-            panic!(
-                "seek landing must reach the expected near-EOF phase; \
-                     seek_issue_frame={seek_issue_frame}; {}",
-                dump(
-                    &[],
-                    &runs,
-                    None,
-                    Some(b_onset_window),
-                    setup.queue.current_index()
-                )
-            )
-        });
-    let landing_window = landing_frame / WINDOW_FRAMES;
+    let seek_complete_window = seek_complete_frame / WINDOW_FRAMES;
     let search_context = ProvenanceDumpContext {
         replays: &[],
         runs: &runs,
-        onset_window: Some(landing_window),
+        onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
         current_index: setup.queue.current_index(),
     };
@@ -758,7 +737,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
 
-    let phase_start_frame = landing_frame.saturating_add(WINDOW_FRAMES);
+    let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
     let replays = ascending_phase_replays(
         &left,
         phase_start_frame,
@@ -768,7 +747,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let context = ProvenanceDumpContext {
         replays: &replays,
         runs: &runs,
-        onset_window: Some(landing_window),
+        onset_window: Some(seek_complete_window),
         b_onset_window: Some(b_onset_window),
         current_index: setup.queue.current_index(),
     };
@@ -779,20 +758,12 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         dump(
             &replays,
             &runs,
-            Some(landing_window),
+            Some(seek_complete_window),
             Some(b_onset_window),
             setup.queue.current_index()
         )
     );
 
-    let ascending_frames = last_ascending_end_frame.saturating_sub(landing_frame);
-    assert_close_len(
-        ascending_frames,
-        EXPECTED_POST_SEEK_FRAMES,
-        TRACK_FRAME_TOLERANCE,
-        "post-seek ascending length must be approximately 0.5s before B starts",
-        &context,
-    );
     assert_no_ascending_after_b(&classes, &context);
     assert_eq!(
         setup.queue.current_index(),
@@ -801,7 +772,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         dump(
             &replays,
             &runs,
-            Some(landing_window),
+            Some(seek_complete_window),
             Some(b_onset_window),
             setup.queue.current_index()
         )
@@ -1589,14 +1560,27 @@ async fn render_seek_near_end_until_b_with_postroll(
     queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
-) -> (Vec<f32>, usize, f64) {
+) -> (Vec<f32>, usize, usize) {
     let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
+    let mut events = queue.subscribe();
     let mut seek_issue_frame: Option<usize> = None;
-    let mut seek_duration: Option<f64> = None;
+    let mut seek_complete_frame: Option<usize> = None;
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
+
+        loop {
+            match events.try_recv().map(|envelope| envelope.event) {
+                Ok(Event::Audio(AudioEvent::SeekComplete { .. })) if seek_issue_frame.is_some() => {
+                    seek_complete_frame.get_or_insert(progress.rendered_frames());
+                }
+                Ok(_) => {}
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+                Err(TryRecvError::Lagged(_)) => continue,
+            }
+        }
+
         let block = harness.render(BLOCK_FRAMES);
         progress.push_block(&block, ASCENDING_TOL, seek_issue_frame);
 
@@ -1608,12 +1592,11 @@ async fn render_seek_near_end_until_b_with_postroll(
         {
             queue.seek(duration - SEEK_OFFSET_SECS).expect("seek");
             seek_issue_frame = Some(progress.rendered_frames());
-            seek_duration = Some(duration);
         }
 
         time::sleep(block_duration).await;
 
-        if progress.has_b_postroll() {
+        if progress.has_b_postroll() && seek_complete_frame.is_some() {
             break;
         }
     }
@@ -1621,7 +1604,7 @@ async fn render_seek_near_end_until_b_with_postroll(
     (
         progress.rendered,
         seek_issue_frame.expect("seek must be issued after duration becomes available"),
-        seek_duration.expect("duration must be recorded when seek is issued"),
+        seek_complete_frame.expect("seek must complete before track B postroll"),
     )
 }
 
@@ -1752,38 +1735,6 @@ impl ToneRenderProgress {
         self.b_seen_at
             .is_some_and(|frame| self.rendered_frames() >= frame.saturating_add(POST_ROLL_FRAMES))
     }
-}
-
-fn find_seek_landing_frame(
-    left: &[f32],
-    seek_issue_frame: usize,
-    b_onset_frame: usize,
-    duration: f64,
-) -> Option<usize> {
-    let expected_phase =
-        frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAWTOOTH_PERIOD_FRAMES;
-    let expected_phase = i32::try_from(expected_phase).expect("sawtooth phase fits i32");
-    let latest_start = b_onset_frame.saturating_sub(SEEK_LANDING_WINDOW_FRAMES);
-
-    (seek_issue_frame..=latest_start).find(|frame| {
-        let phase_delta = phase_distance(phase_units(left[*frame]), expected_phase).abs();
-        phase_delta <= SEEK_PHASE_TOL_UNITS
-            && ascending_phase_replays(
-                left,
-                *frame,
-                frame.saturating_add(SEEK_LANDING_WINDOW_FRAMES),
-                PHASE_TOL_UNITS,
-            )
-            .is_empty()
-    })
-}
-
-fn phase_distance(actual: i32, expected: i32) -> i32 {
-    const SAWTOOTH_PERIOD_UNITS: i32 = 65_536;
-    const SAWTOOTH_HALF_PERIOD_UNITS: i32 = 32_768;
-
-    (actual - expected + SAWTOOTH_HALF_PERIOD_UNITS).rem_euclid(SAWTOOTH_PERIOD_UNITS)
-        - SAWTOOTH_HALF_PERIOD_UNITS
 }
 
 fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {

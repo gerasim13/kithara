@@ -3,6 +3,7 @@ use std::path::Path;
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, StorageBackend},
+    bufpool::HasPool,
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
@@ -1026,12 +1027,15 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// virtual clock, so the engine is free to advance time, run the tick
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
-async fn await_progress(
+async fn await_progress<S>(
     rx: &mut EventReceiver,
-    queue: &QueueControl<TestPools>,
+    queue: &QueueControl<S>,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     // The current cached position may already satisfy the predicate
     // (the tick driver updated it before we subscribed) — check before
     // blocking so a no-op wait returns immediately.
@@ -1062,11 +1066,14 @@ async fn await_progress(
     }
 }
 
-pub async fn wait_for_loaded(
-    queue: &QueueControl<TestPools>,
+pub async fn wait_for_loaded<S>(
+    queue: &QueueControl<S>,
     id: TrackId,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     if let Some(entry) = queue.track(id) {
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
@@ -1109,11 +1116,14 @@ pub async fn wait_for_loaded(
     }
 }
 
-pub async fn wait_for_position_at_least(
-    queue: &QueueControl<TestPools>,
+pub async fn wait_for_position_at_least<S>(
+    queue: &QueueControl<S>,
     min_secs: f64,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let mut rx = queue.subscribe();
     await_progress(&mut rx, queue, |p| p >= min_secs, deadline)
         .await

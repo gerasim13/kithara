@@ -57,8 +57,8 @@ to the single `decoder` field.
 
 ## Core Surface
 
-- `PlayWorker` owns the shared playback scheduler, pools, and task-registration
-  lifetime for one or many players.
+- `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
+  optional shared `kithara-worker` base.
 - `EngineImpl` owns session dispatch, slot registration, and master output
   state.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, item

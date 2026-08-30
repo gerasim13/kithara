@@ -4,10 +4,11 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
-    BeatArtifact,
+    BeatArtifact, BlobError,
     analyzer::{BeatAnalysisConfig, default_beat_detector},
-    beat::{BeatDetector, BeatPass, BeatPassConfig, GridParams},
+    beat::{BeatDetector, BeatPass, BeatPassConfig, DetectOutput, DetectRequest, GridParams},
     coverage::FrameRange,
+    progress::BeatResume,
 };
 
 pub(crate) type Detector = Box<dyn BeatDetector>;
@@ -125,14 +126,21 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn snapshot(
+    pub(crate) fn snapshot<S>(
         &mut self,
+        pools: &PoolRegion<S>,
         detector: Option<&mut Detector>,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
-        let (analyzer, detector) = (self.0.as_mut()?, detector?);
-        analyzer.snapshot(detector.as_mut(), ending, extent)
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    where
+        S: HasPool<f32>,
+    {
+        let analyzer = self.0.as_mut()?;
+        match detector {
+            Some(detector) => analyzer.snapshot(pools, detector.as_mut(), ending, extent),
+            None => analyzer.snapshot_deferred(ending, extent),
+        }
     }
 
     pub(crate) fn push<S>(
@@ -145,8 +153,57 @@ where
     ) where
         S: HasPool<f32>,
     {
-        if let (Some(analyzer), Some(detector)) = (&mut self.0, detector) {
-            analyzer.push(pools, pcm, channels, at, detector.as_mut());
+        if let Some(analyzer) = &mut self.0 {
+            match detector {
+                Some(detector) => analyzer.push(pools, pcm, channels, at, detector.as_mut()),
+                None => analyzer.push_deferred(pools, pcm, channels, at),
+            }
         }
     }
+
+    pub(crate) fn prepare_detection<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        trailing: bool,
+    ) -> Option<DetectRequest>
+    where
+        S: HasPool<f32>,
+    {
+        self.0.as_mut()?.prepare_detection(pools, trailing)
+    }
+
+    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
+        if let Some(analyzer) = &mut self.0 {
+            analyzer.apply_detection(output);
+        }
+    }
+
+    pub(crate) fn write_resume(&mut self) -> Option<Vec<u8>> {
+        self.0.as_mut().map(|analyzer| {
+            let mut out = Vec::new();
+            analyzer.write_resume(&mut out);
+            out
+        })
+    }
+
+    pub(crate) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        resume: Option<BeatResume>,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        match (self.0.as_mut(), resume) {
+            (Some(analyzer), Some(resume)) => analyzer.restore(pools, resume),
+            (None, None) => Ok(()),
+            (Some(_), None) | (None, Some(_)) => Err(BlobError::Corrupt),
+        }
+    }
+}
+
+pub(crate) use crate::beat::{DetectOutput as DetectionOutput, DetectRequest as DetectionRequest};
+
+pub(crate) fn detect(request: DetectionRequest, detector: &mut Detector) -> DetectionOutput {
+    request.detect(detector.as_mut())
 }

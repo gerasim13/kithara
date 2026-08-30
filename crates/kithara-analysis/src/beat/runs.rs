@@ -6,7 +6,12 @@ use num_traits::cast::ToPrimitive;
 use tracing::debug;
 
 use super::detector::BeatDetectError;
-use crate::analyzer::BeatAnalysisConfig;
+use crate::{
+    BlobError,
+    analyzer::BeatAnalysisConfig,
+    blob::Writer,
+    progress::{BeatRunResume, write_samples},
+};
 
 struct Run<B>
 where
@@ -127,6 +132,63 @@ where
                 finish_stream(stream, mono)?;
             }
             pad(mono, expected)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
+        writer.write_len(self.runs.len());
+        for run in &self.runs {
+            writer.write_u64(run.start);
+            writer.write_u64(run.end);
+            write_samples(writer, &run.mono);
+        }
+        writer.write_len(self.dropped.len());
+        for (from, to) in &self.dropped {
+            writer.write_u64(*from);
+            writer.write_u64(*to);
+        }
+    }
+
+    pub(super) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        runs: Vec<BeatRunResume>,
+        dropped: Vec<(u64, u64)>,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        let mut restored: Vec<Run<B>> = Vec::with_capacity(runs.len());
+        for run in runs {
+            let expected = self.detector_frames(run.end.saturating_sub(run.start));
+            if run.mono.len() != expected {
+                return Err(BlobError::Corrupt);
+            }
+            let samples = run.mono.into_vec();
+            let mut mono = pools
+                .get_with_len::<f32>(samples.len())
+                .map_err(|_| BlobError::Corrupt)?;
+            mono.copy_from_slice(&samples);
+            restored.push(Run {
+                start: run.start,
+                end: run.end,
+                mono,
+                stream: None,
+            });
+        }
+        if restored.iter().any(|run| {
+            dropped
+                .iter()
+                .any(|(from, to)| *from < run.end && run.start < *to)
+        }) {
+            return Err(BlobError::Corrupt);
+        }
+
+        self.runs = restored;
+        self.dropped = dropped;
+        if self.held() > self.budget {
+            return Err(BlobError::Corrupt);
         }
         Ok(())
     }

@@ -1,6 +1,10 @@
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 
-use crate::waveform::{AnalysisParams, WaveformAnalyzer, bucket::Waveform};
+use crate::{
+    BlobError,
+    progress::WaveformResume,
+    waveform::{AnalysisParams, WaveformAnalyzer, bucket::Waveform},
+};
 
 pub(crate) struct WaveformPass {
     inner: WaveformAnalyzer,
@@ -22,6 +26,12 @@ impl WaveformPass {
         })
     }
 
+    delegate::delegate! {
+        to self.inner {
+            pub(crate) fn write_resume(&self, out: &mut Vec<u8>);
+        }
+    }
+
     pub(crate) fn push<S>(
         &mut self,
         pools: &PoolRegion<S>,
@@ -33,6 +43,17 @@ impl WaveformPass {
         S: HasPool<f32>,
     {
         self.inner.push(pools, pcm, channels, at)
+    }
+
+    pub(crate) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        resume: WaveformResume,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        self.inner.restore(pools, resume)
     }
 
     pub(crate) fn snapshot(&mut self, extent: Option<u64>) -> Waveform {

@@ -1,14 +1,15 @@
-use std::{
-    ops::RangeInclusive,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::ops::RangeInclusive;
 
 use kithara::{
     audio::ConsumerWakeMode,
     bufpool::HasPool,
     host::testing::GraphSession,
     platform::{
-        sync::{Arc, Mutex, mpsc},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
         thread::{JoinHandle, spawn_named},
         time::{Duration, Instant},
     },

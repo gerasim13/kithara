@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_resampler::ResamplerBackend;
@@ -7,6 +7,7 @@ use super::{
     AnalysisFingerprint, AnalysisToken, config::BeatAnalysisConfig, session::TrackAnalyzers,
 };
 use crate::{
+    AnalysisProgress, BlobError,
     coverage::Coverage,
     slots::{
         beat::{self, Config},
@@ -56,10 +57,35 @@ where
             extent: None,
             revision: 0,
             settled: false,
+            ended: false,
             source_sample_rate: rate,
             token,
             pools: self.pools.clone(),
         })
+    }
+
+    pub(crate) fn restore(
+        &self,
+        progress: &AnalysisProgress,
+        chunk_frames: NonZeroU64,
+    ) -> Result<TrackAnalyzers<B, S>, BlobError> {
+        let analysis = progress.analysis();
+        if analysis.fingerprint() != &self.fingerprint() {
+            return Err(BlobError::Fingerprint);
+        }
+        let resume = progress.decode_resume()?.ok_or(BlobError::Corrupt)?;
+        let mut analyzers = self
+            .build(analysis.source_sample_rate(), analysis.token().clone())
+            .map_err(|_| BlobError::Corrupt)?;
+        analyzers.restore(analysis, resume, chunk_frames)?;
+        Ok(analyzers)
+    }
+
+    pub(crate) fn resume_shape(&self) -> (bool, bool) {
+        (
+            !waveform::config_is_empty(&self.waveform),
+            !Config::is_empty(&self.beat),
+        )
     }
 
     /// What this configuration produces, per artifact. The two tags are
@@ -74,12 +100,6 @@ where
                 .as_deref(),
             waveform::cache_tag(&self.waveform).as_deref(),
         )
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn run_frames(&self, rate: NonZeroU32) -> Option<u64> {
-        let seconds = self.beat_config.as_ref()?.ready_seconds();
-        Some(u64::from(rate.get()).saturating_mul(u64::from(seconds)))
     }
 
     #[must_use]
@@ -155,7 +175,7 @@ mod tests {
 
     use super::{
         super::session::{Ingest, TrackAnalyzers},
-        AnalyzerBuilder, BeatAnalysisConfig,
+        AnalyzerBuilder,
     };
     use crate::{
         BeatState,
@@ -325,39 +345,6 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_run_is_sized_by_the_window_the_detector_really_uses() {
-        let rate = NonZeroU32::new(44_100).unwrap_or(NonZeroU32::MIN);
-        let sized = |window, overlap| {
-            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
-                .with_beat_config(
-                    BeatAnalysisConfig::builder()
-                        .resampler_backend(NoResamplerBackend)
-                        .detector_window_seconds(window)
-                        .detector_overlap_seconds(overlap)
-                        .build(),
-                )
-                .run_frames(rate)
-        };
-
-        assert_eq!(sized(2, 1), Some(3 * 44_100), "window plus its overlap");
-        assert_eq!(
-            sized(2, 7),
-            Some(3 * 44_100),
-            "an overlap wider than its window is clamped to one short of it"
-        );
-        assert_eq!(
-            sized(0, 5),
-            Some(44_100),
-            "a window of nothing is one second, and takes no overlap with it"
-        );
-        assert_eq!(
-            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).run_frames(rate),
-            None,
-            "a pass with no beat configuration names no window"
-        );
-    }
-
-    #[kithara::test(native, flash(false))]
     fn a_scattered_coverage_is_measured_against_where_it_reaches() {
         let mut analyzers = waveform_pass(8);
         // A range decoded away from the start, which is what a schedule
@@ -482,10 +469,6 @@ mod tests {
                 .is_none_or(|beat| beat.state() == BeatState::Final),
             "the whole extent is covered, so the grid is final"
         );
-        assert_eq!(
-            ended.waveform_completeness(),
-            Some(1.0),
-            "a fully covered extent is a complete waveform"
-        );
+        assert_eq!(ended.coverage().frames(), ended.extent().unwrap_or(0));
     }
 }
