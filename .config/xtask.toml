@@ -447,9 +447,16 @@ shared_paths = [
   "tests/Cargo.toml",
 ]
 
+# `kithara/flash` reaches `kithara-platform` and `kithara-test-utils` through
+# the facade and stops there. The integration suite owns flash-gated code of
+# its own - the virtual time a rendered block advances by, the lexical
+# targets, the loom case - so it is named here too. Without it a lane runs a
+# virtual clock while the suite compiles as if the clock were real: the
+# targets under `#![cfg(feature = "flash")]` come out empty and the run
+# reports them green.
 [test.flash]
 default = true
-features = ["kithara/flash"]
+features = ["kithara/flash", "kithara-integration-tests/flash"]
 
 [test.no_block]
 default = false
