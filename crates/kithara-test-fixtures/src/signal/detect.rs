@@ -14,8 +14,11 @@ pub enum SignalDirection {
 /// Detect a saw-tooth direction from a buffer of interleaved `f32` samples.
 #[must_use]
 pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
+    if channels == 0 {
+        return SignalDirection::Unknown;
+    }
     let frames = samples.len() / channels;
-    if channels == 0 || frames < 2 {
+    if frames < 2 {
         return SignalDirection::Unknown;
     }
 
@@ -57,5 +60,10 @@ mod tests {
             detect_direction(&[-1.0, -1.0, -0.9999695, -0.9999695], 2),
             SignalDirection::Ascending
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_channel_less_buffer_has_no_direction() {
+        assert_eq!(detect_direction(&[-1.0, -0.5], 0), SignalDirection::Unknown);
     }
 }
