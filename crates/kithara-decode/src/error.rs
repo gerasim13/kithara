@@ -222,7 +222,6 @@ impl DecodeError {
     /// `match` over the discriminant.
     #[must_use]
     #[inline]
-    // ast-grep-ignore: idioms.match-self-conversion
     pub fn classify(&self) -> ErrorClass {
         match self {
             Self::Interrupted => ErrorClass::Interrupted,

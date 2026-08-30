@@ -117,19 +117,8 @@ pub(super) struct InnerIndex {
 }
 
 impl AvailabilityIndex {
-    // ast-grep-ignore: style.prefer-default-derive
     pub(crate) fn new() -> Self {
-        Self {
-            inner: Arc::new(InnerIndex {
-                assets: ArcSwap::from_pointee(AssetTree::new()),
-                retired: Retired::new(RETIRE_CAPACITY),
-                #[cfg(not(target_arch = "wasm32"))]
-                persist: OnceLock::new(),
-                hub: OnceLock::new(),
-                dirty: AtomicBool::new(false),
-                pending_durability: DashSet::new(),
-            }),
-        }
+        Self::default()
     }
 
     /// Bind this aggregate to a [`FlushHub`] for coordinated flushing.
@@ -382,7 +371,17 @@ impl InnerIndex {
 
 impl Default for AvailabilityIndex {
     fn default() -> Self {
-        Self::new()
+        Self {
+            inner: Arc::new(InnerIndex {
+                assets: ArcSwap::from_pointee(AssetTree::new()),
+                retired: Retired::new(RETIRE_CAPACITY),
+                #[cfg(not(target_arch = "wasm32"))]
+                persist: OnceLock::new(),
+                hub: OnceLock::new(),
+                dirty: AtomicBool::new(false),
+                pending_durability: DashSet::new(),
+            }),
+        }
     }
 }
 

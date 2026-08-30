@@ -350,6 +350,79 @@ mod tests {
     }
 
     #[test]
+    fn default_rule_ignores_types_that_already_implement_default() {
+        let source = r#"
+struct Existing;
+
+impl Existing {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for Existing {
+    fn default() -> Self {
+        Self
+    }
+}
+
+struct Missing;
+
+impl Missing {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[derive(Default)]
+struct Derived;
+
+impl Derived {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+"#;
+
+        assert_eq!(rule_hits("style.prefer-default-derive.yml", source), 1);
+    }
+
+    #[test]
+    fn conversion_rule_only_reports_owned_direct_conversions() {
+        let source = r#"
+enum Input {
+    One,
+}
+
+enum Output {
+    One,
+}
+
+impl Input {
+    fn convert(self) -> Output {
+        match self {
+            Self::One => Output::One,
+        }
+    }
+
+    fn inspect(&self) -> Output {
+        match self {
+            Self::One => Output::One,
+        }
+    }
+
+    fn resolve(self) -> Option<Output> {
+        match self {
+            Self::One => Some(Output::One),
+        }
+    }
+}
+"#;
+
+        assert_eq!(rule_hits("idioms.match-self-conversion.yml", source), 1);
+    }
+
+    #[test]
     fn magic_number_rule_accepts_self_explanatory_math() {
         let source = r#"
 fn math(value: usize, width: f32, values: &[f32]) {

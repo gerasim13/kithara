@@ -63,7 +63,6 @@ impl MmapState {
             Self::Empty => None,
         }
     }
-    // ast-grep-ignore: idioms.match-self-conversion
     pub(super) fn len(&self) -> u64 {
         match self {
             Self::Active(m) => m.len(),
