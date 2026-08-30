@@ -81,6 +81,7 @@ use kithara_ui::{
         vis::VisPass,
     },
     source::{MemResolver, OverlayResolver, UiConfig},
+    view,
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions,
@@ -785,6 +786,7 @@ impl Immediate {
                 &self.ui.root,
                 &self.ui,
                 reads,
+                &view::EMPTY,
                 builtin::skin(),
                 Clock::default(),
                 None

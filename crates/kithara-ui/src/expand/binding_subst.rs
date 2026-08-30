@@ -5,7 +5,7 @@ use serde::de::DeserializeOwned;
 use super::{Binding, BindingKind, machine::Context};
 use crate::{
     error::UiDocError,
-    ids::{EndpointId, InternId, Interner, SourceUri},
+    ids::{EndpointId, InternId, Interner, SourceUri, StateId},
     module::BindingRef,
     param::Param,
     text::TextDoc,
@@ -125,16 +125,42 @@ pub(crate) fn substitute_map(
         .collect()
 }
 
+/// The name one view state answers to, which is the name the document wrote
+/// under the module instance that declared it.
+///
+/// Two includes of one module are two instances at two prefixes, so a state
+/// named inside that module is a different state in each without the document
+/// saying so. Nodes of one instance share the prefix, which is what lets a
+/// popover and the button that closes it name the same state.
+pub(crate) fn scoped_state(instance: &str, id: &str) -> String {
+    if instance.is_empty() {
+        id.to_owned()
+    } else {
+        format!("{instance}/{id}")
+    }
+}
+
 pub(crate) fn substitute_binding(
     args: &BTreeMap<String, String>,
     origin: &SourceUri,
     binding: &BindingRef,
     path: &str,
+    instance: &str,
 ) -> Result<BindingRef, UiDocError> {
+    if let BindingRef::View { id, set } = binding {
+        let id = substitute(args, origin, &id.0, path)?;
+        return Ok(BindingRef::View {
+            id: StateId(scoped_state(instance, &id)),
+            set: *set,
+        });
+    }
     let (BindingRef::Command { id, with }
     | BindingRef::Parameter { id, with }
     | BindingRef::Telemetry { id, with }
-    | BindingRef::Model { id, with }) = binding;
+    | BindingRef::Model { id, with }) = binding
+    else {
+        unreachable!("the view binding is answered above")
+    };
     let id = EndpointId(substitute(args, origin, &id.0, path)?);
     let with = substitute_map(args, origin, with, path)?;
     Ok(match binding {
@@ -142,6 +168,7 @@ pub(crate) fn substitute_binding(
         BindingRef::Parameter { .. } => BindingRef::Parameter { id, with },
         BindingRef::Telemetry { .. } => BindingRef::Telemetry { id, with },
         BindingRef::Model { .. } => BindingRef::Model { id, with },
+        BindingRef::View { .. } => unreachable!("the view binding is answered above"),
     })
 }
 
@@ -217,11 +244,23 @@ pub(crate) fn intern_binding(
     binding: &BindingRef,
     origin: &SourceUri,
 ) -> Result<Binding, UiDocError> {
+    if let BindingRef::View { id, set } = binding {
+        // A state has no scope map: the name it was given under its module
+        // instance is already the whole of its identity, so its key is its id.
+        let id = interner.intern(&id.0, origin)?;
+        return Ok(Binding {
+            with: BTreeMap::new(),
+            kind: BindingKind::View { set: *set },
+            id,
+            key: id,
+        });
+    }
     let (kind, id, with) = match binding {
         BindingRef::Command { id, with } => (BindingKind::Command, id, with),
         BindingRef::Parameter { id, with } => (BindingKind::Parameter, id, with),
         BindingRef::Telemetry { id, with } => (BindingKind::Telemetry, id, with),
         BindingRef::Model { id, with } => (BindingKind::Model, id, with),
+        BindingRef::View { .. } => unreachable!("the view binding is answered above"),
     };
     let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
     Ok(Binding {

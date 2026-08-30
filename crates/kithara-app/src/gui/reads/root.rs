@@ -463,12 +463,10 @@ mod tests {
     #[kithara::test]
     fn the_menu_reads_its_own_state_and_the_layout_in_force() {
         let mut fixture = Fixture::new(["+0.0%", "+0.0%"]);
-        fixture.menu.toggle();
         fixture.menu.toggle_layouts();
         let root = fixture.root();
         let walk = Walk::new(&root);
 
-        assert_eq!(walk.get("ui.menu.open"), Some(ReadValue::Bool(true)));
         assert_eq!(
             walk.get("ui.menu.group_open@group=lay"),
             Some(ReadValue::Bool(true))

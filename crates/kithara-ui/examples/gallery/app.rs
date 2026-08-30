@@ -3,15 +3,17 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    render::{Clock, Skin, UiEvent, WindowCommand, custom::CustomKinds, tree},
+    module::ViewSet,
+    render::{Clock, ControlAction, Skin, UiEvent, WindowCommand, custom::CustomKinds, tree},
     skin::SkinDoc,
+    view::ViewState,
 };
 
 use crate::{
     capture::{Capture, Shot},
     demo::DemoReads,
     fixture::{Consts, Resolver, resolver},
-    sections,
+    sections::{self, Page},
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +42,9 @@ pub(crate) struct Gallery {
     pub(crate) layouts: Vec<CompiledUi>,
     pub(crate) module_layouts: Vec<CompiledUi>,
     pub(crate) capture: Option<Capture>,
+    /// State the documents keep for themselves, which no endpoint of this
+    /// application answers.
+    pub(crate) view: ViewState,
 }
 
 impl Gallery {
@@ -64,6 +69,7 @@ impl Gallery {
             reads: DemoReads::default(),
             kinds: crate::custom::kinds(),
             capture: None,
+            view: ViewState::default(),
         }
     }
 
@@ -95,17 +101,42 @@ impl Gallery {
     pub(crate) fn select(&mut self, shot: Shot) {
         self.clock = Clock::default();
         self.reads = DemoReads::default();
-        self.reads.select_tab(shot.tab);
+        self.view = ViewState::default();
+        self.select_tab(shot.tab);
         if let Some(module) = shot.module {
             self.reads.select_module(module);
         }
     }
 
+    /// Turns to a page, and stands the module that page demonstrates open: a
+    /// menu page whose menu is shut demonstrates a burger.
+    pub(crate) fn select_tab(&mut self, tab: Page) {
+        self.reads.select_tab(tab);
+        for (page, state) in DEMONSTRATED {
+            let set = if tab == page {
+                ViewSet::On
+            } else {
+                ViewSet::Off
+            };
+            self.view.set(state, set);
+        }
+    }
+
     pub(crate) fn compiled(&self) -> &CompiledUi {
-        if self.reads.active_tab() == sections::MODULES {
-            &self.module_layouts[sections::module_index(self.reads.active_module())]
-        } else {
-            &self.layouts[sections::index(self.reads.active_tab())]
+        shown(&self.reads, &self.layouts, &self.module_layouts)
+    }
+
+    /// Applies whatever the press at `path` writes to the page's own state.
+    pub(crate) fn press(&mut self, path: &str) {
+        let Self {
+            layouts,
+            module_layouts,
+            reads,
+            view,
+            ..
+        } = self;
+        if let Some((state, set)) = shown(reads, layouts, module_layouts).views().at(path) {
+            view.set(state, set);
         }
     }
 
@@ -154,8 +185,13 @@ pub(crate) fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Ui(UiEvent::Control { path, action }) => {
+            // What the document turns for itself is answered here, by the host
+            // that owns the store, before the demo model is told anything.
+            if matches!(action, ControlAction::Activate) {
+                state.press(&path);
+            }
             if let Some(tab) = sections::pressed(&path) {
-                state.reads.select_tab(tab);
+                state.select_tab(tab);
             } else {
                 let was = state.reads.active_skin();
                 state.reads.apply(&path, &action);
@@ -194,12 +230,34 @@ pub(crate) fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message>
         &state.compiled().root,
         state.compiled(),
         &state.reads,
+        &state.view,
         state.skin(),
         state.clock,
         Some(&state.kinds),
     )
     .map(Message::Ui)
 }
+
+/// The page the gallery is showing, which is a module demo when the nav stands
+/// on the modules section and a page of the package otherwise.
+fn shown<'a>(
+    reads: &DemoReads,
+    layouts: &'a [CompiledUi],
+    module_layouts: &'a [CompiledUi],
+) -> &'a CompiledUi {
+    if reads.active_tab() == sections::MODULES {
+        &module_layouts[sections::module_index(reads.active_module())]
+    } else {
+        &layouts[sections::index(reads.active_tab())]
+    }
+}
+
+/// The state each page stands its own module in, by the name that page's
+/// document gave it.
+const DEMONSTRATED: [(Page, &str); 2] = [
+    ("menu", "app-menu/menu"),
+    ("clock", "clock-components/clock"),
+];
 
 /// Every nav page, compiled in the order the package declares them.
 fn pages(

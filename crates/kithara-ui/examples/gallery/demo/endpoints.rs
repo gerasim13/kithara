@@ -107,7 +107,6 @@ fn insert_deck_endpoints(registry: &mut DemoRegistry) {
 
 fn insert_clock_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
-        ("clock.open", ValueKind::Bool),
         ("clock.bpm", ValueKind::Text),
         ("clock.source", ValueKind::Text),
         ("clock.warning", ValueKind::Text),
@@ -153,8 +152,6 @@ fn insert_clock_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for id in [
-        "clock.toggle",
-        "clock.close",
         "clock.nudge_up",
         "clock.nudge_down",
         "clock.family.step",
@@ -545,7 +542,6 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
 
 fn insert_menu_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
-        ("ui.menu.open", ValueKind::Bool),
         ("ui.window.can_open", ValueKind::Bool),
         ("ui.prefs.wave_follow", ValueKind::Bool),
         ("ui.prefs.autogain", ValueKind::Bool),
@@ -586,8 +582,6 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for id in [
-        "ui.menu.toggle",
-        "ui.menu.close",
         "ui.window.open",
         "ui.window.toggle_full_screen",
         "ui.prefs.toggle_wave_follow",

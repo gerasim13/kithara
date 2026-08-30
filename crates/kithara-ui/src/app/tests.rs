@@ -14,6 +14,7 @@ use super::{App, Config, RunError, Ui, scenario::Scenario};
 use crate::{
     builtin,
     draw::{Pt, Rect, Rgba},
+    error::UiDocError,
     ids::{DocId, EndpointId, SourceUri},
     interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -23,6 +24,7 @@ use crate::{
     },
     shaping::FontPolicy,
     source::MemResolver,
+    view,
 };
 
 /// A registry that answers for the one endpoint the fixture binds to.
@@ -488,7 +490,7 @@ impl crate::source::SourceResolver for Counted<'_> {
         &self,
         base: Option<&SourceUri>,
         rel: &str,
-    ) -> Result<crate::source::LoadedSource, crate::error::UiDocError> {
+    ) -> Result<crate::source::LoadedSource, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.load(base, rel)
     }
@@ -497,7 +499,7 @@ impl crate::source::SourceResolver for Counted<'_> {
         &self,
         base: Option<&SourceUri>,
         rel: &str,
-    ) -> Result<crate::source::LoadedBytes, crate::error::UiDocError> {
+    ) -> Result<crate::source::LoadedBytes, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.bytes(base, rel)
     }
@@ -2264,7 +2266,13 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         &UiConfig::default(),
     )
     .unwrap_or_else(|error| panic!("fixture must compile: {error}"));
-    let ctx = Ctx::new(&ui, &reads, builtin::skin_doc(), Clock::default());
+    let ctx = Ctx::new(
+        &ui,
+        &reads,
+        &view::EMPTY,
+        builtin::skin_doc(),
+        Clock::default(),
+    );
     let host = MasonryHost::new(ctx, skin());
     let node = document::render(&ui.root, ctx, host);
     let mut root = crate::render::masonry::MasonryRoot::new(
@@ -2665,5 +2673,170 @@ fn a_list_scrolled_to_a_row_stays_there_when_the_row_turns_the_page() {
         scenario.rect_of(&last),
         Some(scrolled),
         "the page the list turned to must show the list where it was scrolled to"
+    );
+}
+
+/// A registry that declares nothing at all, so a document that mounts under it
+/// is one no endpoint of any application answers for.
+struct NoEndpoints;
+
+impl EndpointRegistry for NoEndpoints {
+    fn endpoint(&self, _category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
+        None
+    }
+}
+
+/// A burger with a menu on it, opening and shutting on state the document names
+/// for itself. No application declares the state, answers it, or is asked.
+const VIEW_MENU: &str = r#"Popover(id: "menu", open: View(id: "menu"), align: Start,
+    anchor: Pressable(id: "burger", press: View(id: "menu"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0)))))"#;
+
+/// Mounts the view-state menu under a registry that declares nothing.
+fn view_menu(control: &str) -> (NoEndpoints, MemResolver) {
+    (NoEndpoints, one_control(control))
+}
+
+/// A popover is the standard piece of screen furniture that cost an application
+/// three endpoints to own: a flag to read and two commands to turn it. The
+/// document names the flag itself, and nothing of the application is involved.
+#[kithara::test]
+fn a_menu_opens_on_state_no_endpoint_declares() {
+    let (endpoints, resolver) = view_menu(VIEW_MENU);
+    let mut scenario = Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+
+    assert!(
+        !scenario.view().flag("demo/menu"),
+        "a screen that has been pressed nowhere must hold the menu shut"
+    );
+    assert_eq!(
+        scenario.rect_of("demo/content").map(|rect| rect.w),
+        Some(0.0),
+        "the shut menu must cover none of the screen"
+    );
+
+    // The press lands on the spacer the anchor wraps, which is the only part of
+    // a pressable that has a size of its own.
+    scenario.click("demo/anchor");
+
+    assert!(
+        scenario.view().flag("demo/menu"),
+        "the press must turn the state the document named for itself"
+    );
+    assert_eq!(
+        scenario.rect_of("demo/content").map(|rect| rect.w),
+        Some(100.0),
+        "the opened menu must cover the width its content asked for"
+    );
+
+    scenario.click("demo/anchor");
+
+    assert!(
+        !scenario.view().flag("demo/menu"),
+        "the second press must turn the same state back"
+    );
+}
+
+/// The state a press turns is told to the application all the same: what the
+/// document does for itself is not hidden from the host that owns it.
+#[kithara::test]
+fn a_view_press_is_still_published() {
+    let (endpoints, resolver) = view_menu(VIEW_MENU);
+    let mut scenario = Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    let mark = scenario.published().len();
+
+    scenario.click("demo/anchor");
+
+    assert_eq!(
+        &scenario.published()[mark..],
+        [UiEvent::Control {
+            path: "demo/burger".to_owned(),
+            action: ControlAction::Activate,
+        }],
+    );
+}
+
+/// A state written under one name and read under another leaves the one meant
+/// unwritten and the one typed unread, which is a misspelling rather than a
+/// screen. Nothing reads it, so nothing would show the mistake at runtime.
+#[kithara::test]
+fn a_state_written_and_never_read_is_refused() {
+    let (endpoints, resolver) = view_menu(
+        r#"Popover(id: "menu", open: View(id: "menu"), align: Start,
+    anchor: Pressable(id: "burger", press: View(id: "meun"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0)))))"#,
+    );
+    let error = Ui::new(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .err()
+    .unwrap_or_else(|| panic!("a state written and never read must not compile"));
+
+    assert!(
+        matches!(
+            &error,
+            RunError::Document(UiDocError::UnreadState { id, path, .. })
+                if id == "demo/meun" && path == "demo/burger"
+        ),
+        "{error}"
+    );
+}
+
+/// A press away from an open popover is how a menu is dismissed, and the
+/// popover publishes that on its own path. The state it reads for whether it
+/// stands open is the state that dismissal shuts, without the document saying
+/// twice what a popover already is.
+#[kithara::test]
+fn a_press_away_shuts_a_menu_that_keeps_its_own_state() {
+    let (endpoints, resolver) = view_menu(VIEW_MENU);
+    let mut scenario = Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    scenario.click("demo/anchor");
+    assert!(
+        scenario.view().flag("demo/menu"),
+        "the menu must open first"
+    );
+
+    // A press away from both the burger and the surface is the dismissal.
+    scenario.click_at(Pt { x: 200.0, y: 100.0 });
+
+    assert!(
+        !scenario.view().flag("demo/menu"),
+        "the dismissal must shut the state the popover reads"
     );
 }

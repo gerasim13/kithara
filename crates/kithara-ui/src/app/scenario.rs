@@ -10,6 +10,7 @@ use crate::{
     draw::{PoolStats, Pt, Rect, Rgba},
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     render::{Reads, Skin, UiEvent},
+    view::ViewState,
 };
 
 /// Wraps an application, recording every event the document published to
@@ -76,6 +77,8 @@ impl<'config, A: App> Scenario<'config, A> {
             /// Reuse counters for the pools this host draws every one of its
             /// documents from.
             pub(super) fn draw_pool_stats(&self) -> PoolStats;
+            /// The state the shown screen keeps for itself.
+            pub(super) fn view(&self) -> &ViewState;
         }
         to self.ui.app() {
             /// The application the scenario is driving.
@@ -121,6 +124,14 @@ impl<'config, A: App> Scenario<'config, A> {
     pub(super) fn click(&mut self, path: &str) {
         self.press(path);
         self.release(path);
+    }
+
+    /// A whole press at one point of the window, for the gestures that are
+    /// aimed at no control: dismissing what stands over the page.
+    pub(super) fn click_at(&mut self, at: Pt) {
+        self.ui.input(pointer(at, PointerPhase::Move));
+        self.ui.input(pointer(at, PointerPhase::Down));
+        self.ui.input(pointer(at, PointerPhase::Up));
     }
 
     /// Drags from one point in the control's rect to another. `from` and

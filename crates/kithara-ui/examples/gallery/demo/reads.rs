@@ -335,8 +335,6 @@ impl DemoReads {
             self.stress.reset_clock();
         }
         self.active_tab = tab;
-        self.menu.set_open(tab == "menu");
-        self.clock.set_open(tab == "clock");
     }
 
     /// The skin the gallery is dressed in, which every host asks for and no

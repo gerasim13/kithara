@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use cargo_metadata::{Package, Target, TargetKind};
+use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
     Attribute, Expr, Fields, FnArg, Ident, ImplItem, Item, ItemStruct, ItemUse, Local, Member,
@@ -66,7 +67,7 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
     let mut refs = Refs::default();
     let mut defs: Vec<Def> = Vec::new();
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    let mut chain_cache: HashMap<PathBuf, bool> = HashMap::new();
+    let mut chain_cache: HashMap<PathBuf, Gate> = HashMap::new();
 
     for pkg in &members {
         let role = classify(pkg, cfg);
@@ -105,17 +106,17 @@ fn scan(ctx: &Context<'_>, cfg: &DeadExportsThreshold) -> (Vec<Def>, Refs) {
                         .unwrap_or(&path)
                         .to_string_lossy()
                         .replace('\\', "/");
-                    let mod_gated =
-                        mod_chain_gated(target.src_path.as_std_path(), &path, &mut chain_cache);
+                    let gate =
+                        mod_chain_gate(target.src_path.as_std_path(), &path, &mut chain_cache);
                     DefScan {
-                        mod_gated,
+                        mod_gated: gate.platform,
                         crate_name: &pkg.name,
                         rel: &rel,
                         kinds: &kinds,
                         export_attrs: &cfg.export_attrs,
                         out: &mut defs,
                     }
-                    .collect(&file.items, false);
+                    .collect(&file.items, gate.test);
                 }
             }
         }
@@ -361,28 +362,57 @@ fn protected_names<'a>(defs: &'a [Def], cfg: &DeadExportsThreshold) -> HashSet<&
         .collect()
 }
 
-/// A file whose `mod`-declaration chain (crate root down to the file) carries
-/// a `#[cfg(target_os/target_arch)]` gate is protected exactly like an
-/// item-level cfg: the gate is declared once on the parent `mod x;` (the
-/// module-level switch pattern, e.g. `flash/mod.rs` gating `mod api;` /
-/// `mod inert;`), so every item inside compiles only in build configurations
-/// this scan cannot see.
-fn mod_chain_gated(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, bool>) -> bool {
+/// What a file's `mod`-declaration chain puts every item in the file behind.
+///
+/// Either gate is declared once on the parent `mod x;` rather than on each
+/// item, so a scan reading the file alone cannot see it.
+#[derive(Clone, Copy, Default)]
+struct Gate {
+    /// A `#[cfg(target_os/target_arch)]` gate: the module-level switch pattern
+    /// (e.g. `flash/mod.rs` gating `mod api;` / `mod inert;`), where every item
+    /// inside compiles only in build configurations this scan cannot see. It is
+    /// protected exactly like an item-level cfg.
+    platform: bool,
+    /// A `#[cfg(test)]` gate: the file is not in the production build at all,
+    /// so nothing it declares is an export, exactly as if each item carried the
+    /// attribute itself.
+    test: bool,
+}
+
+impl Gate {
+    fn of(attrs: &[Attribute]) -> Self {
+        Self {
+            platform: is_gated(attrs),
+            test: attrs_mark_test(attrs),
+        }
+    }
+
+    fn or(self, other: Self) -> Self {
+        Self {
+            platform: self.platform || other.platform,
+            test: self.test || other.test,
+        }
+    }
+}
+
+/// The gate a file's `mod`-declaration chain (crate root down to the file)
+/// carries.
+fn mod_chain_gate(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, Gate>) -> Gate {
     if file == root_file {
-        return false;
+        return Gate::default();
     }
-    if let Some(&gated) = cache.get(file) {
-        return gated;
+    if let Some(&gate) = cache.get(file) {
+        return gate;
     }
-    let gated = decl_gated(root_file, file, cache).unwrap_or(false);
-    cache.insert(file.to_path_buf(), gated);
-    gated
+    let gate = decl_gate(root_file, file, cache).unwrap_or_default();
+    cache.insert(file.to_path_buf(), gate);
+    gate
 }
 
 /// Resolve the parent file declaring `file`'s module and combine that
 /// declaration's cfg gate with the parent's own chain. `None` when no
 /// declaring file is found (unresolvable layouts stay unprotected).
-fn decl_gated(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, bool>) -> Option<bool> {
+fn decl_gate(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, Gate>) -> Option<Gate> {
     let stem = file.file_stem()?.to_str()?.to_owned();
     let dir = file.parent()?;
     let (name, owner_dir) = if stem == "mod" {
@@ -394,8 +424,8 @@ fn decl_gated(root_file: &Path, file: &Path, cache: &mut HashMap<PathBuf, bool>)
         let Ok(ast) = parse_file(&parent) else {
             continue;
         };
-        if let Some(gated) = find_mod_decl(&ast.items, &name, false) {
-            return Some(gated || mod_chain_gated(root_file, &parent, cache));
+        if let Some(gate) = find_mod_decl(&ast.items, &name, Gate::default()) {
+            return Some(gate.or(mod_chain_gate(root_file, &parent, cache)));
         }
     }
     None
@@ -417,18 +447,18 @@ fn decl_candidates(root_file: &Path, owner_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Find the `mod <name>;` declaration (no inline body) among `items`,
-/// recursing through inline modules; returns whether the declaration or any
-/// enclosing inline module is cfg-gated.
-fn find_mod_decl(items: &[Item], name: &str, enclosing: bool) -> Option<bool> {
+/// recursing through inline modules; returns the gate the declaration and
+/// every enclosing inline module put it behind.
+fn find_mod_decl(items: &[Item], name: &str, enclosing: Gate) -> Option<Gate> {
     for item in items {
         let Item::Mod(m) = item else {
             continue;
         };
-        let gated = enclosing || is_gated(&m.attrs);
+        let gate = enclosing.or(Gate::of(&m.attrs));
         match &m.content {
-            None if m.ident == name => return Some(gated),
+            None if m.ident == name => return Some(gate),
             Some((_, inner)) => {
-                if let Some(found) = find_mod_decl(inner, name, gated) {
+                if let Some(found) = find_mod_decl(inner, name, gate) {
                     return Some(found);
                 }
             }
@@ -577,8 +607,8 @@ struct DefScan<'a> {
     export_attrs: &'a [String],
     crate_name: &'a str,
     rel: &'a str,
-    /// The file's `mod`-declaration chain carries a cfg gate; every def in
-    /// the file inherits it (see [`mod_chain_gated`]).
+    /// The file's `mod`-declaration chain carries a platform cfg gate; every
+    /// def in the file inherits it (see [`mod_chain_gate`]).
     mod_gated: bool,
 }
 
@@ -657,7 +687,7 @@ fn item_attrs(it: &Item) -> &[Attribute] {
 }
 
 /// `#[test]`, `#[kithara::test]`/`#[tokio::test]` (last segment `test`), or a
-/// `#[cfg(...)]` whose predicate mentions `test`.
+/// `#[cfg(...)]` that holds only in a test build.
 fn attrs_mark_test(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| {
         let p = a.path();
@@ -667,10 +697,36 @@ fn attrs_mark_test(attrs: &[Attribute]) -> bool {
         if p.is_ident("cfg")
             && let Meta::List(list) = &a.meta
         {
-            return list.tokens.to_string().contains("test");
+            return cfg_marks_test(list.tokens.clone());
         }
         false
     })
+}
+
+/// Whether a `cfg` predicate names `test` on the side that holds in a test
+/// build. `not(test)` is the production build and names nothing: reading the
+/// predicate as text instead would call every item behind it a test item and
+/// stop looking at it.
+fn cfg_marks_test(tokens: TokenStream) -> bool {
+    let mut trees = tokens.into_iter().peekable();
+    while let Some(tree) = trees.next() {
+        match tree {
+            TokenTree::Ident(ident) if ident == "test" => return true,
+            // Whatever `not` negates holds in the other build, so the whole
+            // group it takes says nothing about this one.
+            TokenTree::Ident(ident) if ident == "not" => {
+                if matches!(trees.peek(), Some(TokenTree::Group(_))) {
+                    trees.next();
+                }
+            }
+            TokenTree::Group(group) if cfg_marks_test(group.stream()) => return true,
+            TokenTree::Group(_)
+            | TokenTree::Ident(_)
+            | TokenTree::Literal(_)
+            | TokenTree::Punct(_) => {}
+        }
+    }
+    false
 }
 
 fn has_export_attr(attrs: &[Attribute], words: &[String]) -> bool {
@@ -837,12 +893,12 @@ impl RefCollector<'_> {
         }
     }
 
-    fn record_qualified_tokens(&mut self, ts: &proc_macro2::TokenStream) {
-        let tokens: Vec<proc_macro2::TokenTree> = ts.clone().into_iter().collect();
+    fn record_qualified_tokens(&mut self, ts: &TokenStream) {
+        let tokens: Vec<TokenTree> = ts.clone().into_iter().collect();
         let mut idx = 0;
         while idx < tokens.len() {
             match &tokens[idx] {
-                proc_macro2::TokenTree::Ident(ident)
+                TokenTree::Ident(ident)
                     if self.is_workspace_crate(ident) || self.is_workspace_import(ident) =>
                 {
                     if let Some((next, names)) = qualified_token_path(&tokens, idx) {
@@ -853,7 +909,7 @@ impl RefCollector<'_> {
                         continue;
                     }
                 }
-                proc_macro2::TokenTree::Group(group) => {
+                TokenTree::Group(group) => {
                     self.record_qualified_tokens(&group.stream());
                 }
                 _ => {}
@@ -898,14 +954,14 @@ impl RefCollector<'_> {
     /// reference that only appears there is invisible and the symbol looks
     /// dead. Over-recording here is safe: it can only suppress a flag, never
     /// cause a false deletion.
-    fn record_tokens(&mut self, ts: &proc_macro2::TokenStream) {
+    fn record_tokens(&mut self, ts: &TokenStream) {
         if self.qualified_only {
             return;
         }
         for tree in ts.clone() {
             match tree {
-                proc_macro2::TokenTree::Ident(id) => self.record(id.to_string()),
-                proc_macro2::TokenTree::Group(g) => self.record_tokens(&g.stream()),
+                TokenTree::Ident(id) => self.record(id.to_string()),
+                TokenTree::Group(g) => self.record_tokens(&g.stream()),
                 _ => {}
             }
         }
@@ -960,18 +1016,15 @@ impl RefCollector<'_> {
     }
 }
 
-fn qualified_token_path(
-    tokens: &[proc_macro2::TokenTree],
-    start: usize,
-) -> Option<(usize, Vec<String>)> {
-    let proc_macro2::TokenTree::Ident(root) = &tokens[start] else {
+fn qualified_token_path(tokens: &[TokenTree], start: usize) -> Option<(usize, Vec<String>)> {
+    let TokenTree::Ident(root) = &tokens[start] else {
         return None;
     };
     let mut names = vec![root.to_string()];
     let mut idx = start;
     while token_path_sep_at(tokens, idx + 1) {
         let next_ident = idx + 3;
-        let Some(proc_macro2::TokenTree::Ident(ident)) = tokens.get(next_ident) else {
+        let Some(TokenTree::Ident(ident)) = tokens.get(next_ident) else {
             break;
         };
         names.push(ident.to_string());
@@ -980,11 +1033,11 @@ fn qualified_token_path(
     (names.len() > 1).then_some((idx + 1, names))
 }
 
-fn token_path_sep_at(tokens: &[proc_macro2::TokenTree], idx: usize) -> bool {
-    let Some(proc_macro2::TokenTree::Punct(first)) = tokens.get(idx) else {
+fn token_path_sep_at(tokens: &[TokenTree], idx: usize) -> bool {
+    let Some(TokenTree::Punct(first)) = tokens.get(idx) else {
         return false;
     };
-    let Some(proc_macro2::TokenTree::Punct(second)) = tokens.get(idx + 1) else {
+    let Some(TokenTree::Punct(second)) = tokens.get(idx + 1) else {
         return false;
     };
     first.as_char() == ':' && second.as_char() == ':'
@@ -1126,7 +1179,7 @@ mod tests {
 
     use syn::visit::Visit;
 
-    use super::{RefCollector, Refs, mod_chain_gated};
+    use super::{RefCollector, Refs, mod_chain_gate};
 
     const GATE: &str = "#[cfg(all(not(target_arch = \"wasm32\"), feature = \"flash\"))]";
 
@@ -1159,7 +1212,12 @@ mod tests {
 
     fn gated(root: &Path, rel: &str) -> bool {
         let mut cache = HashMap::new();
-        mod_chain_gated(&root.join("lib.rs"), &root.join(rel), &mut cache)
+        mod_chain_gate(&root.join("lib.rs"), &root.join(rel), &mut cache).platform
+    }
+
+    fn test_gated(root: &Path, rel: &str) -> bool {
+        let mut cache = HashMap::new();
+        mod_chain_gate(&root.join("lib.rs"), &root.join(rel), &mut cache).test
     }
 
     #[test]
@@ -1323,6 +1381,50 @@ mod tests {
         let root = dir.path();
         write(root, "lib.rs", "pub fn open() {}");
         assert!(!gated(root, "lib.rs"));
+    }
+
+    #[test]
+    fn file_behind_a_cfg_test_mod_declaration_declares_no_exports() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod app;");
+        write(root, "app/mod.rs", "#[cfg(test)]\nmod scenario;");
+        write(root, "app/scenario.rs", "pub(super) fn click_at() {}");
+        assert!(
+            test_gated(root, "app/scenario.rs"),
+            "a harness the production build never compiles exports nothing"
+        );
+        assert!(
+            !gated(root, "app/scenario.rs"),
+            "a test gate is not a platform gate"
+        );
+    }
+
+    #[test]
+    fn a_mod_declared_for_the_production_build_is_not_test_gated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod no_block;");
+        write(
+            root,
+            "no_block/mod.rs",
+            "#[cfg(not(test))]\nmod mode;\n#[cfg(test)]\npub(crate) mod mode;",
+        );
+        write(root, "no_block/mode.rs", "pub fn force_panic_mode() {}");
+        assert!(
+            !test_gated(root, "no_block/mode.rs"),
+            "`not(test)` declares the module for the production build"
+        );
+    }
+
+    #[test]
+    fn a_production_file_is_not_test_gated() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write(root, "lib.rs", "mod app;");
+        write(root, "app/mod.rs", "mod embed;");
+        write(root, "app/embed.rs", "pub fn mount() {}");
+        assert!(!test_gated(root, "app/embed.rs"));
     }
 
     #[test]

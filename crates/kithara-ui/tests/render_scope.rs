@@ -12,6 +12,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{Clock, ReadValue, Reads, tree},
     source::UiConfig,
+    view,
 };
 
 /// Records every endpoint the renderer asks for and answers nothing.
@@ -47,6 +48,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         &ui.root,
         &ui,
         &reads,
+        &view::EMPTY,
         builtin::skin(),
         Clock::default(),
         None,
@@ -134,6 +136,7 @@ fn rendered_endpoints(ui: &CompiledUi, truthy: BTreeSet<String>) -> BTreeSet<Str
         &ui.root,
         ui,
         &reads,
+        &view::EMPTY,
         builtin::skin(),
         Clock::default(),
         None,

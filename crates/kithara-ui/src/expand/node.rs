@@ -7,7 +7,7 @@ use crate::{
     module::{
         BindingRef, ButtonStyle, ChipStyle, ChromeStyle, ControlNode, DeckSummaryStyle, FaderStyle,
         GlyphStyle, IconName, MeasureAxis, Motion, PopoverAlign, PopoverAt, Pose, ScalarFormat,
-        TableColumn, TextAlign, TextStyle, Tone, WaveStyle, WindowControlsStyle,
+        TableColumn, TextAlign, TextStyle, Tone, ViewSet, WaveStyle, WindowControlsStyle,
     },
     shader::ShaderSpec,
     size::{BlockNode, SizeSpec},
@@ -295,6 +295,11 @@ pub enum BindingKind {
     Parameter,
     Telemetry,
     Model,
+    /// State the view keeps for itself. `set` is what a write does to it, and
+    /// is absent on the side that only reads.
+    View {
+        set: ViewSet,
+    },
 }
 
 /// Compiled endpoint reference. `id` is the bare endpoint; `key` is the

@@ -53,6 +53,7 @@ use kithara_ui::{
     },
     shaping::FontPolicy,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 const LAYOUT: &str = "fixture.klayout.ron";
@@ -778,6 +779,7 @@ impl FrameHost for Immediate {
             &self.ui.root,
             &self.ui,
             self.reads.as_ref(),
+            &view::EMPTY,
             skin(),
             Clock::default(),
             Some(&self.kinds),
@@ -854,7 +856,15 @@ fn redraw_asked(state: &State) -> bool {
 /// the geometry measured here and each is made to prove it was hit.
 fn laid_out_rect(fixture: &Fixture, reads: &CensusReads, renderer: &iced::Renderer) -> Rect {
     let ui = fixture.compiled();
-    let mut element = tree::render(&ui.root, &ui, reads, skin(), Clock::default(), None);
+    let mut element = tree::render(
+        &ui.root,
+        &ui,
+        reads,
+        &view::EMPTY,
+        skin(),
+        Clock::default(),
+        None,
+    );
     let mut tree = Tree::new(element.as_widget());
     let bounds = Size::new(f32::from(WIDTH), f32::from(HEIGHT));
     let node =

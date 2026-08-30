@@ -25,6 +25,7 @@ use crate::{
     source::{SourceResolver, UiConfig},
     text::TextDoc,
     validate::{self, NodePath},
+    view::{Census, Side, ViewWrites},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +50,12 @@ pub struct CompiledUi {
     /// unrelated event keeps waking it — a mouse crossing the window, and
     /// nothing once the mouse stops.
     pub animates: bool,
+    /// Where each press of this screen writes the screen's own state.
+    ///
+    /// The host answers these itself: a document that turns its own state says
+    /// so here, and the application is neither asked nor required to have
+    /// declared anything for it.
+    views: ViewWrites,
     arena: StrArena,
     includes: Vec<IncludedModule>,
     #[cfg(feature = "render")]
@@ -56,6 +63,12 @@ pub struct CompiledUi {
 }
 
 impl CompiledUi {
+    /// Where each press of this screen writes its own state.
+    #[must_use]
+    pub const fn views(&self) -> &ViewWrites {
+        &self.views
+    }
+
     #[cfg(feature = "render")]
     #[must_use]
     pub(crate) const fn draw_pools(&self) -> &DrawPools {
@@ -273,6 +286,7 @@ pub fn compile(
     let mut interner = Interner::new(config.max_arena_bytes);
     let mut includes = Vec::new();
     let mut shaders = ShaderCache::default();
+    let mut states = Census::default();
     let mut root = Compiler {
         resolver,
         endpoints,
@@ -283,6 +297,7 @@ pub fn compile(
         interner: &mut interner,
         includes: &mut includes,
         shaders: &mut shaders,
+        states: &mut states,
     }
     .build(&document.root, &loaded.uri)?;
     round_corners(&mut root, FrameCorners::ALL);
@@ -296,6 +311,7 @@ pub fn compile(
     let unprompted = motion_of_layout(&root);
     let driven = unprompted.driven;
     let animates = driven || unprompted.continuous || interner.reads_clock();
+    let views = states.finish()?;
     let arena = interner.finish();
     Ok(CompiledUi {
         root,
@@ -306,6 +322,7 @@ pub fn compile(
         driven,
         includes,
         arena,
+        views,
         resize_edges: document.resize_edges,
         #[cfg(feature = "render")]
         draw_pools: config.draw_pools.clone(),
@@ -373,6 +390,7 @@ struct Compiler<'a> {
     shaders: &'a mut ShaderCache,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
+    states: &'a mut Census,
 }
 
 impl Compiler<'_> {
@@ -390,8 +408,11 @@ impl Compiler<'_> {
                 children,
             } => self.build_split(*axis, *measure, *size, children, layout_uri),
             LayoutNode::Optional { id, hidden, node } => {
-                let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0)?;
+                // A layout node sits under no module instance, so a state it names is
+                // named at the top of the document rather than inside one.
+                let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0, "")?;
                 validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
+                self.states.note(&id.0, &hidden, layout_uri, Side::Read);
                 let child = self.build(node, layout_uri)?;
                 Ok(CompiledNode::Optional {
                     block: BlockSpec {
@@ -443,13 +464,12 @@ impl Compiler<'_> {
                     source,
                     &self.config.limits,
                 )?;
+                let endpoints = self.endpoints;
+                let kinds = &self.config.custom_kinds;
+                let states = &mut *self.states;
                 let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
-                    validate::check_controls(
-                        site,
-                        origin,
-                        self.endpoints,
-                        &self.config.custom_kinds,
-                    )
+                    states.note_site(site, origin);
+                    validate::check_controls(site, origin, endpoints, kinds)
                 };
                 let document = set
                     .defs

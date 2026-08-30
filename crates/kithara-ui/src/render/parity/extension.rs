@@ -21,6 +21,7 @@ use crate::{
     },
     shaping::TextContext,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 /// A document naming content the toolkit does not own, so both hosts have to
@@ -121,6 +122,7 @@ impl Extension {
             &ui.root,
             &ui,
             &Page,
+            &view::EMPTY,
             builtin::skin(),
             Clock::default(),
             Some(&kinds),

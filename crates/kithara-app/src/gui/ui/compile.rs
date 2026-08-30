@@ -8,6 +8,7 @@ use kithara_ui::{
     ids::SourceUri,
     render::{Clock, Walk, tree},
     source::UiConfig,
+    view::ViewState,
 };
 
 use super::{
@@ -30,6 +31,9 @@ pub(crate) struct AppUi {
     /// loading a second copy.
     pub(in crate::gui) package: Rc<Package>,
     single: CompiledUi,
+    /// State the documents keep for themselves, which no endpoint of this
+    /// application declares or answers.
+    view: ViewState,
 }
 
 impl AppUi {
@@ -44,6 +48,7 @@ impl AppUi {
             cache: ViewCache::default(),
             clock: Clock::default(),
             package,
+            view: ViewState::default(),
         })
     }
 
@@ -60,10 +65,35 @@ impl AppUi {
     }
 
     const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
-        match layout {
-            DeckLayout::Single => &self.single,
-            DeckLayout::Dual => &self.dual,
+        screen(&self.single, &self.dual, layout)
+    }
+
+    /// Applies whatever the press at `path` writes to the screen's own state.
+    ///
+    /// The application is told about the press all the same; this is only the
+    /// part of it no application declared an endpoint for.
+    pub(super) fn press(&mut self, path: &str) {
+        let Self {
+            dual,
+            single,
+            view,
+            cache,
+            ..
+        } = self;
+        if let Some((state, set)) = screen(single, dual, cache.layout()).views().at(path) {
+            view.set(state, set);
         }
+    }
+}
+
+const fn screen<'a>(
+    single: &'a CompiledUi,
+    dual: &'a CompiledUi,
+    layout: DeckLayout,
+) -> &'a CompiledUi {
+    match layout {
+        DeckLayout::Single => single,
+        DeckLayout::Dual => dual,
     }
 }
 
@@ -98,6 +128,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         &compiled.root,
         compiled,
         &reads,
+        &state.ui.view,
         state.ui.package.skin(),
         state.ui.clock,
         None,

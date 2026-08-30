@@ -21,6 +21,7 @@ use kithara_ui::{
     },
     size::SizeSpec,
     source::UiConfig,
+    view,
 };
 
 fn builtin_layout() -> &'static str {
@@ -255,7 +256,13 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
 
     render(
         &ui.root,
-        Ctx::new(&ui, &EmptyReads, builtin::skin_doc(), Clock::default()),
+        Ctx::new(
+            &ui,
+            &EmptyReads,
+            &view::EMPTY,
+            builtin::skin_doc(),
+            Clock::default(),
+        ),
         WaveHost::new(&ui),
     )
 }

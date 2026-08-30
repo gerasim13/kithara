@@ -26,6 +26,7 @@ use kithara_ui::{
     },
     size::SizeSpec,
     source::UiConfig,
+    view,
 };
 
 /// One placement, as the host was handed it.
@@ -229,7 +230,13 @@ fn mounted(children: &str, reads: &Points) -> Vec<Mounted> {
 
     render(
         &ui.root,
-        Ctx::new(&ui, reads, builtin::skin_doc(), Clock::default()),
+        Ctx::new(
+            &ui,
+            reads,
+            &view::EMPTY,
+            builtin::skin_doc(),
+            Clock::default(),
+        ),
         Spy { ui: &ui },
     )
 }

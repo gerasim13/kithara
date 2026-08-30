@@ -225,6 +225,12 @@ pub enum UiDocError {
         name: String,
         path: String,
     },
+    #[error("{origin}: view state {id:?} is written at {path} and read nowhere")]
+    UnreadState {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
     #[error("{origin}: unknown endpoint {category} {id:?} at {path}")]
     UnknownEndpoint {
         origin: SourceUri,

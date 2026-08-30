@@ -30,6 +30,7 @@ use kithara_ui::{
     },
     shaping::{FontPolicy, GlyphFace, GlyphSegment, TextContext},
     source::{MemResolver, UiConfig},
+    view,
 };
 
 struct FixtureReads {
@@ -275,7 +276,15 @@ fn dump(
     renderer: &iced::Renderer,
     viewport: Size,
 ) -> String {
-    let mut element = tree::render(&ui.root, ui, reads, skin, Clock::default(), None);
+    let mut element = tree::render(
+        &ui.root,
+        ui,
+        reads,
+        &view::EMPTY,
+        skin,
+        Clock::default(),
+        None,
+    );
     let mut tree = Tree::new(element.as_widget());
     let node =
         element
@@ -1120,7 +1129,15 @@ fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
     .expect("the scene document must compile");
     let skin = fixture_skin();
     let renderer = headless_renderer();
-    let mut element = tree::render(&ui.root, &ui, reads, &skin, Clock::default(), None);
+    let mut element = tree::render(
+        &ui.root,
+        &ui,
+        reads,
+        &view::EMPTY,
+        &skin,
+        Clock::default(),
+        None,
+    );
     let mut tree = Tree::new(element.as_widget());
     let node = element.as_widget_mut().layout(
         &mut tree,

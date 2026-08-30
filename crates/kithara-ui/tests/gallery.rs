@@ -875,7 +875,7 @@ mod tests {
         assert_eq!(
             found.popovers,
             [
-                ("app-menu/menu/pop", "ui.menu.open"),
+                ("app-menu/menu/pop", "app-menu/menu"),
                 ("ctx/track-1/menu", "gallery.menu.context@row=1"),
                 ("ctx/track-2/menu", "gallery.menu.context@row=2"),
                 ("ctx/track-3/menu", "gallery.menu.context@row=3"),
@@ -1774,7 +1774,7 @@ mod tests {
                 }
             }
             CompiledNode::Optional { block, child } => {
-                keys.push(ui.resolve(block.hidden.key));
+                keys.extend(endpoint_key(ui, &block.hidden));
                 collect_menu_reads(child, ui, keys);
             }
             CompiledNode::Module { root, .. } => collect_menu_module_reads(root, ui, keys),
@@ -1792,7 +1792,7 @@ mod tests {
                 active, children, ..
             } => {
                 if let Some(binding) = active {
-                    keys.push(ui.resolve(binding.key));
+                    keys.extend(endpoint_key(ui, binding));
                 }
                 for child in children {
                     collect_menu_module_reads(child, ui, keys);
@@ -1804,7 +1804,7 @@ mod tests {
                 }
             }
             ExpandedNode::Optional { block, child } => {
-                keys.push(ui.resolve(block.hidden.key));
+                keys.extend(endpoint_key(ui, &block.hidden));
                 collect_menu_module_reads(child, ui, keys);
             }
             ExpandedNode::Popover {
@@ -1813,7 +1813,7 @@ mod tests {
                 content,
                 ..
             } => {
-                keys.push(ui.resolve(open.key));
+                keys.extend(endpoint_key(ui, open));
                 collect_menu_module_reads(anchor, ui, keys);
                 collect_menu_module_reads(content, ui, keys);
             }
@@ -1822,7 +1822,7 @@ mod tests {
             }
             ExpandedNode::Control { spec, read, .. } => {
                 if let Some(binding) = read {
-                    keys.push(ui.resolve(binding.key));
+                    keys.extend(endpoint_key(ui, binding));
                 }
                 if let ControlSpec::Text {
                     active: Some(binding),
@@ -1833,11 +1833,17 @@ mod tests {
                     ..
                 } = spec
                 {
-                    keys.push(ui.resolve(binding.key));
+                    keys.extend(endpoint_key(ui, binding));
                 }
             }
             node => panic!("the menu walker does not know {node:?}"),
         }
+    }
+
+    /// The endpoint one binding names, or nothing when it names state the page
+    /// keeps for itself, which no application is asked to answer.
+    fn endpoint_key<'a>(ui: &'a CompiledUi, binding: &Binding) -> Option<&'a str> {
+        (!matches!(binding.kind, BindingKind::View { .. })).then(|| ui.resolve(binding.key))
     }
 
     fn collect_tree_queries<'a>(

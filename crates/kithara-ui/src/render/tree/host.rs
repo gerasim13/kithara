@@ -617,6 +617,7 @@ mod tests {
         shaping::TextResources,
         solve::{Length as SolveLength, Size as SolveSize},
         source::{MemResolver, UiConfig},
+        view,
     };
 
     fn redraw_event() -> Event {
@@ -855,7 +856,13 @@ mod tests {
     /// What the host hands the document for one frame, built from a fixture
     /// reader so a test drives the clock rather than waiting for one.
     fn ctx<'a>(ui: &'a CompiledUi, reads: &'a dyn Reads) -> Ctx<'a, 'a> {
-        Ctx::new(ui, reads, builtin::skin_doc(), Clock::default())
+        Ctx::new(
+            ui,
+            reads,
+            &view::EMPTY,
+            builtin::skin_doc(),
+            Clock::default(),
+        )
     }
 
     struct FixtureReads {

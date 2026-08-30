@@ -64,7 +64,15 @@ pub(super) fn expand_include(
         .id
         .0
         .clone();
-    let root = expand_at(context.set, &target, args, path.clone(), depth + 1, machine)?;
+    let root = expand_at(
+        context.set,
+        &target,
+        args,
+        path.clone(),
+        context.instance.clone(),
+        depth + 1,
+        machine,
+    )?;
     machine.includes.push(ExpandedInclude {
         address: machine.address.clone().into_boxed_slice(),
         module: machine.interner.intern(&module, &target)?,

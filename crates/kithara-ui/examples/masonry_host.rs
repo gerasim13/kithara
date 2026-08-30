@@ -17,6 +17,7 @@ use kithara_ui::{
     },
     shaping::FontPolicy,
     source::{MemResolver, UiConfig},
+    view,
 };
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},
@@ -134,7 +135,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let reads = EmptyReads;
     let state = MasonryState::default();
-    let ctx = Ctx::new(&ui, &reads, builtin::skin_doc(), Clock::default());
+    let ctx = Ctx::new(
+        &ui,
+        &reads,
+        &view::EMPTY,
+        builtin::skin_doc(),
+        Clock::default(),
+    );
     let host = MasonryHost::new(ctx, &skin).with_state(state).with_custom(
         "demo/custom",
         LetterboxedBadge {

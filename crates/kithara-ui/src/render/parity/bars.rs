@@ -17,6 +17,7 @@ use crate::{
     interact::{Input, MOUSE, PointerInput, PointerPhase},
     render::{Clock, ControlAction, ReadValue, Reads, Skin, UiEvent, tree},
     source::{MemResolver, UiConfig},
+    view,
 };
 
 /// The shape of the document below: the bars it hangs a menu on, the rows each
@@ -190,6 +191,7 @@ fn neutral_menus(width: u32, height: u32) -> Vec<Vec<Rect>> {
         &ui.root,
         &ui,
         &reads,
+        &view::EMPTY,
         builtin::skin(),
         Clock::default(),
         None,

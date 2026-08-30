@@ -37,13 +37,14 @@ use crate::{
     draw::{PoolStats, Rgba},
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
-        Reads, Skin, UiEvent, WindowCommand,
+        ControlAction, Reads, Skin, UiEvent, WindowCommand,
         custom::CustomKinds,
         document,
         document::{Clock, Ctx},
         masonry::{MasonryHost, MasonryRoot, MasonryState},
     },
     source::UiConfig,
+    view::ViewState,
 };
 
 /// One mounted document, driven by whoever owns the window.
@@ -70,6 +71,9 @@ pub struct Ui<'config, Application> {
     size: PhysicalSize<u32>,
     state: MasonryState,
     ui: CompiledUi,
+    /// The state the shown screen keeps for itself. It is this host's, not the
+    /// application's: nothing is asked for it and nothing declares it.
+    view: ViewState,
 }
 
 impl<'config, Application> Ui<'config, Application>
@@ -94,7 +98,8 @@ where
             .build();
         let ui = compile_document(&app, &config, &doc)?;
         let clock = Clock::default();
-        let root = mount(&app, &config, &state, &ui, size, scale, clock)?;
+        let view = ViewState::default();
+        let root = mount(&app, &config, &state, &ui, size, scale, clock, &view)?;
         Ok(Self {
             app,
             clock,
@@ -107,6 +112,7 @@ where
             size,
             state,
             ui,
+            view,
         })
     }
 
@@ -119,6 +125,15 @@ where
     pub fn background(&self) -> Rgba {
         let skin = self.app.skin();
         skin.rgba(skin.layout.page_background)
+    }
+
+    /// The state the shown screen keeps for itself.
+    ///
+    /// An application may read what a document turned for itself without
+    /// having declared, answered, or been asked for any of it.
+    #[must_use]
+    pub const fn view(&self) -> &ViewState {
+        &self.view
     }
 
     /// Current allocation-reuse counters for this mounted document.
@@ -256,10 +271,11 @@ where
             root,
             ui,
             config,
+            view,
             ..
         } = self;
         let clock = *clock;
-        app.reads(|reads| root.refresh(frame_ctx(ui, reads, app.skin(), config, clock)));
+        app.reads(|reads| root.refresh(frame_ctx(ui, reads, view, app.skin(), config, clock)));
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -355,6 +371,15 @@ where
         let was_document = self.app.document().to_owned();
         let was_skin = self.app.skin().id().to_owned();
         for event in actions {
+            // A press that turns the screen's own state is answered here, by
+            // the host that owns it. The application is told all the same: what
+            // the document turns for itself is not hidden from it.
+            if let UiEvent::Control { path, action } = &event
+                && matches!(action, ControlAction::Activate)
+                && let Some((state, set)) = self.ui.views().at(path)
+            {
+                self.view.set(state, set);
+            }
             if let UiEvent::Window(command) = event {
                 self.commands.push(command);
             }
@@ -367,10 +392,11 @@ where
                 root,
                 ui,
                 config,
+                view,
                 ..
             } = self;
             let clock = *clock;
-            app.reads(|reads| root.refresh(frame_ctx(ui, reads, app.skin(), config, clock)));
+            app.reads(|reads| root.refresh(frame_ctx(ui, reads, view, app.skin(), config, clock)));
             return;
         }
         if let Err(error) = self.remount() {
@@ -387,6 +413,10 @@ where
     /// reaches the screen only by being built again.
     fn remount(&mut self) -> Result<(), RunError> {
         let ui = compile_document(&self.app, &self.config, &self.doc)?;
+        // A state belongs to the document that named it. What the screen now
+        // shown does not name is gone rather than kept to answer for a state
+        // this document does not have.
+        self.view.retain(ui.views().named());
         self.root = mount(
             &self.app,
             &self.config,
@@ -395,6 +425,7 @@ where
             self.size,
             self.scale,
             self.clock,
+            &self.view,
         )?;
         self.ui = ui;
         self.root
@@ -427,11 +458,12 @@ where
 fn frame_ctx<'a, 'r>(
     ui: &'a CompiledUi,
     reads: &'r dyn Reads,
+    view: &'r ViewState,
     skin: &'a Skin,
     config: &Config<'a>,
     clock: Clock,
 ) -> Ctx<'a, 'r> {
-    let ctx = Ctx::new(ui, reads, skin.document(), clock);
+    let ctx = Ctx::new(ui, reads, view, skin.document(), clock);
     config.kinds.map_or(ctx, |kinds| ctx.with_kinds(kinds))
 }
 
@@ -443,6 +475,7 @@ fn mount<Application>(
     size: PhysicalSize<u32>,
     scale: f64,
     clock: Clock,
+    view: &ViewState,
 ) -> Result<MasonryRoot<UiEvent>, RunError>
 where
     Application: App,
@@ -451,7 +484,7 @@ where
     state.clear_paths();
     let skin = app.skin();
     let node = app.reads(|reads| {
-        let ctx = frame_ctx(ui, reads, skin, config, clock);
+        let ctx = frame_ctx(ui, reads, view, skin, config, clock);
         let host = MasonryHost::new(ctx, skin).with_state(state.clone());
         document::render(&ui.root, ctx, host)
     });

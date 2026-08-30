@@ -52,12 +52,20 @@ use crate::{
     source::{MemResolver, UiConfig},
 };
 
+static EMPTY_VIEW: crate::view::ViewState = crate::view::ViewState::new();
+
 struct FixtureReads;
 
 /// What the host hands the document for one frame, built from a fixture reader
 /// so a test drives the clock rather than waiting for one.
 fn ctx<'a>(ui: &'a CompiledUi, reads: &'a dyn Reads) -> Ctx<'a, 'a> {
-    Ctx::new(ui, reads, builtin::skin_doc(), Clock::default())
+    Ctx::new(
+        ui,
+        reads,
+        &EMPTY_VIEW,
+        builtin::skin_doc(),
+        Clock::default(),
+    )
 }
 
 static CENSUS_PORTALS: [PortalTarget; 2] = [

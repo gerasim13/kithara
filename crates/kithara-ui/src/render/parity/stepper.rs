@@ -20,6 +20,7 @@ use crate::{
     interact::{Input, MOUSE, PointerInput, PointerPhase, Scroll},
     render::{Clock, ReadValue, Reads, Skin, UiEvent, tree},
     source::{MemResolver, UiConfig},
+    view,
 };
 
 /// The shape of the document below, and the window both hosts are given.
@@ -141,6 +142,7 @@ fn neutral() -> Vec<UiEvent> {
         &ui.root,
         &ui,
         &Tempo::default(),
+        &view::EMPTY,
         builtin::skin(),
         Clock::default(),
         None,
