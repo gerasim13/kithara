@@ -70,8 +70,8 @@ where
     B: ResamplerBackend,
 {
     node: AnalysisNode<B>,
-    _pending: PendingTask,
     _dispatcher: Dispatcher,
+    _pending: PendingTask,
     _worker: Worker,
 }
 
@@ -87,6 +87,15 @@ where
             NonZeroUsize::new(8).expect("test drain limit is non-zero"),
             NonZeroU32::new(5).expect("test publish duration is non-zero"),
         )
+    }
+
+    #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+    fn context(&self) -> &TaskContext {
+        self._pending.context()
+    }
+
+    pub(super) fn tick(&mut self) -> TickResult {
+        self.node.tick()
     }
 
     pub(super) fn with_settings(
@@ -122,15 +131,6 @@ where
             _dispatcher: dispatcher,
             _worker: worker,
         }
-    }
-
-    #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-    fn context(&self) -> &TaskContext {
-        self._pending.context()
-    }
-
-    pub(super) fn tick(&mut self) -> TickResult {
-        self.node.tick()
     }
 }
 
@@ -176,12 +176,12 @@ fn enqueue(
 ) -> watch::Receiver<Option<AnalysisProgress>> {
     let (tx, results) = watch::channel(None);
     jobs.send(Job {
-        token: token.into(),
         tx,
-        rate: super::fixtures::spec().sample_rate,
         ingest,
         reader,
         cancel,
+        token: token.into(),
+        rate: super::fixtures::spec().sample_rate,
         resume: None,
     })
     .expect("analysis node accepts the test job");

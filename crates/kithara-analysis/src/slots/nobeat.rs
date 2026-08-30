@@ -63,12 +63,9 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn snapshot(
-        _slot: &mut Self,
-        _detector: Option<&mut Detector>,
-        _ending: bool,
-        _extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
+    pub(crate) fn apply_detection(&mut self, _output: DetectionOutput) {}
+
+    pub(crate) fn prepare_detection(&mut self, _trailing: bool) -> Option<DetectionRequest> {
         None
     }
 
@@ -81,21 +78,24 @@ where
     ) {
     }
 
-    pub(crate) fn prepare_detection(&mut self, _trailing: bool) -> Option<DetectionRequest> {
-        None
-    }
-
-    pub(crate) fn apply_detection(&mut self, _output: DetectionOutput) {}
-
-    pub(crate) const fn write_resume(&mut self) -> Option<Vec<u8>> {
-        None
-    }
-
     pub(crate) fn restore(&mut self, resume: Option<BeatResume>) -> Result<(), BlobError> {
         if resume.is_none() {
             Ok(())
         } else {
             Err(BlobError::Corrupt)
         }
+    }
+
+    pub(crate) fn snapshot(
+        _slot: &mut Self,
+        _detector: Option<&mut Detector>,
+        _ending: bool,
+        _extent: Option<u64>,
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
+        None
+    }
+
+    pub(crate) const fn write_resume(&mut self) -> Option<Vec<u8>> {
+        None
     }
 }

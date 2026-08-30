@@ -17,8 +17,8 @@ use crate::{
 
 struct DetectJob {
     pass_cancel: CancelToken,
-    detector: Detector,
     request: DetectionRequest,
+    detector: Detector,
 }
 
 struct DetectDone {
@@ -39,15 +39,15 @@ where
     B: ResamplerBackend,
 {
     builder: AnalyzerBuilder<B>,
+    detector: DetectorState,
     chunk_seconds: NonZeroU32,
+    publish_seconds: NonZeroU32,
+    producer_drain_limit: NonZeroUsize,
+    current: Option<AnalysisTask<B>>,
     completed: Receiver<DetectDone>,
+    jobs: Receiver<Job>,
     completion: Sender<DetectDone>,
     context: TaskContext,
-    current: Option<AnalysisTask<B>>,
-    detector: DetectorState,
-    jobs: Receiver<Job>,
-    producer_drain_limit: NonZeroUsize,
-    publish_seconds: NonZeroU32,
 }
 
 impl<B> AnalysisNode<B>
@@ -72,20 +72,12 @@ where
             completed,
             completion,
             context,
-            current: None,
             detector,
             jobs,
             producer_drain_limit,
             publish_seconds,
+            current: None,
         }
-    }
-
-    pub(crate) fn effective(&self) -> (AnalysisFingerprint, bool, (bool, bool)) {
-        (
-            self.builder.fingerprint(),
-            !self.builder.is_empty(),
-            self.builder.resume_shape(),
-        )
     }
 
     fn accept_completion(&mut self) -> bool {
@@ -105,45 +97,40 @@ where
         true
     }
 
-    fn submit_detection(&mut self, job: DetectJob) -> TickResult {
-        let completion = self.completion.clone();
-        match self.context.submit_compute(job, move |compute, mut job| {
-            let cancel = compute.cancel_group().clone() | job.pass_cancel.clone();
-            let output = if cancel.is_cancelled() {
-                None
-            } else {
-                let output = detect(job.request, &mut job.detector);
-                (!cancel.is_cancelled()).then_some(output)
-            };
-            completion
-                .send(DetectDone {
-                    detector: job.detector,
-                    output,
-                })
-                .ok();
-        }) {
-            Ok(()) => {
-                self.detector = DetectorState::Running;
-                TickResult::Progress
+    fn accept_job(&mut self) -> TickResult {
+        match self.jobs.try_recv() {
+            Ok(job) => {
+                let task = match AnalysisTask::new(
+                    job,
+                    &self.builder,
+                    self.chunk_seconds,
+                    self.producer_drain_limit,
+                    self.publish_seconds,
+                ) {
+                    Ok(task) => task,
+                    Err(error) => {
+                        warn!(?error, "analysis: resume checkpoint rejected");
+                        return TickResult::Progress;
+                    }
+                };
+                self.current = Some(task);
+                self.tick_current()
             }
-            Err(rejected) if rejected.reason() == ComputeSubmitError::Saturated => {
-                self.detector = DetectorState::Retry(rejected.recover_payload());
-                TickResult::Backpressured
-            }
-            Err(rejected) => {
-                let reason = rejected.reason();
-                drop(rejected.recover_payload());
-                self.detector = DetectorState::Unavailable;
-                if let Some(current) = &mut self.current {
-                    current.fail_compute_unavailable();
-                }
-                debug_assert!(matches!(
-                    reason,
-                    ComputeSubmitError::Cancelled | ComputeSubmitError::Unavailable
-                ));
-                TickResult::Progress
-            }
+            Err(TryRecvError::Empty) => TickResult::UpstreamPending,
+            Err(TryRecvError::Disconnected) => TickResult::Done,
         }
+    }
+
+    fn clear_finished(&mut self) {
+        if !self.current.as_ref().is_some_and(AnalysisTask::is_done) {
+            return;
+        }
+        self.current = None;
+        let state = std::mem::replace(&mut self.detector, DetectorState::Disabled);
+        self.detector = match state {
+            DetectorState::Retry(job) => DetectorState::Idle(job.detector),
+            state => state,
+        };
     }
 
     fn drive_detection(&mut self) -> Option<TickResult> {
@@ -195,23 +182,60 @@ where
                 let pass_cancel = current.cancel_token().clone();
                 Some(self.submit_detection(DetectJob {
                     pass_cancel,
-                    detector,
                     request,
+                    detector,
                 }))
             }
         }
     }
 
-    fn clear_finished(&mut self) {
-        if !self.current.as_ref().is_some_and(AnalysisTask::is_done) {
-            return;
+    pub(crate) fn effective(&self) -> (AnalysisFingerprint, bool, (bool, bool)) {
+        (
+            self.builder.fingerprint(),
+            !self.builder.is_empty(),
+            self.builder.resume_shape(),
+        )
+    }
+
+    fn submit_detection(&mut self, job: DetectJob) -> TickResult {
+        let completion = self.completion.clone();
+        match self.context.submit_compute(job, move |compute, mut job| {
+            let cancel = compute.cancel_group().clone() | job.pass_cancel.clone();
+            let output = if cancel.is_cancelled() {
+                None
+            } else {
+                let output = detect(job.request, &mut job.detector);
+                (!cancel.is_cancelled()).then_some(output)
+            };
+            completion
+                .send(DetectDone {
+                    output,
+                    detector: job.detector,
+                })
+                .ok();
+        }) {
+            Ok(()) => {
+                self.detector = DetectorState::Running;
+                TickResult::Progress
+            }
+            Err(rejected) if rejected.reason() == ComputeSubmitError::Saturated => {
+                self.detector = DetectorState::Retry(rejected.recover_payload());
+                TickResult::Backpressured
+            }
+            Err(rejected) => {
+                let reason = rejected.reason();
+                drop(rejected.recover_payload());
+                self.detector = DetectorState::Unavailable;
+                if let Some(current) = &mut self.current {
+                    current.fail_compute_unavailable();
+                }
+                debug_assert!(matches!(
+                    reason,
+                    ComputeSubmitError::Cancelled | ComputeSubmitError::Unavailable
+                ));
+                TickResult::Progress
+            }
         }
-        self.current = None;
-        let state = std::mem::replace(&mut self.detector, DetectorState::Disabled);
-        self.detector = match state {
-            DetectorState::Retry(job) => DetectorState::Idle(job.detector),
-            state => state,
-        };
     }
 
     fn tick_current(&mut self) -> TickResult {
@@ -241,36 +265,16 @@ where
             _ => result,
         }
     }
-
-    fn accept_job(&mut self) -> TickResult {
-        match self.jobs.try_recv() {
-            Ok(job) => {
-                let task = match AnalysisTask::new(
-                    job,
-                    &self.builder,
-                    self.chunk_seconds,
-                    self.producer_drain_limit,
-                    self.publish_seconds,
-                ) {
-                    Ok(task) => task,
-                    Err(error) => {
-                        warn!(?error, "analysis: resume checkpoint rejected");
-                        return TickResult::Progress;
-                    }
-                };
-                self.current = Some(task);
-                self.tick_current()
-            }
-            Err(TryRecvError::Empty) => TickResult::UpstreamPending,
-            Err(TryRecvError::Disconnected) => TickResult::Done,
-        }
-    }
 }
 
 impl<B> Task for AnalysisNode<B>
 where
     B: ResamplerBackend,
 {
+    fn on_cancel(&mut self) {
+        self.current = None;
+    }
+
     fn tick(&mut self) -> TickResult {
         let completed = self.accept_completion();
         let result = if self.current.is_some() {
@@ -283,9 +287,5 @@ where
         } else {
             result
         }
-    }
-
-    fn on_cancel(&mut self) {
-        self.current = None;
     }
 }

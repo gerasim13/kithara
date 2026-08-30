@@ -29,8 +29,8 @@ impl TrackPriority {
 }
 
 pub(crate) struct TrackLease {
-    task: TaskHandle,
     _worker: PlayWorker,
+    task: TaskHandle,
 }
 
 impl TrackLease {
@@ -51,8 +51,8 @@ impl TrackLease {
 /// The reader drops before its registration lease, so its wake handles and
 /// buffers are released before the final worker owner can shut down.
 pub struct RegisteredAudio<S> {
-    warp: Warp<Audio<S>>,
     _lease: TrackLease,
+    warp: Warp<Audio<S>>,
 }
 
 impl<S> RegisteredAudio<S> {
@@ -102,6 +102,10 @@ impl<S: MaybeSend> AudioSession for RegisteredAudio<S> {
 }
 
 impl<S: MaybeSend> AudioControl for RegisteredAudio<S> {
+    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
+        AudioControl::seek_handle(self.warp.source())
+    }
+
     delegate::delegate! {
         to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;
@@ -111,9 +115,5 @@ impl<S: MaybeSend> AudioControl for RegisteredAudio<S> {
         to self.warp.source() {
             fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
-    }
-
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        AudioControl::seek_handle(self.warp.source())
     }
 }

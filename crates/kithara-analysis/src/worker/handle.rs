@@ -18,15 +18,15 @@ use crate::{
 };
 
 pub struct AnalysisWorker {
-    active: bool,
-    chunk_seconds: NonZeroU32,
-    dispatcher: Dispatcher,
+    resume_shape: (bool, bool),
     fingerprint: AnalysisFingerprint,
     job_scope: CancelToken,
+    dispatcher: Dispatcher,
+    chunk_seconds: NonZeroU32,
     jobs: mpsc::Sender<Job>,
-    resume_shape: (bool, bool),
     task: TaskHandle,
     _base: Worker,
+    active: bool,
 }
 
 /// An analysis pass opened before either decoder starts.
@@ -35,12 +35,12 @@ pub struct AnalysisWorker {
 /// therefore attach the producer to playback before it asynchronously opens
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
-    cancel: CancelToken,
-    ingest: ring::Reader,
-    rate: NonZeroU32,
     token: AnalysisToken,
-    tx: watch::Sender<Option<AnalysisProgress>>,
+    cancel: CancelToken,
+    rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
+    ingest: ring::Reader,
+    tx: watch::Sender<Option<AnalysisProgress>>,
 }
 
 /// Output of opening an analysis pass before its fallback reader starts.
@@ -143,16 +143,31 @@ impl AnalysisWorker {
         })
     }
 
-    /// Whether detector initialization left at least one effective analyzer.
+    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
+    /// another axis is refused. Returns where its snapshots arrive and the
+    /// producer another component may contribute decoded ranges through.
     #[must_use]
-    pub const fn is_active(&self) -> bool {
-        self.active
+    pub fn analyze(
+        &self,
+        reader: Box<dyn AudioReader>,
+        token: AnalysisToken,
+        rate: NonZeroU32,
+    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
+        let (rx, producer, pass) = self.open(token, rate);
+        self.start(pass, reader);
+        (rx, producer)
     }
 
     /// Identity of the analyzers that survived worker initialization.
     #[must_use]
     pub const fn fingerprint(&self) -> &AnalysisFingerprint {
         &self.fingerprint
+    }
+
+    /// Whether detector initialization left at least one effective analyzer.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active
     }
 
     /// Open a pass and its bounded playback producer without waiting for the
@@ -171,58 +186,14 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
-            cancel: self.job_scope.child(),
             ingest,
             rate,
             token,
             tx,
+            cancel: self.job_scope.child(),
             resume: None,
         };
         (rx, producer, pass)
-    }
-
-    /// Start an already-open pass with its fallback reader.
-    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        if pass.resume.is_some() {
-            warn!("analysis resume pass requires extent validation");
-            return;
-        }
-        self.submit_pass(pass, reader);
-    }
-
-    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        let AnalysisPass {
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        } = pass;
-        self.submit(Job {
-            reader,
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        });
-    }
-
-    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
-    /// another axis is refused. Returns where its snapshots arrive and the
-    /// producer another component may contribute decoded ranges through.
-    #[must_use]
-    pub fn analyze(
-        &self,
-        reader: Box<dyn AudioReader>,
-        token: AnalysisToken,
-        rate: NonZeroU32,
-    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate);
-        self.start(pass, reader);
-        (rx, producer)
     }
 
     /// Open a validated partial publication before its fallback reader is
@@ -263,14 +234,23 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
-            cancel: self.job_scope.child(),
             ingest,
             rate,
             token,
             tx,
+            cancel: self.job_scope.child(),
             resume: Some(progress),
         };
         Ok((rx, producer, pass))
+    }
+
+    /// Start an already-open pass with its fallback reader.
+    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+        if pass.resume.is_some() {
+            warn!("analysis resume pass requires extent validation");
+            return;
+        }
+        self.submit_pass(pass, reader);
     }
 
     /// Start a resume pass only after its opened reader confirms the persisted
@@ -303,6 +283,26 @@ impl AnalysisWorker {
         } else {
             self.task.control().wake();
         }
+    }
+
+    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+        let AnalysisPass {
+            cancel,
+            ingest,
+            rate,
+            token,
+            tx,
+            resume,
+        } = pass;
+        self.submit(Job {
+            token,
+            reader,
+            cancel,
+            rate,
+            resume,
+            ingest,
+            tx,
+        });
     }
 }
 

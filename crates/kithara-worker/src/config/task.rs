@@ -9,9 +9,9 @@ use crate::Priority;
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(with)]
 pub struct TaskConfig {
+    pub(crate) max_compute_tasks: NonZeroUsize,
     #[field(option_set_some)]
     pub(crate) cancel: Option<CancelGroup>,
-    pub(crate) max_compute_tasks: NonZeroUsize,
     pub(crate) priority: Priority,
 }
 

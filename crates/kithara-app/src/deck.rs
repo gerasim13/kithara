@@ -40,6 +40,15 @@ impl EqMode {
     }
 
     #[must_use]
+    pub(crate) fn layout(self, gains: &[GainDb]) -> Vec<EqBandConfig> {
+        let mut layout = generate_log_spaced_bands(self.bands().len());
+        for (band, gain) in layout.iter_mut().zip(gains) {
+            band.set_gain_db(*gain);
+        }
+        layout
+    }
+
+    #[must_use]
     pub(crate) fn remap(self, next: Self, gains: &[GainDb]) -> Option<Vec<GainDb>> {
         match (self, next, gains) {
             (Self::ThreeBand, Self::FourBand, [low, mid, high]) => {
@@ -50,15 +59,6 @@ impl EqMode {
             }
             _ => None,
         }
-    }
-
-    #[must_use]
-    pub(crate) fn layout(self, gains: &[GainDb]) -> Vec<EqBandConfig> {
-        let mut layout = generate_log_spaced_bands(self.bands().len());
-        for (band, gain) in layout.iter_mut().zip(gains) {
-            band.set_gain_db(*gain);
-        }
-        layout
     }
 }
 
@@ -78,10 +78,10 @@ pub struct DeckId(pub usize);
 
 /// One app deck: its own cancellation subtree, player, queue and tempo controls.
 pub struct Deck {
-    cancel: CancelToken,
-    pub queue: HostOwned<Queue>,
     pub timestretch: Arc<StretchControls>,
     pub id: DeckId,
+    pub queue: HostOwned<Queue>,
+    cancel: CancelToken,
 }
 
 impl Deck {
@@ -113,10 +113,10 @@ impl Deck {
         let queue = host.insert(queue)?;
 
         Ok(Self {
-            cancel,
-            queue,
             timestretch,
             id,
+            queue,
+            cancel,
         })
     }
 

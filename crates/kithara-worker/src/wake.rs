@@ -13,14 +13,13 @@ pub struct Wake {
 }
 
 impl Wake {
-    /// Wake the dispatcher immediately from an off-real-time thread.
-    pub fn wake(&self) {
-        self.inner.gate.signal();
-    }
-
     /// Coalesce a future dispatcher pass without unparking the thread.
     pub fn defer(&self) {
         self.inner.deferred.store(true, Ordering::Release);
+    }
+
+    fn take_deferred(&self) -> bool {
+        self.inner.deferred.swap(false, Ordering::Acquire)
     }
 
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
@@ -35,16 +34,17 @@ impl Wake {
         woken || self.take_deferred()
     }
 
-    fn take_deferred(&self) -> bool {
-        self.inner.deferred.swap(false, Ordering::Acquire)
+    /// Wake the dispatcher immediately from an off-real-time thread.
+    pub fn wake(&self) {
+        self.inner.gate.signal();
     }
 }
 
 #[derive(Default)]
 struct WakeInner {
     deferred: AtomicBool,
-    gate: ThreadGate,
     seen: AtomicU64,
+    gate: ThreadGate,
 }
 
 #[cfg(test)]

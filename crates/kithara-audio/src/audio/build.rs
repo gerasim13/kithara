@@ -78,14 +78,6 @@ where
         }
     }
 
-    delegate::delegate! {
-        to self.decoder {
-            fn backend(&self) -> kithara_decode::DecoderBackend;
-            #[call(resampler_backend_name)]
-            fn playback_resampler_backend(&self) -> &'static str;
-        }
-    }
-
     /// Publish the initial decoder state before the source becomes registrable.
     /// A registered source may emit `FormatDetected` on its first worker pass.
     fn publish_initial_events(
@@ -134,6 +126,14 @@ where
     fn resampler_config(&self) -> Option<DecoderResamplerConfig<B>> {
         let target_sample_rate = NonZeroU32::new(self.host_sample_rate.load(Ordering::Acquire));
         self.decoder.build_resampler_config(target_sample_rate)
+    }
+
+    delegate::delegate! {
+        to self.decoder {
+            fn backend(&self) -> kithara_decode::DecoderBackend;
+            #[call(resampler_backend_name)]
+            fn playback_resampler_backend(&self) -> &'static str;
+        }
     }
 }
 

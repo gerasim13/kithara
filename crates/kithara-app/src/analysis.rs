@@ -51,7 +51,6 @@ pub(crate) async fn listen(
         }
     };
 
-    // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
 
     loop {
@@ -103,8 +102,8 @@ fn handle_event(
 /// Results land in the two-tier [`TrackAnalysisCache`];
 pub(crate) struct AnalysisController {
     activity: Option<Activity>,
-    cache: TrackAnalysisCache,
     persistence: Option<AnalysisPersistence>,
+    cache: TrackAnalysisCache,
     runner: TrackAnalysisRunner,
     /// Tracks waiting for background analysis, current track first.
     pending: VecDeque<TrackId>,
@@ -118,16 +117,16 @@ enum Activity {
 /// An in-flight analysis: the track it is for (stale-guard), its content cache
 /// key (`None` for an unkeyable source), and its result channel.
 struct Run {
-    target: Option<AnalysisTarget>,
     /// The rate axis this pass was opened on. A pass pins it, so a host rate
     /// change means the pass has to end rather than keep measuring in frames
     /// that would come to mean something else.
     axis: NonZeroU32,
-    rx: watch::Receiver<Option<AnalysisProgress>>,
     /// Highest revision this run has published. Revisions are monotonic within
     /// one pass and start over in the next, so the guard belongs to the run
     /// rather than to what the UI happens to show.
     shown_revision: Option<u64>,
+    target: Option<AnalysisTarget>,
+    rx: watch::Receiver<Option<AnalysisProgress>>,
     track_id: TrackId,
 }
 
@@ -165,27 +164,6 @@ impl AnalysisController {
         })
     }
 
-    /// Persist a closed run before allowing the next analysis to start.
-    fn finish_run(&mut self, state: &Mutex<UiState>) {
-        let Some(Activity::Running(run)) = self.activity.take() else {
-            return;
-        };
-        let Some(progress) = run.rx.borrow().clone() else {
-            return;
-        };
-
-        if let Some(target) = &run.target {
-            self.cache.put(target.clone(), progress.clone());
-        }
-        publish_if_current(state, run.track_id, progress.analysis().clone());
-
-        let (Some(target), Some(persistence)) = (run.target, self.persistence.clone()) else {
-            return;
-        };
-        let task = tokio::task::spawn(async move { persistence.store(target, progress).await });
-        self.activity = Some(Activity::Committing(Commit { task }));
-    }
-
     /// Await the run's next event and handle it: publish the staged
     /// intermediate, or commit and pump on close. Parks when no run is active.
     pub(crate) async fn drive(
@@ -215,6 +193,27 @@ impl AnalysisController {
             }
             None => std::future::pending::<()>().await,
         }
+    }
+
+    /// Persist a closed run before allowing the next analysis to start.
+    fn finish_run(&mut self, state: &Mutex<UiState>) {
+        let Some(Activity::Running(run)) = self.activity.take() else {
+            return;
+        };
+        let Some(progress) = run.rx.borrow().clone() else {
+            return;
+        };
+
+        if let Some(target) = &run.target {
+            self.cache.put(target.clone(), progress.clone());
+        }
+        publish_if_current(state, run.track_id, progress.analysis().clone());
+
+        let (Some(target), Some(persistence)) = (run.target, self.persistence.clone()) else {
+            return;
+        };
+        let task = tokio::task::spawn(async move { persistence.store(target, progress).await });
+        self.activity = Some(Activity::Committing(Commit { task }));
     }
 
     /// The current track changed: put it at the front of the queue and
@@ -257,31 +256,6 @@ impl AnalysisController {
             self.pending.retain(|t| *t != run.track_id);
         }
         self.pump(queue, state, config);
-    }
-
-    /// End a pass whose rate axis the engine has moved off, and put its track
-    /// back at the front of the queue so the next pump opens a fresh pass on
-    /// the new axis. Letting the old pass follow the device would leave one
-    /// snapshot series whose frames mean two different things.
-    fn retire_stale_axis(&mut self, queue: &QueueControl) {
-        let Some(Activity::Running(run)) = &self.activity else {
-            return;
-        };
-        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
-            return;
-        };
-        if run.axis == rate {
-            return;
-        }
-        let track_id = run.track_id;
-        warn!(
-            from = run.axis.get(),
-            to = rate.get(),
-            "analysis: the host rate moved; the pass restarts on the new axis"
-        );
-        self.runner.clear();
-        self.pending.retain(|pending| *pending != track_id);
-        self.pending.push_front(track_id);
     }
 
     /// Publish and best-effort checkpoint a newer intermediate revision.
@@ -327,14 +301,12 @@ impl AnalysisController {
             return;
         }
 
-        // No analyzers found: decoding would produce nothing.
         if !self.runner.is_active() {
             self.pending.clear();
             return;
         }
 
         while let Some(track_id) = self.pending.pop_front() {
-            // Track gone from the queue since it was enqueued: skip.
             let Some(source) = queue.track_source(track_id) else {
                 continue;
             };
@@ -374,21 +346,18 @@ impl AnalysisController {
                 continue;
             }
 
-            // An unkeyable source cannot be cached, so a background decode
-            // would be thrown away; decode it only for display.
+            // WHY: An unkeyable background result cannot be cached or displayed.
             if !is_current && target.is_none() {
                 continue;
             }
 
-            // A refill keeps what it just served on screen: the pass produces
-            // the missing artifact, not a blank deck.
+            // WHY: Keep a served partial visible while its missing artifact refills.
             if is_current && !served {
                 state.lock().set_analysis(None);
             }
 
-            // The handle waits where this track's load will find it. A track
-            // already loaded keeps it waiting until it loads again, so a pass
-            // opened mid-play warms nothing this time round.
+            // WHY: The observer must wait for this track's next load; attaching
+            // mid-play cannot warm the already active load.
             let queue = queue.clone();
             let rx = if let Some(progress) = resume {
                 match self.runner.resume(cfg, progress, move |producer| {
@@ -411,10 +380,10 @@ impl AnalysisController {
             };
             self.activity = Some(Activity::Running(Run {
                 target,
-                axis: rate,
                 rx,
-                shown_revision: None,
                 track_id,
+                axis: rate,
+                shown_revision: None,
             }));
             return;
         }
@@ -430,6 +399,31 @@ impl AnalysisController {
         if current_track_id_in(&state) == Some(track_id) {
             state.set_analysis(None);
         }
+    }
+
+    /// End a pass whose rate axis the engine has moved off, and put its track
+    /// back at the front of the queue so the next pump opens a fresh pass on
+    /// the new axis. Letting the old pass follow the device would leave one
+    /// snapshot series whose frames mean two different things.
+    fn retire_stale_axis(&mut self, queue: &QueueControl) {
+        let Some(Activity::Running(run)) = &self.activity else {
+            return;
+        };
+        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
+            return;
+        };
+        if run.axis == rate {
+            return;
+        }
+        let track_id = run.track_id;
+        warn!(
+            from = run.axis.get(),
+            to = rate.get(),
+            "analysis: the host rate moved; the pass restarts on the new axis"
+        );
+        self.runner.clear();
+        self.pending.retain(|pending| *pending != track_id);
+        self.pending.push_front(track_id);
     }
 }
 
@@ -457,7 +451,7 @@ fn plan_analysis(
     source_sample_rate: NonZeroU32,
 ) -> Plan {
     let Some(target) = target else {
-        // No stable key (the reserved non-exhaustive source seam): cannot
+        // WHY: Without a stable key, the result cannot be cached.
         return Plan::Decode;
     };
 
@@ -685,10 +679,10 @@ mod tests {
             .expect("analysis controller fixture starts");
         let (tx, rx) = watch::channel(value.map(progress));
         controller.activity = Some(Activity::Running(Run {
-            shown_revision: None,
-            axis: sample_rate(),
             track_id,
             rx,
+            shown_revision: None,
+            axis: sample_rate(),
             target: Some(target),
         }));
         (controller, tx)

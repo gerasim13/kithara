@@ -32,8 +32,8 @@ impl Consts {
 }
 
 struct Partial {
-    samples: SampleBuffer,
     written: Coverage,
+    samples: SampleBuffer,
     seq: u64,
 }
 
@@ -45,17 +45,17 @@ struct Partial {
 pub struct WaveformAnalyzer {
     params: AnalysisParams,
     fft: Arc<dyn RealToComplex<f32>>,
-    fft_input: SampleBuffer,
-    fft_output: Vec<Complex<f32>>,
-    fft_scratch: Vec<Complex<f32>>,
-    hann: SampleBuffer,
     bands: BTreeMap<u64, [f32; Band::COUNT]>,
     partial: BTreeMap<u64, Partial>,
+    fft_input: SampleBuffer,
+    hann: SampleBuffer,
     sample_pool: SamplePool,
+    fft_output: Vec<Complex<f32>>,
+    fft_scratch: Vec<Complex<f32>>,
     band_bin_inv: [f32; Band::COUNT],
+    opened: u64,
     low_mid_bin: usize,
     mid_high_bin: usize,
-    opened: u64,
     window_hop: usize,
 }
 
@@ -76,9 +76,8 @@ impl WaveformAnalyzer {
         let bin_hz = if size_f > 0.0 { rate / size_f } else { 0.0 };
         let low_mid_bin = crossover_bin(params.low_mid_hz(), bin_hz, bins);
         let mid_high_bin = crossover_bin(params.mid_high_hz(), bin_hz, bins).max(low_mid_bin);
-        // Per-band inverse bin count: divide summed energy by bandwidth so a
-        // wide band (mid/high) doesn't outweigh a narrow one (low) by sheer bin
-        // count. This makes each band an energy density (RMS-like).
+        // WHY: Normalize by bin count so wide bands do not outweigh narrow
+        // bands merely because they contain more bins.
         let inv = |count: usize| 1.0 / count.max(1).to_f32().unwrap_or(1.0);
         let band_bin_inv = [
             inv(low_mid_bin.saturating_sub(1)),
@@ -102,6 +101,33 @@ impl WaveformAnalyzer {
             sample_pool: sample_pool.clone(),
             opened: 0,
         }
+    }
+
+    fn evict_overflow(&mut self) {
+        while self.partial.len() > Consts::MAX_PARTIAL {
+            let oldest = self
+                .partial
+                .iter()
+                .min_by_key(|(_, partial)| partial.seq)
+                .map(|(index, _)| *index);
+            let Some(index) = oldest else {
+                return;
+            };
+            self.partial.remove(&index);
+            debug!(
+                index,
+                "waveform: partial window evicted; span left unanalysed"
+            );
+        }
+    }
+
+    fn hop(&self) -> u64 {
+        u64::try_from(self.window_hop).unwrap_or(1)
+    }
+
+    #[cfg(test)]
+    fn partial_len(&self) -> usize {
+        self.partial.len()
     }
 
     /// Fold one interleaved block starting at source frame `at`: downmix to
@@ -131,7 +157,7 @@ impl WaveformAnalyzer {
         let hop = self.hop();
         let size = self.size();
         let end = at.saturating_add(span);
-        // Windows overlapping `[at, end)`: `k·hop < end` and `k·hop + size > at`.
+        // WHY: Overlap requires `k·hop < end` and `k·hop + size > at`.
         let first = if at >= size { (at - size) / hop + 1 } else { 0 };
         let last = (end - 1) / hop;
 
@@ -144,128 +170,6 @@ impl WaveformAnalyzer {
             self.reduce_if_complete(index);
         }
         self.evict_overflow();
-    }
-
-    /// Fold the band-energy series into per-bucket band heights, leaving the
-    /// pass able to accept further ranges. `extent` is the source length in
-    /// frames when it is known: it sets the window count the buckets are
-    /// spread over, so bucket boundaries stay put as coverage grows.
-    #[must_use]
-    pub fn snapshot(&mut self, buckets: usize, extent: Option<u64>) -> Waveform {
-        if self.bands.is_empty()
-            && let Some(extent) = extent
-        {
-            self.reduce_padded(extent);
-        }
-
-        let total = self.window_count(extent);
-        if buckets == 0 || total == 0 {
-            return Waveform::default();
-        }
-
-        let mut raw = vec![[0.0; Band::COUNT]; total];
-        for (&index, energy) in &self.bands {
-            if let Ok(index) = usize::try_from(index)
-                && let Some(slot) = raw.get_mut(index)
-            {
-                *slot = *energy;
-            }
-        }
-
-        let buckets = buckets.min(total);
-        let max = |a: [f32; Band::COUNT], b: [f32; Band::COUNT]| array::from_fn(|i| a[i].max(b[i]));
-        let energy = bucketize(&raw, buckets, [0.0; Band::COUNT], max);
-        let bands = normalize_bands(energy, self.params.band_gain());
-
-        let out: Vec<Bucket> = bands
-            .into_iter()
-            .map(|b| Bucket::new(b[Band::Low.idx()], b[Band::Mid.idx()], b[Band::High.idx()]))
-            .collect();
-        Waveform::from(out)
-    }
-
-    pub(crate) fn write_resume(&self, out: &mut Vec<u8>) {
-        let mut writer = Writer::new(out);
-        writer.write_len(self.bands.len());
-        for (index, bands) in &self.bands {
-            writer.write_u64(*index);
-            for band in bands {
-                writer.write_f32(*band);
-            }
-        }
-        writer.write_len(self.partial.len());
-        for (index, partial) in &self.partial {
-            writer.write_u64(*index);
-            write_samples(&mut writer, &partial.samples);
-            write_coverage(&mut writer, &partial.written);
-            writer.write_u64(partial.seq);
-        }
-        writer.write_u64(self.opened);
-    }
-
-    pub(crate) fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
-        if resume.partials.len() > Consts::MAX_PARTIAL {
-            return Err(BlobError::Corrupt);
-        }
-
-        let mut bands = BTreeMap::new();
-        for (index, energy) in resume.bands {
-            bands.insert(index, energy);
-        }
-
-        let mut partial = BTreeMap::new();
-        for held in resume.partials {
-            if held.samples.len() != self.window_size()
-                || held.seq >= resume.opened
-                || bands.contains_key(&held.index)
-            {
-                return Err(BlobError::Corrupt);
-            }
-            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
-            if held
-                .written
-                .runs()
-                .iter()
-                .any(|range| range.start() < span.start() || range.end() > span.end())
-            {
-                return Err(BlobError::Corrupt);
-            }
-            partial.insert(
-                held.index,
-                Partial {
-                    samples: self.sample_pool.attach(held.samples.into_vec()),
-                    written: held.written,
-                    seq: held.seq,
-                },
-            );
-        }
-
-        self.bands = bands;
-        self.partial = partial;
-        self.opened = resume.opened;
-        Ok(())
-    }
-
-    fn evict_overflow(&mut self) {
-        while self.partial.len() > Consts::MAX_PARTIAL {
-            let oldest = self
-                .partial
-                .iter()
-                .min_by_key(|(_, partial)| partial.seq)
-                .map(|(index, _)| *index);
-            let Some(index) = oldest else {
-                return;
-            };
-            self.partial.remove(&index);
-            debug!(
-                index,
-                "waveform: partial window evicted; span left unanalysed"
-            );
-        }
-    }
-
-    fn hop(&self) -> u64 {
-        u64::try_from(self.window_hop).unwrap_or(1)
     }
 
     fn reduce(&mut self, index: u64) {
@@ -328,6 +232,54 @@ impl WaveformAnalyzer {
         self.reduce(0);
     }
 
+    #[cfg(test)]
+    fn reduced(&self, index: u64) -> Option<[f32; Band::COUNT]> {
+        self.bands.get(&index).copied()
+    }
+
+    pub(crate) fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
+        if resume.partials.len() > Consts::MAX_PARTIAL {
+            return Err(BlobError::Corrupt);
+        }
+
+        let mut bands = BTreeMap::new();
+        for (index, energy) in resume.bands {
+            bands.insert(index, energy);
+        }
+
+        let mut partial = BTreeMap::new();
+        for held in resume.partials {
+            if held.samples.len() != self.window_size()
+                || held.seq >= resume.opened
+                || bands.contains_key(&held.index)
+            {
+                return Err(BlobError::Corrupt);
+            }
+            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
+            if held
+                .written
+                .runs()
+                .iter()
+                .any(|range| range.start() < span.start() || range.end() > span.end())
+            {
+                return Err(BlobError::Corrupt);
+            }
+            partial.insert(
+                held.index,
+                Partial {
+                    samples: self.sample_pool.attach(held.samples.into_vec()),
+                    written: held.written,
+                    seq: held.seq,
+                },
+            );
+        }
+
+        self.bands = bands;
+        self.partial = partial;
+        self.opened = resume.opened;
+        Ok(())
+    }
+
     fn scatter(&mut self, index: u64, mono: &[f32], at: u64, end: u64) {
         if self.bands.contains_key(&index) {
             return;
@@ -372,22 +324,50 @@ impl WaveformAnalyzer {
         partial.written.insert(FrameRange::new(from, to - from));
     }
 
-    #[cfg(test)]
-    fn partial_len(&self) -> usize {
-        self.partial.len()
-    }
-
-    #[cfg(test)]
-    fn reduced(&self, index: u64) -> Option<[f32; Band::COUNT]> {
-        self.bands.get(&index).copied()
-    }
-
     fn size(&self) -> u64 {
         u64::try_from(self.fft_input.len()).unwrap_or(0)
     }
 
+    /// Fold the band-energy series into per-bucket band heights, leaving the
+    /// pass able to accept further ranges. `extent` is the source length in
+    /// frames when it is known: it sets the window count the buckets are
+    /// spread over, so bucket boundaries stay put as coverage grows.
+    #[must_use]
+    pub fn snapshot(&mut self, buckets: usize, extent: Option<u64>) -> Waveform {
+        if self.bands.is_empty()
+            && let Some(extent) = extent
+        {
+            self.reduce_padded(extent);
+        }
+
+        let total = self.window_count(extent);
+        if buckets == 0 || total == 0 {
+            return Waveform::default();
+        }
+
+        let mut raw = vec![[0.0; Band::COUNT]; total];
+        for (&index, energy) in &self.bands {
+            if let Ok(index) = usize::try_from(index)
+                && let Some(slot) = raw.get_mut(index)
+            {
+                *slot = *energy;
+            }
+        }
+
+        let buckets = buckets.min(total);
+        let max = |a: [f32; Band::COUNT], b: [f32; Band::COUNT]| array::from_fn(|i| a[i].max(b[i]));
+        let energy = bucketize(&raw, buckets, [0.0; Band::COUNT], max);
+        let bands = normalize_bands(energy, self.params.band_gain());
+
+        let out: Vec<Bucket> = bands
+            .into_iter()
+            .map(|b| Bucket::new(b[Band::Low.idx()], b[Band::Mid.idx()], b[Band::High.idx()]))
+            .collect();
+        Waveform::from(out)
+    }
+
     fn window_bands(&self) -> [f32; Band::COUNT] {
-        // Zero the DC bin so a constant offset never colors the low band.
+        // WHY: A constant offset must not color the low band.
         let bins = &self.fft_output[1..];
         let total: f32 = bins.iter().map(Complex::norm_sqr).sum();
         let rms = (total / self.fft_input.len().to_f32().unwrap_or(1.0)).sqrt();
@@ -420,6 +400,25 @@ impl WaveformAnalyzer {
 
     fn window_size(&self) -> usize {
         self.fft_input.len()
+    }
+
+    pub(crate) fn write_resume(&self, out: &mut Vec<u8>) {
+        let mut writer = Writer::new(out);
+        writer.write_len(self.bands.len());
+        for (index, bands) in &self.bands {
+            writer.write_u64(*index);
+            for band in bands {
+                writer.write_f32(*band);
+            }
+        }
+        writer.write_len(self.partial.len());
+        for (index, partial) in &self.partial {
+            writer.write_u64(*index);
+            write_samples(&mut writer, &partial.samples);
+            write_coverage(&mut writer, &partial.written);
+            writer.write_u64(partial.seq);
+        }
+        writer.write_u64(self.opened);
     }
 }
 

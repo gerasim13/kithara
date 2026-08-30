@@ -36,18 +36,6 @@ pub struct PlayWorkerConfig {
     #[builder(start_fn)]
     #[field(get)]
     pub(crate) sample_pool: SamplePool,
-    /// Parent cancellation token for this playback dispatcher lifetime.
-    pub(crate) cancel: Option<CancelToken>,
-    /// Optional base worker shared with other domain workers.
-    pub(crate) worker: Option<Worker>,
-    /// Maximum number of simultaneously registered track render chains.
-    #[builder(default = Consts::CAPACITY)]
-    #[field(get, copy)]
-    pub(crate) capacity: NonZeroUsize,
-    /// Consecutive progress passes between cooperative thread yields.
-    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
-    #[field(get, copy)]
-    pub(crate) fairness_yield_interval: NonZeroU32,
     /// Park duration when no playback task expects progress.
     #[builder(default = Duration::from_millis(100))]
     #[field(get, copy)]
@@ -56,12 +44,24 @@ pub struct PlayWorkerConfig {
     #[builder(default = Duration::from_millis(10))]
     #[field(get, copy)]
     pub(crate) slow_tick_threshold: Duration,
-    /// Maximum consecutive ticks for one track visit.
-    #[builder(default = Consts::TASK_BURST)]
-    #[field(get, copy)]
-    pub(crate) task_burst: NonZeroU32,
     /// Park duration while live playback tasks are waiting.
     #[builder(default = Duration::from_millis(10))]
     #[field(get, copy)]
     pub(crate) wait_timeout: Duration,
+    /// Consecutive progress passes between cooperative thread yields.
+    #[builder(default = Consts::FAIRNESS_YIELD_INTERVAL)]
+    #[field(get, copy)]
+    pub(crate) fairness_yield_interval: NonZeroU32,
+    /// Maximum consecutive ticks for one track visit.
+    #[builder(default = Consts::TASK_BURST)]
+    #[field(get, copy)]
+    pub(crate) task_burst: NonZeroU32,
+    /// Maximum number of simultaneously registered track render chains.
+    #[builder(default = Consts::CAPACITY)]
+    #[field(get, copy)]
+    pub(crate) capacity: NonZeroUsize,
+    /// Parent cancellation token for this playback dispatcher lifetime.
+    pub(crate) cancel: Option<CancelToken>,
+    /// Optional base worker shared with other domain workers.
+    pub(crate) worker: Option<Worker>,
 }

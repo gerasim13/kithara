@@ -33,13 +33,13 @@ pub(crate) struct DecoderNode<S> {
     playhead: Arc<dyn PlayheadWrite>,
     preload_gate: Arc<PreloadGate>,
     seek_obs: Arc<dyn SeekObserve>,
-    source: S,
+    runtime: DecoderRuntime,
+    engine_load: Option<Arc<EngineLoad>>,
     /// Chunk displaced by a seek inside the checked tick. The scheduler shell
     /// reclaims it in `recycle` before the next tick.
     retired_chunk: Option<AudioChunk>,
-    runtime: DecoderRuntime,
     port: ProducerPort,
-    engine_load: Option<Arc<EngineLoad>>,
+    source: S,
     preload_chunks: usize,
 }
 
@@ -165,6 +165,7 @@ where
         let seek_epoch = seek_obs.epoch();
         Self {
             seek_obs,
+            engine_load,
             source: lane.source,
             retired_chunk: None,
             port: lane.port,
@@ -172,7 +173,6 @@ where
             emit: lane.emit,
             preload_gate: lane.preload_gate,
             preload_chunks: lane.preload_chunks,
-            engine_load,
             runtime: DecoderRuntime {
                 seek_epoch,
                 ..Default::default()

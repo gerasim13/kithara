@@ -16,10 +16,10 @@ struct Run<B>
 where
     B: ResamplerBackend,
 {
-    start: u64,
-    end: u64,
-    mono: SampleBuffer,
     stream: Option<MonoStream<B>>,
+    mono: SampleBuffer,
+    end: u64,
+    start: u64,
 }
 
 #[derive(fieldwork::Fieldwork)]
@@ -28,16 +28,16 @@ pub(super) struct Runs<B>
 where
     B: ResamplerBackend,
 {
-    runs: Vec<Run<B>>,
     config: BeatAnalysisConfig<B>,
     sample_pool: SamplePool,
-    budget: usize,
     #[field(get, vis = "pub(super)")]
     dropped: Vec<(u64, u64)>,
+    runs: Vec<Run<B>>,
     ratio: f64,
     source_rate: u32,
     #[field(get, copy, vis = "pub(super)")]
     target_rate: u32,
+    budget: usize,
 }
 
 impl<B> Runs<B>
@@ -64,13 +64,12 @@ where
         }
     }
 
-    fn held(&self) -> usize {
-        self.runs.iter().map(|run| run.mono.len()).sum()
-    }
-
-    #[cfg(test)]
-    pub(super) fn held_frames(&self) -> usize {
-        self.held()
+    fn detector_frames(&self, frames: u64) -> usize {
+        let frames: f64 = frames.to_f64().unwrap_or(0.0);
+        (frames * self.ratio)
+            .round()
+            .to_usize()
+            .unwrap_or(usize::MAX)
     }
 
     fn enforce_budget(&mut self) {
@@ -112,14 +111,6 @@ where
         }
     }
 
-    fn detector_frames(&self, frames: u64) -> usize {
-        let frames: f64 = frames.to_f64().unwrap_or(0.0);
-        (frames * self.ratio)
-            .round()
-            .to_usize()
-            .unwrap_or(usize::MAX)
-    }
-
     pub(super) fn flush(&mut self) {
         for index in 0..self.runs.len() {
             let Some((span, stream)) = self
@@ -143,86 +134,13 @@ where
         }
     }
 
-    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
-        writer.write_len(self.runs.len());
-        for run in &self.runs {
-            writer.write_u64(run.start);
-            writer.write_u64(run.end);
-            write_samples(writer, &run.mono);
-        }
-        writer.write_len(self.dropped.len());
-        for (from, to) in &self.dropped {
-            writer.write_u64(*from);
-            writer.write_u64(*to);
-        }
+    fn held(&self) -> usize {
+        self.runs.iter().map(|run| run.mono.len()).sum()
     }
 
-    pub(super) fn restore(
-        &mut self,
-        runs: Vec<BeatRunResume>,
-        dropped: Vec<(u64, u64)>,
-    ) -> Result<(), BlobError> {
-        let mut restored: Vec<Run<B>> = Vec::with_capacity(runs.len());
-        for run in runs {
-            let expected = self.detector_frames(run.end.saturating_sub(run.start));
-            if run.mono.len() != expected {
-                return Err(BlobError::Corrupt);
-            }
-            restored.push(Run {
-                start: run.start,
-                end: run.end,
-                mono: self.sample_pool.attach(run.mono.into_vec()),
-                stream: None,
-            });
-        }
-        if restored.iter().any(|run| {
-            dropped
-                .iter()
-                .any(|(from, to)| *from < run.end && run.start < *to)
-        }) {
-            return Err(BlobError::Corrupt);
-        }
-
-        self.runs = restored;
-        self.dropped = dropped;
-        if self.held() > self.budget {
-            return Err(BlobError::Corrupt);
-        }
-        Ok(())
-    }
-
-    pub(super) fn push(&mut self, mono: &[f32], at: u64) {
-        let Ok(span) = u64::try_from(mono.len()) else {
-            return;
-        };
-        if span == 0 {
-            return;
-        }
-        let end = at.saturating_add(span);
-
-        let first = self.runs.partition_point(|run| run.end < at);
-        let last = self.runs.partition_point(|run| run.start <= end);
-        if first == last {
-            if let Some(run) = self.open(mono, at, end) {
-                self.runs.insert(first, run);
-            }
-            self.enforce_budget();
-            return;
-        }
-
-        let absorbed: Vec<Run<B>> = self.runs.splice(first..last, []).collect();
-        if let Some(merged) = self.merge(absorbed, mono, at, end) {
-            self.runs.insert(first, merged);
-        }
-        self.enforce_budget();
-    }
-
-    pub(super) fn spans(&self) -> impl Iterator<Item = (u64, &[f32])> {
-        self.runs.iter().map(|run| (run.start, &run.mono[..]))
-    }
-
-    pub(super) fn offset_in_run(&self, start: u64, frame: u64) -> usize {
-        self.detector_frames(frame.saturating_sub(start))
+    #[cfg(test)]
+    pub(super) fn held_frames(&self) -> usize {
+        self.held()
     }
 
     fn merge(&mut self, absorbed: Vec<Run<B>>, mono: &[f32], at: u64, end: u64) -> Option<Run<B>> {
@@ -265,11 +183,15 @@ where
         }
 
         Some(Run {
+            stream,
             start: base,
             end: cursor,
             mono: out,
-            stream,
         })
+    }
+
+    pub(super) fn offset_in_run(&self, start: u64, frame: u64) -> usize {
+        self.detector_frames(frame.saturating_sub(start))
     }
 
     fn open(&mut self, mono: &[f32], at: u64, end: u64) -> Option<Run<B>> {
@@ -291,11 +213,71 @@ where
             Some(stream)
         };
         Some(Run {
-            start: at,
             end,
-            mono: out,
             stream,
+            start: at,
+            mono: out,
         })
+    }
+
+    pub(super) fn push(&mut self, mono: &[f32], at: u64) {
+        let Ok(span) = u64::try_from(mono.len()) else {
+            return;
+        };
+        if span == 0 {
+            return;
+        }
+        let end = at.saturating_add(span);
+
+        let first = self.runs.partition_point(|run| run.end < at);
+        let last = self.runs.partition_point(|run| run.start <= end);
+        if first == last {
+            if let Some(run) = self.open(mono, at, end) {
+                self.runs.insert(first, run);
+            }
+            self.enforce_budget();
+            return;
+        }
+
+        let absorbed: Vec<Run<B>> = self.runs.splice(first..last, []).collect();
+        if let Some(merged) = self.merge(absorbed, mono, at, end) {
+            self.runs.insert(first, merged);
+        }
+        self.enforce_budget();
+    }
+
+    pub(super) fn restore(
+        &mut self,
+        runs: Vec<BeatRunResume>,
+        dropped: Vec<(u64, u64)>,
+    ) -> Result<(), BlobError> {
+        let mut restored: Vec<Run<B>> = Vec::with_capacity(runs.len());
+        for run in runs {
+            let expected = self.detector_frames(run.end.saturating_sub(run.start));
+            if run.mono.len() != expected {
+                return Err(BlobError::Corrupt);
+            }
+            restored.push(Run {
+                start: run.start,
+                end: run.end,
+                mono: self.sample_pool.attach(run.mono.into_vec()),
+                stream: None,
+            });
+        }
+        if restored.iter().any(|run| {
+            dropped
+                .iter()
+                .any(|(from, to)| *from < run.end && run.start < *to)
+        }) {
+            return Err(BlobError::Corrupt);
+        }
+
+        self.runs = restored;
+        self.dropped = dropped;
+        if self.held() > self.budget {
+            return Err(BlobError::Corrupt);
+        }
+        Ok(())
     }
 
     fn segment(&mut self, out: &mut SampleBuffer, mono: &[f32]) -> Option<()> {
@@ -316,6 +298,10 @@ where
             return None;
         }
         Some(())
+    }
+
+    pub(super) fn spans(&self) -> impl Iterator<Item = (u64, &[f32])> {
+        self.runs.iter().map(|run| (run.start, &run.mono[..]))
     }
 
     fn stream(&self) -> Option<MonoStream<B>> {
@@ -342,6 +328,20 @@ where
                 );
             })
             .ok()
+    }
+
+    pub(super) fn write_resume(&self, writer: &mut Writer<'_>) {
+        writer.write_len(self.runs.len());
+        for run in &self.runs {
+            writer.write_u64(run.start);
+            writer.write_u64(run.end);
+            write_samples(writer, &run.mono);
+        }
+        writer.write_len(self.dropped.len());
+        for (from, to) in &self.dropped {
+            writer.write_u64(*from);
+            writer.write_u64(*to);
+        }
     }
 }
 

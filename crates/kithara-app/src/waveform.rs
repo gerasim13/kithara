@@ -120,6 +120,20 @@ impl TrackAnalysisRunner {
         rx
     }
 
+    /// Cancel the in-flight run.
+    pub fn clear(&mut self) {
+        if let Some(prev) = self.current.take() {
+            prev.cancel.cancel();
+            prev.task.abort();
+        }
+    }
+
+    /// What the active configuration produces, per artifact.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
+    }
+
     /// Resume a validated checkpoint, preserving the same synchronous
     /// playback-producer handoff as a fresh pass.
     ///
@@ -151,20 +165,6 @@ impl TrackAnalysisRunner {
         ));
         self.current = Some(RunHandle { task, cancel: run });
         Ok(rx)
-    }
-
-    /// Cancel the in-flight run.
-    pub fn clear(&mut self) {
-        if let Some(prev) = self.current.take() {
-            prev.cancel.cancel();
-            prev.task.abort();
-        }
-    }
-
-    /// What the active configuration produces, per artifact.
-    #[must_use]
-    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
-        &self.fingerprint
     }
 }
 

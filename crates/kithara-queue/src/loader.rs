@@ -26,7 +26,6 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
-    cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
     /// Background prefetch lane (`max_concurrent_loads` permits).
@@ -35,6 +34,7 @@ pub(crate) struct Loader {
     /// so both change under one lock.
     tracks: Arc<Tracks>,
     store: AssetStore,
+    cancel: CancelToken,
     player: PlayerControl,
 }
 
@@ -48,11 +48,11 @@ impl Loader {
     ) -> Self {
         Self {
             cancel,
-            interactive_lane: Arc::new(Semaphore::new(1)),
             player,
-            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             tracks,
             store,
+            interactive_lane: Arc::new(Semaphore::new(1)),
+            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
         }
     }
 
@@ -144,11 +144,6 @@ impl Loader {
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
     }
 
-    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
-        cancel.cancelled().await;
-        track_cancel.cancel();
-    }
-
     fn spawn_attempt(
         self: &Arc<Self>,
         ticket: Ticket,
@@ -226,6 +221,11 @@ impl Loader {
         Some(self.spawn_attempt(ticket, config, cancel, class))
     }
 
+    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
+        cancel.cancelled().await;
+        track_cancel.cancel();
+    }
+
     /// Watches the [`EventBus`] for the first
     /// [`DownloaderEvent::LoadSlow`] and flips the track status to
     /// [`TrackStatus::Slow`]. Returns a never-completing future:
@@ -274,8 +274,8 @@ mod tests {
     use crate::track::TrackRecord;
 
     struct CancelDropProbe {
-        cancel: CancelToken,
         state: Arc<AtomicUsize>,
+        cancel: CancelToken,
     }
 
     impl Drop for CancelDropProbe {

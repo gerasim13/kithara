@@ -52,8 +52,8 @@ impl AnalysisTarget {
 }
 
 struct MemoryEntry {
-    target: AnalysisTarget,
     progress: AnalysisProgress,
+    target: AnalysisTarget,
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -61,13 +61,13 @@ struct MemoryEntry {
 /// track's storage lifecycle). Owned by the single listener task, so it needs
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
-    byte_pool: BytePool,
-    chunk_duration: Duration,
-    mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration, per artifact: a stored artifact whose
     /// tag differs is dropped on its own, so a waveform resolution change no
     /// longer invalidates stored beat results.
     fingerprint: AnalysisFingerprint,
+    byte_pool: BytePool,
+    chunk_duration: Duration,
+    mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Insertion order of store-qualified targets; the oldest is evicted past
     /// the cap.
     order: VecDeque<AnalysisTarget>,
@@ -81,21 +81,11 @@ impl TrackAnalysisCache {
     ) -> Self {
         Self {
             byte_pool,
-            chunk_duration: Duration::from_secs(u64::from(chunk_seconds.get())),
             fingerprint,
+            chunk_duration: Duration::from_secs(u64::from(chunk_seconds.get())),
             mem: HashMap::new(),
             order: VecDeque::new(),
         }
-    }
-
-    /// Whether a cached snapshot carries every artifact the active
-    /// configuration expects. A stored artifact whose tag moved is dropped on
-    /// read, so a hit can be real and still need the pass to run.
-    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
-        let analysis = progress.analysis();
-        let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
-        let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
-        waveform && beat
     }
 
     /// Look up a cached analysis: memory first, then the scope resource.
@@ -121,13 +111,23 @@ impl TrackAnalysisCache {
         Some(progress)
     }
 
+    /// Whether a cached snapshot carries every artifact the active
+    /// configuration expects. A stored artifact whose tag moved is dropped on
+    /// read, so a hit can be real and still need the pass to run.
+    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
+        let analysis = progress.analysis();
+        let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
+        let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
+        waveform && beat
+    }
+
     fn load_disk(
         &self,
         target: &AnalysisTarget,
         source_sample_rate: NonZeroU32,
     ) -> Option<AnalysisProgress> {
         let resource = &target.key;
-        // Side-effect-free probe first: opening a missing key would create it.
+        // WHY: Opening a missing key would create it, so probe first.
         match target.store.resource_state(resource).ok()? {
             AssetResourceState::Committed { .. } => {}
             _ => return None,
@@ -154,8 +154,7 @@ impl TrackAnalysisCache {
     /// Store the latest publication in the bounded memory tier.
     pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let analysis = progress.analysis();
-        // An analysis with no meaningful slots would be served forever as
-        // emptiness on later hits; skip memoizing it in either tier.
+        // WHY: Memoizing an empty settled analysis would serve emptiness forever.
         if analysis.waveform().is_none() && analysis.beat().is_none() && !progress.is_resumable() {
             return;
         }
@@ -230,15 +229,13 @@ mod tests {
 
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};
 
-    /// The beat tag two tests must agree on: one of them keeps it while the
-    /// waveform tag moves.
-    const BEAT_TAG: &str = "beat:test:v1";
-
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::new(Some(beat), Some(wave))
     }
 
     fn fp() -> AnalysisFingerprint {
+        const BEAT_TAG: &str = "beat:test:v1";
+
         fingerprint("wave:native:max1500:v1", BEAT_TAG)
     }
 

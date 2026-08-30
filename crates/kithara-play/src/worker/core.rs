@@ -22,10 +22,10 @@ use crate::effects::EffectDrain;
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
 struct WorkerOwner {
-    dispatcher: Dispatcher,
-    base: Worker,
     byte_pool: BytePool,
+    dispatcher: Dispatcher,
     sample_pool: SamplePool,
+    base: Worker,
 }
 
 /// Explicit owner of the playback dispatcher.
@@ -74,10 +74,10 @@ impl PlayWorker {
         }
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
-            dispatcher,
-            base,
             byte_pool,
+            dispatcher,
             sample_pool,
+            base,
         }))
     }
 

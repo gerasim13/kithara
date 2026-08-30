@@ -9,13 +9,13 @@ use kithara_platform::{CancelToken, tokio::runtime::Handle};
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct WorkerConfig {
-    #[field(with, option_set_some)]
-    pub(crate) cancel: Option<CancelToken>,
     #[field(with)]
     pub(crate) max_compute_tasks: NonZeroUsize,
-    pub(crate) pool: PoolConfig,
+    #[field(with, option_set_some)]
+    pub(crate) cancel: Option<CancelToken>,
     #[field(with, option_set_some)]
     pub(crate) runtime: Option<Handle>,
+    pub(crate) pool: PoolConfig,
 }
 
 impl WorkerConfig {
@@ -30,19 +30,19 @@ impl WorkerConfig {
         }
     }
 
-    /// Share an existing Rayon pool without creating another pool.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[must_use]
-    pub fn with_pool(mut self, pool: Arc<rayon::ThreadPool>) -> Self {
-        self.pool = PoolConfig::Shared(pool);
-        self
-    }
-
     /// Lazily create an owned Rayon pool on the first admitted compute job.
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn with_owned_pool(mut self, config: RayonConfig) -> Self {
         self.pool = PoolConfig::OwnedLazy(config);
+        self
+    }
+
+    /// Share an existing Rayon pool without creating another pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn with_pool(mut self, pool: Arc<rayon::ThreadPool>) -> Self {
+        self.pool = PoolConfig::Shared(pool);
         self
     }
 }
@@ -67,8 +67,8 @@ pub(crate) enum PoolConfig {
 #[non_exhaustive]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RayonConfig {
-    pub(crate) name: String,
     pub(crate) threads: NonZeroUsize,
+    pub(crate) name: String,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -77,8 +77,8 @@ impl RayonConfig {
     #[must_use]
     pub fn new<N: Into<String>>(threads: NonZeroUsize, name: N) -> Self {
         Self {
-            name: name.into(),
             threads,
+            name: name.into(),
         }
     }
 }

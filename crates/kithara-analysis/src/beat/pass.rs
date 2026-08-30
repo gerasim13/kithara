@@ -25,25 +25,6 @@ where
         }
     }
 
-    delegate::delegate! {
-        to self.analyzer {
-            #[call(push_interleaved)]
-            pub(crate) fn push(
-                &mut self,
-                pcm: &[f32],
-                channels: usize,
-                at: u64,
-                detector: &mut dyn BeatDetector,
-            );
-            #[call(push_interleaved_deferred)]
-            pub(crate) fn push_deferred(&mut self, pcm: &[f32], channels: usize, at: u64);
-            pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<DetectRequest>;
-            pub(crate) fn apply_detection(&mut self, output: DetectOutput);
-            pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
-            pub(crate) fn restore(&mut self, resume: BeatResume) -> Result<(), BlobError>;
-        }
-    }
-
     pub(crate) fn snapshot(
         &mut self,
         detector: &mut dyn BeatDetector,
@@ -84,6 +65,25 @@ where
                 warn!(?error, "beat analysis failed; leaving the beat slot empty");
                 None
             }
+        }
+    }
+
+    delegate::delegate! {
+        to self.analyzer {
+            #[call(push_interleaved)]
+            pub(crate) fn push(
+                &mut self,
+                pcm: &[f32],
+                channels: usize,
+                at: u64,
+                detector: &mut dyn BeatDetector,
+            );
+            #[call(push_interleaved_deferred)]
+            pub(crate) fn push_deferred(&mut self, pcm: &[f32], channels: usize, at: u64);
+            pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<DetectRequest>;
+            pub(crate) fn apply_detection(&mut self, output: DetectOutput);
+            pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
+            pub(crate) fn restore(&mut self, resume: BeatResume) -> Result<(), BlobError>;
         }
     }
 }

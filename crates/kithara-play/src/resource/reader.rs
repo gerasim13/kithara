@@ -23,12 +23,12 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
-    /// Per-track cancel guard, declared first so reader teardown observes
-    /// cancellation. Disarmed when the live reader moves into analysis.
-    cancel: CancelGuard,
     pub(crate) inner: Box<dyn AudioReader>,
     #[field(get, deref = false)]
     src: Arc<str>,
+    /// Per-track cancel guard, declared first so reader teardown observes
+    /// cancellation. Disarmed when the live reader moves into analysis.
+    cancel: CancelGuard,
     #[field(get = event_bus)]
     bus: EventBus,
     priority: Option<TrackPriority>,
@@ -360,14 +360,14 @@ mod tests {
     struct DropState;
 
     impl DropState {
-        const NOT_DROPPED: u8 = 0;
-        const BEFORE_CANCEL: u8 = 1;
         const AFTER_CANCEL: u8 = 2;
+        const BEFORE_CANCEL: u8 = 1;
+        const NOT_DROPPED: u8 = 0;
     }
 
     struct DropProbe {
-        cancel: CancelToken,
         state: Arc<AtomicU8>,
+        cancel: CancelToken,
     }
 
     impl Drop for DropProbe {
@@ -384,10 +384,10 @@ mod tests {
     struct EofReader {
         spec: AudioSpec,
         bus: EventBus,
+        _drop_probe: Option<DropProbe>,
         meta: TrackMetadata,
         position_frames: usize,
         total_frames: usize,
-        _drop_probe: Option<DropProbe>,
     }
 
     impl Default for EofReader {
@@ -413,13 +413,6 @@ mod tests {
             }
         }
 
-        fn with_drop_probe(cancel: CancelToken, state: Arc<AtomicU8>) -> Self {
-            Self {
-                _drop_probe: Some(DropProbe { cancel, state }),
-                ..Self::default()
-            }
-        }
-
         fn position_duration(&self) -> Duration {
             let frames = u32::try_from(self.position_frames).expect("test frame count fits u32");
             Duration::from_secs_f64(f64::from(frames) / f64::from(Consts::SAMPLE_RATE))
@@ -429,6 +422,13 @@ mod tests {
             let frames = capacity.min(self.total_frames - self.position_frames);
             self.position_frames += frames;
             NonZeroUsize::new(frames)
+        }
+
+        fn with_drop_probe(cancel: CancelToken, state: Arc<AtomicU8>) -> Self {
+            Self {
+                _drop_probe: Some(DropProbe { cancel, state }),
+                ..Self::default()
+            }
         }
 
         fn with_frames(total_frames: usize) -> Self {
