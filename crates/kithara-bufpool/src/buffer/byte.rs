@@ -21,10 +21,10 @@ use crate::PoolError;
 ///     let _ = buffer.into_inner();
 /// }
 /// ```
-pub struct ByteBuffer(pub(super) OwnedBuffer<32, u8>);
+pub struct ByteBuffer(pub(super) OwnedBuffer<32, Vec<u8>, false>);
 
 impl ByteBuffer {
-    pub(crate) fn new(inner: OwnedBuffer<32, u8>) -> Self {
+    pub(crate) fn new(inner: OwnedBuffer<32, Vec<u8>, false>) -> Self {
         Self(inner)
     }
 

@@ -13,6 +13,9 @@ duplicate, unknown, and unsupported registrations fail to compile.
 Lower crates accept `PoolRegion<S>` with the narrow `S: HasPool<K>` bounds they
 need. `PoolAlias<Tag, K>` names a distinct physical slot with an existing key's
 element and guard policy; aliases do not share a free list or per-pool counter.
+`VecKey<T, N>` and `StringKey<N>` are the sealed extension points for
+crate-owned vector and UTF-8 aliases; downstream crates cannot implement raw
+key plumbing or detach a slot from its region.
 
 The public macro must expose construction plumbing to downstream expansion.
 Every slot therefore carries its region provenance, checked on every dispatch.
@@ -22,16 +25,17 @@ reported budget.
 
 ## Allocation flow
 
-The built-in byte key uses 32 shards and the sample key uses 8. Each shard is a
-bounded `crossbeam_queue::ArrayQueue`; acquisition and return take no lock.
+The built-in byte key uses 32 shards and the sample key uses 8. Generic vector
+and string keys state their shard count in the key type. Each shard is a bounded
+`crossbeam_queue::ArrayQueue`; acquisition and return take no lock.
 
 1. `get` probes the calling thread's shard, up to four neighbouring shards, and
    the optional cold-start queue. A complete miss returns a fresh empty guard.
 1. Checked growth reserves capacity against both hard budgets before allocation,
    reconciles allocator capacity, and rolls both counters back on failure.
-1. Guard drop clears the vector, optionally trims an oversized allocation, and
-   returns it to the home shard. A rejected return drops the allocation and
-   releases its complete charge.
+1. Guard drop clears its vector or string, applies the configured trim or strict
+   retained-capacity ceiling, and returns it to the home shard. A rejected return
+   drops the allocation and releases its complete charge.
 
 `max_buffers` is divided across shards and each shard is capped at 1024 retained
 values. It must provide at least one slot per shard. `initial_buffers` and
@@ -44,10 +48,11 @@ earlier slots and no region is published.
 `max_share` is an additional hard ceiling, not a reservation or partition: two
 slots may both use `Percent::FULL` and compete for the same peak capacity.
 
-Accounting measures `Vec` capacity multiplied by element size. It deliberately
-does not claim to measure RSS, allocator metadata, or the temporary old-plus-new
-allocation during transactional growth. Every retained or checked-out pooled
-allocation remains charged until trimming or dropping returns bytes.
+Accounting measures `Vec` capacity multiplied by element size and `String`
+capacity in bytes. It deliberately does not claim to measure RSS, allocator
+metadata, or the temporary old-plus-new allocation during transactional growth.
+Every retained or checked-out pooled allocation remains charged until trimming
+or dropping returns bytes.
 
 Growth chooses one amortized target, clamped to the capacity currently available
 under both counters, and makes one reservation/allocation attempt. This keeps
@@ -57,15 +62,16 @@ error, the original buffer and both counters stay unchanged.
 
 ## Buffer boundary
 
-`ByteBuffer` and `SampleBuffer` dereference to slices, never raw `Vec`s. Capacity
-can grow only through `ensure_len` and `try_extend_from_slice`; shrinking uses
-`clear` and `truncate`, with sample-only `drain`, `retain`, and `dedup` where
-needed. There is no public raw growth, extraction, attach, recycle, collect, or
-pre-warm contract.
+`ByteBuffer`, `SampleBuffer`, and `PooledVec` dereference to slices, never raw
+`Vec`s. Built-in capacity grows through `ensure_len` and
+`try_extend_from_slice`; generic vectors use `try_push` and `try_extend`.
+`PooledString` keeps UTF-8 validity in `String` and grows through
+`try_push_str`. There is no public raw growth, extraction, attach, recycle,
+collect, or pre-warm contract.
 
 `ByteBuffer::renew` returns the current allocation and replaces it with another
 empty guard from the same core. Long-lived storage can therefore publish one
 generation and continue without retaining the schema facade.
 
-`stats()` reports the shared region budget. Pool reuse remains an internal
-optimization measured by the buffer-pool benchmarks.
+`stats()` reports the shared region budget. `pool_stats::<K>()` reports reuse for
+one registered generic slot; built-in hot-path keys compile out counter updates.

@@ -1,35 +1,5 @@
-use crate::{
-    compile::{CompiledNode, SplitCell, compiled_node_size, module_size},
-    layout::Axis,
-    size::{SizeSpec, Snapshot, combine_horizontal, combine_vertical, is_hidden},
-    skin::SkinDoc,
-};
-
-pub(super) fn node_size(node: &CompiledNode, skin: &SkinDoc, snapshot: &dyn Snapshot) -> SizeSpec {
-    match node {
-        CompiledNode::Optional { child, .. } => node_size(child, skin, snapshot),
-        CompiledNode::Adaptive { size, .. } => *size,
-        node if !node.blocks() => compiled_node_size(node),
-        CompiledNode::Split { axis, children, .. } => {
-            let sizes = visible_children(children, snapshot)
-                .map(|cell| node_size(&cell.node, skin, snapshot));
-            match axis {
-                Axis::Horizontal => combine_horizontal(sizes),
-                Axis::Vertical => combine_vertical(sizes),
-            }
-        }
-        CompiledNode::Module { chrome, root, .. } => module_size(root, *chrome, skin, snapshot),
-    }
-}
-
-pub(super) fn visible_children<'a>(
-    children: &'a [SplitCell],
-    snapshot: &'a dyn Snapshot,
-) -> impl Iterator<Item = &'a SplitCell> {
-    children
-        .iter()
-        .filter(move |cell| !is_hidden(&cell.node, snapshot))
-}
+#[cfg(test)]
+use crate::size::{SizeSpec, Snapshot, compiled_node_size_with_hidden as node_size};
 
 #[cfg(test)]
 mod tests {
@@ -225,6 +195,48 @@ mod tests {
 
         assert_eq!(size_of(&full, HIDDEN), size_of(&empty, DEFAULTS));
         assert_ne!(size_of(&full, DEFAULTS), size_of(&empty, DEFAULTS));
+    }
+
+    /// Both hosts measure a stack's first layer and hand every layer that box:
+    /// `Stack` in iced, and `NodeLayout::Stack` on masonry. The document has to
+    /// say the same thing, or a stage would ask for a box neither host gives it.
+    #[kithara::test]
+    fn a_stage_is_the_size_of_its_first_child() {
+        let stage = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Stage(id: "scene", children: [
+                    Knob(id: "volume"),
+                    Knob(id: "trim"),
+                ]))"#,
+        );
+        let alone = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Stage(id: "scene", children: [Knob(id: "volume")]))"#,
+        );
+
+        assert_eq!(size_of(&stage, DEFAULTS), size_of(&alone, DEFAULTS));
+    }
+
+    /// The same two knobs in a column do add up, which is what makes the
+    /// previous assertion a statement about stacking rather than about knobs.
+    #[kithara::test]
+    fn a_column_of_the_same_two_children_is_taller_than_the_stage() {
+        let stage = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Stage(id: "scene", children: [
+                    Knob(id: "volume"),
+                    Knob(id: "trim"),
+                ]))"#,
+        );
+        let column = compiled(
+            r#"(schema: "kithara.module", version: 1, id: "mixer",
+                root: Column(gap: 0.0, pad: 0.0, children: [
+                    Knob(id: "volume"),
+                    Knob(id: "trim"),
+                ]))"#,
+        );
+
+        assert_ne!(size_of(&stage, DEFAULTS), size_of(&column, DEFAULTS));
     }
 
     #[kithara::test]

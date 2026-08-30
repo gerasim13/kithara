@@ -1,29 +1,42 @@
 use crossbeam_queue::ArrayQueue;
 
-/// One bounded lock-free free list.
-pub(super) struct PoolShard<T> {
-    free: ArrayQueue<Vec<T>>,
+use super::storage::Storage;
+
+pub(super) struct PoolShard<B> {
+    free: ArrayQueue<B>,
+    max_retained_capacity: usize,
     trim_capacity: usize,
 }
 
-impl<T> PoolShard<T> {
+impl<B> PoolShard<B>
+where
+    B: Storage,
+{
     pub(super) const MAX_SLOTS: usize = 1024;
 
-    pub(super) fn new(max_buffers: usize, trim_capacity: usize) -> Self {
+    pub(super) fn new(
+        max_buffers: usize,
+        max_retained_capacity: usize,
+        trim_capacity: usize,
+    ) -> Self {
         Self {
             free: ArrayQueue::new(max_buffers.min(Self::MAX_SLOTS)),
+            max_retained_capacity,
             trim_capacity,
         }
     }
 
-    pub(super) fn try_get(&self) -> Option<Vec<T>> {
+    pub(super) fn try_get(&self) -> Option<B> {
         self.free.pop()
     }
 
-    pub(super) fn try_put(&self, mut value: Vec<T>) -> Result<usize, Vec<T>> {
+    pub(super) fn try_put(&self, mut value: B) -> Result<usize, B> {
         const TRIM_HYSTERESIS: usize = 2;
 
         value.clear();
+        if self.max_retained_capacity > 0 && value.capacity() > self.max_retained_capacity {
+            return Err(value);
+        }
         if self.trim_capacity > 0
             && value.capacity() > self.trim_capacity.saturating_mul(TRIM_HYSTERESIS)
         {
@@ -32,11 +45,11 @@ impl<T> PoolShard<T> {
         if value.capacity() == 0 {
             return Err(value);
         }
-        let kept = value.capacity().saturating_mul(size_of::<T>());
+        let kept = B::bytes_for_capacity(value.capacity()).unwrap_or(usize::MAX);
         self.free.push(value).map(|()| kept)
     }
 
-    pub(super) fn drain(&self, mut release: impl FnMut(Vec<T>)) {
+    pub(super) fn drain(&self, mut release: impl FnMut(B)) {
         while let Some(value) = self.free.pop() {
             release(value);
         }

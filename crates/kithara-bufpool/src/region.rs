@@ -3,8 +3,8 @@ use std::{fmt, marker::PhantomData};
 use kithara_platform::sync::Arc;
 
 use crate::{
-    HasPool, OverallBudget, Percent, PoolConfig, PoolError, PoolKey, budget::RegionBudget,
-    key::PoolAccess,
+    HasPool, OverallBudget, Percent, PoolConfig, PoolError, PoolKey, PoolKeyWithLen, PoolStats,
+    budget::RegionBudget, key::PoolAccess,
 };
 
 /// Region-wide byte statistics.
@@ -50,11 +50,22 @@ impl<S> PoolRegion<S> {
     #[inline]
     pub fn get_with_len<K>(&self, len: usize) -> Result<K::Buffer, PoolError>
     where
-        K: PoolKey,
+        K: PoolKeyWithLen,
         S: HasPool<K>,
     {
         let slot = self.slot::<K>();
         K::__get_with_len(&slot.core, len, PoolAccess::new())
+    }
+
+    /// Snapshot reuse counters for the pool registered for `K`.
+    #[must_use]
+    pub fn pool_stats<K>(&self) -> PoolStats
+    where
+        K: PoolKey,
+        S: HasPool<K>,
+    {
+        let slot = self.slot::<K>();
+        K::__stats(&slot.core, PoolAccess::new())
     }
 
     /// Snapshot the shared region budget.
@@ -96,7 +107,7 @@ impl<S> PoolRegion<S> {
         S: HasPool<K>,
     {
         let slot = <S as HasPool<K>>::__slot(&self.inner.schema);
-        assert!(
+        debug_assert!(
             self.inner.budget.same_region(&slot.budget),
             "pool slot belongs to a different region"
         );

@@ -13,6 +13,9 @@ pub struct PoolConfig {
     pub(crate) initial_capacity: usize,
     /// Maximum number of retained buffers across all shards.
     pub(crate) max_buffers: usize,
+    /// Drop returned buffers above this capacity. Zero disables the ceiling.
+    #[builder(default)]
+    pub(crate) max_retained_capacity: usize,
     /// Maximum share of the region budget this pool may hold.
     #[builder(default = Percent::FULL)]
     pub(crate) max_share: Percent,

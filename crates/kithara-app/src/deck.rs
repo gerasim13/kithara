@@ -27,8 +27,13 @@ pub(crate) enum EqMode {
 
 #[cfg(feature = "gui")]
 impl EqMode {
-    const FOUR_BANDS: [&'static str; 4] = ["low", "low_mid", "high_mid", "high"];
-    const THREE_BANDS: [&'static str; 3] = ["low", "mid", "high"];
+    const FOUR_BANDS: [&str; 4] = ["low", "low_mid", "high_mid", "high"];
+    const THREE_BANDS: [&str; 3] = ["low", "mid", "high"];
+
+    #[must_use]
+    pub(crate) fn band(self, name: &str) -> Option<usize> {
+        self.bands().iter().position(|band| *band == name)
+    }
 
     #[must_use]
     pub(crate) const fn bands(self) -> &'static [&'static str] {
@@ -36,11 +41,6 @@ impl EqMode {
             Self::ThreeBand => &Self::THREE_BANDS,
             Self::FourBand => &Self::FOUR_BANDS,
         }
-    }
-
-    #[must_use]
-    pub(crate) fn band(self, name: &str) -> Option<usize> {
-        self.bands().iter().position(|band| *band == name)
     }
 
     #[must_use]
@@ -238,6 +238,16 @@ impl DeckSet {
     pub fn set_crossfader(&mut self, position: f32) -> Result<(), PlayError> {
         let mut next = self.mix.clone();
         next.position = position;
+        self.commit(next)
+    }
+
+    /// The master gain every deck's level is folded through.
+    ///
+    /// # Errors
+    /// See [`DeckSet::commit`].
+    pub fn set_group_master(&mut self, gain: f32) -> Result<(), PlayError> {
+        let mut next = self.mix.clone();
+        next.group_master = gain;
         self.commit(next)
     }
 

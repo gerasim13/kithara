@@ -10,9 +10,10 @@ message: |
     - fixed-size scratch uses arrays; transient structural data stays lazy when
       it does not need owned storage.
 
-  Grow guards only through checked `ensure_len` and
-  `try_extend_from_slice` operations so both the typed-pool share and the
-  region-wide hard budget remain enforced.
+  Grow built-in guards only through checked `ensure_len` and
+  `try_extend_from_slice`; registered `VecKey<T, N>` guards use `try_push` or
+  `try_extend`. These operations enforce both the typed-pool share and the
+  region-wide hard budget.
 
   The rule covers empty and capacity-bearing constructors, `default`, `vec!`,
   `collect`, `to_vec`, and `repeat` when the primitive type is explicit. An

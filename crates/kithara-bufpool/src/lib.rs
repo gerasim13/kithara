@@ -14,9 +14,10 @@ mod region;
 mod schema;
 
 pub use budget::{OverallBudget, Percent};
-pub use buffer::{ByteBuffer, SampleBuffer};
+pub use buffer::{ByteBuffer, PooledString, PooledVec, SampleBuffer};
 pub use config::PoolConfig;
 pub use error::PoolError;
-pub use key::{PoolAlias, PoolKey};
+pub use key::{PoolAlias, PoolKey, PoolKeyWithLen, StringKey, VecKey};
+pub use pool::PoolStats;
 pub use region::{PoolRegion, RegionStats};
 pub use schema::HasPool;

@@ -32,6 +32,47 @@ endpoint the documents may bind, `AppUi::new` compiles both layout documents aga
 condition. `compile_ui` merges `builtin::text_doc()` with `assets/ui/app-en.ktext.ron` before every compile;
 that catalog holds only the window-manager menu words canon has no key for.
 
+### Where the UI package is read from
+
+`AppConfig.ui_package` names the folder holding the UI package. `main` defaults it to `assets/ui` beside the
+executable, which is where a release lays its documents out, and `--ui-package` overrides it. `AppUi::new`
+reads that folder over what the build embeds, so changing a document on disk changes the interface at the next
+start without a rebuild.
+
+A path that does not exist means no package was laid out and the build's own documents draw; that is what a
+developer running from a build directory sees. Anything else that stops the folder being read - a permission,
+a manifest that fails the `kithara-ui` contract - stops the application rather than quietly drawing the
+built-in one. This is the one place the application accepts a missing input as an answer, and it is a
+user-facing default rather than a state-resolution fallback: the package is optional configuration, and its
+absence is not evidence of a broken contract.
+
+`gui::ui::package::Package` is the single owner of one loaded package: the resolver it is read through, the
+screens it answered for, and the skin and catalog it dresses them in. Both hosts read from that one value -
+the iced host paints with `Package::skin`, and the retained host builds its window `Config` from the same
+resolver and catalog rather than loading a second copy. Two packages drawing one application is the failure
+this shape exists to prevent.
+
+The application asks the package for `deck-single` and `deck-dual` by role, and `Package` resolves both once.
+A manifest may also name a skin document and a caption catalog; naming a skin is what lets a package change
+how the application looks without a rebuild. A manifest that names neither wears the built-in skin and the
+built-in words, which is a package carrying pages and nothing else - declared optionality, not a fallback.
+
+`Package::REQUIRED` is the whole of what a package must answer for, checked once each screen compiles:
+
+- `deck-a/play` - the only path that starts and stops playback. A screen without it draws a player that
+  cannot play.
+- `deck-a/wave` - the only path that moves the position within a track. A screen without it can start a
+  track and never move inside it.
+
+Everything else a screen offers is the package's own business. The minimum is checked rather than assumed
+because a screen missing a path still compiles and still draws; only the paths it answers on say whether the
+application can reach it, and a press that lands nowhere reads as a dead button rather than as a package
+defect.
+
+Reading the package from disk costs 1.7 ms once at start: 10.1 ms against 8.4 ms for the same documents
+embedded, 17 files and 62 KiB, measured on this laptop under `test-release`. Compilation dominates both, which
+is why the resolver caches what it read rather than indexing what it might read.
+
 ### Deck addressing
 
 A deck is addressed by channel letter, and the letter is its position in the session. The letter appears in two
@@ -75,6 +116,10 @@ reaches it. `ViewCache` owns focus next to hover, both naming a deck by position
   `current_abr_handle` and mirrors it in the deck state.
 - The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
 
+The deck module is retained-hosted, but the tempo surface stays on iced: the engine observes each decoded event first,
+and an unanswered wheel event reaches the same child unchanged. The Hero Wave and five transport buttons have engine
+descriptors; the tempo row deliberately does not.
+
 `Kithara` owns one EQ mode for the whole app; every deck keeps only its own desired gains in `UiState`.
 Right-clicking either knob bank opens its host-owned pointer popover in `ViewCache`, which owns no product
 state, and selecting a mode replaces every deck's player layout before the shared mode is committed. Which bank
@@ -100,7 +145,15 @@ answers only its own addresses, so no type carries the whole vocabulary, and `Wa
 endpoint key into a walk over it. A binding scope (`@deck=a`) selects an instance rather than naming a path
 segment: the node owning the instances spends it. `ViewCache` owns what the renderer borrows but the model does
 not hold: converted waveform columns, formatted strings, per-deck zoom and quality-menu flag, collapsed modules,
-the hovered and focused deck, and the deck layout.
+the hovered and focused deck, and the deck layout. Four smaller views sit beside them, one owner each:
+`MenuState` (which menu group is open), `Modules` (which pane the menu switched off), `WindowState` (what the
+single window reports), `LibraryView` (the library's own query and scope) and `StageView` (the tempo-map window
+edges and the visualisation preset, answered by `TempoNode`/`VisNode`). A view is read through `ReadRoot` and
+written only by `ui::events`; nothing else holds a second copy.
+
+`AppUi` carries the compiled document set and a `Clock`. The clock is what answers `ui.clock.seconds`, so a frame is
+reproducible from the state that produced it: `update` steps it once per tick and both hosts read the same value, rather
+than each sampling a wall clock of its own.
 
 ### Layout switching
 
@@ -140,8 +193,8 @@ band edge — a `WindowDrag` below it, the wave above — so the window stays mo
 cell arriving beside the wave narrows it rather than taking it away.
 
 `CompiledUi::min` is that bar's own `compiled_min`, since it is the only cell standing in the room the root
-split settles on; `AppUi::window_min`
-takes the larger of the two layouts' and `frontend::window_settings` hands it to `iced` as `min_size`.
+split settles on; `AppUi::window_min` takes the larger of the two layouts' and `frontend::window_settings` hands
+it to `iced` as `min_size`.
 
 ## Track analysis cache
 

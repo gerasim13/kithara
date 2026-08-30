@@ -13,7 +13,7 @@ use kithara_app::{
     baked,
     config::AppConfig,
     deck::{Deck, DeckId, DeckSet},
-    gui::GuiFrontend,
+    gui::{self, GuiFrontend},
     pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
@@ -30,6 +30,21 @@ struct Args {
     /// Enabled by default during testing phase.
     #[arg(long, default_value_t = true)]
     insecure: bool,
+
+    /// Which host draws the studio. A build without the `masonry` feature has
+    /// only the immediate one.
+    #[arg(long, value_enum, default_value_t)]
+    host: gui::Host,
+
+    /// Folder holding the UI package to draw from. Defaults to `assets/ui`
+    /// beside the executable.
+    #[arg(long)]
+    ui_package: Option<std::path::PathBuf>,
+}
+
+/// Where a release lays its UI documents out: beside the executable.
+fn shipped_ui_package() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("assets/ui"))
 }
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
@@ -85,6 +100,7 @@ fn main() -> AppResult {
         .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
+        .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
         .build();
 
     let mut host = AppHost::new(HostConfig::builder().build())?;
@@ -94,7 +110,7 @@ fn main() -> AppResult {
     ];
     let mut deck_set = DeckSet::new(host, decks);
     deck_set.commit(deck_set.mix().clone())?;
-    let mut frontend = GuiFrontend::new(&config)?;
+    let mut frontend = GuiFrontend::new(&config, args.host)?;
     frontend.attach_broadcast(shutdown.clone());
     frontend.start(&deck_set)?;
     frontend.run_loop(deck_set)?;

@@ -4,10 +4,10 @@ use super::OwnedBuffer;
 use crate::PoolError;
 
 /// Pooled decoded samples returned to their typed pool on drop.
-pub struct SampleBuffer(pub(super) OwnedBuffer<8, f32>);
+pub struct SampleBuffer(pub(super) OwnedBuffer<8, Vec<f32>, false>);
 
 impl SampleBuffer {
-    pub(crate) fn new(inner: OwnedBuffer<8, f32>) -> Self {
+    pub(crate) fn new(inner: OwnedBuffer<8, Vec<f32>, false>) -> Self {
         Self(inner)
     }
 

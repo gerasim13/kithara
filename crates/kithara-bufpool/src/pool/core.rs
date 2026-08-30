@@ -1,27 +1,34 @@
-use std::array;
+use std::{
+    array,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use crossbeam_queue::ArrayQueue;
 use kithara_platform::{sync::Arc, thread::current_thread_id};
 
-use super::shard::PoolShard;
+use super::{shard::PoolShard, stats::PoolStats, storage::Storage};
 use crate::{
     PoolConfig, PoolError,
     budget::{BudgetPair, RegionBudget, ReserveFailure},
     buffer::OwnedBuffer,
 };
 
-pub(crate) struct Core<const SHARDS: usize, T>
+pub(crate) struct Core<const SHARDS: usize, B, const OBSERVE: bool>
 where
-    T: Copy + Default,
+    B: Storage,
 {
     budgets: BudgetPair,
-    cold: Option<ArrayQueue<Vec<T>>>,
-    shards: [PoolShard<T>; SHARDS],
+    cold: Option<ArrayQueue<B>>,
+    shards: [PoolShard<B>; SHARDS],
+    stat_alloc_misses: AtomicU64,
+    stat_home_hits: AtomicU64,
+    stat_put_drops: AtomicU64,
+    stat_steal_hits: AtomicU64,
 }
 
-impl<const SHARDS: usize, T> Core<SHARDS, T>
+impl<const SHARDS: usize, B, const OBSERVE: bool> Core<SHARDS, B, OBSERVE>
 where
-    T: Copy + Default,
+    B: Storage,
 {
     const MAX_PROBE: usize = 4;
 
@@ -30,6 +37,12 @@ where
         region_budget: RegionBudget,
         pool_limit: usize,
     ) -> Result<Self, PoolError> {
+        if SHARDS == 0 {
+            return Err(PoolError::InvalidConfig {
+                field: "shards",
+                reason: "must contain at least one shard",
+            });
+        }
         if config.max_buffers < SHARDS {
             return Err(PoolError::InvalidConfig {
                 field: "max_buffers",
@@ -38,7 +51,7 @@ where
         }
         let buffers_per_shard = config.max_buffers / SHARDS;
         let effective_buffers = buffers_per_shard
-            .min(PoolShard::<T>::MAX_SLOTS)
+            .min(PoolShard::<B>::MAX_SLOTS)
             .checked_mul(SHARDS)
             .ok_or(PoolError::InvalidConfig {
                 field: "max_buffers",
@@ -50,9 +63,7 @@ where
                 reason: "exceeds the effective retained-buffer capacity",
             });
         }
-        config
-            .initial_capacity
-            .checked_mul(size_of::<T>())
+        B::bytes_for_capacity(config.initial_capacity)
             .and_then(|bytes| bytes.checked_mul(config.initial_buffers))
             .ok_or(PoolError::InvalidConfig {
                 field: "initial_capacity",
@@ -63,16 +74,24 @@ where
         let core = Self {
             budgets: BudgetPair::new(region_budget, pool_limit),
             cold,
-            shards: array::from_fn(|_| PoolShard::new(buffers_per_shard, config.trim_capacity)),
+            shards: array::from_fn(|_| {
+                PoolShard::new(
+                    buffers_per_shard,
+                    config.max_retained_capacity,
+                    config.trim_capacity,
+                )
+            }),
+            stat_alloc_misses: AtomicU64::new(0),
+            stat_home_hits: AtomicU64::new(0),
+            stat_put_drops: AtomicU64::new(0),
+            stat_steal_hits: AtomicU64::new(0),
         };
 
         if let Some(cold) = &core.cold {
             for _ in 0..config.initial_buffers {
-                let empty = Vec::new();
-                let mut value = core.grow(&empty, config.initial_capacity, None)?;
-                value.clear();
+                let value = core.allocate(config.initial_capacity, 0)?;
                 if let Err(value) = cold.push(value) {
-                    let bytes = Self::byte_size(&value);
+                    let bytes = Self::byte_size(&value)?;
                     drop(value);
                     core.budgets.release(bytes);
                     return Err(PoolError::InvalidConfig {
@@ -86,50 +105,86 @@ where
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub(crate) fn acquire(self: &Arc<Self>) -> OwnedBuffer<SHARDS, T> {
+    pub(crate) fn acquire(self: &Arc<Self>) -> OwnedBuffer<SHARDS, B, OBSERVE> {
         let shard_idx = Self::shard_index();
         let value = self.shards[shard_idx]
             .try_get()
-            .or_else(|| self.try_steal(shard_idx))
-            .or_else(|| self.cold.as_ref().and_then(ArrayQueue::pop));
-        let value = value.unwrap_or_default();
+            .map(|value| (value, &self.stat_home_hits))
+            .or_else(|| {
+                self.try_steal(shard_idx)
+                    .map(|value| (value, &self.stat_steal_hits))
+            })
+            .or_else(|| {
+                self.cold
+                    .as_ref()
+                    .and_then(ArrayQueue::pop)
+                    .map(|value| (value, &self.stat_home_hits))
+            })
+            .map_or_else(
+                || {
+                    Self::increment(&self.stat_alloc_misses);
+                    B::default()
+                },
+                |(value, counter)| {
+                    Self::increment(counter);
+                    value
+                },
+            );
         OwnedBuffer::new(Arc::clone(self), value, shard_idx)
     }
 
-    pub(crate) fn grow(
-        &self,
-        current: &Vec<T>,
-        new_len: usize,
-        appended: Option<&[T]>,
-    ) -> Result<Vec<T>, PoolError> {
+    pub(crate) fn grow(&self, current: &mut B, new_len: usize) -> Result<(), PoolError> {
         let old_capacity = current.capacity();
-        let old_bytes =
-            old_capacity
-                .checked_mul(size_of::<T>())
-                .ok_or(PoolError::CapacityOverflow {
-                    elements: old_capacity,
-                    element_size: size_of::<T>(),
-                })?;
+        if new_len <= old_capacity {
+            return Ok(());
+        }
+        let old_bytes = Self::bytes_for_capacity(old_capacity)?;
+        let element_bytes = Self::bytes_for_capacity(1)?;
+        if element_bytes == 0 {
+            return Ok(());
+        }
         let region_available = self
             .budgets
             .region_limit()
             .saturating_sub(self.budgets.region_current());
         let pool_available = self.budgets.limit().saturating_sub(self.budgets.current());
         let affordable_capacity =
-            old_bytes.saturating_add(region_available.min(pool_available)) / size_of::<T>();
+            old_bytes.saturating_add(region_available.min(pool_available)) / element_bytes;
         let amortized_capacity = new_len.max(old_capacity.saturating_mul(2));
         let target_capacity = if affordable_capacity >= new_len {
             amortized_capacity.min(affordable_capacity)
         } else {
             new_len
         };
-        let requested_bytes =
-            target_capacity
-                .checked_mul(size_of::<T>())
-                .ok_or(PoolError::CapacityOverflow {
-                    elements: target_capacity,
-                    element_size: size_of::<T>(),
-                })?;
+        let mut grown = self.allocate(target_capacity, old_bytes)?;
+        grown.move_from(current);
+        *current = grown;
+        Ok(())
+    }
+
+    pub(crate) fn put(&self, value: B, shard_idx: usize) {
+        let before = Self::byte_size(&value).unwrap_or(usize::MAX);
+        match self.shards[shard_idx].try_put(value) {
+            Ok(kept) => self.budgets.release(before.saturating_sub(kept)),
+            Err(value) => {
+                drop(value);
+                self.budgets.release(before);
+                Self::increment(&self.stat_put_drops);
+            }
+        }
+    }
+
+    pub(crate) fn stats(&self) -> PoolStats {
+        PoolStats {
+            alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
+            home_hits: self.stat_home_hits.load(Ordering::Relaxed),
+            put_drops: self.stat_put_drops.load(Ordering::Relaxed),
+            steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
+        }
+    }
+
+    fn allocate(&self, capacity: usize, old_bytes: usize) -> Result<B, PoolError> {
+        let requested_bytes = Self::bytes_for_capacity(capacity)?;
         let requested_delta =
             requested_bytes
                 .checked_sub(old_bytes)
@@ -138,22 +193,12 @@ where
                     reason: "new capacity is smaller than the current capacity",
                 })?;
         let mut reservation = self.reserve(requested_delta)?;
-
-        let mut grown = Vec::new();
-        if grown.try_reserve_exact(target_capacity).is_err() {
-            return Err(PoolError::AllocationFailed {
-                additional_bytes: requested_delta,
-                allocated_bytes: self.budgets.region_current(),
-                max_bytes: self.budgets.region_limit(),
-            });
-        }
-        let actual_bytes = grown
-            .capacity()
-            .checked_mul(size_of::<T>())
-            .ok_or_else(|| PoolError::CapacityOverflow {
-                elements: grown.capacity(),
-                element_size: size_of::<T>(),
-            })?;
+        let grown = B::try_with_capacity(capacity).map_err(|()| PoolError::AllocationFailed {
+            additional_bytes: requested_delta,
+            allocated_bytes: self.budgets.region_current(),
+            max_bytes: self.budgets.region_limit(),
+        })?;
+        let actual_bytes = Self::byte_size(&grown)?;
         let actual_delta = actual_bytes
             .checked_sub(old_bytes)
             .ok_or(PoolError::InvalidConfig {
@@ -166,13 +211,6 @@ where
             reservation.reduce(requested_delta - actual_delta);
             None
         };
-
-        grown.extend_from_slice(current);
-        if let Some(appended) = appended {
-            grown.extend_from_slice(appended);
-        } else {
-            grown.resize(new_len, T::default());
-        }
         if let Some(extra) = extra {
             extra.commit();
         }
@@ -180,19 +218,21 @@ where
         Ok(grown)
     }
 
-    pub(crate) fn put(&self, value: Vec<T>, shard_idx: usize) {
-        let before = Self::byte_size(&value);
-        match self.shards[shard_idx].try_put(value) {
-            Ok(kept) => self.budgets.release(before - kept),
-            Err(value) => {
-                drop(value);
-                self.budgets.release(before);
-            }
-        }
+    fn byte_size(value: &B) -> Result<usize, PoolError> {
+        Self::bytes_for_capacity(value.capacity())
     }
 
-    fn byte_size(value: &Vec<T>) -> usize {
-        value.capacity() * size_of::<T>()
+    fn bytes_for_capacity(capacity: usize) -> Result<usize, PoolError> {
+        B::bytes_for_capacity(capacity).ok_or_else(|| PoolError::CapacityOverflow {
+            elements: capacity,
+            element_size: B::bytes_for_capacity(1).unwrap_or(usize::MAX),
+        })
+    }
+
+    fn increment(counter: &AtomicU64) {
+        if OBSERVE {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn reserve(&self, amount: usize) -> Result<crate::budget::Reservation<'_>, PoolError> {
@@ -217,27 +257,27 @@ where
         usize::try_from(current_thread_id() % shards).unwrap_or(0)
     }
 
-    fn try_steal(&self, home: usize) -> Option<Vec<T>> {
+    fn try_steal(&self, home: usize) -> Option<B> {
         let probes = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
         (1..=probes).find_map(|offset| self.shards[(home + offset) % SHARDS].try_get())
     }
 }
 
-impl<const SHARDS: usize, T> Drop for Core<SHARDS, T>
+impl<const SHARDS: usize, B, const OBSERVE: bool> Drop for Core<SHARDS, B, OBSERVE>
 where
-    T: Copy + Default,
+    B: Storage,
 {
     fn drop(&mut self) {
         if let Some(cold) = &self.cold {
             while let Some(value) = cold.pop() {
-                let bytes = Self::byte_size(&value);
+                let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
                 drop(value);
                 self.budgets.release(bytes);
             }
         }
         for shard in &self.shards {
             shard.drain(|value| {
-                let bytes = Self::byte_size(&value);
+                let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
                 drop(value);
                 self.budgets.release(bytes);
             });

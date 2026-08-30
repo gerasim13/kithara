@@ -2,22 +2,25 @@ use std::ops::RangeBounds;
 
 use kithara_platform::sync::Arc;
 
-use crate::{PoolError, pool::Core};
+use crate::{
+    PoolError,
+    pool::{Core, storage::Storage},
+};
 
-pub(crate) struct OwnedBuffer<const SHARDS: usize, T>
+pub(crate) struct OwnedBuffer<const SHARDS: usize, B, const OBSERVE: bool>
 where
-    T: Copy + Default,
+    B: Storage,
 {
-    core: Arc<Core<SHARDS, T>>,
+    core: Arc<Core<SHARDS, B, OBSERVE>>,
     shard_idx: usize,
-    pub(super) value: Vec<T>,
+    pub(super) value: B,
 }
 
-impl<const SHARDS: usize, T> OwnedBuffer<SHARDS, T>
+impl<const SHARDS: usize, B, const OBSERVE: bool> OwnedBuffer<SHARDS, B, OBSERVE>
 where
-    T: Copy + Default,
+    B: Storage,
 {
-    pub(crate) fn new(core: Arc<Core<SHARDS, T>>, value: Vec<T>, shard_idx: usize) -> Self {
+    pub(crate) fn new(core: Arc<Core<SHARDS, B, OBSERVE>>, value: B, shard_idx: usize) -> Self {
         Self {
             core,
             shard_idx,
@@ -25,6 +28,24 @@ where
         }
     }
 
+    delegate::delegate! {
+        to self.value {
+            pub(super) fn capacity(&self) -> usize;
+            pub(super) fn clear(&mut self);
+        }
+    }
+
+    pub(super) fn renew(&mut self) {
+        let core = Arc::clone(&self.core);
+        *self = core.acquire();
+    }
+
+    fn grow(&mut self, new_len: usize) -> Result<(), PoolError> {
+        self.core.grow(&mut self.value, new_len)
+    }
+}
+
+impl<const SHARDS: usize, T, const OBSERVE: bool> OwnedBuffer<SHARDS, Vec<T>, OBSERVE> {
     pub(super) fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, T>
     where
         R: RangeBounds<usize>,
@@ -33,17 +54,15 @@ where
     }
 
     #[inline]
-    pub(super) fn ensure_len(&mut self, min_len: usize) -> Result<(), PoolError> {
+    pub(super) fn ensure_len(&mut self, min_len: usize) -> Result<(), PoolError>
+    where
+        T: Clone + Default,
+    {
         if min_len <= self.value.len() {
             return Ok(());
         }
-        if min_len <= self.value.capacity() {
-            self.value.resize(min_len, T::default());
-            return Ok(());
-        }
-
-        let grown = self.core.grow(&self.value, min_len, None)?;
-        self.value = grown;
+        self.grow(min_len)?;
+        self.value.resize(min_len, T::default());
         Ok(())
     }
 
@@ -54,35 +73,45 @@ where
         self.value.retain(keep);
     }
 
-    pub(super) fn renew(&mut self) {
-        let core = Arc::clone(&self.core);
-        let replacement = core.acquire();
-        *self = replacement;
+    pub(super) fn try_extend<I>(&mut self, values: I) -> Result<(), PoolError>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        for value in values {
+            self.try_push(value)?;
+        }
+        Ok(())
     }
 
-    pub(super) fn try_extend_from_slice(&mut self, values: &[T]) -> Result<(), PoolError> {
-        let new_len =
-            self.value
-                .len()
-                .checked_add(values.len())
-                .ok_or(PoolError::CapacityOverflow {
-                    elements: usize::MAX,
-                    element_size: size_of::<T>(),
-                })?;
-        if new_len <= self.value.capacity() {
-            self.value.extend_from_slice(values);
-            return Ok(());
-        }
-
-        let grown = self.core.grow(&self.value, new_len, Some(values))?;
-        self.value = grown;
+    pub(super) fn try_extend_from_slice(&mut self, values: &[T]) -> Result<(), PoolError>
+    where
+        T: Clone,
+    {
+        let new_len = self.checked_extended_len(values.len())?;
+        self.grow(new_len)?;
+        self.value.extend_from_slice(values);
         Ok(())
+    }
+
+    pub(super) fn try_push(&mut self, value: T) -> Result<(), PoolError> {
+        let new_len = self.checked_extended_len(1)?;
+        self.grow(new_len)?;
+        self.value.push(value);
+        Ok(())
+    }
+
+    fn checked_extended_len(&self, additional: usize) -> Result<usize, PoolError> {
+        self.value
+            .len()
+            .checked_add(additional)
+            .ok_or(PoolError::CapacityOverflow {
+                elements: usize::MAX,
+                element_size: size_of::<T>(),
+            })
     }
 
     delegate::delegate! {
         to self.value {
-            pub(super) fn capacity(&self) -> usize;
-            pub(super) fn clear(&mut self);
             pub(super) fn dedup(&mut self)
             where
                 T: PartialEq;
@@ -91,9 +120,25 @@ where
     }
 }
 
-impl<const SHARDS: usize, T> Drop for OwnedBuffer<SHARDS, T>
+impl<const SHARDS: usize, const OBSERVE: bool> OwnedBuffer<SHARDS, String, OBSERVE> {
+    pub(super) fn try_push_str(&mut self, content: &str) -> Result<(), PoolError> {
+        let new_len =
+            self.value
+                .len()
+                .checked_add(content.len())
+                .ok_or(PoolError::CapacityOverflow {
+                    elements: usize::MAX,
+                    element_size: 1,
+                })?;
+        self.grow(new_len)?;
+        self.value.push_str(content);
+        Ok(())
+    }
+}
+
+impl<const SHARDS: usize, B, const OBSERVE: bool> Drop for OwnedBuffer<SHARDS, B, OBSERVE>
 where
-    T: Copy + Default,
+    B: Storage,
 {
     fn drop(&mut self) {
         self.core

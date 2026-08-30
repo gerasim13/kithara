@@ -101,6 +101,85 @@ impl Default for FrameSides {
     }
 }
 
+/// Which of a box's four corners are the window's own.
+///
+/// The window has no frame of its own to round: what stands at its corner is
+/// whichever module the layout puts there, so the shape of the window is the
+/// shape of those boxes. A compiled layout hands each module the corners it
+/// inherits from the root, and the skin's frame radius does the rest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct FrameCorners {
+    pub bottom_left: bool,
+    pub bottom_right: bool,
+    pub top_left: bool,
+    pub top_right: bool,
+}
+
+impl FrameCorners {
+    /// No corner, which is what a box inside the window is given.
+    pub const EMPTY: Self = Self {
+        bottom_left: false,
+        bottom_right: false,
+        top_left: false,
+        top_right: false,
+    };
+
+    /// Every corner, which is what the root of a layout is given.
+    pub const ALL: Self = Self {
+        bottom_left: true,
+        bottom_right: true,
+        top_left: true,
+        top_right: true,
+    };
+
+    /// The top pair of `self`, the bottom pair dropped.
+    #[must_use]
+    pub const fn top(self) -> Self {
+        Self {
+            bottom_left: false,
+            bottom_right: false,
+            ..self
+        }
+    }
+
+    /// The bottom pair of `self`, the top pair dropped.
+    #[must_use]
+    pub const fn bottom(self) -> Self {
+        Self {
+            top_left: false,
+            top_right: false,
+            ..self
+        }
+    }
+
+    /// The left pair of `self`, the right pair dropped.
+    #[must_use]
+    pub const fn left(self) -> Self {
+        Self {
+            bottom_right: false,
+            top_right: false,
+            ..self
+        }
+    }
+
+    /// The right pair of `self`, the left pair dropped.
+    #[must_use]
+    pub const fn right(self) -> Self {
+        Self {
+            bottom_left: false,
+            top_left: false,
+            ..self
+        }
+    }
+
+    /// Whether any corner is the window's.
+    #[must_use]
+    pub const fn any(self) -> bool {
+        self.bottom_left || self.bottom_right || self.top_left || self.top_right
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 pub enum Axis {

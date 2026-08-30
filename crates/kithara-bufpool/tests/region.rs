@@ -1,7 +1,8 @@
 use std::{mem::size_of, sync::Barrier, thread};
 
 use kithara_bufpool::{
-    HasPool, OverallBudget, Percent, PoolAlias, PoolConfig, PoolError, PoolRegion, pool_schema,
+    HasPool, OverallBudget, Percent, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey,
+    VecKey, pool_schema,
 };
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
@@ -308,4 +309,69 @@ fn trimmed_returns_release_both_pool_and_region_charges() {
     drop(samples);
 
     assert!(pools.stats().allocated_bytes < charged);
+}
+
+mod generic_keys {
+    use super::*;
+
+    pub(super) enum NumbersTag {}
+    pub(super) enum TextTag {}
+    pub(super) type Numbers = PoolAlias<NumbersTag, VecKey<u64, 1>>;
+    pub(super) type Text = PoolAlias<TextTag, StringKey<1>>;
+
+    pool_schema! {
+        pub(super) GenericPools {
+            numbers: Numbers,
+            text: Text,
+        }
+    }
+
+    pub(super) fn pools(
+        max_bytes: usize,
+        max_retained_capacity: usize,
+    ) -> PoolRegion<GenericPools> {
+        let config = || {
+            PoolConfig::builder()
+                .max_buffers(1)
+                .max_retained_capacity(max_retained_capacity)
+                .build()
+        };
+        GenericPools::builder(OverallBudget(max_bytes))
+            .numbers(config())
+            .text(config())
+            .build()
+            .unwrap_or_else(|error| panic!("generic region: {error}"))
+    }
+}
+
+#[kithara::test]
+fn generic_vector_and_string_keys_share_the_region_budget() {
+    let pools = generic_keys::pools(16, 0);
+    let mut numbers = pools.get::<generic_keys::Numbers>();
+    numbers
+        .try_extend([1, 2])
+        .unwrap_or_else(|error| panic!("numbers: {error}"));
+    let mut text = pools.get::<generic_keys::Text>();
+
+    assert!(matches!(
+        text.try_push_str("x"),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+    assert_eq!(&*numbers, &[1, 2]);
+    assert!(text.is_empty());
+    assert_eq!(pools.stats().allocated_bytes, 16);
+}
+
+#[kithara::test]
+fn generic_keys_report_reuse_and_rejected_returns() {
+    let pools = generic_keys::pools(64, 1);
+    let mut numbers = pools.get::<generic_keys::Numbers>();
+    numbers
+        .try_extend([1, 2])
+        .unwrap_or_else(|error| panic!("numbers: {error}"));
+    drop(numbers);
+
+    let stats = pools.pool_stats::<generic_keys::Numbers>();
+    assert_eq!(stats.alloc_misses, 1);
+    assert_eq!(stats.put_drops, 1);
 }

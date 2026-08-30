@@ -8,10 +8,12 @@ use crate::{
 
 pub(crate) const LAYOUT_SCHEMA: &str = "kithara.layout";
 pub(crate) const MODULE_SCHEMA: &str = "kithara.module";
+pub(crate) const PACKAGE_SCHEMA: &str = "kithara.package";
 pub(crate) const SKIN_SCHEMA: &str = "kithara.skin";
 pub(crate) const TEXT_SCHEMA: &str = "kithara.text";
 pub const LAYOUT_VERSION: u32 = 1;
 pub const MODULE_VERSION: u32 = 1;
+pub const PACKAGE_VERSION: u32 = 1;
 pub const SKIN_VERSION: u32 = 1;
 pub const TEXT_VERSION: u32 = 1;
 
@@ -19,6 +21,7 @@ pub const TEXT_VERSION: u32 = 1;
 pub enum DocKind {
     Layout,
     Module,
+    Package,
     Skin,
     Text,
 }
@@ -28,6 +31,7 @@ impl DocKind {
         match self {
             Self::Layout => "layout",
             Self::Module => "module",
+            Self::Package => "package",
             Self::Skin => "skin",
             Self::Text => "text",
         }
@@ -65,6 +69,8 @@ pub fn probe(text: &str, origin: &SourceUri) -> Result<Envelope, UiDocError> {
         (DocKind::Layout, LAYOUT_VERSION)
     } else if raw.schema == MODULE_SCHEMA {
         (DocKind::Module, MODULE_VERSION)
+    } else if raw.schema == PACKAGE_SCHEMA {
+        (DocKind::Package, PACKAGE_VERSION)
     } else if raw.schema == SKIN_SCHEMA {
         (DocKind::Skin, SKIN_VERSION)
     } else if raw.schema == TEXT_SCHEMA {

@@ -14,19 +14,30 @@
 
 # kithara-bufpool
 
-Typed sharded byte and sample pools behind one cloneable region facade. A
-composition root declares a closed schema, configures every pool explicitly,
-and shares one hard byte budget across them.
+Typed sharded buffers behind one cloneable region facade. A composition root
+declares a closed schema, configures every pool explicitly, and shares one hard
+byte budget across built-in byte/sample buffers and registered vector or string
+keys.
 
 ## Usage
 
 ```rust
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolError, pool_schema};
+use kithara_bufpool::{
+    OverallBudget, PoolAlias, PoolConfig, PoolError, StringKey, VecKey, pool_schema,
+};
+
+enum CommandsTag {}
+enum TextTag {}
+
+type Commands = PoolAlias<CommandsTag, VecKey<u32, 1>>;
+type Text = PoolAlias<TextTag, StringKey<1>>;
 
 pool_schema! {
     pub AppPools {
         bytes: u8,
         samples: f32,
+        commands: Commands,
+        text: Text,
     }
 }
 
@@ -35,10 +46,16 @@ fn build() -> Result<(), PoolError> {
     let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
         .bytes(config())
         .samples(config())
+        .commands(config())
+        .text(config())
         .build()?;
 
     let mut samples = pools.get_with_len::<f32>(1024)?;
     samples.fill(0.0);
+    let mut commands = pools.get::<Commands>();
+    commands.try_push(7)?;
+    let mut text = pools.get::<Text>();
+    text.try_push_str("ready")?;
     let _bytes = pools.get::<u8>();
     Ok(())
 }
@@ -57,6 +74,10 @@ fn build() -> Result<(), PoolError> {
 <tr><td><code>PoolConfig</code></td><td>Retention, initial allocation, trim, and per-pool share policy</td></tr>
 
 <tr><td><code>ByteBuffer</code> / <code>SampleBuffer</code></td><td>Checked RAII guards returned to their typed pool on drop</td></tr>
+
+<tr><td><code>VecKey</code> / <code>StringKey</code></td><td>Safe registered storage shapes for crate-owned aliases</td></tr>
+
+<tr><td><code>PooledVec</code> / <code>PooledString</code></td><td>Checked guards for registered vector and UTF-8 storage</td></tr>
 
 <tr><td><code>OverallBudget</code> / <code>Percent</code></td><td>Region hard cap and an optional per-pool hard ceiling</td></tr>
 

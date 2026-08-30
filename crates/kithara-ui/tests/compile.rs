@@ -6,7 +6,8 @@ use kithara_ui::{
     compile::{CompiledNode, CompiledUi, compile},
     error::UiDocError,
     expand::{Binding, BindingKind, ControlSpec, ExpandedNode, MeasureSpec},
-    module::{ChromeStyle, IconName, PopoverAt, TrackColumn},
+    layout::FrameCorners,
+    module::{ChromeStyle, IconName, PopoverAt},
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
@@ -16,14 +17,40 @@ fn resolver() -> MemResolver {
     builtin::resolver()
 }
 
-fn track_list_resolver(module: &str) -> MemResolver {
+fn table_resolver(module: &str) -> MemResolver {
     let mut resolver = MemResolver::default();
     resolver.insert(
-        "track-list.klayout.ron",
-        r#"(schema: "kithara.layout", version: 1, id: "track-list",
-            root: Module(instance: "track-list", source: "track-list.kmodule.ron"))"#,
+        "table.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "table",
+            root: Module(instance: "table", source: "table.kmodule.ron"))"#,
     );
-    resolver.insert("track-list.kmodule.ron", module);
+    resolver.insert("table.kmodule.ron", module);
+    resolver
+}
+
+/// Same shape, but the layout hands the module a column list, so the module
+/// body reads `columns: "$columns"`.
+fn parameterised_table_resolver(columns: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    let columns = columns.replace('"', "\\\"");
+    resolver.insert(
+        "table.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "table",
+            root: Module(instance: "table", source: "table.kmodule.ron",
+                with: {{ "columns": "{columns}" }}))"#
+        ),
+    );
+    resolver.insert(
+        "table.kmodule.ron",
+        r##"(schema: "kithara.module", version: 1, id: "table",
+            parameters: ["columns"],
+            root: Table(
+                id: "tracks",
+                columns: "$columns",
+                read: Model(id: "library.visible_tracks"),
+            ))"##,
+    );
     resolver
 }
 
@@ -95,6 +122,116 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
     else {
         panic!("expected compiled crossfader");
     };
+}
+
+fn shader_resolver(source: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "shader.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "shader",
+            root: Module(instance: "meter", source: "panels/meter.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "panels/meter.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "meter",
+            root: Shader(
+                id: "meter",
+                source: "../shaders/meter.wgsl",
+                uniforms: { "level": Telemetry(id: "player.output.levels") },
+            ))"#,
+    );
+    resolver.insert("shaders/meter.wgsl", source);
+    resolver
+}
+
+#[kithara::test]
+fn shader_source_and_uniforms_compile_through_the_document_pipeline() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(position.xy / kithara.viewport.xy, kithara.level.x, 1.0);
+}
+"#,
+    );
+
+    let ui = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    assert!(matches!(
+        &**root,
+        ExpandedNode::Control {
+            spec: ControlSpec::Shader(_),
+            read: None,
+            write: None,
+            ..
+        }
+    ));
+}
+
+#[kithara::test]
+fn malformed_shader_reports_the_resolved_source() {
+    let resolver = shader_resolver("@fragment fn fs_main(");
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        UiDocError::Shader { origin, path, .. }
+            if origin.0 == "shaders/meter.wgsl" && path == "meter/meter"
+    ));
+}
+
+#[kithara::test]
+fn shader_uniforms_reject_non_numeric_endpoint_values() {
+    let resolver = shader_resolver(
+        r#"
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+    return vec4<f32>(kithara.level.x);
+}
+"#,
+    );
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Telemetry,
+        "player.output.levels",
+        EndpointDesc::new(ValueKind::Text),
+    );
+
+    let error = compile(
+        "shader.klayout.ron",
+        &resolver,
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, UiDocError::Shader { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("expected Bool, Scalar, or Stereo")
+    );
 }
 
 #[kithara::test]
@@ -281,52 +418,84 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
 }
 
 #[kithara::test]
-fn track_list_requires_title_column_at_compile_time() {
-    let resolver = track_list_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "track-list",
-            root: TrackList(
-                id: "tracks",
-                columns: [Index, Artist],
+fn table_accepts_arbitrary_text_columns() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "people",
+                columns: [
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                    (id: "note", label: "NOTE", style: Secondary, width: 240.0),
+                ],
                 read: Model(id: "library.visible_tracks"),
             ))"#,
     );
 
-    let error = compile(
-        "track-list.klayout.ron",
+    compile(
+        "table.klayout.ron",
         &resolver,
         &common::player_registry(),
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
     )
-    .unwrap_err();
-
-    assert!(matches!(
-        error,
-        UiDocError::MissingTrackTitleColumn { path, .. } if path == "track-list/tracks"
-    ));
+    .expect("a table must not require track-specific columns");
 }
 
 #[kithara::test]
-fn track_list_compiles_typed_columns_and_optional_state_prefix() {
-    let resolver = track_list_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "track-list",
-            root: TrackList(
-                id: "tracks",
-                columns: [Index, Title, Bpm],
-                columns_state: Some(Model(id: "ui.tracklist.columns")),
+fn a_column_list_may_arrive_as_an_include_parameter() {
+    compile(
+        "table.klayout.ron",
+        &parameterised_table_resolver(
+            r#"[(id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true), (id: "note", label: "NOTE", style: Secondary, width: 200.0)]"#,
+        ),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect("a substituted column list must compile like a literal one");
+}
+
+#[kithara::test]
+fn a_parameterised_column_list_can_use_non_music_ids() {
+    compile(
+        "table.klayout.ron",
+        &parameterised_table_resolver(
+            r#"[(id: "status", label: "STATUS", style: Badge, width: 80.0)]"#,
+        ),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect("parameterized tables must accept arbitrary column identifiers");
+}
+
+#[kithara::test]
+fn table_compiles_typed_columns_and_optional_state_prefix() {
+    let resolver = table_resolver(
+        r##"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "rank", label: "#", style: Index, width: 28.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                    (id: "score", label: "SCORE", style: Metric, width: 70.0),
+                ],
+                columns_state: Some(Model(id: "ui.table.columns")),
                 read: Model(id: "library.visible_tracks"),
-            ))"#,
+            ))"##,
     );
     let mut registry = common::player_registry();
     registry.insert(
         EndpointCategory::Model,
-        "ui.tracklist.columns.title",
+        "ui.table.columns.name",
         EndpointDesc::new(ValueKind::Bool),
     );
 
     let ui = compile(
-        "track-list.klayout.ron",
+        "table.klayout.ron",
         &resolver,
         &registry,
         builtin::skin_doc(),
@@ -339,7 +508,7 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
     };
     let ExpandedNode::Control {
         spec:
-            ControlSpec::TrackList {
+            ControlSpec::Table {
                 columns,
                 columns_state,
                 ..
@@ -347,13 +516,12 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
         ..
     } = &**root
     else {
-        panic!("expected track list control");
+        panic!("expected table control");
     };
 
-    assert_eq!(
-        columns,
-        &[TrackColumn::Index, TrackColumn::Title, TrackColumn::Bpm]
-    );
+    assert_eq!(columns[0].id(), "rank");
+    assert_eq!(columns[1].id(), "name");
+    assert_eq!(columns[2].id(), "score");
     let Some(Binding {
         kind: BindingKind::Model,
         id,
@@ -362,29 +530,136 @@ fn track_list_compiles_typed_columns_and_optional_state_prefix() {
     else {
         panic!("expected model state prefix");
     };
-    assert_eq!(ui.resolve(*id), "ui.tracklist.columns");
+    assert_eq!(ui.resolve(*id), "ui.table.columns");
 }
 
 #[kithara::test]
-fn present_track_list_column_state_endpoint_must_be_bool() {
-    let resolver = track_list_resolver(
-        r#"(schema: "kithara.module", version: 1, id: "track-list",
-            root: TrackList(
-                id: "tracks",
-                columns: [Title],
-                columns_state: Some(Model(id: "ui.tracklist.columns")),
+fn a_table_column_label_resolves_through_the_catalog() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[0].label(), "DECK");
+}
+
+#[kithara::test]
+fn a_table_column_label_written_as_plain_text_stays_that_text() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@track_list.column.deck", style: Badge, width: 44.0),
+                    (id: "name", label: "NAME", style: Primary, width: 180.0, flexible: true),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let ui = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap();
+    let CompiledNode::Module { root, .. } = &ui.root else {
+        panic!("expected module root");
+    };
+    let ExpandedNode::Control {
+        spec: ControlSpec::Table { columns, .. },
+        ..
+    } = &**root
+    else {
+        panic!("expected table control");
+    };
+
+    assert_eq!(columns[1].label(), "NAME");
+}
+
+#[kithara::test]
+fn a_table_column_naming_a_missing_key_is_a_compile_error() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [
+                    (id: "deck", label: "@missing.key", style: Badge, width: 44.0),
+                ],
+                read: Model(id: "library.visible_tracks"),
+            ))"#,
+    );
+
+    let error = compile(
+        "table.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .expect_err("a column caption naming no catalog entry must not compile");
+
+    let UiDocError::UnknownTextKey { key, path, .. } = error else {
+        panic!("expected an unknown-key error, got {error:?}");
+    };
+    assert_eq!(key, "missing.key");
+    assert!(
+        path.ends_with("/columns/0/label"),
+        "the error must name the column that carried the key, got {path}"
+    );
+}
+
+#[kithara::test]
+fn present_table_column_state_endpoint_must_be_bool() {
+    let resolver = table_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "table",
+            root: Table(
+                id: "rows",
+                columns: [(id: "name", label: "NAME", style: Primary, width: 180.0)],
+                columns_state: Some(Model(id: "ui.table.columns")),
                 read: Model(id: "library.visible_tracks"),
             ))"#,
     );
     let mut registry = common::player_registry();
     registry.insert(
         EndpointCategory::Model,
-        "ui.tracklist.columns.title",
+        "ui.table.columns.name",
         EndpointDesc::new(ValueKind::Text),
     );
 
     let error = compile(
-        "track-list.klayout.ron",
+        "table.klayout.ron",
         &resolver,
         &registry,
         builtin::skin_doc(),
@@ -396,7 +671,7 @@ fn present_track_list_column_state_endpoint_must_be_bool() {
     assert!(matches!(
         error,
         UiDocError::BindingType { id, expected, got, .. }
-            if id == "ui.tracklist.columns.title" && expected == "Bool" && got == "Text"
+            if id == "ui.table.columns.name" && expected == "Bool" && got == "Text"
     ));
 }
 
@@ -2109,4 +2384,263 @@ fn a_layout_box_may_not_be_smaller_than_the_node_standing_in_it() {
     for (_, layout) in layouts(120.0) {
         compile_layout(&layout).expect("a box the node fills exactly is a box it fits in");
     }
+}
+
+/// A window split into three stacked modules: a window corner belongs to the
+/// module at one end of the split, and to nothing standing between the ends.
+fn stacked_resolver() -> MemResolver {
+    let mut resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+    resolver.insert(
+        "stacked.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "stacked",
+            root: Split(axis: Vertical, children: [
+                (node: Module(instance: "top", source: "blocks.kmodule.ron")),
+                (node: Module(instance: "middle", source: "blocks.kmodule.ron")),
+                (node: Module(instance: "bottom", source: "blocks.kmodule.ron")),
+            ]))"#,
+    );
+    resolver
+}
+
+/// The window corners the module in cell `index` of the stacked layout stands
+/// at.
+fn stacked_round(index: usize) -> FrameCorners {
+    let ui = compile_blocks(&stacked_resolver(), "stacked.klayout.ron").unwrap();
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected a split root");
+    };
+    let CompiledNode::Module { round, .. } = &children[index].node else {
+        panic!("expected a module in every cell");
+    };
+    *round
+}
+
+#[kithara::test]
+fn the_module_at_the_top_of_the_window_takes_the_top_corners() {
+    assert_eq!(stacked_round(0), FrameCorners::ALL.top());
+}
+
+#[kithara::test]
+fn the_module_at_the_bottom_of_the_window_takes_the_bottom_corners() {
+    assert_eq!(stacked_round(2), FrameCorners::ALL.bottom());
+}
+
+#[kithara::test]
+fn a_module_between_the_ends_of_a_split_stands_at_no_window_corner() {
+    assert_eq!(stacked_round(1), FrameCorners::EMPTY);
+}
+
+#[kithara::test]
+fn a_layout_of_one_module_gives_it_every_window_corner() {
+    let resolver = block_resolver(
+        r#"(schema: "kithara.module", version: 1, id: "mixer",
+            root: Knob(id: "low"))"#,
+    );
+
+    let ui = compile_blocks(&resolver, "blocks.klayout.ron").unwrap();
+
+    let CompiledNode::Module { round, .. } = &ui.root else {
+        panic!("expected a module root");
+    };
+    assert_eq!(*round, FrameCorners::ALL);
+}
+
+/// The pools live on the configuration, so the document a host compiles draws
+/// from the family the host handed it rather than from one of its own.
+#[kithara::test]
+fn a_document_draws_from_the_pools_its_configuration_carries() {
+    let config = UiConfig::default();
+    drop(config.draw_buffers.text("held"));
+
+    let ui = compile(
+        "micro.klayout.ron",
+        &resolver(),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &config,
+    )
+    .unwrap();
+
+    assert_eq!(ui.draw_pool_stats(), config.draw_buffers.stats());
+}
+
+/// A host compiles a second screen, and compiles the first one again whenever
+/// it is redressed. Every one of those joins the family already in use instead
+/// of starting an empty one.
+#[kithara::test]
+fn a_document_compiled_after_the_first_joins_the_same_family() {
+    let config = UiConfig::default();
+    let screen = |()| {
+        compile(
+            "micro.klayout.ron",
+            &resolver(),
+            &common::player_registry(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &config,
+        )
+        .unwrap()
+    };
+    let _first = screen(());
+    let second = screen(());
+
+    drop(config.draw_buffers.text("held"));
+
+    assert_eq!(second.draw_pool_stats(), config.draw_buffers.stats());
+}
+
+/// A stage whose children the caller writes, so a test says only what it is
+/// about: what the placements of one scene declare.
+fn stage_resolver(children: &str) -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        &format!(
+            r#"(schema: "kithara.module", version: 1, id: "scene",
+            root: Stage(id: "stage", children: [{children}]))"#
+        ),
+    );
+    resolver
+}
+
+fn compile_stage(children: &str) -> Result<CompiledUi, UiDocError> {
+    let mut registry = common::player_registry();
+    registry.insert(
+        EndpointCategory::Model,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    registry.insert(
+        EndpointCategory::Parameter,
+        "scene.at",
+        EndpointDesc::new(ValueKind::Point),
+    );
+    compile(
+        "scene.klayout.ron",
+        &stage_resolver(children),
+        &registry,
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+}
+
+/// The point of a carried placement is the application's, so one that publishes
+/// a drag has to read the point back or it stands still while the model moves.
+#[kithara::test]
+fn a_placement_that_writes_without_reading_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "carry", at: (0.0, 0.0),
+            write: Parameter(id: "scene.at"),
+            child: Knob(id: "one"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::PlacedUnread { path, .. } if path == "root/Stage(stage)/[0]/Placed(carry)"),
+        "{error:?}"
+    );
+}
+
+/// A magnet pulls where a drag ends, so a placement no pointer carries never
+/// has an occasion to snap.
+#[kithara::test]
+fn a_magnet_on_a_placement_nobody_carries_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "dock", at: (0.0, 0.0), child: Knob(id: "one")),
+        Placed(id: "still", at: (40.0, 0.0),
+            magnet: (to: ["dock"], within: 64.0),
+            child: Knob(id: "two"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::MagnetUncarried { path, .. } if path == "root/Stage(stage)/[1]/Placed(still)"),
+        "{error:?}"
+    );
+}
+
+/// A magnet names placements of its own stage; anything else names nothing that
+/// stands anywhere.
+#[kithara::test]
+fn a_magnet_naming_no_placement_of_the_stage_is_rejected() {
+    let error = compile_stage(
+        r#"Placed(id: "carry", at: (0.0, 0.0),
+            read: Model(id: "scene.at"),
+            write: Parameter(id: "scene.at"),
+            magnet: (to: ["absent"], within: 64.0),
+            child: Knob(id: "one"))"#,
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::MagnetUnknown { path, target, .. }
+            if path == "root/Stage(stage)/[0]/Placed(carry)" && target == "absent"),
+        "{error:?}"
+    );
+}
+
+/// A reach no distance is under is a magnet that never pulls, whichever way the
+/// document wrote it.
+#[kithara::test]
+fn a_magnet_reach_no_distance_is_under_is_rejected() {
+    for within in ["0.0", "-1.0"] {
+        let error = compile_stage(&format!(
+            r#"Placed(id: "dock", at: (0.0, 0.0), child: Knob(id: "one")),
+            Placed(id: "carry", at: (40.0, 0.0),
+                read: Model(id: "scene.at"),
+                write: Parameter(id: "scene.at"),
+                magnet: (to: ["dock"], within: {within}),
+                child: Knob(id: "two"))"#
+        ))
+        .unwrap_err();
+
+        assert!(
+            matches!(&error, UiDocError::MagnetReach { path, .. } if path == "root/Stage(stage)/[1]/Placed(carry)"),
+            "`{within}`: {error:?}"
+        );
+    }
+}
+
+/// A placement is a point inside a scene, so it means nothing under a container
+/// that puts its children where it likes.
+#[kithara::test]
+fn a_placement_outside_a_stage_is_rejected() {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "scene.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "scene",
+            root: Module(instance: "scene", source: "scene.kmodule.ron"))"#,
+    );
+    resolver.insert(
+        "scene.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "scene",
+            root: Column(children: [
+                Placed(id: "loose", at: (0.0, 0.0), child: Knob(id: "one")),
+            ]))"#,
+    );
+
+    let error = compile(
+        "scene.klayout.ron",
+        &resolver,
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&error, UiDocError::PlacedOutsideStage { path, .. } if path == "root/[0]/Placed(loose)"),
+        "{error:?}"
+    );
 }
