@@ -14,6 +14,7 @@ impl SignalAsset {
     pub const WAV_SAW_1S: Self = Self::new("signal_wav_saw_1s", "wav");
     pub const WAV_SILENCE_1S: Self = Self::new("signal_wav_silence_1s", "wav");
     pub const WAV_SINE440_120MS: Self = Self::new("signal_wav_sine440_120ms", "wav");
+    pub const WAV_SINE440_1S: Self = Self::new("signal_wav_sine440_1s", "wav");
     pub const WAV_SINE440_60S: Self = Self::new("signal_wav_sine440_60s", "wav");
     pub const WAV_SINE880_240MS: Self = Self::new("signal_wav_sine880_240ms", "wav");
     pub const MP3_SAW_1S: Self = Self::new("signal_mp3_saw_1s", "mp3");
@@ -27,6 +28,8 @@ impl SignalAsset {
     pub const MP3_SINE440_60S_256K: Self = Self::new("signal_mp3_sine440_60s_256k", "mp3");
     pub const MP3_SINE440_60S_320K: Self = Self::new("signal_mp3_sine440_60s_320k", "mp3");
     pub const MP3_SINE880_30S: Self = Self::new("signal_mp3_sine880_30s", "mp3");
+    pub const MP3_SINE880_48K_162S: Self = Self::new("signal_mp3_sine880_48k_162s", "mp3");
+    pub const MP3_TRACK_SINE440_187S: Self = Self::new("signal_mp3_track_sine440_187s", "mp3");
     pub const FLAC_SAW_1S: Self = Self::new("signal_flac_saw_1s", "flac");
     pub const FLAC_SINE1K_48K_1S: Self = Self::new("signal_flac_sine1k_48k_1s", "flac");
     pub const FLAC_SINE440_60S: Self = Self::new("signal_flac_sine440_60s", "flac");
@@ -44,10 +47,11 @@ impl SignalAsset {
     pub const M4A_SINE440_60S_320K: Self = Self::new("signal_m4a_sine440_60s_320k", "m4a");
 
     /// Every asset the `/signal` route can serve.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 34] = [
         Self::WAV_SAW_1S,
         Self::WAV_SILENCE_1S,
         Self::WAV_SINE440_120MS,
+        Self::WAV_SINE440_1S,
         Self::WAV_SINE440_60S,
         Self::WAV_SINE880_240MS,
         Self::MP3_SAW_1S,
@@ -61,6 +65,8 @@ impl SignalAsset {
         Self::MP3_SINE440_60S_256K,
         Self::MP3_SINE440_60S_320K,
         Self::MP3_SINE880_30S,
+        Self::MP3_SINE880_48K_162S,
+        Self::MP3_TRACK_SINE440_187S,
         Self::FLAC_SAW_1S,
         Self::FLAC_SINE1K_48K_1S,
         Self::FLAC_SINE440_60S,

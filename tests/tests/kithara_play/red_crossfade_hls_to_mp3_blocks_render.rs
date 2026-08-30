@@ -9,8 +9,11 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, Resource},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::offline::resource_from_reader;
-use kithara_test_fixtures::signal::{self, Wave};
+use kithara_integration_tests::{offline::resource_from_reader, temp_dir};
+use kithara_test_fixtures::{
+    assets::signal_mp3_track_sine440_187s,
+    signal::{self, Wave},
+};
 use tracing::info;
 
 use crate::{common::test_defaults::Consts as Shared, continuity::render_offline_window};
@@ -68,7 +71,8 @@ async fn red_hls_to_mp3_crossfade_no_render_budget_violations() {
     let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, sample_pool).build());
     let mut player = OfflinePlayer::new(Consts::SR);
 
-    let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
+    let media_dir = temp_dir();
+    let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
 
     let make_mp3 = |w: PlayWorker| {
         let p = local_mp3.clone();

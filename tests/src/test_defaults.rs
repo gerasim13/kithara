@@ -1,8 +1,6 @@
 use kithara::platform::{sync::Arc, time::Duration};
 use kithara_test_fixtures::signal;
 
-use crate::audio_fixture::EmbeddedAudio;
-
 /// Default audio parameters for generated WAV test fixtures.
 ///
 /// All stress and integration tests that create synthetic WAV data
@@ -70,7 +68,7 @@ impl Default for SawWav {
 /// Cross-module scalar constants.
 ///
 /// Items here were previously duplicated inline (`const SAMPLE_RATE`,
-/// `TEST_MP3_BYTES`, `EXPECTED_DURATION_SECS`, …) across `kithara_audio`,
+/// `SEGMENT_SIZE`, `EXPECTED_DURATION_SECS`, …) across `kithara_audio`,
 /// `kithara_play`, `kithara_file`, and `kithara_hls` tests. Centralising
 /// them keeps numeric drift impossible and makes it obvious which values
 /// are shared vs. test-local.
@@ -87,10 +85,10 @@ impl Consts {
     /// Default packaged HLS segment size (bytes).
     pub const SEGMENT_SIZE: usize = SawWav::DEFAULT.segment_size;
 
-    /// Bytes of the `assets/test.mp3` fixture.
-    pub const TEST_MP3_BYTES: &'static [u8] = EmbeddedAudio::TEST_MP3_BYTES;
-    /// Nominal duration of [`Self::TEST_MP3_BYTES`] in seconds.
-    pub const TEST_MP3_DURATION_SECS: f64 = EmbeddedAudio::MP3_EXPECTED_DURATION_SECS;
+    /// Nominal duration of `signal_mp3_track_sine440_187s`, the full-length
+    /// MPEG clip, in seconds. The generator renders exactly this many seconds;
+    /// decoders report it back within their own priming and tail slack.
+    pub const TEST_MP3_DURATION_SECS: f64 = 187.0;
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);

@@ -11,6 +11,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{Content, Delivery, FixtureBehavior, TestServerHelper};
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 use crate::common::test_defaults::Consts;
 
@@ -38,7 +39,7 @@ async fn audio_file_mp3_decodes_with_duration(
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -133,7 +134,7 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Throttle {
@@ -181,7 +182,7 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,

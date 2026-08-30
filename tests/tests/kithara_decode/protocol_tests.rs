@@ -11,7 +11,7 @@ use kithara::{
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_integration_tests::decode_ext::DecoderChunkOutcomeTestExt;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_test_fixtures::assets::alac_silence_1s;
+use kithara_test_fixtures::assets::{alac_silence_1s, signal_mp3_track_sine440_187s};
 use kithara_test_fixtures::signal::{self, Pcm, Wave};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
@@ -45,13 +45,11 @@ impl Backend {
     }
 
     fn make_mp3(self) -> Box<dyn Decoder> {
-        const TEST_MP3_BYTES: &[u8] =
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/test.mp3"));
         let info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Mp3))
             .maybe_container(Some(ContainerFormat::MpegAudio))
             .build();
-        self.make_decoder(TEST_MP3_BYTES.to_vec(), &info)
+        self.make_decoder(signal_mp3_track_sine440_187s().bytes().to_vec(), &info)
     }
 
     fn make_wav(self) -> Box<dyn Decoder> {

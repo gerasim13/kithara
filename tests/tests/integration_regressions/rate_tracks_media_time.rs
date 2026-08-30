@@ -9,13 +9,11 @@ use kithara::{
     play::{Resource, ResourceConfig},
 };
 use kithara_integration_tests::{
-    TestTempDir,
-    audio_fixture::EmbeddedAudio,
-    kithara,
+    TestTempDir, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
-use kithara_test_fixtures::signal;
+use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, signal};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -119,7 +117,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
         SAMPLE_RATE,
     );
     let path = temp_dir.path().join("rate.mp3");
-    std::fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("write mp3 fixture");
+    std::fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
     harness.with_player(|player| {
         player.insert(resource, TrackId::allocate(), None);

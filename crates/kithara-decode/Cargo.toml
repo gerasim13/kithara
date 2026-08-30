@@ -97,18 +97,13 @@ ndk-context = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { workspace = true }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 criterion = { workspace = true }
-
-# The browser suite is the only target here that reads a saw back, and it takes
-# the vocabulary for that from the crate that writes one. Scoped to wasm so the
-# native tests keep their build graph free of the fixture store's build script.
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-kithara-test-fixtures = { workspace = true }
 
 [lints]
 workspace = true

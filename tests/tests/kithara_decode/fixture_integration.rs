@@ -7,11 +7,12 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, audio_fixture::EmbeddedAudio,
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
     decode_ext::DecoderChunkOutcomeTestExt, fixture_protocol::PackagedSignal,
 };
 use kithara_test_fixtures::{
     SignalAsset,
+    assets::signal_mp3_track_sine440_187s,
     signal::{SignalDirection, detect_direction},
 };
 use reqwest::Client;
@@ -21,13 +22,14 @@ async fn test_test_server_helper_serves_audio_fixture_urls() {
     let server = TestServerHelper::new().await;
 
     let wav_url = server.signal(SignalAsset::WAV_SAW_1S);
-    let mp3_url = server.asset("test.mp3");
+    let mp3_url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
 
     assert!(wav_url.as_str().starts_with("http://127.0.0.1:"));
     assert!(mp3_url.as_str().starts_with("http://127.0.0.1:"));
     assert!(wav_url.path().starts_with("/signal/"));
     assert!(wav_url.path().ends_with(".wav"));
-    assert!(mp3_url.path().ends_with("test.mp3"));
+    assert!(mp3_url.path().starts_with("/signal/"));
+    assert!(mp3_url.path().ends_with(".mp3"));
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
@@ -43,7 +45,7 @@ async fn test_test_server_helper_serves_format(
 
     let url = match format {
         "wav" => server.signal(SignalAsset::WAV_SAW_1S),
-        "mp3" => server.asset("test.mp3"),
+        "mp3" => server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
         _ => panic!("Unknown format: {}", format),
     };
 
@@ -508,16 +510,8 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
 }
 
 #[kithara::test]
-fn test_embedded_audio_contains_data() {
-    let audio = EmbeddedAudio::get();
-
-    let wav_data = audio.wav();
-    assert!(!wav_data.is_empty());
-
-    let mp3_data = audio.mp3();
-    assert!(!mp3_data.is_empty());
-
-    assert!(mp3_data.len() > wav_data.len());
+fn embedded_mp3_contains_data() {
+    assert!(!signal_mp3_track_sine440_187s().bytes().is_empty());
 }
 
 fn assert_valid_pcm_samples(samples: &[f32], context: &str) {

@@ -12,15 +12,16 @@ use kithara_platform::time::{self, Duration};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use kithara_test_fixtures::signal::{SignalDirection, detect_direction};
+use kithara_test_fixtures::{
+    assets::{flac_unknown_length_saw_6s, signal_mp3_track_sine440_187s},
+    signal::{SignalDirection, detect_direction},
+};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioDecoder, AudioDecoderConfig, AudioDecoderSupport};
 
-const MP3: &[u8] = include_bytes!("../../../assets/test.mp3");
-const FLAC: &[u8] = include_bytes!("../../../assets/sawtooth.flac");
 const AAC_INIT: &[u8] = include_bytes!("../../../assets/hls/init-slq-a1.mp4");
 const AAC_SEGMENT: &[u8] = include_bytes!("../../../assets/hls/segment-1-slq-a1.m4s");
 const EXPECTED_CHANNELS: u16 = 2;
@@ -64,8 +65,18 @@ struct DecodeSummary {
 async fn mp3_parity() {
     prepare_webcodecs("mp3").await;
 
-    let webcodecs = decode_file(MP3, "mp3", DecoderBackend::WebCodecs).await;
-    let symphonia = decode_file(MP3, "mp3", DecoderBackend::Symphonia).await;
+    let webcodecs = decode_file(
+        signal_mp3_track_sine440_187s().bytes(),
+        "mp3",
+        DecoderBackend::WebCodecs,
+    )
+    .await;
+    let symphonia = decode_file(
+        signal_mp3_track_sine440_187s().bytes(),
+        "mp3",
+        DecoderBackend::Symphonia,
+    )
+    .await;
 
     assert_common_parity("mp3", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
     tracing::info!(
@@ -80,8 +91,18 @@ async fn mp3_parity() {
 async fn flac_parity_direction() {
     prepare_webcodecs("flac").await;
 
-    let webcodecs = decode_file(FLAC, "flac", DecoderBackend::WebCodecs).await;
-    let symphonia = decode_file(FLAC, "flac", DecoderBackend::Symphonia).await;
+    let webcodecs = decode_file(
+        flac_unknown_length_saw_6s().bytes(),
+        "flac",
+        DecoderBackend::WebCodecs,
+    )
+    .await;
+    let symphonia = decode_file(
+        flac_unknown_length_saw_6s().bytes(),
+        "flac",
+        DecoderBackend::Symphonia,
+    )
+    .await;
 
     assert_common_parity("flac", &webcodecs, &symphonia, MP3_FRAME_TOLERANCE);
     if webcodecs.frames != symphonia.frames {
@@ -102,7 +123,11 @@ async fn flac_parity_direction() {
 async fn seek_generation() {
     prepare_webcodecs("mp3").await;
 
-    let mut decoder = create_file_decoder(MP3, "mp3", DecoderBackend::WebCodecs);
+    let mut decoder = create_file_decoder(
+        signal_mp3_track_sine440_187s().bytes(),
+        "mp3",
+        DecoderBackend::WebCodecs,
+    );
     let spec = decoder.spec();
     let mut warmup_chunks = 0usize;
     while warmup_chunks < 4 {
@@ -158,7 +183,11 @@ async fn seek_generation() {
 async fn seek_trim_no_preroll_leak() {
     prepare_webcodecs("mp3").await;
 
-    let mut decoder = create_file_decoder(MP3, "mp3", DecoderBackend::WebCodecs);
+    let mut decoder = create_file_decoder(
+        signal_mp3_track_sine440_187s().bytes(),
+        "mp3",
+        DecoderBackend::WebCodecs,
+    );
     let duration = decoder.duration().expect("MP3 duration must be known");
     let spec = decoder.spec();
 
@@ -210,8 +239,18 @@ async fn seek_trim_no_preroll_leak() {
 async fn eof_tail_drain() {
     prepare_webcodecs("mp3").await;
 
-    let webcodecs = decode_file(MP3, "mp3", DecoderBackend::WebCodecs).await;
-    let symphonia = decode_file(MP3, "mp3", DecoderBackend::Symphonia).await;
+    let webcodecs = decode_file(
+        signal_mp3_track_sine440_187s().bytes(),
+        "mp3",
+        DecoderBackend::WebCodecs,
+    )
+    .await;
+    let symphonia = decode_file(
+        signal_mp3_track_sine440_187s().bytes(),
+        "mp3",
+        DecoderBackend::Symphonia,
+    )
+    .await;
 
     assert!(webcodecs.eof, "WebCodecs MP3 must reach explicit EOF");
     assert!(
@@ -320,13 +359,13 @@ async fn prepare_webcodecs(codec: &str) {
 fn webcodecs_runtime_ready(codec: &str) -> bool {
     match codec {
         "mp3" => DecoderFactory::create_with_probe(
-            Cursor::new(MP3.to_vec()),
+            Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             Some("mp3"),
             decoder_config(DecoderBackend::WebCodecs),
         )
         .is_ok(),
         "flac" => DecoderFactory::create_with_probe(
-            Cursor::new(FLAC.to_vec()),
+            Cursor::new(flac_unknown_length_saw_6s().bytes().to_vec()),
             Some("flac"),
             decoder_config(DecoderBackend::WebCodecs),
         )

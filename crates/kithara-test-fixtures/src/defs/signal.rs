@@ -8,6 +8,8 @@ struct Consts;
 impl Consts {
     /// Amplitude of every tone the signal route serves: full scale.
     const FRAMES_120MS_44K1: usize = 5_292;
+    const FRAMES_162S_48K: usize = 7_776_000;
+    const FRAMES_187S_44K1: usize = 8_246_700;
     const FRAMES_1S_44K1: usize = 44_100;
     const FRAMES_1S_48K: usize = 48_000;
     const FRAMES_240MS_44K1: usize = 10_584;
@@ -67,6 +69,12 @@ fn backfill_flac_frame_count(bytes: &mut [u8], total_frames: usize) {
 )]
 #[case::silence_1s(
     Wave::Silence,
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_1S_44K1
+)]
+#[case::sine440_1s(
+    Wave::sine(440.0),
     Consts::RATE_44K1,
     Consts::STEREO,
     Consts::FRAMES_1S_44K1
@@ -172,7 +180,46 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::FRAMES_30S_44K1,
     None
 )]
+#[case::sine880_48k_162s(
+    Wave::sine(880.0),
+    Consts::RATE_48K,
+    Consts::STEREO,
+    Consts::FRAMES_162S_48K,
+    None
+)]
 fn signal_mp3(
+    wave: Wave,
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bit_rate: Option<u64>,
+) -> Vec<u8> {
+    encode(
+        BytesEncodeTarget::Mp3,
+        wave,
+        sample_rate,
+        channels,
+        total_frames,
+        bit_rate,
+    )
+}
+
+/// The full-length MPEG clip in-process decoders read: minutes rather than
+/// seconds, so duration, seek-by-ratio, and range tests have room to work.
+///
+/// Embedded rather than stored because the browser suite decodes it end to end
+/// with neither a store nor a server, which is also why the tone stays plain:
+/// the `WebCodecs` and Symphonia backends are compared against each other, not
+/// against a reference waveform.
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg", embed)]
+#[case::sine440_187s(
+    Wave::sine(440.0),
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_187S_44K1,
+    None
+)]
+fn signal_mp3_track(
     wave: Wave,
     sample_rate: u32,
     channels: u16,

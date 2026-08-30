@@ -8,12 +8,11 @@
 //! buffer, or a RIFF body, whether at build time or at run time. See
 //! `CONTEXT.md` for the store layout and the invalidation contract.
 
-// The store is a host filesystem, and the accessors that read it are generated
-// against one. The wasm lane names assets through `SignalAsset` instead and
-// fetches their bytes over HTTP, so the store and its accessors stay native.
-#[cfg(not(target_arch = "wasm32"))]
+// Every accessor that reads the store carries its own `cfg`, because the store
+// is a host filesystem the browser cannot reach; an `embed` accessor carries
+// its bytes instead and compiles everywhere. The store itself stays native, and
+// the wasm lane reaches the rest through `SignalAsset` over HTTP.
 pub mod asset;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod assets;
 pub mod signal;
 pub mod signal_asset;

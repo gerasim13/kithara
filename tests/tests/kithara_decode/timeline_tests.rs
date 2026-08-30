@@ -5,11 +5,10 @@ use kithara::{
     platform::time::Duration,
     signal::AudioChunk,
 };
-use kithara_integration_tests::audio_fixture::EmbeddedAudio;
+use kithara_test_fixtures::assets::signal_wav_sine440_1s;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
-    let audio = EmbeddedAudio::get();
-    let reader = Cursor::new(audio.wav());
+    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
@@ -59,8 +58,7 @@ fn test_progressive_file_timeline_monotonic() {
 
 #[kithara::test]
 fn test_progressive_file_seek_resets_frame_offset() {
-    let audio = EmbeddedAudio::get();
-    let reader = Cursor::new(audio.wav());
+    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,

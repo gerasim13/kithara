@@ -163,7 +163,7 @@ extension IntegrationRegressionsIOS {
     private func throttledStormFixture() async throws -> TestServerFixture.BehaviorHandle {
         try await TestServerFixture.registerBehavior(
             .init(
-                content: .asset(name: "test.mp3"),
+                content: .signal(name: "signal_mp3_track_sine440_187s.mp3"),
                 delivery: .throttle(chunk: 4 * 1024, delayMilliseconds: 20)
             )
         )

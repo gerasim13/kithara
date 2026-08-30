@@ -10,6 +10,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, temp_dir};
+use kithara_test_fixtures::SignalAsset;
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
@@ -24,7 +25,7 @@ async fn open_test_mp3(
     backend: DecoderBackend,
     events: Option<EventBus>,
 ) -> RegisteredAudio<Stream<File>> {
-    let url = server.asset("test.mp3");
+    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
     let region = Region::default();
     let byte_pool = region.byte_pool();
     let file_config = FileConfig::for_src(url.into())

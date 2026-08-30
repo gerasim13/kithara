@@ -25,9 +25,10 @@ use kithara::{
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
-    TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
+    TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
     memory_asset_store, offline::OfflineSession,
 };
+use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
 use reference::capture_references;
 use runtime::{Deck, DeckObservation, EventPolicy};
@@ -55,14 +56,14 @@ const PRELOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 enum Media {
-    Mp3(&'static str),
+    Mp3(SignalAsset),
     Hls,
 }
 
 impl Media {
     const fn label(self) -> &'static str {
         match self {
-            Self::Mp3(name) => name,
+            Self::Mp3(asset) => asset.name(),
             Self::Hls => "hls/master.m3u8",
         }
     }
@@ -74,21 +75,24 @@ struct Case {
     media: &'static [Media],
 }
 
-const MP3_ONE: &[Media] = &[Media::Mp3("test.mp3")];
-const MP3_TWO: &[Media] = &[Media::Mp3("test.mp3"), Media::Mp3("track.mp3")];
+const MP3_ONE: &[Media] = &[Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S)];
+const MP3_TWO: &[Media] = &[
+    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
+    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
+];
 const MP3_FOUR: &[Media] = &[
-    Media::Mp3("test.mp3"),
-    Media::Mp3("track.mp3"),
-    Media::Mp3("test.mp3"),
-    Media::Mp3("track.mp3"),
+    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
+    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
+    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
+    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
 ];
 const HLS_ONE: &[Media] = &[Media::Hls];
-const HLS_MP3_TWO: &[Media] = &[Media::Hls, Media::Mp3("track.mp3")];
+const HLS_MP3_TWO: &[Media] = &[Media::Hls, Media::Mp3(SignalAsset::MP3_SINE880_48K_162S)];
 const HLS_MP3_FOUR: &[Media] = &[
     Media::Hls,
-    Media::Mp3("track.mp3"),
+    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
     Media::Hls,
-    Media::Mp3("test.mp3"),
+    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
 ];
 
 const CASES: &[Case] = &[
@@ -203,9 +207,10 @@ async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool
     let session = Arc::new(OfflineSession::new_manual());
     let mut failures = Vec::new();
 
+    let media_dir = TestTempDir::new();
     let mut decks = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks.push(prepare_deck(case, deck_index, media, server, &session).await);
+        decks.push(prepare_deck(case, deck_index, media, server, &media_dir, &session).await);
     }
 
     load_decks(case, &decks, &mut failures);
@@ -762,6 +767,7 @@ async fn prepare_deck(
     deck_index: usize,
     media: Media,
     server: &TestServerHelper,
+    media_dir: &TestTempDir,
     session: &Arc<OfflineSession>,
 ) -> Deck {
     let controls = StretchControls::new(1.0);
@@ -785,9 +791,9 @@ async fn prepare_deck(
     ));
     let events = player.subscribe();
     let src = match media {
-        Media::Mp3(name) => media_path(name)
+        Media::Mp3(asset) => media_path(media_dir, asset)
             .to_str()
-            .expect("repository media path is UTF-8")
+            .expect("temporary media path is UTF-8")
             .to_owned(),
         Media::Hls => server.asset("hls/master.m3u8").to_string(),
     };
@@ -911,10 +917,10 @@ fn inspect_block(
     }
 }
 
-fn media_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repository root above tests crate")
-        .join("assets")
-        .join(name)
+/// Materializes one generated body as a file the deck can open by path.
+fn media_path(dir: &TestTempDir, asset: SignalAsset) -> PathBuf {
+    let bytes = by_name(asset.name())
+        .unwrap_or_else(|| panic!("`{}` is generated", asset.name()))
+        .bytes();
+    dir.write(&format!("{}.{}", asset.name(), asset.ext()), bytes)
 }
