@@ -15,24 +15,13 @@ use kithara::{
     prelude::ResourceConfig,
 };
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
-use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, memory_asset_store,
-};
+use kithara_integration_tests::{TestServerHelper, memory_asset_store};
+use kithara_test_fixtures::SignalAsset;
 
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
 /// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
-
-fn silence_wav_spec() -> SignalSpec {
-    SignalSpec {
-        format: SignalFormat::Wav,
-        length: SignalSpecLength::Seconds(1.0),
-        channels: 2,
-        sample_rate: 44_100,
-        bit_rate: None,
-    }
-}
 
 fn worker() -> PlayWorker {
     PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build())
@@ -66,7 +55,7 @@ async fn run_analysis(
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn runner_silent_wav_yields_all_zero_envelope() {
     let server = TestServerHelper::new().await;
-    let url = server.silence(&silence_wav_spec()).await;
+    let url = server.signal(SignalAsset::WAV_SILENCE_1S);
     let config = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
@@ -100,7 +89,7 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn runner_returns_nothing_when_cancelled_upfront() {
     let server = TestServerHelper::new().await;
-    let url = server.silence(&silence_wav_spec()).await;
+    let url = server.signal(SignalAsset::WAV_SILENCE_1S);
     let config = ResourceConfig::for_src(
         ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )

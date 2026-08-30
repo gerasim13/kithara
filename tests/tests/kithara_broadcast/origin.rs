@@ -15,11 +15,8 @@ use kithara::{
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::{
-    goertzel::goertzel_magnitude,
-    signal_pcm::signal::{SignalFn, SineWave},
-    waits::wait_until,
-};
+use kithara_integration_tests::waits::wait_until;
+use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
 use url::Url;
 
 pub(super) const CHANNELS: u16 = 2;
@@ -270,7 +267,7 @@ impl LivePcmFeed for PacedSine {
             .saturating_sub(self.produced);
         let frames = pending.min(CHUNK_FRAMES);
 
-        let tone = SineWave(TONE_HZ);
+        let tone = Wave::sine(TONE_HZ);
         for frame in self.produced..self.produced + frames {
             let frame = usize::try_from(frame).expect("the feed stays inside one address space");
             let sample = f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0;

@@ -26,6 +26,7 @@ use kithara_integration_tests::{
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 use crate::continuity::{
@@ -745,7 +746,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 )]
 async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("track.mp3");
+    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
 
     let region = Region::default();
     let worker = PlayWorker::new(

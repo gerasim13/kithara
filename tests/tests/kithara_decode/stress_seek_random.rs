@@ -10,7 +10,8 @@ use kithara::{
     signal::AudioSpec,
     stream::Stream,
 };
-use kithara_integration_tests::{TestTempDir, Xorshift64, wav::create_test_wav};
+use kithara_integration_tests::{TestTempDir, Xorshift64};
+use kithara_test_fixtures::signal;
 use tempfile::NamedTempFile;
 use tracing::info;
 
@@ -153,7 +154,7 @@ async fn stress_random_seek_read_synthetic_wav() {
     const SAMPLE_COUNT: usize = SawWav::DEFAULT.sample_rate as usize * DURATION_SECS_INT as usize;
     const SEEK_ITERATIONS: usize = 1000;
 
-    let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
+    let wav_data = signal::wav(44100, 2, SAMPLE_COUNT, signal::TONE);
     let wav_size_mb = wav_data.len() as f64 / 1_000_000.0;
     info!(
         samples = SAMPLE_COUNT,

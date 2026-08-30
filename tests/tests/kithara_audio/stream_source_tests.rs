@@ -16,13 +16,14 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
-    create_test_wav, kithara,
+    kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     reads::blocking_audio,
 };
+use kithara_test_fixtures::signal;
 
 fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
-    let wav = create_test_wav(samples, 44_100, 2);
+    let wav = signal::wav(44_100, 2, samples, signal::TONE);
     let source = MemorySource::new(wav);
     let stream = MemStreamConfig {
         source: Some(source),
@@ -149,7 +150,7 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
     let source_rate = NonZeroU32::new(SOURCE_RATE).expect("source rate is non-zero");
     let target_rate = NonZeroU32::new(TARGET_RATE).expect("target rate is non-zero");
     let source_frames = usize::try_from(SOURCE_RATE).expect("source rate fits usize") * 6;
-    let wav = create_test_wav(source_frames, SOURCE_RATE, 2);
+    let wav = signal::wav(SOURCE_RATE, 2, source_frames, signal::TONE);
     let stream = MemStreamConfig {
         source: Some(MemorySource::new(wav)),
         event_bus: None,
@@ -467,7 +468,7 @@ async fn truncated_wav_surfaces_decode_error_or_eof() {
     let worker = PlayWorker::new(
         PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
     );
-    let mut wav = create_test_wav(44_100, 44_100, 2);
+    let mut wav = signal::wav(44_100, 2, 44_100, signal::TONE);
     wav.truncate(wav.len() / 4);
     let source = MemorySource::new(wav);
     let config = AudioConfig::<MemStream>::for_stream(MemStreamConfig {

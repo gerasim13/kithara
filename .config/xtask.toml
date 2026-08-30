@@ -577,8 +577,8 @@ prefix_args = [
 ]
 
 # The fixture library and the harness meta-tests: the local test server, the
-# fixture cache and protocol, the signal oracles (`signal_pcm`, `goertzel`,
-# `wav`, `rfc6381`) — and `suite_harness`, which asserts that a timeout kills a
+# fixture cache and protocol, the signal oracles (`goertzel`,
+# `rfc6381`) — and `suite_harness`, which asserts that a timeout kills a
 # wedged test and that `flash` rewrites the test body. If these break quietly,
 # product tests start lying, which is why they keep a lane rather than being
 # dropped.

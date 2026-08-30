@@ -166,7 +166,6 @@ memory-stats = { workspace = true }
 
 # Storage
 mmap-io = { workspace = true }
-moka = { workspace = true }
 
 # Seeded RNG for user-simulation e2e scenarios. Tests in
 # `tests/tests/kithara_queue/user_simulation/` need a deterministic
@@ -212,6 +211,13 @@ kithara = { workspace = true, features = [
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
 kithara-stretch = { workspace = true, default-features = false, features = ["stretch-signalsmith"] }
+kithara-test-fixtures = { workspace = true }
+
+# `v4` mints the random tokens the test server hands out; the workspace
+# default carries only `v5`. It stays off wasm: `v4` needs an RNG, and
+# `uuid` refuses to build for `wasm32-unknown-unknown` without a randomness
+# backend.
+uuid = { workspace = true, features = ["v4"] }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -234,6 +240,11 @@ kithara = { workspace = true, default-features = false, features = [
     "client-reqwest",
     "tls-rustls",
 ] }
+
+# Only `signal` reaches wasm: the store and its accessors are a host
+# filesystem, and the wasm lane names assets through `SignalAsset` instead,
+# fetching their bytes from the native test server.
+kithara-test-fixtures = { workspace = true }
 
 console_error_panic_hook = { workspace = true }
 gloo-timers = { workspace = true }

@@ -10,16 +10,16 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, auto, detect_direction,
+    TestTempDir, Xorshift64, abr_fast, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
+};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
 };
 use tracing::{info, warn};
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -75,50 +75,41 @@ async fn stress_seek_lifecycle_with_zero_reset(
     #[case] ephemeral: bool,
     abr_fast: kithara::abr::AbrSettings,
 ) {
-    let init_segment = Arc::new(create_wav_header(
+    let init_segment = Arc::new(signal::header(
         Consts::D.sample_rate,
         Consts::D.channels,
         None,
     ));
-    let v0_pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            Consts::D.sample_rate,
+    let v0_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
-    let v1_pcm = Arc::new(
-        SignalPcm::new(
-            signal::SawtoothDescending,
-            Consts::D.sample_rate,
+        ),
+        Wave::Sawtooth,
+    )));
+    let v1_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
-    let v2_pcm = Arc::new(
-        SignalPcm::new(
-            signal::SawtoothShifted,
-            Consts::D.sample_rate,
+        ),
+        Wave::SawtoothDescending,
+    )));
+    let v2_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
+        ),
+        Wave::SawtoothShifted,
+    )));
 
     let segment_duration = Consts::D.segment_size as f64
         / (f64::from(Consts::D.sample_rate) * f64::from(Consts::D.channels) * 2.0);
@@ -412,10 +403,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            let first_phase = phase_from_f32(buf[0]);
+            let first_phase = signal::phase::units(buf[0]);
             if let Some(pp) = prev_phase {
-                let next_asc = (pp + 1) % SawWav::SAW_PERIOD;
-                let next_desc = (pp + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let next_asc = (pp + 1) % signal::SAW_PERIOD;
+                let next_desc = (pp + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if first_phase != next_asc && first_phase != next_desc {
                     continuity_breaks += 1;
                     if continuity_breaks <= 5 {
@@ -432,10 +423,10 @@ async fn stress_seek_lifecycle_with_zero_reset(
             }
 
             for f in 1..frames {
-                let p0 = phase_from_f32(buf[(f - 1) * channels]);
-                let p1 = phase_from_f32(buf[f * channels]);
-                let next_asc = (p0 + 1) % SawWav::SAW_PERIOD;
-                let next_desc = (p0 + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let p0 = signal::phase::units(buf[(f - 1) * channels]);
+                let p1 = signal::phase::units(buf[f * channels]);
+                let next_asc = (p0 + 1) % signal::SAW_PERIOD;
+                let next_desc = (p0 + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if p1 != next_asc && p1 != next_desc {
                     continuity_breaks += 1;
                     if continuity_breaks <= 5 {
@@ -447,7 +438,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            let last_frame_phase = phase_from_f32(buf[(frames - 1) * channels]);
+            let last_frame_phase = signal::phase::units(buf[(frames - 1) * channels]);
             prev_phase = Some(last_frame_phase);
 
             total_frames_read += frames as u64;

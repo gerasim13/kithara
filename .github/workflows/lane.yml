@@ -58,6 +58,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The store the build-time audio assets are read from. A job that finds it
+  # empty regenerates every asset it needs, which is encode work no test should
+  # pay for. The path is the one the Linux executor already mounts, and a
+  # called workflow inherits nothing from its caller, so every workflow that
+  # runs a lane on that fleet says it for itself.
+  KITHARA_FIXTURE_CACHE: /cache/fixtures
 
 jobs:
   # Named after the lane, not after this file. A caller reaches this workflow

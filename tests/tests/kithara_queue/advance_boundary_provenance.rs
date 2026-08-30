@@ -19,13 +19,12 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    pcm_provenance::{
-        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
-        phase_units,
-    },
     temp_dir,
+};
+use kithara_test_fixtures::signal::{
+    FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, goertzel_magnitude,
+    phase,
 };
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -56,7 +55,7 @@ const SEEK_OFFSET_SECS: f64 = 0.5;
 const EXPECTED_POST_SEEK_FRAMES: usize = 22_050;
 /// One phase unit is one frame, so this admits a landing anywhere inside the
 /// render block that carries it - the granularity post-seek audio starts at.
-const SEEK_PHASE_TOL_UNITS: i32 = 512;
+const SEEK_PHASE_TOL_UNITS: usize = 512;
 const MIN_RENDER_PEAK: f32 = 1.0e-6;
 const TONE_A_FREQ_HZ: f64 = 440.0;
 const TONE_B_FREQ_HZ: f64 = 880.0;
@@ -785,11 +784,8 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         )
     );
 
-    let expected_phase =
-        frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAWTOOTH_PERIOD_FRAMES;
-    let expected_phase = i32::try_from(expected_phase).expect("sawtooth phase fits i32");
-    let landing_phase_delta =
-        phase_distance(phase_units(left[landing_frame]), expected_phase).abs();
+    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
+    let landing_phase_delta = phase::distance(phase::units(left[landing_frame]), expected_phase);
     assert!(
         landing_phase_delta <= SEEK_PHASE_TOL_UNITS,
         "seek must land at the requested position in track A: \
@@ -2043,14 +2039,6 @@ fn require_run_containing(
                 context.dump()
             )
         })
-}
-
-/// Signed distance between two sawtooth phases, taking the shorter way around
-/// the period.
-fn phase_distance(actual: i32, expected: i32) -> i32 {
-    let period = i32::try_from(SAWTOOTH_PERIOD_FRAMES).expect("sawtooth period fits i32");
-    let half = period / 2;
-    (actual - expected + half).rem_euclid(period) - half
 }
 
 fn require_last_class_window_before_with_switch(
