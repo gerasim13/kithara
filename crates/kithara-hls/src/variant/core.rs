@@ -4,7 +4,7 @@ use std::{
 };
 
 use bon::{Builder, bon};
-use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
+use kithara_assets::{AssetReader, AssetResource, AssetScope, ReadSide, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
 use kithara_net::Headers;
@@ -73,7 +73,7 @@ pub(crate) struct PlanConfig {
 }
 
 pub(crate) struct PlanCtx {
-    pub(crate) scope: kithara_assets::AssetScope,
+    pub(crate) scope: AssetScope,
     pub(crate) bus: EventBus,
     /// Per-resource HTTP headers applied to every init/segment fetch.
     /// Mirrors `HlsConfig::headers`; threaded through so DRM-style auth
@@ -174,7 +174,7 @@ pub(super) struct VariantSegments {
     /// Vends a narrow `ResourceHandle` per segment/init (`segment_handle` /
     /// `init_handle`); the produce-core's disk read and acquire flow through
     /// that handle.
-    pub(super) scope: kithara_assets::AssetScope,
+    pub(super) scope: AssetScope,
     held: HeldReaders,
     /// Store opens the read path performed.
     #[cfg(test)]
@@ -191,11 +191,7 @@ pub(super) struct VariantSegments {
 }
 
 impl VariantSegments {
-    fn new(
-        scope: kithara_assets::AssetScope,
-        init: Option<Segment>,
-        entries: Vec<Segment>,
-    ) -> Self {
+    fn new(scope: AssetScope, init: Option<Segment>, entries: Vec<Segment>) -> Self {
         Self {
             scope,
             held: HeldReaders::default(),
