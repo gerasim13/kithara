@@ -47,7 +47,7 @@ const MIN_DECK_CONTRIBUTION_RATIO: f64 = 0.02;
 const MAX_DECK_GAIN_DELTA: f64 = 0.02;
 const MAX_MATCHED_RMS_DELTA_DB: f64 = 0.1;
 const POSITION_TOLERANCE_SECS: f64 = 0.15;
-const SEEK_POSITION_TOLERANCE_SECS: f64 = 513.0 / 44_100.0;
+const SEEK_POSITION_EPSILON_SECS: f64 = 1.0 / 44_100.0;
 const EXACT_ZERO_RUN_LIMIT_FRAMES: usize = 8;
 const MIN_BOUNDARY_JUMP: f32 = 0.05;
 const BOUNDARY_OUTLIER_RATIO: f32 = 6.0;
@@ -486,6 +486,7 @@ async fn reset_for_capture(
         deck.seek_complete_epoch = None;
         deck.muted_seek_underrun_epoch = None;
         deck.seek_terminal = false;
+        deck.seek_rendered_secs = 0.0;
     }
     let mut requested = true;
     for (deck_index, deck) in decks.iter().enumerate() {
@@ -543,6 +544,13 @@ async fn reset_for_capture(
                 case.label,
                 block.len(),
             ));
+        }
+        let rendered_secs = f64::from(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
+            / f64::from(case.host_rate);
+        for deck in &mut *decks {
+            if deck.player.is_playing() {
+                deck.seek_rendered_secs += rendered_secs;
+            }
         }
         runtime::drain_all_events(
             decks,
@@ -832,6 +840,7 @@ async fn prepare_deck(
         seek_complete_epoch: None,
         muted_seek_underrun_epoch: None,
         seek_terminal: false,
+        seek_rendered_secs: 0.0,
         capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
         observation: DeckObservation {
             hls: matches!(media, Media::Hls),
