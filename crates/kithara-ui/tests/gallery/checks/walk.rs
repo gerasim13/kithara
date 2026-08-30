@@ -54,7 +54,12 @@ use iced_tiny_skia::Renderer as TinySkiaRenderer;
 use kithara_test_utils::kithara;
 use kithara_ui::render::fonts::{FONT_BYTES, SANS};
 
-use crate::{app::Message, capture::Shot, cli::Host, sections::Tab};
+use crate::{
+    app::Message,
+    capture::Shot,
+    cli::Host,
+    sections::{self, Page},
+};
 
 /// How many frames a page is given to stop asking.
 ///
@@ -354,7 +359,7 @@ fn no_page_asks_for_frames_its_document_never_declared() {
 fn a_page_the_application_keeps_feeding_asks_for_the_frame_after_it() {
     let page = Shot::all()
         .into_iter()
-        .find(|page| page.tab == Tab::Stress)
+        .find(|page| page.tab == "stress")
         .expect("the gallery must hold the stress page");
     assert!(
         retained::fed(page).asking,
@@ -399,10 +404,11 @@ fn every_page_that_declares_motion_keeps_asking_for_frames() {
 /// rather than merely photographed.
 #[kithara::test]
 fn every_tab_the_gallery_shows_is_walked() {
-    let walked: Vec<Tab> = Shot::all().into_iter().map(|page| page.tab).collect();
+    let walked: Vec<Page> = Shot::all().into_iter().map(|page| page.tab).collect();
 
-    let missing: Vec<Tab> = Tab::ALL
-        .into_iter()
+    let missing: Vec<Page> = sections::pages()
+        .iter()
+        .copied()
         .filter(|tab| !walked.contains(tab))
         .collect();
 

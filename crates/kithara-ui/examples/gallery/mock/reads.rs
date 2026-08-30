@@ -22,7 +22,7 @@ use super::{
     },
     quality::QualityState,
 };
-use crate::sections::{ModuleDemo, Tab};
+use crate::sections::{self, Page};
 
 /// The face families the assets page sets its specimen in, named as the
 /// document writes them. The page offers one switch per name and the endpoints
@@ -50,12 +50,12 @@ enum Feed {
 }
 
 impl Feed {
-    const fn of(tab: Tab) -> Option<Self> {
+    fn of(tab: Page) -> Option<Self> {
         match tab {
-            Tab::Stress => Some(Self::Bench),
-            Tab::Vis => Some(Self::Vis),
-            Tab::Objects => Some(Self::Phase),
-            Tab::Motion | Tab::Sprites | Tab::Lottie | Tab::Scene => Some(Self::Clock),
+            "stress" => Some(Self::Bench),
+            "vis" => Some(Self::Vis),
+            "objects" => Some(Self::Phase),
+            "motion" | "sprites" | "lottie" | "scene" => Some(Self::Clock),
             _ => None,
         }
     }
@@ -73,14 +73,14 @@ pub(crate) struct MockReads {
     pivot: PivotState,
     mixer: MixerState,
     #[field(get, vis = "pub(crate)", copy)]
-    active_module: ModuleDemo,
+    active_module: Page,
     quality: QualityState,
     scene: SceneState,
     stress: StressState,
     #[field(set, vis = "pub(crate)")]
     library_query: String,
     #[field(get, vis = "pub(crate)", copy)]
-    active_tab: Tab,
+    active_tab: Page,
     /// Which shipped skin the gallery wears, as an index into
     /// [`builtin::skins`]. It lives beside the page rather than on it, so a
     /// skin chosen here outlives every page turned afterwards.
@@ -142,8 +142,8 @@ impl Default for MockReads {
             wave_downbeats,
             tree_expanded,
             tree_selected,
-            active_module: ModuleDemo::Deck,
-            active_tab: Tab::Atoms,
+            active_module: sections::modules()[0],
+            active_tab: sections::FIRST,
             active_skin: 0,
             active_font: 0,
             button_cue: false,
@@ -225,12 +225,13 @@ impl MockReads {
         if self.transport.activate(path) {
             return;
         }
+        if let Some(module) = path.strip_prefix("modules-tabs/") {
+            if let Some(named) = sections::module_named(module) {
+                self.active_module = named;
+            }
+            return;
+        }
         match path {
-            "modules-tabs/deck" => self.active_module = ModuleDemo::Deck,
-            "modules-tabs/deck-micro" => self.active_module = ModuleDemo::DeckMicro,
-            "modules-tabs/global-bar" => self.active_module = ModuleDemo::GlobalBar,
-            "modules-tabs/telemetry" => self.active_module = ModuleDemo::Telemetry,
-            "modules-tabs/layout" => self.active_module = ModuleDemo::Layout,
             "atoms/toggles/toggle-on" | "cells/toggle-on" => self.toggle_on = !self.toggle_on,
             "atoms/toggles/toggle-off" | "cells/toggle-off" => self.toggle_off = !self.toggle_off,
             "atoms/toggles/checkbox-on" | "cells/checkbox-on" => {
@@ -329,13 +330,13 @@ impl MockReads {
         }
     }
 
-    pub(crate) fn select_tab(&mut self, tab: Tab) {
+    pub(crate) fn select_tab(&mut self, tab: Page) {
         if self.active_tab != tab {
             self.stress.reset_clock();
         }
         self.active_tab = tab;
-        self.menu.set_open(tab == Tab::Menu);
-        self.clock.set_open(tab == Tab::Clock);
+        self.menu.set_open(tab == "menu");
+        self.clock.set_open(tab == "clock");
     }
 
     /// The skin the gallery is dressed in, which every host asks for and no
@@ -360,7 +361,7 @@ impl MockReads {
         }
     }
 
-    pub(crate) const fn select_module(&mut self, module: ModuleDemo) {
+    pub(crate) const fn select_module(&mut self, module: Page) {
         self.active_module = module;
     }
 
@@ -461,10 +462,10 @@ impl MockReads {
     fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
             endpoint if let Some(slug) = endpoint.strip_prefix("gallery.tab.") => {
-                self.active_tab.slug() == slug
+                self.active_tab == slug
             }
             endpoint if let Some(slug) = endpoint.strip_prefix("gallery.module.") => {
-                self.active_module.slug() == slug
+                self.active_module == slug
             }
             endpoint if let Some(skin) = endpoint.strip_prefix("gallery.skin.") => {
                 builtin::skins()[self.active_skin].id() == skin
@@ -480,7 +481,7 @@ impl MockReads {
     }
 
     /// Whether the application moves a reading on the page it is showing.
-    pub(crate) const fn feeds(&self) -> bool {
+    pub(crate) fn feeds(&self) -> bool {
         Feed::of(self.active_tab).is_some()
     }
 
@@ -672,12 +673,12 @@ impl Reads for MockReads {
             "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
-                l: if self.active_tab == Tab::Vis {
+                l: if self.active_tab == "vis" {
                     self.vis_levels[0]
                 } else {
                     0.66
                 },
-                r: if self.active_tab == Tab::Vis {
+                r: if self.active_tab == "vis" {
                     self.vis_levels[1]
                 } else {
                     0.52

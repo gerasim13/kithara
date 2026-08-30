@@ -38,7 +38,7 @@ use self::{
     capture::{Capture, Shot},
     fixture::{Consts, resolver},
     mock::{MockReads, reads::FONT_FAMILIES},
-    sections::{ModuleDemo, Tab},
+    sections::Page,
 };
 
 mod tests {
@@ -65,48 +65,18 @@ mod tests {
     #[kithara::test]
     fn every_page_is_read_from_the_folder_it_ships_in() {
         let resolver = resolver();
-        for tab in Tab::ALL {
-            let on_disk = std::fs::read_to_string(fixture::package_root().join(tab.entry()))
+        for tab in sections::pages().iter().copied() {
+            let entry = sections::entry(tab);
+            let on_disk = std::fs::read_to_string(fixture::package_root().join(entry))
                 .expect("the gallery ships every page it names");
             let answered = resolver
-                .load(None, tab.entry())
+                .load(None, entry)
                 .expect("the gallery resolver answers for every page it names");
-            assert_eq!(
-                answered.text,
-                on_disk,
-                "{} must be answered from disk",
-                tab.entry()
-            );
+            assert_eq!(answered.text, on_disk, "{entry} must be answered from disk");
         }
     }
 
-    /// Every page the gallery's package declares is one the gallery shows.
-    ///
-    /// The manifest is what turns a folder of documents into the gallery, so
-    /// a role it declares that no tab reaches is a page nobody would ever
-    /// look at, and it would go stale unseen.
-    #[kithara::test]
-    fn every_page_the_package_declares_is_one_the_gallery_shows() {
-        let shown: BTreeSet<&str> = Tab::ALL
-            .iter()
-            .map(|tab| tab.entry())
-            .chain(ModuleDemo::ALL.iter().map(|demo| demo.entry()))
-            .collect();
-
-        let unshown: Vec<&str> = fixture::pages()
-            .values()
-            .map(String::as_str)
-            .filter(|file| !shown.contains(file))
-            .collect();
-
-        assert_eq!(
-            unshown,
-            Vec::<&str>::new(),
-            "the gallery package declares pages no tab turns to"
-        );
-    }
-
-    fn shot(tab: Tab) -> Shot {
+    fn shot(tab: Page) -> Shot {
         Shot { tab, module: None }
     }
 
@@ -123,7 +93,7 @@ mod tests {
     #[kithara::test]
     fn turning_to_another_skin_compiles_the_pages_again() {
         let mut gallery = Gallery::mounted();
-        gallery.reads.select_tab(Tab::Skins);
+        gallery.reads.select_tab("skins");
         let dark = gallery.compiled().min;
 
         drop(update(
@@ -144,7 +114,7 @@ mod tests {
     #[kithara::test]
     fn pressing_a_face_family_unfolds_that_specimen_and_folds_the_others() {
         let mut gallery = Gallery::mounted();
-        gallery.reads.select_tab(Tab::Assets);
+        gallery.reads.select_tab("assets");
 
         drop(update(
             &mut gallery,
@@ -175,7 +145,7 @@ mod tests {
     #[kithara::test]
     fn a_tick_moves_the_clock_a_page_binds_to() {
         let mut gallery = Gallery::mounted();
-        gallery.select(shot(Tab::Motion));
+        gallery.select(shot("motion"));
         gallery.tick();
         assert_ne!(gallery.clock, Clock::default());
     }
@@ -183,7 +153,7 @@ mod tests {
     #[kithara::test]
     fn a_tick_moves_the_reading_the_application_hands_over() {
         let mut gallery = Gallery::mounted();
-        gallery.select(shot(Tab::Motion));
+        gallery.select(shot("motion"));
         gallery.tick();
         assert_ne!(
             seconds(&gallery.reads, "gallery.motion.clock"),
@@ -194,18 +164,18 @@ mod tests {
     #[kithara::test]
     fn a_page_the_capture_turns_to_opens_at_nothing_on_the_clock() {
         let mut gallery = Gallery::mounted();
-        gallery.select(shot(Tab::Motion));
+        gallery.select(shot("motion"));
         gallery.tick();
-        gallery.select(shot(Tab::Sprites));
+        gallery.select(shot("sprites"));
         assert_eq!(gallery.clock, Clock::default());
     }
 
     #[kithara::test]
     fn a_page_the_capture_turns_to_opens_with_nothing_behind_it() {
         let mut gallery = Gallery::mounted();
-        gallery.select(shot(Tab::Motion));
+        gallery.select(shot("motion"));
         gallery.tick();
-        gallery.select(shot(Tab::Sprites));
+        gallery.select(shot("sprites"));
         assert_eq!(
             seconds(&gallery.reads, "gallery.motion.clock"),
             seconds(&MockReads::default(), "gallery.motion.clock")
@@ -217,9 +187,9 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
 
-        for module in ModuleDemo::ALL {
+        for module in sections::modules().iter().copied() {
             let ui = compile(
-                module.entry(),
+                sections::module_entry(module),
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
@@ -255,10 +225,15 @@ mod tests {
                 panic!("expected module demo");
             };
 
-            assert_eq!(*chrome, ChromeStyle::Full, "{}", module.entry());
-            assert!(title.is_some(), "{}", module.entry());
-            assert!(chip.is_some(), "{}", module.entry());
-            assert!(footer.is_some(), "{}", module.entry());
+            assert_eq!(
+                *chrome,
+                ChromeStyle::Full,
+                "{}",
+                sections::module_entry(module)
+            );
+            assert!(title.is_some(), "{}", sections::module_entry(module));
+            assert!(chip.is_some(), "{}", sections::module_entry(module));
+            assert!(footer.is_some(), "{}", sections::module_entry(module));
         }
     }
 
@@ -267,16 +242,16 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
 
-        for tab in Tab::ALL {
+        for tab in sections::pages().iter().copied() {
             compile(
-                tab.entry(),
+                sections::entry(tab),
                 &resolver,
                 &endpoints,
                 builtin::skin_doc(),
                 builtin::text_doc(),
                 custom::config(),
             )
-            .unwrap_or_else(|error| panic!("{} must compile: {error}", tab.entry()));
+            .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry(tab)));
         }
     }
 
@@ -287,10 +262,14 @@ mod tests {
     fn every_control_appears_on_a_gallery_page() {
         let resolver = resolver();
         let endpoints = mock::registry();
-        let entries = Tab::ALL
+        let entries = sections::pages()
             .iter()
-            .map(|tab| tab.entry())
-            .chain(ModuleDemo::ALL.iter().map(|demo| demo.entry()));
+            .map(|tab| sections::entry(tab))
+            .chain(
+                sections::modules()
+                    .iter()
+                    .map(|demo| sections::module_entry(demo)),
+            );
 
         let mut drawn = BTreeSet::new();
         for entry in entries {
@@ -322,7 +301,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_meters_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Atoms,
+            "atoms",
             "meters",
             |path| path.contains("/meters/"),
             &[
@@ -336,7 +315,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_knobs_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Atoms,
+            "atoms",
             "knobs",
             |path| path.contains("/knobs/"),
             &[
@@ -351,7 +330,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_toggles_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Atoms,
+            "atoms",
             "toggles",
             |path| path.contains("/toggles/"),
             &[
@@ -366,7 +345,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_chips_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Atoms,
+            "atoms",
             "chips",
             |path| path.contains("/chips/"),
             &[
@@ -379,7 +358,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_buttons_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Buttons,
+            "buttons",
             "buttons",
             |path| path.starts_with("buttons/"),
             &[
@@ -396,7 +375,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_faders_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Faders,
+            "faders",
             "faders",
             |path| path.starts_with("faders/"),
             &[
@@ -410,7 +389,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_tree_keeps_its_exact_descriptor_inventory() {
         assert_hosted_page_claims(
-            Tab::Tree,
+            "tree",
             "tree",
             |path| path.starts_with("tree/"),
             &[
@@ -423,7 +402,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_library_keeps_its_exact_descriptor_inventory() {
         assert_hosted_page_claims(
-            Tab::Library2,
+            "library2",
             "library",
             |path| path.starts_with("library2/"),
             &[
@@ -438,7 +417,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_table_keeps_its_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Table,
+            "table",
             "track-list",
             |path| path.starts_with("table/"),
             &[
@@ -461,7 +440,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_module_tabs_keep_their_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Modules,
+            "modules",
             "module tabs",
             |path| path.starts_with("modules-tabs/"),
             &[
@@ -477,7 +456,7 @@ mod tests {
     #[kithara::test]
     fn the_hosted_nav_keeps_its_descriptor_backed_controls() {
         assert_hosted_page_claims(
-            Tab::Atoms,
+            "atoms",
             "nav",
             |path| path.starts_with("gallery/"),
             &[
@@ -551,13 +530,13 @@ mod tests {
     }
 
     fn assert_hosted_page_claims(
-        tab: Tab,
+        tab: Page,
         page: &str,
         belongs: impl Fn(&str) -> bool,
         expected: &[(&str, &str)],
     ) {
         let ui = compile(
-            tab.entry(),
+            sections::entry(tab),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
@@ -702,7 +681,7 @@ mod tests {
     #[kithara::test]
     fn every_nav_item_path_selects_its_tab() {
         let ui = compile(
-            Tab::Atoms.entry(),
+            sections::entry("atoms"),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
@@ -713,12 +692,19 @@ mod tests {
         let mut paths = Vec::new();
         collect_nav_item_paths(&ui.root, &ui, &mut paths);
 
-        assert_eq!(paths.len(), Tab::ALL.len());
-        let selected: Vec<_> = paths
+        let mut selected: Vec<Page> = paths
             .iter()
-            .map(|path| Tab::try_from(path.as_str()).unwrap_or_else(|()| panic!("{path}")))
+            .map(|path| sections::pressed(path).unwrap_or_else(|| panic!("{path}")))
             .collect();
-        assert_eq!(selected, Tab::ALL);
+        selected.sort_unstable();
+
+        let mut declared = sections::pages().to_vec();
+        declared.sort_unstable();
+
+        assert_eq!(
+            selected, declared,
+            "the nav offers every page the package declares, once each"
+        );
     }
 
     /// The page offering a choice of skins and the skins the crate ships are
@@ -727,14 +713,14 @@ mod tests {
     #[kithara::test]
     fn the_skins_page_offers_every_shipped_skin() {
         let ui = compile(
-            Tab::Skins.entry(),
+            sections::entry("skins"),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
         )
-        .unwrap_or_else(|error| panic!("{} must compile: {error}", Tab::Skins.entry()));
+        .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("skins")));
         let mut paths = Vec::new();
         collect_nav_item_paths(&ui.root, &ui, &mut paths);
 
@@ -755,14 +741,14 @@ mod tests {
     #[kithara::test]
     fn the_assets_page_offers_every_face_family() {
         let ui = compile(
-            Tab::Assets.entry(),
+            sections::entry("assets"),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
         )
-        .unwrap_or_else(|error| panic!("{} must compile: {error}", Tab::Assets.entry()));
+        .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("assets")));
         let mut paths = Vec::new();
         collect_nav_item_paths(&ui.root, &ui, &mut paths);
 
@@ -782,14 +768,14 @@ mod tests {
     #[kithara::test]
     fn the_assets_page_shows_every_icon_the_toolkit_draws() {
         let ui = compile(
-            Tab::Assets.entry(),
+            sections::entry("assets"),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
         )
-        .unwrap_or_else(|error| panic!("{} must compile: {error}", Tab::Assets.entry()));
+        .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("assets")));
         let mut shown = Vec::new();
         each_control(&ui, &mut |path, spec| {
             if let ControlSpec::Glyph { icon, .. } = spec
@@ -840,7 +826,7 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
         let ui = compile(
-            Tab::Modules.entry(),
+            sections::entry("modules"),
             &resolver,
             &endpoints,
             builtin::skin_doc(),
@@ -851,12 +837,23 @@ mod tests {
         let mut paths = Vec::new();
         collect_tab_large_paths(&ui.root, &ui, &mut paths);
 
-        assert_eq!(paths.len(), ModuleDemo::ALL.len());
         let mut reads = MockReads::default();
-        for (path, module) in paths.iter().zip(ModuleDemo::ALL) {
-            reads.apply(path, &ControlAction::Activate);
-            assert_eq!(reads.active_module(), module, "{path}");
-        }
+        let mut activated: Vec<Page> = paths
+            .iter()
+            .map(|path| {
+                reads.apply(path, &ControlAction::Activate);
+                reads.active_module()
+            })
+            .collect();
+        activated.sort_unstable();
+
+        let mut declared = sections::modules().to_vec();
+        declared.sort_unstable();
+
+        assert_eq!(
+            activated, declared,
+            "the modules page offers every demo the package declares, once each"
+        );
     }
 
     #[kithara::test]
@@ -864,7 +861,7 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
         let ui = compile(
-            Tab::Menu.entry(),
+            sections::entry("menu"),
             &resolver,
             &endpoints,
             builtin::skin_doc(),
@@ -963,26 +960,26 @@ mod tests {
         found
     }
 
-    fn page(tab: Tab) -> CompiledUi {
+    fn page(tab: Page) -> CompiledUi {
         compile(
-            tab.entry(),
+            sections::entry(tab),
             &resolver(),
             &mock::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
         )
-        .unwrap_or_else(|error| panic!("the {tab:?} page must compile: {error}"))
+        .unwrap_or_else(|error| panic!("the {tab} page must compile: {error}"))
     }
 
     /// Poses, tracks and the stage that holds them.
     fn objects_page() -> CompiledUi {
-        page(Tab::Objects)
+        page("objects")
     }
 
     /// The same journey a track makes, declared as a duration and a curve.
     fn motion_page() -> CompiledUi {
-        page(Tab::Motion)
+        page("motion")
     }
 
     /// Every stage the page declares, as the number of children sharing its box.
@@ -1143,7 +1140,7 @@ mod tests {
     /// all.
     #[kithara::test]
     fn every_sprite_names_a_picture_the_skin_carries() {
-        let ui = page(Tab::Sprites);
+        let ui = page("sprites");
 
         let missing: Vec<&str> = sprite_sites(&ui)
             .iter()
@@ -1159,7 +1156,7 @@ mod tests {
     /// eight frames cut, is one frame apart each.
     #[kithara::test]
     fn the_sheet_row_reads_one_second_per_frame() {
-        let ui = page(Tab::Sprites);
+        let ui = page("sprites");
         let reads = MockReads::default();
 
         let mut seconds: Vec<f64> = sprite_sites(&ui)
@@ -1181,7 +1178,7 @@ mod tests {
     /// for itself, that sprite would hold its first frame for ever.
     #[kithara::test]
     fn the_played_sprite_reads_a_clock_the_application_does_not_own() {
-        let ui = page(Tab::Sprites);
+        let ui = page("sprites");
         let reads = MockReads::default();
 
         let host_clock: Vec<&str> = sprite_sites(&ui)
@@ -1198,7 +1195,7 @@ mod tests {
 
     #[kithara::test]
     fn the_page_plays_a_sprite_off_the_host_clock() {
-        let ui = page(Tab::Sprites);
+        let ui = page("sprites");
 
         let played = sprite_sites(&ui)
             .iter()
@@ -1212,7 +1209,7 @@ mod tests {
     /// is only worth making if the page actually poses one.
     #[kithara::test]
     fn the_page_poses_a_sprite_inside_a_moving_object() {
-        let ui = page(Tab::Sprites);
+        let ui = page("sprites");
 
         let posed = motion_objects(&ui)
             .iter()
@@ -1255,7 +1252,7 @@ mod tests {
     /// capture beside it would agree with itself about nothing at all.
     #[kithara::test]
     fn every_artwork_names_one_the_toolkit_ships() {
-        let ui = page(Tab::Lottie);
+        let ui = page("lottie");
 
         let missing: Vec<&str> = artwork_sites(&ui)
             .iter()
@@ -1272,7 +1269,7 @@ mod tests {
     /// for itself, that artwork would hold its first frame for ever.
     #[kithara::test]
     fn the_played_artwork_reads_a_clock_the_application_does_not_own() {
-        let ui = page(Tab::Lottie);
+        let ui = page("lottie");
         let reads = MockReads::default();
 
         let host_clock: Vec<&str> = artwork_sites(&ui)
@@ -1289,7 +1286,7 @@ mod tests {
 
     #[kithara::test]
     fn the_page_plays_an_artwork_off_the_host_clock() {
-        let ui = page(Tab::Lottie);
+        let ui = page("lottie");
 
         let played = artwork_sites(&ui)
             .iter()
@@ -1303,7 +1300,7 @@ mod tests {
     /// is only worth making if the page actually poses one.
     #[kithara::test]
     fn the_page_poses_an_artwork_inside_a_moving_object() {
-        let ui = page(Tab::Lottie);
+        let ui = page("lottie");
 
         let posed = motion_objects(&ui)
             .iter()
@@ -1383,7 +1380,7 @@ mod tests {
     /// drag would publish somewhere the picture never follows.
     #[kithara::test]
     fn every_carried_placement_of_the_scene_reads_the_point_it_publishes() {
-        let ui = page(Tab::Scene);
+        let ui = page("scene");
 
         let unread: Vec<&str> = placements(&ui)
             .iter()
@@ -1398,7 +1395,7 @@ mod tests {
     /// answer every placement that reads one.
     #[kithara::test]
     fn the_mock_answers_the_point_every_placement_reads() {
-        let ui = page(Tab::Scene);
+        let ui = page("scene");
         let reads = MockReads::default();
 
         let unanswered: Vec<&str> = placements(&ui)
@@ -1414,7 +1411,7 @@ mod tests {
     /// others it snaps onto, whatever each of them holds.
     #[kithara::test]
     fn the_scene_magnets_name_placements_of_the_same_stage() {
-        let ui = page(Tab::Scene);
+        let ui = page("scene");
         let placed = placements(&ui);
         let names: Vec<&str> = placed
             .iter()
@@ -1433,7 +1430,7 @@ mod tests {
 
     #[kithara::test]
     fn the_scene_carries_more_than_one_placement() {
-        let ui = page(Tab::Scene);
+        let ui = page("scene");
 
         let carried = placements(&ui)
             .iter()
@@ -1447,7 +1444,7 @@ mod tests {
     /// to name a second artwork and the toolkit has to ship it.
     #[kithara::test]
     fn the_scene_switches_between_two_artworks_the_toolkit_ships() {
-        let ui = page(Tab::Scene);
+        let ui = page("scene");
 
         let switched: Vec<(&str, &str)> = artwork_sites(&ui)
             .iter()
@@ -1520,7 +1517,7 @@ mod tests {
     /// nothing and the fader is a control the page only claims to have.
     #[kithara::test]
     fn the_scrub_fader_moves_the_artwork_beside_it() {
-        let path = only_fader_path(&page(Tab::Lottie));
+        let path = only_fader_path(&page("lottie"));
         let mut reads = MockReads::default();
         let before = scalar(&reads, "gallery.lottie.scrub");
 
@@ -1531,7 +1528,7 @@ mod tests {
 
     #[kithara::test]
     fn the_scrub_fader_moves_the_sprite_beside_it() {
-        let path = only_fader_path(&page(Tab::Sprites));
+        let path = only_fader_path(&page("sprites"));
         let mut reads = MockReads::default();
         let before = scalar(&reads, "gallery.sprite.scrub");
 
@@ -1615,7 +1612,7 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
         let ui = compile(
-            Tab::Menu.entry(),
+            sections::entry("menu"),
             &resolver,
             &endpoints,
             builtin::skin_doc(),
@@ -1643,7 +1640,7 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
         let ui = compile(
-            Tab::Tree.entry(),
+            sections::entry("tree"),
             &resolver,
             &endpoints,
             builtin::skin_doc(),
@@ -1662,7 +1659,7 @@ mod tests {
         let resolver = resolver();
         let endpoints = mock::registry();
         let ui = compile(
-            Tab::Library2.entry(),
+            sections::entry("library2"),
             &resolver,
             &endpoints,
             builtin::skin_doc(),

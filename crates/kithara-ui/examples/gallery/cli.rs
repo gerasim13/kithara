@@ -203,7 +203,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{Args, Duration, Extent, Host, Path, Shot};
-    use crate::sections::Tab;
+    use crate::sections::Page;
 
     fn args(flags: &[&str]) -> Args {
         Args::try_parse_from(once("gallery").chain(flags.iter().copied()))
@@ -214,7 +214,7 @@ mod tests {
         Args::try_parse_from(once("gallery").chain(flags.iter().copied())).is_err()
     }
 
-    fn shot(tab: Tab) -> Shot {
+    fn shot(tab: Page) -> Shot {
         Shot { tab, module: None }
     }
 
@@ -254,7 +254,7 @@ mod tests {
         let film = args(&["--shoot", "out", "--page", "motion", "--page", "lottie"])
             .film()
             .expect("both pages are ones the gallery has");
-        assert_eq!(film.pages, vec![shot(Tab::Motion), shot(Tab::Lottie)]);
+        assert_eq!(film.pages, vec![shot("motion"), shot("lottie")]);
     }
 
     #[kithara::test]

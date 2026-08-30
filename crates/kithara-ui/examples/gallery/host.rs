@@ -9,7 +9,7 @@ use kithara_ui::{
     render::{Reads, Skin, UiEvent},
 };
 
-use crate::{capture::Shot, mock, sections::Tab};
+use crate::{capture::Shot, mock, sections};
 
 #[derive(Default)]
 pub(super) struct Gallery {
@@ -38,10 +38,10 @@ impl App for Gallery {
 
     fn document(&self) -> &str {
         let tab = self.reads.active_tab();
-        if tab == Tab::Modules {
-            self.reads.active_module().entry()
+        if tab == sections::MODULES {
+            sections::module_entry(self.reads.active_module())
         } else {
-            tab.entry()
+            sections::entry(tab)
         }
     }
 
@@ -52,7 +52,7 @@ impl App for Gallery {
     fn update(&mut self, event: UiEvent) {
         match event {
             UiEvent::Control { path, action } => {
-                if let Ok(tab) = Tab::try_from(path.as_str()) {
+                if let Some(tab) = sections::pressed(&path) {
                     self.reads.select_tab(tab);
                 } else {
                     self.reads.apply(&path, &action);
@@ -79,7 +79,7 @@ mod tests {
         render::ControlAction,
     };
 
-    use super::{App, Gallery, Tab, UiEvent, mock};
+    use super::{App, Gallery, UiEvent, mock, sections};
     use crate::{custom, fixture::resolver};
 
     /// Pressing a row on the skins page dresses the gallery in that skin.
@@ -100,12 +100,12 @@ mod tests {
         let mut gallery = Gallery::default();
         gallery.update(pressing("skins/kithara-light/item"));
 
-        for tab in Tab::ALL {
+        for tab in sections::pages().iter().copied() {
             gallery.reads.select_tab(tab);
             assert_eq!(
                 gallery.skin().id(),
                 "kithara-light",
-                "the gallery undressed itself on {tab:?}"
+                "the gallery undressed itself on {tab}"
             );
         }
     }

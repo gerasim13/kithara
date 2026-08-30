@@ -1,174 +1,122 @@
-use super::fixture;
+//! Which pages the gallery offers, taken from the package it ships.
+//!
+//! A page is added by putting its document in the folder, naming it in the
+//! manifest and giving it a nav item. Nothing here lists the pages, so the
+//! list cannot disagree with the package that answers for them.
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Tab {
-    Atoms,
-    Buttons,
-    Faders,
-    Modules,
-    Typography,
-    Assets,
-    Cells,
-    Sizes,
-    Tokens,
-    Micro,
-    Mixer,
-    Vis,
-    Chrome,
-    Titlebars,
-    Table,
-    Tree,
-    Library2,
-    Stress,
-    Menu,
-    Clock,
-    Pivot,
-    Shader,
-    Objects,
-    Motion,
-    Sprites,
-    Lottie,
-    Scene,
-    TableLong,
-    Custom,
-    Skins,
+use std::sync::LazyLock;
+
+use crate::fixture;
+
+/// What a page's nav item, its document and the reading behind both call it.
+///
+/// The manifest answers for the screen `gallery-<slug>`, a press arrives from
+/// `gallery/<slug>/item`, and a photograph of the page is named `<slug>`.
+pub(super) type Page = &'static str;
+
+/// The page the gallery opens on, which is the one its nav lists first.
+pub(super) const FIRST: Page = "atoms";
+/// The page whose demos the modules list offers.
+pub(super) const MODULES: Page = "modules";
+
+/// What the gallery's package calls the screens this module reads.
+struct Consts;
+
+impl Consts {
+    /// What the modules page calls the demo it opens on. That demo's document
+    /// is the modules page itself, so the manifest names it once and this is
+    /// the only demo whose slug the manifest does not carry.
+    const FIRST_MODULE: Page = "deck";
+    /// The prefix every screen the gallery's package declares stands behind.
+    const ROLE: &'static str = "gallery-";
 }
 
-impl Tab {
-    /// Every page the gallery offers, in the order the nav lists them, each
-    /// with the slug its nav item and its document share: the item a press
-    /// arrives from stands at `gallery/<slug>/item`, and the package answers
-    /// for the page as `gallery-<slug>`.
-    ///
-    /// One list stands behind all three, so a page is added by writing it here
-    /// and in the documents, and nowhere else.
-    const PAGES: [(Self, &'static str); 30] = [
-        (Self::Atoms, "atoms"),
-        (Self::Buttons, "buttons"),
-        (Self::Faders, "faders"),
-        (Self::Modules, "modules"),
-        (Self::Typography, "typography"),
-        (Self::Assets, "assets"),
-        (Self::Cells, "cells"),
-        (Self::Sizes, "sizes"),
-        (Self::Tokens, "tokens"),
-        (Self::Micro, "micro"),
-        (Self::Mixer, "mixer"),
-        (Self::Vis, "vis"),
-        (Self::Chrome, "chrome"),
-        (Self::Titlebars, "titlebars"),
-        (Self::Table, "table"),
-        (Self::Tree, "tree"),
-        (Self::Library2, "library2"),
-        (Self::Stress, "stress"),
-        (Self::Menu, "menu"),
-        (Self::Clock, "clock"),
-        (Self::Pivot, "pivot"),
-        (Self::Shader, "shader"),
-        (Self::Objects, "objects"),
-        (Self::Motion, "motion"),
-        (Self::Sprites, "sprites"),
-        (Self::Lottie, "lottie"),
-        (Self::Scene, "scene"),
-        (Self::TableLong, "table-long"),
-        (Self::Custom, "custom"),
-        (Self::Skins, "skins"),
-    ];
+/// Every page the nav lists, in the order the package declares them.
+pub(super) fn pages() -> &'static [Page] {
+    &declared().0
+}
 
-    pub(super) const ALL: [Self; Self::PAGES.len()] = {
-        let mut all = [Self::Atoms; Self::PAGES.len()];
-        let mut index = 0;
-        while index < all.len() {
-            all[index] = Self::PAGES[index].0;
-            index += 1;
+/// The demos the modules page offers, the one it opens on first.
+pub(super) fn modules() -> &'static [Page] {
+    &declared().1
+}
+
+/// Where `page` stands among the pages, which is the order they are compiled
+/// in.
+///
+/// # Panics
+/// Panics when asked for a page the package does not declare.
+pub(super) fn index(page: Page) -> usize {
+    position(pages(), page)
+}
+
+/// Where `module` stands among the modules page's demos.
+///
+/// # Panics
+/// Panics when asked for a demo the modules page does not offer.
+pub(super) fn module_index(module: Page) -> usize {
+    position(modules(), module)
+}
+
+/// The file the package puts behind a nav page.
+pub(super) fn entry(page: Page) -> &'static str {
+    fixture::document(&format!("{}{page}", Consts::ROLE))
+}
+
+/// The file the package puts behind one demo of the modules page.
+pub(super) fn module_entry(module: Page) -> &'static str {
+    if module == Consts::FIRST_MODULE {
+        return entry(MODULES);
+    }
+    fixture::document(&format!("{}{MODULES}-{module}", Consts::ROLE))
+}
+
+/// The page a press on a nav item turns to, or nothing when the press came
+/// from somewhere else.
+pub(super) fn pressed(path: &str) -> Option<Page> {
+    named(path.strip_prefix("gallery/")?.strip_suffix("/item")?)
+}
+
+/// The page named `slug`, or nothing when the package declares no such page.
+pub(super) fn named(slug: &str) -> Option<Page> {
+    pages().iter().copied().find(|page| *page == slug)
+}
+
+/// The demo of the modules page named `slug`, or nothing when it offers none.
+pub(super) fn module_named(slug: &str) -> Option<Page> {
+    modules().iter().copied().find(|module| *module == slug)
+}
+
+/// The nav pages and the modules page's demos, split out of the roles the
+/// package declares.
+///
+/// # Panics
+/// Panics when the manifest declares a screen the gallery is not the package
+/// for, which is a broken checkout rather than a runtime condition.
+fn declared() -> &'static (Vec<Page>, Vec<Page>) {
+    static DECLARED: LazyLock<(Vec<Page>, Vec<Page>)> = LazyLock::new(|| {
+        let demo = format!("{MODULES}-");
+        let mut pages = Vec::new();
+        let mut modules = vec![Consts::FIRST_MODULE];
+        for role in fixture::pages().keys() {
+            let slug = role
+                .0
+                .strip_prefix(Consts::ROLE)
+                .unwrap_or_else(|| panic!("the gallery package declares a screen {role}"));
+            match slug.strip_prefix(&demo) {
+                Some(module) => modules.push(module),
+                None => pages.push(slug),
+            }
         }
-        all
-    };
+        (pages, modules)
+    });
 
-    /// The page this tab shows, as the gallery's package names it: the role is
-    /// the id the document states, and which file that role lives in is the
-    /// manifest's to say.
-    pub(super) fn entry(self) -> &'static str {
-        fixture::document(&format!("gallery-{}", self.slug()))
-    }
-
-    /// What a nav item, a page and the reading behind both call this page.
-    pub(super) fn slug(self) -> &'static str {
-        Self::PAGES[self.index()].1
-    }
-
-    /// Where this tab stands among the pages, which is the order they were
-    /// compiled in.
-    pub(super) fn index(self) -> usize {
-        Self::PAGES
-            .iter()
-            .position(|(tab, _)| *tab == self)
-            .expect("every tab stands in the page list")
-    }
+    &DECLARED
 }
 
-impl TryFrom<&str> for Tab {
-    type Error = ();
-
-    fn try_from(path: &str) -> Result<Self, ()> {
-        let slug = path
-            .strip_prefix("gallery/")
-            .and_then(|rest| rest.strip_suffix("/item"))
-            .ok_or(())?;
-        Self::PAGES
-            .iter()
-            .find(|(_, named)| *named == slug)
-            .map(|(tab, _)| *tab)
-            .ok_or(())
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ModuleDemo {
-    Deck,
-    DeckMicro,
-    GlobalBar,
-    Telemetry,
-    Layout,
-}
-
-impl ModuleDemo {
-    /// The module pages, in the order the demo offers them, each with the slug
-    /// the reading behind its tab is named by and the role the package answers
-    /// for it.
-    const PAGES: [(Self, &'static str, &'static str); 5] = [
-        (Self::Deck, "deck", "gallery-modules"),
-        (Self::DeckMicro, "deck-micro", "gallery-modules-deck-micro"),
-        (Self::GlobalBar, "global-bar", "gallery-modules-global-bar"),
-        (Self::Telemetry, "telemetry", "gallery-modules-telemetry"),
-        (Self::Layout, "layout", "gallery-modules-layout"),
-    ];
-
-    pub(super) const ALL: [Self; Self::PAGES.len()] = {
-        let mut all = [Self::Deck; Self::PAGES.len()];
-        let mut index = 0;
-        while index < all.len() {
-            all[index] = Self::PAGES[index].0;
-            index += 1;
-        }
-        all
-    };
-
-    pub(super) fn entry(self) -> &'static str {
-        let (_, _, role) = Self::PAGES[self.index()];
-        fixture::document(role)
-    }
-
-    /// What the tab offering this page, and the reading behind it, call it.
-    pub(super) fn slug(self) -> &'static str {
-        let (_, slug, _) = Self::PAGES[self.index()];
-        slug
-    }
-
-    pub(super) fn index(self) -> usize {
-        Self::PAGES
-            .iter()
-            .position(|(demo, ..)| *demo == self)
-            .expect("every module page stands in the list")
-    }
+fn position(among: &[Page], page: Page) -> usize {
+    among
+        .iter()
+        .position(|named| *named == page)
+        .unwrap_or_else(|| panic!("the gallery offers no page {page}"))
 }

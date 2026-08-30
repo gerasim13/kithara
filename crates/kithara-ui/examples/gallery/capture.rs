@@ -9,22 +9,22 @@ use std::{
 use iced::window::Screenshot;
 use kithara_ui::capture::{Geometry, page_file, write_geometry, write_png};
 
-use crate::sections::{ModuleDemo, Tab};
+use crate::sections::{self, Page};
 
 /// One page to photograph: a tab, and for the modules tab the demo shown in it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Shot {
-    pub(super) tab: Tab,
-    pub(super) module: Option<ModuleDemo>,
+    pub(super) tab: Page,
+    pub(super) module: Option<Page>,
 }
 
 impl Shot {
     /// Every gallery page in tab order, with the modules tab expanded per demo.
     pub(super) fn all() -> Vec<Self> {
         let mut pages = Vec::new();
-        for tab in Tab::ALL {
-            if tab == Tab::Modules {
-                pages.extend(ModuleDemo::ALL.map(|module| Self {
+        for tab in sections::pages().iter().copied() {
+            if tab == sections::MODULES {
+                pages.extend(sections::modules().iter().copied().map(|module| Self {
                     tab,
                     module: Some(module),
                 }));
@@ -41,9 +41,9 @@ impl FromStr for Shot {
 
     /// A page named the way its document is, which is how a run asks for one.
     fn from_str(name: &str) -> Result<Self, Self::Err> {
-        Tab::try_from(format!("gallery/{name}/item").as_str())
+        sections::named(name)
             .map(|tab| Self { tab, module: None })
-            .map_err(|()| format!("no gallery page named {name}"))
+            .ok_or_else(|| format!("no gallery page named {name}"))
     }
 }
 
@@ -53,10 +53,10 @@ impl FromStr for Shot {
 /// pricing files nothing writes.
 impl Display for Shot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let tab = self.tab.slug();
+        let tab = self.tab;
         match self.module {
             None => f.write_str(tab),
-            Some(module) => write!(f, "{tab}-{}", module.slug()),
+            Some(module) => write!(f, "{tab}-{module}"),
         }
     }
 }

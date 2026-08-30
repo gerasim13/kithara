@@ -88,11 +88,7 @@ use masonry::vello::{
 };
 use num_traits::cast::AsPrimitive as _;
 
-use self::{
-    fixture::Consts,
-    mock::MockReads,
-    sections::{ModuleDemo, Tab},
-};
+use self::{fixture::Consts, mock::MockReads};
 
 /// The format each host rasterises into. The retained one matches the gallery's
 /// own capture; iced's engine is built for a surface format, which is the sRGB
@@ -217,7 +213,7 @@ struct Page {
     /// Which mock state the page's tick advances. The gallery's reads move the
     /// stress waveforms only on the stress tab and the visualiser only on the
     /// vis one, so a page measured under the wrong tab is a still picture.
-    tab: Tab,
+    tab: sections::Page,
     frames: usize,
     program: Program,
     /// The one reading this page moves on its own, if it has one. A run that
@@ -240,7 +236,7 @@ const PAGES: &[Page] = &[
         name: "gallery-buttons",
         group: Group::Pages,
         entry: "gallery-buttons.klayout.ron",
-        tab: Tab::Buttons,
+        tab: "buttons",
         frames: 120,
         program: Program::Idle,
         moving: None,
@@ -257,7 +253,7 @@ const PAGES: &[Page] = &[
         name: "gallery-clock",
         group: Group::Pages,
         entry: "gallery-clock.klayout.ron",
-        tab: Tab::Clock,
+        tab: "clock",
         frames: 120,
         program: Program::Idle,
         moving: None,
@@ -274,7 +270,7 @@ const PAGES: &[Page] = &[
         name: "gallery-table",
         group: Group::Pages,
         entry: "gallery-table.klayout.ron",
-        tab: Tab::Table,
+        tab: "table",
         frames: 120,
         program: Program::Idle,
         moving: None,
@@ -287,7 +283,7 @@ const PAGES: &[Page] = &[
         name: "gallery-stress",
         group: Group::Pages,
         entry: "gallery-stress.klayout.ron",
-        tab: Tab::Stress,
+        tab: "stress",
         frames: 120,
         program: Program::Buckets(&[8_192, 4_096, 1_024, 256]),
         moving: Some("bench.wave.0"),
@@ -300,7 +296,7 @@ const PAGES: &[Page] = &[
         name: "gallery-vis",
         group: Group::Native,
         entry: "gallery-vis.klayout.ron",
-        tab: Tab::Vis,
+        tab: "vis",
         frames: 120,
         program: Program::Tick,
         moving: Some("vis.time"),
@@ -316,7 +312,7 @@ const PAGES: &[Page] = &[
         name: "gallery-shader",
         group: Group::Native,
         entry: "gallery-shader.klayout.ron",
-        tab: Tab::Shader,
+        tab: "shader",
         frames: 120,
         program: Program::Tick,
         moving: None,
@@ -329,7 +325,7 @@ const PAGES: &[Page] = &[
         name: "gallery-pivot",
         group: Group::Scroll,
         entry: "gallery-pivot.klayout.ron",
-        tab: Tab::Pivot,
+        tab: "pivot",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
@@ -342,7 +338,7 @@ const PAGES: &[Page] = &[
         name: "gallery-library2",
         group: Group::Scroll,
         entry: "gallery-library2.klayout.ron",
-        tab: Tab::Library2,
+        tab: "library2",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
@@ -359,7 +355,7 @@ const PAGES: &[Page] = &[
         name: "gallery-table-long",
         group: Group::Scroll,
         entry: "gallery-table-long.klayout.ron",
-        tab: Tab::TableLong,
+        tab: "table-long",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
@@ -372,7 +368,7 @@ const PAGES: &[Page] = &[
         name: "gallery-tree",
         group: Group::Scroll,
         entry: "gallery-tree.klayout.ron",
-        tab: Tab::Tree,
+        tab: "tree",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: None,
@@ -389,7 +385,7 @@ const PAGES: &[Page] = &[
         name: "gallery-faders",
         group: Group::Drag,
         entry: "gallery-faders.klayout.ron",
-        tab: Tab::Faders,
+        tab: "faders",
         frames: 60,
         program: Program::Drag(&[0, 1, 4, 8]),
         moving: Some("mock.volume"),
@@ -407,7 +403,7 @@ const PAGES: &[Page] = &[
         name: "gallery-objects",
         group: Group::Pages,
         entry: "gallery-objects.klayout.ron",
-        tab: Tab::Objects,
+        tab: "objects",
         frames: 120,
         program: Program::Idle,
         moving: None,
@@ -424,7 +420,7 @@ const PAGES: &[Page] = &[
         name: "gallery-motion",
         group: Group::Pages,
         entry: "gallery-motion.klayout.ron",
-        tab: Tab::Motion,
+        tab: "motion",
         frames: 120,
         program: Program::Tick,
         moving: Some("gallery.motion.clock"),
@@ -437,7 +433,7 @@ const PAGES: &[Page] = &[
         name: "gallery-sprites",
         group: Group::Pages,
         entry: "gallery-sprites.klayout.ron",
-        tab: Tab::Sprites,
+        tab: "sprites",
         frames: 120,
         program: Program::Tick,
         moving: Some("gallery.motion.clock"),
@@ -450,7 +446,7 @@ const PAGES: &[Page] = &[
         name: "gallery-lottie",
         group: Group::Pages,
         entry: "gallery-lottie.klayout.ron",
-        tab: Tab::Lottie,
+        tab: "lottie",
         frames: 120,
         program: Program::Tick,
         moving: Some("gallery.motion.clock"),
@@ -463,7 +459,7 @@ const PAGES: &[Page] = &[
         name: "gallery-scene",
         group: Group::Pages,
         entry: "gallery-scene.klayout.ron",
-        tab: Tab::Scene,
+        tab: "scene",
         frames: 120,
         program: Program::Tick,
         moving: Some("gallery.motion.clock"),
@@ -476,7 +472,7 @@ const PAGES: &[Page] = &[
         name: "perf-scroll-vis",
         group: Group::Scroll,
         entry: SCROLL_VIS_LAYOUT,
-        tab: Tab::Vis,
+        tab: "vis",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
         moving: Some("vis.time"),
@@ -565,7 +561,7 @@ impl App for PageApp {
         // harness fixes; everything else the document publishes is applied.
         if self.closes_loop
             && let UiEvent::Control { path, action } = event
-            && Tab::try_from(path.as_str()).is_err()
+            && sections::pressed(&path).is_none()
         {
             self.reads.apply(&path, &action);
         }
@@ -1965,17 +1961,21 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
 fn the_page_table_is_pinned_to_the_gallery() {
     let fixture = Fixture::new();
     let mut reads = MockReads::default();
-    // `Tab::Modules` and the first module demo name the same document, and the
-    // gallery reaches a demo through the application's own selection rather
+    // The modules page and the first module demo name the same document, and
+    // the gallery reaches a demo through the application's own selection rather
     // than through the tab.
-    let mut gallery: Vec<(usize, &'static str)> = Tab::ALL
+    let mut gallery: Vec<(usize, &'static str)> = sections::pages()
         .iter()
-        .filter(|tab| **tab != Tab::Modules)
-        .map(|tab| (tab.index(), tab.entry()))
+        .copied()
+        .filter(|tab| *tab != sections::MODULES)
+        .map(|tab| (sections::index(tab), sections::entry(tab)))
         .collect();
-    gallery.extend(ModuleDemo::ALL.iter().map(|demo| {
-        reads.select_module(*demo);
-        (Tab::ALL.len() + demo.index(), reads.active_module().entry())
+    gallery.extend(sections::modules().iter().copied().map(|demo| {
+        reads.select_module(demo);
+        (
+            sections::pages().len() + sections::module_index(demo),
+            sections::module_entry(reads.active_module()),
+        )
     }));
     gallery.sort_unstable();
 

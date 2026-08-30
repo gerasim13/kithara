@@ -11,7 +11,7 @@ use crate::{
     capture::{Capture, Shot},
     fixture::{Consts, Resolver, resolver},
     mock::MockReads,
-    sections::{ModuleDemo, Tab},
+    sections,
 };
 
 #[derive(Clone, Debug)]
@@ -37,8 +37,8 @@ pub(crate) struct Gallery {
     /// The extensions this application registers, offered to whichever host
     /// draws the page that names one.
     pub(crate) kinds: CustomKinds,
-    pub(crate) layouts: [CompiledUi; Tab::ALL.len()],
-    pub(crate) module_layouts: [CompiledUi; ModuleDemo::ALL.len()],
+    pub(crate) layouts: Vec<CompiledUi>,
+    pub(crate) module_layouts: Vec<CompiledUi>,
     pub(crate) capture: Option<Capture>,
 }
 
@@ -56,9 +56,8 @@ impl Gallery {
         let endpoints = crate::mock::registry();
         let skin = builtin::skin().document();
         Self {
-            layouts: Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints, skin)),
-            module_layouts: ModuleDemo::ALL
-                .map(|module| compiled(module.entry(), &resolver, &endpoints, skin)),
+            layouts: pages(&resolver, &endpoints, skin),
+            module_layouts: module_pages(&resolver, &endpoints, skin),
             window_id: window::Id::unique(),
             clock: Clock::default(),
             step: Duration::from_millis(Consts::STRESS_TICK_MS),
@@ -103,10 +102,10 @@ impl Gallery {
     }
 
     pub(crate) fn compiled(&self) -> &CompiledUi {
-        if self.reads.active_tab() == Tab::Modules {
-            &self.module_layouts[self.reads.active_module().index()]
+        if self.reads.active_tab() == sections::MODULES {
+            &self.module_layouts[sections::module_index(self.reads.active_module())]
         } else {
-            &self.layouts[self.reads.active_tab().index()]
+            &self.layouts[sections::index(self.reads.active_tab())]
         }
     }
 
@@ -119,9 +118,8 @@ impl Gallery {
         let resolver = resolver();
         let endpoints = crate::mock::registry();
         let skin = self.skin().document();
-        self.layouts = Tab::ALL.map(|tab| compiled(tab.entry(), &resolver, &endpoints, skin));
-        self.module_layouts =
-            ModuleDemo::ALL.map(|module| compiled(module.entry(), &resolver, &endpoints, skin));
+        self.layouts = pages(&resolver, &endpoints, skin);
+        self.module_layouts = module_pages(&resolver, &endpoints, skin);
     }
 
     /// Selects the next page and lets one frame render before the shot.
@@ -156,7 +154,7 @@ pub(crate) fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Ui(UiEvent::Control { path, action }) => {
-            if let Ok(tab) = Tab::try_from(path.as_str()) {
+            if let Some(tab) = sections::pressed(&path) {
                 state.reads.select_tab(tab);
             } else {
                 let was = state.reads.active_skin();
@@ -201,6 +199,30 @@ pub(crate) fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message>
         Some(&state.kinds),
     )
     .map(Message::Ui)
+}
+
+/// Every nav page, compiled in the order the package declares them.
+fn pages(
+    resolver: &Resolver,
+    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
+    skin: &SkinDoc,
+) -> Vec<CompiledUi> {
+    sections::pages()
+        .iter()
+        .map(|page| compiled(sections::entry(page), resolver, endpoints, skin))
+        .collect()
+}
+
+/// Every demo the modules page offers, compiled in the order it lists them.
+fn module_pages(
+    resolver: &Resolver,
+    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
+    skin: &SkinDoc,
+) -> Vec<CompiledUi> {
+    sections::modules()
+        .iter()
+        .map(|module| compiled(sections::module_entry(module), resolver, endpoints, skin))
+        .collect()
 }
 
 fn compiled(
