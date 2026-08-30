@@ -1497,7 +1497,13 @@ fn arb_op() -> impl Strategy<Value = Op> {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 64,
+        // Measured under Miri: one case of this sequence costs the interpreter
+        // about a minute, so sixty-four of them are seventy minutes of a lane
+        // whose whole budget is four hours and which has four more crates to
+        // interpret. That lane is here for the atomics' memory ordering, and a
+        // handful of sequences reaches the same stores and loads; the full
+        // sweep still runs on every lane that executes rather than interprets.
+        cases: if cfg!(miri) { 8 } else { 64 },
         ..ProptestConfig::default()
     })]
 
