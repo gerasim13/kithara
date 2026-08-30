@@ -7,9 +7,12 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, SignalAsset, SignalDirection, TestServerHelper,
-    audio_fixture::EmbeddedAudio, decode_ext::DecoderChunkOutcomeTestExt, detect_direction,
-    fixture_protocol::PackagedSignal,
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, audio_fixture::EmbeddedAudio,
+    decode_ext::DecoderChunkOutcomeTestExt, fixture_protocol::PackagedSignal,
+};
+use kithara_test_fixtures::{
+    SignalAsset,
+    signal::{SignalDirection, detect_direction},
 };
 use reqwest::Client;
 

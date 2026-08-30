@@ -108,6 +108,31 @@ which one it is asserting against.
 `Pcm::new` and `wav` take a `Wave`; `Pcm::from_fn` and `wav_from_fn` take a
 per-frame closure, for the bodies no single waveform describes.
 
+The same module owns the reading side, because a reader that disagrees with the
+writer is worse than no reader at all:
+
+- `phase` — the saw decoder. `units` recovers a frame's phase from a decoded
+  sample, `delta` is the shortest signed step between two phases, `distance`
+  the same ignoring direction. `SAW_PERIOD` is the one period, and `phase`
+  fails to compile if its signed twin ever stops matching it.
+- `detect_direction` / `SignalDirection` — which way a saw runs, by voting over
+  the first frames of a buffer.
+- `classify_windows` / `ascending_phase_replays` / `FrameClass` / `Replay` —
+  per-window provenance: which stretch of a decoded stream ascends, descends,
+  or is silent, and where a stream replays phase it already served.
+- `goertzel_magnitude` — energy at one frequency, for telling two generated
+  tones apart without a full transform.
+
+These were four copies of the saw period and five of the phase decoder spread
+across `tests/src/` and individual suites. A test that measures a fixture and a
+build script that writes one now agree by construction.
+
+`SignalAsset` sits beside `signal` rather than inside `assets`, because it has
+to compile for wasm and `assets` does not: the store is a host filesystem, and
+the browser lane names an asset and fetches its bytes over HTTP. Its census
+tests hold the two sides together — every declared asset is registered by a
+generator, every registered one is declarable, and the extensions agree.
+
 This is the workspace's only route to a generated signal. `tests/src/wav.rs`
 and `tests/src/signal_pcm.rs` were the other two — a `SignalFn` trait with one
 struct per waveform, a lazy renderer with an `Infinite` length nothing asked

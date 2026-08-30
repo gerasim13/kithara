@@ -16,11 +16,12 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    SignalAsset, TestServerHelper, TestTempDir, kithara,
+    TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_fixtures::SignalAsset;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
 

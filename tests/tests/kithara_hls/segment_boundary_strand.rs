@@ -45,7 +45,6 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
 };
 use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
@@ -259,8 +258,8 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let mut breaks = 0usize;
     let mut worst_jump = 0usize;
     for w in samples.windows(2) {
-        let prev = phase_from_f32(w[0]);
-        let curr = phase_from_f32(w[1]);
+        let prev = signal::phase::units(w[0]);
+        let curr = signal::phase::units(w[1]);
         let expected_asc = (prev + 1) % signal::SAW_PERIOD;
         if curr != expected_asc {
             breaks += 1;

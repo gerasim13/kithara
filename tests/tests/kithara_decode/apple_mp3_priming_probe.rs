@@ -5,7 +5,8 @@ use kithara::{
     platform::time::Duration,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{SignalAsset, TestServerHelper};
+use kithara_integration_tests::TestServerHelper;
+use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
 const SAMPLE_RATE: u32 = 44_100;

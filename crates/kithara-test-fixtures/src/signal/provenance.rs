@@ -1,7 +1,7 @@
-pub const SAWTOOTH_PERIOD_FRAMES: usize = 65_536;
+use num_traits::cast;
 
-const SAWTOOTH_PERIOD_UNITS: i32 = 65_536;
-const SAWTOOTH_HALF_PERIOD_UNITS: i32 = 32_768;
+use super::{SAW_PERIOD, phase};
+
 const SILENCE_THRESHOLD: f32 = 1.0e-4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +15,7 @@ pub enum FrameClass {
 /// Per-window classification of a mono f32 stream.
 /// `window` = frames per window; `tol` = allowed deviation of the mean
 /// per-frame modular delta from +/-1.0 i16 units.
+#[must_use]
 pub fn classify_windows(left: &[f32], window: usize, tol: f32) -> Vec<FrameClass> {
     if window < 2 {
         return Vec::new();
@@ -25,20 +26,15 @@ pub fn classify_windows(left: &[f32], window: usize, tol: f32) -> Vec<FrameClass
         .collect()
 }
 
-/// Sample to sawtooth phase in i16 units, 0..65535.
-pub fn phase_units(sample: f32) -> i32 {
-    ((sample * 32_768.0).round() as i32 + SAWTOOTH_HALF_PERIOD_UNITS)
-        .rem_euclid(SAWTOOTH_PERIOD_UNITS)
-}
-
 #[derive(Clone, Copy, Debug)]
 pub struct Replay {
     pub start_frame: usize,
     pub len: usize,
-    pub start_phase: i32,
+    pub start_phase: usize,
 }
 
 /// Detect phase-continuity violations inside a contiguous ascending sawtooth.
+#[must_use]
 pub fn ascending_phase_replays(
     left: &[f32],
     start: usize,
@@ -50,7 +46,7 @@ pub fn ascending_phase_replays(
         return Vec::new();
     }
 
-    let base_phase = phase_units(left[start]);
+    let base_phase = phase::units(left[start]);
     let mut replays = Vec::new();
     let mut active: Option<Replay> = None;
 
@@ -67,7 +63,7 @@ pub fn ascending_phase_replays(
                 active = Some(Replay {
                     start_frame: frame,
                     len: 1,
-                    start_phase: phase_units(sample),
+                    start_phase: phase::units(sample),
                 });
             }
             (false, Some(_)) => {
@@ -93,9 +89,10 @@ fn classify_window(samples: &[f32], tol: f32) -> FrameClass {
 
     let delta_sum = samples
         .windows(2)
-        .map(|pair| modular_delta(phase_units(pair[0]), phase_units(pair[1])) as f32)
+        .map(|pair| f32::from(phase::delta(phase::units(pair[0]), phase::units(pair[1]))))
         .sum::<f32>();
-    let mean_delta = delta_sum / (samples.len() - 1) as f32;
+    let steps: f32 = cast(samples.len() - 1).expect("invariant: a window length fits f32");
+    let mean_delta = delta_sum / steps;
 
     if (mean_delta - 1.0).abs() <= tol {
         FrameClass::Ascending
@@ -106,15 +103,9 @@ fn classify_window(samples: &[f32], tol: f32) -> FrameClass {
     }
 }
 
-fn expected_phase_error(sample: f32, base_phase: i32, frame_offset: usize) -> i32 {
-    let offset = (frame_offset % SAWTOOTH_PERIOD_FRAMES) as i32;
-    let expected = (base_phase + offset).rem_euclid(SAWTOOTH_PERIOD_UNITS);
-    modular_delta(expected, phase_units(sample))
-}
-
-const fn modular_delta(current: i32, next: i32) -> i32 {
-    (next - current + SAWTOOTH_HALF_PERIOD_UNITS).rem_euclid(SAWTOOTH_PERIOD_UNITS)
-        - SAWTOOTH_HALF_PERIOD_UNITS
+fn expected_phase_error(sample: f32, base_phase: usize, frame_offset: usize) -> i32 {
+    let expected = (base_phase + frame_offset % SAW_PERIOD) % SAW_PERIOD;
+    i32::from(phase::delta(expected, phase::units(sample)))
 }
 
 fn is_silence(sample: f32) -> bool {
@@ -125,22 +116,19 @@ fn is_silence(sample: f32) -> bool {
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{
-        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
-        phase_units,
-    };
+    use super::{FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows};
 
     const WINDOW: usize = 64;
 
     #[kithara::test(native, flash(false))]
     fn classify_windows_labels_pure_signals_including_wrap() {
-        let ascending = ascending_signal(SAWTOOTH_PERIOD_FRAMES - 32, WINDOW);
+        let ascending = ascending_signal(SAW_PERIOD - 32, WINDOW);
         assert_eq!(
             classify_windows(&ascending, WINDOW, 0.5),
             vec![FrameClass::Ascending]
         );
 
-        let descending = descending_signal(SAWTOOTH_PERIOD_FRAMES - 32, WINDOW);
+        let descending = descending_signal(SAW_PERIOD - 32, WINDOW);
         assert_eq!(
             classify_windows(&descending, WINDOW, 0.5),
             vec![FrameClass::Descending]
@@ -154,16 +142,8 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn phase_units_round_trips_i16_sawtooth_values() {
-        assert_eq!(phase_units(i16_to_f32(-32_768)), 0);
-        assert_eq!(phase_units(i16_to_f32(-32_767)), 1);
-        assert_eq!(phase_units(i16_to_f32(0)), 32_768);
-        assert_eq!(phase_units(i16_to_f32(32_767)), 65_535);
-    }
-
-    #[kithara::test(native, flash(false))]
     fn ascending_phase_replays_accepts_pure_ascending_run_including_wrap() {
-        let left = ascending_signal(SAWTOOTH_PERIOD_FRAMES - 32, WINDOW * 2);
+        let left = ascending_signal(SAW_PERIOD - 32, WINDOW * 2);
 
         assert!(ascending_phase_replays(&left, 0, left.len(), 3).is_empty());
     }
@@ -230,12 +210,12 @@ mod tests {
     }
 
     fn ascending_sample(frame: usize) -> f32 {
-        let unit = i32::try_from(frame % SAWTOOTH_PERIOD_FRAMES).expect("phase fits i32");
+        let unit = i32::try_from(frame % SAW_PERIOD).expect("phase fits i32");
         i16_to_f32(i16::try_from(unit - 32_768).expect("ascending sample fits i16"))
     }
 
     fn descending_sample(frame: usize) -> f32 {
-        let unit = i32::try_from(frame % SAWTOOTH_PERIOD_FRAMES).expect("phase fits i32");
+        let unit = i32::try_from(frame % SAW_PERIOD).expect("phase fits i32");
         i16_to_f32(i16::try_from(32_767 - unit).expect("descending sample fits i16"))
     }
 

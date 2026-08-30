@@ -8,9 +8,10 @@ use kithara::{
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SignalAsset, TestServerHelper,
+    HlsFixtureBuilder, TestServerHelper,
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
+use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
 use crate::gapless_common::{

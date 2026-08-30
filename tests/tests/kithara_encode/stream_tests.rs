@@ -6,10 +6,8 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncodedTrack, StreamBackend, StreamEncoder};
-use kithara_integration_tests::{
-    encode_ext::mux_fmp4_bytes, fixture_protocol::GaplessEncoding, goertzel::goertzel_magnitude,
-};
-use kithara_test_fixtures::signal::Wave;
+use kithara_integration_tests::{encode_ext::mux_fmp4_bytes, fixture_protocol::GaplessEncoding};
+use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;

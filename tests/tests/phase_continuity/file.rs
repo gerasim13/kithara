@@ -10,7 +10,8 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
-use kithara_integration_tests::{SignalAsset, TestServerHelper, TestTempDir};
+use kithara_integration_tests::{TestServerHelper, TestTempDir};
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 #[cfg(all(

@@ -1,6 +1,12 @@
+use std::f64::consts::TAU;
+
+/// Energy of `samples` at `freq_hz`, by the Goertzel algorithm.
+///
+/// A test that needs to know which generated tone it is hearing compares the
+/// magnitudes of the candidate frequencies instead of running a full transform.
 #[must_use]
 pub fn goertzel_magnitude(samples: &[f32], freq_hz: f64, sample_rate: u32) -> f64 {
-    let omega = 2.0 * std::f64::consts::PI * freq_hz / f64::from(sample_rate);
+    let omega = TAU * freq_hz / f64::from(sample_rate);
     let coeff = 2.0 * omega.cos();
     let mut previous = 0.0f64;
     let mut before_previous = 0.0f64;

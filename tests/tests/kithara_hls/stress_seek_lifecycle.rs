@@ -10,12 +10,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, abr_fast, auto, detect_direction,
+    TestTempDir, Xorshift64, abr_fast, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
+};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::{SawWav, frames_in_segments};
@@ -402,7 +403,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            let first_phase = phase_from_f32(buf[0]);
+            let first_phase = signal::phase::units(buf[0]);
             if let Some(pp) = prev_phase {
                 let next_asc = (pp + 1) % signal::SAW_PERIOD;
                 let next_desc = (pp + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
@@ -422,8 +423,8 @@ async fn stress_seek_lifecycle_with_zero_reset(
             }
 
             for f in 1..frames {
-                let p0 = phase_from_f32(buf[(f - 1) * channels]);
-                let p1 = phase_from_f32(buf[f * channels]);
+                let p0 = signal::phase::units(buf[(f - 1) * channels]);
+                let p1 = signal::phase::units(buf[f * channels]);
                 let next_asc = (p0 + 1) % signal::SAW_PERIOD;
                 let next_desc = (p0 + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if p1 != next_asc && p1 != next_desc {
@@ -437,7 +438,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
                 }
             }
 
-            let last_frame_phase = phase_from_f32(buf[(frames - 1) * channels]);
+            let last_frame_phase = signal::phase::units(buf[(frames - 1) * channels]);
             prev_phase = Some(last_frame_phase);
 
             total_frames_read += frames as u64;

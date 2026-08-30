@@ -15,8 +15,8 @@ use kithara::{
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_integration_tests::{goertzel::goertzel_magnitude, waits::wait_until};
-use kithara_test_fixtures::signal::Wave;
+use kithara_integration_tests::waits::wait_until;
+use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
 use url::Url;
 
 pub(super) const CHANNELS: u16 = 2;

@@ -19,13 +19,11 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    pcm_provenance::{
-        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
-        phase_units,
-    },
     temp_dir,
+};
+use kithara_test_fixtures::signal::{
+    self, FrameClass, Replay, ascending_phase_replays, classify_windows, goertzel_magnitude,
 };
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -1753,12 +1751,12 @@ fn find_seek_landing_frame(
     duration: f64,
 ) -> Option<usize> {
     let expected_phase =
-        frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAWTOOTH_PERIOD_FRAMES;
-    let expected_phase = i32::try_from(expected_phase).expect("sawtooth phase fits i32");
+        frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % signal::SAW_PERIOD;
     let latest_start = b_onset_frame.saturating_sub(SEEK_LANDING_WINDOW_FRAMES);
 
     (seek_issue_frame..=latest_start).find(|frame| {
-        let phase_delta = phase_distance(phase_units(left[*frame]), expected_phase).abs();
+        let landed = signal::phase::units(left[*frame]);
+        let phase_delta = i32::from(signal::phase::delta(expected_phase, landed)).abs();
         phase_delta <= SEEK_PHASE_TOL_UNITS
             && ascending_phase_replays(
                 left,
@@ -1768,14 +1766,6 @@ fn find_seek_landing_frame(
             )
             .is_empty()
     })
-}
-
-fn phase_distance(actual: i32, expected: i32) -> i32 {
-    const SAWTOOTH_PERIOD_UNITS: i32 = 65_536;
-    const SAWTOOTH_HALF_PERIOD_UNITS: i32 = 32_768;
-
-    (actual - expected + SAWTOOTH_HALF_PERIOD_UNITS).rem_euclid(SAWTOOTH_PERIOD_UNITS)
-        - SAWTOOTH_HALF_PERIOD_UNITS
 }
 
 fn deinterleave_left(samples: &[f32], channels: usize) -> Vec<f32> {

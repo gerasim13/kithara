@@ -15,7 +15,6 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     fixture_protocol::{DataMode, InitMode},
-    phase_distance, phase_from_f32,
 };
 use kithara_test_fixtures::signal;
 use tracing::{info, warn};
@@ -223,7 +222,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
             if inspected >= inspect_frames {
                 break;
             }
-            let phase = phase_from_f32(buf[f * channels]);
+            let phase = signal::phase::units(buf[f * channels]);
             if let Some(prev) = prev_phase {
                 let expected = (prev + 1) % signal::SAW_PERIOD;
                 if phase != expected {
@@ -360,7 +359,7 @@ async fn stress_read_samples_integrity() {
         }
 
         if let Some(prev_phase) = prev_last_phase {
-            let first_phase = phase_from_f32(buf[0]);
+            let first_phase = signal::phase::units(buf[0]);
             let expected = (prev_phase + 1) % signal::SAW_PERIOD;
             if first_phase != expected {
                 continuity_errors += 1;
@@ -375,8 +374,8 @@ async fn stress_read_samples_integrity() {
 
         if frames >= 2 {
             for f in 1..frames {
-                let prev = phase_from_f32(buf[(f - 1) * channels]);
-                let curr = phase_from_f32(buf[f * channels]);
+                let prev = signal::phase::units(buf[(f - 1) * channels]);
+                let curr = signal::phase::units(buf[f * channels]);
                 let expected = (prev + 1) % signal::SAW_PERIOD;
                 if curr != expected {
                     continuity_errors += 1;
@@ -395,7 +394,7 @@ async fn stress_read_samples_integrity() {
         }
 
         if frames > 0 {
-            prev_last_phase = Some(phase_from_f32(buf[(frames - 1) * channels]));
+            prev_last_phase = Some(signal::phase::units(buf[(frames - 1) * channels]));
         }
     }
 
@@ -486,8 +485,8 @@ async fn stress_seek_and_read() {
 
             if frames >= 2 {
                 for f in 1..frames {
-                    let prev = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr = phase_from_f32(buf[f * channels]);
+                    let prev = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr = signal::phase::units(buf[f * channels]);
                     if curr != (prev + 1) % signal::SAW_PERIOD {
                         continuity_errors += 1;
                     }
@@ -497,8 +496,8 @@ async fn stress_seek_and_read() {
             if !position_checked && frames > 0 {
                 let expected_frame = (pos_secs * spec.sample_rate.get() as f64).round() as usize;
                 let expected_phase = expected_frame % signal::SAW_PERIOD;
-                let actual_phase = phase_from_f32(buf[0]);
-                let dist = phase_distance(actual_phase, expected_phase);
+                let actual_phase = signal::phase::units(buf[0]);
+                let dist = signal::phase::distance(actual_phase, expected_phase);
                 if dist > 1200 {
                     position_errors += 1;
                     warn!(
@@ -626,8 +625,8 @@ async fn stress_rapid_seeks_must_not_stall() {
         if frames > 0 {
             let expected_frame = (pos_secs * sample_rate as f64).round() as usize;
             let expected_phase = expected_frame % signal::SAW_PERIOD;
-            let actual_phase = phase_from_f32(buf[0]);
-            let dist = phase_distance(actual_phase, expected_phase);
+            let actual_phase = signal::phase::units(buf[0]);
+            let dist = signal::phase::distance(actual_phase, expected_phase);
             if dist > 1200 {
                 position_mismatches += 1;
                 if position_mismatches <= 5 {
@@ -782,8 +781,8 @@ async fn stress_seek_to_zero_after_pressure() {
         }
 
         if !position_checked && frames > 0 {
-            let actual_phase = phase_from_f32(buf[0]);
-            let dist = phase_distance(actual_phase, 0);
+            let actual_phase = signal::phase::units(buf[0]);
+            let dist = signal::phase::distance(actual_phase, 0);
             info!(
                 actual_phase,
                 dist, sample_rate, "Phase after seek-to-0 (expected ≈ 0)"
@@ -797,7 +796,7 @@ async fn stress_seek_to_zero_after_pressure() {
         }
 
         if let Some(prev_phase) = prev_last_phase {
-            let first_phase = phase_from_f32(buf[0]);
+            let first_phase = signal::phase::units(buf[0]);
             if first_phase != (prev_phase + 1) % signal::SAW_PERIOD {
                 continuity_errors += 1;
             }
@@ -805,8 +804,8 @@ async fn stress_seek_to_zero_after_pressure() {
 
         if frames >= 2 {
             for f in 1..frames {
-                let prev = phase_from_f32(buf[(f - 1) * channels]);
-                let curr = phase_from_f32(buf[f * channels]);
+                let prev = signal::phase::units(buf[(f - 1) * channels]);
+                let curr = signal::phase::units(buf[f * channels]);
                 if curr != (prev + 1) % signal::SAW_PERIOD {
                     continuity_errors += 1;
                 }
@@ -814,7 +813,7 @@ async fn stress_seek_to_zero_after_pressure() {
         }
 
         if frames > 0 {
-            prev_last_phase = Some(phase_from_f32(buf[(frames - 1) * channels]));
+            prev_last_phase = Some(signal::phase::units(buf[(frames - 1) * channels]));
         }
 
         if chunks_from_zero >= target_chunks {
@@ -916,9 +915,9 @@ async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segmen
             continue;
         }
 
-        let actual_phase = phase_from_f32(buf[0]);
-        let dist_expected = phase_distance(actual_phase, expected_phase);
-        let dist_seg1 = phase_distance(actual_phase, seg1_start_phase);
+        let actual_phase = signal::phase::units(buf[0]);
+        let dist_expected = signal::phase::distance(actual_phase, expected_phase);
+        let dist_seg1 = signal::phase::distance(actual_phase, seg1_start_phase);
 
         info!(
             near_start_secs,

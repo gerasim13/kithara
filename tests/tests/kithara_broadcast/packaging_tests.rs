@@ -8,8 +8,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{StreamBackend, StreamEncoder};
-use kithara_integration_tests::goertzel::goertzel_magnitude;
-use kithara_test_fixtures::signal::Wave;
+use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;

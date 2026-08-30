@@ -1,9 +1,9 @@
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 use crate::{
     hls_url::HlsSpec,
     server_url::join_server_url,
-    signal_asset::SignalAsset,
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, post_token},
     token_store::TokenRequest,
 };

@@ -15,7 +15,8 @@ use kithara::{
     prelude::ResourceConfig,
 };
 use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
-use kithara_integration_tests::{SignalAsset, TestServerHelper, memory_asset_store};
+use kithara_integration_tests::{TestServerHelper, memory_asset_store};
+use kithara_test_fixtures::SignalAsset;
 
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
 /// nothing is resampled on the way in.

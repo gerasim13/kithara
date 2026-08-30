@@ -23,12 +23,14 @@ use kithara_integration_tests::{
         CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
         time_stretch_failures,
     },
-    goertzel::goertzel_magnitude,
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     offline::{OfflinePlayer, OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
 };
-use kithara_test_fixtures::assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s};
+use kithara_test_fixtures::{
+    assets::{marked_sine_wav_a440_6s, sine_wav_a440_6s},
+    signal::goertzel_magnitude,
+};
 use num_traits::ToPrimitive;
 use serde::Serialize;
 

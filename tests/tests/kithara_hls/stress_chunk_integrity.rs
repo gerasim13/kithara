@@ -21,12 +21,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, auto, detect_direction,
+    TestTempDir, Xorshift64, auto,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
+};
 use tracing::{info, warn};
 
 use crate::common::test_defaults::{SawWav, frames_in_segments};
@@ -67,8 +68,8 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
 
     let mut breaks = 0;
     for f in 1..frames {
-        let prev_phase = phase_from_f32(chunk.samples[(f - 1) * channels]);
-        let curr_phase = phase_from_f32(chunk.samples[f * channels]);
+        let prev_phase = signal::phase::units(chunk.samples[(f - 1) * channels]);
+        let curr_phase = signal::phase::units(chunk.samples[f * channels]);
         let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
         let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
         if curr_phase != expected_asc && curr_phase != expected_desc {
@@ -471,8 +472,8 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 && !chunk.samples.is_empty()
             {
                 let curr_first = chunk.samples[0];
-                let prev_phase = phase_from_f32(prev_last);
-                let curr_phase = phase_from_f32(curr_first);
+                let prev_phase = signal::phase::units(prev_last);
+                let curr_phase = signal::phase::units(curr_first);
                 let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
                 let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if curr_phase != expected_asc && curr_phase != expected_desc {

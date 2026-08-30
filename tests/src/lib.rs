@@ -41,7 +41,6 @@ pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flash_pace;
-pub mod goertzel;
 pub mod hls_blob_store;
 pub mod hls_fixture;
 pub mod hls_server;
@@ -58,15 +57,12 @@ pub mod net_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
 pub mod packed_audio;
-pub mod pcm_provenance;
 pub mod reads;
 pub mod rfc6381;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ring;
 pub mod rng;
 pub mod server_url;
-pub mod signal_asset;
-pub mod signal_source_utils;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod swallow_detector;
@@ -104,8 +100,6 @@ pub use log_filter::rust_log_filter;
 pub use native::*;
 pub use rng::*;
 pub use server_url::join_server_url;
-pub use signal_asset::SignalAsset;
-pub use signal_source_utils::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, PrivateTestServer,

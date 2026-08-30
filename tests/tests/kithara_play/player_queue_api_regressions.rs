@@ -8,10 +8,11 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, player::PlayerControl},
 };
 use kithara_integration_tests::{
-    SignalAsset, TestServerHelper, TestTempDir, kithara,
+    TestServerHelper, TestTempDir, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;

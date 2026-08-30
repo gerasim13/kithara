@@ -8,13 +8,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SignalDirection as Direction, TestServerHelper, TestTempDir, Xorshift64,
-    auto, detect_direction,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64, auto,
     fixture_protocol::{DelayRule, PcmPattern},
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
 };
-use kithara_test_fixtures::signal::{self, Pcm, Wave};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
+};
 use tracing::info;
 
 use crate::common::test_defaults::{SawWav, frames_in_segments};
@@ -397,8 +397,8 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
             if frames >= 2 {
                 let mut break_count = 0;
                 for f in 1..frames {
-                    let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr_phase = phase_from_f32(buf[f * channels]);
+                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr_phase = signal::phase::units(buf[f * channels]);
                     let expected = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                     if curr_phase != expected {
                         break_count += 1;
@@ -496,8 +496,8 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
 
             if frames >= 2 {
                 for f in 1..frames {
-                    let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr_phase = phase_from_f32(buf[f * channels]);
+                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr_phase = signal::phase::units(buf[f * channels]);
                     let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
                     let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                     if curr_phase != expected_asc && curr_phase != expected_desc {

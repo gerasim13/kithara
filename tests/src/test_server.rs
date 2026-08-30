@@ -584,11 +584,12 @@ pub(crate) async fn post_token(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use kithara_test_fixtures::SignalAsset;
+
     use super::*;
     use crate::{
         fixture_protocol::{DataMode, InitMode},
         kithara,
-        signal_asset::SignalAsset,
     };
 
     #[kithara::test(tokio)]

@@ -14,7 +14,6 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::PcmPattern,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_distance, phase_from_f32,
 };
 use kithara_test_fixtures::signal::{self, Wave};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
@@ -606,8 +605,8 @@ async fn stress_seek_audio_hls(
 
             if frames >= 2 {
                 for f in 1..frames {
-                    let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr_phase = phase_from_f32(buf[f * channels]);
+                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr_phase = signal::phase::units(buf[f * channels]);
                     let expected_next = (prev_phase + 1) % signal::SAW_PERIOD;
                     if curr_phase != expected_next {
                         continuity_errors += 1;
@@ -631,8 +630,8 @@ async fn stress_seek_audio_hls(
             )
             .unwrap_or(usize::MAX);
             let expected_phase = expected_frame_idx % signal::SAW_PERIOD;
-            let actual_phase = phase_from_f32(buf[0]);
-            let dist = phase_distance(actual_phase, expected_phase);
+            let actual_phase = signal::phase::units(buf[0]);
+            let dist = signal::phase::distance(actual_phase, expected_phase);
             if dist > 1200 {
                 position_errors += 1;
                 if position_error_details.len() < 10 {

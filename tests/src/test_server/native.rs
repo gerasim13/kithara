@@ -6,6 +6,7 @@ use kithara::platform::{
     time::{Duration, sleep},
     tokio::task::spawn,
 };
+use kithara_test_fixtures::SignalAsset;
 use tower_http::cors::CorsLayer;
 use tracing::trace;
 use url::Url;
@@ -15,7 +16,6 @@ use crate::{
     hls_url::HlsSpec,
     http_server::TestHttpServer,
     routes::{assets, behavior, control, signal, stream},
-    signal_asset::SignalAsset,
     test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder},
     test_server_state::{DelayGate, FixtureBehavior, InitGate, SegmentGate, TestServerState},
 };

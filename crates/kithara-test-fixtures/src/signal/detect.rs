@@ -1,4 +1,4 @@
-use kithara_test_fixtures::signal;
+use super::{SAW_PERIOD, phase};
 
 /// Detected direction of a saw-tooth signal in decoded PCM.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -9,20 +9,6 @@ pub enum SignalDirection {
     Descending,
     /// Direction could not be determined.
     Unknown,
-}
-
-/// Recover saw-tooth phase from a decoded `f32` sample.
-#[must_use]
-pub fn phase_from_f32(sample: f32) -> usize {
-    let i16_val = (sample * 32768.0).round() as i32;
-    ((i16_val + 32768) & 0xFFFF) as usize
-}
-
-/// Circular distance between two phases modulo [`signal::SAW_PERIOD`].
-#[must_use]
-pub fn phase_distance(a: usize, b: usize) -> usize {
-    let d = a.abs_diff(b);
-    d.min(signal::SAW_PERIOD - d)
 }
 
 /// Detect a saw-tooth direction from a buffer of interleaved `f32` samples.
@@ -38,10 +24,10 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
     let mut descending_votes = 0u32;
 
     for frame in 0..check_count {
-        let current = phase_from_f32(samples[frame * channels]);
-        let next = phase_from_f32(samples[(frame + 1) * channels]);
-        let expected_asc = (current + 1) % signal::SAW_PERIOD;
-        let expected_desc = (current + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
+        let current = phase::units(samples[frame * channels]);
+        let next = phase::units(samples[(frame + 1) * channels]);
+        let expected_asc = (current + 1) % SAW_PERIOD;
+        let expected_desc = (current + SAW_PERIOD - 1) % SAW_PERIOD;
 
         if next == expected_asc {
             ascending_votes += 1;
@@ -61,14 +47,12 @@ pub fn detect_direction(samples: &[f32], channels: usize) -> SignalDirection {
 
 #[cfg(test)]
 mod tests {
-    use kithara;
+    use kithara_test_utils::kithara;
 
-    use super::*;
+    use super::{SignalDirection, detect_direction};
 
-    #[kithara::test]
-    fn phase_helpers_work() {
-        assert_eq!(phase_from_f32(-1.0), 0);
-        assert_eq!(phase_distance(0, signal::SAW_PERIOD - 1), 1);
+    #[kithara::test(native, flash(false))]
+    fn one_ascending_step_per_frame_reads_as_ascending() {
         assert_eq!(
             detect_direction(&[-1.0, -1.0, -0.9999695, -0.9999695], 2),
             SignalDirection::Ascending

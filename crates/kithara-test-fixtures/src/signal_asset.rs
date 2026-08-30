@@ -1,9 +1,9 @@
-/// One body the `/signal` route serves, named by the `kithara-test-fixtures`
-/// accessor that generates it.
+/// One generated body a test can ask for by name, and the path a server serves
+/// it at.
 ///
 /// The name travels instead of the accessor because this type compiles for
-/// wasm too, where the fixtures crate is absent and the browser only needs the
-/// URL. The census tests below hold the two sides together.
+/// wasm, where the store is a host filesystem the browser cannot reach and only
+/// the URL is usable. The census tests below hold the two sides together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignalAsset {
     ext: &'static str,
@@ -103,10 +103,10 @@ impl SignalAsset {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_test_fixtures::assets::MANIFEST;
+    use kithara_test_utils::kithara;
 
     use super::SignalAsset;
-    use crate::kithara;
+    use crate::assets::MANIFEST;
 
     /// Registered signal assets, by accessor name.
     fn registered() -> Vec<&'static str> {
@@ -117,7 +117,7 @@ mod tests {
             .collect()
     }
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn every_declared_asset_is_registered() {
         let registered = registered();
         for asset in SignalAsset::ALL {
@@ -129,7 +129,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn every_registered_asset_is_declared() {
         let declared: Vec<&str> = SignalAsset::ALL.iter().map(|a| a.name()).collect();
         for name in registered() {
@@ -140,7 +140,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn the_extension_matches_the_stored_entry() {
         for asset in SignalAsset::ALL {
             let entry = MANIFEST

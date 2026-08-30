@@ -9,16 +9,19 @@
 //! `CONTEXT.md` for the store layout and the invalidation contract.
 
 // The store is a host filesystem, and the accessors that read it are generated
-// against one. The wasm lane names assets instead and fetches their bytes over
-// HTTP, so it takes only `signal` from this crate.
+// against one. The wasm lane names assets through `SignalAsset` instead and
+// fetches their bytes over HTTP, so the store and its accessors stay native.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod asset;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod assets;
 pub mod signal;
+pub mod signal_asset;
 // Read by this crate's build script through `#[path]`, and still by the
 // integration suite's; declared here so its own tests keep running.
 #[cfg(test)]
 mod encoders;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
+
+pub use signal_asset::SignalAsset;
