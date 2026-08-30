@@ -48,10 +48,11 @@ in that screen's tabs, so what the gallery offers is read back off the compiled 
 listed in Rust beside it - `sections.rs` compiles the shipped screen once and asks it for its pages,
 its module demos and the page it opens on.
 
-`examples/gallery` is the program and nothing else: the window, the state behind it, the fake
-readings the pages are drawn from, and the three harnesses that step in front of the window when
-their environment variable asks. Everything that checks the gallery is `tests/gallery.rs`, which
-mounts those same modules through `#[path]` rather than copying them - the idiom the measurement
+`examples/gallery` is the program and nothing else: the window, the state behind it, the demo model
+under `demo/` the pages are drawn from, and the harnesses that step in front of the window when a
+flag on its command line names one. Everything that checks the gallery is `tests/gallery.rs` and the
+checks under `tests/gallery/checks/`, which mount those same modules through `#[path]` rather than
+copying them - the idiom the measurement
 harnesses beside it already use - so one gallery is both run and checked. The example is therefore
 not a test target, and the split is load-bearing in one direction: an item only the program uses
 belongs in `main.rs`, because a file mounted in both targets reports whatever the other target does
