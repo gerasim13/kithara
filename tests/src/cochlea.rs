@@ -5,6 +5,9 @@ use num_traits::cast;
 use serde::Serialize;
 
 const BEAT_MARKER_THRESHOLD: f32 = 0.6;
+const BEATS_PER_BAR: usize = 4;
+const DOWNBEAT_MARKER_THRESHOLD: f32 = 0.8;
+const SECONDS_PER_MINUTE: f64 = 60.0;
 const TEMPO_TOLERANCE_BPM: f64 = 0.5;
 const WINDOW_MS: f64 = 5.0;
 
@@ -124,10 +127,12 @@ pub fn synchronization_failures(
 
     let mut failures = Vec::new();
     let channel_count = usize::from(channels);
-    let beat_period: usize = cast((f64::from(sample_rate) * 60.0 / target_bpm).round())
-        .unwrap_or(1)
-        .max(1);
+    let beat_period: usize =
+        cast((f64::from(sample_rate) * SECONDS_PER_MINUTE / target_bpm).round())
+            .unwrap_or(1)
+            .max(1);
     let mut phases = Vec::with_capacity(tracks.len());
+    let mut bar_offsets = Vec::with_capacity(tracks.len());
     for (index, &samples) in tracks.iter().enumerate() {
         assert!(
             samples.len().is_multiple_of(channel_count),
@@ -156,11 +161,34 @@ pub fn synchronization_failures(
             ));
         }
 
-        let Some(first) = first_beat_marker(samples, channel_count) else {
+        let (markers, downbeats) = rhythm_markers(samples, channel_count);
+        let Some(&first) = markers.first() else {
             failures.push(format!("{label}: track {index} has no exact beat markers"));
             continue;
         };
+        let marker_period = markers
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .min()
+            .unwrap_or(beat_period);
+        if let Some(pair) = markers
+            .windows(2)
+            .find(|pair| pair[1] - pair[0] == marker_period.saturating_mul(2))
+        {
+            failures.push(format!(
+                "{label}: track {index} is missing a rhythmic event before frame {}",
+                pair[1],
+            ));
+        }
         phases.push(first % beat_period);
+
+        let Some(&first_downbeat) = downbeats.first() else {
+            failures.push(format!(
+                "{label}: track {index} has no exact downbeat markers"
+            ));
+            continue;
+        };
+        bar_offsets.push((first_downbeat - first) / marker_period % BEATS_PER_BAR);
     }
 
     if phases.len() == tracks.len() {
@@ -172,15 +200,31 @@ pub fn synchronization_failures(
             ));
         }
     }
+    if bar_offsets.len() == tracks.len() {
+        let spread = circular_spread(&mut bar_offsets, BEATS_PER_BAR);
+        if spread > 0 {
+            let suffix = if spread == 1 { "" } else { "s" };
+            failures.push(format!(
+                "{label}: bar phase spread is {spread} beat{suffix}",
+            ));
+        }
+    }
     failures
 }
 
-fn first_beat_marker(samples: &[f32], channels: usize) -> Option<usize> {
-    samples.chunks_exact(channels).position(|values| {
-        values
-            .iter()
-            .any(|sample| sample.abs() >= BEAT_MARKER_THRESHOLD)
-    })
+fn rhythm_markers(samples: &[f32], channels: usize) -> (Vec<usize>, Vec<usize>) {
+    let mut beats = Vec::new();
+    let mut downbeats = Vec::new();
+    for (frame, values) in samples.chunks_exact(channels).enumerate() {
+        let peak = values.iter().map(|sample| sample.abs()).fold(0.0, f32::max);
+        if peak >= BEAT_MARKER_THRESHOLD {
+            beats.push(frame);
+        }
+        if peak >= DOWNBEAT_MARKER_THRESHOLD {
+            downbeats.push(frame);
+        }
+    }
+    (beats, downbeats)
 }
 
 fn circular_spread(phases: &mut [usize], period: usize) -> usize {

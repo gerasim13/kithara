@@ -3,6 +3,7 @@ use kithara_test_fixtures::{
     asset::Asset,
     assets::{
         rhythm_wav_deck_a_120bpm_48k, rhythm_wav_deck_b_120bpm_48k,
+        rhythm_wav_deck_b_missing_beat_120bpm_48k, rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k,
         rhythm_wav_deck_b_one_frame_late_120bpm_48k, rhythm_wav_deck_c_120bpm_48k,
         rhythm_wav_deck_d_120bpm_48k,
     },
@@ -65,5 +66,59 @@ fn static_rhythmic_oracle_accepts_aligned_stems_and_rejects_one_frame_phase_erro
         failures.as_slice(),
         ["one-frame-late static stem: beat phase spread is 1 frame"],
         "the negative control must fail only because of its exact one-frame phase error",
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn static_rhythmic_oracle_rejects_one_missing_event_for_that_reason() {
+    let deck_a = samples(rhythm_wav_deck_a_120bpm_48k());
+    let missing = samples(rhythm_wav_deck_b_missing_beat_120bpm_48k());
+    let failures = synchronization_failures(
+        "missing static beat",
+        &[deck_a.as_slice(), missing.as_slice()],
+        CHANNELS,
+        SAMPLE_RATE,
+        TARGET_BPM,
+    );
+
+    assert_eq!(
+        failures.as_slice(),
+        ["missing static beat: track 1 is missing a rhythmic event before frame 168000"],
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn static_rhythmic_oracle_rejects_wrong_target_tempo_for_that_reason() {
+    let deck = samples(rhythm_wav_deck_a_120bpm_48k());
+    let failures = synchronization_failures(
+        "wrong target tempo",
+        &[deck.as_slice()],
+        CHANNELS,
+        SAMPLE_RATE,
+        127.0,
+    );
+
+    assert_eq!(failures.len(), 1, "unexpected failures: {failures:?}");
+    assert!(
+        failures[0].contains("tempo is") && failures[0].contains("expected 127.000"),
+        "the control must fail only on its 120 BPM signal against 127 BPM target: {failures:?}",
+    );
+}
+
+#[kithara::test(native, flash(false))]
+fn static_rhythmic_oracle_rejects_one_beat_bar_phase_error_for_that_reason() {
+    let deck_a = samples(rhythm_wav_deck_a_120bpm_48k());
+    let shifted = samples(rhythm_wav_deck_b_one_beat_bar_late_120bpm_48k());
+    let failures = synchronization_failures(
+        "one-beat-late static bar",
+        &[deck_a.as_slice(), shifted.as_slice()],
+        CHANNELS,
+        SAMPLE_RATE,
+        TARGET_BPM,
+    );
+
+    assert_eq!(
+        failures.as_slice(),
+        ["one-beat-late static bar: bar phase spread is 1 beat"],
     );
 }

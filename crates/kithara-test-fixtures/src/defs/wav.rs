@@ -6,14 +6,29 @@ use crate::signal::{Wave, wav, wav_from_fn};
 struct Consts;
 
 impl Consts {
+    const BEAT_MARKER_PEAK: i16 = 22_000;
+    const BEAT_TONE_PEAK: i16 = 10_000;
+    const BEATS_PER_BAR: usize = 4;
     const CHANNELS: u16 = 2;
+    const DOWNBEAT_MARKER_PEAK: i16 = 28_000;
+    const DOWNBEAT_TONE_PEAK: i16 = 14_000;
     const MARKER_FRAMES: usize = 2_205;
     const MARKER_PEAK: i16 = 2_000;
     const MARKER_STARTS: [usize; 2] = [17_640, 35_280];
+    const MILLIS_PER_SECOND: usize = 1_000;
+    const PULSE_DURATION_MS: usize = 40;
     const SAMPLE_RATE: u32 = 44_100;
+    const SECONDS_PER_MINUTE: f64 = 60.0;
     const SOURCE_FRAMES: usize = 264_600;
     const TONE_HZ: f64 = 440.0;
     const TONE_PEAK: i16 = 16_000;
+}
+
+#[derive(Clone, Copy)]
+enum RhythmControl {
+    Aligned,
+    BarPhaseBeats(usize),
+    MissingBeat(usize),
 }
 
 /// Plain 440 Hz tone.
@@ -55,11 +70,37 @@ fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> 
 
 /// Four-beat pulse track with an exact frame-addressable beat marker.
 #[kithara::asset(ext = "wav", content_type = "audio/wav")]
-#[case::deck_a_120bpm_48k(48_000, 2, 576_000, 120.0, 220.0, 0)]
-#[case::deck_b_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0, 0)]
-#[case::deck_c_120bpm_48k(48_000, 2, 576_000, 120.0, 1_760.0, 0)]
-#[case::deck_d_120bpm_48k(48_000, 2, 576_000, 120.0, 3_520.0, 0)]
-#[case::deck_b_one_frame_late_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0, 1)]
+#[case::deck_a_120bpm_48k(48_000, 2, 576_000, 120.0, 220.0, 0, RhythmControl::Aligned)]
+#[case::deck_b_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0, 0, RhythmControl::Aligned)]
+#[case::deck_c_120bpm_48k(48_000, 2, 576_000, 120.0, 1_760.0, 0, RhythmControl::Aligned)]
+#[case::deck_d_120bpm_48k(48_000, 2, 576_000, 120.0, 3_520.0, 0, RhythmControl::Aligned)]
+#[case::deck_b_one_frame_late_120bpm_48k(
+    48_000,
+    2,
+    576_000,
+    120.0,
+    880.0,
+    1,
+    RhythmControl::Aligned
+)]
+#[case::deck_b_one_beat_bar_late_120bpm_48k(
+    48_000,
+    2,
+    576_000,
+    120.0,
+    880.0,
+    0,
+    RhythmControl::BarPhaseBeats(1)
+)]
+#[case::deck_b_missing_beat_120bpm_48k(
+    48_000,
+    2,
+    576_000,
+    120.0,
+    880.0,
+    0,
+    RhythmControl::MissingBeat(5)
+)]
 fn rhythm_wav(
     sample_rate: u32,
     channels: u16,
@@ -67,12 +108,20 @@ fn rhythm_wav(
     bpm: f64,
     carrier_hz: f64,
     phase_frame: usize,
+    control: RhythmControl,
 ) -> Vec<u8> {
-    let beat_frames: usize = cast((f64::from(sample_rate) * 60.0 / bpm).round())
-        .expect("invariant: a fixture beat period fits usize");
+    let beat_frames: usize =
+        cast((f64::from(sample_rate) * Consts::SECONDS_PER_MINUTE / bpm).round())
+            .expect("invariant: a fixture beat period fits usize");
     let first_beat = beat_frames + phase_frame;
-    let pulse_frames =
-        usize::try_from(sample_rate).expect("invariant: a sample rate fits usize") / 25;
+    let pulse_frames = usize::try_from(sample_rate).expect("invariant: a sample rate fits usize")
+        * Consts::PULSE_DURATION_MS
+        / Consts::MILLIS_PER_SECOND;
+    let (bar_phase, missing_beat) = match control {
+        RhythmControl::Aligned => (0, None),
+        RhythmControl::BarPhaseBeats(phase) => (phase, None),
+        RhythmControl::MissingBeat(missing) => (0, Some(missing)),
+    };
 
     wav_from_fn(sample_rate, channels, total_frames, |frame| {
         let Some(since_first) = frame.checked_sub(first_beat) else {
@@ -80,11 +129,15 @@ fn rhythm_wav(
         };
         let beat = since_first / beat_frames;
         let within_beat = since_first % beat_frames;
+        if missing_beat == Some(beat) {
+            return 0;
+        }
+        let downbeat = beat % Consts::BEATS_PER_BAR == bar_phase;
         if within_beat == 0 {
-            return if beat.is_multiple_of(4) {
-                28_000
+            return if downbeat {
+                Consts::DOWNBEAT_MARKER_PEAK
             } else {
-                22_000
+                Consts::BEAT_MARKER_PEAK
             };
         }
         if within_beat >= pulse_frames {
@@ -93,10 +146,10 @@ fn rhythm_wav(
 
         Wave::Sine {
             hz: carrier_hz,
-            peak: if beat.is_multiple_of(4) {
-                14_000
+            peak: if downbeat {
+                Consts::DOWNBEAT_TONE_PEAK
             } else {
-                10_000
+                Consts::BEAT_TONE_PEAK
             },
         }
         .sample(within_beat, sample_rate)
