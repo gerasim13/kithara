@@ -227,8 +227,9 @@ Recreation is two-phase and never builds a decoder on the produce core.
 `RebuildPort::prepare` `probe_seek`s to the recreate offset and stores a pending
 job — only one may be pending at a time. `finish_deferred` → `RebuildPort::submit`
 spawns it (`spawn_blocking_on`); the job builds the decoder, optionally seeks it
-to its landing time, pushes a `DecoderBuildComplete` onto the replacement or
-incoming completion queue (capacity 4 each), then wakes the worker. Shell-side
+to its landing time, primes an incoming generation up to the existing bounded
+step limit, pushes a `DecoderBuildComplete` onto the replacement or incoming
+completion queue (capacity 4 each), then wakes the worker. Shell-side
 `prepare_deferred` drains the completion queues, retires stale completions, and caches the
 replacement matching the current `BuildId`; `RebuildingDecoder` only takes that
 cached replacement. A matching replacement first aborts any exact incoming
@@ -400,9 +401,10 @@ Ramp counters are `u16`, so the per-frame gain is an exact `f32::from`.
 readiness gate. The construction read goes through the **blocking** off-RT
 `Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,
 shared only with that reader's `SharedStream` clone. The initial builder and
-`RebuildPort` arm their reader-local gate around each off-RT factory call and
-disarm it after a normal return, join error, or caught panic. A rebuild therefore
-cannot switch an active decoder reader into blocking mode. Steady-state reads
+`RebuildPort` arm their reader-local gate around each off-RT factory call;
+incoming rebuilds keep it armed for their bounded initial PCM prime. They disarm
+it after a normal return, join error, or caught panic. A rebuild therefore cannot
+switch an active decoder reader into blocking mode. Steady-state reads
 use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
 math only, no `prime_seek_range` spin on the forbid path). The gate selects the
 read mode and nothing else: `SharedStream`'s `Seek` is the blocking adapter in

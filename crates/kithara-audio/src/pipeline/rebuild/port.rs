@@ -4,7 +4,9 @@ use std::{
 };
 
 use crossbeam_queue::ArrayQueue;
-use kithara_decode::{DecodeError, DecoderSeekOutcome, DropChunks, GaplessMode};
+use kithara_decode::{
+    DecodeError, DecoderChunkOutcome, DecoderSeekOutcome, DropChunks, GaplessMode,
+};
 use kithara_platform::{
     sync::Arc,
     time::Duration,
@@ -17,7 +19,9 @@ use kithara_stream::{
 use tracing::warn;
 
 use crate::pipeline::{
-    decode::{core::DecoderFactory, generation::DecoderGeneration},
+    decode::{
+        core::DecoderFactory, generation::DecoderGeneration, transition::INCOMING_PRIME_STEPS,
+    },
     rebuild::{
         policy::classify,
         state::{
@@ -25,7 +29,7 @@ use crate::pipeline::{
             RecreateNext, RecreateOutcome, RecreateState,
         },
     },
-    seek::{ResumeState, SeekContext},
+    seek::{ResumeState, SeekContext, skip::apply as apply_skip},
     stream::shared::SharedStream,
 };
 
@@ -294,6 +298,9 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         if landing.is_some_and(|landing| !landing.is_zero()) {
             generation.notify_seek(&DropChunks);
         }
+        if matches!(purpose, DecoderBuildPurpose::Incoming(_)) {
+            prime_incoming(&mut generation, seek_epoch)?;
+        }
         Ok(generation)
     }));
     if let Some(gate) = &construction_gate {
@@ -330,6 +337,28 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         }
     }
     deps.wake.wake();
+}
+
+fn prime_incoming(generation: &mut DecoderGeneration, seek_epoch: u64) -> Result<(), DecodeError> {
+    for _ in 0..INCOMING_PRIME_STEPS {
+        match generation.next_chunk()? {
+            DecoderChunkOutcome::Chunk(chunk) => {
+                let Some(chunk) = apply_skip(chunk, seek_epoch, generation.pending_head_skip_mut())
+                else {
+                    continue;
+                };
+                if !chunk.samples.is_empty() {
+                    generation.stage(chunk);
+                }
+            }
+            DecoderChunkOutcome::Pending(_) => break,
+            DecoderChunkOutcome::Eof => {
+                generation.finish_staging();
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {

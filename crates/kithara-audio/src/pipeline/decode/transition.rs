@@ -16,11 +16,12 @@ use crate::pipeline::{
     seek::skip::{apply as apply_skip, apply_frames},
 };
 
-struct Consts;
-
-impl Consts {
-    const PRIME_STEPS_PER_PASS: usize = 8;
-}
+/// Maximum decoder pulls attempted by one incoming-prime call.
+///
+/// The same bound applies to the off-core initial prime and each remaining
+/// shell-side pass, keeping every call finite without making output-ring depth
+/// responsible for codec startup latency.
+pub(crate) const INCOMING_PRIME_STEPS: usize = 8;
 
 pub(crate) enum IncomingDecode {
     Preparing {
@@ -376,7 +377,7 @@ impl super::core::ActiveDecode {
             PromotionReadiness::NeedIncoming => {}
         }
         let mut outcome = IncomingPrime::Pending;
-        for _ in 0..Consts::PRIME_STEPS_PER_PASS {
+        for _ in 0..INCOMING_PRIME_STEPS {
             outcome = match generation.next_chunk() {
                 Ok(DecoderChunkOutcome::Chunk(chunk)) => {
                     let epoch = generation.installed_at_seek_epoch();
