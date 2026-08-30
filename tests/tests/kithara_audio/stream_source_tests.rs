@@ -134,7 +134,12 @@ async fn basic_decode_to_eof() {
     );
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(15)), hang_timeout_secs(5))]
+#[kithara::test(
+    tokio,
+    flash(false),
+    timeout(Duration::from_secs(15)),
+    hang_timeout_secs(5)
+)]
 #[case(StretchKind::Signalsmith)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
