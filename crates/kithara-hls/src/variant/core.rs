@@ -180,7 +180,7 @@ pub(super) struct VariantSegments {
     held: HeldReaders,
     /// Store opens the read path performed.
     #[cfg(test)]
-    pub(super) opens: std::sync::atomic::AtomicUsize,
+    pub(super) opens: AtomicUsize,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
     /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
     /// is keyed on the playlist `#EXT-X-MAP` URL, never on the known byte size
@@ -196,11 +196,11 @@ impl VariantSegments {
     fn new(scope: AssetScope, init: Option<Segment>, entries: Vec<Segment>) -> Self {
         Self {
             scope,
+            init,
+            entries,
             held: HeldReaders::default(),
             #[cfg(test)]
             opens: AtomicUsize::new(0),
-            init,
-            entries,
         }
     }
 
@@ -222,16 +222,6 @@ impl VariantSegments {
             .read_at(range.start, dst)
             .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
         Ok(Some(n))
-    }
-
-    /// Drop the held resource for `key`, so the next read opens it again.
-    pub(super) fn release(&self, key: &ResourceKey) {
-        for slot in [&self.held.init, &self.held.media] {
-            let mut held = slot.lock();
-            if held.as_ref().is_some_and(|h| h.key == *key) {
-                *held = None;
-            }
-        }
     }
 
     /// The slot's open resource, opened and held on first use.
@@ -258,6 +248,16 @@ impl VariantSegments {
         drop(held);
         Ok(Some(reader))
     }
+
+    /// Drop the held resource for `key`, so the next read opens it again.
+    pub(super) fn release(&self, key: &ResourceKey) {
+        for slot in [&self.held.init, &self.held.media] {
+            let mut held = slot.lock();
+            if held.as_ref().is_some_and(|h| h.key == *key) {
+                *held = None;
+            }
+        }
+    }
 }
 
 /// One slot for the init prefix and one for the media segment, which is what a
@@ -270,8 +270,8 @@ struct HeldReaders {
 }
 
 struct Held {
-    key: ResourceKey,
     reader: AssetReader,
+    key: ResourceKey,
 }
 
 fn serves(reader: &AssetReader) -> bool {

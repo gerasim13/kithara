@@ -158,26 +158,6 @@ impl AvailabilityIndex {
         }
     }
 
-    /// Keep only the entries `keep` accepts, by asset root and relative path.
-    pub(crate) fn retain<F: Fn(&str, &str) -> bool>(&self, keep: F) {
-        let mut dropped = false;
-        self.edit_tree(|tree| {
-            tree.retain(|root, entries| {
-                let kept: HashMap<String, Entry> = entries
-                    .iter()
-                    .filter(|(path, _)| keep(root, path))
-                    .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
-                    .collect();
-                dropped |= kept.len() != entries.len();
-                *entries = Arc::new(kept);
-                !entries.is_empty()
-            });
-        });
-        if dropped {
-            self.mark_dirty();
-        }
-    }
-
     /// Called from the decode produce path (`phase_at` cascade): reads the
     /// snapshots in place and parks them instead of dropping, so a read
     /// racing a writer never frees a replaced generation on the audio thread.
@@ -347,6 +327,26 @@ impl AvailabilityIndex {
                 rel_path,
             } => (asset_root, rel_path),
             ResourceKeyKind::Absolute(path) => (ABSOLUTE_ROOT, path.to_str().unwrap_or("")),
+        }
+    }
+
+    /// Keep only the entries `keep` accepts, by asset root and relative path.
+    pub(crate) fn retain<F: Fn(&str, &str) -> bool>(&self, keep: F) {
+        let mut dropped = false;
+        self.edit_tree(|tree| {
+            tree.retain(|root, entries| {
+                let kept: HashMap<String, Entry> = entries
+                    .iter()
+                    .filter(|(path, _)| keep(root, path))
+                    .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
+                    .collect();
+                dropped |= kept.len() != entries.len();
+                *entries = Arc::new(kept);
+                !entries.is_empty()
+            });
+        });
+        if dropped {
+            self.mark_dirty();
         }
     }
 }
