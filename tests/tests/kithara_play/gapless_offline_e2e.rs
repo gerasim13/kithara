@@ -1350,6 +1350,10 @@ fn gapless_control_peak(left: &[f32], stitch_frame: usize) -> (f32, usize) {
     (peak, count)
 }
 
+#[cfg(all(
+    feature = "apple-fused-src",
+    any(target_os = "macos", target_os = "ios")
+))]
 fn floor_scaled_frames(frames: u64, output_rate: u32, input_rate: u32) -> u64 {
     let numerator = u128::from(frames).saturating_mul(u128::from(output_rate));
     let scaled = numerator / u128::from(input_rate.max(1));
