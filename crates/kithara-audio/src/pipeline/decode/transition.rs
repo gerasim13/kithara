@@ -473,7 +473,12 @@ fn promotion_readiness(
     if !blender.is_steady() {
         return PromotionReadiness::NeedIncoming;
     }
-    let Some((incoming_first, incoming_end, incoming_spec)) = generation.staged_span() else {
+    let staged = if outgoing_frontier == OutgoingFrontier::Unavailable {
+        generation.staged_head_span()
+    } else {
+        generation.staged_span()
+    };
+    let Some((incoming_first, incoming_end, incoming_spec)) = staged else {
         return PromotionReadiness::NeedIncoming;
     };
     let incoming_rate = incoming_spec.sample_rate.get();
