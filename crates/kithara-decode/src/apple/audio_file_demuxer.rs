@@ -704,12 +704,10 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
-    fn size_less_mp3_with_id3v1_tail_reaches_eof() {
-        let mut bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
-        let mut id3v1 = [0_u8; 128];
-        id3v1[..3].copy_from_slice(b"TAG");
-        bytes.extend_from_slice(&id3v1);
+    /// Demuxes `bytes` to EOF in size-less streaming mode and returns how many
+    /// packets came out, failing if `AudioFileServices` repeats a short tail
+    /// read.
+    fn packets_to_eof(bytes: Vec<u8>) -> u64 {
         let byte_len = u64::try_from(bytes.len()).expect("fixture length fits u64");
         let tripped = Arc::new(AtomicBool::new(false));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
@@ -731,7 +729,12 @@ mod tests {
             match dx.next_frame() {
                 Ok(DemuxOutcome::Frame(_)) => {
                     packets += 1;
-                    assert!(packets <= 7_163, "demuxer produced too many packets");
+                    // A packet costs at least one byte, so this cannot be
+                    // reached by a run that is making progress.
+                    assert!(
+                        packets <= byte_len,
+                        "demuxer produced more packets than bytes"
+                    );
                 }
                 Ok(DemuxOutcome::Eof) => break,
                 Ok(DemuxOutcome::Pending(reason)) => {
@@ -745,7 +748,30 @@ mod tests {
             !tripped.load(Ordering::Acquire),
             "AudioFileServices repeated the same short tail read"
         );
-        assert_eq!(packets, 7_163, "the final MPEG packet must not be lost");
+        packets
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn size_less_mp3_with_id3v1_tail_reaches_eof() {
+        let plain = signal_mp3_track_sine440_187s().bytes().to_vec();
+        let mut tagged = plain.clone();
+        let mut id3v1 = [0_u8; 128];
+        id3v1[..3].copy_from_slice(b"TAG");
+        tagged.extend_from_slice(&id3v1);
+
+        let plain_packets = packets_to_eof(plain);
+        // The fixture is a 187 s 44.1 kHz clip and MPEG Layer III carries 1152
+        // frames per packet, so a run that reached EOF cannot come back with
+        // less than that budget.
+        assert!(
+            plain_packets >= 187 * 44_100 / 1_152,
+            "a complete pass must cover the fixture's own frame budget, got {plain_packets}"
+        );
+        assert_eq!(
+            packets_to_eof(tagged),
+            plain_packets,
+            "the ID3v1 tail must not cost the final MPEG packet"
+        );
     }
 
     /// Seeks `dx` to three seconds and returns the reported `landed_byte`.
