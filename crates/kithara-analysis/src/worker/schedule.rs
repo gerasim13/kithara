@@ -19,8 +19,51 @@ impl Schedule {
         extent: Option<u64>,
         window: Option<u64>,
     ) -> Option<u64> {
+        let extent = extent?;
+        let Some(window) = window.filter(|window| *window > 0) else {
+            return self.gap_target(coverage, extent, None);
+        };
+        let identities = extent.div_ceil(window);
+        let mut regions = 2;
+
+        // Visit the centres of 2, 4, 8, ... regions before linear leftovers.
+        while regions < identities {
+            for region in 0..regions {
+                let identity = region_midpoint(identities, regions, region);
+                if let Some(at) = self.untouched(coverage, extent, window, identity) {
+                    return Some(at);
+                }
+            }
+            regions = regions.saturating_mul(2);
+        }
+
+        (0..identities)
+            .find_map(|identity| self.untouched(coverage, extent, window, identity))
+            .or_else(|| self.gap_target(coverage, extent, Some(window)))
+    }
+
+    pub(crate) fn barren(&mut self, at: u64) {
+        self.barren.insert(at);
+    }
+
+    fn untouched(
+        &self,
+        coverage: &Coverage,
+        extent: u64,
+        window: u64,
+        identity: u64,
+    ) -> Option<u64> {
+        let at = identity * window;
+        let frames = window.min(extent.saturating_sub(at));
+        (!self.barren.contains(&at)
+            && frames > 0
+            && !overlaps(coverage, FrameRange::new(at, frames)))
+        .then_some(at)
+    }
+
+    fn gap_target(&self, coverage: &Coverage, extent: u64, window: Option<u64>) -> Option<u64> {
         let mut widest: Option<FrameRange> = None;
-        for gap in coverage.gaps(extent?) {
+        for gap in coverage.gaps(extent) {
             if self.barren.contains(&aim(gap, window)) {
                 continue;
             }
@@ -29,10 +72,6 @@ impl Schedule {
             }
         }
         widest.map(|gap| aim(gap, window))
-    }
-
-    pub(crate) fn barren(&mut self, at: u64) {
-        self.barren.insert(at);
     }
 }
 
@@ -43,6 +82,13 @@ pub(crate) struct Extent {
 }
 
 impl Extent {
+    pub(crate) const fn restore(frames: u64) -> Self {
+        Self {
+            reported: Some(frames),
+            reachable: None,
+        }
+    }
+
     pub(crate) fn frames(&self) -> Option<u64> {
         let reported = self.reported?;
         Some(self.reachable.map_or(reported, |limit| reported.min(limit)))
@@ -57,11 +103,21 @@ impl Extent {
     }
 }
 
-// A run reaches a window past where it starts, so what is placed is that
-// window and not a point. It sits in the middle of a gap wider than itself,
-// which is what spreads early coverage over the track, and at the gap's own
-// start once one run can close it. Aiming at the middle either way would
-// leave the front of every gap behind and halve it again next time.
+fn region_midpoint(identities: u64, regions: u64, region: u64) -> u64 {
+    let width = identities / regions;
+    let wider = identities % regions;
+    let start = region * width + region.min(wider);
+    let count = width + u64::from(region < wider);
+    start + count / 2
+}
+
+fn overlaps(coverage: &Coverage, target: FrameRange) -> bool {
+    coverage
+        .runs()
+        .iter()
+        .any(|run| run.start() < target.end() && target.start() < run.end())
+}
+
 fn aim(gap: FrameRange, window: Option<u64>) -> u64 {
     let Some(inset) = window
         .filter(|window| gap.frames() > *window)
@@ -72,7 +128,7 @@ fn aim(gap: FrameRange, window: Option<u64>) -> u64 {
     gap.start().saturating_add(inset)
 }
 
-fn extent_frames(duration: Option<Duration>, rate: NonZeroU32) -> Option<u64> {
+pub(crate) fn extent_frames(duration: Option<Duration>, rate: NonZeroU32) -> Option<u64> {
     let frames = AudioSpec::new(1, rate).frames_for(duration?).ok()?.get();
     u64::try_from(frames).ok().filter(|frames| *frames > 0)
 }
@@ -103,7 +159,30 @@ mod tests {
     }
 
     #[kithara::test]
-    fn an_untouched_track_takes_the_window_from_its_middle() {
+    fn fixed_chunks_spread_by_progressive_subdivision_before_the_remainder() {
+        const CHUNKS: u64 = 16;
+        const WINDOW: u64 = 16;
+        const EXTENT: u64 = CHUNKS * WINDOW;
+
+        let schedule = Schedule::default();
+        let mut covered = Coverage::default();
+        let mut identities = Vec::new();
+        while let Some(at) = schedule.next(&covered, Some(EXTENT), Some(WINDOW)) {
+            identities.push(at / WINDOW);
+            covered.insert(FrameRange::new(at, WINDOW));
+        }
+
+        assert_eq!(&identities[..2], &[4, 12]);
+        assert_eq!(&identities[2..6], &[2, 6, 10, 14]);
+        assert_eq!(&identities[6..14], &[1, 3, 5, 7, 9, 11, 13, 15]);
+
+        let mut sorted = identities.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..CHUNKS).collect::<Vec<_>>());
+    }
+
+    #[kithara::test]
+    fn an_untouched_track_starts_with_the_middle_of_its_first_half() {
         let schedule = Schedule::default();
         assert_eq!(
             schedule.next(
@@ -111,8 +190,8 @@ mod tests {
                 Some(Consts::EXTENT),
                 Some(Consts::WINDOW)
             ),
-            Some(400),
-            "the run spans [400, 600), which is the middle of the track"
+            Some(200),
+            "the first run is chunk one, the middle of the first half"
         );
     }
 
@@ -142,7 +221,7 @@ mod tests {
         );
         assert_eq!(
             schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
-            Some(450)
+            Some(400)
         );
     }
 
@@ -209,15 +288,22 @@ mod tests {
         let covered = coverage(&[(0, 100), (200, 200), (700, 300)]);
         assert_eq!(
             schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
-            Some(450)
+            Some(400)
         );
 
-        // The seek to 450 snapped back into covered audio and added nothing.
+        // The seek to 400 snapped back into covered audio and added nothing.
+        schedule.barren(400);
+        assert_eq!(
+            schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
+            Some(450),
+            "recovery may try another position, but never repeats the barren one"
+        );
+
         schedule.barren(450);
         assert_eq!(
             schedule.next(&covered, Some(Consts::EXTENT), Some(Consts::WINDOW)),
             Some(100),
-            "the next choice comes from what is still uncovered"
+            "the next choice comes from the other uncovered range"
         );
 
         schedule.barren(100);

@@ -4518,6 +4518,7 @@ name = "kithara-analysis"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "bytes",
  "delegate",
  "derive_more",
  "fieldwork",
@@ -4531,6 +4532,7 @@ dependencies = [
  "kithara-signal",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "realfft",
@@ -4562,6 +4564,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "obfstr",
@@ -5170,6 +5173,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-warp",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "portable-atomic",
@@ -5410,6 +5414,21 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "realfft",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "kithara-worker"
+version = "0.0.1-alpha4"
+dependencies = [
+ "criterion",
+ "delegate",
+ "fieldwork",
+ "kithara-platform",
+ "kithara-test-macros",
+ "kithara-test-utils",
+ "rayon",
  "thiserror 2.0.18",
  "tracing",
 ]

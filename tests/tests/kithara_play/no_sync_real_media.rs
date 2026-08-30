@@ -535,8 +535,10 @@ async fn reset_for_capture(
         deck.player.play();
     }
     let mut completed = false;
+    let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
         let block = render_paced(session, decks, case.host_rate).await;
+        seek_blocks += 1;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
                 "{} {label}: seek render produced {} samples",
@@ -585,6 +587,32 @@ async fn reset_for_capture(
                 ))
                 .collect::<Vec<_>>(),
         ));
+        return false;
+    }
+
+    let rendered_secs = f64::from(seek_blocks) * BLOCK_FRAMES as f64 / f64::from(case.host_rate);
+    let mut positions_valid = true;
+    for (deck_index, deck) in decks.iter().enumerate() {
+        let Some(served) = deck.player.position_seconds() else {
+            positions_valid = false;
+            failures.push(format!(
+                "{} {label} deck {deck_index} ({}): seek completed without a playback position",
+                case.label, deck.observation.label,
+            ));
+            continue;
+        };
+        let advance = served - deck.capture_target_secs;
+        if advance < -SEEK_POSITION_TOLERANCE_SECS
+            || advance > rendered_secs + SEEK_POSITION_TOLERANCE_SECS
+        {
+            positions_valid = false;
+            failures.push(format!(
+                "{} {label} deck {deck_index} ({}): seek position {served:.9}s exceeded the {rendered_secs:.9}s rendered budget from {:.9}s",
+                case.label, deck.observation.label, deck.capture_target_secs,
+            ));
+        }
+    }
+    if !positions_valid {
         return false;
     }
 

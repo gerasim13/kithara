@@ -15,15 +15,13 @@ use kithara_stream::{
     PlayheadRead, PlayheadState, PlayheadWrite, SeekControl, SeekObserve, SeekState,
 };
 use kithara_test_utils::kithara;
+use kithara_worker::{Task, TickResult};
 use unimock::{MockFn, Unimock, matching};
 
 use super::*;
 use crate::{
     effects::EffectDrain,
-    worker::{
-        EngineLoad, WarpSource,
-        scheduler::{AtomicServiceClass, Node, ServiceClass, TickResult},
-    },
+    worker::{EngineLoad, WarpSource},
 };
 
 fn empty_chunk() -> AudioChunk {
@@ -46,7 +44,6 @@ fn test_node<S>(
         preload_gate,
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
-        service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
         preload_chunks: 1,
         engine_load: None,
         runtime: DecoderRuntime::default(),
@@ -209,7 +206,6 @@ fn decoder_node_records_engine_load_on_produced() {
         preload_gate: Arc::new(PreloadGate::default()),
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
-        service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
         preload_chunks: 1,
         engine_load: Some(Arc::clone(&meter)),
         runtime: DecoderRuntime::default(),
@@ -245,7 +241,6 @@ fn worker_telemetry_throttles_immediate_repeats() {
         preload_gate: gate,
         playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
         emit: Arc::clone(&emit),
-        service_class: Arc::new(AtomicServiceClass::new(ServiceClass::default())),
         preload_chunks: 1,
         engine_load: Some(meter),
         runtime: DecoderRuntime::default(),

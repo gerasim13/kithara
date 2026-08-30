@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisWorker, AnalyzerBuilder},
+    analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     bufpool::Region,
     events::TrackStatus,
     net::{HttpClient, NetOptions},
@@ -86,9 +86,13 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let rate = NonZeroU32::new(queue.sample_rate()).expect("the engine runs at some rate");
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
-        &cancel,
-        AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
-    );
+        AnalysisWorkerConfig::for_builder(
+            AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
+        )
+        .cancel(cancel)
+        .build(),
+    )
+    .expect("analysis worker task is admitted");
     let (analysis, producer) = worker.analyze(
         stalled_reader(AudioSpec::new(2, rate)),
         "played-track".into(),
@@ -101,7 +105,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         analysis
             .borrow()
             .as_ref()
-            .map_or(0, |snapshot| snapshot.coverage().frames())
+            .map_or(0, |progress| progress.analysis().coverage().frames())
     };
     wait_until(Duration::from_secs(60), "analysis coverage", || {
         covered() > 0

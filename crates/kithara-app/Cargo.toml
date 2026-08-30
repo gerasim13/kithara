@@ -38,6 +38,8 @@ analysis-waveform = ["kithara/analysis-waveform"]
 # modules without pulling in iced. Used by integration tests
 # (`tests/tests/kithara_queue/real_playlist.rs`).
 lib-only = []
+# Enable app and facade USDT probes together.
+probe = ["kithara/probe"]
 # Production Apple decode shape: embedded AudioConverter SRC inside the Apple
 # codec. Opt-in so the default desktop build keeps the Rubato adapter path.
 apple-fused-src = ["kithara/apple-fused-src"]
@@ -55,6 +57,7 @@ kithara-platform = { workspace = true }
 kithara-queue = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 kithara-ui = { workspace = true, features = ["iced"], optional = true }
+kithara-worker = { workspace = true }
 
 delegate = { workspace = true }
 

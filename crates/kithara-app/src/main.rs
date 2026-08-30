@@ -1,6 +1,8 @@
 #[cfg(not(feature = "gui"))]
 compile_error!("`kithara` binary requires the `gui` feature");
 
+use std::num::NonZeroUsize;
+
 use clap::Parser;
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
@@ -17,7 +19,8 @@ use kithara_app::{
     gui::{self, GuiFrontend},
     tracing_init::init_tracing,
 };
-use kithara_platform::CancelToken;
+use kithara_platform::{CancelToken, thread, tokio};
+use kithara_worker::{RayonConfig, Worker, WorkerConfig};
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -68,6 +71,8 @@ fn main() -> AppResult {
 
     let args = Args::parse();
     init_tracing(&["info"])?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let _runtime_guard = runtime.enter();
 
     // App master root held for the whole process: it goes into `AppConfig` and
     // every subsystem derives from `shutdown.child()`, so a frontend
@@ -76,9 +81,18 @@ fn main() -> AppResult {
     let region = Region::default();
     let byte_pool = region.byte_pool();
     let sample_pool = region.sample_pool();
+    let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+    let base_worker = Worker::new(
+        WorkerConfig::new()
+            .with_cancel(shutdown.child())
+            .with_runtime(runtime.handle().clone())
+            .with_max_compute_tasks(compute_threads)
+            .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute")),
+    );
     let worker = PlayWorker::new(
         PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
             .cancel(shutdown.child())
+            .worker(base_worker.clone())
             .build(),
     );
     let net = NetOptions::builder()
@@ -101,6 +115,7 @@ fn main() -> AppResult {
         .downloader(downloader)
         .shutdown(shutdown.clone())
         .worker(worker)
+        .base_worker(base_worker)
         .store(store)
         .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
         .should_accept_invalid_certs(args.insecure)
