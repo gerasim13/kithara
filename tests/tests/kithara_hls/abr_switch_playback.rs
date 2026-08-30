@@ -879,7 +879,11 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .build();
 
     let mut audio = worker
-        .open(AudioConfig::<Hls>::for_stream(hls_config).build())
+        .open(
+            AudioConfig::<Hls>::for_stream(hls_config)
+                .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                .build(),
+        )
         .await
         .expect("audio creation");
     let _ = audio.preload();
