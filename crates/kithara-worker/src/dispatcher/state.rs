@@ -7,6 +7,8 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_test_macros as kithara;
+#[cfg(feature = "probe")]
+use tracing as _;
 
 use crate::{Priority, Task, TaskControl, TaskId};
 
@@ -30,7 +32,7 @@ impl Capacity {
     pub(super) fn reserve(capacity: &Arc<Self>) -> Option<Reservation> {
         capacity
             .active
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < capacity.limit).then_some(current + 1)
             })
             .ok()

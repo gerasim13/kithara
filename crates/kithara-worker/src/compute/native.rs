@@ -159,7 +159,7 @@ impl Budget {
     fn try_acquire(budget: &Arc<Self>) -> Option<BudgetPermit> {
         budget
             .active
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
                 (active < budget.limit.get()).then_some(active + 1)
             })
             .ok()
