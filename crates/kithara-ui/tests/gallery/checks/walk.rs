@@ -267,6 +267,7 @@ mod retained {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("page {} must compile: {error}", page))
         .animates;

@@ -125,18 +125,22 @@ pub(crate) fn substitute_map(
         .collect()
 }
 
-/// The name one view state answers to, which is the name the document wrote
-/// under the module instance that declared it.
+/// The name one view state answers to, read the way a path is read.
 ///
-/// Two includes of one module are two instances at two prefixes, so a state
-/// named inside that module is a different state in each without the document
-/// saying so. Nodes of one instance share the prefix, which is what lets a
-/// popover and the button that closes it name the same state.
+/// A bare name is the module instance's own: two includes of one module are
+/// two instances at two prefixes, so a state named inside that module is a
+/// different state in each without the document saying so, and nodes of one
+/// instance share the prefix - which is what lets a popover and the button
+/// that closes it name the same state.
+///
+/// A name led by `/` is the screen's, named from the layout that holds every
+/// instance. That is how a nav in one module turns a `Tabs` in another: the
+/// two are not one instance, so the state they share can only be the screen's.
 pub(crate) fn scoped_state(instance: &str, id: &str) -> String {
-    if instance.is_empty() {
-        id.to_owned()
-    } else {
-        format!("{instance}/{id}")
+    match id.strip_prefix('/') {
+        Some(screen) => screen.to_owned(),
+        None if instance.is_empty() => id.to_owned(),
+        None => format!("{instance}/{id}"),
     }
 }
 
@@ -154,12 +158,19 @@ pub(crate) fn substitute_binding(
             set: *set,
         });
     }
+    if let BindingRef::Page { id, name } = binding {
+        let id = substitute(args, origin, &id.0, path)?;
+        return Ok(BindingRef::Page {
+            id: StateId(scoped_state(instance, &id)),
+            name: substitute(args, origin, name, path)?,
+        });
+    }
     let (BindingRef::Command { id, with }
     | BindingRef::Parameter { id, with }
     | BindingRef::Telemetry { id, with }
     | BindingRef::Model { id, with }) = binding
     else {
-        unreachable!("the view binding is answered above")
+        unreachable!("the view and page bindings are answered above")
     };
     let id = EndpointId(substitute(args, origin, &id.0, path)?);
     let with = substitute_map(args, origin, with, path)?;
@@ -168,7 +179,9 @@ pub(crate) fn substitute_binding(
         BindingRef::Parameter { .. } => BindingRef::Parameter { id, with },
         BindingRef::Telemetry { .. } => BindingRef::Telemetry { id, with },
         BindingRef::Model { .. } => BindingRef::Model { id, with },
-        BindingRef::View { .. } => unreachable!("the view binding is answered above"),
+        BindingRef::View { .. } | BindingRef::Page { .. } => {
+            unreachable!("the view and page bindings are answered above")
+        }
     })
 }
 
@@ -255,12 +268,24 @@ pub(crate) fn intern_binding(
             key: id,
         });
     }
+    if let BindingRef::Page { id, name } = binding {
+        let name = interner.intern(name, origin)?;
+        let id = interner.intern(&id.0, origin)?;
+        return Ok(Binding {
+            with: BTreeMap::new(),
+            kind: BindingKind::Page { name },
+            id,
+            key: id,
+        });
+    }
     let (kind, id, with) = match binding {
         BindingRef::Command { id, with } => (BindingKind::Command, id, with),
         BindingRef::Parameter { id, with } => (BindingKind::Parameter, id, with),
         BindingRef::Telemetry { id, with } => (BindingKind::Telemetry, id, with),
         BindingRef::Model { id, with } => (BindingKind::Model, id, with),
-        BindingRef::View { .. } => unreachable!("the view binding is answered above"),
+        BindingRef::View { .. } | BindingRef::Page { .. } => {
+            unreachable!("the view and page bindings are answered above")
+        }
     };
     let BindingParts { id, key, with } = intern_binding_parts(interner, &id.0, with, origin)?;
     Ok(Binding {

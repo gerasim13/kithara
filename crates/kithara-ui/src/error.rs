@@ -231,6 +231,13 @@ pub enum UiDocError {
         id: String,
         path: String,
     },
+    #[error("{origin}: {path} names page {page:?} of view state {id:?}, which has no such page")]
+    UnknownPage {
+        origin: SourceUri,
+        id: String,
+        page: String,
+        path: String,
+    },
     #[error("{origin}: unknown endpoint {category} {id:?} at {path}")]
     UnknownEndpoint {
         origin: SourceUri,

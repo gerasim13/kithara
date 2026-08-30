@@ -1364,7 +1364,7 @@ fn the_bar_carries_the_app_menu() {
         ] {
             assert_eq!(
                 ui.views().at(path),
-                Some(("bar/menu", set)),
+                Some(("bar/menu", view::ViewWrite::Flag(set))),
                 "{layout:?}: `{path}` must turn the menu's own state",
             );
         }

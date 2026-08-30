@@ -6,7 +6,7 @@ use super::ron_io;
 use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
-    ids::{DocId, InstanceId, NodeId, SourceUri},
+    ids::{DocId, InstanceId, NodeId, SourceUri, StateId},
     module::{BindingRef, MeasureAxis},
     size::SizeSpec,
 };
@@ -71,6 +71,27 @@ pub enum LayoutNode {
         frame: FrameSides,
         /// Draws the decorative ticks at the top-left and bottom-right of the
         /// module frame.
+        #[serde(default)]
+        corners: bool,
+    },
+    /// Shows the one page its state stands at, and compiles no other.
+    ///
+    /// The body alone: what turns the state is an ordinary control writing a
+    /// [`crate::doc::module::BindingRef::Page`], so a document keeps every say
+    /// over the chrome that offers the pages.
+    Tabs {
+        instance: InstanceId,
+        state: StateId,
+        /// The page a screen that has turned nothing stands at.
+        initial: String,
+        /// The document each page shows, by the name a control writes.
+        pages: BTreeMap<String, String>,
+        #[serde(default)]
+        with: BTreeMap<String, String>,
+        #[serde(default)]
+        size: Option<SizeSpec>,
+        #[serde(default)]
+        frame: FrameSides,
         #[serde(default)]
         corners: bool,
     },

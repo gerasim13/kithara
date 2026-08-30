@@ -95,22 +95,22 @@ pub(super) type BindingParts<'a> = (
 /// The endpoint one binding addresses, or nothing when it addresses no
 /// endpoint at all.
 ///
-/// A [`BindingRef::View`] names state the view keeps for itself, which no
-/// application declares and no registry can answer for, so it has no parts of
-/// this shape.
+/// A [`BindingRef::View`] and a [`BindingRef::Page`] name state the view keeps
+/// for itself, which no application declares and no registry can answer for, so
+/// they have no parts of this shape.
 pub(super) const fn binding_parts(binding: &BindingRef) -> Option<BindingParts<'_>> {
     match binding {
         BindingRef::Command { id, with } => Some((EndpointCategory::Command, id, with)),
         BindingRef::Parameter { id, with } => Some((EndpointCategory::Parameter, id, with)),
         BindingRef::Telemetry { id, with } => Some((EndpointCategory::Telemetry, id, with)),
         BindingRef::Model { id, with } => Some((EndpointCategory::Model, id, with)),
-        BindingRef::View { .. } => None,
+        BindingRef::View { .. } | BindingRef::Page { .. } => None,
     }
 }
 
-/// A view binding names no endpoint, so what is checked is the side it sits on
-/// and the shape of the state it names: a flag, read as a bool and written by a
-/// press.
+/// A view binding names no endpoint, so what is checked is the side it sits on:
+/// state reads as a bool, whether it is a flag standing on or a page the state
+/// stands at, and is written by a press.
 fn check_view(
     id: &StateId,
     side: BindingSide,
@@ -131,7 +131,7 @@ fn check_view(
     };
     match expected_kind {
         Some(kind) if kind == wanted => Ok(()),
-        Some(kind) => Err(wrong(format!("view state is a flag, not {kind}"))),
+        Some(kind) => Err(wrong(format!("view state reads as a bool, not {kind}"))),
         None => Err(wrong("control does not support this side".to_owned())),
     }
 }
@@ -144,7 +144,7 @@ pub(super) fn check_binding(
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    if let BindingRef::View { id, .. } = binding {
+    if let BindingRef::View { id, .. } | BindingRef::Page { id, .. } = binding {
         return check_view(id, side, expected_kind, path, origin);
     }
     let Some((category, id, with)) = binding_parts(binding) else {

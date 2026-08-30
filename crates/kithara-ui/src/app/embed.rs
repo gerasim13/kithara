@@ -44,7 +44,7 @@ use crate::{
         masonry::{MasonryHost, MasonryRoot, MasonryState},
     },
     source::UiConfig,
-    view::ViewState,
+    view::{Screens, ViewState},
 };
 
 /// One mounted document, driven by whoever owns the window.
@@ -69,8 +69,8 @@ pub struct Ui<'config, Application> {
     root: MasonryRoot<UiEvent>,
     scale: f64,
     size: PhysicalSize<u32>,
+    screens: Screens,
     state: MasonryState,
-    ui: CompiledUi,
     /// The state the shown screen keeps for itself. It is this host's, not the
     /// application's: nothing is asked for it and nothing declares it.
     view: ViewState,
@@ -96,10 +96,11 @@ where
         let doc = UiConfig::builder()
             .custom_kinds(config.kinds.map(CustomKinds::names).unwrap_or_default())
             .build();
-        let ui = compile_document(&app, &config, &doc)?;
         let clock = Clock::default();
         let view = ViewState::default();
+        let ui = compile_document(&app, &config, &doc, &view)?;
         let root = mount(&app, &config, &state, &ui, size, scale, clock, &view)?;
+        let screens = Screens::new(doc.screen_cache, ui);
         Ok(Self {
             app,
             clock,
@@ -109,9 +110,9 @@ where
             pointer: PhysicalPosition::new(0.0, 0.0),
             root,
             scale,
+            screens,
             size,
             state,
-            ui,
             view,
         })
     }
@@ -139,7 +140,7 @@ where
     /// Current allocation-reuse counters for this mounted document.
     #[must_use]
     pub fn draw_pool_stats(&self) -> PoolStats {
-        self.ui.draw_pool_stats()
+        self.screens.shown().draw_pool_stats()
     }
 
     /// Resolves one control's document path to the rect its layout gave it, in
@@ -269,13 +270,22 @@ where
             app,
             clock,
             root,
-            ui,
+            screens,
             config,
             view,
             ..
         } = self;
         let clock = *clock;
-        app.reads(|reads| root.refresh(frame_ctx(ui, reads, view, app.skin(), config, clock)));
+        app.reads(|reads| {
+            root.refresh(frame_ctx(
+                screens.shown(),
+                reads,
+                view,
+                app.skin(),
+                config,
+                clock,
+            ));
+        });
         if let Err(error) = self
             .root
             .handle_window_event(WindowEvent::AnimFrame(elapsed))
@@ -351,7 +361,14 @@ where
             | PointerPhase::MoveLongPress => None,
         }
     }
+}
 
+/// How the screen this host shows follows the application and the state the
+/// document keeps for itself.
+impl<Application> Ui<'_, Application>
+where
+    Application: App,
+{
     /// Hands the application what the document published, then shows the new
     /// state.
     ///
@@ -376,9 +393,9 @@ where
             // the document turns for itself is not hidden from it.
             if let UiEvent::Control { path, action } = &event
                 && matches!(action, ControlAction::Activate)
-                && let Some((state, set)) = self.ui.views().at(path)
+                && let Some((state, write)) = self.screens.shown().views().at(path)
             {
-                self.view.set(state, set);
+                self.view.apply(state, write);
             }
             if let UiEvent::Window(command) = event {
                 self.commands.push(command);
@@ -386,22 +403,62 @@ where
             self.app.update(event);
         }
         if self.app.document() == was_document && self.app.skin().id() == was_skin {
-            let Self {
-                app,
-                clock,
-                root,
-                ui,
-                config,
-                view,
-                ..
-            } = self;
-            let clock = *clock;
-            app.reads(|reads| root.refresh(frame_ctx(ui, reads, view, app.skin(), config, clock)));
+            match self.turn() {
+                // The shape on screen is the one the pages already standing
+                // compile to, so the mounted tree is read again in place.
+                Ok(false) => {
+                    let Self {
+                        app,
+                        clock,
+                        root,
+                        screens,
+                        config,
+                        view,
+                        ..
+                    } = self;
+                    let clock = *clock;
+                    app.reads(|reads| {
+                        root.refresh(frame_ctx(
+                            screens.shown(),
+                            reads,
+                            view,
+                            app.skin(),
+                            config,
+                            clock,
+                        ));
+                    });
+                }
+                Ok(true) => {}
+                Err(error) => {
+                    tracing::error!(%error, "page did not follow the state that turns it")
+                }
+            }
             return;
         }
         if let Err(error) = self.remount() {
             tracing::error!(%error, "document did not follow its application");
         }
+    }
+
+    /// Shows the page the screen's own state now stands at, and answers whether
+    /// the shape on screen changed.
+    ///
+    /// A page is a document of its own, so turning to one is a tree built
+    /// again rather than a tree read again. What was shown is kept: turning
+    /// back to it costs no compile at all.
+    fn turn(&mut self) -> Result<bool, RunError> {
+        let Self {
+            app,
+            config,
+            doc,
+            screens,
+            view,
+            ..
+        } = self;
+        if !screens.show(view, || compile_document(app, config, doc, view))? {
+            return Ok(false);
+        }
+        self.mount_shown().map(|()| true)
     }
 
     /// Compiles the application's document again and mounts what it produced,
@@ -412,22 +469,27 @@ where
     /// application moved on, or because another skin measures it differently -
     /// reaches the screen only by being built again.
     fn remount(&mut self) -> Result<(), RunError> {
-        let ui = compile_document(&self.app, &self.config, &self.doc)?;
+        let ui = compile_document(&self.app, &self.config, &self.doc, &self.view)?;
+        self.screens.reset(ui);
+        self.mount_shown()
+    }
+
+    /// Mounts the screen the cache is showing, in place of the tree standing.
+    fn mount_shown(&mut self) -> Result<(), RunError> {
         // A state belongs to the document that named it. What the screen now
         // shown does not name is gone rather than kept to answer for a state
         // this document does not have.
-        self.view.retain(ui.views().named());
+        self.view.retain(self.screens.shown().views().named());
         self.root = mount(
             &self.app,
             &self.config,
             &self.state,
-            &ui,
+            self.screens.shown(),
             self.size,
             self.scale,
             self.clock,
             &self.view,
         )?;
-        self.ui = ui;
         self.root
             .handle_window_event(WindowEvent::Resize(self.size))
             .map(|_| ())
@@ -439,6 +501,7 @@ fn compile_document<Application>(
     app: &Application,
     config: &Config<'_>,
     doc: &UiConfig,
+    view: &ViewState,
 ) -> Result<CompiledUi, RunError>
 where
     Application: App,
@@ -450,6 +513,7 @@ where
         app.skin().document(),
         config.text,
         doc,
+        view,
     )?)
 }
 

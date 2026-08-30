@@ -300,6 +300,12 @@ pub enum BindingKind {
     View {
         set: ViewSet,
     },
+    /// One page of a `Tabs` body, by the state that says which page stands. A
+    /// read answers whether the state stands at this page, a write stands it
+    /// here.
+    Page {
+        name: InternId,
+    },
 }
 
 /// Compiled endpoint reference. `id` is the bare endpoint; `key` is the

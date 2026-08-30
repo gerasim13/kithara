@@ -42,13 +42,14 @@ impl AppUi {
         // family per screen would keep two sets of retained buffers where the
         // host only ever draws one layout at a time.
         let doc = UiConfig::default();
+        let view = ViewState::default();
         Ok(Self {
-            single: compile_screen(&package, DeckLayout::Single, &doc)?,
-            dual: compile_screen(&package, DeckLayout::Dual, &doc)?,
+            single: compile_screen(&package, DeckLayout::Single, &doc, &view)?,
+            dual: compile_screen(&package, DeckLayout::Dual, &doc, &view)?,
             cache: ViewCache::default(),
             clock: Clock::default(),
             package,
-            view: ViewState::default(),
+            view,
         })
     }
 
@@ -80,8 +81,8 @@ impl AppUi {
             cache,
             ..
         } = self;
-        if let Some((state, set)) = screen(single, dual, cache.layout()).views().at(path) {
-            view.set(state, set);
+        if let Some((state, write)) = screen(single, dual, cache.layout()).views().at(path) {
+            view.apply(state, write);
         }
     }
 }
@@ -99,13 +100,19 @@ const fn screen<'a>(
 
 #[cfg(test)]
 pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
-    compile_screen(Package::load(None)?.as_ref(), layout, &UiConfig::default())
+    compile_screen(
+        Package::load(None)?.as_ref(),
+        layout,
+        &UiConfig::default(),
+        &kithara_ui::view::EMPTY,
+    )
 }
 
 fn compile_screen(
     package: &Package,
     layout: DeckLayout,
     doc: &UiConfig,
+    view: &ViewState,
 ) -> Result<CompiledUi, UiDocError> {
     let document = package.document(layout);
     let ui = compile(
@@ -115,6 +122,7 @@ fn compile_screen(
         package.skin().document(),
         package.text(),
         doc,
+        view,
     )?;
     ui.require_paths(Package::REQUIRED, &SourceUri(document.to_owned()))?;
     Ok(ui)

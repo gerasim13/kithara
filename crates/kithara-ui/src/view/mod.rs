@@ -1,6 +1,8 @@
 mod census;
+mod screens;
 mod state;
 
-pub use census::ViewWrites;
-pub(crate) use census::{Census, Side};
+pub(crate) use census::{Census, Side, Tabs};
+pub use census::{PageStanding, ViewWrite, ViewWrites};
+pub use screens::Screens;
 pub use state::{EMPTY, ViewState};

@@ -230,6 +230,7 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
         source::UiConfig,
+        view,
     };
 
     struct Nothing;
@@ -239,8 +240,6 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
             None
         }
     }
-
-    static EMPTY_VIEW: ViewState = ViewState::new();
 
     static EMPTY: LazyLock<CompiledUi> = LazyLock::new(|| {
         let mut resolver = builtin::resolver();
@@ -260,6 +259,7 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the probe document must compile: {error}"))
     });
@@ -267,7 +267,7 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
     Ctx::new(
         &EMPTY,
         reads,
-        &EMPTY_VIEW,
+        &view::EMPTY,
         builtin::skin_doc(),
         Clock::default(),
     )

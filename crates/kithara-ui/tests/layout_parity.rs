@@ -870,6 +870,7 @@ fn builtin_layouts_match_rect_fixtures() {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .expect("builtin layout must compile");
         let mut actual = String::new();
@@ -936,6 +937,7 @@ fn split_weights_reach_layout_as_f32() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("fractional split document must compile");
     let actual = dump(
@@ -1003,6 +1005,7 @@ fn a_padded_measuring_row_reads_its_bands_against_the_declared_box() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("banded document must compile");
     let laid_out = |width: f32| {
@@ -1125,6 +1128,7 @@ fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("the scene document must compile");
     let skin = fixture_skin();

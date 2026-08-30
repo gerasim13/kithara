@@ -107,6 +107,25 @@ pub(super) fn walk_layout(
                 seen,
             )
         }
+        LayoutNode::Tabs {
+            instance,
+            state,
+            initial,
+            pages,
+            ..
+        } => {
+            check_id(&instance.0, origin)?;
+            let here = path.push(format!("Tabs({instance})"));
+            if !pages.contains_key(initial) {
+                return Err(UiDocError::UnknownPage {
+                    origin: origin.clone(),
+                    id: state.0.clone(),
+                    page: initial.clone(),
+                    path: here.render(),
+                });
+            }
+            claim(&instance.0, &here, origin, seen)
+        }
     }
 }
 

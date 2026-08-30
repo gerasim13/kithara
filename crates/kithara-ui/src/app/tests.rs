@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     env,
     fs::{File, create_dir_all},
     io::BufWriter,
@@ -23,7 +24,7 @@ use crate::{
         document::{Clock, Ctx},
     },
     shaping::FontPolicy,
-    source::MemResolver,
+    source::{LoadedBytes, LoadedSource, MemResolver, SourceResolver},
     view,
 };
 
@@ -482,7 +483,7 @@ fn drag(control: &Draggable) -> Dragged {
 /// document was compiled again at all.
 struct Counted<'a> {
     inner: &'a dyn crate::source::SourceResolver,
-    loads: std::cell::Cell<usize>,
+    loads: Cell<usize>,
 }
 
 impl crate::source::SourceResolver for Counted<'_> {
@@ -747,7 +748,7 @@ fn turning_to_another_skin_compiles_the_document_again() {
     let inner = resolver();
     let resolver = Counted {
         inner: &inner,
-        loads: std::cell::Cell::new(0),
+        loads: Cell::new(0),
     };
     let blue = page_skin("fixture-blue", "#123456");
     let mut scenario = Scenario::mount(
@@ -781,7 +782,7 @@ fn moving_a_control_does_not_compile_the_document_again() {
     );
     let resolver = Counted {
         inner: &inner,
-        loads: std::cell::Cell::new(0),
+        loads: Cell::new(0),
     };
     let mut ui = Ui::new(
         Dial::new(false),
@@ -2264,6 +2265,7 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("fixture must compile: {error}"));
     let ctx = Ctx::new(
@@ -2838,5 +2840,158 @@ fn a_press_away_shuts_a_menu_that_keeps_its_own_state() {
     assert!(
         !scenario.view().flag("demo/menu"),
         "the dismissal must shut the state the popover reads"
+    );
+}
+
+/// A layout whose body is a `Tabs`: the nav that turns it and the pages it
+/// turns between are separate documents, and the state they share is the
+/// screen's rather than either instance's.
+fn tabbed() -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "one.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "tabbed",
+            root: Split(axis: Vertical, children: [
+                (weight: 1.0, node: Module(instance: "nav", source: "nav.kmodule.ron",
+                    size: (w: Fill, h: Fixed(20.0)))),
+                (weight: 1.0, node: Tabs(instance: "page", state: "shown", initial: "one",
+                    pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"},
+                    size: (w: Fill, h: Fill))),
+            ]))"#,
+    );
+    resolver.insert(
+        "nav.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "nav", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Pressable(id: "one", press: Page(id: "/shown", name: "one"),
+                    child: Spacer(id: "one-hit", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+                Pressable(id: "two", press: Page(id: "/shown", name: "two"),
+                    child: Spacer(id: "two-hit", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+            ]))"#,
+    );
+    for (source, id, width) in [
+        ("one.kmodule.ron", "page-one", 30.0_f32),
+        ("two.kmodule.ron", "page-two", 60.0_f32),
+    ] {
+        resolver.insert(
+            source,
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{id}", chrome: Plain,
+                    root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                        Spacer(id: "body", size: Some((w: Fixed({width:.1}), h: Fixed(10.0)))),
+                    ]))"#
+            ),
+        );
+    }
+    resolver
+}
+
+/// Counts what a host asks for, so a test can tell a page compiled from a page
+/// shown again out of the screens the host kept.
+struct Counting<'a> {
+    inner: &'a MemResolver,
+    loads: Cell<usize>,
+}
+
+impl<'a> Counting<'a> {
+    fn new(inner: &'a MemResolver) -> Self {
+        Self {
+            inner,
+            loads: Cell::new(0),
+        }
+    }
+
+    fn loads(&self) -> usize {
+        self.loads.get()
+    }
+}
+
+impl SourceResolver for Counting<'_> {
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
+        self.loads.set(self.loads.get() + 1);
+        self.inner.load(base, rel)
+    }
+
+    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
+        self.inner.bytes(base, rel)
+    }
+}
+
+fn tabbed_scenario<'a>(resolver: &'a Counting<'a>) -> Scenario<'a, Bare> {
+    Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&NoEndpoints)
+            .resolver(resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+}
+
+/// Turning a tab costs a document one node and no application code at all: the
+/// press names the page, the `Tabs` shows it, and nothing is asked of the
+/// application in between.
+#[kithara::test]
+fn a_press_turns_the_page_a_tabs_shows() {
+    let mem = tabbed();
+    let resolver = Counting::new(&mem);
+    let mut scenario = tabbed_scenario(&resolver);
+
+    assert_eq!(
+        scenario.rect_of("page/body").map(|rect| rect.w),
+        Some(30.0),
+        "a screen pressed nowhere must stand at the page the document calls initial"
+    );
+
+    scenario.click("nav/two-hit");
+
+    assert_eq!(
+        scenario.view().page("shown"),
+        Some("two"),
+        "the press must stand the screen's own state at the page it names"
+    );
+    assert_eq!(
+        scenario.rect_of("page/body").map(|rect| rect.w),
+        Some(60.0),
+        "the page standing must be the one on screen"
+    );
+    assert_eq!(
+        scenario.rect_of("page/one"),
+        None,
+        "the page left must be gone rather than mounted behind the one shown"
+    );
+}
+
+/// The pages a `Tabs` does not stand at are documents this screen never reads:
+/// only the one standing is compiled, and turning back to a page already
+/// visited compiles nothing at all.
+#[kithara::test]
+fn only_the_standing_page_is_compiled() {
+    let mem = tabbed();
+    let resolver = Counting::new(&mem);
+    let mut scenario = tabbed_scenario(&resolver);
+    let mark = resolver.loads();
+
+    scenario.click("nav/two-hit");
+    let turned = resolver.loads();
+    assert!(
+        turned > mark,
+        "the page turned to must be loaded when it is first shown"
+    );
+
+    scenario.click("nav/one-hit");
+    scenario.click("nav/two-hit");
+
+    assert_eq!(
+        resolver.loads(),
+        turned,
+        "a page already compiled must be shown again without being loaded again"
+    );
+    assert_eq!(
+        scenario.rect_of("page/body").map(|rect| rect.w),
+        Some(60.0),
+        "the screen kept must be the page it was compiled for"
     );
 }

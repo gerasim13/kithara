@@ -50,6 +50,7 @@ impl Fixture {
             builtin::skin_doc(),
             builtin::text_doc(),
             &self.config,
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("benchmark fixture must compile: {error}"))
     }

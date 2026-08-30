@@ -11,6 +11,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     size::{Dim, SizeSpec},
     source::{Limits, MemResolver, UiConfig},
+    view,
 };
 
 fn resolver() -> MemResolver {
@@ -63,6 +64,7 @@ fn compiles_micro_layout_end_to_end() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { instance, .. } = &ui.root else {
@@ -102,6 +104,7 @@ fn crossfader_compiles_with_scalar_read_and_write_bindings() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -162,6 +165,7 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -189,6 +193,7 @@ fn malformed_shader_reports_the_resolved_source() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
 
@@ -223,6 +228,7 @@ fn fs_main() -> @location(0) vec4<f32> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
 
@@ -263,6 +269,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -288,6 +295,7 @@ fn meter_reads_a_scalar_and_refuses_any_other_kind() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
 
@@ -330,6 +338,7 @@ fn vis_compiles_with_scalar_read_and_select_index_write() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -388,6 +397,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(matches!(
@@ -408,6 +418,7 @@ fn vis_rejects_non_scalar_read_and_write_bindings() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(matches!(
@@ -438,6 +449,7 @@ fn table_accepts_arbitrary_text_columns() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("a table must not require track-specific columns");
 }
@@ -453,6 +465,7 @@ fn a_column_list_may_arrive_as_an_include_parameter() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("a substituted column list must compile like a literal one");
 }
@@ -468,6 +481,7 @@ fn a_parameterised_column_list_can_use_non_music_ids() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("parameterized tables must accept arbitrary column identifiers");
 }
@@ -501,6 +515,7 @@ fn table_compiles_typed_columns_and_optional_state_prefix() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -554,6 +569,7 @@ fn a_table_column_label_resolves_through_the_catalog() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -591,6 +607,7 @@ fn a_table_column_label_written_as_plain_text_stays_that_text() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -627,6 +644,7 @@ fn a_table_column_naming_a_missing_key_is_a_compile_error() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect_err("a column caption naming no catalog entry must not compile");
 
@@ -665,6 +683,7 @@ fn present_table_column_state_endpoint_must_be_bool() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
 
@@ -700,6 +719,7 @@ fn layout_module_size_override_wins_over_computed_size() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let expected = SizeSpec::new(Dim::Fixed(100.0), Dim::Fixed(50.0));
@@ -740,6 +760,7 @@ fn module_shell_metadata_compiles_into_the_module_node() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module {
@@ -814,6 +835,7 @@ fn module_footer_requires_a_text_read_endpoint() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
 
@@ -843,6 +865,7 @@ fn unknown_endpoint_fails_with_module_origin_and_path() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(matches!(
@@ -868,6 +891,7 @@ fn node_limit_is_enforced() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(matches!(error, UiDocError::NodesExceeded { max: 1, .. }));
@@ -896,6 +920,7 @@ fn layout_parameter_reference_is_unresolved() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(matches!(
@@ -928,6 +953,7 @@ fn layout_doubled_dollar_passes_literal_dollar() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -961,6 +987,7 @@ fn oversized_layout_source_is_rejected() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(matches!(
@@ -997,6 +1024,7 @@ fn fifty_empty_columns_exceed_node_limit() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::builder().limits(limits).build(),
+        &view::EMPTY,
     )
     .unwrap_err();
     assert!(
@@ -1036,6 +1064,7 @@ fn knob_caption_is_document_text_and_optional() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Module { root, .. } = &ui.root else {
@@ -1110,6 +1139,7 @@ fn compile_blocks(resolver: &MemResolver, entry: &str) -> Result<CompiledUi, UiD
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 
@@ -1902,6 +1932,7 @@ fn compile_glyphs(resolver: &MemResolver) -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 
@@ -2001,6 +2032,7 @@ fn one_template_reads_a_different_endpoint_per_include() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
 
@@ -2462,6 +2494,7 @@ fn a_document_draws_from_the_pools_its_configuration_carries() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &config,
+        &view::EMPTY,
     )
     .unwrap();
 
@@ -2482,6 +2515,7 @@ fn a_document_compiled_after_the_first_joins_the_same_family() {
             builtin::skin_doc(),
             builtin::text_doc(),
             &config,
+            &view::EMPTY,
         )
         .unwrap()
     };
@@ -2531,6 +2565,7 @@ fn compile_stage(children: &str) -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 
@@ -2636,11 +2671,141 @@ fn a_placement_outside_a_stage_is_rejected() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_err();
 
     assert!(
         matches!(&error, UiDocError::PlacedOutsideStage { path, .. } if path == "root/[0]/Placed(loose)"),
         "{error:?}"
+    );
+}
+
+/// A `Tabs` and the presses that turn it, with the layout's own text under the
+/// caller's control so one fixture serves every way of getting it wrong.
+fn tabbed(tabs: &str) -> MemResolver {
+    let mut resolver = builtin::resolver();
+    resolver.insert(
+        "tabbed.klayout.ron",
+        &format!(
+            r#"(schema: "kithara.layout", version: 1, id: "tabbed",
+                root: Split(axis: Vertical, children: [
+                    (weight: 1.0, node: Module(instance: "nav", source: "nav.kmodule.ron")),
+                    (weight: 1.0, node: {tabs}),
+                ]))"#
+        ),
+    );
+    resolver.insert(
+        "nav.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "nav",
+            root: Row(children: [
+                Pressable(id: "two", press: Page(id: "/shown", name: "two"),
+                    child: Spacer(id: "two-hit", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+            ]))"#,
+    );
+    for (source, id) in [("one.kmodule.ron", "one"), ("two.kmodule.ron", "two")] {
+        resolver.insert(
+            source,
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{id}",
+                    root: Row(children: [
+                        Spacer(id: "body", size: Some((w: Fixed(30.0), h: Fixed(10.0)))),
+                    ]))"#
+            ),
+        );
+    }
+    resolver
+}
+
+const TABS: &str = r#"Tabs(instance: "page", state: "shown", initial: "one",
+    pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"})"#;
+
+fn tabbed_error(tabs: &str) -> UiDocError {
+    compile(
+        "tabbed.klayout.ron",
+        &tabbed(tabs),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap_err()
+}
+
+/// A nav in one module turns a `Tabs` in another, which the two can only do
+/// through the screen's own state: neither instance holds the other.
+#[kithara::test]
+fn a_tabs_compiles_the_page_it_stands_at() {
+    let ui = compile(
+        "tabbed.klayout.ron",
+        &tabbed(TABS),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+
+    assert_eq!(
+        ui.views().pages()["shown"].shown,
+        "one",
+        "a state standing nowhere must show the page the document calls initial"
+    );
+    assert_eq!(
+        ui.views().at("nav/two").map(|(state, _)| state),
+        Some("shown"),
+        "a press naming the screen's state must write the screen's state, not the module's"
+    );
+}
+
+/// The page a `Tabs` calls initial is the page it shows before anything is
+/// pressed, so a name that is not one of its pages is a screen that could never
+/// be drawn.
+#[kithara::test]
+fn a_tabs_refuses_an_initial_page_it_does_not_offer() {
+    let error = tabbed_error(
+        r#"Tabs(instance: "page", state: "shown", initial: "three",
+            pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"})"#,
+    );
+
+    assert!(
+        matches!(&error, UiDocError::UnknownPage { id, page, .. }
+            if id == "shown" && page == "three"),
+        "{error}"
+    );
+}
+
+/// A press naming a page no `Tabs` offers leaves the state standing where no
+/// document can show it. The name is refused where it is written rather than
+/// answered with some other page.
+#[kithara::test]
+fn a_press_refuses_a_page_no_tabs_offers() {
+    let error = tabbed_error(
+        r#"Tabs(instance: "page", state: "shown", initial: "one",
+            pages: {"one": "one.kmodule.ron"})"#,
+    );
+
+    assert!(
+        matches!(&error, UiDocError::UnknownPage { id, page, path, .. }
+            if id == "shown" && page == "two" && path == "nav/two"),
+        "{error}"
+    );
+}
+
+/// A press naming a state no `Tabs` follows turns nothing at all, which is a
+/// misspelt name rather than a screen.
+#[kithara::test]
+fn a_press_refuses_a_state_no_tabs_follows() {
+    let error = tabbed_error(
+        r#"Tabs(instance: "page", state: "elsewhere", initial: "one",
+            pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"})"#,
+    );
+
+    assert!(
+        matches!(&error, UiDocError::UnknownPage { id, page, .. }
+            if id == "shown" && page == "two"),
+        "{error}"
     );
 }

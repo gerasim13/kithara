@@ -125,6 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )?;
     let skin = Skin::resolve_with_font_policy(
         builtin::skin_doc().clone(),

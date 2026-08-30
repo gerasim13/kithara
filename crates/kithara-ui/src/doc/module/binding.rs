@@ -36,6 +36,10 @@ pub enum BindingRef {
         #[serde(default)]
         set: ViewSet,
     },
+    /// One page of a [`crate::doc::layout::LayoutNode::Tabs`], named by the
+    /// state that says which page stands. A read answers whether the state
+    /// stands at this page, a write stands it here.
+    Page { id: StateId, name: String },
 }
 
 /// What a write on a [`BindingRef::View`] does to the state it names.

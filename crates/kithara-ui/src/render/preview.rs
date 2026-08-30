@@ -190,6 +190,7 @@ mod tests {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         source::UiConfig,
+        view,
     };
 
     #[derive(Default)]
@@ -533,6 +534,7 @@ mod tests {
                 builtin::skin_doc(),
                 builtin::text_doc(),
                 &UiConfig::default(),
+                &view::EMPTY,
             )
             .unwrap_or_else(|error| panic!("{preset} must compile: {error}"));
             PreviewGeometry::new(&ui.root)

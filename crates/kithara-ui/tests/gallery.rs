@@ -195,6 +195,7 @@ mod tests {
                 builtin::skin_doc(),
                 builtin::text_doc(),
                 custom::config(),
+                &kithara_ui::view::EMPTY,
             )
             .unwrap();
             let CompiledNode::Split { children, .. } = &ui.root else {
@@ -250,6 +251,7 @@ mod tests {
                 builtin::skin_doc(),
                 builtin::text_doc(),
                 custom::config(),
+                &kithara_ui::view::EMPTY,
             )
             .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry(tab)));
         }
@@ -280,6 +282,7 @@ mod tests {
                 builtin::skin_doc(),
                 builtin::text_doc(),
                 custom::config(),
+                &kithara_ui::view::EMPTY,
             )
             .unwrap_or_else(|error| panic!("{entry} must compile: {error}"));
             each_control(&ui, &mut |_, spec| {
@@ -542,6 +545,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
         let mut claims = Vec::new();
@@ -687,6 +691,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap();
         let mut paths = Vec::new();
@@ -719,6 +724,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("skins")));
         let mut paths = Vec::new();
@@ -747,6 +753,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("assets")));
         let mut paths = Vec::new();
@@ -774,6 +781,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("assets")));
         let mut shown = Vec::new();
@@ -832,6 +840,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap();
         let mut paths = Vec::new();
@@ -867,6 +876,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap();
         let mut found = MenuTab::default();
@@ -968,6 +978,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the {tab} page must compile: {error}"))
     }
@@ -1618,6 +1629,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap();
         let mut keys = Vec::new();
@@ -1646,6 +1658,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap();
         let mut queries = Vec::new();
@@ -1665,6 +1678,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &kithara_ui::view::EMPTY,
         )
         .unwrap();
         let mut contexts = Vec::new();

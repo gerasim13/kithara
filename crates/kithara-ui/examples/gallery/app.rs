@@ -135,8 +135,8 @@ impl Gallery {
             view,
             ..
         } = self;
-        if let Some((state, set)) = shown(reads, layouts, module_layouts).views().at(path) {
-            view.set(state, set);
+        if let Some((state, write)) = shown(reads, layouts, module_layouts).views().at(path) {
+            view.apply(state, write);
         }
     }
 
@@ -296,6 +296,7 @@ fn compiled(
         skin,
         builtin::text_doc(),
         crate::custom::config(),
+        &kithara_ui::view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
 }

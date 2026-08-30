@@ -40,6 +40,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let reads = RecordingReads::default();
@@ -127,6 +128,7 @@ fn block_ui() -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 
@@ -207,6 +209,7 @@ fn menu_ui(module: &'static str) -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 

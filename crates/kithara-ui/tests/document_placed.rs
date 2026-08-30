@@ -221,6 +221,7 @@ fn document(children: &str) -> CompiledUi {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the fixture must compile: {error}"))
 }

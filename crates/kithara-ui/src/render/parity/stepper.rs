@@ -133,6 +133,7 @@ fn neutral() -> Vec<UiEvent> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the tempo fixture must compile: {error}"));
     let (width, height) = Consts::CASE;

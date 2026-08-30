@@ -251,6 +251,7 @@ fn mounted_wave(module: &str, source: &str, layout: &str, studio: bool) -> Vec<M
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("{module} must compile: {error}"));
 

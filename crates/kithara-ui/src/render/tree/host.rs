@@ -963,6 +963,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("retained host fixture must compile: {error}"))
     }
@@ -992,6 +993,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("tree surface fixture must compile: {error}"))
     }
@@ -1014,6 +1016,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery library fixture must compile: {error}"))
     }
@@ -1041,6 +1044,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery {page} fixture must compile: {error}"))
     }
@@ -1084,6 +1088,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
     }
@@ -1106,6 +1111,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
     }
@@ -1128,6 +1134,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery track-list fixture must compile: {error}"))
     }
@@ -1150,6 +1157,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery faders fixture must compile: {error}"))
     }
@@ -1172,6 +1180,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery module tabs fixture must compile: {error}"))
     }
@@ -1198,6 +1207,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery nav fixture must compile: {error}"))
     }
@@ -1229,6 +1239,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the leaf nav fixture must compile: {error}"))
     }
@@ -1271,6 +1282,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the clipped scroll fixture must compile: {error}"))
     }
@@ -1316,6 +1328,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the clipped drag fixture must compile: {error}"))
     }
@@ -1359,6 +1372,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("overview row fixture must compile: {error}"))
     }
@@ -4580,6 +4594,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("root include chain must compile: {error}"));
         let CompiledNode::Module { instance, .. } = &ui.root else {

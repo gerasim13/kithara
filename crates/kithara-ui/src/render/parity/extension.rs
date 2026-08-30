@@ -72,6 +72,7 @@ impl Extension {
             &UiConfig::builder()
                 .custom_kinds([Self::KIND.to_owned()].into_iter().collect())
                 .build(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the extension fixture must compile: {error}"))
     }

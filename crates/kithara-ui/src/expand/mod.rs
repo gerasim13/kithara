@@ -7,7 +7,7 @@ mod spec;
 mod structural;
 
 pub use binding_subst::scoped_key;
-pub(crate) use binding_subst::{intern_binding, substitute_binding, substitute_map};
+pub(crate) use binding_subst::{intern_binding, scoped_state, substitute_binding, substitute_map};
 pub(crate) use machine::Expander;
 pub use node::{
     Binding, BindingKind, BlockSpec, ControlSpec, DropSpec, ExpandedNode, MagnetSpec, MeasureSpec,
