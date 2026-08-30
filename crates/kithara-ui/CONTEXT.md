@@ -29,11 +29,11 @@ miss. A layer that holds the name and refuses it - led out of its root, or unope
 in the package that named it, and answering it from below would let a broken package quietly wear
 the base package's face.
 
-The gallery reads its own pages from `examples/gallery/assets`, laid over the built-in library, so
-editing a page and opening the gallery again shows the edit. The folder is named at build time and
+The gallery reads its own screen from `examples/gallery/assets`, laid over the built-in library, so
+editing it and opening the gallery again shows the edit. The folder is named at build time and
 is part of this checkout, so it being unreadable is a broken checkout rather than a runtime
-condition. A test walks every tab and asserts the resolver answers with the file on disk, which is
-what keeps the embedded copy from quietly becoming the one that draws.
+condition. A test asserts the resolver answers with the file on disk, which is what keeps the
+embedded copy from quietly becoming the one that draws.
 
 `CompiledUi::require_paths` names the other half of the package contract. A manifest says which file answers for which
 role; the paths a compiled screen answers on say whether an application can reach what it drew. The check is
@@ -42,10 +42,11 @@ rather than during it, because a screen missing a path is still a valid document
 control paths all count: they are what a host addresses, and an application binds to whichever of them its
 documents use.
 
-The gallery is itself a package: `examples/gallery/assets/package.kpackage.ron` names a role per
-page, and the example holds roles only, never file names. A census asserts every role the manifest
-declares is a page some tab turns to, so a document added to the folder and left unreachable is
-caught rather than going stale unseen.
+The gallery is itself a package: `examples/gallery/assets/package.kpackage.ron` names the file
+behind one screen role, and the example holds that role only, never a file name. Every page lives
+in that screen's tabs, so what the gallery offers is read back off the compiled screen rather than
+listed in Rust beside it - `sections.rs` compiles the shipped screen once and asks it for its pages,
+its module demos and the page it opens on.
 
 `examples/gallery` is the program and nothing else: the window, the state behind it, the fake
 readings the pages are drawn from, and the three harnesses that step in front of the window when
@@ -1664,6 +1665,44 @@ click recognizer publishes and captures the left press before `mouse_area` sees 
 `Pressable` stays silent and the release publishes nothing. The explicit-SVG legacy iced button
 still captures the press and publishes on release; that earlier capture likewise keeps the wrapper
 silent.
+
+## Screen State Ownership
+
+A screen keeps state no application declares, answers, or is told to change: which page a `Tabs`
+stands at, and whether an `Optional` block is folded. `ViewState` holds it, the host owns it, and
+`compile` is handed it, so the same documents and the same readings compile to a different screen
+once the reader has turned something.
+
+A state name reads like a path. A bare name belongs to the module instance that wrote it, so two
+includes of one module keep two states without the document saying so; a name led by `/` is the
+screen's own, which is how a nav item in one module turns the tabs in another. `expand::scoped_state`
+applies the rule, and `validate::path::check_state_id` checks the name under the mark rather than
+the mark itself.
+
+`LayoutNode::Tabs` names the state, the page it calls initial, and a layout node per page. A page is
+a layout rather than a document, because a page of the gallery is a split of several modules with
+their own frames and corners, and a module document cannot say either. Only the page the state
+stands at is compiled: the rest are documents this screen never read. Pages are alternatives, so
+`validate::layout` walks each against a clone of what stood before the tabs, exactly as `Adaptive`
+branches do, and two pages may name the same instance.
+
+An `InternId` is valid only inside the `CompiledUi` that made it, so a page cannot be spliced into
+another tree and what a host keeps is a whole screen. `Screens` holds the one shown and the last few
+compiled, and finds a kept screen by asking whether it stands where the view does - `fits` compares
+every page state the screen carries against the view, with no key beside the screen to fall out of
+step. Turning back to a page already visited costs nothing; the depth is `UiConfig::screen_cache`.
+
+A screen says what it offers. `ViewWrites::pages()` maps each page-turning state to `PageStanding`,
+which carries the page the document calls initial, every page the tabs offer, and the page this
+screen showed. A harness opens one page through `Ui::stand`, which refuses a page the shown screen
+does not offer before anything moves; an application is told what the document turned for itself
+through `App::turned`, and reading it is all that is for.
+
+The census refuses two things at compile time. A control naming a page no `Tabs` offers is a typo -
+the page it meant stays unreachable and the name it became unread - so `UnknownPage` names the
+control's own path. A state written and never read is the same typo on the other side, and answers
+`UnreadState`. A state only read is left alone: an application is allowed to be the only thing that
+moves one.
 
 ## Popover Ownership
 
