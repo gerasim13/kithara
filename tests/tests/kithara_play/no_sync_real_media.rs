@@ -50,8 +50,7 @@ const MIN_DECK_CONTRIBUTION_RATIO: f64 = 0.02;
 const MAX_DECK_GAIN_DELTA: f64 = 0.02;
 const MAX_MATCHED_RMS_DELTA_DB: f64 = 0.1;
 const POSITION_TOLERANCE_SECS: f64 = 0.15;
-// Deferred event delivery can advance the manual renderer by two callback blocks.
-const SEEK_POSITION_TOLERANCE_SECS: f64 = 1_025.0 / 44_100.0;
+const SEEK_POSITION_TOLERANCE_SECS: f64 = 513.0 / 44_100.0;
 const EXACT_ZERO_RUN_LIMIT_FRAMES: usize = 8;
 const MIN_BOUNDARY_JUMP: f32 = 0.05;
 const BOUNDARY_OUTLIER_RATIO: f32 = 6.0;
