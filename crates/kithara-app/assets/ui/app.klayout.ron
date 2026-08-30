@@ -1,7 +1,7 @@
 (
     schema: "kithara.layout",
     version: 1,
-    id: "app",
+    id: "deck-dual",
     resize_edges: true,
     dragged: Some(Model(id: "ui.drag.track")),
     root: Split(
@@ -9,14 +9,14 @@
         measure: Height,
         size: (w: Fill, h: Fill),
         children: [
-            (until: Some(492.0), node: Module(
+            (until: Some(493.0), node: Module(
                 instance: "micro-bar",
                 source: "modules/app-bar-micro.kmodule.ron",
                 with: { "deck": "a" },
                 size: (w: Fill, h: Fixed(42.0)),
                 frame: (top: false, right: false, bottom: false, left: false),
             )),
-            (from: 492.0, node: Module(
+            (from: 493.0, node: Module(
                 instance: "bar",
                 source: "modules/app-bar.kmodule.ron",
                 size: (w: Fill, h: Fixed(42.0)),
@@ -32,7 +32,7 @@
                     frame: (top: false, right: false, bottom: true, left: false),
                 ),
             )),
-            (from: 492.0, weight: 2.1, node: Split(
+            (from: 493.0, weight: 2.1, node: Split(
                 axis: Horizontal,
                 measure: Width,
                 size: (w: Fill, h: Fill),

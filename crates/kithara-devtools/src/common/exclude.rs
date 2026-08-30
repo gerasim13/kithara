@@ -1,7 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     ops::RangeInclusive,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use glob::Pattern;
@@ -10,8 +11,107 @@ use syn::{ImplItem, Item, Meta, spanned::Spanned};
 use crate::common::{
     parse::parse_file,
     violation::Report,
-    walker::{compile_globs, matches_any},
+    walker::{compile_globs, matches_any, walk_rs_files},
 };
+
+/// Globs for every file a `#[cfg(test)] mod name;` declaration brings in.
+///
+/// A scanner that reads one file at a time and evaluates no cfg cannot tell
+/// that such a module exists only for tests: the attribute stands in the
+/// parent, and the file itself reads as production code. The declarations are
+/// the only place the fact is written down, so the exclusion is derived from
+/// them rather than kept as a list of file names that goes stale.
+///
+/// Only a predicate that holds nowhere but a test build counts: `cfg(test)`
+/// and `cfg(all(test, ...))` do, while `cfg(any(test, feature = "mock"))` names
+/// a module a release build can still carry, and stays in scope.
+#[must_use]
+pub fn cfg_test_module_globs(workspace_root: &Path) -> Vec<String> {
+    let Ok(files) = walk_rs_files(&workspace_root.join("crates")) else {
+        return Vec::new();
+    };
+    let mut out = BTreeSet::new();
+    for file in files {
+        declared_test_modules(workspace_root, &file, &mut out);
+    }
+    out.into_iter().collect()
+}
+
+/// The directory one file resolves its `mod name;` declarations in.
+fn module_dir(file: &Path) -> Option<PathBuf> {
+    let parent = file.parent()?;
+    let stem = file.file_stem()?.to_str()?;
+    Some(match stem {
+        "lib" | "main" | "mod" => parent.to_owned(),
+        _ => parent.join(stem),
+    })
+}
+
+fn declared_test_modules(workspace_root: &Path, file: &Path, out: &mut BTreeSet<String>) {
+    let Ok(source) = fs::read_to_string(file) else {
+        return;
+    };
+    if !source.contains("mod ") {
+        return;
+    }
+    let Ok(parsed) = syn::parse_file(&source) else {
+        return;
+    };
+    let Some(dir) = module_dir(file) else {
+        return;
+    };
+    collect_declared_test_modules(&parsed.items, &dir, workspace_root, out);
+}
+
+/// Record the file and directory of every `mod name;` a test-only attribute
+/// stands on, following inline modules so a declaration nested in one is
+/// resolved against the directory it actually reads from.
+fn collect_declared_test_modules(
+    items: &[Item],
+    dir: &Path,
+    workspace_root: &Path,
+    out: &mut BTreeSet<String>,
+) {
+    for item in items {
+        let Item::Mod(module) = item else {
+            continue;
+        };
+        let owned = dir.join(module.ident.to_string());
+        if let Some((_, inner)) = &module.content {
+            collect_declared_test_modules(inner, &owned, workspace_root, out);
+            continue;
+        }
+        if !attrs_are_test_only(&module.attrs) {
+            continue;
+        }
+        let Ok(rel) = owned.strip_prefix(workspace_root) else {
+            continue;
+        };
+        let rel = rel.to_string_lossy();
+        out.insert(format!("{rel}.rs"));
+        out.insert(format!("{rel}/**"));
+    }
+}
+
+/// Whether the attributes carry a cfg that holds in no build but a test one.
+fn attrs_are_test_only(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| match &a.meta {
+        Meta::List(list) if list.path.is_ident("cfg") => {
+            syn::parse2::<Meta>(list.tokens.clone()).is_ok_and(|m| cfg_predicate_is_test_only(&m))
+        }
+        _ => false,
+    })
+}
+
+fn cfg_predicate_is_test_only(meta: &Meta) -> bool {
+    match meta {
+        Meta::Path(path) => path.is_ident("test"),
+        Meta::List(list) if list.path.is_ident("all") => list
+            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+            .is_ok_and(|nested| nested.iter().any(cfg_predicate_is_test_only)),
+        _ => false,
+    }
+}
 
 /// Drop violations whose path portion matches any glob. A no-op when empty.
 pub fn apply_path_excludes(report: &mut Report, patterns: &[String]) {
@@ -183,7 +283,7 @@ fn collect_module_ranges(
     }
 }
 
-fn item_attrs(item: &Item) -> &[syn::Attribute] {
+pub(crate) fn item_attrs(item: &Item) -> &[syn::Attribute] {
     match item {
         Item::Const(i) => &i.attrs,
         Item::Enum(i) => &i.attrs,
@@ -234,6 +334,76 @@ fn cfg_predicate_has_test(meta: &Meta) -> bool {
 mod tests {
     use super::*;
     use crate::common::violation::Violation;
+
+    fn attrs_of(source: &str) -> Vec<syn::Attribute> {
+        let file = syn::parse_file(source).expect("the fixture parses");
+        item_attrs(&file.items[0]).to_vec()
+    }
+
+    fn workspace_with(file: &str, source: &str) -> tempfile::TempDir {
+        let root = tempfile::tempdir().expect("a temporary workspace");
+        let path = root.path().join(file);
+        fs::create_dir_all(path.parent().expect("the file sits in a directory"))
+            .expect("the directory is created");
+        fs::write(&path, source).expect("the fixture is written");
+        root
+    }
+
+    #[test]
+    fn a_plain_cfg_test_module_is_test_only() {
+        assert!(attrs_are_test_only(&attrs_of("#[cfg(test)]\nmod probe;")));
+    }
+
+    #[test]
+    fn a_cfg_all_carrying_test_is_test_only() {
+        assert!(attrs_are_test_only(&attrs_of(
+            "#[cfg(all(test, feature = \"masonry\"))]\nmod probe;"
+        )));
+    }
+
+    #[test]
+    fn a_module_a_feature_can_also_turn_on_is_not_test_only() {
+        assert!(!attrs_are_test_only(&attrs_of(
+            "#[cfg(any(test, feature = \"mock\"))]\npub mod mock;"
+        )));
+    }
+
+    #[test]
+    fn a_module_file_declares_its_children_beside_its_own_name() {
+        assert_eq!(
+            module_dir(Path::new("crates/x/src/backends.rs")),
+            Some(PathBuf::from("crates/x/src/backends"))
+        );
+    }
+
+    #[test]
+    fn a_mod_file_declares_its_children_in_its_own_directory() {
+        assert_eq!(
+            module_dir(Path::new("crates/x/src/backends/mod.rs")),
+            Some(PathBuf::from("crates/x/src/backends"))
+        );
+    }
+
+    #[test]
+    fn a_declared_test_module_excludes_its_file_and_its_directory() {
+        let root = workspace_with(
+            "crates/x/src/backends/mod.rs",
+            "#[cfg(all(test, feature = \"masonry\"))]\nmod conformance;\nmod vello;\n",
+        );
+        assert_eq!(
+            cfg_test_module_globs(root.path()),
+            vec![
+                "crates/x/src/backends/conformance.rs".to_owned(),
+                "crates/x/src/backends/conformance/**".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_production_module_is_left_in_scope() {
+        let root = workspace_with("crates/x/src/lib.rs", "mod vello;\n");
+        assert!(cfg_test_module_globs(root.path()).is_empty());
+    }
 
     fn exclude_globs() -> Vec<String> {
         [

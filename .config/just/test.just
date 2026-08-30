@@ -135,6 +135,63 @@ e2e-resamplers *ARGS:
     just test run --lane=e2e-fused "$@"
     just test run --lane=e2e-glide "$@"
 
+# Every UI test target, followed by both hosts drawing the same gallery and
+# shipped studio pages, and the gallery built the other way it ships. This is
+# the UI pipeline's single entrypoint; the general workspace lane deliberately
+# excludes the same tests.
+#
+# The frame and page harnesses live behind their own feature, so the lane above
+# does not compile them and the censuses inside them - one row per control the
+# document can name, one per gallery page - were checked by hand or not at all.
+# They run here as their own lane. Nothing in them judges a duration: what they
+# assert is that a run did the thing it claims to measure, so the numbers stay
+# a report and the censuses become a gate.
+#
+# The last step builds the gallery's suite with the toolkit's default features
+# - iced alone, no retained host - and runs it there. Everything above is one
+# feature set, so a page, a walk or a census that only holds when both hosts
+# are compiled in would pass all of it and fail the first consumer who takes
+# the toolkit without masonry.
+ui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$PWD/target/parity"
+    rm -rf "$dir/scenario"
+    KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
+    just test run --lane=ui-doc
+    just test run --lane=ui-perf
+    just test parity --dir "$dir"
+    cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
+
+# The picture parity programme on its own. `just test ui` runs it after the UI
+# lanes; run it alone to re-check a drawing change without paying for the
+# suites again.
+#
+# One binary takes both sets, so a difference between them is a difference
+# between the hosts rather than between two builds of the same documents. Both
+# rasterise on a graphics device, neither opens a window. `parity-budget.txt`
+# prices each page, and a page over its price - or missing from a set - ends
+# this non-zero.
+#
+# One control is then photographed on its own, because the retained host is the
+# only one that can find a control by its document path and nothing else here
+# asks it to. A page that stops drawing that control ends this non-zero rather
+# than leaving the shortest capture path untested.
+#
+# The steps are xtask's, not this file's: which sets are taken, in which order,
+# and what each is priced against is logic, and logic in a recipe body is logic
+# nothing can test.
+[positional-arguments]
+parity *ARGS:
+    just _xtask parity "$@"
+
+# The same pages through a real window, which is the only one of the three
+# captures that needs a display. Its job is to say whether the headless iced
+# set draws what a window draws, so compare it against a set photographed at
+# the geometry this one recorded in `frame.txt`.
+ui-window DIR="target/parity/window":
+    cargo run -p kithara-ui --example gallery --features kithara-ui/capture -- --shoot {{ DIR }} --windowed
+
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:
     #!/usr/bin/env bash

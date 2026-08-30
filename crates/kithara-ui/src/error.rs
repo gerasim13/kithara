@@ -28,6 +28,9 @@ pub enum UiDocError {
     },
     #[error("{origin}: invalid skin color {value:?}; expected #RRGGBB or #RRGGBBAA")]
     BadColor { origin: SourceUri, value: String },
+    #[cfg(feature = "render")]
+    #[error(transparent)]
+    Text(#[from] crate::shaping::TextError),
     #[error("{origin}: duplicate id {id:?} at {path}")]
     DuplicateId {
         origin: SourceUri,
@@ -136,8 +139,52 @@ pub enum UiDocError {
     ArenaFull { origin: SourceUri, max: usize },
     #[error("{origin}: source not found: {rel:?}")]
     NotFound { origin: SourceUri, rel: String },
+    #[error("{origin}: package needs ui contract {needs}, this build offers {offers}")]
+    ContractMismatch {
+        needs: u32,
+        offers: u32,
+        origin: SourceUri,
+    },
+    #[error("{origin}: package puts this file behind role {role:?}, it names screen {found:?}")]
+    RoleMismatch {
+        found: String,
+        origin: SourceUri,
+        role: String,
+    },
+    #[error("package {package:?} answers for no screen role {role:?}")]
+    MissingRole { package: String, role: String },
+    #[error("{origin}: package declares no screens")]
+    EmptyPackage { origin: SourceUri },
+    #[error("{origin}: package role {role:?} names no file")]
+    RoleWithoutFile { origin: SourceUri, role: String },
+    #[error("{origin}: screen answers on none of these paths: {paths:?}")]
+    MissingPaths {
+        origin: SourceUri,
+        paths: Vec<String>,
+    },
     #[error("{origin}: source {rel:?} escapes configured root")]
     RootEscape { origin: SourceUri, rel: String },
+    #[error("{origin}: source {rel:?} could not be read: {source}")]
+    Unreadable {
+        origin: SourceUri,
+        rel: String,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(
+        "{origin}: control at {path} names custom kind {kind:?}, which no application registered"
+    )]
+    UnknownCustomKind {
+        origin: SourceUri,
+        path: String,
+        kind: String,
+    },
+    #[error("{origin}: shader at {path}: {detail}")]
+    Shader {
+        origin: SourceUri,
+        path: String,
+        detail: String,
+    },
     #[error(
         "include cycle: {}",
         chain
@@ -216,12 +263,54 @@ pub enum UiDocError {
         path: String,
         detail: String,
     },
-    #[error("{origin}: track list at {path} must contain the Title column")]
-    MissingTrackTitleColumn { origin: SourceUri, path: String },
     #[error("{origin}: ContextBar at {path} requires scope_items, scope, and write together")]
     InvalidContextScope { origin: SourceUri, path: String },
     #[error("{origin}: container at {path} declares write but has no id to address it by")]
     UnaddressedSurface { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Object at {path} turns or scales a {child}, which is laid out as several boxes and has no single one to turn about"
+    )]
+    ObjectGroup {
+        origin: SourceUri,
+        path: String,
+        child: &'static str,
+    },
+    #[error(
+        "{origin}: Object at {path} poses a {child}, which paints its own pass rather than a draw list"
+    )]
+    ObjectNative {
+        origin: SourceUri,
+        path: String,
+        child: &'static str,
+    },
+    #[error(
+        "{origin}: Object at {path} declares both phase and motion; a motion computes the phase, so one pose cannot carry both"
+    )]
+    ObjectDrivenTwice { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Placed at {path} is not a child of a Stage; a placement is a point inside a scene"
+    )]
+    PlacedOutsideStage { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Placed at {path} declares write without read; a placement publishes where a drag left it and reads back the point it stands on"
+    )]
+    PlacedUnread { origin: SourceUri, path: String },
+    #[error(
+        "{origin}: Placed at {path} declares a magnet without write; a magnet acts on a placement the pointer carries"
+    )]
+    MagnetUncarried { origin: SourceUri, path: String },
+    #[error("{origin}: Placed at {path} snaps onto {target:?}, which is no placement of its stage")]
+    MagnetUnknown {
+        origin: SourceUri,
+        path: String,
+        target: String,
+    },
+    #[error("{origin}: Placed at {path} snaps within {within}, which no distance is under")]
+    MagnetReach {
+        origin: SourceUri,
+        path: String,
+        within: f32,
+    },
     #[error("{origin}: compiled node count {count} exceeds limit {max}")]
     NodesExceeded {
         origin: SourceUri,
@@ -236,4 +325,16 @@ pub enum UiDocError {
     },
     #[error("{origin}: text key {key:?} is defined in more than one catalog")]
     DuplicateTextKey { origin: SourceUri, key: String },
+    /// A picture the skin names, and why it could not be cut into frames.
+    ///
+    /// Only where there is drawing: a build that mounts documents without
+    /// painting them never reads a picture.
+    #[cfg(feature = "render")]
+    #[error("{origin}: picture {name:?} did not cut into frames: {source}")]
+    Picture {
+        origin: SourceUri,
+        name: String,
+        #[source]
+        source: Box<crate::render::SheetError>,
+    },
 }

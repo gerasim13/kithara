@@ -12,7 +12,7 @@
                 children: [
                     Include(
                         id: "a",
-                        source: "app-overview-row.kmodule.ron",
+                        source: "deck/overview-row.kmodule.ron",
                         with: { "deck": "a", "letter": "A" },
                     ),
                 ],
@@ -24,7 +24,7 @@
                 children: [
                     Include(
                         id: "b",
-                        source: "app-overview-row.kmodule.ron",
+                        source: "deck/overview-row.kmodule.ron",
                         with: { "deck": "b", "letter": "B" },
                     ),
                 ],
