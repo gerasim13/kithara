@@ -54,6 +54,17 @@ rule:
     - not:
         inside:
           all:
+            - kind: expression_statement
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
             - kind: mod_item
             - follows:
                 kind: attribute_item
