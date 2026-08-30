@@ -6,7 +6,7 @@ use crate::{
     blob::{BlobError, Reader, Writer},
 };
 
-const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0005;
+const TRACK_ANALYSIS_BYTES_VERSION: u32 = 0x4b41_0006;
 
 impl TrackAnalysis {
     /// Append this snapshot to caller-owned storage using the durable analysis format.
@@ -21,6 +21,7 @@ impl TrackAnalysis {
         writer.write_u32(self.source_sample_rate().get());
         writer.write_optional_u64(self.extent());
         writer.write_u64(self.revision());
+        writer.write_bool(self.is_settled());
         write_ranges(&mut writer, self.coverage().runs())?;
 
         writer.write_str(self.fingerprint().waveform().unwrap_or_default())?;
@@ -60,6 +61,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
         let source_sample_rate = NonZeroU32::new(reader.read_u32()?).ok_or(BlobError::Corrupt)?;
         let extent = reader.read_optional_u64()?;
         let revision = reader.read_u64()?;
+        let settled = reader.read_bool()?;
         let coverage = read_ranges(&mut reader)?;
 
         let waveform_tag = reader.read_str()?;
@@ -70,9 +72,17 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
         let unanalysed = read_ranges(&mut reader)?;
         reader.finish()?;
 
-        let waveform_ok = waveform_tag == active.waveform().unwrap_or_default();
-        let beat_ok = beat_tag == active.beat().unwrap_or_default();
-        if !waveform_ok && !beat_ok {
+        let waveform_ok = active.waveform().is_some_and(|tag| waveform_tag == tag);
+        let beat_ok = active.beat().is_some_and(|tag| beat_tag == tag);
+        let empty = active.waveform().is_none()
+            && active.beat().is_none()
+            && waveform_tag.is_empty()
+            && beat_tag.is_empty()
+            && waveform_bytes.is_empty()
+            && grid_bytes.is_empty()
+            && !final_grid
+            && unanalysed.is_empty();
+        if !waveform_ok && !beat_ok && !empty {
             return Err(BlobError::Fingerprint);
         }
 
@@ -100,7 +110,7 @@ impl TryFrom<(&[u8], &AnalysisFingerprint)> for TrackAnalysis {
             .revision(revision)
             .source_sample_rate(source_sample_rate)
             .maybe_extent(extent)
-            .settled(true)
+            .settled(settled)
             .coverage(restored)
             .fingerprint(AnalysisFingerprint::new(
                 beat_ok.then_some(beat_tag.as_str()),
@@ -162,6 +172,17 @@ mod tests {
             0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00,
         ];
+        const V6_FIXTURE: &'static [u8] = &[
+            0x06, 0x00, 0x41, 0x4b, 0x09, 0x00, 0x00, 0x00, 0x67, 0x6f, 0x6c, 0x64, 0x65, 0x6e,
+            0x2d, 0x76, 0x36, 0x80, 0xbb, 0x00, 0x00, 0x01, 0xd2, 0x04, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0xc8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x32, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x77, 0x61, 0x76, 0x65, 0x3a,
+            0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+            0x62, 0x65, 0x61, 0x74, 0x3a, 0x76, 0x31, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
     }
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
@@ -219,14 +240,27 @@ mod tests {
     }
 
     #[kithara::test]
-    fn frozen_v5_fixture_decodes_and_reencodes_identically() {
+    fn frozen_v5_fixture_is_a_cache_miss() {
         let active = fingerprint("wave:v1", "beat:v1");
-        let decoded = TrackAnalysis::try_from((Consts::V5_FIXTURE, &active)).expect("v5 decodes");
+        assert!(matches!(
+            TrackAnalysis::try_from((Consts::V5_FIXTURE, &active)),
+            Err(BlobError::Version {
+                found: 0x4b41_0005,
+                expected: TRACK_ANALYSIS_BYTES_VERSION,
+            })
+        ));
+    }
 
-        assert_eq!(decoded.token().as_str(), "golden-v5");
+    #[kithara::test]
+    fn frozen_v6_fixture_decodes_and_reencodes_identically() {
+        let active = fingerprint("wave:v1", "beat:v1");
+        let decoded = TrackAnalysis::try_from((Consts::V6_FIXTURE, &active)).expect("v6 decodes");
+
+        assert_eq!(decoded.token().as_str(), "golden-v6");
         assert_eq!(decoded.source_sample_rate().get(), 48_000);
         assert_eq!(decoded.extent(), Some(1_234));
         assert_eq!(decoded.revision(), 9);
+        assert!(!decoded.is_settled());
         assert_eq!(
             decoded.coverage().runs(),
             &[FrameRange::new(0, 100), FrameRange::new(200, 50)]
@@ -236,8 +270,8 @@ mod tests {
         assert!(decoded.beat().is_none());
 
         let mut encoded = BytePool::default().get();
-        decoded.write_to(&mut encoded).expect("v5 re-encodes");
-        assert_eq!(encoded.as_slice(), Consts::V5_FIXTURE);
+        decoded.write_to(&mut encoded).expect("v6 re-encodes");
+        assert_eq!(encoded.as_slice(), Consts::V6_FIXTURE);
     }
 
     #[kithara::test]
@@ -250,6 +284,27 @@ mod tests {
         );
         assert_eq!(back.beat().expect("beat grid survives").artifact(), &grid());
         assert_eq!(back.source_frames(), 1_234_567);
+    }
+
+    #[kithara::test]
+    fn codec_preserves_an_empty_fingerprint() {
+        let mut coverage = Coverage::default();
+        coverage.insert(FrameRange::new(0, 64));
+        let analysis = TrackAnalysis::builder()
+            .token("empty-fingerprint".into())
+            .revision(1)
+            .source_sample_rate(rate())
+            .extent(64)
+            .settled(true)
+            .coverage(coverage)
+            .fingerprint(AnalysisFingerprint::default())
+            .build();
+
+        let bytes = encode(&analysis);
+        let restored = TrackAnalysis::try_from((bytes.as_slice(), &AnalysisFingerprint::default()))
+            .expect("empty-fingerprint analysis restores");
+
+        assert_eq!(restored.fingerprint(), &AnalysisFingerprint::default());
     }
 
     #[kithara::test]
@@ -306,7 +361,7 @@ mod tests {
         assert_eq!(got.extent(), want.extent());
         assert_eq!(got.coverage(), want.coverage());
         assert_eq!(got.revision(), want.revision());
-        assert_eq!(got.waveform_completeness(), want.waveform_completeness());
+        assert_eq!(got.is_settled(), want.is_settled());
         let (got_beat, want_beat) = (
             got.beat().expect("beat survives"),
             want.beat().expect("beat fixture"),

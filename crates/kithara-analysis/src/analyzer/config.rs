@@ -45,14 +45,6 @@ where
         super::nn::tag(self)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn ready_seconds(&self) -> u32 {
-        self.detector_window_seconds.max(1).saturating_add(
-            self.detector_overlap_seconds
-                .min(self.detector_window_seconds.saturating_sub(1)),
-        )
-    }
-
     fn resampler_backend_name(&self) -> &'static str {
         self.resampler_backend.name()
     }

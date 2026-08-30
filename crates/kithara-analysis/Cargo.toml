@@ -15,6 +15,7 @@ analysis-beat = []
 analysis-waveform = ["dep:realfft"]
 beat-nn = ["analysis-beat", "dep:kithara-beat", "kithara-beat/embed-small-model"]
 mock = ["dep:unimock"]
+probe = ["kithara-worker/probe"]
 client-reqwest = ["kithara-audio/client-reqwest", "kithara-test-utils/client-reqwest"]
 client-wreq = ["kithara-audio/client-wreq", "kithara-test-utils/client-wreq"]
 tls-rustls = ["kithara-audio/tls-rustls", "kithara-test-utils/tls-rustls"]
@@ -30,6 +31,7 @@ kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
 bon = { workspace = true }
+bytes = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
 num-traits = { workspace = true }
@@ -44,6 +46,7 @@ kithara-beat = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
+kithara-worker = { workspace = true }
 
 derive_more = { workspace = true }
 realfft = { workspace = true, optional = true }

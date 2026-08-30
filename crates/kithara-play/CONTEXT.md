@@ -10,8 +10,9 @@ Contracts and invariants for the kithara-play crate; the README is the overview.
 - `policy/` - domain-aware cache identity and DRM key-request routing.
 - `resource/` - source detection, `ResourceConfig`, reader construction.
 - `player/` - playlist and parameter state in `state/`, transitions in `flow/`.
-- `worker/` - shared `PlayWorker`, generic scheduler, per-track `DecoderNode`,
-  final producer admission, registration leases, and `EngineLoad`.
+- `worker/` - shared `PlayWorker`, per-track `DecoderNode`, final producer
+  admission, registration leases, and `EngineLoad`; generic dispatch lives in
+  `kithara-worker`.
 - `effects/` - the post-Warp per-track `AudioEffect` chain, terminal drain, EQ
   primitives, and limiter primitives.
 - `engine/` - session registration, slot table, mix batch.
@@ -58,10 +59,10 @@ reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
 frontier publication, terminal event publication, and per-track load
 measurement before the task is registered on the shared worker.
 
-The generic scheduler kernel and concrete playback scheduler are private to
-`kithara-play::PlayWorker`. `kithara-audio` exposes only the prepared source and
-wake contracts. `kithara-analysis` owns a separate private single-node runner.
-No workspace production code can construct a second playback scheduler path.
+`PlayWorker` derives a dedicated dispatcher from `kithara-worker` and supplies
+the play-owned node and observer. `kithara-audio` exposes only the prepared
+source and wake contracts. No workspace production code can construct a second
+playback scheduling path.
 
 There is one chain and one final output path:
 
@@ -239,7 +240,10 @@ session output node, and limiter are torn down and the next `start_player` build
 Drop order is load-bearing. `PlayerImpl` declares `phase` before `core`, and `PlayerCore` declares
 `items` before `engine`, so undelivered resources (which hold worker references) release before the
 engine and resource registrations. `worker` is declared after those owners, so the final
-`PlayWorker` reference cannot shut down its thread while a track still holds a lease.
+`PlayWorker` reference cannot shut down its thread while a track still holds a lease. Inside the
+worker, the dispatcher is declared before the base-worker clone; inside each lease, the task handle
+is declared before its worker clone. Task unregister and dispatcher shutdown therefore precede any
+possible final base-worker release.
 
 ## Cancel Hierarchy
 
@@ -248,8 +252,8 @@ Cancel is the typed propagate-down tree from `kithara-platform` (`common/cancel/
 `PlayerImpl` derives its token through `CancelScope::new(config.cancel)`: a passed `CancelToken`
 (consumer crates `Queue` / `App` / FFI mint their own root and pass a child through
 `PlayerConfig.cancel`) makes the token a child of it; `None` makes it a fresh root. The same token
-is handed to `EngineConfig.cancel`, which scopes the session engine. The shared playback worker
-has its own explicit lifetime in `PlayWorkerConfig.cancel`. `prepare_config` gives every track a
+is handed to `EngineConfig.cancel`, which scopes the session engine. The playback dispatcher has
+its own explicit lifetime in `PlayWorkerConfig.cancel`. `prepare_config` gives every track a
 `.child()` of the player token, and subsystems (Downloader, AssetStore, HlsPeer, epoch cancel)
 derive further children.
 
@@ -359,9 +363,8 @@ Withdrawal is a compare-exchange against the published value: a newer seek havin
 meantime makes it a no-op, because that seek carries its own command and rolling back over it would
 strand *it* instead.
 
-`PlayWorker` owns the shared playback worker, its generic scheduler, and its
-registered `DecoderNode`s. The scheduler's `produce_tick_rt` carries the
-real-time attribute.
+`PlayWorker` owns its base-worker clone, dedicated dispatcher, and registered
+`DecoderNode`s. `DecoderNode::tick` carries the real-time attribute.
 Off-core work (pooled-buffer free, event flush, parking, symphonia allocation)
 belongs to the scheduler shell. Cross-thread wakes reached on the core are
 *armed* lock-free (`kithara_stream::DeferredWake::arm`) and delivered by the

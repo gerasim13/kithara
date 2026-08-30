@@ -3,8 +3,8 @@ use std::num::NonZeroU32;
 pub use kithara::analysis::TrackAnalysis;
 use kithara::{
     analysis::{
-        AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisToken, AnalysisWorker,
-        AnalyzerBuilder, BeatAnalysisConfig,
+        AnalysisFileError, AnalysisFingerprint, AnalysisPass, AnalysisProducer, AnalysisProgress,
+        AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
     audio::AudioReader,
     bufpool::SamplePool,
@@ -18,6 +18,7 @@ use kithara_platform::{
         task::{self, JoinHandle},
     },
 };
+use kithara_worker::{TaskError, Worker};
 use tracing::warn;
 
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
@@ -52,26 +53,37 @@ impl TrackAnalysisRunner {
     /// `master` must be a child of the app master cancel; the worker thread
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns the base worker's task admission error.
     pub fn new(
         master: &CancelToken,
+        base_worker: Option<Worker>,
+        chunk_seconds: NonZeroU32,
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
         sample_pool: SamplePool,
-    ) -> Self {
+    ) -> Result<Self, TaskError> {
         let builder = AnalyzerBuilder::new(sample_pool).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();
-        let worker = Arc::new(AnalysisWorker::new(master, builder));
+        let worker = Arc::new(AnalysisWorker::new(
+            AnalysisWorkerConfig::for_builder(builder)
+                .cancel(master.clone())
+                .chunk_seconds(chunk_seconds)
+                .maybe_worker(base_worker)
+                .build(),
+        )?);
         let active = worker.is_active();
         let fingerprint = worker.fingerprint().clone();
-        Self {
+        Ok(Self {
             fingerprint,
             worker,
             active,
             current: None,
-        }
+        })
     }
 
     /// What the active configuration produces, per artifact.
@@ -94,7 +106,7 @@ impl TrackAnalysisRunner {
         token: AnalysisToken,
         rate: NonZeroU32,
         deliver: D,
-    ) -> watch::Receiver<Option<TrackAnalysis>>
+    ) -> watch::Receiver<Option<AnalysisProgress>>
     where
         D: FnOnce(AnalysisProducer),
     {
@@ -112,6 +124,39 @@ impl TrackAnalysisRunner {
         ));
         self.current = Some(RunHandle { task, cancel: run });
         rx
+    }
+
+    /// Resume a validated checkpoint, preserving the same synchronous
+    /// playback-producer handoff as a fresh pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns an archive error when the checkpoint or source extent no longer
+    /// matches the current analyzer configuration.
+    pub fn resume<D>(
+        &mut self,
+        config: AppResourceConfig,
+        progress: AnalysisProgress,
+        deliver: D,
+    ) -> Result<watch::Receiver<Option<AnalysisProgress>>, AnalysisFileError>
+    where
+        D: FnOnce(AnalysisProducer),
+    {
+        self.clear();
+
+        let rate = progress.analysis().source_sample_rate();
+        let (rx, producer, pass) = self.worker.open_resume(progress)?;
+        let run = pass.cancel_token().clone();
+        deliver(producer);
+        let task = task::spawn(run_resume_analysis(
+            Arc::clone(&self.worker),
+            config,
+            run.clone(),
+            rate,
+            pass,
+        ));
+        self.current = Some(RunHandle { task, cancel: run });
+        Ok(rx)
     }
 
     /// Cancel the in-flight run.
@@ -141,6 +186,21 @@ async fn run_analysis(
         return;
     };
     worker.start(pass, reader);
+}
+
+async fn run_resume_analysis(
+    worker: Arc<AnalysisWorker>,
+    config: AppResourceConfig,
+    cancel: CancelToken,
+    rate: NonZeroU32,
+    pass: AnalysisPass,
+) {
+    let Some(reader) = open_reader(config, &cancel, rate).await else {
+        return;
+    };
+    if let Err(error) = worker.start_resume(pass, reader) {
+        warn!(%error, "analysis: resume checkpoint rejected by source");
+    }
 }
 
 /// Open the resource under the run's cancel scope (so preemption and app

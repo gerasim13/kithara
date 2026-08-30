@@ -1,7 +1,9 @@
 use std::{collections::VecDeque, num::NonZeroU32};
 
+#[cfg(feature = "analysis-waveform")]
+use kithara_audio::PendingReason;
 use kithara_audio::{
-    AudioControl, AudioRead, AudioSession, ChunkOutcome, PendingReason, ReadOutcome, SeekOutcome,
+    AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
 use kithara_bufpool::SamplePool;
 use kithara_decode::{DecodeError, TrackMetadata};

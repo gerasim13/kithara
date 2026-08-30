@@ -13,6 +13,8 @@ impl<'a> Writer<'a> {
             pub(crate) fn reserve(&mut self, extra: usize);
             #[call(push)]
             pub(crate) fn write_u8(&mut self, value: u8);
+            #[call(extend_from_slice)]
+            pub(crate) fn write_bytes(&mut self, bytes: &[u8]);
         }
     }
 
