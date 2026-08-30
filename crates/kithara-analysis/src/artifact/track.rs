@@ -2,7 +2,6 @@ use std::num::NonZeroU32;
 
 use bon::Builder;
 use kithara_platform::sync::Arc;
-use num_traits::cast::ToPrimitive;
 
 use super::snapshot::BeatSnapshot;
 use crate::{
@@ -162,15 +161,5 @@ impl TrackAnalysis {
     #[must_use]
     pub const fn waveform(&self) -> Option<&Waveform> {
         self.waveform.as_ref()
-    }
-
-    /// Share of the source extent the waveform is derived from, in `[0, 1]`.
-    /// `None` while the extent is unknown, which is when a live source claims
-    /// no completeness at all.
-    #[must_use]
-    pub fn waveform_completeness(&self) -> Option<f32> {
-        let extent = self.extent.filter(|extent| *extent > 0)?;
-        let covered = self.coverage.frames().min(extent).to_f32()?;
-        Some(covered / extent.to_f32()?)
     }
 }

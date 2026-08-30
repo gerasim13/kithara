@@ -43,8 +43,8 @@ consumer (currently `kithara-app`).
 
 ## Key types
 
-- `AnalyzerBuilder` / `AnalysisWorker` — configure and run a progressive
-  per-track pass.
+- `AnalyzerBuilder` / `AnalysisWorkerConfig` / `AnalysisWorker` — configure
+  analysis and run progressive per-track passes on a domain dispatcher.
 - `AnalysisProducer` — non-blocking decoded-chunk ingress for an open pass.
 - `TrackAnalysis` — self-contained published snapshot: token, revision, source
   axis, coverage, fingerprint, waveform, and beat artifact.

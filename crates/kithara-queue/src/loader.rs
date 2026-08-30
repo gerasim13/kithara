@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::future::Future;
 use std::num::NonZeroUsize;
 
 use kithara_assets::AssetStore;
@@ -7,8 +5,6 @@ use kithara_audio::AudioObserver;
 use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
-#[cfg(test)]
-use kithara_platform::sync::Notify;
 use kithara_platform::{
     CancelGroup, CancelToken,
     sync::Arc,
@@ -19,6 +15,7 @@ use kithara_platform::{
     },
 };
 use kithara_play::{Resource, ResourceConfig, player::PlayerControl};
+use kithara_test_utils::kithara;
 
 use crate::{
     attempts::{LoadClass, Ticket},
@@ -29,8 +26,6 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
-    #[cfg(test)]
-    admission_started: Notify,
     cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
@@ -52,8 +47,6 @@ impl Loader {
         cancel: CancelToken,
     ) -> Self {
         Self {
-            #[cfg(test)]
-            admission_started: Notify::default(),
             cancel,
             interactive_lane: Arc::new(Semaphore::new(1)),
             player,
@@ -66,19 +59,6 @@ impl Loader {
     /// Attach `observer` through `id`'s live-or-pending decoder relay.
     pub(crate) fn attach_observer<O: AudioObserver>(&self, id: TrackId, observer: O) {
         self.tracks.attach_observer(id, Box::new(observer));
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn hold_prefetch_permit(&self) -> impl Sized {
-        Arc::clone(&self.prefetch_lane)
-            .acquire_owned()
-            .await
-            .expect("BUG: loader keeps the prefetch semaphore open")
-    }
-
-    #[cfg(test)]
-    pub(crate) fn wait_for_admission(&self) -> impl Future<Output = ()> + '_ {
-        self.admission_started.notified()
     }
 
     fn attempt_config(
@@ -184,8 +164,7 @@ impl Loader {
                 LoadClass::Interactive => &this.interactive_lane,
                 LoadClass::Prefetch => &this.prefetch_lane,
             };
-            #[cfg(test)]
-            this.admission_started.notify_one();
+            admission_started(id);
             let permit = tokio::select! {
                 biased;
                 _ = Self::wait_and_cancel_track(&cancel, &track_cancel) => {
@@ -272,6 +251,9 @@ impl Loader {
     }
 }
 
+#[kithara::probe(track_id = id.as_u64())]
+fn admission_started(id: TrackId) {}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -286,7 +268,7 @@ mod tests {
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{kithara, probe::capture as probe_capture};
 
     use super::*;
     use crate::track::TrackRecord;
@@ -358,6 +340,51 @@ mod tests {
         canceller.await.expect("canceller task must not panic");
 
         assert_eq!(state.load(Ordering::SeqCst), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
+        let probes = probe_capture::install();
+        let fixture = LoaderFixtureSpec::default()
+            .with_cap(NonZeroUsize::MIN)
+            .build();
+        let permit = Arc::clone(&fixture.loader.prefetch_lane)
+            .acquire_owned()
+            .await
+            .expect("loader keeps the prefetch semaphore open");
+        let id = TrackId::allocate();
+        let source = TrackSource::Uri("https://example.com/pending.mp3".into());
+        fixture
+            .tracks
+            .lock()
+            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        let handle = fixture
+            .loader
+            .spawn_load(id, source, LoadClass::Prefetch)
+            .expect("fresh track starts one load attempt");
+        let admitted = probes
+            .wait_for_probe_async(
+                |event| {
+                    event.target == "kithara_queue_probe"
+                        && event.probe_name() == Some("admission_started")
+                        && event.u64("track_id") == Some(id.as_u64())
+                },
+                Duration::from_secs(1),
+            )
+            .await;
+        assert!(admitted.is_some(), "loader never reached admission");
+
+        fixture.loader.cancel.cancel();
+
+        let result = kithara_platform::tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("cancellation must wake the pending loader")
+            .expect("loader task must not panic");
+        assert!(matches!(
+            result,
+            Err(QueueError::Cancelled(cancelled)) if cancelled == id
+        ));
+        drop(permit);
     }
 
     /// Test fixture: the [`Loader`] under test, the shared

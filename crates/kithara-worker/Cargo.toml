@@ -1,0 +1,40 @@
+[package]
+name = "kithara-worker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Domain-free prioritized worker dispatch for Kithara."
+keywords = ["concurrency", "scheduler", "worker"]
+categories = ["concurrency"]
+
+[features]
+probe = ["dep:kithara-test-utils", "dep:tracing"]
+
+[dependencies]
+kithara-platform = { workspace = true }
+kithara-test-macros = { workspace = true }
+kithara-test-utils = { workspace = true, optional = true }
+
+delegate = { workspace = true }
+fieldwork = { workspace = true }
+
+thiserror = { workspace = true }
+tracing = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
+[dev-dependencies]
+kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
+
+criterion = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "dispatcher"
+harness = false

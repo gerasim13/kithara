@@ -1,11 +1,12 @@
-use std::error::Error;
+use std::{error::Error, num::NonZeroUsize};
 
 use iced::{Size, window::Settings};
 use kithara_platform::{
     sync::{Arc, Mutex},
-    tokio,
+    time::Duration,
 };
 use kithara_ui::render::fonts;
+use kithara_worker::{DispatcherConfig, TaskConfig};
 
 use super::{
     app::{Decks, Kithara},
@@ -18,6 +19,7 @@ use crate::{
     deck::{DeckId, DeckSet},
     state::StateController,
     theme::gui,
+    wave_cache::{AnalysisPersistence, persistence::AnalysisPersistenceConfig},
 };
 
 /// Error returned by the GUI frontend.
@@ -85,9 +87,18 @@ impl GuiFrontend {
         let palette = self.palette;
         let config = self.config.clone();
         let ui = AppUi::new()?;
-
-        let rt = tokio::runtime::Runtime::new().map_err(FrontendError::from)?;
-        let _guard = rt.enter();
+        let base_worker = config
+            .base_worker
+            .clone()
+            .ok_or("GUI analysis persistence requires the app base worker")?;
+        let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
+            base_worker,
+            config.worker.byte_pool().clone(),
+            NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+            Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
+            DispatcherConfig::new("kithara-analysis-persistence"),
+            TaskConfig::new(),
+        ))?;
 
         // The CLI tracks start on the first deck; every deck gets its own
         // controller, listener and analysis worker.
@@ -105,6 +116,7 @@ impl GuiFrontend {
                     Arc::clone(&deck.timestretch),
                     config.clone(),
                     deck.cancel_child(),
+                    persistence.clone(),
                 ));
                 (deck.id, controller)
             })

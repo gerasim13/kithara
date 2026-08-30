@@ -9,8 +9,8 @@ mod kithara {
 pub trait AudioEffect: Send + 'static {
     /// Service work deferred by the checked audio-production path.
     ///
-    /// The scheduler shell calls this after lifecycle transitions, outside
-    /// `produce_tick_rt`, and before the next checked tick, using the active
+    /// The dispatcher shell calls this after lifecycle transitions, outside
+    /// the checked decoder tick, using the active
     /// decoder specification. Effects without deferred work can keep the
     /// default no-op implementation.
     fn service_deferred(&mut self, spec: AudioSpec) {

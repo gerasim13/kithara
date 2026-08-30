@@ -34,6 +34,7 @@ members = [
     "crates/kithara-test-utils",
     "crates/kithara-ui",
     "crates/kithara-warp",
+    "crates/kithara-worker",
     "crates/kithara-workspace-hack",
     "tests",
     "tests/fuzz",
@@ -68,6 +69,7 @@ default-members = [
     "crates/kithara-test-utils",
     "crates/kithara-ui",
     "crates/kithara-warp",
+    "crates/kithara-worker",
     "tests",
 ]
 
@@ -225,6 +227,7 @@ kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-al
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
 kithara-ui = { path = "crates/kithara-ui", version = "0.0.1-alpha4" }
 kithara-warp = { path = "crates/kithara-warp", version = "0.0.1-alpha4", default-features = false }
+kithara-worker = { path = "crates/kithara-worker", version = "0.0.1-alpha4" }
 kithara-workspace-hack = { path = "crates/kithara-workspace-hack", version = "0.0.1-alpha4" }
 
 # misc
@@ -338,6 +341,7 @@ proptest = "1"
 quote = "1"
 rand = "0.10.2"
 rangemap = { version = "1.7.1", features = ["serde1"] }
+rayon = "1.12.0"
 re_mp4 = "0.5.0"
 realfft = "3.5"
 regex = "1"
