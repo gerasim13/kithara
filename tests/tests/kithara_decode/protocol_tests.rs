@@ -11,11 +11,11 @@ use kithara::{
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_integration_tests::decode_ext::DecoderChunkOutcomeTestExt;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_test_fixtures::assets::alac_silence_1s;
 use kithara_test_fixtures::{
-    assets::signal_mp3_track_sine440_187s,
-    signal::{self, Pcm, Wave},
+    assets::alac_silence_1s,
+    signal::{Pcm, Wave},
 };
+use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, signal};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use num_traits::AsPrimitive;
 
