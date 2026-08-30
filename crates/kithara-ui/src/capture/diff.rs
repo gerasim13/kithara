@@ -31,14 +31,14 @@ impl Shares {
 /// One page of the comparison. A page missing from the second set has no
 /// shares, which no budget forgives.
 struct Row {
-    page: String,
     shares: Option<Shares>,
+    page: String,
 }
 
 /// A page that differed by more than it was allowed to.
 struct Over {
-    allowed: f64,
     page: String,
+    allowed: f64,
     worst: f64,
 }
 
@@ -46,11 +46,11 @@ struct Over {
 /// difference masks were written, and — when a budget was given — the pages
 /// that went over it.
 pub struct Report {
-    judged: bool,
     masks: PathBuf,
     over: Vec<Over>,
-    pages: usize,
     rows: Vec<Row>,
+    judged: bool,
+    pages: usize,
 }
 
 impl Report {
@@ -205,11 +205,11 @@ pub fn compare(
         .map(|budget| over_budget(&rows, budget))
         .unwrap_or_default();
     Ok(Report {
-        judged: budget.is_some(),
-        masks: masks.to_owned(),
         over,
         pages,
         rows,
+        judged: budget.is_some(),
+        masks: masks.to_owned(),
     })
 }
 
@@ -226,8 +226,8 @@ fn over_budget(rows: &[Row], budget: &[(String, f64)]) -> Vec<Over> {
                 .map_or(f64::INFINITY, |shares| shares.worst() * 100.0);
             (worst > allowed).then(|| Over {
                 allowed,
-                page: row.page.clone(),
                 worst,
+                page: row.page.clone(),
             })
         })
         .collect()
@@ -257,8 +257,8 @@ fn read_budget(path: &Path) -> Result<Vec<(String, f64)>, String> {
 }
 
 pub(super) struct Image {
-    pub(super) height: u32,
     pub(super) rgba: Vec<u8>,
+    pub(super) height: u32,
     pub(super) width: u32,
 }
 
@@ -274,8 +274,8 @@ pub(super) fn read_png(path: &Path) -> Result<Image, String> {
         .map_err(|error| format!("decode {}: {error}", path.display()))?;
     rgba.truncate(info.buffer_size());
     Ok(Image {
-        height: info.height,
         rgba,
+        height: info.height,
         width: info.width,
     })
 }

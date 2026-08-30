@@ -4,7 +4,6 @@
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
-
 use std::{f32::consts::TAU, ops::RangeInclusive};
 
 use kithara_bufpool::{ByteBudget, SamplePool};

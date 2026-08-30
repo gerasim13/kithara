@@ -42,10 +42,6 @@ impl ResourceLease {
         }
     }
 
-    pub(in crate::index) fn writer(&self, claim: Arc<WriterClaim>) -> WriterHandle {
-        WriterHandle::new(claim, &self.session)
-    }
-
     /// Extend this consumer's immediate byte demand and wake the writer.
     #[doc(hidden)]
     pub fn request_until(&self, end: u64) {
@@ -89,6 +85,10 @@ impl ResourceLease {
         if let Some(waker) = self.entry.take_peer_waker() {
             waker.wake();
         }
+    }
+
+    pub(in crate::index) fn writer(&self, claim: Arc<WriterClaim>) -> WriterHandle {
+        WriterHandle::new(claim, &self.session)
     }
 
     delegate::delegate! {
@@ -198,8 +198,8 @@ impl fmt::Debug for ResourceLease {
 #[doc(hidden)]
 pub struct ResourceAttachment {
     pub(in crate::index) reader: AssetReader,
-    pub(in crate::index) lease: ResourceLease,
     pub(in crate::index) writer: Option<WriterHandle>,
+    pub(in crate::index) lease: ResourceLease,
 }
 
 impl From<ResourceAttachment> for (AssetReader, ResourceLease, Option<WriterHandle>) {

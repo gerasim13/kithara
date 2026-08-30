@@ -33,14 +33,14 @@ use kithara_ui::{
 };
 
 struct FixtureReads {
-    beats: [f32; 4],
     /// Where the application says a carried placement stands, for the fixtures
     /// that have one; nothing answers for the rest.
     placed: Option<Pt>,
+    tracks: [TableRow<'static>; 3],
     buckets: [WaveBucket; 6],
+    beats: [f32; 4],
     cues: [f32; 2],
     downbeats: [f32; 2],
-    tracks: [TableRow<'static>; 3],
 }
 
 impl Default for FixtureReads {
@@ -296,9 +296,9 @@ fn dump(
 struct Attribution {
     document_nodes: usize,
     document_rects: usize,
-    wrappers: usize,
-    opaque_control_nodes: usize,
     furniture: usize,
+    opaque_control_nodes: usize,
+    wrappers: usize,
 }
 
 impl Attribution {
@@ -308,84 +308,13 @@ impl Attribution {
 }
 
 struct LayoutWalker<'a> {
-    output: &'a mut String,
     ui: &'a CompiledUi,
+    output: &'a mut String,
     reads: &'a dyn Reads,
     attribution: Attribution,
 }
 
 impl LayoutWalker<'_> {
-    fn document(&mut self, path: &str, layout: Layout<'_>, depth: usize, already_attributed: bool) {
-        let bounds = layout.bounds();
-        assert!(
-            [bounds.x, bounds.y, bounds.width, bounds.height]
-                .iter()
-                .all(|value| value.is_finite()),
-            "layout for document path `{path}` contains non-finite bounds: {bounds:?}"
-        );
-        for _ in 0..depth {
-            self.output.push_str("  ");
-        }
-        writeln!(
-            self.output,
-            "{path} {:.3} {:.3} {:.3} {:.3}",
-            bounds.x, bounds.y, bounds.width, bounds.height
-        )
-        .expect("writing to a String cannot fail");
-        self.attribution.document_nodes += 1;
-        if !already_attributed {
-            self.attribution.document_rects += 1;
-        }
-    }
-
-    /// Writes a document node the room never reached, which carries a path and
-    /// no box.
-    fn unplaced(&mut self, path: &str, depth: usize) {
-        for _ in 0..depth {
-            self.output.push_str("  ");
-        }
-        writeln!(self.output, "{path} -").expect("writing to a String cannot fail");
-        self.attribution.document_nodes += 1;
-    }
-
-    /// Names every document node beneath a cell the room never reached.
-    ///
-    /// Nothing under such a cell is laid out, so there is no iced node to walk
-    /// and the paths come from the document alone.
-    fn unreached(&mut self, node: &ExpandedNode, parent: &str, position: usize, depth: usize) {
-        let path = expanded_path(node, self.ui, parent, position);
-        match node {
-            ExpandedNode::Row { children, .. }
-            | ExpandedNode::Column { children, .. }
-            | ExpandedNode::Slot { children, .. } => {
-                self.unplaced(&path, depth);
-                for (position, child) in children.iter().enumerate() {
-                    self.unreached(child, &path, position, depth + 1);
-                }
-            }
-            ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
-                self.unreached(child, parent, position, depth);
-            }
-            ExpandedNode::Control { .. }
-            | ExpandedNode::Popover { .. }
-            | ExpandedNode::Pressable { .. } => self.unplaced(&path, depth),
-            _ => panic!("unsupported expanded node at document path `{path}`"),
-        }
-    }
-
-    fn wrapper(&mut self) {
-        self.attribution.wrappers += 1;
-    }
-
-    fn furniture(&mut self, layout: Layout<'_>) {
-        self.attribution.furniture += layout_node_count(layout);
-    }
-
-    fn opaque_control_children(&mut self, layout: Layout<'_>) {
-        self.attribution.opaque_control_nodes +=
-            layout.children().map(layout_node_count).sum::<usize>();
-    }
-
     fn compiled(
         &mut self,
         node: &CompiledNode,
@@ -449,57 +378,27 @@ impl LayoutWalker<'_> {
         }
     }
 
-    fn framed_module(
-        &mut self,
-        root: &ExpandedNode,
-        shell: Layout<'_>,
-        shell_attributed: bool,
-        path: &str,
-        depth: usize,
-    ) {
-        if !shell_attributed {
-            self.wrapper();
+    fn document(&mut self, path: &str, layout: Layout<'_>, depth: usize, already_attributed: bool) {
+        let bounds = layout.bounds();
+        assert!(
+            [bounds.x, bounds.y, bounds.width, bounds.height]
+                .iter()
+                .all(|value| value.is_finite()),
+            "layout for document path `{path}` contains non-finite bounds: {bounds:?}"
+        );
+        for _ in 0..depth {
+            self.output.push_str("  ");
         }
-        let shell_children = exact_children(shell, 2, path, "module frame Stack");
-        let body = shell_children[0];
-        self.wrapper();
-        self.furniture(shell_children[1]);
-        let root_layout = only_child(body, path, "module frame body container");
-        self.expanded(root, root_layout, path, 0, depth + 1, false);
-    }
-
-    fn full_module(
-        &mut self,
-        root: &ExpandedNode,
-        shell: Layout<'_>,
-        shell_attributed: bool,
-        collapsed: bool,
-        path: &str,
-        depth: usize,
-    ) {
-        if !shell_attributed {
-            self.wrapper();
+        writeln!(
+            self.output,
+            "{path} {:.3} {:.3} {:.3} {:.3}",
+            bounds.x, bounds.y, bounds.width, bounds.height
+        )
+        .expect("writing to a String cannot fail");
+        self.attribution.document_nodes += 1;
+        if !already_attributed {
+            self.attribution.document_rects += 1;
         }
-        let shell_children = exact_children(shell, 2, path, "full module frame Stack");
-        let body = shell_children[0];
-        self.wrapper();
-        self.furniture(shell_children[1]);
-        let content = only_child(body, path, "full module frame body container");
-        if collapsed {
-            self.furniture(content);
-            return;
-        }
-
-        self.wrapper();
-        let chrome = exact_children(content, 5, path, "full module chrome Column");
-        for (index, furniture) in chrome.iter().copied().enumerate() {
-            if index != 2 {
-                self.furniture(furniture);
-            }
-        }
-        self.wrapper();
-        let root_layout = only_child(chrome[2], path, "full module content container");
-        self.expanded(root, root_layout, path, 0, depth + 1, false);
     }
 
     fn expanded(
@@ -592,6 +491,63 @@ impl LayoutWalker<'_> {
         }
     }
 
+    fn framed_module(
+        &mut self,
+        root: &ExpandedNode,
+        shell: Layout<'_>,
+        shell_attributed: bool,
+        path: &str,
+        depth: usize,
+    ) {
+        if !shell_attributed {
+            self.wrapper();
+        }
+        let shell_children = exact_children(shell, 2, path, "module frame Stack");
+        let body = shell_children[0];
+        self.wrapper();
+        self.furniture(shell_children[1]);
+        let root_layout = only_child(body, path, "module frame body container");
+        self.expanded(root, root_layout, path, 0, depth + 1, false);
+    }
+
+    fn full_module(
+        &mut self,
+        root: &ExpandedNode,
+        shell: Layout<'_>,
+        shell_attributed: bool,
+        collapsed: bool,
+        path: &str,
+        depth: usize,
+    ) {
+        if !shell_attributed {
+            self.wrapper();
+        }
+        let shell_children = exact_children(shell, 2, path, "full module frame Stack");
+        let body = shell_children[0];
+        self.wrapper();
+        self.furniture(shell_children[1]);
+        let content = only_child(body, path, "full module frame body container");
+        if collapsed {
+            self.furniture(content);
+            return;
+        }
+
+        self.wrapper();
+        let chrome = exact_children(content, 5, path, "full module chrome Column");
+        for (index, furniture) in chrome.iter().copied().enumerate() {
+            if index != 2 {
+                self.furniture(furniture);
+            }
+        }
+        self.wrapper();
+        let root_layout = only_child(chrome[2], path, "full module content container");
+        self.expanded(root, root_layout, path, 0, depth + 1, false);
+    }
+
+    fn furniture(&mut self, layout: Layout<'_>) {
+        self.attribution.furniture += layout_node_count(layout);
+    }
+
     fn group(
         &mut self,
         layout: Layout<'_>,
@@ -628,6 +584,50 @@ impl LayoutWalker<'_> {
         {
             self.expanded(child, child_layout, path, position, depth + 1, false);
         }
+    }
+
+    fn opaque_control_children(&mut self, layout: Layout<'_>) {
+        self.attribution.opaque_control_nodes +=
+            layout.children().map(layout_node_count).sum::<usize>();
+    }
+
+    /// Writes a document node the room never reached, which carries a path and
+    /// no box.
+    fn unplaced(&mut self, path: &str, depth: usize) {
+        for _ in 0..depth {
+            self.output.push_str("  ");
+        }
+        writeln!(self.output, "{path} -").expect("writing to a String cannot fail");
+        self.attribution.document_nodes += 1;
+    }
+
+    /// Names every document node beneath a cell the room never reached.
+    ///
+    /// Nothing under such a cell is laid out, so there is no iced node to walk
+    /// and the paths come from the document alone.
+    fn unreached(&mut self, node: &ExpandedNode, parent: &str, position: usize, depth: usize) {
+        let path = expanded_path(node, self.ui, parent, position);
+        match node {
+            ExpandedNode::Row { children, .. }
+            | ExpandedNode::Column { children, .. }
+            | ExpandedNode::Slot { children, .. } => {
+                self.unplaced(&path, depth);
+                for (position, child) in children.iter().enumerate() {
+                    self.unreached(child, &path, position, depth + 1);
+                }
+            }
+            ExpandedNode::Optional { child, .. } | ExpandedNode::Reveal { child, .. } => {
+                self.unreached(child, parent, position, depth);
+            }
+            ExpandedNode::Control { .. }
+            | ExpandedNode::Popover { .. }
+            | ExpandedNode::Pressable { .. } => self.unplaced(&path, depth),
+            _ => panic!("unsupported expanded node at document path `{path}`"),
+        }
+    }
+
+    fn wrapper(&mut self) {
+        self.attribution.wrappers += 1;
     }
 }
 

@@ -54,6 +54,7 @@ const ZERO_FRAME_BUDGET: u32 = 32;
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
 pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
+    spec: AudioSpec,
     codec: C,
     demuxer: D,
     head_strip: HeadStrip,
@@ -71,7 +72,6 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
     pool: SamplePool,
-    spec: AudioSpec,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
     zero_frame_count: u32,
@@ -287,8 +287,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
                         frames_to_trim(chunk_pts, target, live_spec.sample_rate.get())
                             .min(u64::from(frames));
                     let trim_frames = u32::try_from(trim_frames_u64).unwrap_or(frames);
-                    // Duration rounding can leave `frame_end > target` even when
-                    // this packet is fully pre-target in sample space.
+                    // WHY: Duration rounding can leave `frame_end > target` even when this packet is fully pre-target in sample space.
                     if trim_frames >= frames {
                         drop(buf);
                         continue;
@@ -700,9 +699,9 @@ mod test_stub_codec {
     }
 
     pub(super) struct LaggedQueueCodec {
+        spec: AudioSpec,
         decoded_pts: Duration,
         pending_pts: Option<Duration>,
-        spec: AudioSpec,
         frames_per_call: u32,
     }
 

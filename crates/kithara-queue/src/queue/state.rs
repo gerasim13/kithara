@@ -119,9 +119,11 @@ pub struct QueueControl {
 ///
 /// Owns the resident player and its canonical synchronization state. Runtime
 /// commands are exposed through a separate cloneable [`QueueControl`].
+#[derive(derive_more::Deref)]
 pub struct Queue {
-    pub(super) control: QueueControl,
     pub(super) player: PlayerImpl,
+    #[deref]
+    pub(super) control: QueueControl,
 }
 
 impl Deref for QueueControl {
@@ -129,14 +131,6 @@ impl Deref for QueueControl {
 
     fn deref(&self) -> &Self::Target {
         &self.runtime
-    }
-}
-
-impl Deref for Queue {
-    type Target = QueueControl;
-
-    fn deref(&self) -> &Self::Target {
-        &self.control
     }
 }
 
@@ -181,12 +175,12 @@ impl Queue {
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
-            admission: Mutex::new(()),
             loader,
             tracks,
             bus,
             #[cfg(any(test, feature = "probe"))]
             should_autoplay,
+            admission: Mutex::new(()),
             shutdown: cancel,
             navigation: Arc::new(Mutex::new(NavigationState::new(max_history_size))),
             pending_select: Arc::new(Mutex::new(SelectPhase::Idle)),
@@ -200,20 +194,16 @@ impl Queue {
             cached_position: AtomicCachedPosition::unknown(),
         });
         Self {
-            control: QueueControl {
-                player: player_control,
-                runtime,
-            },
             player,
+            control: QueueControl {
+                runtime,
+                player: player_control,
+            },
         }
     }
 }
 
 impl QueueControl {
-    pub(crate) fn invalidate(&self) {
-        self.shutdown.cancel();
-    }
-
     /// Close the resident player, then irreversibly cancel queue-owned work.
     ///
     /// # Errors
@@ -227,6 +217,10 @@ impl QueueControl {
         Ok(())
     }
 
+    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
+        let _ = self.with_open(operation);
+    }
+
     fn ensure_open(&self) -> Result<(), PlayError> {
         if self.is_closed() {
             Err(PlayError::Closed)
@@ -235,29 +229,8 @@ impl QueueControl {
         }
     }
 
-    pub(in crate::queue) fn with_open<T>(
-        &self,
-        operation: impl FnOnce(&Self) -> T,
-    ) -> Result<T, PlayError> {
-        let _admission = self.lock_admission();
-        self.ensure_open()?;
-        Ok(operation(self))
-    }
-
-    pub(in crate::queue) fn with_open_result<T, E>(
-        &self,
-        operation: impl FnOnce(&Self) -> Result<T, E>,
-    ) -> Result<T, E>
-    where
-        E: From<PlayError>,
-    {
-        let _admission = self.lock_admission();
-        self.ensure_open().map_err(E::from)?;
-        operation(self)
-    }
-
-    pub(in crate::queue) fn command(&self, operation: impl FnOnce(&Self)) {
-        let _ = self.with_open(operation);
+    pub(crate) fn invalidate(&self) {
+        self.shutdown.cancel();
     }
 
     #[must_use]
@@ -299,6 +272,27 @@ impl QueueControl {
         self.select_apply
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(in crate::queue) fn with_open<T>(
+        &self,
+        operation: impl FnOnce(&Self) -> T,
+    ) -> Result<T, PlayError> {
+        let _admission = self.lock_admission();
+        self.ensure_open()?;
+        Ok(operation(self))
+    }
+
+    pub(in crate::queue) fn with_open_result<T, E>(
+        &self,
+        operation: impl FnOnce(&Self) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<PlayError>,
+    {
+        let _admission = self.lock_admission();
+        self.ensure_open().map_err(E::from)?;
+        operation(self)
     }
 
     delegate::delegate! {
@@ -366,6 +360,10 @@ pub(crate) mod tests {
     }
 
     impl SessionDispatcher for TestSession {
+        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            ConsumerWakeMode::RealtimeDeferred
+        }
+
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             let reply = match cmd {
                 Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
@@ -380,10 +378,6 @@ pub(crate) mod tests {
                 _ => Reply::Ok,
             };
             Ok(reply)
-        }
-
-        fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            ConsumerWakeMode::RealtimeDeferred
         }
     }
 

@@ -41,9 +41,6 @@ struct HlsTrackState {
     /// activation time. All epoch/target/pending reads use this directly
     /// rather than routing through `coord.timeline`.
     seek_obs: Arc<dyn SeekObserve>,
-    /// The `HlsConfig`-derived plan config threaded into every `PlanCtx`
-    /// this state constructs for `dispatch`.
-    config: PlanConfig,
     /// Target segment of an in-flight forward seek, held until the reader's
     /// physical byte cursor catches up to it. `coord.position()` only
     /// advances when the reader actually reads at the new offset, so right
@@ -57,6 +54,9 @@ struct HlsTrackState {
     /// Cleared once the reader physically resolves at/after the floor.
     seek_settle_floor: Option<u32>,
     waker: Option<Waker>,
+    /// The `HlsConfig`-derived plan config threaded into every `PlanCtx`
+    /// this state constructs for `dispatch`.
+    config: PlanConfig,
     eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
     last_seek_epoch: u64,
     /// Variant the stored `reader_segment` was resolved against. A
@@ -72,15 +72,15 @@ struct HlsTrackState {
 struct PeerPollWake(Weak<HlsPeer>);
 
 impl WorkerWake for PeerPollWake {
-    fn wake(&self) {
-        if let Some(peer) = self.0.upgrade() {
-            peer.wake_poll();
-        }
-    }
-
     fn defer(&self) {
         if let Some(peer) = self.0.upgrade() {
             peer.reader_advanced.arm();
+        }
+    }
+
+    fn wake(&self) {
+        if let Some(peer) = self.0.upgrade() {
+            peer.wake_poll();
         }
     }
 }
@@ -130,7 +130,6 @@ impl SessionTurns {
 pub(crate) struct HlsPeer {
     abr_publisher: AbrPublisher,
     abr: Arc<AbrState>,
-    cancel: CancelToken,
     /// Narrow activity handle. Used by `priority()` to check whether
     /// the track is currently playing.
     activity: Arc<dyn Activity>,
@@ -146,6 +145,7 @@ pub(crate) struct HlsPeer {
     /// holding a wide seek/playhead aggregate.
     seek_obs: Arc<dyn SeekObserve>,
     state: Arc<Mutex<Option<HlsTrackState>>>,
+    cancel: CancelToken,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
     /// cancellation of work — fires from `teardown()` / `Drop`. A free
     /// `CancelToken` used purely as a one-shot latch (cloned to the
@@ -197,9 +197,8 @@ impl HlsPeer {
         config: PlanConfig,
     ) {
         let reader_advanced = Arc::clone(&self.reader_advanced);
-        // Let the `on_slow` hook wake this peer's `poll_next` when an in-flight
-        // fetch stalls past `soft_timeout`, so `reconcile_escape` runs without
-        // waiting for an incidental reader-progress wake.
+        // WHY: Let the `on_slow` hook wake this peer's `poll_next` when an in-flight fetch stalls past `soft_timeout`, so `reconcile_escape`
+        // runs without waiting for an incidental reader-progress wake.
         coord.set_peer_wake(
             Arc::clone(&self.reader_advanced),
             Arc::new(PeerPollWake(Arc::downgrade(self))),
@@ -260,11 +259,8 @@ impl HlsPeer {
                                 waker.wake_by_ref();
                             }
                         }
-                        // A producer can publish another reader edge while
-                        // this task is still being polled. Hand the task back
-                        // to the scheduler after each delivery so Flash can
-                        // observe quiescence instead of draining an endless
-                        // stream of ready Notify permits in one active poll.
+                        // WHY: A producer can publish another reader edge while this task is still being polled. Hand the task back to the scheduler after
+                        // each delivery so Flash can observe quiescence instead of draining an endless stream of ready Notify permits in one active poll.
                         yield_now().await;
                     }
                 }
@@ -298,8 +294,8 @@ impl HlsPeer {
             .as_ref()
             .and_then(|state| state.waker.clone())
             .or_else(|| self.pending_waker.lock().clone());
-        // A wake that finds no waker is silently dropped, and the caller has no
-        // way to tell that apart from a wake that landed and produced nothing.
+        // WHY: A wake that finds no waker is silently dropped, and the caller has no way to tell that apart from a wake that landed and
+        // produced nothing.
         tracing::trace!(found = waker.is_some(), "hls peer wake requested");
         if let Some(waker) = waker {
             waker.wake();
@@ -335,10 +331,8 @@ impl Abr for HlsPeer {
             .lock()
             .as_ref()
             .map_or(0, |s| s.coord.download_head() as usize);
-        // `reader_idx`/`download_head` are prefix endpoints into `durations`:
-        // `idx == len` is the valid "at/after the last segment" endpoint and
-        // sums the full slice; `idx > len` is impossible and surfaces as
-        // `None` rather than being silently clamped.
+        // WHY: `reader_idx`/`download_head` are prefix endpoints into `durations`: `idx == len` is the valid "at/after the last segment"
+        // endpoint and sums the full slice; `idx > len` is impossible and surfaces as `None` rather than being silently clamped.
         let reader_playback_time = duration_prefix(&durations, reader_idx)?;
         let download_head_playback_time = duration_prefix(&durations, download_head)?;
         Some(AbrProgressSnapshot {
@@ -357,9 +351,8 @@ impl Abr for HlsPeer {
 
     fn wake(&self) {
         let signal = self.state.lock().as_ref().map(|state| state.coord.signal());
-        // The ABR controller is off the RT produce core. The peer owns fetch
-        // dispatch, while the audio worker owns the exact incoming-session
-        // plan, so publishing a decision wakes both consumers.
+        // WHY: The ABR controller is off the RT produce core. The peer owns fetch dispatch, while the audio worker owns the exact
+        // incoming-session plan, so publishing a decision wakes both consumers.
         self.reader_advanced.notify_now();
         if let Some(signal) = signal {
             signal.wake_worker();
@@ -403,21 +396,16 @@ impl Peer for HlsPeer {
                 return Poll::Ready(Some(cmds));
             }
             self.session_turns.reset();
-            // The active session feeds the speaker; the incoming one is only
-            // preparation. Serve the active first and reserve a single slot for
-            // the incoming, so a switch can never starve the audio that is
+            // WHY: The active session feeds the speaker; the incoming one is only preparation. Serve the active first and reserve a single slot
+            // for the incoming, so a switch can never starve the audio that is
             let active_budget = if has_incoming && outcome.ctx.config.prefetch_budget > 1 {
                 outcome.ctx.config.prefetch_budget - 1
             } else {
                 outcome.ctx.config.prefetch_budget
             };
             cmds.extend(outcome.coord.dispatch_active(&outcome.ctx, active_budget));
-            // Whatever the active session declined is idle capacity, not
-            // contention: hand it to the incoming session so a switch the user
-            // asked for is not serviced one fetch per poll while the active
-            // variant sits fully cached. The incoming never draws past its own
-            // reader position and look-ahead, so this changes when its bytes
-            // arrive, never how far ahead of itself it fetches.
+            // WHY: Whatever the active session declined is idle capacity, not contention: hand it to the incoming session so a switch the user
+            // asked for is not serviced one fetch per poll while the active variant sits fully cached.
             let mut remaining = outcome
                 .ctx
                 .config
@@ -436,10 +424,8 @@ impl Peer for HlsPeer {
             }
         }
         if cmds.is_empty() {
-            // Parking with a session still waiting on bytes is the stall shape:
-            // from here only an external wake re-drives this peer, and the one
-            // an unready incoming session raises comes from a readiness poll its
-            // own consumer cannot make while it waits.
+            // WHY: Parking with a session still waiting on bytes is the stall shape: from here only an external wake re-drives this peer, and
+            // the one an unready incoming session raises comes from a readiness poll its own consumer cannot make while it waits.
             tracing::trace!(
                 has_incoming = outcome.coord.has_incoming(),
                 budget = outcome.ctx.config.prefetch_budget,
@@ -511,9 +497,8 @@ impl HlsPeer {
 
         state.apply_seek_change(&coord, &ctx);
         let seg_at_reader = state.apply_boundary_crossing(&coord, &ctx);
-        // Reconcile the ABR escape flag under the guard (atomic-only). A rising
-        // edge wants a controller re-tick, which reads `peer.progress()` and
-        // re-locks `state` — so defer it until after `drop(guard)`.
+        // WHY: Reconcile the ABR escape flag under the guard (atomic-only). A rising edge wants a controller re-tick, which reads
+        // `peer.progress()` and re-locks `state` - so defer it until after `drop(guard)`.
         let needs_retick = coord.reconcile_escape(seg_at_reader);
         let evictions = state.drain_evictions();
         drop(guard);
@@ -550,42 +535,22 @@ impl HlsTrackState {
         self.reader_variant = variant_now;
         let demand_segment = coord.demand_segment_at_offset(pos);
         let resolved = demand_segment.unwrap_or_else(|| u32::try_from(prev).unwrap_or(0));
-        // Forward-seek settle floor: while the reader's physical byte cursor
-        // still lags behind a just-applied seek target, ignore this poll's
-        // stale-low segment. `seek_epoch_reset` already aimed `reader_segment`
-        // + the fetch plan at the target; without this guard the lagging
-        // `resolved` re-keys the cursor backward and `rebuild`s the prefix
-        // (re-downloading seg 0..target). Only drop the floor once the reader
-        // *physically resolves* (`demand_segment.is_some()`) to a segment
-        // a `None` lookup falls back to `prev` and must NOT be read as "caught
-        // up", or a later valid low lookup re-opens the race.
+        // WHY: Forward-seek settle floor: while the reader's physical byte cursor still lags behind a just-applied seek target, ignore this
+        // poll's stale-low segment.
         if let Some(floor) = self.seek_settle_floor {
             if demand_segment.is_some_and(|idx| idx >= floor) {
                 self.seek_settle_floor = None;
             } else if let Some(landing) = demand_segment
                 && floor.saturating_sub(landing) == 1
             {
-                // Decoder-backoff landing, NOT a lagging cursor. The seek
-                // re-aimed the queue + floor at the time-derived target
-                // (`seek_epoch_reset` → `rebuild_at_time`), but the codec's
-                // recreate seek backs off by its warmup preroll and parks one
-                // segment earlier (60s target → 54s landing). `set_position`
-                // already put the reader cursor in that landing segment, yet
-                // the queue starts at the target segment, so the landing
-                // segment is never fetched and the decoder (reading forward
-                // from the landing) starves. Re-aim the prefetch at the
-                // reader's actual segment and drop the floor to it; the floor
-                // then clears normally once the cursor resolves at/after the
-                // target. The one-segment bound (`floor - landing == 1`) is
-                // the codec preroll bound: a stale *lagging* cursor resolves
-                // many segments below the floor and stays suppressed (the
-                // prefix re-download guard the floor was built for is intact).
+                // WHY: Decoder-backoff landing, NOT a lagging cursor. The seek re-aimed the queue + floor at the time-derived target
+                // (`seek_epoch_reset` -> `rebuild_at_time`), but the codec's recreate seek backs off by its warmup preroll and parks one segment
+                // earlier (60s target -> 54s landing).
                 coord.active().rebuild(ctx, landing);
                 self.seek_settle_floor = Some(landing);
                 return landing;
             } else {
-                // Lagging cursor: suppress the re-key/rebuild below (the
-                // floor's sole job — guards rapid-seek prefix re-download).
+                // WHY: Lagging cursor: suppress the re-key/rebuild below (the floor's sole job - guards rapid-seek prefix re-download).
                 return floor;
             }
         }
@@ -596,20 +561,9 @@ impl HlsTrackState {
         }
         let prev_u32 = u32::try_from(prev).unwrap_or(0);
         let discontinuous_advance = boundary_crossed && resolved != prev_u32.saturating_add(1);
-        // A switch committed since the last poll re-keys the byte space
-        // under the cursor: the commit planned from its time-derived
-        // target segment, while the decoder's recreate seek backs off by
-        // the codec warmup and can land one segment earlier — a segment
-        // the plan excludes and that no seek-epoch reseed owns (a
-        // FormatBoundary recreate never bumps the epoch). Re-aim the
-        // plan at the reader's actual segment; the probe variant keeps
-        // the init/header seeds a mid-flight recreate still needs, and
-        // slot dedup makes a redundant reseed free. Two gates: never
-        // reseed from the `prev` fallback (an old-variant-space index),
-        // and skip the shifted byte-continuity path (`served_from != 0`
-        // cannot host a FormatBoundary recreate — `header_byte_range`
-        // is not applicable there — and the reader still reads the
-        // pre-switch range from `v_old`).
+        // WHY: A switch committed since the last poll re-keys the byte space under the cursor: the commit planned from its time-derived
+        // target segment, while the decoder's recreate seek backs off by the codec warmup and can land one segment earlier - a segment the
+        // plan excludes and that no seek-epoch reseed owns (a FormatBoundary recreate never bumps the epoch).
         let aligned_rescue =
             variant_changed && demand_segment.is_some() && coord.active().served_from() == 0;
         if aligned_rescue {

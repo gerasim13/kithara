@@ -27,10 +27,10 @@ unsafe impl Send for Encoder {}
 
 pub(crate) struct EncoderParams {
     pub(crate) aot: sys::AUDIO_OBJECT_TYPE,
-    pub(crate) bit_rate: u32,
-    pub(crate) channels: u16,
-    pub(crate) sample_rate: u32,
     pub(crate) sbr: bool,
+    pub(crate) channels: u16,
+    pub(crate) bit_rate: u32,
+    pub(crate) sample_rate: u32,
 }
 
 pub(crate) struct EncodeInfo {

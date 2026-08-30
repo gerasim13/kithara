@@ -20,7 +20,6 @@
 //! construction (playlists + size HEADs + the init/header read) is otherwise
 //! undelayed — so `slow` routinely reached `Loaded` before the second select,
 //! leaving the supersede path untaken.
-
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},

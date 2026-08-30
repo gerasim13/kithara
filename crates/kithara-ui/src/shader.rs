@@ -11,9 +11,9 @@ use crate::{
 /// One document endpoint packed into the shader's standard uniform block.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ShaderUniform {
-    pub(crate) kind: ValueKind,
-    pub(crate) name: InternId,
     pub(crate) read: Binding,
+    pub(crate) name: InternId,
+    pub(crate) kind: ValueKind,
 }
 
 /// Validated WGSL and the endpoint bindings that feed it.
@@ -37,15 +37,15 @@ impl ShaderSpec {
 #[cfg(feature = "render")]
 #[derive(Debug, PartialEq)]
 struct ShaderModule {
-    origin: SourceUri,
     source: Arc<str>,
+    origin: SourceUri,
 }
 
 #[cfg(feature = "render")]
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ShaderKey {
-    fields: Vec<String>,
     origin: SourceUri,
+    fields: Vec<String>,
 }
 
 #[derive(Default)]
@@ -79,8 +79,8 @@ pub(crate) fn compile(
         };
         if let Some(module) = cache.modules.get(&key) {
             return Ok(ShaderSpec {
-                module: Arc::clone(module),
                 uniforms,
+                module: Arc::clone(module),
             });
         }
         let source = wgsl::combined(authored, origin, path, fields)?;
@@ -133,7 +133,13 @@ pub(crate) fn compile(
 mod wgsl {
     use super::{SourceUri, UiDocError, error};
 
-    const PRELUDE_TAIL: &str = r#"}
+    pub(super) fn combined(
+        authored: &str,
+        origin: &SourceUri,
+        path: &str,
+        fields: &[String],
+    ) -> Result<String, UiDocError> {
+        const PRELUDE_TAIL: &str = r#"}
 
 @group(0) @binding(0)
 var<uniform> kithara: KitharaUniforms;
@@ -146,12 +152,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<
 }
 "#;
 
-    pub(super) fn combined(
-        authored: &str,
-        origin: &SourceUri,
-        path: &str,
-        fields: &[String],
-    ) -> Result<String, UiDocError> {
         let mut source = String::from("struct KitharaUniforms {\n    viewport: vec4<f32>,\n");
         for name in fields {
             if name == "viewport" || !identifier(name) {
@@ -181,9 +181,9 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<
 
 fn error(origin: &SourceUri, path: &str, detail: String) -> UiDocError {
     UiDocError::Shader {
+        detail,
         origin: origin.clone(),
         path: path.to_owned(),
-        detail,
     }
 }
 

@@ -12,11 +12,11 @@ use crate::{
 /// A pressable button, worded and optionally iconed by the document.
 #[derive(Builder)]
 pub(crate) struct Button {
+    pub(crate) style: ButtonStyle,
+    pub(crate) label: InternId,
     pub(crate) active_label: Option<InternId>,
     pub(crate) frame: Option<FrameSides>,
     pub(crate) icon: Option<IconName>,
-    pub(crate) label: InternId,
-    pub(crate) style: ButtonStyle,
 }
 
 impl Control for Button {
@@ -76,23 +76,6 @@ mod host {
     impl Draws for Button {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            let icon = self.icon;
-            let marks = Marks {
-                active: mark(self.style, icon, true),
-                idle: mark(self.style, icon, false),
-            };
-            Face::new(
-                ButtonConfig::builder()
-                    .maybe_frame(self.frame)
-                    .maybe_mark(marks.idle)
-                    .style(self.style)
-                    .build(),
-                marks.active,
-                skin,
-            )
-        }
-
         /// A button always draws. Unlike a switch, one whose endpoint has not
         /// spoken is a button at rest rather than an empty box — it still shows
         /// its word, and pressing it is how the endpoint first gets a value.
@@ -110,6 +93,23 @@ mod host {
 
         fn grip(&self, _skin: &Skin, _data: &ButtonData) -> Grip {
             Grip::Press
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            let icon = self.icon;
+            let marks = Marks {
+                active: mark(self.style, icon, true),
+                idle: mark(self.style, icon, false),
+            };
+            Face::new(
+                ButtonConfig::builder()
+                    .maybe_frame(self.frame)
+                    .maybe_mark(marks.idle)
+                    .style(self.style)
+                    .build(),
+                marks.active,
+                skin,
+            )
         }
     }
 

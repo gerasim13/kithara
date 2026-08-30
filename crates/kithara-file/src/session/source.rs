@@ -23,12 +23,12 @@ use crate::{coord::FileCoord, error::SourceError as FileSourceError};
 /// Inputs for constructing a local/cached file source.
 #[derive(Clone, Builder)]
 pub(crate) struct FileLocalConfig {
-    reader: AssetReader,
     coord: Arc<FileCoord>,
-    bus: EventBus,
+    reader: AssetReader,
     cancel: CancelToken,
-    reader_event_capacity: usize,
+    bus: EventBus,
     cached_codec: Option<AudioCodec>,
+    reader_event_capacity: usize,
 }
 
 /// Sync `Source` impl over a shared [`FileInner`].
@@ -62,16 +62,6 @@ impl FileSource {
         Ok(())
     }
 
-    fn ensure_storage_not_terminal(&self) -> StreamResult<()> {
-        match self.inner.asset.reader.status() {
-            ResourceStatus::Failed(reason) => Err(StreamError::Source(
-                FileSourceError::Storage(StorageError::Failed(reason)).into(),
-            )),
-            ResourceStatus::Cancelled => Err(Self::cancelled_error()),
-            ResourceStatus::Active | ResourceStatus::Committed { .. } => Ok(()),
-        }
-    }
-
     fn ensure_realtime_not_terminal(&self) -> StreamResult<()> {
         self.inner.refresh_unmanaged_terminal();
         match self.inner.terminal_state() {
@@ -80,6 +70,16 @@ impl FileSource {
             }
             FileTerminalState::Cancelled => Err(Self::cancelled_error()),
             FileTerminalState::Active | FileTerminalState::Committed => Ok(()),
+        }
+    }
+
+    fn ensure_storage_not_terminal(&self) -> StreamResult<()> {
+        match self.inner.asset.reader.status() {
+            ResourceStatus::Failed(reason) => Err(StreamError::Source(
+                FileSourceError::Storage(StorageError::Failed(reason)).into(),
+            )),
+            ResourceStatus::Cancelled => Err(Self::cancelled_error()),
+            ResourceStatus::Active | ResourceStatus::Committed { .. } => Ok(()),
         }
     }
 
@@ -99,10 +99,10 @@ impl FileSource {
         } = config;
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                coord: Arc::clone(&coord),
                 cancel,
                 bus,
                 reader_event_capacity,
+                coord: Arc::clone(&coord),
             },
             FileAssetCtx {
                 reader,
@@ -188,6 +188,13 @@ impl FileSource {
 /// narrow [`SourceProbe`] handle the forbid-blocking audio core polls without
 /// the stream's control-plane lock answers from here.
 impl FileInner {
+    pub(crate) fn known_len(&self) -> Option<u64> {
+        self.source
+            .coord
+            .total_bytes()
+            .or_else(|| self.asset.reader.len())
+    }
+
     pub(crate) fn phase(&self) -> SourcePhase {
         let pos = self.source.coord.position();
         self.phase_at(pos..pos.saturating_add(1))
@@ -219,13 +226,6 @@ impl FileInner {
         SourcePhase::Waiting
     }
 
-    pub(crate) fn known_len(&self) -> Option<u64> {
-        self.source
-            .coord
-            .total_bytes()
-            .or_else(|| self.asset.reader.len())
-    }
-
     fn readable_part(&self, range: Range<u64>) -> Option<Range<u64>> {
         let Some(total) = self.known_len() else {
             return Some(range);
@@ -255,6 +255,10 @@ fn file_byte_map(inner: &Arc<FileInner>) -> Option<Arc<dyn ByteMap>> {
 }
 
 impl SourceProbe for FileProbe {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        file_byte_map(&self.inner)
+    }
+
     delegate::delegate! {
         to self.inner {
             fn phase(&self) -> SourcePhase;
@@ -266,10 +270,6 @@ impl SourceProbe for FileProbe {
             fn position(&self) -> u64;
             fn set_position(&self, pos: u64);
         }
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        file_byte_map(&self.inner)
     }
 }
 
@@ -393,17 +393,6 @@ impl FileByteMap {
 }
 
 impl ByteMap for FileByteMap {
-    delegate::delegate! {
-        to self {
-            #[expr($.map_or(0..0, FileSegmentIndex::init_range))]
-            #[call(segment_index)]
-            fn init_segment_range(&self) -> Range<u64>;
-            #[expr(Some($?.segment_count()))]
-            #[call(segment_index)]
-            fn segment_count(&self) -> Option<u32>;
-        }
-    }
-
     fn len(&self) -> Option<u64> {
         self.inner.asset.reader.len()
     }
@@ -414,5 +403,16 @@ impl ByteMap for FileByteMap {
 
     fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
         self.segment_index()?.segment_at_time(t)
+    }
+
+    delegate::delegate! {
+        to self {
+            #[expr($.map_or(0..0, FileSegmentIndex::init_range))]
+            #[call(segment_index)]
+            fn init_segment_range(&self) -> Range<u64>;
+            #[expr(Some($?.segment_count()))]
+            #[call(segment_index)]
+            fn segment_count(&self) -> Option<u32>;
+        }
     }
 }

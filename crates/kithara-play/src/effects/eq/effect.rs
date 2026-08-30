@@ -44,6 +44,12 @@ impl EqEffect {
             .collect()
     }
 
+    /// Set the gain for a specific band.
+    pub fn set_gain(&mut self, band_index: usize, gain_db: GainDb) {
+        self.eq_l.set_gain(band_index, gain_db);
+        self.eq_r.set_gain(band_index, gain_db);
+    }
+
     delegate::delegate! {
         to self.eq_l {
             /// Check if any band is currently smoothing.
@@ -53,12 +59,6 @@ impl EqEffect {
             #[must_use]
             pub fn target_gain(&self, band_index: usize) -> Option<GainDb>;
         }
-    }
-
-    /// Set the gain for a specific band.
-    pub fn set_gain(&mut self, band_index: usize, gain_db: GainDb) {
-        self.eq_l.set_gain(band_index, gain_db);
-        self.eq_r.set_gain(band_index, gain_db);
     }
 }
 

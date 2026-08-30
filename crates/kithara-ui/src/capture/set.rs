@@ -30,8 +30,6 @@ where
     for page in &film.pages {
         stage.turn(page)?;
         for photo in 0..film.photos {
-            // Time passes between two photographs, never before the first: a
-            // film opens where the page opens.
             if photo > 0 {
                 for _ in 0..film.steps {
                     stage.tick();

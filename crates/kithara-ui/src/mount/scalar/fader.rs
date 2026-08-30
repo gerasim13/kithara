@@ -5,8 +5,8 @@ use crate::{ids::InternId, module::FaderStyle, mount::Control, size::SizeSpec, s
 /// A rail and a cap, dragged along the rail.
 #[derive(Builder)]
 pub(crate) struct Fader {
-    pub(crate) label: Option<InternId>,
     pub(crate) style: FaderStyle,
+    pub(crate) label: Option<InternId>,
 }
 
 impl Control for Fader {
@@ -32,10 +32,6 @@ mod host {
     impl Draws for Fader {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(self.style, skin)
-        }
-
         /// A fader is the fraction it sits at, so one whose endpoint has not
         /// reported a fraction draws nothing rather than a rail at zero.
         fn data(&self, read: Reading<'_>) -> Option<Captioned> {
@@ -60,6 +56,10 @@ mod host {
                     .step(skin.fader.step)
                     .build(),
             )
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.style, skin)
         }
     }
 }

@@ -83,16 +83,16 @@ impl Reads for Blocks {
 }
 
 impl App for Blocks {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         "blocks.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -127,7 +127,7 @@ fn retained() -> Vec<Rect> {
     .unwrap_or_else(|error| panic!("the block fixture must mount: {error}"));
     let head = ui
         .rect_of("flow/head")
-        .unwrap_or_else(|| panic!("the row that shows the blocks must be laid out"));
+        .expect("the row that shows the blocks must be laid out");
     let at = Pt {
         x: head.x + head.w / 2.0,
         y: head.y + head.h / 2.0,

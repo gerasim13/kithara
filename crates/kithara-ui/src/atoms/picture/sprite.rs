@@ -90,6 +90,6 @@ mod tests {
 
     fn square() -> Image {
         Image::pixels(ImageId::new("test/square"), 4, 4, Arc::from(vec![0_u8; 64]))
-            .unwrap_or_else(|| panic!("a four by four block of pixels is a picture"))
+            .expect("a four by four block of pixels is a picture")
     }
 }

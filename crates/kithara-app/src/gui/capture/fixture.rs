@@ -2,7 +2,6 @@
 //!
 //! One fixture answers every endpoint both hosts ask for, so the two sets
 //! differ in how they draw and never in what they were given to draw.
-
 use std::rc::Rc;
 
 use kithara_ui::{
@@ -19,8 +18,8 @@ use crate::gui::ui::{cache::DeckLayout, endpoints::readable_kind, package::Packa
 
 pub(super) struct Fixture {
     layout: DeckLayout,
-    rows: Vec<TableRow<'static>>,
     package: Rc<Package>,
+    rows: Vec<TableRow<'static>>,
 }
 
 impl Fixture {
@@ -31,18 +30,6 @@ impl Fixture {
         volume: 0.72,
     };
     const SCALAR: f64 = 0.5;
-
-    /// The settings sheet is open in both captures, because a control only the
-    /// sheet carries is compared across the hosts on no page otherwise. Its two
-    /// sections cannot show at once, so each layout photographs one of them.
-    fn on(&self, endpoint: &str) -> bool {
-        match endpoint {
-            "deck.eq.three_band" | "ui.settings.open" => true,
-            "ui.settings.on_view" => self.layout == DeckLayout::Dual,
-            "ui.settings.on_audio" => self.layout == DeckLayout::Single,
-            _ => false,
-        }
-    }
 
     pub(super) fn new(layout: DeckLayout, package: Rc<Package>) -> Self {
         Self {
@@ -66,6 +53,18 @@ impl Fixture {
                     false,
                 ),
             ],
+        }
+    }
+
+    /// The settings sheet is open in both captures, because a control only the
+    /// sheet carries is compared across the hosts on no page otherwise. Its two
+    /// sections cannot show at once, so each layout photographs one of them.
+    fn on(&self, endpoint: &str) -> bool {
+        match endpoint {
+            "deck.eq.three_band" | "ui.settings.open" => true,
+            "ui.settings.on_view" => self.layout == DeckLayout::Dual,
+            "ui.settings.on_audio" => self.layout == DeckLayout::Single,
+            _ => false,
         }
     }
 }
@@ -208,16 +207,16 @@ fn text(endpoint: &str) -> &'static str {
 }
 
 impl App for Fixture {
-    fn skin(&self) -> &Skin {
-        self.package.skin()
-    }
-
     fn document(&self) -> &str {
         self.package.document(self.layout)
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        self.package.skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}

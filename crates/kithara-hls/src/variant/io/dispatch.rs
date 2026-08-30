@@ -94,9 +94,8 @@ impl HlsVariant {
         let mut remaining = budget;
         self.dispatch_size_demands(ctx, &mut out, &mut remaining, &cancel);
         let prefetch_base = position.max(self.prefetch_anchor());
-        // A construction bound names a debt: everything up to it must land for
-        // the splice or build to finish. Look-ahead trims optional prefetch
-        // only, so inside a bounded window the caps step aside.
+        // WHY: A construction bound names a debt: everything up to it must land for the splice or build to finish. Look-ahead trims optional
+        // prefetch only, so inside a bounded window the caps step aside.
         let prefetch_byte_cap = construction_segment_end
             .is_none()
             .then(|| {
@@ -220,9 +219,8 @@ impl HlsVariant {
         if !deferred.is_empty() {
             let mut queue = self.flow.queue.lock();
             for (planned, revision) in deferred {
-                // A concurrent claim's Drop may have requeued this entry
-                // between the pop above and this write-back (a downloader
-                // teardown racing the dispatch) — never double-plan it.
+                // WHY: A concurrent claim's Drop may have requeued this entry between the pop above and this write-back (a downloader teardown
+                // racing the dispatch) - never double-plan it.
                 queue.requeue_if_current(planned, revision);
             }
         }
@@ -266,6 +264,17 @@ impl HlsVariant {
         )
     }
 
+    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
+        let window = look_ahead_segments(ctx)?;
+        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
+        Some(base.saturating_add(window.saturating_sub(1)))
+    }
+
+    fn segment_window_entry_byte(&self, ctx: &PlanCtx, seg_idx: u32) -> Option<u64> {
+        let window = look_ahead_segments(ctx)?;
+        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
+    }
+
     /// Settle a claim whose resource could not be acquired, per
     /// [`settle_for`].
     fn settle_unacquirable(
@@ -299,17 +308,6 @@ impl HlsVariant {
                 let _ = handle.into_failed();
             }
         }
-    }
-
-    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
-        let window = look_ahead_segments(ctx)?;
-        let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
-        Some(base.saturating_add(window.saturating_sub(1)))
-    }
-
-    fn segment_window_entry_byte(&self, ctx: &PlanCtx, seg_idx: u32) -> Option<u64> {
-        let window = look_ahead_segments(ctx)?;
-        self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
     }
 }
 

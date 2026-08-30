@@ -13,10 +13,10 @@ pub(super) struct AnalysisInput<'a> {
 }
 
 pub(super) struct NativeOutput {
+    pub(super) valid: bool,
     pub(super) begin: f64,
     pub(super) end: f64,
     pub(super) frames: usize,
-    pub(super) valid: bool,
 }
 
 pub(super) struct NativeStretcher {
@@ -67,27 +67,6 @@ impl NativeStretcher {
         })
     }
 
-    pub(super) fn max_input_frames(&self) -> Result<usize, ElasticError> {
-        usize::try_from(stretcher::max_input_frame_count(self.inner.as_ptr()))
-            .ok()
-            .filter(|frames| *frames > 0)
-            .ok_or(ElasticError::EnginePreparation(
-                "Bungee reported an invalid input grain size",
-            ))
-    }
-
-    pub(super) fn preroll(&mut self, request: &mut Request) {
-        stretcher::preroll(self.inner.as_ptr(), request);
-    }
-
-    pub(super) fn specify(&mut self, request: &Request) -> InputChunk {
-        stretcher::specify_grain(self.inner.as_ptr(), request, 0.0)
-    }
-
-    pub(super) fn next(&mut self, request: &mut Request) {
-        stretcher::next(self.inner.as_ptr(), request);
-    }
-
     pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
         #[cfg(test)]
         if self.take_fault(NativeFault::Analyse) {
@@ -118,32 +97,6 @@ impl NativeStretcher {
             mute_tail,
         );
         Ok(())
-    }
-
-    pub(super) fn synthesise(
-        &mut self,
-        destination: &mut [f32],
-        destination_stride: usize,
-    ) -> Result<NativeOutput, ElasticError> {
-        let output = self.synthesise_native();
-        #[cfg(test)]
-        if self.take_fault(NativeFault::Synthesise) {
-            return Err(ElasticError::EnginePreparation(
-                "injected Bungee synthesis failure",
-            ));
-        }
-        self.copy_native_output(&output, destination, destination_stride)
-    }
-
-    fn synthesise_native(&mut self) -> OutputChunk {
-        let mut output = OutputChunk {
-            data: std::ptr::null_mut(),
-            frame_count: i32::default(),
-            channel_stride: isize::default(),
-            request: [std::ptr::null(); Self::OUTPUT_ENDPOINT_COUNT],
-        };
-        stretcher::synthesise_grain(self.inner.as_ptr(), &mut output);
-        output
     }
 
     fn copy_native_output(
@@ -199,13 +152,60 @@ impl NativeStretcher {
         })
     }
 
+    #[cfg(test)]
+    pub(super) fn fail_next(&mut self, fault: NativeFault) {
+        self.fault = Some(fault);
+    }
+
     pub(super) fn is_flushed(&self) -> bool {
         stretcher::is_flushed(self.inner.as_ptr()) != 0
     }
 
-    #[cfg(test)]
-    pub(super) fn fail_next(&mut self, fault: NativeFault) {
-        self.fault = Some(fault);
+    pub(super) fn max_input_frames(&self) -> Result<usize, ElasticError> {
+        usize::try_from(stretcher::max_input_frame_count(self.inner.as_ptr()))
+            .ok()
+            .filter(|frames| *frames > 0)
+            .ok_or(ElasticError::EnginePreparation(
+                "Bungee reported an invalid input grain size",
+            ))
+    }
+
+    pub(super) fn next(&mut self, request: &mut Request) {
+        stretcher::next(self.inner.as_ptr(), request);
+    }
+
+    pub(super) fn preroll(&mut self, request: &mut Request) {
+        stretcher::preroll(self.inner.as_ptr(), request);
+    }
+
+    pub(super) fn specify(&mut self, request: &Request) -> InputChunk {
+        stretcher::specify_grain(self.inner.as_ptr(), request, 0.0)
+    }
+
+    pub(super) fn synthesise(
+        &mut self,
+        destination: &mut [f32],
+        destination_stride: usize,
+    ) -> Result<NativeOutput, ElasticError> {
+        let output = self.synthesise_native();
+        #[cfg(test)]
+        if self.take_fault(NativeFault::Synthesise) {
+            return Err(ElasticError::EnginePreparation(
+                "injected Bungee synthesis failure",
+            ));
+        }
+        self.copy_native_output(&output, destination, destination_stride)
+    }
+
+    fn synthesise_native(&mut self) -> OutputChunk {
+        let mut output = OutputChunk {
+            data: std::ptr::null_mut(),
+            frame_count: i32::default(),
+            channel_stride: isize::default(),
+            request: [std::ptr::null(); Self::OUTPUT_ENDPOINT_COUNT],
+        };
+        stretcher::synthesise_grain(self.inner.as_ptr(), &mut output);
+        output
     }
 
     #[cfg(test)]
@@ -243,11 +243,8 @@ fn request_position(request: *const Request) -> Result<f64, ElasticError> {
     let request = NonNull::new(request.cast_mut()).ok_or(ElasticError::EnginePreparation(
         "Bungee returned null output timing",
     ))?;
-    // SAFETY: Bungee initializes `Request::position` for every grain, including
-    // its otherwise partially initialized pipeline grains. Projecting and
-    // reading only that field avoids creating a Rust reference to the complete
-    // native `Request`; the pointer is consumed before another native call can
-    // rotate the owning grain storage.
+    // SAFETY: Bungee initializes `position` for every grain. Reading only that field avoids referencing the partially initialized
+    // `Request`, and the pointer remains valid until the next native call.
     Ok(unsafe { std::ptr::addr_of!((*request.as_ptr()).position).read() })
 }
 

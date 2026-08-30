@@ -130,13 +130,8 @@ impl StreamType for Hls {
 
         playhead.set_duration(playlist_state.track_duration());
 
-        // Unified reader-wake handle: the shared readiness gate for the off-RT
-        // `wait_range(_, None)` park (CONTEXT.md "Seek and wait_range Contract")
-        // paired with the late-bound audio-worker wake. The wake is filled by
-        // `HlsSource::set_worker_wake` once the worker exists; `SizeSignal::fire`
-        // fires both on the two downloader write/settle sites so the RT decoder
-        // re-ticks on data arrival, not on its 10 ms scheduler poll. Built once
-        // here and cloned down into every consumer.
+        // WHY: Unified reader-wake handle: the shared readiness gate for the off-RT `wait_range(_, None)` park (CONTEXT.md "Seek and
+        // wait_range Contract") paired with the late-bound audio-worker wake.
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 

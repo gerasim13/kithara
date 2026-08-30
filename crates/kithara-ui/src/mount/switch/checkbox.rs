@@ -23,10 +23,6 @@ mod host {
     impl Draws for Checkbox {
         type Painter = Binary;
 
-        fn painter(&self, skin: &Skin) -> Binary {
-            Binary::checkbox(skin)
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<bool> {
             match read.value {
                 Some(ReadValue::Bool(active)) => Some(*active),
@@ -36,6 +32,10 @@ mod host {
 
         fn grip(&self, _skin: &Skin, _data: &bool) -> Grip {
             Grip::Press
+        }
+
+        fn painter(&self, skin: &Skin) -> Binary {
+            Binary::checkbox(skin)
         }
     }
 }

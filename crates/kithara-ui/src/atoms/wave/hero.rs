@@ -28,10 +28,10 @@ pub(crate) struct HeroPalette {
 #[derive(Clone, Copy)]
 pub(crate) struct HeroWave<'a> {
     pub(crate) buckets: &'a [WaveBucket],
+    pub(crate) unready: &'a [[f32; 2]],
     pub(crate) beats: &'a [f32],
     pub(crate) cues: &'a [f32],
     pub(crate) downbeats: &'a [f32],
-    pub(crate) unready: &'a [[f32; 2]],
     pub(crate) loop_region: Option<[f32; 2]>,
     pub(crate) position: f32,
     pub(crate) zoom: f32,
@@ -71,10 +71,6 @@ fn draw_bars(
     metrics: WaveSkin,
     palette: WavePalette,
 ) {
-    // The count of bars follows from the pitch, and the pitch is the skin's:
-    // the comb is a grid the window slides over, not a division of the box.
-    // The width it is measured against is the one that rasterises, so two hosts
-    // that lay the same box out a hair apart still summarise the same track.
     let step = bars::step(metrics);
     let Some(grid) = bar_grid(bounds.w.round(), step, data.zoom, window) else {
         return;
@@ -246,10 +242,10 @@ fn draw_playhead(
     ] {
         list.fill_rect(
             Rect {
+                y,
                 h: metrics.playhead_marker_height,
                 w: metrics.playhead_marker_width,
                 x: marker_x,
-                y,
             },
             palette.played,
         );
@@ -307,6 +303,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let data = HeroWave {
+            zoom,
             buckets: &buckets,
             beats: &[],
             cues: &[],
@@ -314,7 +311,6 @@ mod tests {
             unready: &[],
             loop_region: None,
             position: 0.5,
-            zoom,
         };
         let window = window_bounds(data.position, zoom);
         let mut list = DrawListBuilder::default();

@@ -766,8 +766,8 @@ fn locked_state_rejects_switch(
 }
 
 struct SeedPeer {
-    cancel: CancelToken,
     state: Arc<AbrState>,
+    cancel: CancelToken,
     variants: Vec<VariantInfo>,
 }
 
@@ -785,9 +785,9 @@ impl Abr for SeedPeer {
 }
 
 struct TickPeer {
-    cancel: CancelToken,
     state: Arc<AbrState>,
     wake: Arc<Notify>,
+    cancel: CancelToken,
 }
 
 struct CountingEstimator {
@@ -807,9 +807,9 @@ impl Estimator for CountingEstimator {
 }
 
 struct CountingTickPeer {
-    cancel: CancelToken,
     state: Arc<AbrState>,
     ticks: Arc<AtomicUsize>,
+    cancel: CancelToken,
 }
 
 impl Abr for CountingTickPeer {
@@ -875,8 +875,8 @@ async fn bandwidth_samples_are_preserved_across_immediate_ticks() {
     );
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(CountingTickPeer {
-        cancel: CancelToken::never(),
         state,
+        cancel: CancelToken::never(),
         ticks: Arc::clone(&ticks),
     });
     let handle = controller.register(&peer);
@@ -1204,8 +1204,8 @@ async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
     let controller = AbrController::new(settings);
     let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
-        cancel: CancelToken::never(),
         state,
+        cancel: CancelToken::never(),
         wake: Arc::new(Notify::default()),
     });
     let handle = controller.register(&peer);

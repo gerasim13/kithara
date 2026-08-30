@@ -63,6 +63,10 @@ pub(crate) struct CustomSkins {
 }
 
 impl CustomSkins {
+    pub(crate) fn kind(&self, kind: &str) -> Option<&CustomSkin> {
+        self.kinds.get(kind)
+    }
+
     pub(crate) fn resolve(
         document: &CustomDoc,
         palette: &RenderPalette,
@@ -77,10 +81,6 @@ impl CustomSkins {
             kinds.insert(kind.clone(), CustomSkin { settings });
         }
         Ok(Self { kinds })
-    }
-
-    pub(crate) fn kind(&self, kind: &str) -> Option<&CustomSkin> {
-        self.kinds.get(kind)
     }
 }
 

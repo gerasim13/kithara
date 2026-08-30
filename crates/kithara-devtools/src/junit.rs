@@ -8,16 +8,16 @@ pub(crate) const MAX_CASE_OUTPUT_BYTES: usize = 8 * 1_024 * 1_024;
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CaseTiming {
-    pub name: String,
-    pub suite: String,
     pub iteration: Option<usize>,
-    pub failed: bool,
-    pub secs: f64,
     pub timestamp: Option<String>,
+    pub name: String,
     pub output: String,
+    pub suite: String,
+    pub failed: bool,
     /// The retained output hit the per-case budget and lost its tail. The case
     /// itself stays valid evidence; reports must name the truncation.
     pub output_truncated: bool,
+    pub secs: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,14 +98,14 @@ pub(crate) fn parse_junit_report(xml: &str) -> Result<JunitReport> {
         let timestamp = node.attribute("timestamp").map(str::to_owned);
         let (output, output_truncated) = failure_output(node);
         cases.push(CaseTiming {
-            name,
-            suite,
             iteration,
-            failed,
-            secs,
             timestamp,
+            name,
             output,
+            suite,
+            failed,
             output_truncated,
+            secs,
         });
     }
     Ok(JunitReport {

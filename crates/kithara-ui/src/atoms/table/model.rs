@@ -39,18 +39,18 @@ pub(crate) enum TableCell {
 }
 
 impl TableCell {
-    pub(crate) fn text(&self) -> Option<&str> {
-        match self {
-            Self::Text(value) => Some(value),
-            Self::Empty | Self::Number(_) => None,
-        }
-    }
-
     pub(crate) fn number(&self) -> Option<u8> {
         let Self::Number(value) = self else {
             return None;
         };
         Some(*value)
+    }
+
+    pub(crate) fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(value) => Some(value),
+            Self::Empty | Self::Number(_) => None,
+        }
     }
 }
 

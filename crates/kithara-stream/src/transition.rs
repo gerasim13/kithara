@@ -62,14 +62,14 @@ pub enum OutgoingDisposition {
 #[non_exhaustive]
 #[fieldwork(opt_in, with)]
 pub struct VariantTransition {
-    active_variant: VariantIndex,
-    incoming_variant: VariantIndex,
-    id: VariantTransitionId,
     #[field(with(
         vis = "pub",
         doc = "Return this transition with an explicitly bound outgoing disposition."
     ))]
     outgoing_disposition: OutgoingDisposition,
+    active_variant: VariantIndex,
+    incoming_variant: VariantIndex,
+    id: VariantTransitionId,
 }
 
 impl VariantTransition {

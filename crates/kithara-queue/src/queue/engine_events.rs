@@ -64,10 +64,8 @@ impl QueueControl {
             }
         }
         if lagged {
-            // `CurrentItemChanged` is edge-triggered and de-duplicated by
-            // `ItemQueue::announce_current_item`, so waiting cannot recover a drop.
-            // Resync after draining, as `Queue::seek` does; publishing mid-drain
-            // could overwrite the next unread slot and trigger another lag.
+            // WHY: `CurrentItemChanged` is edge-triggered and de-duplicated by `ItemQueue::announce_current_item`, so waiting cannot recover a
+            // drop.
             self.handle_current_item_changed();
         }
     }

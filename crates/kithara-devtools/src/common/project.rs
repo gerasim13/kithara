@@ -267,22 +267,22 @@ pub struct ProjectIdentity {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HealthConfig {
+    /// Package whose dependency closure the unsafe-code census is rooted at.
+    pub geiger_package: String,
     /// Backend groups a crate refuses to be built without.
     pub feature_invariants: Vec<FeatureInvariant>,
     /// Crates excluded from the `cargo hack --feature-powerset` stage.
     pub feature_powerset_exclude: Vec<String>,
-    /// Packages the semver stage compares against the baseline branch.
-    pub semver_packages: Vec<String>,
-    /// Package whose dependency closure the unsafe-code census is rooted at.
-    pub geiger_package: String,
-    /// Crates whose manifest a generator owns, so "is this dependency used?"
-    /// is a question about the generator rather than about the code.
-    pub machete_exclude: Vec<String>,
     /// Crates whose deadlock findings the stage reports without failing on.
     /// Only this workspace's own crates belong here: a dependency is out of
     /// the verdict already, and this list is for a finding that has an owner
     /// and a place it is being fixed.
     pub lockbud_exclude: Vec<String>,
+    /// Crates whose manifest a generator owns, so "is this dependency used?"
+    /// is a question about the generator rather than about the code.
+    pub machete_exclude: Vec<String>,
+    /// Packages the semver stage compares against the baseline branch.
+    pub semver_packages: Vec<String>,
 }
 
 /// A rule some crates state with `compile_error!`: this build needs a backend.
@@ -399,6 +399,9 @@ pub struct TestNetBackendConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct TestLaneConfig {
+    /// Environment the lane runs with, so what the lane exercises is named by
+    /// the lane rather than by whatever the caller happened to export.
+    pub env: BTreeMap<String, String>,
     pub default_flash: Option<bool>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
@@ -406,9 +409,6 @@ pub struct TestLaneConfig {
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,
-    /// Environment the lane runs with, so what the lane exercises is named by
-    /// the lane rather than by whatever the caller happened to export.
-    pub env: BTreeMap<String, String>,
     pub prefix_args: Vec<String>,
     pub suffix_args: Vec<String>,
 }
@@ -417,20 +417,11 @@ pub struct TestLaneConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressConfig {
-    /// The lanes one run is made of, executed in order. More than one is the
-    /// normal case: a clock the fixtures' delays collapse under answers a
-    /// different question than a clock they survive, and a run covering
-    /// only one of them cannot say which of the two a flake belongs to.
-    pub default_modes: Vec<String>,
-    pub lane: String,
+    pub modes: BTreeMap<String, StressModeConfig>,
+    pub artifacts: StressArtifactConfig,
+    pub environment: StressEnvironmentConfig,
+    pub evidence: StressEvidenceConfig,
     pub backend: String,
-    pub nextest_config: String,
-    pub nextest_profile: String,
-    pub default_filter: String,
-    pub default_count: usize,
-    pub max_count: usize,
-    pub test_threads: String,
-    pub max_test_threads: usize,
     /// The directory a lane builds into, relative to the checkout it builds.
     ///
     /// A stress run that inherits `CARGO_TARGET_DIR` builds into whatever
@@ -440,19 +431,40 @@ pub struct StressConfig {
     /// milliseconds. Naming the directory here is what makes the artifacts the
     /// lane runs belong to the revision the lane was asked about.
     pub build_dir: String,
+    pub default_filter: String,
+    pub lane: String,
+    pub nextest_config: String,
+    pub nextest_profile: String,
     pub raw_output: String,
     pub report_output: String,
+    pub test_threads: String,
+    /// The lanes one run is made of, executed in order. More than one is the
+    /// normal case: a clock the fixtures' delays collapse under answers a
+    /// different question than a clock they survive, and a run covering
+    /// only one of them cannot say which of the two a flake belongs to.
+    pub default_modes: Vec<String>,
     pub workflow_job_timeout_minutes: u64,
-    pub artifacts: StressArtifactConfig,
-    pub environment: StressEnvironmentConfig,
-    pub modes: BTreeMap<String, StressModeConfig>,
-    pub evidence: StressEvidenceConfig,
+    pub default_count: usize,
+    pub max_count: usize,
+    pub max_test_threads: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressArtifactConfig {
+    pub envelope_dir: Option<String>,
+    pub line_log: Option<String>,
+    /// Per-attempt exit codes of a lane that repeats a command. A sanitizer
+    /// leaves no per-test verdict, so this is the whole of what such a lane
+    /// can be counted by.
+    pub attempts: String,
+    pub inventory: String,
+    pub junit: String,
+    pub log: String,
+    pub manifest: String,
+    pub pressure: String,
+    pub report: String,
     /// Where the test runner leaves its report, relative to the subject
     /// checkout.
     ///
@@ -460,18 +472,6 @@ pub struct StressArtifactConfig {
     /// `CARGO_TARGET_DIR`, so the report stays put while the build is sent to
     /// the run's own directory.
     pub subject_junit: String,
-    pub inventory: String,
-    pub junit: String,
-    pub log: String,
-    pub manifest: String,
-    pub pressure: String,
-    pub report: String,
-    pub envelope_dir: Option<String>,
-    pub line_log: Option<String>,
-    /// Per-attempt exit codes of a lane that repeats a command. A sanitizer
-    /// leaves no per-test verdict, so this is the whole of what such a lane
-    /// can be counted by.
-    pub attempts: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -485,9 +485,15 @@ pub struct StressEnvironmentConfig {
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressModeConfig {
-    pub features: Vec<String>,
-    pub set_env: BTreeMap<String, String>,
     pub raw_path_env: BTreeMap<String, String>,
+    pub set_env: BTreeMap<String, String>,
+    /// Where this command leaves a `JUnit` report, relative to `build_dir`.
+    ///
+    /// An exit code names no test. When the command runs its tests under a
+    /// runner that writes a report anyway, that report is what turns "something
+    /// aborted" into "this test aborted, this often". The runner overwrites the
+    /// file every attempt, so the lane keeps a copy of each.
+    pub attempt_junit: Option<String>,
     /// A command this lane runs instead of the configured test runner.
     ///
     /// Some lanes cannot be described as a feature set: a sanitizer lane picks
@@ -496,6 +502,7 @@ pub struct StressModeConfig {
     /// The run launches the command and reads what it leaves behind. Empty
     /// means the lane runs the configured test runner and is measured per test.
     pub command: Vec<String>,
+    pub features: Vec<String>,
     /// Whether the command performs the run's repeats itself.
     ///
     /// A command that runs its tests under nextest can be handed the count
@@ -506,29 +513,22 @@ pub struct StressModeConfig {
     /// pays a rebuild and a cold start each time and can report only an exit
     /// code — and an exit code names no test.
     pub owns_repeats: bool,
-    /// Where this command leaves a `JUnit` report, relative to `build_dir`.
-    ///
-    /// An exit code names no test. When the command runs its tests under a
-    /// runner that writes a report anyway, that report is what turns "something
-    /// aborted" into "this test aborted, this often". The runner overwrites the
-    /// file every attempt, so the lane keeps a copy of each.
-    pub attempt_junit: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
 #[serde(default, deny_unknown_fields)]
 pub struct StressEvidenceConfig {
-    pub envelope_schema: Option<String>,
-    pub envelope_marker: Option<String>,
-    pub envelope_text_field: Option<String>,
-    pub envelope_suffix_markers: Vec<String>,
-    pub line_marker: Option<String>,
     pub dump_marker: Option<String>,
-    pub primitive_marker: Option<String>,
+    pub envelope_marker: Option<String>,
+    pub envelope_schema: Option<String>,
+    pub envelope_text_field: Option<String>,
     pub holder_marker: Option<String>,
+    pub line_marker: Option<String>,
+    pub primitive_marker: Option<String>,
     pub wait_marker: Option<String>,
     pub direct_markers: Vec<String>,
+    pub envelope_suffix_markers: Vec<String>,
     pub source_excludes: Vec<String>,
 }
 

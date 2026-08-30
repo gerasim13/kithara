@@ -17,9 +17,9 @@ use crate::{bridge::TrackState, worker::ServiceClass};
 #[fieldwork(opt_in, get)]
 pub struct PlayerTrack {
     pub(super) resource: Box<PlayerResource>,
+    pub(super) fade: TrackFade,
     #[field(get, copy)]
     pub(super) item_id: TrackId,
-    pub(super) fade: TrackFade,
     #[field(get, copy)]
     pub(super) state: TrackState,
     pub(super) triggers: TrackTriggers,
@@ -101,35 +101,6 @@ impl PlayerTrack {
         track
     }
 
-    delegate::delegate! {
-        to self.resource {
-            /// Cached span in seconds: how much of the source is on disk.
-            #[must_use]
-            pub fn cached_span(&self) -> f64;
-            /// Decoded-ahead frontier in seconds.
-            #[must_use]
-            pub fn decoded_frontier(&self) -> f64;
-            /// Current visible (post-gapless-trim) duration in seconds.
-            #[must_use]
-            #[expr(observed_duration(self.observed_duration, $))]
-            pub fn duration(&self) -> f64;
-            /// Control-plane handle used to begin this track's seeks off the audio thread.
-            #[must_use]
-            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
-            /// Source identifier.
-            #[must_use]
-            pub fn src(&self) -> &Arc<str>;
-            /// Effective media seconds consumed per output second.
-            #[must_use]
-            pub(crate) fn playback_rate(&self) -> f32;
-            /// Apply a playback-rate target to this track's resource.
-            #[call(apply_playback_rate)]
-            pub fn set_playback_rate(&mut self, rate: f32);
-            /// Propagate the host sample rate to the owned resource.
-            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
-        }
-    }
-
     /// Start a fade-in: transitions to `FadingIn`, targets `FULLY_DRY` (audible).
     pub fn fade_in(&mut self) {
         self.set_state(TrackState::FadingIn);
@@ -143,14 +114,6 @@ impl PlayerTrack {
         self.fade.fade_out();
     }
 
-    /// Instantly start playing at full volume.
-    pub fn play(&mut self) {
-        self.set_state(TrackState::Playing);
-        self.fade.play();
-        self.triggers.reset();
-        self.ended_at_eof = false;
-    }
-
     /// Re-base this track onto a slot seek epoch the processor has applied.
     ///
     /// Every loaded track observes the epoch, not just the ones a seek moves:
@@ -158,6 +121,14 @@ impl PlayerTrack {
     /// natural end would never finalize.
     pub const fn observe_seek_epoch(&mut self, epoch: u64) {
         self.seek_epoch = epoch;
+    }
+
+    /// Instantly start playing at full volume.
+    pub fn play(&mut self) {
+        self.set_state(TrackState::Playing);
+        self.fade.play();
+        self.triggers.reset();
+        self.ended_at_eof = false;
     }
 
     /// Current media position in seconds.
@@ -219,6 +190,35 @@ impl PlayerTrack {
     fn update_service_class(&self, state: TrackState) {
         self.resource
             .set_service_class(service_class_for_state(state));
+    }
+
+    delegate::delegate! {
+        to self.resource {
+            /// Cached span in seconds: how much of the source is on disk.
+            #[must_use]
+            pub fn cached_span(&self) -> f64;
+            /// Decoded-ahead frontier in seconds.
+            #[must_use]
+            pub fn decoded_frontier(&self) -> f64;
+            /// Current visible (post-gapless-trim) duration in seconds.
+            #[must_use]
+            #[expr(observed_duration(self.observed_duration, $))]
+            pub fn duration(&self) -> f64;
+            /// Control-plane handle used to begin this track's seeks off the audio thread.
+            #[must_use]
+            pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>>;
+            /// Source identifier.
+            #[must_use]
+            pub fn src(&self) -> &Arc<str>;
+            /// Effective media seconds consumed per output second.
+            #[must_use]
+            pub(crate) fn playback_rate(&self) -> f32;
+            /// Apply a playback-rate target to this track's resource.
+            #[call(apply_playback_rate)]
+            pub fn set_playback_rate(&mut self, rate: f32);
+            /// Propagate the host sample rate to the owned resource.
+            pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
+        }
     }
 }
 

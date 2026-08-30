@@ -14,16 +14,6 @@ pub struct FileLock {
 }
 
 impl FileLock {
-    /// Takes `file`'s shared lock, waiting out an exclusive holder.
-    ///
-    /// # Errors
-    ///
-    /// When the lock cannot be taken.
-    pub fn shared(file: File) -> io::Result<Self> {
-        FileExt::lock_shared(&file)?;
-        Ok(Self { file })
-    }
-
     /// Takes `file`'s exclusive lock, waiting out every other holder.
     ///
     /// # Errors
@@ -34,13 +24,13 @@ impl FileLock {
         Ok(Self { file })
     }
 
-    /// Takes `file`'s shared lock unless an exclusive holder has it.
+    /// Takes `file`'s shared lock, waiting out an exclusive holder.
     ///
     /// # Errors
     ///
-    /// [`TryLockError::WouldBlock`] when a holder has the file.
-    pub fn try_shared(file: File) -> Result<Self, TryLockError> {
-        FileExt::try_lock_shared(&file)?;
+    /// When the lock cannot be taken.
+    pub fn shared(file: File) -> io::Result<Self> {
+        FileExt::lock_shared(&file)?;
         Ok(Self { file })
     }
 
@@ -51,6 +41,16 @@ impl FileLock {
     /// [`TryLockError::WouldBlock`] when a holder has the file.
     pub fn try_exclusive(file: File) -> Result<Self, TryLockError> {
         FileExt::try_lock(&file)?;
+        Ok(Self { file })
+    }
+
+    /// Takes `file`'s shared lock unless an exclusive holder has it.
+    ///
+    /// # Errors
+    ///
+    /// [`TryLockError::WouldBlock`] when a holder has the file.
+    pub fn try_shared(file: File) -> Result<Self, TryLockError> {
+        FileExt::try_lock_shared(&file)?;
         Ok(Self { file })
     }
 }

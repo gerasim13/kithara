@@ -16,16 +16,6 @@ pub trait Stage {
     /// compared against another set page by page.
     fn geometry(&self) -> Geometry;
 
-    /// Opens a page, ready to be photographed as it stands.
-    ///
-    /// # Errors
-    /// Fails when the page cannot be opened, which for a retained host means
-    /// its document did not compile or did not mount.
-    fn turn(&mut self, page: &Self::Page) -> Result<(), String>;
-
-    /// Advances the open page by one step of this stage's own clock.
-    fn tick(&mut self);
-
     /// Rasterises the open page and answers with its pixels, RGBA8, row major,
     /// borrowed from whatever storage the stage rasterised into. The stage owns
     /// them because only the stage knows how they are produced: one host reads
@@ -36,4 +26,14 @@ pub trait Stage {
     /// Fails when no page is open, or when the page cannot be drawn or read
     /// back.
     fn shoot(&mut self) -> Result<&[u8], String>;
+
+    /// Advances the open page by one step of this stage's own clock.
+    fn tick(&mut self);
+
+    /// Opens a page, ready to be photographed as it stands.
+    ///
+    /// # Errors
+    /// Fails when the page cannot be opened, which for a retained host means
+    /// its document did not compile or did not mount.
+    fn turn(&mut self, page: &Self::Page) -> Result<(), String>;
 }

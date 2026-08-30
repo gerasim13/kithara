@@ -4,20 +4,20 @@ pub(crate) const SHADER: &str = include_str!("../../../assets/shaders/vis.wgsl")
 
 #[derive(Clone, Copy)]
 pub(crate) struct Uniforms {
+    frame: VisFrame,
     origin: [f32; 2],
     resolution: [f32; 2],
-    frame: VisFrame,
 }
 
 impl Uniforms {
-    pub(crate) const BYTE_COUNT: usize = 32;
     pub(crate) const BUFFER_SIZE: u64 = 32;
+    pub(crate) const BYTE_COUNT: usize = 32;
 
     pub(crate) const fn new(frame: VisFrame, origin: [f32; 2], resolution: [f32; 2]) -> Self {
         Self {
+            frame,
             origin,
             resolution,
-            frame,
         }
     }
 

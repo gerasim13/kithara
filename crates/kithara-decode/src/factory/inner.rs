@@ -28,11 +28,6 @@ use crate::{
     traits::BoxedSource,
 };
 
-const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
-    Some(bytes) => bytes,
-    None => unreachable!(),
-};
-
 /// Explicit backend selection for [`DecoderFactory`].
 ///
 /// Replaces the legacy boolean `prefer_hardware` flag with a typed
@@ -306,6 +301,11 @@ impl DecoderFactory {
     /// `media_info`, for the kithara-audio readiness gate.
     #[must_use]
     pub fn reader_profile(media_info: &MediaInfo, byte_map: Option<&dyn ByteMap>) -> ReaderProfile {
+        const READER_READ_AHEAD_BYTES: NonZeroU64 = match NonZeroU64::new(32 * 1_024) {
+            Some(bytes) => bytes,
+            None => unreachable!(),
+        };
+
         let input = match byte_map {
             Some(_)
                 if media_info
@@ -600,8 +600,8 @@ fn scale_gapless_for_output_domain(
         });
     }
 
-    // Container probes are born in source-rate frames; the trimmer only sees
-    // decoder-output frames, so Apple fused SRC scales once at this boundary.
+    // WHY: Container probes are born in source-rate frames; the trimmer only sees decoder-output frames, so Apple fused SRC scales once
+    // at this boundary.
     Ok(Some(GaplessInfo {
         leading_frames: round_scaled_frames(info.leading_frames, source_rate, output_rate)?,
         trailing_frames: round_scaled_frames(info.trailing_frames, source_rate, output_rate)?,
@@ -1028,8 +1028,8 @@ mod apple_factory_tests {
     }
 
     struct OutputDomainCodec {
-        track_info: DecoderTrackInfo,
         spec: AudioSpec,
+        track_info: DecoderTrackInfo,
         frames_per_call: u32,
     }
 

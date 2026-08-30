@@ -13,12 +13,20 @@ pub(in crate::gui) struct Modules {
 impl Modules {
     const ALL: [&'static str; 4] = ["ov", "mix", "lib", "cpu"];
 
-    pub(in crate::gui) fn on(&self) -> usize {
-        Self::ALL.len() - self.off.len()
+    fn count_label(on: usize) -> String {
+        format!("{on} OF {}", Self::ALL.len())
     }
 
     pub(in crate::gui) fn is_on(&self, module: &str) -> bool {
         Self::key(module).is_some_and(|key| !self.off.contains(key))
+    }
+
+    fn key(module: &str) -> Option<&'static str> {
+        Self::ALL.into_iter().find(|key| *key == module)
+    }
+
+    pub(in crate::gui) fn on(&self) -> usize {
+        Self::ALL.len() - self.off.len()
     }
 
     pub(in crate::gui) fn toggle(&mut self, module: &str) {
@@ -29,14 +37,6 @@ impl Modules {
             self.off.insert(key);
         }
         self.count = Self::count_label(self.on());
-    }
-
-    fn key(module: &str) -> Option<&'static str> {
-        Self::ALL.into_iter().find(|key| *key == module)
-    }
-
-    fn count_label(on: usize) -> String {
-        format!("{on} OF {}", Self::ALL.len())
     }
 }
 

@@ -14,8 +14,8 @@ pub(crate) struct Settings {
     icon: Rgba,
     idle: Rgba,
     pressed: Rgba,
-    size: f32,
     stroke: Rgba,
+    size: f32,
 }
 
 impl Settings {
@@ -67,7 +67,7 @@ mod tests {
     fn gear() -> Mark {
         IconName::Gear
             .mark()
-            .unwrap_or_else(|| panic!("the built-in gear must resolve to a mark"))
+            .expect("the built-in gear must resolve to a mark")
     }
 
     fn filled(state: VisualState) -> DrawCmd {
@@ -79,7 +79,7 @@ mod tests {
             .commands()
             .first()
             .cloned()
-            .unwrap_or_else(|| panic!("a settings button must fill its box"))
+            .expect("a settings button must fill its box")
     }
 
     /// The hand resting on the button and pressing it are three different
@@ -113,7 +113,7 @@ mod tests {
                 DrawCmd::Text { transform, .. } => Some(transform.dx),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("the gear must be shaped and placed"));
+            .expect("the gear must be shaped and placed");
         let width = super::Marked::new(gear(), skin.global_bar.gear_size).width(&mut text);
 
         assert!((placed - (BOUNDS.x + (BOUNDS.w - width) / 2.0)).abs() < 0.001);

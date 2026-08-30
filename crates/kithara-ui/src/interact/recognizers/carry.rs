@@ -15,6 +15,28 @@ pub(crate) struct Carry {
 }
 
 impl Carry {
+    fn corner(&self, hit: &Hit) -> Option<Pt> {
+        let grab = self.grab?;
+        let at = hit.at()?;
+        Some(Pt {
+            x: at.x - grab.x,
+            y: at.y - grab.y,
+        })
+    }
+
+    pub(crate) const fn cursor(&self) -> CursorShape {
+        if self.grab.is_some() {
+            CursorShape::Grabbing
+        } else {
+            CursorShape::Grab
+        }
+    }
+
+    /// Whether a pointer is carrying this placement right now.
+    pub(crate) const fn is_carried(&self) -> bool {
+        self.grab.is_some()
+    }
+
     pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<Pt> {
         match input {
             Input::Pointer(pointer) if pointer.phase == PointerPhase::Down => {
@@ -57,28 +79,6 @@ impl Carry {
             | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         }
-    }
-
-    /// Whether a pointer is carrying this placement right now.
-    pub(crate) const fn is_carried(&self) -> bool {
-        self.grab.is_some()
-    }
-
-    pub(crate) const fn cursor(&self) -> CursorShape {
-        if self.grab.is_some() {
-            CursorShape::Grabbing
-        } else {
-            CursorShape::Grab
-        }
-    }
-
-    fn corner(&self, hit: &Hit) -> Option<Pt> {
-        let grab = self.grab?;
-        let at = hit.at()?;
-        Some(Pt {
-            x: at.x - grab.x,
-            y: at.y - grab.y,
-        })
     }
 }
 

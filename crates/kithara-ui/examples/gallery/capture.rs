@@ -14,8 +14,8 @@ use crate::sections::{self, Page};
 /// One page to photograph: a tab, and for the modules tab the demo shown in it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Shot {
-    pub(super) tab: Page,
     pub(super) module: Option<Page>,
+    pub(super) tab: Page,
 }
 
 impl Shot {
@@ -84,13 +84,16 @@ impl Capture {
         }
     }
 
-    delegate::delegate! {
-        to self.pending {
-            #[call(pop)]
-            pub(super) fn next(&mut self) -> Option<Shot>;
-            #[call(len)]
-            pub(super) fn remaining(&self) -> usize;
+    /// One line per page, then the directory — printed when the walk finishes.
+    pub(super) fn report(&self) {
+        for path in &self.written {
+            println!("{}", path.display());
         }
+        println!(
+            "{} page(s) written to {}",
+            self.written.len(),
+            self.dir.display()
+        );
     }
 
     /// Encodes one RGBA screenshot and records where it landed.
@@ -116,15 +119,12 @@ impl Capture {
         Ok(path)
     }
 
-    /// One line per page, then the directory — printed when the walk finishes.
-    pub(super) fn report(&self) {
-        for path in &self.written {
-            println!("{}", path.display());
+    delegate::delegate! {
+        to self.pending {
+            #[call(pop)]
+            pub(super) fn next(&mut self) -> Option<Shot>;
+            #[call(len)]
+            pub(super) fn remaining(&self) -> usize;
         }
-        println!(
-            "{} page(s) written to {}",
-            self.written.len(),
-            self.dir.display()
-        );
     }
 }

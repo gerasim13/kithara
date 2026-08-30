@@ -27,26 +27,65 @@ pub(crate) enum Message {
 }
 
 pub(crate) struct Gallery {
-    pub(crate) window_id: window::Id,
     /// This host's own reading of time, advanced by the same step the tick
     /// subscription fires at, so a document bound to it moves with the page.
     pub(crate) clock: Clock,
-    /// How far that clock moves in one frame.
-    pub(crate) step: Duration,
-    pub(crate) reads: DemoReads,
     /// The extensions this application registers, offered to whichever host
     /// draws the page that names one.
     pub(crate) kinds: CustomKinds,
+    pub(crate) reads: DemoReads,
+    /// How far that clock moves in one frame.
+    pub(crate) step: Duration,
+    pub(crate) window_id: window::Id,
+    pub(crate) capture: Option<Capture>,
     pub(crate) layouts: Vec<CompiledUi>,
     pub(crate) module_layouts: Vec<CompiledUi>,
-    pub(crate) capture: Option<Capture>,
 }
 
 impl Gallery {
-    /// The skin the gallery is dressed in, read off the same state every page
-    /// is read from, so turning a page cannot undress it.
-    pub(crate) fn skin(&self) -> &'static Skin {
-        self.reads.skin()
+    /// Selects the next page and lets one frame render before the shot.
+    fn capture_next(&mut self) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        let Some(shot) = capture.next() else {
+            capture.report();
+            return iced::exit();
+        };
+        self.select(shot);
+        Task::done(Message::CaptureShoot(shot))
+    }
+
+    fn capture_save(&mut self, shot: Shot, image: &window::Screenshot) -> Task<Message> {
+        let Some(capture) = self.capture.as_mut() else {
+            return Task::none();
+        };
+        match capture.save(shot, image) {
+            Ok(path) => println!("captured {} ({} left)", path.display(), capture.remaining()),
+            Err(error) => eprintln!("capture failed: {error}"),
+        }
+        Task::done(Message::CaptureNext)
+    }
+
+    pub(crate) fn compiled(&self) -> &CompiledUi {
+        if self.reads.active_tab() == sections::MODULES {
+            &self.module_layouts[sections::module_index(self.reads.active_module())]
+        } else {
+            &self.layouts[sections::index(self.reads.active_tab())]
+        }
+    }
+
+    /// Compiles every page again against the skin the gallery has turned to.
+    ///
+    /// A document is compiled against a skin and not merely painted with one:
+    /// what a page measures comes from the skin's own numbers, so a skin
+    /// changed at runtime is a set of pages built again.
+    pub(crate) fn dress(&mut self) {
+        let resolver = resolver();
+        let endpoints = crate::demo::registry();
+        let skin = self.skin().document();
+        self.layouts = pages(&resolver, &endpoints, skin);
+        self.module_layouts = module_pages(&resolver, &endpoints, skin);
     }
 
     /// The gallery with no window of iced's: the offscreen capture rasterises
@@ -80,13 +119,6 @@ impl Gallery {
         self.compiled().animates || self.reads.feeds()
     }
 
-    /// One frame of the gallery's own time: the clock a document binds to,
-    /// and the application's own reading of how far along it is.
-    pub(crate) fn tick(&mut self) {
-        self.clock = self.clock.advance(self.step);
-        self.reads.tick();
-    }
-
     /// Turns to the page a shot names, as freshly as the retained host mounts
     /// one: that host builds a page its own, so a page opens here at nothing
     /// on the clock and nothing behind it. Carrying the page before it over
@@ -101,49 +133,17 @@ impl Gallery {
         }
     }
 
-    pub(crate) fn compiled(&self) -> &CompiledUi {
-        if self.reads.active_tab() == sections::MODULES {
-            &self.module_layouts[sections::module_index(self.reads.active_module())]
-        } else {
-            &self.layouts[sections::index(self.reads.active_tab())]
-        }
+    /// The skin the gallery is dressed in, read off the same state every page
+    /// is read from, so turning a page cannot undress it.
+    pub(crate) fn skin(&self) -> &'static Skin {
+        self.reads.skin()
     }
 
-    /// Compiles every page again against the skin the gallery has turned to.
-    ///
-    /// A document is compiled against a skin and not merely painted with one:
-    /// what a page measures comes from the skin's own numbers, so a skin
-    /// changed at runtime is a set of pages built again.
-    pub(crate) fn dress(&mut self) {
-        let resolver = resolver();
-        let endpoints = crate::demo::registry();
-        let skin = self.skin().document();
-        self.layouts = pages(&resolver, &endpoints, skin);
-        self.module_layouts = module_pages(&resolver, &endpoints, skin);
-    }
-
-    /// Selects the next page and lets one frame render before the shot.
-    fn capture_next(&mut self) -> Task<Message> {
-        let Some(capture) = self.capture.as_mut() else {
-            return Task::none();
-        };
-        let Some(shot) = capture.next() else {
-            capture.report();
-            return iced::exit();
-        };
-        self.select(shot);
-        Task::done(Message::CaptureShoot(shot))
-    }
-
-    fn capture_save(&mut self, shot: Shot, image: &window::Screenshot) -> Task<Message> {
-        let Some(capture) = self.capture.as_mut() else {
-            return Task::none();
-        };
-        match capture.save(shot, image) {
-            Ok(path) => println!("captured {} ({} left)", path.display(), capture.remaining()),
-            Err(error) => eprintln!("capture failed: {error}"),
-        }
-        Task::done(Message::CaptureNext)
+    /// One frame of the gallery's own time: the clock a document binds to,
+    /// and the application's own reading of how far along it is.
+    pub(crate) fn tick(&mut self) {
+        self.clock = self.clock.advance(self.step);
+        self.reads.tick();
     }
 }
 

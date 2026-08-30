@@ -35,10 +35,6 @@ mod host {
     impl Draws for NavItem {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// A rail item is nothing without the page it points at, so an item
         /// whose endpoint has not said which page is current draws nothing —
         /// and neither does one whose art could not be read.
@@ -47,14 +43,18 @@ mod host {
                 return None;
             };
             Some(NavData {
+                mark,
                 active: *active,
                 label: read.ctx.ui.resolve(self.label).to_owned(),
-                mark,
             })
         }
 
         fn grip(&self, _skin: &Skin, _data: &NavData) -> Grip {
             Grip::Press
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

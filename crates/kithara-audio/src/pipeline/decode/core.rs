@@ -160,18 +160,18 @@ impl DecodeInit {
 pub(crate) struct ActiveDecode {
     #[field(get, vis = "pub(crate)")]
     pub(super) active: DecoderGeneration,
-    pub(super) incoming: Option<IncomingDecode>,
     pub(super) blender: GaplessBlender,
     /// Which transition already announced `DecoderEvent::TransitionHold`,
     /// so a held pass is reported once instead of per tick.
     pub(super) announced_hold: Option<VariantTransition>,
+    pub(super) incoming: Option<IncomingDecode>,
     output: DecodedOutput,
     #[field(get, vis = "pub(crate)", copy)]
     gapless_mode: GaplessMode,
     observer: Option<Box<dyn AudioObserver>>,
-    discontinuity_revision: u64,
     rejected_chunk: Option<AudioChunk>,
     stage_error: Option<DecodeError>,
+    discontinuity_revision: u64,
 }
 
 pub(crate) struct DecodeCtx<'a, T: StreamType> {
@@ -216,16 +216,16 @@ impl ActiveDecode {
         }
     }
 
-    pub(crate) fn flush_reader_signals(&mut self) {
-        self.active.decoder_mut().flush_reader_signals();
-        self.flush_incoming_reader_signals();
-    }
-
     pub(crate) fn discontinuity(&self) -> crate::SourceDiscontinuity {
         crate::SourceDiscontinuity::new(
             self.discontinuity_revision,
             self.active.blender_profile().spec(),
         )
+    }
+
+    pub(crate) fn flush_reader_signals(&mut self) {
+        self.active.decoder_mut().flush_reader_signals();
+        self.flush_incoming_reader_signals();
     }
 
     #[kithara::rtsan_allow_blocking]
@@ -257,14 +257,6 @@ impl ActiveDecode {
         self.next_output_inner(cursor, epoch, true)
     }
 
-    pub(crate) fn next_output_unheld(
-        &mut self,
-        cursor: &mut ResumeCursor,
-        epoch: u64,
-    ) -> DecodeResult<Option<AudioChunk>> {
-        self.next_output_inner(cursor, epoch, false)
-    }
-
     fn next_output_inner(
         &mut self,
         cursor: &mut ResumeCursor,
@@ -294,47 +286,20 @@ impl ActiveDecode {
         Ok(Some(self.blender.process_active(chunk)))
     }
 
+    pub(crate) fn next_output_unheld(
+        &mut self,
+        cursor: &mut ResumeCursor,
+        epoch: u64,
+    ) -> DecodeResult<Option<AudioChunk>> {
+        self.next_output_inner(cursor, epoch, false)
+    }
+
     fn outgoing_holdback_is_active(&self) -> bool {
         let Some(IncomingDecode::Priming { generation, .. }) = self.incoming.as_ref() else {
             return false;
         };
         self.blender.is_steady()
             && self.active.blender_profile().spec() == generation.blender_profile().spec()
-    }
-
-    delegate::delegate! {
-        to self.active {
-            #[call(finish)]
-            pub(crate) fn finish_active(&mut self);
-            pub(crate) fn mark_source_exhausted(&mut self);
-            pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire);
-        }
-        to self.output {
-            pub(crate) const fn stats(&self) -> (u64, u64);
-            pub(crate) fn track(
-                &mut self,
-                chunk: &AudioChunk,
-                emit: Option<&DeferredBus<Event>>,
-            );
-        }
-        to self.blender {
-            #[call(prepare_active)]
-            pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile);
-            #[cfg(test)]
-            #[call(is_steady)]
-            pub(crate) fn blender_is_steady(&self) -> bool;
-        }
-    }
-
-    pub(crate) fn push(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
-        if !self.outgoing_holdback_is_active() {
-            self.active.push(chunk);
-            return Ok(());
-        }
-        match self.active.push_holdback(chunk) {
-            StageResult::Ready | StageResult::NeedMore => Ok(()),
-            StageResult::Invalid(failure) => Err(self.reject_stage(*failure)),
-        }
     }
 
     pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
@@ -351,12 +316,15 @@ impl ActiveDecode {
         }
     }
 
-    pub(crate) fn take_rejected_chunk(&mut self) -> Option<AudioChunk> {
-        self.rejected_chunk.take()
-    }
-
-    pub(crate) fn take_stage_error(&mut self) -> Option<DecodeError> {
-        self.stage_error.take()
+    pub(crate) fn push(&mut self, chunk: AudioChunk) -> DecodeResult<()> {
+        if !self.outgoing_holdback_is_active() {
+            self.active.push(chunk);
+            return Ok(());
+        }
+        match self.active.push_holdback(chunk) {
+            StageResult::Ready | StageResult::NeedMore => Ok(()),
+            StageResult::Invalid(failure) => Err(self.reject_stage(*failure)),
+        }
     }
 
     fn reject_stage(&mut self, failure: StageFailure) -> DecodeError {
@@ -409,8 +377,40 @@ impl ActiveDecode {
         outcome
     }
 
+    pub(crate) fn take_rejected_chunk(&mut self) -> Option<AudioChunk> {
+        self.rejected_chunk.take()
+    }
+
+    pub(crate) fn take_stage_error(&mut self) -> Option<DecodeError> {
+        self.stage_error.take()
+    }
+
     pub(crate) fn update_len(&self, len: u64) {
         self.active.decoder().update_byte_len(len);
+    }
+
+    delegate::delegate! {
+        to self.active {
+            #[call(finish)]
+            pub(crate) fn finish_active(&mut self);
+            pub(crate) fn mark_source_exhausted(&mut self);
+            pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire);
+        }
+        to self.output {
+            pub(crate) const fn stats(&self) -> (u64, u64);
+            pub(crate) fn track(
+                &mut self,
+                chunk: &AudioChunk,
+                emit: Option<&DeferredBus<Event>>,
+            );
+        }
+        to self.blender {
+            #[call(prepare_active)]
+            pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile);
+            #[cfg(test)]
+            #[call(is_steady)]
+            pub(crate) fn blender_is_steady(&self) -> bool;
+        }
     }
 }
 
@@ -1009,8 +1009,8 @@ mod tests {
     }
 
     struct TerminalDecoder {
-        outcome: TerminalOutcome,
         spec: AudioSpec,
+        outcome: TerminalOutcome,
     }
 
     impl TerminalDecoder {

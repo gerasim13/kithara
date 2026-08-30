@@ -9,10 +9,10 @@ use crate::{
 /// A framed box with a caption under it.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Cell {
-    background: Rgba,
+    metrics: CellSkin,
     highlighted: Face,
     idle: Face,
-    metrics: CellSkin,
+    background: Rgba,
     role: TextRoleSkin,
 }
 
@@ -20,8 +20,8 @@ pub(crate) struct Cell {
 /// cell is built.
 #[derive(Clone, PartialEq)]
 struct Face {
-    border: Rgba,
     frame: FrameSkin,
+    border: Rgba,
     label: Rgba,
 }
 

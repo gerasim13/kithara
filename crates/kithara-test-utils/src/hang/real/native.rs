@@ -80,18 +80,18 @@ impl Consts {
 
 #[derive(Debug, Serialize)]
 struct NextestContext {
-    run_id: Option<String>,
-    binary_id: Option<String>,
-    attempt_id: Option<String>,
     attempt: Option<String>,
-    total_attempts: Option<String>,
-    test_name: Option<String>,
+    attempt_id: Option<String>,
+    binary_id: Option<String>,
+    run_id: Option<String>,
     stress_current: Option<String>,
     stress_total: Option<String>,
-    test_group: Option<String>,
     test_global_slot: Option<String>,
+    test_group: Option<String>,
     test_group_slot: Option<String>,
+    test_name: Option<String>,
     test_threads: Option<String>,
+    total_attempts: Option<String>,
 }
 
 impl NextestContext {
@@ -124,13 +124,11 @@ impl NextestContext {
 
 #[derive(Debug, Serialize)]
 struct DumpEnvelope<'a> {
-    schema: &'static str,
-    label: &'a str,
     diagnostic: &'a str,
-    flash: Option<String>,
-    timestamp_ms: u128,
-    pid: u32,
+    label: &'a str,
+    schema: &'static str,
     nextest: NextestContext,
+    flash: Option<String>,
     context: Value,
     /// Flight-recorder tails captured at dump time: the newest DEBUG events
     /// and `#[kithara::probe]` firings. Every dump kind carries them — the
@@ -138,6 +136,8 @@ struct DumpEnvelope<'a> {
     /// duplicates, so this envelope is the only carrier of that context.
     flight_events: Vec<String>,
     flight_probes: Vec<String>,
+    timestamp_ms: u128,
+    pid: u32,
 }
 
 fn flash_dump(label: &str) -> Option<String> {
@@ -337,14 +337,14 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
     let ts = now_ms();
     let pid = std::process::id();
     let envelope = DumpEnvelope {
+        pid,
+        context,
         schema: "kithara.hang.v1",
         label: &label,
         diagnostic: &diagnostic,
         flash: flash_dump(&label),
         timestamp_ms: ts,
-        pid,
         nextest: NextestContext::capture(),
-        context,
         flight_events: bounded_tail(crate::flight::tail(), MAX_FLIGHT_CHANNEL_BYTES),
         flight_probes: bounded_tail(crate::flight::probes_tail(), MAX_FLIGHT_CHANNEL_BYTES),
     };
@@ -579,13 +579,13 @@ mod tests {
         let diagnostic =
             bounded_excerpt(&"\0".repeat(MAX_DIAGNOSTIC_BYTES + 1), MAX_DIAGNOSTIC_BYTES);
         let envelope = DumpEnvelope {
+            nextest,
             schema: "kithara.hang.v1",
             label: &label,
             diagnostic: &diagnostic,
             flash: nonempty_flash_dump("\0".repeat(MAX_FLASH_BYTES + 1)),
             timestamp_ms: u128::MAX,
             pid: u32::MAX,
-            nextest,
             context: bounded_context("\0".repeat(MAX_CONTEXT_BYTES + 1)),
             flight_events: bounded_tail(
                 vec!["\0".repeat(MAX_FLIGHT_CHANNEL_BYTES + 1)],

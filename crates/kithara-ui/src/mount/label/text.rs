@@ -14,12 +14,12 @@ use crate::{
 pub(crate) struct Text<'a> {
     pub(crate) active: Option<&'a Binding>,
     pub(crate) active_color: Option<ColorRole>,
-    pub(crate) align: TextAlign,
     pub(crate) color: Option<ColorRole>,
     pub(crate) font: Option<FontFamily>,
     pub(crate) label: Option<InternId>,
-    pub(crate) style: TextStyle,
     pub(crate) weight: Option<FontWeight>,
+    pub(crate) align: TextAlign,
+    pub(crate) style: TextStyle,
 }
 
 impl Control for Text<'_> {

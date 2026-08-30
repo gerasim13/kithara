@@ -46,25 +46,13 @@ impl SamplePool {
         Self(SharedPool::new(max_buffers, trim_capacity))
     }
 
-    delegate::delegate! {
-        to self.0 {
-            /// Current number of tracked bytes across all live sample buffers.
-            #[must_use]
-            pub fn allocated_bytes(&self) -> usize;
-            /// Wrap an already charged sample buffer for automatic recycling.
-            #[must_use]
-            #[expr(SampleBuffer($))]
-            pub fn attach(&self, value: Vec<f32>) -> SampleBuffer;
-            /// Get a sample buffer from the shared pool.
-            #[must_use]
-            #[expr(SampleBuffer($))]
-            pub fn get(&self) -> SampleBuffer;
-            /// Return a sample buffer to the pool for reuse.
-            pub fn recycle(&self, value: Vec<f32>);
-            /// Get pool hit/miss statistics.
-            #[must_use]
-            pub fn stats(&self) -> PoolStats;
-        }
+    /// Collect samples directly into a buffer owned by this pool.
+    #[must_use]
+    pub fn collect<I>(&self, samples: I) -> SampleBuffer
+    where
+        I: IntoIterator<Item = f32>,
+    {
+        SampleBuffer(self.0.collect(samples))
     }
 
     /// Get a sample buffer with initialization.
@@ -73,15 +61,6 @@ impl SamplePool {
         F: FnOnce(&mut Vec<f32>),
     {
         SampleBuffer(self.0.get_with(init))
-    }
-
-    /// Collect samples directly into a buffer owned by this pool.
-    #[must_use]
-    pub fn collect<I>(&self, samples: I) -> SampleBuffer
-    where
-        I: IntoIterator<Item = f32>,
-    {
-        SampleBuffer(self.0.collect(samples))
     }
 
     /// Pre-warm the pool by creating and recycling `count` buffers.
@@ -113,6 +92,27 @@ impl SamplePool {
             budget,
         ))
     }
+
+    delegate::delegate! {
+        to self.0 {
+            /// Current number of tracked bytes across all live sample buffers.
+            #[must_use]
+            pub fn allocated_bytes(&self) -> usize;
+            /// Wrap an already charged sample buffer for automatic recycling.
+            #[must_use]
+            #[expr(SampleBuffer($))]
+            pub fn attach(&self, value: Vec<f32>) -> SampleBuffer;
+            /// Get a sample buffer from the shared pool.
+            #[must_use]
+            #[expr(SampleBuffer($))]
+            pub fn get(&self) -> SampleBuffer;
+            /// Return a sample buffer to the pool for reuse.
+            pub fn recycle(&self, value: Vec<f32>);
+            /// Get pool hit/miss statistics.
+            #[must_use]
+            pub fn stats(&self) -> PoolStats;
+        }
+    }
 }
 
 /// Pooled sample buffer that auto-recycles to the source pool on drop.
@@ -122,6 +122,14 @@ impl SamplePool {
 pub struct SampleBuffer(PooledOwned<8, Vec<f32>>);
 
 impl SampleBuffer {
+    /// Remove and yield the specified sample range.
+    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, f32>
+    where
+        R: RangeBounds<usize>,
+    {
+        self.0.drain(range)
+    }
+
     delegate::delegate! {
         to self.0 {
             /// Return the allocated sample capacity.
@@ -148,14 +156,6 @@ impl SampleBuffer {
             /// Shorten the buffer to `len` samples.
             pub fn truncate(&mut self, len: usize);
         }
-    }
-
-    /// Remove and yield the specified sample range.
-    pub fn drain<R>(&mut self, range: R) -> std::vec::Drain<'_, f32>
-    where
-        R: RangeBounds<usize>,
-    {
-        self.0.drain(range)
     }
 }
 

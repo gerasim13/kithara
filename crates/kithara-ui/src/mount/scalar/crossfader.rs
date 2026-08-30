@@ -31,10 +31,6 @@ mod host {
     impl Draws for Crossfader {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(self.ticks, skin)
-        }
-
         /// A crossfader is the fraction it sits at, so one whose endpoint has
         /// not reported a fraction draws nothing rather than a rail centred on
         /// a guess.
@@ -54,6 +50,10 @@ mod host {
                     .track(Track::AbsoluteHorizontal)
                     .build(),
             )
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.ticks, skin)
         }
     }
 }

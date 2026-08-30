@@ -110,10 +110,6 @@ impl CustomWidget for Ladder {
         let span = (bounds.w - Self::PAD * 2.0 - Self::GAP * (bars - 1.0)).max(0.0) / bars;
         for index in 0..bars.whole() {
             let step = (index + 1).as_f32() / bars;
-            // Both edges are put on the grid, not the width rounded: a bar that
-            // starts on a half pixel covers one pixel fewer than the same width
-            // starting on a whole one, and rounding the width instead is what
-            // makes two rasterisers disagree about which pixel an edge is in.
             let left = (bounds.x + Self::PAD + index.as_f32() * (span + Self::GAP)).round();
             let right = (left + span).round();
             let ceiling = (floor - room * step).round();

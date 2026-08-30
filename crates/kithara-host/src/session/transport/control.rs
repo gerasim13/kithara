@@ -213,7 +213,7 @@ pub(crate) fn prepare_route_restart<B: AudioBackend>(
         let stamp = target
             .stamp()
             .map_err(|error| SessionError::Graph(error.message().to_owned()))?;
-        // Zero remains a backend-default request; the grid axis is always concrete.
+        // WHY: Zero remains a backend-default request; the grid axis is always concrete.
         let sample_rate = NonZeroU32::new(sample_rate).unwrap_or_else(|| axis.sample_rate());
         state
             .root
@@ -362,8 +362,7 @@ fn update_context<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), Se
     let Err(error) = state.ctx.as_mut().ok_or(SessionError::NoContext)?.update() else {
         return Ok(());
     };
-    // The session owns stream restarts; swallowing this into a message would
-    // strand the transport behind a stream nobody rearms.
+    // WHY: The session owns stream restarts; swallowing this into a message would strand the transport behind a stream nobody rearms.
     if matches!(error, UpdateError::StreamStoppedUnexpectedly(_)) {
         state.stream_needs_restart = true;
     }
@@ -391,9 +390,8 @@ fn abort_commit<B: AudioBackend>(
 
 fn deliver_abort<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
     update_context(state)?;
-    // Firewheel only flushes queued events while a stream runs, so an update
-    // that succeeds on a stopped stream has delivered nothing; leaving the
-    // abort `Pending` is what makes the next refresh retry it.
+    // WHY: Firewheel only flushes queued events while a stream runs, so an update that succeeds on a stopped stream has delivered
+    // nothing; leaving the abort `Pending` is what makes the next refresh retry it.
     if !state
         .ctx
         .as_ref()
@@ -483,9 +481,8 @@ fn apply_completion<B: AudioBackend>(
         {
             (Some(next), Some(next), false)
         }
-        // The graph is authoritative about what it aborted: if it reports our
-        // pending revision, the abort happened whether or not our own delivery
-        // bookkeeping had caught up.
+        // WHY: The graph is authoritative about what it aborted: if it reports our pending revision, the abort happened whether or not our
+        // own delivery bookkeeping had caught up.
         (
             TransportCommitResult::Aborted(_),
             TransportPhase::Aborting {
@@ -547,8 +544,8 @@ fn transport_events(
     let seek = match next.boundary() {
         TransportBoundary::Continuous => None,
         TransportBoundary::Relocate(target) => Some(TransportEvent::SeekCommitted {
-            position_beats: f64::from(target),
             revision,
+            position_beats: f64::from(target),
         }),
     };
     [tempo, play_state, seek]

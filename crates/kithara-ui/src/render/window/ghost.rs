@@ -11,11 +11,11 @@ use crate::{
 /// layout lays out. It paints only: every event passes through it untouched,
 /// and it claims no cursor of its own.
 pub(crate) struct DragGhost {
+    metrics: DragSkin,
+    label: Option<String>,
     background: Rgba,
     border: Rgba,
     text_color: Rgba,
-    metrics: DragSkin,
-    label: Option<String>,
 }
 
 impl DragGhost {

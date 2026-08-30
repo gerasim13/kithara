@@ -53,14 +53,14 @@ pub enum PointerPhase {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct PointerInput {
-    /// Stable identity of the pointer that produced this event.
-    pub id: PointerId,
-    /// Button changed by this event. Motion and lifecycle events carry `None`.
-    pub button: Option<PointerButton>,
-    /// Raw or recognized phase reported by the host.
-    pub phase: PointerPhase,
     /// Host-space logical point, when the source event reports one.
     pub at: Option<Pt>,
+    /// Button changed by this event. Motion and lifecycle events carry `None`.
+    pub button: Option<PointerButton>,
+    /// Stable identity of the pointer that produced this event.
+    pub id: PointerId,
+    /// Raw or recognized phase reported by the host.
+    pub phase: PointerPhase,
     /// Recognized click count. Hosts without multi-click data report one.
     pub clicks: u8,
 }
@@ -76,10 +76,10 @@ impl PointerInput {
         clicks: u8,
     ) -> Self {
         Self {
-            id,
-            button,
-            phase,
             at,
+            button,
+            id,
+            phase,
             clicks,
         }
     }

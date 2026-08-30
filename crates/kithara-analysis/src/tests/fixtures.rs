@@ -156,13 +156,6 @@ impl FakeReader {
     }
 
     #[cfg(feature = "analysis-waveform")]
-    pub(super) fn stalled(stalls: usize) -> Self {
-        let mut outcomes: VecDeque<_> = (0..stalls).map(|_| Ok(pending())).collect();
-        outcomes.push_back(Ok(eof()));
-        Self::new(outcomes)
-    }
-
-    #[cfg(feature = "analysis-waveform")]
     pub(super) fn empty() -> Self {
         Self::new(VecDeque::from([Ok(eof())]))
     }
@@ -172,6 +165,13 @@ impl FakeReader {
         Self::new(VecDeque::from([Err(DecodeError::InvalidData {
             detail: "scripted failure",
         })]))
+    }
+
+    #[cfg(feature = "analysis-waveform")]
+    pub(super) fn stalled(stalls: usize) -> Self {
+        let mut outcomes: VecDeque<_> = (0..stalls).map(|_| Ok(pending())).collect();
+        outcomes.push_back(Ok(eof()));
+        Self::new(outcomes)
     }
 }
 

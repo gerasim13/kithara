@@ -1,9 +1,3 @@
-//! The gallery as a toolkit-neutral application.
-//!
-//! Everything here is stated in terms of `kithara_ui::app`; nothing names a
-//! toolkit. Which host shows it is decided by the feature the crate was built
-//! with.
-
 use kithara_ui::{
     app::App,
     render::{Reads, Skin, UiEvent},
@@ -29,13 +23,6 @@ impl Gallery {
 }
 
 impl App for Gallery {
-    delegate::delegate! {
-        to self.reads {
-            fn skin(&self) -> &Skin;
-            fn tick(&mut self);
-        }
-    }
-
     fn document(&self) -> &str {
         let tab = self.reads.active_tab();
         if tab == sections::MODULES {
@@ -63,6 +50,13 @@ impl App for Gallery {
             }
             UiEvent::ToggleModule(module) => self.reads.toggle_module(module),
             _ => {}
+        }
+    }
+
+    delegate::delegate! {
+        to self.reads {
+            fn skin(&self) -> &Skin;
+            fn tick(&mut self);
         }
     }
 }

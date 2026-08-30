@@ -38,19 +38,19 @@ pub(super) struct RingConsumer {
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
+    consumer_wake_mode: ConsumerWakeMode,
     audio_rx: Inlet<Fetch<AudioChunk>>,
     trash_tx: Outlet<AudioChunk>,
     block_on_underrun: bool,
-    consumer_wake_mode: ConsumerWakeMode,
 }
 
 pub(super) struct RingParts {
     pub(super) epoch: Arc<AtomicU64>,
     pub(super) reader_wake: Arc<ThreadWake>,
+    pub(super) consumer_wake_mode: ConsumerWakeMode,
     pub(super) audio_rx: Inlet<Fetch<AudioChunk>>,
     pub(super) trash_tx: Outlet<AudioChunk>,
     pub(super) block_on_underrun: bool,
-    pub(super) consumer_wake_mode: ConsumerWakeMode,
 }
 
 impl RingConsumer {
@@ -61,6 +61,7 @@ impl RingConsumer {
             parts.consumer_wake_mode
         };
         Self {
+            consumer_wake_mode,
             audio_rx: parts.audio_rx,
             validator: EpochValidator::default(),
             phase: ConsumerPhase::Buffering,
@@ -70,7 +71,6 @@ impl RingConsumer {
             _epoch: parts.epoch,
             preloaded: false,
             block_on_underrun: parts.block_on_underrun,
-            consumer_wake_mode,
         }
     }
 
@@ -96,10 +96,6 @@ impl RingConsumer {
             break;
         }
         popped
-    }
-
-    pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
-        wake_worker(worker, self.consumer_wake_mode);
     }
 
     fn consumer_hang_ctx(&self, ctx: RecvCtx<'_>) -> ConsumerHangCtx {
@@ -278,6 +274,10 @@ impl RingConsumer {
             }
         }
     }
+
+    pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
+        wake_worker(worker, self.consumer_wake_mode);
+    }
 }
 
 pub(super) fn create_channels(
@@ -354,6 +354,10 @@ mod tests {
             Self::with_wake_mode(preloaded, false, ConsumerWakeMode::RealtimeDeferred)
         }
 
+        fn recv(&mut self) -> Option<AudioChunk> {
+            self.ring.recv_valid_chunk(empty_ctx())
+        }
+
         fn with_wake_mode(
             preloaded: bool,
             block_on_underrun: bool,
@@ -365,10 +369,10 @@ mod tests {
             let mut ring = RingConsumer::new(RingParts {
                 audio_rx,
                 trash_tx,
-                reader_wake: Arc::new(ThreadWake::default()),
-                epoch: Arc::new(AtomicU64::new(0)),
                 block_on_underrun,
                 consumer_wake_mode,
+                reader_wake: Arc::new(ThreadWake::default()),
+                epoch: Arc::new(AtomicU64::new(0)),
             });
             ring.preloaded = preloaded;
             Self {
@@ -379,10 +383,6 @@ mod tests {
                 playhead: Arc::new(PlayheadState::new()),
                 _trash_rx: trash_rx,
             }
-        }
-
-        fn recv(&mut self) -> Option<AudioChunk> {
-            self.ring.recv_valid_chunk(empty_ctx())
         }
     }
 

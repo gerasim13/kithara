@@ -54,8 +54,8 @@ pub struct Region {
 
 struct RegionInner {
     byte_pool: BytePool,
-    sample_pool: SamplePool,
     budget: RegionBudget,
+    sample_pool: SamplePool,
 }
 
 impl Region {
@@ -73,8 +73,8 @@ impl Region {
         Self {
             inner: Arc::new(RegionInner {
                 byte_pool,
-                sample_pool,
                 budget,
+                sample_pool,
             }),
         }
     }

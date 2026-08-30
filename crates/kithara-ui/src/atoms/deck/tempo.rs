@@ -12,11 +12,11 @@ const ELAPSED: &str = "TIME";
 /// The deck's tempo, or where it is when no tempo has been measured.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Tempo {
-    caption: Rgba,
-    caption_role: TextRoleSkin,
     metrics: DeckSkin,
+    caption: Rgba,
     panel: Rgba,
     reading: Rgba,
+    caption_role: TextRoleSkin,
     role: TextRoleSkin,
 }
 
@@ -75,8 +75,8 @@ impl Tempo {
                     &caption,
                     ELAPSED,
                     Transform::translate(Pt {
-                        x: bounds.x + (bounds.w - caption.width()) / 2.0,
                         y,
+                        x: bounds.x + (bounds.w - caption.width()) / 2.0,
                     }),
                     self.caption,
                 );

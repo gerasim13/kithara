@@ -58,14 +58,14 @@ pub(crate) struct PlanConfig {
     pub(crate) look_ahead_segments: Option<usize>,
     #[builder(default)]
     pub(crate) size_probe_method: SizeProbeMethod,
-    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
-    /// may emit.
-    #[builder(default = HlsConfig::DEFAULT_DOWNLOAD_BATCH_SIZE)]
-    pub(crate) prefetch_budget: usize,
     /// Mirrors `HlsConfig::acquire_attempt_budget`: dispatch rounds a slot
     /// gets before an acquire failure settles it terminally.
     #[builder(default = HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub(crate) acquire_attempt_budget: u8,
+    /// Mirrors `HlsConfig::download_batch_size`: segments one dispatch round
+    /// may emit.
+    #[builder(default = HlsConfig::DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    pub(crate) prefetch_budget: usize,
 }
 
 pub(crate) struct PlanCtx {
@@ -147,7 +147,6 @@ pub(super) struct VariantSeek {
     /// to not-ready (never spins) on a write-in-flight. Off-RT completers
     /// CAS-consume the generation.
     pub(super) exact_seek: CasAnchorCell,
-    pub(super) size_demand: Mutex<SizeDemandState>,
     /// `(segment_idx, size)` settles parked while a segment-aware seek
     /// tail is active: a media settle landing behind the tail must not
     /// re-key the byte space the post-seek reader lives in, so its size
@@ -160,6 +159,7 @@ pub(super) struct VariantSeek {
     /// freeze decision and the drain serialize with every frame
     /// publication.
     pub(super) deferred_prefix: Mutex<Vec<(u32, u64)>>,
+    pub(super) size_demand: Mutex<SizeDemandState>,
 }
 
 #[derive(derive_more::Deref)]
@@ -201,8 +201,7 @@ impl VariantFlow {
         Self {
             prefetch_anchor: AtomicU64::new(0),
             prefetch_resume_at: AtomicU64::new(NO_PREFETCH_DEFERRAL),
-            // Preallocate to the worst-case rebuild size (init + every media
-            // segment + the seg-0 decoder probe) so the per-seek rebuild in
+            // WHY: Preallocate to the worst-case rebuild size (init + every media segment + the seg-0 decoder probe) so the per-seek rebuild in
             // `rebuild_queue` never reallocates.
             queue: PlanQueue::new(num_segments.saturating_add(2), num_segments),
             reader: ReaderRuntime::new(seek_obs),

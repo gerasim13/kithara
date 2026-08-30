@@ -57,10 +57,10 @@ impl Status {
 struct Stage {
     name: &'static str,
     program: &'static str,
+    own_crates: Option<Vec<String>>,
     args: Vec<String>,
     advisory: bool,
     strict: bool,
-    own_crates: Option<Vec<String>>,
 }
 
 impl Stage {
@@ -75,6 +75,11 @@ impl Stage {
         }
     }
 
+    const fn advisory(mut self) -> Self {
+        self.advisory = true;
+        self
+    }
+
     /// The crates whose findings this stage is allowed to fail on, for a tool
     /// that reports findings without failing. Such a tool exits 0 whether or
     /// not it found anything, so a green exit alone would report every run as
@@ -82,22 +87,6 @@ impl Stage {
     /// dependencies included, which nobody here can fix.
     fn own_crates(mut self, crates: &[String]) -> Self {
         self.own_crates = Some(crates.to_vec());
-        self
-    }
-
-    const fn advisory(mut self) -> Self {
-        self.advisory = true;
-        self
-    }
-
-    /// A stage whose tool is not provisioned by this repository's own CI
-    /// tooling (see `.config/ci-pins.toml` and `xtask/src/ci/image.rs`).
-    /// `ENV_SKIP_MARKERS` exists for transient, environment-level noise on
-    /// tools the fleet does provision; a stage marked strict never gets that
-    /// pass, because a missing tool here is missing coverage the fleet
-    /// never signed up to give, not a fluke worth hiding behind SKIP.
-    const fn strict(mut self) -> Self {
-        self.strict = true;
         self
     }
 
@@ -125,6 +114,17 @@ impl Stage {
             strict: false,
             own_crates: None,
         }
+    }
+
+    /// A stage whose tool is not provisioned by this repository's own CI
+    /// tooling (see `.config/ci-pins.toml` and `xtask/src/ci/image.rs`).
+    /// `ENV_SKIP_MARKERS` exists for transient, environment-level noise on
+    /// tools the fleet does provision; a stage marked strict never gets that
+    /// pass, because a missing tool here is missing coverage the fleet
+    /// never signed up to give, not a fluke worth hiding behind SKIP.
+    const fn strict(mut self) -> Self {
+        self.strict = true;
+        self
     }
 }
 
@@ -173,11 +173,11 @@ pub(crate) fn run(_args: &HealthArgs) -> Result<()> {
 /// paths `cargo metadata` resolves it to.
 #[derive(Default)]
 struct Resolved {
-    machete_paths: Vec<String>,
-    semver_packages: Vec<String>,
     geiger_manifest: String,
-    own_crates: Vec<String>,
     lockbud_toolchain: String,
+    machete_paths: Vec<String>,
+    own_crates: Vec<String>,
+    semver_packages: Vec<String>,
 }
 
 fn build_stages(project: &ProjectConfig) -> Result<Vec<Stage>> {

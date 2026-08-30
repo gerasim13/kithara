@@ -20,9 +20,9 @@ mod holdback;
 
 #[derive(Clone, Copy)]
 struct Holdback {
+    spec: AudioSpec,
     join_frames: u64,
     slots: usize,
-    spec: AudioSpec,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -104,146 +104,20 @@ impl DecoderGeneration {
             installed_at_seek_epoch,
             gapless_profile,
             gapless,
+            pending_head_skip,
             finished: false,
             source_exhausted: false,
             exhaustion_observed: false,
             holdback: None,
             timeline_gap_floor: 0,
-            pending_head_skip,
             staged: VecDeque::new(),
             #[cfg(test)]
             staged_scan_count: Cell::new(0),
         }
     }
 
-    delegate::delegate! {
-        to self.decoder {
-            pub(crate) fn blender_profile(&self) -> BlenderProfile;
-            #[call(as_ref)]
-            pub(crate) fn decoder(&self) -> &dyn Decoder;
-            #[call(as_mut)]
-            pub(crate) fn decoder_mut(&mut self) -> &mut dyn Decoder;
-        }
-        to self.staged {
-            #[cfg(test)]
-            #[call(capacity)]
-            pub(crate) fn staged_capacity(&self) -> usize;
-        }
-    }
-
-    pub(crate) fn finish(&mut self) {
-        if self.finished {
-            return;
-        }
-        self.finished = true;
-        self.holdback = None;
-        let codec = self.media_info.as_ref().and_then(|info| info.codec);
-        self.gapless
-            .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
-        self.gapless.flush();
-    }
-
-    pub(crate) const fn mark_source_exhausted(&mut self) {
-        self.source_exhausted = true;
-    }
-
-    pub(crate) const fn observe_exhaustion(&mut self) {
-        self.exhaustion_observed = true;
-    }
-
-    pub(crate) fn finish_staging(&mut self) {
-        self.finish();
-        while let Some(chunk) = self.gapless.next() {
-            self.staged.push_back(chunk);
-        }
-    }
-
-    pub(crate) fn has_output(&self) -> bool {
-        !self.staged.is_empty() || self.gapless.has_output()
-    }
-
-    pub(crate) const fn media_info(&self) -> Option<&MediaInfo> {
-        self.media_info.as_ref()
-    }
-
-    pub(crate) fn next(&mut self) -> Option<AudioChunk> {
-        self.holdback = None;
-        self.staged.pop_front().or_else(|| self.gapless.next())
-    }
-
-    pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
-        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
-            Ok(result) => result,
-            Err(payload) => {
-                warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
-                Err(DecodeError::InvalidData {
-                    detail: "decoder panicked during next_chunk",
-                })
-            }
-        }
-    }
-    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
-        self.finished = false;
-        self.source_exhausted = false;
-        self.exhaustion_observed = false;
-        self.holdback = None;
-        self.gapless.notify_seek(retire);
-        for chunk in self.staged.drain(..) {
-            retire.retire(chunk);
-        }
-    }
-
-    pub(crate) const fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
-        self.pending_head_skip.as_mut()
-    }
-
-    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
-        self.holdback = None;
-        self.gapless.push(chunk);
-        while let Some(chunk) = self.gapless.next() {
-            self.staged.push_back(chunk);
-        }
-    }
-
-    pub(crate) fn push(&mut self, chunk: AudioChunk) {
-        self.holdback = None;
-        self.gapless.push(chunk);
-    }
-
-    pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
-        self.holdback = None;
-        self.staged.pop_front()
-    }
-
-    pub(crate) fn push_staged_front(&mut self, chunk: AudioChunk) {
-        self.holdback = None;
-        self.staged.push_front(chunk);
-    }
-
-    pub(crate) fn staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
-        #[cfg(test)]
-        self.record_staged_scan();
-        let first = self.staged.front()?;
-        let spec = first.spec();
-        let (start, mut end) = chunk_range(first, spec)?;
-        for chunk in self.staged.iter().skip(1) {
-            let (next, next_end) = chunk_range(chunk, spec)?;
-            if next != end {
-                return None;
-            }
-            end = next_end;
-        }
-        Some((start, end, spec))
-    }
-
-    pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
-        let Some(end) = start.checked_add(frames) else {
-            return false;
-        };
-        let Some((first, staged_end, staged_spec)) = self.staged_span() else {
-            return false;
-        };
-        staged_spec == spec && first <= start && end <= staged_end
+    pub(crate) fn align_timeline_gap(&mut self, gap: u64) {
+        self.timeline_gap_floor = self.timeline_gap_floor.max(gap);
     }
 
     pub(crate) fn copy_staged_frames(
@@ -307,8 +181,119 @@ impl DecoderGeneration {
         written == output.len()
     }
 
-    pub(crate) fn align_timeline_gap(&mut self, gap: u64) {
-        self.timeline_gap_floor = self.timeline_gap_floor.max(gap);
+    pub(crate) fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
+        self.holdback = None;
+        let codec = self.media_info.as_ref().and_then(|info| info.codec);
+        self.gapless
+            .set_tail_compensation(self.decoder.gapless_profile(codec), codec);
+        self.gapless.flush();
+    }
+
+    pub(crate) fn finish_staging(&mut self) {
+        self.finish();
+        while let Some(chunk) = self.gapless.next() {
+            self.staged.push_back(chunk);
+        }
+    }
+
+    pub(crate) fn has_output(&self) -> bool {
+        !self.staged.is_empty() || self.gapless.has_output()
+    }
+
+    pub(crate) const fn mark_source_exhausted(&mut self) {
+        self.source_exhausted = true;
+    }
+
+    pub(crate) const fn media_info(&self) -> Option<&MediaInfo> {
+        self.media_info.as_ref()
+    }
+
+    pub(crate) fn next(&mut self) -> Option<AudioChunk> {
+        self.holdback = None;
+        self.staged.pop_front().or_else(|| self.gapless.next())
+    }
+
+    pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
+        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
+            Ok(result) => result,
+            Err(payload) => {
+                warn!(panic = %panic_message(payload), "decoder panicked during next_chunk");
+                Err(DecodeError::InvalidData {
+                    detail: "decoder panicked during next_chunk",
+                })
+            }
+        }
+    }
+    pub(crate) fn notify_seek(&mut self, retire: &dyn ChunkRetire) {
+        self.finished = false;
+        self.source_exhausted = false;
+        self.exhaustion_observed = false;
+        self.holdback = None;
+        self.gapless.notify_seek(retire);
+        for chunk in self.staged.drain(..) {
+            retire.retire(chunk);
+        }
+    }
+
+    pub(crate) const fn observe_exhaustion(&mut self) {
+        self.exhaustion_observed = true;
+    }
+
+    pub(crate) const fn pending_head_skip_mut(&mut self) -> Option<&mut ResumeState> {
+        self.pending_head_skip.as_mut()
+    }
+
+    pub(crate) fn pop_staged(&mut self) -> Option<AudioChunk> {
+        self.holdback = None;
+        self.staged.pop_front()
+    }
+
+    pub(crate) fn push(&mut self, chunk: AudioChunk) {
+        self.holdback = None;
+        self.gapless.push(chunk);
+    }
+
+    pub(crate) fn push_staged_front(&mut self, chunk: AudioChunk) {
+        self.holdback = None;
+        self.staged.push_front(chunk);
+    }
+
+    pub(crate) fn stage(&mut self, chunk: AudioChunk) {
+        self.holdback = None;
+        self.gapless.push(chunk);
+        while let Some(chunk) = self.gapless.next() {
+            self.staged.push_back(chunk);
+        }
+    }
+
+    pub(crate) fn staged_covers(&self, spec: AudioSpec, start: u64, frames: u64) -> bool {
+        let Some(end) = start.checked_add(frames) else {
+            return false;
+        };
+        let Some((first, staged_end, staged_spec)) = self.staged_span() else {
+            return false;
+        };
+        staged_spec == spec && first <= start && end <= staged_end
+    }
+
+    pub(crate) fn staged_span(&self) -> Option<(u64, u64, AudioSpec)> {
+        #[cfg(test)]
+        self.record_staged_scan();
+        let first = self.staged.front()?;
+        let spec = first.spec();
+        let (start, mut end) = chunk_range(first, spec)?;
+        for chunk in self.staged.iter().skip(1) {
+            let (next, next_end) = chunk_range(chunk, spec)?;
+            if next != end {
+                return None;
+            }
+            end = next_end;
+        }
+        Some((start, end, spec))
     }
 
     pub(crate) fn timeline_gap(&self) -> u64 {
@@ -331,6 +316,21 @@ impl DecoderGeneration {
             )
         };
         leading.saturating_add(gap)
+    }
+
+    delegate::delegate! {
+        to self.decoder {
+            pub(crate) fn blender_profile(&self) -> BlenderProfile;
+            #[call(as_ref)]
+            pub(crate) fn decoder(&self) -> &dyn Decoder;
+            #[call(as_mut)]
+            pub(crate) fn decoder_mut(&mut self) -> &mut dyn Decoder;
+        }
+        to self.staged {
+            #[cfg(test)]
+            #[call(capacity)]
+            pub(crate) fn staged_capacity(&self) -> usize;
+        }
     }
 }
 
@@ -383,16 +383,26 @@ mod tests {
     use super::*;
 
     struct EofDecoder {
-        gapless: Option<GaplessInfo>,
-        default_priming: u64,
         spec: AudioSpec,
-        late_tail_frames: Option<u64>,
         profile_calls: Cell<u32>,
+        gapless: Option<GaplessInfo>,
+        late_tail_frames: Option<u64>,
+        default_priming: u64,
     }
 
     impl Decoder for EofDecoder {
         fn duration(&self) -> Option<Duration> {
             None
+        }
+
+        fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
+            let call = self.profile_calls.get();
+            self.profile_calls.set(call.saturating_add(1));
+            let tail = (call > 0)
+                .then_some(self.late_tail_frames)
+                .flatten()
+                .map(GaplessTailCompensation::new);
+            GaplessProfile::new(self.spec, self.gapless, tail, self.default_priming)
         }
 
         fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
@@ -412,16 +422,6 @@ mod tests {
             self.spec
         }
 
-        fn gapless_profile(&self, _codec: Option<kithara_stream::AudioCodec>) -> GaplessProfile {
-            let call = self.profile_calls.get();
-            self.profile_calls.set(call.saturating_add(1));
-            let tail = (call > 0)
-                .then_some(self.late_tail_frames)
-                .flatten()
-                .map(GaplessTailCompensation::new);
-            GaplessProfile::new(self.spec, self.gapless, tail, self.default_priming)
-        }
-
         fn update_byte_len(&self, _len: u64) {}
     }
 
@@ -435,9 +435,9 @@ mod tests {
     fn generation(spec: AudioSpec) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
+                spec,
                 gapless: None,
                 default_priming: 0,
-                spec,
                 late_tail_frames: None,
                 profile_calls: Cell::new(0),
             }),
@@ -452,9 +452,9 @@ mod tests {
     fn media_generation(spec: AudioSpec, trailing_frames: u64) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
+                spec,
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
                 default_priming: 0,
-                spec,
                 late_tail_frames: None,
                 profile_calls: Cell::new(0),
             }),
@@ -471,9 +471,9 @@ mod tests {
     fn priming_generation(spec: AudioSpec, mode: GaplessMode) -> DecoderGeneration {
         DecoderGeneration::new(
             Box::new(EofDecoder {
+                spec,
                 gapless: None,
                 default_priming: 1_024,
-                spec,
                 late_tail_frames: None,
                 profile_calls: Cell::new(0),
             }),
@@ -520,9 +520,9 @@ mod tests {
         let media_info = codec.map(|codec| MediaInfo::builder().codec(codec).build());
         let mut generation = DecoderGeneration::new(
             Box::new(EofDecoder {
+                spec,
                 gapless: Some(GaplessInfo::new(0, trailing_frames)),
                 default_priming: 0,
-                spec,
                 late_tail_frames: Some(pushed_frames + 1),
                 profile_calls: Cell::new(0),
             }),

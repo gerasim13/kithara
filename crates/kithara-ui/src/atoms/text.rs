@@ -6,10 +6,10 @@ use crate::{
 };
 
 pub(crate) struct Text<'data, 'skin> {
-    content: &'data str,
-    padding_x: f32,
-    role: TextRoleSkin,
     skin: &'skin Skin,
+    content: &'data str,
+    role: TextRoleSkin,
+    padding_x: f32,
 }
 
 impl<'data, 'skin> Text<'data, 'skin> {
@@ -20,10 +20,10 @@ impl<'data, 'skin> Text<'data, 'skin> {
         skin: &'skin Skin,
     ) -> Self {
         Self {
-            content,
-            padding_x,
-            role,
             skin,
+            content,
+            role,
+            padding_x,
         }
     }
 

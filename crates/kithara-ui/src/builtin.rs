@@ -9,8 +9,6 @@ use crate::{
     text::{TextDoc, parse_text},
 };
 
-// `ASSETS` and `PICTURES`: every document and picture the shipped folder holds,
-// read from the folder at build time. See `build.rs`.
 include!(concat!(env!("OUT_DIR"), "/builtin_assets.rs"));
 
 pub const MICRO_PRESET: &str = "micro.klayout.ron";

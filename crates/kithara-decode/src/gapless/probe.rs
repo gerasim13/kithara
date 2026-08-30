@@ -104,9 +104,8 @@ fn read_mp3_probe_prefix(
 ) -> PooledOwned<32, Vec<u8>> {
     let buffer = read_probe_window(source, byte_pool);
     let audio_start = skip_id3v2(&buffer);
-    // A short window means the source ran out of ready bytes, not that the tag
-    // is long, and seeking past the download frontier reads back as EOF. Only a
-    // full window proves the tag really outgrows it.
+    // WHY: A short window means the source ran out of ready bytes, not that the tag is long, and seeking past the download frontier
+    // reads back as EOF.
     if buffer.len() < Consts::WINDOW_BYTES || audio_start < Consts::WINDOW_BYTES {
         return buffer;
     }

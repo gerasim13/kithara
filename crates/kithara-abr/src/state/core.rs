@@ -184,56 +184,10 @@ impl AbrState {
         {
             state.pending = None;
         }
-        // Clear escape BEFORE publishing the new variant: a concurrent tick
-        // that observes the new `current_variant` (Acquire) is then guaranteed
-        // to observe the cleared flag, so it cannot immediately re-escape off
-        // the freshly chosen variant before it has had a chance to deliver.
         self.clear_escape();
         self.current_variant.store(target.get(), Ordering::Release);
         self.record_switch(now);
         drop(state);
-    }
-
-    delegate::delegate! {
-        to self {
-            /// Whether the anti-oscillation interval has elapsed. Before the first
-            /// switch it is measured from the start of the session: that is when the
-            /// throughput estimate rests on the fewest samples, so a fast first segment
-            /// must not be enough to flip the variant out from under a listener who has
-            /// barely started playing.
-            #[expr($.is_zero())]
-            #[call(switch_interval_remaining)]
-            pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool;
-            /// Read-only peek at the pending decision. Returns the
-            /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
-            /// would publish, or `None` when:
-            /// - pending slot is empty;
-            /// - state is locked (the seek-no-switch / blender invariant);
-            /// - pending target equals `current` (no-op switch).
-            ///
-            /// Does not mutate. `current` is supplied by the caller to avoid a
-            /// race with concurrent reads of [`current_variant_index`]; pass
-            /// `self.current_variant_index()` if you do not need an externally
-            /// pinned snapshot.
-            #[must_use]
-            #[expr($.map(PendingAbrDecision::decision))]
-            #[call(claim_pending_decision)]
-            pub fn peek_pending_decision(&self, current: VariantIndex) -> Option<AbrDecision>;
-        }
-    }
-
-    pub(crate) fn switch_interval_remaining(
-        &self,
-        now: Instant,
-        min_interval: Duration,
-    ) -> Duration {
-        let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
-        let since = if nanos == Self::NO_SWITCH {
-            self.reference_instant
-        } else {
-            self.reference_instant + Duration::from_nanos(nanos)
-        };
-        min_interval.saturating_sub(now.duration_since(since))
     }
 
     /// Claim the exact pending request without consuming it.
@@ -435,39 +389,8 @@ impl AbrState {
             .store(self.instant_to_nanos(now), Ordering::Release);
     }
 
-    /// Phase 2 of the two-cursor refactor: record the intent to switch
-    /// to `target` without committing the variant change. The boundary
-    /// commit is driven by [`commit_pending`](Self::commit_pending) at
-    /// segment boundaries (Phase 3 wires the scheduler to call it).
-    ///
-    /// Replace-pending semantics: a request for a *different* target
-    /// overwrites any prior unobserved entry. This honours the user-stated
-    /// contract that a switch only commits at the next segment boundary
-    /// — between two boundaries we keep the latest intent and discard
-    /// stale ones.
-    ///
-    /// A repeat request for the target already queued is a no-op, ticket and
-    /// reason included. The ticket names the exact transition the consumer
-    /// built its incoming session and decoder against, so re-minting one for
-    /// an unchanged intent would cancel that live session on every tick and
-    /// the switch could never finish.
-    ///
-    /// The pending intent is written regardless of `is_locked` — the
-    /// publish gate lives in
-    /// [`peek_pending_decision`](Self::peek_pending_decision), which
-    /// returns `None` while locked so the boundary commit defers until
-    /// post-unlock. Destructive drop of stale pre-seek intents is the
-    /// job of [`invalidate_pending`](Self::invalidate_pending), called
-    /// from `coord::reset_for_seek` on a semantic seek boundary.
-    ///
-    /// A manual pin admits exactly one pending target — its own index.
-    /// A request for any other target under `Manual` mode is a decision
-    /// derived from a superseded mode (a tick racing
-    /// [`set_mode`](Self::set_mode)) and is refused: nothing cleans the
-    /// slot later (`Stay` ticks never touch it), so letting the write
-    /// through would queue a switch the live mode never decided. The
-    /// mode is read under the slot lock, pairing with the
-    /// store-mode-then-clear-slot order in `set_mode`.
+    /// Replaces the pending boundary switch unless the same target is already queued.
+    /// Manual mode accepts only its pinned target.
     ///
     /// # Panics
     ///
@@ -532,28 +455,8 @@ impl AbrState {
             .store(cap.unwrap_or(Self::NO_BANDWIDTH_CAP), Ordering::Release);
     }
 
-    /// Apply a new mode. Caller is responsible for validating that
-    /// `Manual(idx)` references a known variant — variants live on the
-    /// peer, not the state, so validation must happen against
-    /// [`Abr::variants()`](crate::Abr::variants) at the call site.
-    ///
-    /// An explicit mode change supersedes any queued boundary switch:
-    /// the pending slot is cleared, and the new mode's intent re-derives
-    /// on the next tick (the controller ticks synchronously from
-    /// `on_mode_changed`). The mode is stored before the slot clears so
-    /// a [`request_target`](Self::request_target) that acquires the slot
-    /// lock afterwards observes the new mode in its consistency check.
-    ///
-    /// A manual pin that names the target already queued restates that intent
-    /// instead of superseding it, so its entry survives. The ticket identifies
-    /// the transition a consumer is already building against; clearing it here
-    /// would cancel that work only for the re-derived tick to ask for the very
-    /// same switch under a new identity.
-    ///
-    /// The restated entry changes hands: the switch is the user's now, and the
-    /// reason travels all the way out to `VariantApplied`. Left as the
-    /// throughput reason that queued it, a manual switch reaches the app
-    /// disguised as an automatic one.
+    /// Applies a validated mode and clears any superseded pending switch.
+    /// A matching manual target keeps its ticket and becomes a manual override.
     pub fn set_mode(&self, mode: AbrMode) {
         let mut state = self.pending.lock();
         self.mode.store(mode.into(), Ordering::Release);
@@ -570,8 +473,50 @@ impl AbrState {
         }
     }
 
+    pub(crate) fn switch_interval_remaining(
+        &self,
+        now: Instant,
+        min_interval: Duration,
+    ) -> Duration {
+        let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
+        let since = if nanos == Self::NO_SWITCH {
+            self.reference_instant
+        } else {
+            self.reference_instant + Duration::from_nanos(nanos)
+        };
+        min_interval.saturating_sub(now.duration_since(since))
+    }
+
     pub fn unlock(&self) {
         let prev = self.lock_count.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(prev > 0, "unlock called without matching lock");
+    }
+
+    delegate::delegate! {
+        to self {
+            /// Whether the anti-oscillation interval has elapsed. Before the first
+            /// switch it is measured from the start of the session: that is when the
+            /// throughput estimate rests on the fewest samples, so a fast first segment
+            /// must not be enough to flip the variant out from under a listener who has
+            /// barely started playing.
+            #[expr($.is_zero())]
+            #[call(switch_interval_remaining)]
+            pub(super) fn can_switch_now(&self, now: Instant, min_interval: Duration) -> bool;
+            /// Read-only peek at the pending decision. Returns the
+            /// [`AbrDecision`] that [`apply_decision`](Self::apply_decision)
+            /// would publish, or `None` when:
+            /// - pending slot is empty;
+            /// - state is locked (the seek-no-switch / blender invariant);
+            /// - pending target equals `current` (no-op switch).
+            ///
+            /// Does not mutate. `current` is supplied by the caller to avoid a
+            /// race with concurrent reads of [`current_variant_index`]; pass
+            /// `self.current_variant_index()` if you do not need an externally
+            /// pinned snapshot.
+            #[must_use]
+            #[expr($.map(PendingAbrDecision::decision))]
+            #[call(claim_pending_decision)]
+            pub fn peek_pending_decision(&self, current: VariantIndex) -> Option<AbrDecision>;
+        }
     }
 }

@@ -136,7 +136,7 @@ impl Node {
             return Some(id);
         }
         drop(w);
-        // Already fired: fire outside the lock.
+        // WHY: Already fired: fire outside the lock.
         slot.fire();
         None
     }

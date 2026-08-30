@@ -127,9 +127,6 @@ impl Default for MenuState {
 
 impl MenuState {
     pub(crate) fn activate(&mut self, path: &str) -> bool {
-        // The page mounts the menu the way the application does: a bar of its
-        // own, with the menu included in it, so the bar stands between the page
-        // and every control the menu names.
         let Some(id) = path.strip_prefix("app-menu/menu/") else {
             return false;
         };
@@ -144,8 +141,6 @@ impl MenuState {
             return self.apply_layout(number);
         }
         match instance {
-            // The widget publishes the dismissal on the popover's own path, so
-            // this handler sets false; the burger stays the only toggle.
             "pop" | "header-close" => self.open = false,
             "burger" => self.open = !self.open,
             "new-window" => self.open_window(),
@@ -170,10 +165,6 @@ impl MenuState {
         self.windows[active].layout = index;
         self.rebuild();
         true
-    }
-
-    pub(crate) const fn set_open(&mut self, open: bool) {
-        self.open = open;
     }
 
     const fn can_open(&self) -> bool {
@@ -297,6 +288,10 @@ impl MenuState {
         self.modules_title = format!("Modules · WINDOW {active}");
         let on = self.windows[self.active].modules_on();
         self.modules_count = format!("{on} OF 11");
+    }
+
+    pub(crate) const fn set_open(&mut self, open: bool) {
+        self.open = open;
     }
 
     fn toggle_group(&mut self, group: MenuGroup) {

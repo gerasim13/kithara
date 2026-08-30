@@ -9,90 +9,44 @@ use tracing::warn;
 use super::renderer::WarpRenderer;
 
 impl WarpRenderer {
-    /// Assemble an output chunk from `scratch`, preserving the exact source
-    /// start and the latest decoder frontier. `replacement` is retained for
-    /// shell-side preparation before the next checked tick.
-    fn emit(
+    fn advance_transition(
         &mut self,
+        channels: usize,
         replacement: Option<SampleBuffer>,
-        held_source_frames: u64,
     ) -> Option<AudioChunk> {
-        let total = self.scratch.as_deref().map_or(0, <[f32]>::len);
-        if total == 0 {
-            self.defer_scratch(replacement);
-            return None;
+        if !self.active {
+            return self.emit_pending_unity(replacement);
         }
-        let frames = match self.spec.frame_count(SampleCount::new(total)) {
-            Ok(frames) => frames,
+        let complete = match self.drain_tail(channels) {
+            Ok(complete) => complete,
             Err(error) => {
-                warn!(?error, total, "discarding malformed Warp output shape");
-                self.scratch.take();
-                self.defer_scratch(replacement);
+                warn!(%error, "time-stretch transition tail failed; preserving queued unity");
+                self.retire_transition_tail(replacement);
                 return None;
             }
         };
-        let mut meta = self.last_input_meta.unwrap_or_default();
-        self.record_rendered_source_end(meta, held_source_frames);
-        // A non-empty output always carries the live source spec. The default
-        // metadata sentinel has zero channels and cannot reach the resampler.
-        meta.spec = self.spec;
-        meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
-        if let Some(start) = self.output_start_meta.take() {
-            if start.frame_offset != meta.frame_offset {
-                meta.source_byte_offset = None;
-                meta.source_bytes = 0;
-            }
-            meta.frame_offset = start.frame_offset;
-            meta.timestamp = start.timestamp;
+        if complete {
+            self.finish_transition_tail();
         }
-        let samples = self.scratch.take()?;
-        self.defer_scratch(replacement);
-        Some(AudioChunk::new(meta, samples))
-    }
-
-    fn finish_transition_tail(&mut self) {
-        self.reset_pending |= self.active;
-        self.pending_meta = None;
-        self.applied_pitch = f64::NAN;
-        self.output_remainder = 0.0;
-        self.source_frames_admitted = 0;
-        self.active = false;
-        self.region = None;
-    }
-
-    fn retire_transition_tail(&mut self, replacement: Option<SampleBuffer>) {
-        self.retire_engine();
-        if let Some(scratch) = self.scratch.as_mut() {
-            scratch.clear();
+        let held_source_frames = if complete {
+            0
+        } else {
+            self.held_source_frames()
+        };
+        if self
+            .scratch
+            .as_deref()
+            .is_some_and(|scratch| !scratch.is_empty())
+        {
+            return self.emit(replacement, held_source_frames);
         }
-        self.defer_scratch(replacement);
-        self.pending_meta = None;
-        self.output_start_meta = None;
-        self.applied_pitch = f64::NAN;
-        self.output_remainder = 0.0;
-        self.source_frames_admitted = 0;
-        self.reset_pending = false;
-        self.active = false;
-        self.region = None;
-    }
-
-    fn queue_unity(
-        &mut self,
-        meta: AudioChunkInfo,
-        samples: &mut SampleBuffer,
-    ) -> Result<(), ElasticError> {
-        let pending = self
-            .pending_source
-            .as_mut()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
-        if !pending.is_empty() {
-            return Err(ElasticError::EnginePreparation(
-                "time-stretch pending source was not committed before unity",
-            ));
+        if complete {
+            return self.emit_pending_unity(replacement);
         }
-        mem::swap(pending, samples);
-        self.pending_unity_meta = Some(meta);
-        Ok(())
+
+        warn!("time-stretch transition tail stopped without output");
+        self.retire_transition_tail(replacement);
+        None
     }
 
     fn begin_unity_transition(
@@ -123,30 +77,6 @@ impl WarpRenderer {
             self.output_start_meta = tail_start_meta;
         }
         self.queue_unity(meta, samples)
-    }
-
-    fn emit_pending_unity(&mut self, replacement: Option<SampleBuffer>) -> Option<AudioChunk> {
-        let meta = self.pending_unity_meta?;
-        let replacement = replacement
-            .or_else(|| self.scratch.take())
-            .or_else(|| self.deferred_scratch.take());
-        let Some(mut replacement) = replacement else {
-            warn!("time-stretch queued unity has no reusable buffer");
-            return None;
-        };
-        replacement.clear();
-        let Some(samples) = self.pending_source.take() else {
-            self.pending_source = Some(replacement);
-            warn!("time-stretch queued unity buffer is unavailable");
-            return None;
-        };
-        self.pending_source = Some(replacement);
-        self.pending_unity_meta = None;
-        self.pending_meta = None;
-        self.last_input_meta = Some(meta);
-        self.output_start_meta = None;
-        self.record_rendered_source_end(meta, 0);
-        Some(AudioChunk::new(meta, samples))
     }
 
     fn drain_tail(&mut self, channels: usize) -> Result<bool, ElasticError> {
@@ -209,63 +139,115 @@ impl WarpRenderer {
         Ok(drain.complete())
     }
 
-    fn process_unity(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        let channels = usize::from(self.spec.channels.max(1));
-        if !self.active && self.pending_frames(channels) == 0 {
-            self.record_rendered_source_end(chunk.meta, 0);
-            return Some(chunk);
-        }
-
-        let AudioChunk { meta, mut samples } = chunk;
-        if let Err(error) = self.begin_unity_transition(meta, &mut samples, channels) {
-            warn!(%error, "time-stretch transition to passthrough failed; dropping chunk");
-            self.retire_engine();
-            self.clear_render_state();
-            self.defer_scratch(Some(samples));
+    /// Assemble an output chunk from `scratch`, preserving the exact source
+    /// start and the latest decoder frontier. `replacement` is retained for
+    /// shell-side preparation before the next checked tick.
+    fn emit(
+        &mut self,
+        replacement: Option<SampleBuffer>,
+        held_source_frames: u64,
+    ) -> Option<AudioChunk> {
+        let total = self.scratch.as_deref().map_or(0, <[f32]>::len);
+        if total == 0 {
+            self.defer_scratch(replacement);
             return None;
         }
-
-        self.advance_transition(channels, Some(samples))
-    }
-
-    fn advance_transition(
-        &mut self,
-        channels: usize,
-        replacement: Option<SampleBuffer>,
-    ) -> Option<AudioChunk> {
-        if !self.active {
-            return self.emit_pending_unity(replacement);
-        }
-        let complete = match self.drain_tail(channels) {
-            Ok(complete) => complete,
+        let frames = match self.spec.frame_count(SampleCount::new(total)) {
+            Ok(frames) => frames,
             Err(error) => {
-                warn!(%error, "time-stretch transition tail failed; preserving queued unity");
-                self.retire_transition_tail(replacement);
+                warn!(?error, total, "discarding malformed Warp output shape");
+                self.scratch.take();
+                self.defer_scratch(replacement);
                 return None;
             }
         };
-        if complete {
-            self.finish_transition_tail();
+        let mut meta = self.last_input_meta.unwrap_or_default();
+        self.record_rendered_source_end(meta, held_source_frames);
+        meta.spec = self.spec;
+        meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
+        if let Some(start) = self.output_start_meta.take() {
+            if start.frame_offset != meta.frame_offset {
+                meta.source_byte_offset = None;
+                meta.source_bytes = 0;
+            }
+            meta.frame_offset = start.frame_offset;
+            meta.timestamp = start.timestamp;
         }
+        let samples = self.scratch.take()?;
+        self.defer_scratch(replacement);
+        Some(AudioChunk::new(meta, samples))
+    }
+
+    fn emit_pending_unity(&mut self, replacement: Option<SampleBuffer>) -> Option<AudioChunk> {
+        let meta = self.pending_unity_meta?;
+        let replacement = replacement
+            .or_else(|| self.scratch.take())
+            .or_else(|| self.deferred_scratch.take());
+        let Some(mut replacement) = replacement else {
+            warn!("time-stretch queued unity has no reusable buffer");
+            return None;
+        };
+        replacement.clear();
+        let Some(samples) = self.pending_source.take() else {
+            self.pending_source = Some(replacement);
+            warn!("time-stretch queued unity buffer is unavailable");
+            return None;
+        };
+        self.pending_source = Some(replacement);
+        self.pending_unity_meta = None;
+        self.pending_meta = None;
+        self.last_input_meta = Some(meta);
+        self.output_start_meta = None;
+        self.record_rendered_source_end(meta, 0);
+        Some(AudioChunk::new(meta, samples))
+    }
+
+    fn finish_transition_tail(&mut self) {
+        self.reset_pending |= self.active;
+        self.pending_meta = None;
+        self.applied_pitch = f64::NAN;
+        self.output_remainder = 0.0;
+        self.source_frames_admitted = 0;
+        self.active = false;
+        self.region = None;
+    }
+
+    #[doc(hidden)]
+    pub fn flush(&mut self) -> Option<AudioChunk> {
+        if let Some(scratch) = self.scratch.as_mut() {
+            scratch.clear();
+        } else {
+            warn!("time-stretch output scratch was not serviced before flush");
+            return None;
+        }
+        self.output_start_meta = None;
+        let channels = usize::from(self.spec.channels.max(1));
+        if self.transition_pending() {
+            return self.advance_transition(channels, None);
+        }
+        let result = self
+            .render_terminal_pending(channels)
+            .and_then(|()| self.drain_tail(channels));
+        let complete = match result {
+            Ok(complete) => complete,
+            Err(error) => {
+                warn!(%error, "time-stretch engine flush failed");
+                self.retire_engine();
+                self.clear_render_state();
+                return None;
+            }
+        };
         let held_source_frames = if complete {
             0
         } else {
             self.held_source_frames()
         };
-        if self
-            .scratch
-            .as_deref()
-            .is_some_and(|scratch| !scratch.is_empty())
-        {
-            return self.emit(replacement, held_source_frames);
-        }
-        if complete {
-            return self.emit_pending_unity(replacement);
-        }
+        self.emit(None, held_source_frames)
+    }
 
-        warn!("time-stretch transition tail stopped without output");
-        self.retire_transition_tail(replacement);
-        None
+    #[doc(hidden)]
+    pub fn prepare(&mut self, spec: AudioSpec) {
+        self.service_target(spec);
     }
 
     fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
@@ -307,42 +289,42 @@ impl WarpRenderer {
         self.emit(Some(samples), held_source_frames)
     }
 
-    #[doc(hidden)]
-    pub fn prepare(&mut self, spec: AudioSpec) {
-        self.service_target(spec);
-    }
+    fn process_unity(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+        let channels = usize::from(self.spec.channels.max(1));
+        if !self.active && self.pending_frames(channels) == 0 {
+            self.record_rendered_source_end(chunk.meta, 0);
+            return Some(chunk);
+        }
 
-    #[doc(hidden)]
-    pub fn flush(&mut self) -> Option<AudioChunk> {
-        if let Some(scratch) = self.scratch.as_mut() {
-            scratch.clear();
-        } else {
-            warn!("time-stretch output scratch was not serviced before flush");
+        let AudioChunk { meta, mut samples } = chunk;
+        if let Err(error) = self.begin_unity_transition(meta, &mut samples, channels) {
+            warn!(%error, "time-stretch transition to passthrough failed; dropping chunk");
+            self.retire_engine();
+            self.clear_render_state();
+            self.defer_scratch(Some(samples));
             return None;
         }
-        self.output_start_meta = None;
-        let channels = usize::from(self.spec.channels.max(1));
-        if self.transition_pending() {
-            return self.advance_transition(channels, None);
+
+        self.advance_transition(channels, Some(samples))
+    }
+
+    fn queue_unity(
+        &mut self,
+        meta: AudioChunkInfo,
+        samples: &mut SampleBuffer,
+    ) -> Result<(), ElasticError> {
+        let pending = self
+            .pending_source
+            .as_mut()
+            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
+        if !pending.is_empty() {
+            return Err(ElasticError::EnginePreparation(
+                "time-stretch pending source was not committed before unity",
+            ));
         }
-        let result = self
-            .render_terminal_pending(channels)
-            .and_then(|()| self.drain_tail(channels));
-        let complete = match result {
-            Ok(complete) => complete,
-            Err(error) => {
-                warn!(%error, "time-stretch engine flush failed");
-                self.retire_engine();
-                self.clear_render_state();
-                return None;
-            }
-        };
-        let held_source_frames = if complete {
-            0
-        } else {
-            self.held_source_frames()
-        };
-        self.emit(None, held_source_frames)
+        mem::swap(pending, samples);
+        self.pending_unity_meta = Some(meta);
+        Ok(())
     }
 
     #[doc(hidden)]
@@ -373,5 +355,21 @@ impl WarpRenderer {
     pub fn reset(&mut self) {
         self.reset_pending = true;
         self.clear_render_state();
+    }
+
+    fn retire_transition_tail(&mut self, replacement: Option<SampleBuffer>) {
+        self.retire_engine();
+        if let Some(scratch) = self.scratch.as_mut() {
+            scratch.clear();
+        }
+        self.defer_scratch(replacement);
+        self.pending_meta = None;
+        self.output_start_meta = None;
+        self.applied_pitch = f64::NAN;
+        self.output_remainder = 0.0;
+        self.source_frames_admitted = 0;
+        self.reset_pending = false;
+        self.active = false;
+        self.region = None;
     }
 }

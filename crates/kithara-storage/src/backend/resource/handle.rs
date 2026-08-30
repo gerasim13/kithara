@@ -140,8 +140,8 @@ impl<D: DriverIo> Resource<Active, D> {
     /// cannot finalize.
     pub fn commit(self, final_len: Option<u64>) -> StorageResult<Resource<Committed, D>> {
         self.data.core.commit_inner(final_len)?;
-        // `commit_inner` set `committed = true`, so the `WriteGuard` drop below
-        // is a no-op. Clone the cheap `Arc`-backed core into the sealed handle.
+        // WHY: `commit_inner` set `committed = true`, so the `WriteGuard` drop below is a no-op. Clone the cheap `Arc`-backed core into the
+        // sealed handle.
         let core = self.data.core.clone();
         Ok(Resource {
             data: ReadCore { core },

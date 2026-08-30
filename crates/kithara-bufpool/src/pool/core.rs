@@ -65,35 +65,10 @@ where
     /// Each probe is a lock-free `pop` — empty shards yield `None`.
     const MAX_PROBE: usize = 4;
 
-    delegate::delegate! {
-        to self.budget {
-            /// Current number of tracked bytes across all live buffers.
-            pub fn allocated_bytes(&self) -> usize;
-            /// Release byte budget (e.g., when a buffer is dropped without returning to pool).
-            ///
-            /// Uses saturating subtraction to prevent underflow when buffers grow
-            /// via `DerefMut` (e.g., `Vec::resize`) without going through
-            /// [`super::owned::PooledOwned::ensure_len`].
-            #[call(release)]
-            pub fn release_budget(&self, amount: usize);
-            /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
-            ///
-            /// Uses a compare-and-swap loop to atomically check and update.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
-            /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
-            #[call(request)]
-            pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted>;
-        }
-    }
-
     /// Return a buffer to the pool.
     pub fn put(&self, value: T, shard_idx: usize) {
         let bytes = value.byte_size();
-        // A trimmed return handed memory back; the budget holds the charge the
-        // buffer carried at its widest until it is told.
+        // WHY: A trimmed return handed memory back; the budget holds the charge the buffer carried at its widest until it is told.
         if let Ok(kept) = self.shards[shard_idx].try_put(value) {
             self.release_budget(bytes.saturating_sub(kept));
         } else {
@@ -143,6 +118,30 @@ where
     fn try_steal(&self, home: usize) -> Option<T> {
         let probe = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
         (1..=probe).find_map(|i| self.shards[(home + i) % SHARDS].try_get())
+    }
+
+    delegate::delegate! {
+        to self.budget {
+            /// Current number of tracked bytes across all live buffers.
+            pub fn allocated_bytes(&self) -> usize;
+            /// Release byte budget (e.g., when a buffer is dropped without returning to pool).
+            ///
+            /// Uses saturating subtraction to prevent underflow when buffers grow
+            /// via `DerefMut` (e.g., `Vec::resize`) without going through
+            /// [`super::owned::PooledOwned::ensure_len`].
+            #[call(release)]
+            pub fn release_budget(&self, amount: usize);
+            /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
+            ///
+            /// Uses a compare-and-swap loop to atomically check and update.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
+            /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
+            #[call(request)]
+            pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted>;
+        }
     }
 }
 

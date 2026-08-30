@@ -15,16 +15,12 @@ pub(in crate::gui) const WINDOW_SIZE: Size = Size {
 pub(in crate::gui) struct WindowState {
     size: Size,
     #[field(get, vis = "pub(in crate::gui)")]
-    title: String,
-    #[field(get, vis = "pub(in crate::gui)")]
     caption: String,
+    #[field(get, vis = "pub(in crate::gui)")]
+    title: String,
 }
 
 impl WindowState {
-    pub(in crate::gui) const fn set_size(&mut self, size: Size) {
-        self.size = size;
-    }
-
     pub(in crate::gui) fn refresh(&mut self, layout: DeckLayout, modules: &Modules) {
         self.title = format!("WINDOW 1 \u{b7} {}", layout.label());
         self.caption = format!(
@@ -33,6 +29,10 @@ impl WindowState {
             self.size.height.round(),
             modules.on()
         );
+    }
+
+    pub(in crate::gui) const fn set_size(&mut self, size: Size) {
+        self.size = size;
     }
 }
 

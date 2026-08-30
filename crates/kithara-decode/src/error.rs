@@ -192,6 +192,20 @@ pub enum ErrorClass {
 }
 
 impl DecodeError {
+    /// Wrap a producer-side stream failure as a [`DecodeError::AudioStream`]
+    /// with a `&'static str` site tag, keeping the cause a typed source
+    /// instead of a pre-formatted message.
+    #[must_use]
+    pub fn audio_stream<E>(what: &'static str, err: E) -> Self
+    where
+        E: Into<Box<dyn StdError + Send + Sync>>,
+    {
+        Self::AudioStream {
+            what,
+            source: err.into(),
+        }
+    }
+
     /// Wrap any `StdError + Send + Sync` payload as a [`DecodeError::Backend`].
     /// Avoids 30+ repeats of `.map_err(|e| DecodeError::Backend { source: Box::new(e) })`
     /// across the apple / android / symphonia codec layers.
@@ -250,20 +264,6 @@ impl DecodeError {
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
         Self::Parse {
-            what,
-            source: err.into(),
-        }
-    }
-
-    /// Wrap a producer-side stream failure as a [`DecodeError::AudioStream`]
-    /// with a `&'static str` site tag, keeping the cause a typed source
-    /// instead of a pre-formatted message.
-    #[must_use]
-    pub fn audio_stream<E>(what: &'static str, err: E) -> Self
-    where
-        E: Into<Box<dyn StdError + Send + Sync>>,
-    {
-        Self::AudioStream {
             what,
             source: err.into(),
         }

@@ -12,13 +12,13 @@ use crate::{
 /// asked for it.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Telemetry {
-    format: ScalarFormat,
-    framed: bool,
     inset: Rgba,
-    metrics: TelemetrySkin,
-    role: TextRoleSkin,
     stroke: Rgba,
     text: Rgba,
+    format: ScalarFormat,
+    metrics: TelemetrySkin,
+    role: TextRoleSkin,
+    framed: bool,
 }
 
 impl Telemetry {
@@ -32,6 +32,15 @@ impl Telemetry {
             role: metrics.text,
             stroke: skin.rgba(metrics.frame.border),
             text: skin.rgba(metrics.text.color),
+        }
+    }
+
+    /// A framed reading fills its row; a bare one is as wide as its digits.
+    pub(crate) const fn declared(&self) -> Size<Length> {
+        if self.framed {
+            Size::new(Length::Fill, Length::Fill)
+        } else {
+            Size::new(Length::Shrink, Length::Fill)
         }
     }
 
@@ -50,15 +59,6 @@ impl Telemetry {
                 "{value:.precision$}",
                 precision = self.metrics.scalar_precision,
             )
-        }
-    }
-
-    /// A framed reading fills its row; a bare one is as wide as its digits.
-    pub(crate) const fn declared(&self) -> Size<Length> {
-        if self.framed {
-            Size::new(Length::Fill, Length::Fill)
-        } else {
-            Size::new(Length::Shrink, Length::Fill)
         }
     }
 

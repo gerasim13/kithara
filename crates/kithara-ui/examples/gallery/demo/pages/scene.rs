@@ -23,17 +23,6 @@ impl Default for SceneState {
 }
 
 impl SceneState {
-    /// Takes the point a drag published, if the path is one of the scene's own
-    /// placements.
-    pub(crate) fn place(&mut self, path: &str, at: Pt) -> bool {
-        match path {
-            "scene/carry-one" => self.one = at,
-            "scene/carry-two" => self.two = at,
-            _ => return false,
-        }
-        true
-    }
-
     /// Answers the press on the artwork by turning the flag it switches on.
     pub(crate) fn activate(&mut self, path: &str) -> bool {
         if path != "scene/switch" {
@@ -51,6 +40,17 @@ impl SceneState {
             _ => return None,
         };
         Some(value)
+    }
+
+    /// Takes the point a drag published, if the path is one of the scene's own
+    /// placements.
+    pub(crate) fn place(&mut self, path: &str, at: Pt) -> bool {
+        match path {
+            "scene/carry-one" => self.one = at,
+            "scene/carry-two" => self.two = at,
+            _ => return false,
+        }
+        true
     }
 }
 

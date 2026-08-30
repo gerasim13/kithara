@@ -229,8 +229,8 @@ impl HlsCoord {
         if !self.active().layout_seek_invariant() {
             self.reset_for_seek();
         }
-        // A seek repositioned the active variant: wake a reader parked on the
-        // pre-seek range so it re-probes against the new position / flush gate.
+        // WHY: A seek repositioned the active variant: wake a reader parked on the pre-seek range so it re-probes against the new position /
+        // flush gate.
         self.signal.fire();
     }
 
@@ -372,12 +372,10 @@ impl HlsCoord {
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         match timeout {
-            // RT / cooperative-yield probe path (`probe_read`): a single
-            // wake-free probe, unchanged — never parks on the gate.
+            // WHY: RT / cooperative-yield probe path (`probe_read`): a single wake-free probe, unchanged - never parks on the gate.
             Some(_) => self.probe_range(range, timeout),
-            // Off-RT consumer (`Stream::read` / `prime_seek_range`): block on
-            // the readiness gate until the range resolves, a segment fails, or
-            // cancel fires. Event-driven — no wall-clock poll.
+            // WHY: Off-RT consumer (`Stream::read` / `prime_seek_range`): block on the readiness gate until the range resolves, a segment fails,
+            // or cancel fires.
             None => Self::wait_range_blocking(&self.signal, &self.cancel, || {
                 self.probe_range(range.clone(), Some(Duration::ZERO))
             }),
@@ -399,37 +397,29 @@ impl HlsCoord {
         cancel: &CancelToken,
         mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
     ) -> StreamResult<WaitOutcome> {
-        // Cancel is the one transition with no producer-side signal; register a
-        // waker that signals the gate so a parked wait observes it. The guard
-        // unregisters when this wait returns (mirror storage `wait.rs`).
+        // WHY: Cancel is the one transition with no producer-side signal; register a waker that signals the gate so a parked wait observes
+        // it.
         let _cancel_wake = {
             let ready = signal.ready_gate();
             cancel.on_cancel(move || ready.signal())
         };
         loop {
             hang_tick!();
-            // Snapshot the gate BEFORE the probe: a signal landing between the
-            // probe and the park advances the counter, so the park returns at
-            // once and we re-probe — no lost wakeup.
+            // WHY: Snapshot the gate BEFORE the probe: a signal landing between the probe and the park advances the counter, so the park returns
+            // at once and we re-probe - no lost wakeup.
             let since = signal.current();
             match probe() {
                 Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
                 Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
                 Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    // Not ready: park on the gate until a signal advances it,
-                    // bounded by the re-aim heartbeat.
+                    // WHY: Not ready: park on the gate until a signal advances it, bounded by the re-aim heartbeat.
                 }
                 Err(e) => return Err(e),
             }
-            // Event-driven park: a write/commit/fence/seek/cancel signal wakes
-            // us at once to re-probe (the fact of a write, never a timer). If
-            // the gate stays quiet for the heartbeat the peer may be mis-aimed
-            // after a seek; yield so the off-RT reader re-asserts its prefetch
-            // aim and re-enters (mirrors the old per-iteration `notify_peer_wake`
-            // without the wall-clock data poll).
+            // WHY: Event-driven park: a write/commit/fence/seek/cancel signal wakes us at once to re-probe (the fact of a write, never a timer).
             if signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
-                // Woke from a signal — activity, not a wedge: reset the watchdog.
+                // WHY: Woke from a signal - activity, not a wedge: reset the watchdog.
                 hang_reset!();
             } else {
                 return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
@@ -501,13 +491,8 @@ impl HlsProbe {
 }
 
 impl SourceProbe for HlsProbe {
-    delegate! {
-        to self.coord {
-            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            fn position(&self) -> u64;
-            fn set_position(&self, pos: u64);
-            fn len(&self) -> Option<u64>;
-        }
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
     }
 
     fn phase(&self) -> SourcePhase {
@@ -515,8 +500,13 @@ impl SourceProbe for HlsProbe {
         self.coord.phase_at(pos..pos.saturating_add(1))
     }
 
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
+    delegate! {
+        to self.coord {
+            fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            fn position(&self) -> u64;
+            fn set_position(&self, pos: u64);
+            fn len(&self) -> Option<u64>;
+        }
     }
 }
 
@@ -556,22 +546,34 @@ impl VariantControl for HlsCoord {
         Self::selected_variant_for_seek(self)
     }
 
-    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
-        self.sessions.incoming_session().is_some_and(|session| {
-            session.transition() == Some(transition)
-                && session.wait_phase() == SourcePhase::WaitingDemand
-        })
-    }
-
     fn take_prepared_variant_reader(
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake> {
         Self::take_prepared_variant_reader(self, transition)
     }
+
+    fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
+        self.sessions.incoming_session().is_some_and(|session| {
+            session.transition() == Some(transition)
+                && session.wait_phase() == SourcePhase::WaitingDemand
+        })
+    }
 }
 
 impl ByteMap for HlsCoord {
+    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.active().descriptor_after_byte(byte)
+    }
+
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.active().descriptor(segment_index as usize)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.active().descriptor_at_time(t)
+    }
+
     delegate! {
         to self {
             #[call(seek_time_anchor)]
@@ -590,18 +592,6 @@ impl ByteMap for HlsCoord {
             #[call(active)]
             fn segment_count(&self) -> Option<u32>;
         }
-    }
-
-    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.active().descriptor_after_byte(byte)
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.active().descriptor(segment_index as usize)
-    }
-
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.active().descriptor_at_time(t)
     }
 }
 
@@ -642,8 +632,8 @@ mod tests {
     };
 
     struct TestAbrPeer {
-        cancel: CancelToken,
         state: Arc<AbrState>,
+        cancel: CancelToken,
         variants: Vec<kithara_events::VariantInfo>,
     }
 

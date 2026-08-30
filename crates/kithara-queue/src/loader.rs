@@ -29,13 +29,13 @@ pub(crate) struct Loader {
     cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
-    player: PlayerControl,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
     /// so both change under one lock.
     tracks: Arc<Tracks>,
     store: AssetStore,
+    player: PlayerControl,
 }
 
 impl Loader {
@@ -392,9 +392,9 @@ mod tests {
     /// [`EventBus`] (so tests can subscribe for assertions).
     struct LoaderFixture {
         loader: Arc<Loader>,
-        _player: PlayerImpl,
         tracks: Arc<Tracks>,
         bus: EventBus,
+        _player: PlayerImpl,
     }
 
     impl LoaderFixtureSpec {
@@ -423,9 +423,9 @@ mod tests {
             ));
             LoaderFixture {
                 loader,
-                _player: player,
                 tracks,
                 bus,
+                _player: player,
             }
         }
     }

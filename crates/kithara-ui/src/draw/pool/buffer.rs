@@ -33,21 +33,6 @@ pub(in crate::draw) enum Buffer<T> {
 }
 
 impl<T> Buffer<T> {
-    pub(in crate::draw) const fn owned(values: Vec<T>) -> Self {
-        Self::Owned(values)
-    }
-
-    pub(in crate::draw) fn pooled(pool: &VecPool<T>) -> Self {
-        Self::Pooled(pool.get())
-    }
-
-    pub(in crate::draw) fn push(&mut self, value: T) {
-        match self {
-            Self::Owned(values) => values.push(value),
-            Self::Pooled(guard) => guard.0.push(value),
-        }
-    }
-
     pub(in crate::draw) fn as_slice(&self) -> &[T] {
         match self {
             Self::Owned(values) => values,
@@ -65,6 +50,21 @@ impl<T> Buffer<T> {
                 }
                 pooled
             }
+        }
+    }
+
+    pub(in crate::draw) const fn owned(values: Vec<T>) -> Self {
+        Self::Owned(values)
+    }
+
+    pub(in crate::draw) fn pooled(pool: &VecPool<T>) -> Self {
+        Self::Pooled(pool.get())
+    }
+
+    pub(in crate::draw) fn push(&mut self, value: T) {
+        match self {
+            Self::Owned(values) => values.push(value),
+            Self::Pooled(guard) => guard.0.push(value),
         }
     }
 }

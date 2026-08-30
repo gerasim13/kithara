@@ -16,8 +16,8 @@ pub enum BeatState {
 pub struct BeatSnapshot {
     artifact: BeatArtifact,
     state: BeatState,
-    unanalysed: Vec<FrameRange>,
     confidence: Option<f32>,
+    unanalysed: Vec<FrameRange>,
 }
 
 impl BeatSnapshot {
@@ -31,17 +31,17 @@ impl BeatSnapshot {
         }
     }
 
+    #[must_use]
+    pub const fn artifact(&self) -> &BeatArtifact {
+        &self.artifact
+    }
+
     /// Mean confidence over the markers the detector actually reported.
     /// `None` when it reported none, since zero is a different answer.
     /// Independent of [`state`](Self::state).
     #[must_use]
     pub const fn confidence(&self) -> Option<f32> {
         self.confidence
-    }
-
-    #[must_use]
-    pub const fn artifact(&self) -> &BeatArtifact {
-        &self.artifact
     }
 
     #[must_use]

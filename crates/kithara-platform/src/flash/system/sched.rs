@@ -37,15 +37,15 @@ pub(super) enum WaitKind {
 /// carry it: a timed waiter is released by the engine crossing its deadline, so
 /// its parking site names nothing the deadline does not already name.
 pub(super) struct Parked {
+    /// The stack that parked, only under `KITHARA_FLASH_SYNC_BT`. Unlike the
+    /// dump's own backtrace this belongs to the waiter, not to the watchdog that
+    /// took the snapshot, so it names the frame that owes the wait.
+    pub(super) stack: Option<Backtrace>,
     /// The OS thread that parked. Read for SYNC waiters — an async waiter's
     /// parking thread is merely whichever worker polled it. Against
     /// [`Registry::bridged`] it says whether the wait is held from INSIDE an
     /// async poll, i.e. whether it strands the tasks that thread owes a poll.
     pub(super) thread: ThreadKey,
-    /// The stack that parked, only under `KITHARA_FLASH_SYNC_BT`. Unlike the
-    /// dump's own backtrace this belongs to the waiter, not to the watchdog that
-    /// took the snapshot, so it names the frame that owes the wait.
-    pub(super) stack: Option<Backtrace>,
 }
 
 impl Parked {
@@ -62,23 +62,13 @@ impl Parked {
 
 /// A parked waiter's wake handle plus the group it belongs to.
 pub(super) struct Entry {
-    pub(super) kind: WaitKind,
-    pub(super) wake: Wake,
     /// `Some` for deadline-less waiters only. See [`Parked`].
     pub(super) parked: Option<Parked>,
+    pub(super) kind: WaitKind,
+    pub(super) wake: Wake,
 }
 
 impl Entry {
-    /// A waiter the engine itself will release by crossing its deadline, so no
-    /// parking site is recorded.
-    fn timed(kind: WaitKind, wake: Wake) -> Self {
-        Self {
-            kind,
-            wake,
-            parked: None,
-        }
-    }
-
     /// A waiter with NO deadline: only a matching signal frees it, so when one
     /// of these pins quiescence its parking site IS the diagnosis.
     fn indef(kind: WaitKind, wake: Wake, parked: Parked) -> Self {
@@ -86,6 +76,16 @@ impl Entry {
             kind,
             wake,
             parked: Some(parked),
+        }
+    }
+
+    /// A waiter the engine itself will release by crossing its deadline, so no
+    /// parking site is recorded.
+    fn timed(kind: WaitKind, wake: Wake) -> Self {
+        Self {
+            kind,
+            wake,
+            parked: None,
         }
     }
 }
@@ -102,6 +102,18 @@ impl Registry {
         for w in woken {
             w.mark_granted_under_lock();
         }
+    }
+
+    fn fresh_cv(&mut self) -> CvId {
+        let id = self.next_cv;
+        self.next_cv += 1;
+        CvId(id)
+    }
+
+    fn fresh_id(&mut self) -> WaiterId {
+        let id = self.next_id;
+        self.next_id += 1;
+        WaiterId(id)
     }
 
     /// Async slots that genuinely pin quiescence. A counted task normally does:
@@ -128,18 +140,6 @@ impl Registry {
             .count();
         self.active_async.saturating_sub(stranded)
     }
-
-    fn fresh_cv(&mut self) -> CvId {
-        let id = self.next_cv;
-        self.next_cv += 1;
-        CvId(id)
-    }
-
-    fn fresh_id(&mut self) -> WaiterId {
-        let id = self.next_id;
-        self.next_id += 1;
-        WaiterId(id)
-    }
 }
 
 /// Result of an advance attempt: the wakes to fire after releasing the `core`
@@ -159,8 +159,8 @@ impl WakeBatch {
 
 impl Core {
     pub(super) fn pace_target(&self, _clock: &Clock) -> Option<StdDuration> {
-        // No `pinning_async` veto: a paced target exists only while an op is in
-        // flight, and there the pin must not suppress it — see `try_advance`.
+        // WHY: No `pinning_async` veto: a paced target exists only while an op is in flight, and there the pin must not suppress it - see
+        // `try_advance`.
         if self.registry.active != 0 {
             return None;
         }
@@ -194,31 +194,15 @@ impl Core {
     /// every participant is parked (`active == 0`) and at least one timed
     /// waiter exists.
     pub(super) fn try_advance(&mut self, clock: &Clock) -> WakeBatch {
-        // While an op is in flight the advance below is capped at real pace, and a
-        // capped advance is what a wall clock does to a mid-poll task anyway. A pin
-        // exists to forbid JUMPS, which the cap already forbids, so suppressing the
-        // paced advance buys nothing and costs the op its answer: the virtual delay
-        // BEHIND it (a virtually-delayed test server) would never elapse, so the
-        // peer never replies, the await never returns, and the slot doing the
-        // pinning is never released. That is `real_io`'s pace-not-pin contract.
+        // WHY: While an op is in flight the advance below is capped at real pace, and a capped advance is what a wall clock does to a
+        // mid-poll task anyway.
         let paced = self.sched.real_io != 0 && self.sched.pace_anchor.is_some();
         if self.registry.active != 0 || (!paced && self.registry.pinning_async() != 0) {
-            // A running participant (sync OS thread OR async task mid-poll): do not
-            // jump. Both counters must be zero for genuine quiescence — except for
-            // async slots no thread can currently poll (`pinning_async`).
+            // WHY: A running participant (sync OS thread OR async task mid-poll): do not jump. Both counters must be zero for genuine quiescence
+            // - except for async slots no thread can currently poll (`pinning_async`).
             return WakeBatch(Vec::new());
         }
-        // Cooperative yielders re-poll at the CURRENT instant before the clock can
-        // advance to a `Thread` (`park_timeout`) deadline. Such a park is
-        // event-driven — woken by an `unpark` from a peer's progress — and its
-        // deadline is only a watchdog fallback. A pending yielder is an active
-        // participant (e.g. the audio worker mid-produce) that may unpark it, so it
-        // MUST get a chance to make progress before the clock jumps; otherwise the
-        // jump fires the park's watchdog prematurely while the producer still had
-        // work to flush (the audio worker/reader saturation deadlock). A REAL timer
-        // (`Timed`/`Condvar`) could be what a yielder awaits, so when one is the
-        // earliest waiter the clock still advances (below). Vacuously true when
-        // `timed` is empty (the no-timer yielder-drain case).
+        // WHY: Cooperative yielders re-poll at the CURRENT instant before the clock can advance to a `Thread` (`park_timeout`) deadline.
         if !self.sched.yielders.is_empty()
             && self
                 .sched
@@ -233,28 +217,20 @@ impl Core {
             return WakeBatch(woken);
         }
         let Some((&(min, _), _)) = self.sched.timed.iter().next() else {
-            // Quiescent with NO timed waiter to advance to. Any parked yield-waiter
-            // was already drained above (when `timed` is empty the all-`Thread`
-            // guard is vacuously true), so reaching here means there is nothing
-            // runnable at all: stay put.
+            // WHY: Quiescent with NO timed waiter to advance to. Any parked yield-waiter was already drained above (when `timed` is empty the
+            // all-`Thread` guard is vacuously true), so reaching here means there is nothing runnable at all: stay put.
             return WakeBatch(Vec::new());
         };
         if self.sched.real_io != 0
             && let Some((anchor_real, anchor_virtual)) = self.sched.pace_anchor
         {
-            // PACE while real I/O is in flight: virtual time may not outrun real
-            // time, so the earliest deadline fires only once the equivalent REAL
-            // time has accrued since the first in-flight op anchored the pace.
-            // Deferred advances unpark the event-driven pacer to re-evaluate at
-            // the next computed real deadline.
+            // WHY: PACE while real I/O is in flight: virtual time may not outrun real time, so the earliest deadline fires only once the
+            // equivalent REAL time has accrued since the first in-flight op anchored the pace.
             let elapsed = u64::try_from(anchor_real.elapsed().as_nanos()).unwrap_or(u64::MAX);
             if min > anchor_virtual.saturating_add(elapsed) {
-                // Wake the pacer to re-target the next real deadline — but NEVER
-                // the pacer waking itself. The pacer runs this same advance rule
-                // after each park, and a self-unpark would arm its own park token,
-                // so the following `park_timeout` returns immediately → busy-spin
-                // until the deadline comes due. Its own deferred advance is already
-                // followed by a fresh `pace_target` + re-park, so it needs no wake.
+                // WHY: Wake the pacer to re-target the next real deadline - but NEVER the pacer waking itself. The pacer runs this same advance rule
+                // after each park, and a self-unpark would arm its own park token, so the following `park_timeout` returns immediately -> busy-spin
+                // until the deadline comes due.
                 if let Some(t) = &self.sched.pacer_wake
                     && t.id() != std::thread::current().id()
                 {
@@ -279,11 +255,8 @@ impl Core {
                 woken.push(entry.wake);
             }
         }
-        // A clock advance is progress: wake every cooperative-yield waiter to
-        // re-check its poll condition. They carry no deadline, so an advance is the
-        // only thing that reschedules them. Sync entries are `active`-bumped +
-        // `mark_granted`'d by the loops below (like timed wakes); Task entries
-        // re-acquire their `active_async` slot via the gate's waker.
+        // WHY: A clock advance is progress: wake every cooperative-yield waiter to re-check its poll condition. They carry no deadline, so
+        // an advance is the only thing that reschedules them.
         for (_, wake) in std::mem::take(&mut self.sched.yielders) {
             woken.push(wake);
         }
@@ -365,8 +338,7 @@ impl FlashInner {
         let token = Token::new();
         let mut s = self.core.lock();
         if s.sched.unpark_pending.remove(&thread_id) {
-            // A wake already landed: do not park (and do not touch credit — we
-            // never entered a wait, so the thread stays as it was).
+            // WHY: A wake already landed: do not park (and do not touch credit - we never entered a wait, so the thread stays as it was).
             return;
         }
         let deadline = self.clock.now_nanos().saturating_add(delta);
@@ -425,9 +397,8 @@ impl FlashInner {
         if let Some(key) = key
             && let Some(entry) = s.sched.timed.remove(&key)
         {
-            // A Thread-park entry is always `Sync` (see `park_timed_unparkable`),
-            // so this bumps `active` by exactly one; `mark_granted` is a Task-only
-            // no-op. Fired directly — an unpark never runs the advance rule.
+            // WHY: A Thread-park entry is always `Sync` (see `park_timed_unparkable`), so this bumps `active` by exactly one; `mark_granted` is
+            // a Task-only no-op.
             s.registry.account_woken(std::slice::from_ref(&entry.wake));
             drop(s);
             entry.wake.fire();
@@ -490,12 +461,8 @@ impl FlashInner {
     ) -> (Arc<Token>, WakeBatch, WaitGuard<'_>) {
         let token = Token::new();
         let mut s = self.core.lock();
-        // The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this
-        // lock; an async sleep could have jumped the clock since, leaving the
-        // deadline below the current virtual instant. Clamp to "now" under the lock
-        // so the monotonic-clock invariant holds (a wait whose virtual timeout has
-        // already elapsed fires on the next advance, and the caller re-checks its
-        // predicate). This enforces "no backward clock" atomically at the single
+        // WHY: The caller computed `deadline_nanos` from `Instant::now()` OUTSIDE this lock; an async sleep could have jumped the clock
+        // since, leaving the deadline below the current virtual instant.
         let deadline_nanos = deadline_nanos.max(self.clock.now_nanos());
         let id = s.registry.fresh_id();
         s.sched.timed.insert(
@@ -604,9 +571,8 @@ impl FlashInner {
                 woken.push(entry.wake);
             }
         }
-        // Condvar waiters never share a cvid with Task waiters (one cvid per
-        // primitive from the single allocator), so every wake here is `Sync` and
-        // the per-Sync bump equals the old `+= woken.len()`.
+        // WHY: Condvar waiters never share a cvid with Task waiters (one cvid per primitive from the single allocator), so every wake here
+        // is `Sync` and the per-Sync bump equals the old `+= woken.len()`.
         s.registry.account_woken(&woken);
         drop(s);
         for t in woken {
@@ -909,7 +875,7 @@ impl FlashInner {
             woken.push(entry.wake);
         }
         if woken.is_empty() {
-            // No waiter: store a permit (notify_one) so the next notified() returns
+            // WHY: No waiter: store a permit (notify_one) so the next notified() returns
             s.sched.notify_permits.insert(cvid);
         } else {
             s.registry.account_woken(&woken);

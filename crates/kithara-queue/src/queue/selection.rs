@@ -34,11 +34,8 @@ impl QueueControl {
         transition: Transition,
         reason: AdvanceReason,
     ) -> Result<(), QueueError> {
-        // Serialise the whole select against a concurrent
-        // `spawn_apply_after_load` completion (see `select_apply`): the
-        // supersede (marking the prior pending `Cancelled`) and a loading
-        // track's apply must not interleave, or the superseded track barges
-        // in. Held across the synchronous body only.
+        // WHY: Serialise the whole select against a concurrent `spawn_apply_after_load` completion (see `select_apply`): the supersede
+        // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
         let _apply = self.lock_select_apply();
         let (index, status) = {
             let guard = self.lock_tracks();

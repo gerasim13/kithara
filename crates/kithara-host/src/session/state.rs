@@ -37,14 +37,14 @@ pub(super) struct SlotNodes {
 }
 
 pub(super) struct Deck {
+    pub(super) grid_id: BeatGridId,
     pub(super) bus: EventBus,
     pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
     pub(super) master_eq_node_id: Option<NodeID>,
     pub(super) master_volume_memo: Option<Memo<VolumeNode>>,
     pub(super) master_volume_node_id: Option<NodeID>,
-    pub(super) sample_pool: SamplePool,
     pub(super) player_id: PlayerId,
-    pub(super) grid_id: BeatGridId,
+    pub(super) sample_pool: SamplePool,
     pub(super) shared_eq: SharedEq,
     pub(super) eq_layout: Vec<EqBandConfig>,
     pub(super) slots: Vec<SlotNodes>,
@@ -71,13 +71,13 @@ impl Deck {
             sample_pool,
             player_id,
             grid_id,
+            shared_eq,
             master_eq_memo: None,
             master_eq_node_id: None,
             master_volume: 1.0,
             master_volume_memo: None,
             master_volume_node_id: None,
             next_slot_id: 1,
-            shared_eq,
             slots: Vec::new(),
             started: false,
         }
@@ -90,6 +90,18 @@ pub(super) struct GraphRegistry {
 }
 
 impl GraphRegistry {
+    pub(super) fn index_by_grid(&self, grid_id: BeatGridId) -> Option<usize> {
+        self.decks
+            .iter()
+            .position(|candidate| candidate.grid_id == grid_id)
+    }
+
+    pub(super) fn index_by_player(&self, player_id: PlayerId) -> Option<usize> {
+        self.decks
+            .iter()
+            .position(|candidate| candidate.player_id == player_id)
+    }
+
     pub(super) fn insert(&mut self, deck: Deck) -> Result<(), SessionError> {
         if self
             .decks
@@ -119,18 +131,6 @@ impl GraphRegistry {
             pub(super) fn len(&self) -> usize;
         }
     }
-
-    pub(super) fn index_by_grid(&self, grid_id: BeatGridId) -> Option<usize> {
-        self.decks
-            .iter()
-            .position(|candidate| candidate.grid_id == grid_id)
-    }
-
-    pub(super) fn index_by_player(&self, player_id: PlayerId) -> Option<usize> {
-        self.decks
-            .iter()
-            .position(|candidate| candidate.player_id == player_id)
-    }
 }
 
 pub(super) fn prepare_eq_layout(eq_layout: Vec<EqBandConfig>) -> (Vec<EqBandConfig>, Vec<GainDb>) {
@@ -145,8 +145,8 @@ pub(super) enum MixTap {
 
 struct RootSnapshot {
     grid: kithara_warp::BeatGridSnapshot,
-    status: SyncStatusSnapshot,
     topology: Result<SyncGroupSnapshot, SyncError>,
+    status: SyncStatusSnapshot,
 }
 
 #[derive(Clone)]
@@ -165,14 +165,6 @@ impl RootView {
         self.0.load().grid.clone()
     }
 
-    pub(crate) fn status(&self) -> SyncStatusSnapshot {
-        self.0.load().status
-    }
-
-    pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.0.load().topology.clone()
-    }
-
     fn publish(&self, root: &GroupState<PlayerMember>) {
         self.0.store(Arc::new(RootSnapshot {
             grid: root.snapshot(),
@@ -180,25 +172,33 @@ impl RootView {
             topology: root.topology(),
         }));
     }
+
+    pub(crate) fn status(&self) -> SyncStatusSnapshot {
+        self.0.load().status
+    }
+
+    pub(crate) fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
+        self.0.load().topology.clone()
+    }
 }
 
 pub(crate) struct SessionState<B: AudioBackend> {
+    pub(super) graph: GraphRegistry,
+    pub(super) root: GroupState<PlayerMember>,
     pub(super) ctx: Option<FirewheelCtx<B>>,
-    pub(super) transport_control: Option<TransportControl>,
     pub(super) mix_tap: Option<MixTap>,
+    pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) session_limiter_node_id: Option<NodeID>,
     pub(super) session_output_memo: Option<Memo<VolumeNode>>,
     pub(super) session_output_node_id: Option<NodeID>,
+    pub(super) transport_control: Option<TransportControl>,
     pub(super) next_player_id: PlayerId,
+    pub(super) root_view: RootView,
     pub(super) session_ducking: SessionDuckingMode,
+    pub(super) transport: SessionTransportState,
     pub(super) start_stream_fn: StartStreamFn<B>,
     pub(super) stream_needs_restart: bool,
     pub(super) sample_rate_hint: u32,
-    pub(super) transport: SessionTransportState,
-    pub(super) reserved_session_grid: Option<SessionGridGeneration>,
-    pub(super) root: GroupState<PlayerMember>,
-    pub(super) root_view: RootView,
-    pub(super) graph: GraphRegistry,
 }
 
 impl<B: AudioBackend> SessionState<B> {
@@ -220,6 +220,8 @@ impl<B: AudioBackend> SessionState<B> {
         let mut generation = SessionGridGeneration::new(grid_id);
         generation.commit_revision(BeatGridRevision::first());
         Self {
+            root,
+            root_view,
             start_stream_fn: Box::new(start_stream_fn),
             ctx: None,
             transport_control: None,
@@ -233,8 +235,6 @@ impl<B: AudioBackend> SessionState<B> {
             stream_needs_restart: false,
             transport: SessionTransportState::default(),
             reserved_session_grid: Some(generation),
-            root,
-            root_view,
             graph: GraphRegistry::default(),
         }
     }

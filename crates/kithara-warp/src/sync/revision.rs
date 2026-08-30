@@ -25,16 +25,16 @@ fn checked_next_revision(revision: NonZeroU64) -> Option<NonZeroU64> {
 pub struct TopologyRevision(NonZeroU64);
 
 impl TopologyRevision {
-    /// Returns the first revision assigned by a group owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-
     /// Returns the next owner-assigned revision, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
         checked_next_revision(self.0).map(Self)
+    }
+
+    /// Returns the first revision assigned by a group owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
     }
 }
 
@@ -57,16 +57,16 @@ impl TopologyRevision {
 pub struct SyncOperationId(NonZeroU64);
 
 impl SyncOperationId {
-    /// Returns the first operation identity assigned by a group owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-
     /// Returns the next owner-assigned identity, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
         checked_next_revision(self.0).map(Self)
+    }
+
+    /// Returns the first operation identity assigned by a group owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
     }
 }
 
@@ -89,16 +89,16 @@ impl SyncOperationId {
 pub struct WarpMapRevision(NonZeroU64);
 
 impl WarpMapRevision {
-    /// Returns the first revision assigned by a warp-map owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-
     /// Returns the next owner-assigned revision, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
         checked_next_revision(self.0).map(Self)
+    }
+
+    /// Returns the first revision assigned by a warp-map owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
     }
 }
 
@@ -121,16 +121,16 @@ impl WarpMapRevision {
 pub struct LoadGeneration(NonZeroU64);
 
 impl LoadGeneration {
-    /// Returns the first generation assigned by a deck owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-
     /// Returns the next owner-assigned generation, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
         checked_next_revision(self.0).map(Self)
+    }
+
+    /// Returns the first generation assigned by a deck owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
     }
 }
 
@@ -153,16 +153,16 @@ impl LoadGeneration {
 pub struct TransportRevision(NonZeroU64);
 
 impl TransportRevision {
-    /// Returns the first committed transport revision.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-
     /// Returns the next committed revision, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
         checked_next_revision(self.0).map(Self)
+    }
+
+    /// Returns the first committed transport revision.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
     }
 }
 

@@ -21,10 +21,10 @@ pub(crate) struct PlanRevision(u64);
 /// while it still holds the queue lock, and the produce core reads only the
 /// mirror.
 pub(in crate::variant) struct PlanQueue {
-    queue: Mutex<VecDeque<PlannedFetch>>,
-    revision: AtomicU64,
     init_planned: AtomicBool,
+    revision: AtomicU64,
     segments_planned: Box<[AtomicBool]>,
+    queue: Mutex<VecDeque<PlannedFetch>>,
 }
 
 impl PlanQueue {
@@ -37,19 +37,6 @@ impl PlanQueue {
         }
     }
 
-    /// Lock-free membership probe for the produce core. May observe a
-    /// mutation slightly early or late relative to the deque — the same
-    /// temporal slack a racing lock acquisition always had.
-    pub(in crate::variant) fn planned(&self, planned: PlannedFetch) -> bool {
-        match planned {
-            PlannedFetch::Init => self.init_planned.load(Ordering::Relaxed),
-            PlannedFetch::Segment(idx) => self
-                .segments_planned
-                .get(idx as usize)
-                .is_some_and(|flag| flag.load(Ordering::Relaxed)),
-        }
-    }
-
     pub(in crate::variant) fn lock(&self) -> PlanGuard<'_> {
         PlanGuard {
             queue: self.queue.lock(),
@@ -57,11 +44,6 @@ impl PlanQueue {
             init_planned: &self.init_planned,
             segments_planned: &self.segments_planned,
         }
-    }
-
-    #[cfg(test)]
-    pub(in crate::variant) fn revision(&self) -> PlanRevision {
-        PlanRevision(self.revision.load(Ordering::Relaxed))
     }
 
     fn mark(
@@ -79,15 +61,33 @@ impl PlanQueue {
             }
         }
     }
+
+    /// Lock-free membership probe for the produce core. May observe a
+    /// mutation slightly early or late relative to the deque — the same
+    /// temporal slack a racing lock acquisition always had.
+    pub(in crate::variant) fn planned(&self, planned: PlannedFetch) -> bool {
+        match planned {
+            PlannedFetch::Init => self.init_planned.load(Ordering::Relaxed),
+            PlannedFetch::Segment(idx) => self
+                .segments_planned
+                .get(idx as usize)
+                .is_some_and(|flag| flag.load(Ordering::Relaxed)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::variant) fn revision(&self) -> PlanRevision {
+        PlanRevision(self.revision.load(Ordering::Relaxed))
+    }
 }
 
 /// Read access is `Deref` to the deque; mutation goes through the guard's
 /// own methods so the membership mirror can never drift from the plan.
 pub(in crate::variant) struct PlanGuard<'a> {
-    queue: MutexGuard<'a, VecDeque<PlannedFetch>>,
-    revision: &'a AtomicU64,
     init_planned: &'a AtomicBool,
+    revision: &'a AtomicU64,
     segments_planned: &'a [AtomicBool],
+    queue: MutexGuard<'a, VecDeque<PlannedFetch>>,
 }
 
 impl Deref for PlanGuard<'_> {
@@ -99,6 +99,11 @@ impl Deref for PlanGuard<'_> {
 }
 
 impl PlanGuard<'_> {
+    #[cfg(test)]
+    pub(in crate::variant) fn clear(&mut self) {
+        self.replace_with(std::iter::empty());
+    }
+
     pub(in crate::variant) fn pop_front(&mut self) -> Option<(PlannedFetch, PlanRevision)> {
         let planned = self.queue.pop_front();
         if let Some(planned) = planned {
@@ -107,9 +112,28 @@ impl PlanGuard<'_> {
         planned.map(|planned| (planned, PlanRevision(self.revision.load(Ordering::Relaxed))))
     }
 
+    #[cfg(test)]
+    pub(in crate::variant) fn push_back(&mut self, planned: PlannedFetch) {
+        self.queue.push_back(planned);
+        PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+    }
+
     pub(in crate::variant) fn push_front(&mut self, planned: PlannedFetch) {
         self.queue.push_front(planned);
         PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+    }
+
+    pub(in crate::variant) fn replace_with(&mut self, plan: impl Iterator<Item = PlannedFetch>) {
+        self.supersede();
+        self.queue.clear();
+        self.init_planned.store(false, Ordering::Relaxed);
+        for flag in self.segments_planned {
+            flag.store(false, Ordering::Relaxed);
+        }
+        for planned in plan {
+            self.queue.push_back(planned);
+            PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
+        }
     }
 
     /// Re-enter work popped off a still-current plan. The insert keeps plan
@@ -144,30 +168,6 @@ impl PlanGuard<'_> {
     /// and stays off it.
     pub(in crate::variant) fn supersede(&mut self) {
         self.revision.fetch_add(1, Ordering::Relaxed);
-    }
-
-    #[cfg(test)]
-    pub(in crate::variant) fn push_back(&mut self, planned: PlannedFetch) {
-        self.queue.push_back(planned);
-        PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
-    }
-
-    #[cfg(test)]
-    pub(in crate::variant) fn clear(&mut self) {
-        self.replace_with(std::iter::empty());
-    }
-
-    pub(in crate::variant) fn replace_with(&mut self, plan: impl Iterator<Item = PlannedFetch>) {
-        self.supersede();
-        self.queue.clear();
-        self.init_planned.store(false, Ordering::Relaxed);
-        for flag in self.segments_planned {
-            flag.store(false, Ordering::Relaxed);
-        }
-        for planned in plan {
-            self.queue.push_back(planned);
-            PlanQueue::mark(self.init_planned, self.segments_planned, planned, true);
-        }
     }
 }
 

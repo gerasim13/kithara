@@ -67,6 +67,8 @@ impl UiState {
             tracks,
             current_track_index,
             track_name,
+            beat_marks,
+            downbeat_marks,
             abr_variants: Vec::new(),
             abr_mode_is_auto: true,
             selected_variant: None,
@@ -77,8 +79,6 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
-            beat_marks,
-            downbeat_marks,
             unready_ranges: Arc::default(),
             is_seeking: false,
             seek_position: 0.0,
@@ -92,6 +92,8 @@ impl UiState {
         let beat_marks = empty_marks();
         let downbeat_marks = empty_marks();
         Self {
+            beat_marks,
+            downbeat_marks,
             current_track_index: None,
             selected_variant: None,
             current_variant: None,
@@ -100,8 +102,6 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
-            beat_marks,
-            downbeat_marks,
             unready_ranges: Arc::default(),
             abr_mode_is_auto: true,
             is_seeking: false,
@@ -222,13 +222,13 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 #[fieldwork(opt_in, get)]
 pub struct StateController {
     beat_clock: Arc<Mutex<BeatClockState>>,
-    #[field(get, deref = false)]
-    queue: QueueControl,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
+    #[field(get, deref = false)]
+    queue: QueueControl,
 }
 
 impl StateController {
@@ -468,14 +468,10 @@ pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiS
             st.playing = started;
             let eq_bands = started.then(|| st.eq_bands.clone());
             drop(st);
-            // Playback just started on an active slot -- push the desired EQ
-            // down so gains set before play take effect.
             if let Some(eq_bands) = eq_bands {
                 reapply_eq(queue, &eq_bands);
             }
         }
-        // Session-mix gain deliberately has no event mapping here: `st.volume`
-        // is content volume, owned by the player's volume path alone.
         Event::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;

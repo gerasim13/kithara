@@ -84,11 +84,11 @@ impl StrArena {
 #[fieldwork(opt_in, get)]
 pub(crate) struct Interner {
     arena: StrArena,
-    max_bytes: usize,
     /// Whether anything in this document reads the host's own clock, and so
     /// draws a different picture at a later moment with nothing else changing.
     #[field(get(copy), vis = "pub(crate)")]
     reads_clock: bool,
+    max_bytes: usize,
 }
 
 impl Interner {
@@ -102,15 +102,6 @@ impl Interner {
 
     pub(crate) fn finish(self) -> StrArena {
         self.arena
-    }
-
-    /// Notes one binding key on its way into the arena.
-    ///
-    /// Every binding a document holds passes its key through here, which is what
-    /// makes the answer below exhaustive rather than a census kept by hand: a
-    /// control added tomorrow binds the same way, or it has no binding at all.
-    pub(crate) fn note_binding_key(&mut self, key: &str) {
-        self.reads_clock = self.reads_clock || key == SECONDS;
     }
 
     pub(crate) fn intern(
@@ -169,6 +160,15 @@ impl Interner {
         self.arena.bytes.push_str(value);
         self.arena.spans.push(Span { len, start });
         Ok(id)
+    }
+
+    /// Notes one binding key on its way into the arena.
+    ///
+    /// Every binding a document holds passes its key through here, which is what
+    /// makes the answer below exhaustive rather than a census kept by hand: a
+    /// control added tomorrow binds the same way, or it has no binding at all.
+    pub(crate) fn note_binding_key(&mut self, key: &str) {
+        self.reads_clock = self.reads_clock || key == SECONDS;
     }
 
     pub(crate) fn resolve(&self, id: InternId) -> &str {

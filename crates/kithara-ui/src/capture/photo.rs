@@ -63,7 +63,6 @@ impl Photographer {
             device,
             queue,
             TextureFormat::Rgba8UnormSrgb,
-            // A window opens with iced's own default, which is off.
             None,
             Shell::headless(),
         );
@@ -101,9 +100,6 @@ impl Photographer {
             &mut clipboard::Null,
             &mut Vec::new(),
         ));
-        // The theme's own base is what the window clears to and writes text
-        // in. Passing anything else here shows up wherever the document leaves
-        // the background bare, and reads as a difference between the hosts.
         let base = theme.base();
         ui.draw(
             &mut self.renderer,

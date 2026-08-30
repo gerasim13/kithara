@@ -59,7 +59,7 @@ fn default_net_options(byte_pool: BytePool) -> NetOptions {
 
 fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
     let processor = rule.processor;
-    // A caller-provided salt remains fixed for legacy FFI compatibility.
+    // WHY: A caller-provided salt remains fixed for legacy FFI compatibility.
     let salt_template = rule.salt.unwrap_or_default();
     let factory: KeyRequestFactory = Arc::new(move || {
         let salt = salt_template.clone();
@@ -157,8 +157,6 @@ pub(crate) struct NativeInner {
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
-    queue_owner: kithara::host::HostOwned<Queue>,
-    queue: QueueControl,
     /// Rust-owned asset store shared by the queue and every item resource.
     store: Arc<FfiAssetStore>,
     /// Cancellation root for player-owned work; the shared store owns a
@@ -173,6 +171,7 @@ pub(crate) struct NativeInner {
     /// is always alive, independent of the caller thread (Swift /
     /// Kotlin callbacks run without an ambient tokio context).
     downloader: Downloader,
+    queue_owner: kithara::host::HostOwned<Queue>,
     event_bridge: Mutex<Option<EventBridge>>,
     /// Mutable [`KeyOptions`] — initialised from [`FfiPlayerConfig`]
     /// and extended at runtime by `setup_hls_aes`. Cloned per-item on
@@ -184,6 +183,7 @@ pub(crate) struct NativeInner {
     /// drives the ABR cap unless cellular is tighter; cellular is held
     /// for future network-state-aware switching.
     peak_bitrate: Mutex<PeakBitrate>,
+    queue: QueueControl,
 }
 
 impl NativeInner {
@@ -226,12 +226,12 @@ impl NativeInner {
         Self {
             downloader,
             store,
+            queue_owner,
+            queue,
             shutdown: cancel,
             key_options: Mutex::new(key_options),
             player_headers: player_headers_map,
             peak_bitrate: Mutex::default(),
-            queue_owner,
-            queue,
             observer: Mutex::default(),
             event_bridge: Mutex::default(),
             items: Arc::new(Mutex::default()),

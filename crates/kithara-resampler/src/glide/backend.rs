@@ -1,8 +1,6 @@
 use super::{GlideConfig, resampler::GlideResampler};
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
-const BACKEND_GLIDE: &str = "glide";
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct GlideBackend {
     config: GlideConfig,
@@ -42,6 +40,8 @@ impl ResamplerBackend for GlideBackend {
     }
 
     fn name(&self) -> &'static str {
+        const BACKEND_GLIDE: &str = "glide";
+
         BACKEND_GLIDE
     }
 }

@@ -15,8 +15,8 @@ impl Consts {
 
 pub(super) struct GridFitCtx<'a> {
     params: &'a GridParams,
-    outliers: &'a [f32],
     db: &'a [f32],
+    outliers: &'a [f32],
     sample_rate: f64,
 }
 
@@ -29,8 +29,8 @@ impl<'a> GridFitCtx<'a> {
     ) -> Self {
         Self {
             params,
-            outliers,
             db,
+            outliers,
             sample_rate,
         }
     }
@@ -150,9 +150,9 @@ fn visit_anchored_leaves(ctx: &GridFitCtx<'_>, anchor_idx: usize, visit: &mut im
 
 #[derive(Clone, Copy)]
 struct FitSpan {
-    end: usize,
     intercept: f64,
     slope: f64,
+    end: usize,
     start: usize,
 }
 
@@ -160,9 +160,9 @@ impl FitSpan {
     fn fit(ctx: &GridFitCtx<'_>, segment: Segment) -> Self {
         let (intercept, slope, _) = fit_segment(ctx, segment);
         Self {
-            end: segment.end,
             intercept,
             slope,
+            end: segment.end,
             start: segment.start,
         }
     }
@@ -176,42 +176,22 @@ impl FitSpan {
 struct SegmentWriter<'a> {
     ctx: &'a GridFitCtx<'a>,
     current: Option<FitSpan>,
-    nominal_bar: f64,
     previous: Option<FitSpan>,
     previous_start: Option<f64>,
     segments: Vec<FitRegion>,
+    nominal_bar: f64,
 }
 
 impl<'a> SegmentWriter<'a> {
     fn new(ctx: &'a GridFitCtx<'a>, nominal_bar: f64) -> Self {
         Self {
             ctx,
-            current: None,
             nominal_bar,
+            current: None,
             previous: None,
             previous_start: None,
             segments: Vec::new(),
         }
-    }
-
-    fn visit(&mut self, segment: Segment) {
-        let next = FitSpan::fit(self.ctx, segment);
-        let Some(current) = self.current else {
-            self.current = Some(next);
-            return;
-        };
-        let current_ratio = ratio_correction(self.nominal_bar, current.slope);
-        let next_ratio = ratio_correction(self.nominal_bar, next.slope);
-        if (current_ratio - next_ratio).abs() <= self.ctx.params.merge_ratio_eps {
-            self.current = Some(FitSpan::fit(
-                self.ctx,
-                Segment::new(current.start, next.end),
-            ));
-            return;
-        }
-        self.emit_previous(current);
-        self.previous = Some(current);
-        self.current = Some(next);
     }
 
     fn emit_previous(&mut self, current: FitSpan) {
@@ -227,22 +207,6 @@ impl<'a> SegmentWriter<'a> {
             .unwrap_or_else(|| previous.predict(previous.start));
         self.push(previous, start, boundary);
         self.previous_start = Some(boundary);
-    }
-
-    fn push(&mut self, span: FitSpan, start: f64, end: f64) {
-        let (Some(start_frame), Some(end_frame)) = (
-            (start * self.ctx.sample_rate).round().max(0.0).to_u64(),
-            (end * self.ctx.sample_rate).round().max(0.0).to_u64(),
-        ) else {
-            return;
-        };
-        if end_frame > start_frame {
-            self.segments.push(FitRegion::new(
-                start_frame,
-                end_frame,
-                ratio_correction(self.nominal_bar, span.slope),
-            ));
-        }
     }
 
     fn finish(mut self) -> Vec<FitRegion> {
@@ -267,6 +231,42 @@ impl<'a> SegmentWriter<'a> {
             );
         }
         self.segments
+    }
+
+    fn push(&mut self, span: FitSpan, start: f64, end: f64) {
+        let (Some(start_frame), Some(end_frame)) = (
+            (start * self.ctx.sample_rate).round().max(0.0).to_u64(),
+            (end * self.ctx.sample_rate).round().max(0.0).to_u64(),
+        ) else {
+            return;
+        };
+        if end_frame > start_frame {
+            self.segments.push(FitRegion::new(
+                start_frame,
+                end_frame,
+                ratio_correction(self.nominal_bar, span.slope),
+            ));
+        }
+    }
+
+    fn visit(&mut self, segment: Segment) {
+        let next = FitSpan::fit(self.ctx, segment);
+        let Some(current) = self.current else {
+            self.current = Some(next);
+            return;
+        };
+        let current_ratio = ratio_correction(self.nominal_bar, current.slope);
+        let next_ratio = ratio_correction(self.nominal_bar, next.slope);
+        if (current_ratio - next_ratio).abs() <= self.ctx.params.merge_ratio_eps {
+            self.current = Some(FitSpan::fit(
+                self.ctx,
+                Segment::new(current.start, next.end),
+            ));
+            return;
+        }
+        self.emit_previous(current);
+        self.previous = Some(current);
+        self.current = Some(next);
     }
 }
 

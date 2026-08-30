@@ -23,25 +23,25 @@ use crate::{
 #[derive(bon::Builder)]
 pub(crate) struct ModuleChrome<'a, Content> {
     skin: &'a Skin,
+    module: &'a str,
     #[builder(default)]
     style: ChromeStyle,
     content: Content,
+    /// The window corners this module stands at.
+    #[builder(default = FrameCorners::EMPTY)]
+    round: FrameCorners,
     #[builder(default)]
     frame: FrameSides,
+    input_owner: InputOwner,
     chip: Option<&'a str>,
     drop: Option<DropZone>,
     footer: Option<String>,
-    module: &'a str,
-    input_owner: InputOwner,
     title: Option<&'a str>,
     assign: Vec<&'a str>,
     #[builder(default)]
     collapsed: bool,
     #[builder(default)]
     corners: bool,
-    /// The window corners this module stands at.
-    #[builder(default = FrameCorners::EMPTY)]
-    round: FrameCorners,
 }
 
 #[derive(Clone, Copy)]
@@ -332,11 +332,11 @@ where
 
 struct FrameChrome {
     frame_color: Color,
+    /// The window corners the framed box stands at, and the radius they take.
+    round: FrameCorners,
     sides: FrameSides,
     corners: Option<CornerTicks>,
     frame_width: f32,
-    /// The window corners the framed box stands at, and the radius they take.
-    round: FrameCorners,
     radius: f32,
 }
 

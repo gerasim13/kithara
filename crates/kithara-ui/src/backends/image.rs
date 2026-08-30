@@ -58,16 +58,6 @@ impl Backend for VelloImageBackend<'_, '_> {
         self.scene.pop_layer();
     }
 
-    // Everything but the image is the ordinary Vello encoding, so the plain
-    // backend does it against the same scene.
-    delegate::delegate! {
-        to VelloBackend::new(self.scene) {
-            fn fill(&mut self, geom: &Geom, paint: Paint);
-            fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen);
-            fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba);
-        }
-    }
-
     fn image(&mut self, image: &Image, rect: Rect, _turn: f32) {
         if image.id() != self.image_id {
             tracing::error!(?image, "Vello image registry does not own this image");
@@ -85,5 +75,13 @@ impl Backend for VelloImageBackend<'_, '_> {
             );
         let brush = ImageBrush::new(self.image.clone());
         self.scene.draw_image(&brush, transform);
+    }
+
+    delegate::delegate! {
+        to VelloBackend::new(self.scene) {
+            fn fill(&mut self, geom: &Geom, paint: Paint);
+            fn stroke(&mut self, geom: &Geom, color: Rgba, pen: Pen);
+            fn text(&mut self, run: &GlyphRun, content: &str, transform: Transform, color: Rgba);
+        }
     }
 }

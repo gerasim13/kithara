@@ -16,6 +16,10 @@ struct TestSession {
 }
 
 impl SessionDispatcher for TestSession {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
@@ -32,10 +36,6 @@ impl SessionDispatcher for TestSession {
             _ => Reply::Ok,
         };
         Ok(reply)
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 

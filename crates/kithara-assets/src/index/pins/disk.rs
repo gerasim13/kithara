@@ -26,11 +26,11 @@ use crate::{
 
 pub(super) struct PinsPersist {
     cancel: CancelToken,
-    res: OnceLock<Atomic<MmapDriver>>,
-    path: PathBuf,
     /// One writer at a time for `pins.bin`: the snapshot and the atomic
     /// rename that publishes it are one step.
     writing: Mutex<()>,
+    res: OnceLock<Atomic<MmapDriver>>,
+    path: PathBuf,
 }
 
 impl PinsIndex {

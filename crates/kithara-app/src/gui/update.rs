@@ -22,11 +22,11 @@ use crate::{
 };
 
 struct EqModeChange<'a> {
-    id: DeckId,
     controller: &'a StateController,
-    previous: Vec<EqBandConfig>,
-    next: Vec<EqBandConfig>,
+    id: DeckId,
     gains: Vec<GainDb>,
+    next: Vec<EqBandConfig>,
+    previous: Vec<EqBandConfig>,
 }
 
 pub(crate) fn update(state: &mut Kithara, message: Message) -> Task<Message> {
@@ -261,8 +261,6 @@ fn handle_load(state: &mut Kithara, index: usize, id: DeckId) {
 /// Every deck advances on the same tick: a deck the user is not looking at
 /// still plays, streams and needs its continuous values pulled.
 fn handle_tick(state: &mut Kithara) {
-    // The step the subscription is currently firing at, so this host's clock
-    // reads the time its frames were actually drawn at.
     let playing = state.decks.iter().any(|deck| deck.ui.playing);
     state.ui.advance(Duration::from_millis(
         subscription_config(playing).tick_interval_ms,

@@ -63,6 +63,16 @@ impl From<MemResource> for StorageResource {
 /// [`AtomicChunked`]. The split-handle typestate lives below this layer; this
 /// unified enum is the multi-owner facade used by the asset cache.
 impl StorageResource {
+    /// Release the writer without failing the resource, for a caller that owns
+    /// the refill. See [`AtomicChunked::abandon`].
+    pub fn abandon(&self) {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Mmap(r) => r.abandon(),
+            Self::Mem(r) => r.abandon(),
+        }
+    }
+
     /// Commit the resource.
     ///
     /// # Errors
@@ -82,16 +92,6 @@ impl StorageResource {
             #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.contains_range(range),
             Self::Mem(r) => r.contains_range(range),
-        }
-    }
-
-    /// Release the writer without failing the resource, for a caller that owns
-    /// the refill. See [`AtomicChunked::abandon`].
-    pub fn abandon(&self) {
-        match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Mmap(r) => r.abandon(),
-            Self::Mem(r) => r.abandon(),
         }
     }
 

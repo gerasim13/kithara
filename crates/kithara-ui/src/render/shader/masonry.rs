@@ -11,8 +11,8 @@ use crate::draw::ImageId;
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ShaderDeclaration {
-    frame: ShaderFrame,
     image: ImageData,
+    frame: ShaderFrame,
 }
 
 impl ShaderDeclaration {
@@ -24,11 +24,11 @@ impl ShaderDeclaration {
 /// Executes retained document shaders into reusable textures before Vello.
 #[non_exhaustive]
 pub struct ShaderPass {
-    active: BTreeSet<ImageId>,
     programs: BTreeMap<Arc<str>, wgpu::RenderPipeline>,
     slots: BTreeMap<ImageId, Slot>,
-    stale: Vec<ImageId>,
+    active: BTreeSet<ImageId>,
     uniform_layout: wgpu::BindGroupLayout,
+    stale: Vec<ImageId>,
 }
 
 impl ShaderPass {
@@ -42,6 +42,24 @@ impl ShaderPass {
             slots: BTreeMap::new(),
             stale: Vec::new(),
             uniform_layout: uniform_layout(device),
+        }
+    }
+
+    fn release_stale(&mut self, renderer: &mut Renderer) {
+        self.stale.clear();
+        self.stale.extend(
+            self.slots
+                .keys()
+                .filter(|image| !self.active.contains(*image))
+                .cloned(),
+        );
+        for image in self.stale.drain(..) {
+            let Some(slot) = self.slots.remove(&image) else {
+                continue;
+            };
+            if let Some(image) = slot.image {
+                drop(renderer.override_image(&image, None));
+            }
         }
     }
 
@@ -151,36 +169,18 @@ impl ShaderPass {
         }
         self.release_stale(renderer);
     }
-
-    fn release_stale(&mut self, renderer: &mut Renderer) {
-        self.stale.clear();
-        self.stale.extend(
-            self.slots
-                .keys()
-                .filter(|image| !self.active.contains(*image))
-                .cloned(),
-        );
-        for image in self.stale.drain(..) {
-            let Some(slot) = self.slots.remove(&image) else {
-                continue;
-            };
-            if let Some(image) = slot.image {
-                drop(renderer.override_image(&image, None));
-            }
-        }
-    }
 }
 
 struct Slot {
-    image: Option<ImageData>,
-    size: [u32; 2],
     source: Arc<str>,
-    texture: wgpu::Texture,
     uniform_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
-    uniform_bytes: Vec<u8>,
-    uniform_size: usize,
+    image: Option<ImageData>,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
+    uniform_bytes: Vec<u8>,
+    size: [u32; 2],
+    uniform_size: usize,
 }
 
 impl Slot {

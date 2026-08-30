@@ -4,7 +4,6 @@
 //! place worth testing is the argument every host receives. Neither host is
 //! involved here, which is the point - if this is right, both put it in the
 //! same place and both pull it to the same target.
-
 mod common;
 
 use kithara_test_utils::kithara;
@@ -31,13 +30,13 @@ use kithara_ui::{
 /// One placement, as the host was handed it.
 #[derive(Debug, PartialEq)]
 struct Mounted {
-    path: String,
-    at: Pt,
-    carried: bool,
     /// The magnet as the host receives it: where it may pull to, and how near
     /// the drag has to come. `Snap` is not built outside the toolkit, so the
     /// test reads the two things it carries.
     snap: Option<(Vec<Pt>, f32)>,
+    at: Pt,
+    path: String,
+    carried: bool,
 }
 
 struct Spy<'a> {
@@ -53,21 +52,16 @@ impl Spy<'_> {
 impl Host for Spy<'_> {
     type Output = Vec<Mounted>;
 
-    fn split(
+    fn control(
         &mut self,
-        _axis: Axis,
-        _measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
+        _path: InternId,
+        _spec: &ControlSpec,
+        _read: Option<&Binding>,
+        _owner: InputOwner,
+        _size: Option<SizeSpec>,
+        _transform: Transform,
     ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|cell| cell.output))
-    }
-
-    fn measured(&mut self, _plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
-        Self::flatten(branches)
-    }
-
-    fn module(&mut self, _module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
-        content.unwrap_or_default()
+        Vec::new()
     }
 
     fn group(
@@ -78,16 +72,20 @@ impl Host for Spy<'_> {
         Self::flatten(children.into_iter().map(|cell| cell.output))
     }
 
-    fn popover(
+    fn hosted(
         &mut self,
-        popover: Popover<'_>,
-        mut anchor: Self::Output,
-        content: &mut dyn FnMut(&mut Self) -> Self::Output,
+        _node: &kithara_ui::expand::ExpandedNode,
+        child: Self::Output,
     ) -> Self::Output {
-        if popover.is_open() {
-            anchor.extend(content(self));
-        }
-        anchor
+        child
+    }
+
+    fn measured(&mut self, _plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
+        Self::flatten(branches)
+    }
+
+    fn module(&mut self, _module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
+        content.unwrap_or_default()
     }
 
     fn placed(&mut self, placement: PlacedMount<'_>, mut child: Self::Output) -> Self::Output {
@@ -101,6 +99,18 @@ impl Host for Spy<'_> {
                 .map(|snap| (snap.to.clone(), snap.within)),
         });
         child
+    }
+
+    fn popover(
+        &mut self,
+        popover: Popover<'_>,
+        mut anchor: Self::Output,
+        content: &mut dyn FnMut(&mut Self) -> Self::Output,
+    ) -> Self::Output {
+        if popover.is_open() {
+            anchor.extend(content(self));
+        }
+        anchor
     }
 
     fn pressable(
@@ -125,28 +135,17 @@ impl Host for Spy<'_> {
         Self::flatten(children)
     }
 
+    fn split(
+        &mut self,
+        _axis: Axis,
+        _measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
+        Self::flatten(children.into_iter().map(|cell| cell.output))
+    }
+
     fn stage(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
         Self::flatten(children)
-    }
-
-    fn control(
-        &mut self,
-        _path: InternId,
-        _spec: &ControlSpec,
-        _read: Option<&Binding>,
-        _owner: InputOwner,
-        _size: Option<SizeSpec>,
-        _transform: Transform,
-    ) -> Self::Output {
-        Vec::new()
-    }
-
-    fn hosted(
-        &mut self,
-        _node: &kithara_ui::expand::ExpandedNode,
-        child: Self::Output,
-    ) -> Self::Output {
-        child
     }
 
     fn window(

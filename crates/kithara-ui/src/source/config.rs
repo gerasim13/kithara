@@ -20,12 +20,12 @@ pub struct Limits {
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DrawPoolLimits {
-    /// Maximum reusable buffers kept by each pool. Zero is treated as one.
-    #[builder(default = 64)]
-    pub max_buffers: usize,
     /// Command slots retained by one returned draw-list buffer.
     #[builder(default = 512)]
     pub command_capacity: usize,
+    /// Maximum reusable buffers kept by each pool. Zero is treated as one.
+    #[builder(default = 64)]
+    pub max_buffers: usize,
     /// Vector verbs retained by one returned path buffer.
     #[builder(default = 128)]
     pub path_capacity: usize,

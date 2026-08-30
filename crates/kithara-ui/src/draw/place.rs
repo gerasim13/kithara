@@ -1,11 +1,3 @@
-//! Geometry under a transform.
-//!
-//! A named shape survives a transform only while the transform leaves it
-//! nameable: a rectangle stays a rectangle while the axes stay where they are,
-//! a circle stays a circle only under a rotation and one scale. Everything else
-//! becomes an outline here, in the neutral list, so that both hosts replay the
-//! same points instead of each asking its own toolkit to turn a rectangle.
-
 use kurbo::{Arc, Circle, PathEl, Point, RoundedRect, Shape};
 use num_traits::cast::AsPrimitive;
 
@@ -14,10 +6,6 @@ use super::{
     list::DrawList,
     path::{Path, Verb},
 };
-
-/// How closely a flattened curve follows the one it replaces, in logical
-/// pixels. A tenth of a pixel is under what either rasteriser resolves.
-const TOLERANCE: f64 = 0.1;
 
 /// The upright rectangle that holds this one after the transform.
 ///
@@ -123,9 +111,6 @@ fn command_ink(command: &DrawCmd) -> Option<Rect> {
         DrawCmd::Stroke { geom, pen, .. } => {
             geom_ink(geom).map(|geom| grown(geom, pen.width / 2.0))
         }
-        // The run's own box, which the transform then carries wherever the text
-        // went. Ascenders and descenders past the measured height are covered by
-        // taking the height on both sides of the baseline.
         DrawCmd::Text { run, transform, .. } => Some(bounds(
             Rect {
                 h: run.height() * 2.0,
@@ -282,6 +267,10 @@ fn moved(verb: Verb, by: Transform) -> Verb {
 }
 
 fn flatten(shape: &impl Shape, by: Transform) -> Vec<Verb> {
+    /// How closely a flattened curve follows the one it replaces, in logical
+    /// pixels. A tenth of a pixel is under what either rasteriser resolves.
+    const TOLERANCE: f64 = 0.1;
+
     shape
         .path_elements(TOLERANCE)
         .map(|element| element_verb(element, by))
@@ -495,7 +484,7 @@ mod tests {
 
     fn picture() -> Image {
         Image::pixels(ImageId::new("test/sprite"), 1, 1, Arc::from(vec![0_u8; 4]))
-            .unwrap_or_else(|| panic!("one opaque pixel is a picture"))
+            .expect("one opaque pixel is a picture")
     }
 
     /// One opaque colour, because these tests are about where ink lands and

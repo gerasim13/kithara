@@ -32,10 +32,10 @@ type AttachProbe = Arc<dyn Fn() + Send + Sync>;
 /// `u64::MAX`.
 pub(crate) struct DemandEntry {
     read_pos: Arc<AtomicU64>,
-    look_ahead: Option<u64>,
     requested_end: AtomicU64,
     peer_waker: Mutex<Option<Waker>>,
     reader_waker: Mutex<Option<Waker>>,
+    look_ahead: Option<u64>,
 }
 
 impl DemandEntry {
@@ -47,34 +47,6 @@ impl DemandEntry {
             peer_waker: Mutex::new(None),
             reader_waker: Mutex::new(None),
         }
-    }
-
-    /// Per-entry watermark: how far this consumer wants bytes fetched.
-    pub(super) fn watermark(&self) -> u64 {
-        let prefetch = self.look_ahead.map_or(u64::MAX, |la| {
-            self.read_pos.load(Ordering::Acquire).saturating_add(la)
-        });
-        prefetch.max(self.requested_end.load(Ordering::Acquire))
-    }
-
-    pub(super) fn request_until(&self, end: u64) -> bool {
-        self.requested_end.fetch_max(end, Ordering::AcqRel) < end
-    }
-
-    pub(super) fn take_peer_waker(&self) -> Option<Waker> {
-        self.peer_waker.lock().take()
-    }
-
-    pub(super) fn take_reader_waker(&self) -> Option<Waker> {
-        self.reader_waker.lock().take()
-    }
-
-    pub(super) fn register_peer_waker(&self, waker: &Waker) {
-        register_waker(&self.peer_waker, waker);
-    }
-
-    pub(super) fn register_reader_waker(&self, waker: &Waker) {
-        register_waker(&self.reader_waker, waker);
     }
 
     pub(super) fn clear_peer_waker(&self, waker: &Waker) {
@@ -90,6 +62,34 @@ impl DemandEntry {
             }
         };
         drop(old);
+    }
+
+    pub(super) fn register_peer_waker(&self, waker: &Waker) {
+        register_waker(&self.peer_waker, waker);
+    }
+
+    pub(super) fn register_reader_waker(&self, waker: &Waker) {
+        register_waker(&self.reader_waker, waker);
+    }
+
+    pub(super) fn request_until(&self, end: u64) -> bool {
+        self.requested_end.fetch_max(end, Ordering::AcqRel) < end
+    }
+
+    pub(super) fn take_peer_waker(&self) -> Option<Waker> {
+        self.peer_waker.lock().take()
+    }
+
+    pub(super) fn take_reader_waker(&self) -> Option<Waker> {
+        self.reader_waker.lock().take()
+    }
+
+    /// Per-entry watermark: how far this consumer wants bytes fetched.
+    pub(super) fn watermark(&self) -> u64 {
+        let prefetch = self.look_ahead.map_or(u64::MAX, |la| {
+            self.read_pos.load(Ordering::Acquire).saturating_add(la)
+        });
+        prefetch.max(self.requested_end.load(Ordering::Acquire))
     }
 }
 
@@ -213,8 +213,8 @@ impl PendingResourceIndex {
         let writer = epoch.map(|claim| lease.writer(claim));
         Ok(AcquisitionResult::Pending(ResourceAttachment {
             reader,
-            lease,
             writer,
+            lease,
         }))
     }
 
@@ -224,16 +224,16 @@ impl PendingResourceIndex {
     }
 
     #[cfg(test)]
-    fn set_attach_probe_for_test(&self, probe: impl Fn() + Send + Sync + 'static) {
-        *self.inner.attach_probe.lock() = Some(Arc::new(probe));
-    }
-
-    #[cfg(test)]
     fn run_attach_probe_for_test(&self) {
         let probe = self.inner.attach_probe.lock().take();
         if let Some(probe) = probe {
             probe();
         }
+    }
+
+    #[cfg(test)]
+    fn set_attach_probe_for_test(&self, probe: impl Fn() + Send + Sync + 'static) {
+        *self.inner.attach_probe.lock() = Some(Arc::new(probe));
     }
 
     #[cfg(test)]

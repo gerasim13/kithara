@@ -7,8 +7,8 @@ use crate::{
 };
 
 pub(in crate::engine) struct ActivationComponent {
-    path: String,
     hover: Hover,
+    path: String,
 }
 
 impl ActivationComponent {
@@ -21,12 +21,12 @@ impl ActivationComponent {
 }
 
 impl Component for ActivationComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn captures_pointer(&self) -> bool {
+        false
     }
 
-    fn kind(&self) -> Kind {
-        Kind::Activation
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        self.hover.cursor(false, hit)
     }
 
     fn handle(
@@ -42,11 +42,11 @@ impl Component for ActivationComponent {
         )
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.hover.cursor(false, hit)
+    fn kind(&self) -> Kind {
+        Kind::Activation
     }
 
-    fn captures_pointer(&self) -> bool {
-        false
+    fn path(&self) -> &str {
+        &self.path
     }
 }

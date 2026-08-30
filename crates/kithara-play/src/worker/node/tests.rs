@@ -43,9 +43,9 @@ fn test_node<S>(
     DecoderNode {
         seek_obs,
         source,
-        retired_chunk: None,
         port,
         preload_gate,
+        retired_chunk: None,
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
         preload_chunks: 1,
@@ -59,15 +59,15 @@ struct PersistentEofSource {
 }
 
 struct RetiringSource {
-    seek: Arc<SeekState>,
     retired: Arc<AtomicUsize>,
+    seek: Arc<SeekState>,
     chunks_left: usize,
 }
 
 struct CommitSource {
-    chunk: Option<AudioChunk>,
     commits: Arc<Mutex<Vec<(SourceEnd, u64)>>>,
     seek: Arc<SeekState>,
+    chunk: Option<AudioChunk>,
     source_end: SourceEnd,
 }
 
@@ -236,8 +236,8 @@ fn decoder_node_records_engine_load_on_produced() {
 
     let mut node = DecoderNode {
         source,
-        retired_chunk: None,
         port,
+        retired_chunk: None,
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         preload_gate: Arc::new(PreloadGate::default()),
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
@@ -272,8 +272,8 @@ fn worker_telemetry_throttles_immediate_repeats() {
 
     let mut node = DecoderNode {
         source,
-        retired_chunk: None,
         port,
+        retired_chunk: None,
         seek_obs: Arc::clone(&seek) as Arc<dyn SeekObserve>,
         preload_gate: gate,
         playhead: Arc::clone(&playhead) as Arc<dyn PlayheadWrite>,
@@ -443,10 +443,10 @@ fn source_end_commits_only_after_final_port_admission() {
     );
     let commits = Arc::new(Mutex::new(Vec::new()));
     let source = CommitSource {
+        source_end,
         chunk: Some(empty_chunk()),
         commits: Arc::clone(&commits),
         seek: Arc::new(SeekState::new()),
-        source_end,
     };
     let mut node = test_node(
         source,

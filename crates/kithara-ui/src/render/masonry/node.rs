@@ -48,17 +48,17 @@ use crate::{
 /// The gesture is the one the immediate host puts over the same flow, so the
 /// two hosts step alike; only the way it is mounted differs.
 pub(crate) struct Detent {
+    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     stepper: Stepper,
     path: String,
-    map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
 }
 
 impl Detent {
     pub(super) fn new(path: String, map_event: Rc<dyn Fn(UiEvent) -> HostAction>) -> Self {
         Self {
-            stepper: Stepper::default(),
             path,
             map_event,
+            stepper: Stepper::default(),
         }
     }
 
@@ -76,28 +76,28 @@ impl Detent {
 }
 
 pub(crate) struct Node {
-    layout: NodeLayout,
-    declared: solve::Size<solve::Length>,
-    limits: Option<solve::Limits>,
-    children: Vec<WidgetPod<Self>>,
-    primary: Option<Box<dyn Fn() -> HostAction>>,
-    secondary: Option<Box<dyn Fn() -> HostAction>>,
-    background: Option<Rgba>,
-    frame: Option<(FrameSides, Rgba, f32)>,
     round: FrameCorners,
-    radius: f32,
-    double_click: bool,
-    pointer: Option<(Pt, Pt)>,
-    /// Whether this node's leaf took the pointer and is still holding it.
-    leaf_holds: bool,
-    engine: Option<Rc<HostedEngine>>,
+    layout: NodeLayout,
+    background: Option<Rgba>,
     /// The stepping surface this flow declares over itself, where it declares
     /// one.
     detent: Option<Detent>,
+    engine: Option<Rc<HostedEngine>>,
+    frame: Option<(FrameSides, Rgba, f32)>,
+    limits: Option<solve::Limits>,
+    pointer: Option<(Pt, Pt)>,
+    primary: Option<Box<dyn Fn() -> HostAction>>,
+    secondary: Option<Box<dyn Fn() -> HostAction>>,
     /// Where this node stands in the stage that holds it, when it is one of
     /// its placements.
     spot: Option<Spot>,
+    declared: solve::Size<solve::Length>,
     transform: Transform,
+    children: Vec<WidgetPod<Self>>,
+    double_click: bool,
+    /// Whether this node's leaf took the pointer and is still holding it.
+    leaf_holds: bool,
+    radius: f32,
 }
 
 impl Node {
@@ -111,12 +111,12 @@ impl Node {
         Self {
             layout,
             declared,
-            limits: None,
             children,
-            primary: None,
-            secondary: None,
             background,
             frame,
+            limits: None,
+            primary: None,
+            secondary: None,
             round: FrameCorners::EMPTY,
             radius: 0.0,
             double_click: false,
@@ -129,16 +129,12 @@ impl Node {
         }
     }
 
-    pub(crate) fn set_child_limits(
-        ctx: &mut LayoutCtx<'_>,
-        child: &mut WidgetPod<Self>,
-        limits: solve::Limits,
-    ) {
-        let (node, mut raw) = ctx.get_raw_mut(child);
-        if node.limits != Some(limits) {
-            node.limits = Some(limits);
-            raw.request_layout();
-        }
+    /// Offers the input to the grip a placement carries, answering whether
+    /// the grip took it.
+    fn carry_spot(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
+        self.spot
+            .as_mut()
+            .is_some_and(|spot| spot.carry(ctx, input, hit))
     }
 
     /// The point a child of a stage is laid out at: its own, when the child
@@ -148,41 +144,21 @@ impl Node {
         node.spot_at()
     }
 
-    fn queue_pointer(&self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
-        let PointerEvent::Down(button) = event else {
-            return;
+    fn engine_text_input(&self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
+        let Some(engine) = &self.engine else {
+            return false;
         };
-        let action = match button.button {
-            Some(MasonryPointerButton::Secondary) => self.secondary.as_ref(),
-            Some(MasonryPointerButton::Primary) | None => self.primary.as_ref(),
-            _ => None,
-        };
-        if let Some(action) = action {
-            ctx.submit_action::<HostAction>(action());
+        let outcome = engine.route(input, None).outcome;
+        sync_ime_area(ctx, engine);
+        let captured = outcome.is_captured();
+        if let Some(action) = outcome.value() {
+            ctx.submit_action::<HostAction>(action);
+        }
+        if captured {
+            ctx.request_paint_only();
             ctx.set_handled();
         }
-    }
-
-    /// Offers the input to the stepping surface this flow declares, answering
-    /// whether the surface took it.
-    fn step_surface(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
-        let Some(detent) = &mut self.detent else {
-            return false;
-        };
-        let Some(action) = detent.step(input, hit) else {
-            return false;
-        };
-        ctx.submit_action::<HostAction>(action);
-        ctx.set_handled();
-        true
-    }
-
-    /// Offers the input to the grip a placement carries, answering whether
-    /// the grip took it.
-    fn carry_spot(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
-        self.spot
-            .as_mut()
-            .is_some_and(|spot| spot.carry(ctx, input, hit))
+        captured
     }
 
     fn leaf_input(
@@ -233,45 +209,6 @@ impl Node {
         exclusive
     }
 
-    /// Shows the value an engine just published for this node's control, without
-    /// waiting for the rebuild that follows the gesture.
-    pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
-        self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
-    }
-
-    pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
-        self.layout.leaf().is_some_and(|leaf| leaf.refresh(ctx))
-    }
-
-    pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
-        match &self.layout {
-            NodeLayout::Leaf(leaf) => leaf.shader_declaration(),
-            NodeLayout::Flex(_)
-            | NodeLayout::Measured(_)
-            | NodeLayout::Scroll(_)
-            | NodeLayout::Stack
-            | NodeLayout::Stage => None,
-        }
-    }
-
-    pub(crate) fn vis_frame(&self) -> Option<VisFrame> {
-        match &self.layout {
-            NodeLayout::Leaf(Leaf::Vis(vis)) => vis.frame(),
-            NodeLayout::Leaf(
-                Leaf::Empty
-                | Leaf::Control(_)
-                | Leaf::Text { .. }
-                | Leaf::Custom { .. }
-                | Leaf::Shader(_),
-            )
-            | NodeLayout::Flex(_)
-            | NodeLayout::Measured(_)
-            | NodeLayout::Scroll(_)
-            | NodeLayout::Stack
-            | NodeLayout::Stage => None,
-        }
-    }
-
     fn leaf_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
         let Some(leaf) = self.layout.leaf() else {
             return false;
@@ -303,28 +240,54 @@ impl Node {
         captured
     }
 
-    fn engine_text_input(&self, ctx: &mut EventCtx<'_>, input: Input<'_>) -> bool {
-        let Some(engine) = &self.engine else {
-            return false;
+    fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
+        let Some(color) = self.background else {
+            return;
         };
-        let outcome = engine.route(input, None).outcome;
-        sync_ime_area(ctx, engine);
-        let captured = outcome.is_captured();
-        if let Some(action) = outcome.value() {
-            ctx.submit_action::<HostAction>(action);
+        if self.rounded() {
+            list.fill_path(corner_path(bounds, self.radius, self.round), color);
+        } else {
+            list.fill_rect(bounds, color);
         }
-        if captured {
-            ctx.request_paint_only();
-            ctx.set_handled();
-        }
-        captured
     }
 
-    fn route_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) {
-        if self.leaf_text_input(ctx, input) {
+    /// A frame is drawn over whatever the node holds, not under it: a child
+    /// that fills its parent to the edge would otherwise paint the side away,
+    /// which is what the other host, stacking the frame above the body, never
+    /// does.
+    fn paint_frame(&self, bounds: Rect, list: &mut DrawListBuilder) {
+        let Some((sides, color, width)) = self.frame else {
+            return;
+        };
+        if self.rounded() {
+            corner_frame(list, bounds, self.radius, self.round, sides, color, width);
             return;
         }
-        self.engine_text_input(ctx, input);
+        let right = bounds.x + (bounds.w - width).max(0.0);
+        let bottom = bounds.y + (bounds.h - width).max(0.0);
+        let mut side = |x: f32, y: f32, w: f32, h: f32| {
+            list.fill_rect(
+                Rect {
+                    x,
+                    y,
+                    w: w.max(0.0),
+                    h: h.max(0.0),
+                },
+                color,
+            );
+        };
+        if sides.top {
+            side(bounds.x, bounds.y, bounds.w, width);
+        }
+        if sides.right {
+            side(right, bounds.y, width, bounds.h);
+        }
+        if sides.bottom {
+            side(bounds.x, bottom, bounds.w, width);
+        }
+        if sides.left {
+            side(bounds.x, bounds.y, width, bounds.h);
+        }
     }
 
     fn pointer_input(
@@ -395,15 +358,23 @@ impl Node {
         Some((input, hit))
     }
 
-    fn paint_background(&self, bounds: Rect, list: &mut DrawListBuilder) {
-        let Some(color) = self.background else {
+    fn queue_pointer(&self, ctx: &mut EventCtx<'_>, event: &PointerEvent) {
+        let PointerEvent::Down(button) = event else {
             return;
         };
-        if self.rounded() {
-            list.fill_path(corner_path(bounds, self.radius, self.round), color);
-        } else {
-            list.fill_rect(bounds, color);
+        let action = match button.button {
+            Some(MasonryPointerButton::Secondary) => self.secondary.as_ref(),
+            Some(MasonryPointerButton::Primary) | None => self.primary.as_ref(),
+            _ => None,
+        };
+        if let Some(action) = action {
+            ctx.submit_action::<HostAction>(action());
+            ctx.set_handled();
         }
+    }
+
+    pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        self.layout.leaf().is_some_and(|leaf| leaf.refresh(ctx))
     }
 
     /// Whether this node stands at a window corner the skin gives a radius to.
@@ -413,47 +384,71 @@ impl Node {
         self.round.any() && self.radius > 0.0
     }
 
-    /// A frame is drawn over whatever the node holds, not under it: a child
-    /// that fills its parent to the edge would otherwise paint the side away,
-    /// which is what the other host, stacking the frame above the body, never
-    /// does.
-    fn paint_frame(&self, bounds: Rect, list: &mut DrawListBuilder) {
-        let Some((sides, color, width)) = self.frame else {
-            return;
-        };
-        if self.rounded() {
-            corner_frame(list, bounds, self.radius, self.round, sides, color, width);
+    fn route_text_input(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>) {
+        if self.leaf_text_input(ctx, input) {
             return;
         }
-        // A frame belongs to the box it frames, so each side is filled just
-        // inside it. A line stroked along the edge is centred on the edge, so
-        // half of it falls outside the box and a width of one pixel lands
-        // across two rows instead of on one — a whole pixel away from where
-        // the other host puts the same side.
-        let right = bounds.x + (bounds.w - width).max(0.0);
-        let bottom = bounds.y + (bounds.h - width).max(0.0);
-        let mut side = |x: f32, y: f32, w: f32, h: f32| {
-            list.fill_rect(
-                Rect {
-                    x,
-                    y,
-                    w: w.max(0.0),
-                    h: h.max(0.0),
-                },
-                color,
-            );
+        self.engine_text_input(ctx, input);
+    }
+
+    pub(crate) fn set_child_limits(
+        ctx: &mut LayoutCtx<'_>,
+        child: &mut WidgetPod<Self>,
+        limits: solve::Limits,
+    ) {
+        let (node, mut raw) = ctx.get_raw_mut(child);
+        if node.limits != Some(limits) {
+            node.limits = Some(limits);
+            raw.request_layout();
+        }
+    }
+
+    pub(crate) fn shader_declaration(&self) -> Option<ShaderDeclaration> {
+        match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.shader_declaration(),
+            NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage => None,
+        }
+    }
+
+    /// Shows the value an engine just published for this node's control, without
+    /// waiting for the rebuild that follows the gesture.
+    pub(crate) fn show_live(&mut self, value: &ReadValue<'_>) -> bool {
+        self.layout.leaf().is_some_and(|leaf| leaf.set_read(value))
+    }
+
+    /// Offers the input to the stepping surface this flow declares, answering
+    /// whether the surface took it.
+    fn step_surface(&mut self, ctx: &mut EventCtx<'_>, input: Input<'_>, hit: &Hit) -> bool {
+        let Some(detent) = &mut self.detent else {
+            return false;
         };
-        if sides.top {
-            side(bounds.x, bounds.y, bounds.w, width);
-        }
-        if sides.right {
-            side(right, bounds.y, width, bounds.h);
-        }
-        if sides.bottom {
-            side(bounds.x, bottom, bounds.w, width);
-        }
-        if sides.left {
-            side(bounds.x, bounds.y, width, bounds.h);
+        let Some(action) = detent.step(input, hit) else {
+            return false;
+        };
+        ctx.submit_action::<HostAction>(action);
+        ctx.set_handled();
+        true
+    }
+
+    pub(crate) fn vis_frame(&self) -> Option<VisFrame> {
+        match &self.layout {
+            NodeLayout::Leaf(Leaf::Vis(vis)) => vis.frame(),
+            NodeLayout::Leaf(
+                Leaf::Empty
+                | Leaf::Control(_)
+                | Leaf::Text { .. }
+                | Leaf::Custom { .. }
+                | Leaf::Shader(_),
+            )
+            | NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage => None,
         }
     }
 }
@@ -464,6 +459,21 @@ impl Node {
 /// only callers are the tree builder and the render root; keeping them apart
 /// from the widget's behaviour is what says so.
 impl Node {
+    /// Whether this node draws through a pass of its own rather than into the
+    /// scene, which is what makes it something the host has to declare.
+    pub(super) const fn is_native(&self) -> bool {
+        matches!(
+            &self.layout,
+            NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
+        )
+    }
+
+    /// Moves a placement to the point its endpoint now answers, saying whether
+    /// that is somewhere else than it stood.
+    pub(crate) fn move_spot(&mut self, at: Pt) -> bool {
+        self.spot.as_mut().is_some_and(|spot| spot.move_to(at))
+    }
+
     /// Puts this node where the document now says it is, and answers whether
     /// that moved it. A pose only changes what the node paints, so a node that
     /// moved needs repainting and nothing else re-measured.
@@ -484,21 +494,21 @@ impl Node {
         self.secondary = secondary;
     }
 
-    /// Which of this node's corners are the window's own, and how far they are
-    /// rounded. Both come from the mount: the corners from where the layout
-    /// puts the node, the radius from the skin.
-    pub(super) const fn set_round(&mut self, round: FrameCorners, radius: f32) {
-        self.round = round;
-        self.radius = radius;
+    /// The stepping surface this flow is asked to carry over itself.
+    pub(super) fn set_detent(&mut self, detent: Detent) {
+        self.detent = Some(detent);
     }
 
     pub(super) fn set_engine(&mut self, engine: Rc<HostedEngine>) {
         self.engine = Some(engine);
     }
 
-    /// The stepping surface this flow is asked to carry over itself.
-    pub(super) fn set_detent(&mut self, detent: Detent) {
-        self.detent = Some(detent);
+    /// Which of this node's corners are the window's own, and how far they are
+    /// rounded. Both come from the mount: the corners from where the layout
+    /// puts the node, the radius from the skin.
+    pub(super) const fn set_round(&mut self, round: FrameCorners, radius: f32) {
+        self.round = round;
+        self.radius = radius;
     }
 
     /// Where this placement of a stage stands, and what carries it.
@@ -509,21 +519,6 @@ impl Node {
     /// The point the stage lays this node out at, when it is a placement.
     pub(crate) fn spot_at(&self) -> Option<Pt> {
         self.spot.as_ref().map(Spot::at)
-    }
-
-    /// Moves a placement to the point its endpoint now answers, saying whether
-    /// that is somewhere else than it stood.
-    pub(crate) fn move_spot(&mut self, at: Pt) -> bool {
-        self.spot.as_mut().is_some_and(|spot| spot.move_to(at))
-    }
-
-    /// Whether this node draws through a pass of its own rather than into the
-    /// scene, which is what makes it something the host has to declare.
-    pub(super) const fn is_native(&self) -> bool {
-        matches!(
-            &self.layout,
-            NodeLayout::Leaf(Leaf::Shader(_) | Leaf::Vis(_))
-        )
     }
 
     /// Where this node draws, relative to the box the layout gave it.
@@ -538,6 +533,134 @@ impl AllowRawMut for Node {}
 impl Widget for Node {
     type Action = HostAction;
 
+    fn accepts_focus(&self) -> bool {
+        self.layout.accepts_input() || self.engine.is_some()
+    }
+
+    /// A leaf whose picture answers the hand is asked for too, even when the
+    /// gesture over it belongs to the engine: the hover edge only reaches a
+    /// widget Masonry counts as taking the pointer.
+    fn accepts_pointer_interaction(&self) -> bool {
+        self.primary.is_some()
+            || self.secondary.is_some()
+            || self.detent.is_some()
+            || self.spot.as_ref().is_some_and(Spot::grips)
+            || self.layout.accepts_input()
+            || self.layout.reads_pointer()
+    }
+
+    fn accepts_text_input(&self) -> bool {
+        self.layout.accepts_text_input()
+            || self
+                .engine
+                .as_ref()
+                .is_some_and(|engine| engine.accepts_text_input())
+    }
+
+    fn accessibility(
+        &mut self,
+        _ctx: &mut AccessCtx<'_>,
+        _props: &PropertiesRef<'_>,
+        _node: &mut AccessNode,
+    ) {
+    }
+
+    fn accessibility_role(&self) -> Role {
+        Role::GenericContainer
+    }
+
+    fn children_ids(&self) -> ChildrenIds {
+        self.children.iter().map(WidgetPod::id).collect()
+    }
+
+    fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
+        if let Some(engine) = &self.engine {
+            if let Some(area) = local_ime_area(engine, ctx.window_transform()) {
+                ctx.set_ime_area(area);
+            } else {
+                ctx.clear_ime_area();
+            }
+        }
+    }
+
+    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
+        let local = ctx.window_transform().inverse() * pos;
+        let size = ctx.size();
+        let hit = Hit::new(
+            Some(Pt {
+                x: local.x.as_(),
+                y: local.y.as_(),
+            }),
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                w: size.width.as_(),
+                h: size.height.as_(),
+            },
+        );
+        if let Some(spot) = &self.spot
+            && spot.grips()
+            && hit.over()
+        {
+            return cursor_icon(spot.cursor());
+        }
+        let leaf = match &self.layout {
+            NodeLayout::Leaf(leaf) => leaf.cursor(&hit),
+            NodeLayout::Flex(_)
+            | NodeLayout::Measured(_)
+            | NodeLayout::Scroll(_)
+            | NodeLayout::Stack
+            | NodeLayout::Stage => CursorShape::None,
+        };
+        cursor_icon(leaf)
+    }
+
+    fn layout(
+        &mut self,
+        ctx: &mut LayoutCtx<'_>,
+        _props: &mut PropertiesMut<'_>,
+        constraints: &BoxConstraints,
+    ) -> MasonrySize {
+        let limits = self.limits.unwrap_or_else(|| {
+            solve::Limits::new(
+                solve::Size::new(
+                    constraints.min().width.as_(),
+                    constraints.min().height.as_(),
+                ),
+                solve::Size::new(
+                    constraints.max().width.as_(),
+                    constraints.max().height.as_(),
+                ),
+            )
+        });
+        let size = self
+            .layout
+            .layout(ctx, &mut self.children, limits, self.declared);
+        MasonrySize::new(f64::from(size.width), f64::from(size.height))
+    }
+
+    fn make_trace_span(&self, id: WidgetId) -> Span {
+        trace_span!("KitharaMasonryNode", id = id.trace())
+    }
+
+    fn on_anim_frame(
+        &mut self,
+        ctx: &mut UpdateCtx<'_>,
+        _props: &mut PropertiesMut<'_>,
+        interval: u64,
+    ) {
+        if ctx.is_stashed() {
+            return;
+        }
+        if let Some(leaf) = self.layout.leaf() {
+            let repaint = leaf.repaint();
+            if let Some(action) = leaf.frame(Duration::from_nanos(interval)) {
+                ctx.submit_action::<HostAction>(action);
+            }
+            leaf.animate(ctx, repaint);
+        }
+    }
+
     fn on_pointer_event(
         &mut self,
         ctx: &mut EventCtx<'_>,
@@ -548,8 +671,6 @@ impl Widget for Node {
             self.queue_pointer(ctx, event);
             return;
         };
-        // A window under the pointer takes the wheel before anything below it,
-        // and only while it still has somewhere to go.
         if self.layout.wheel(input) {
             ctx.set_handled();
             ctx.request_layout();
@@ -585,83 +706,6 @@ impl Widget for Node {
         }
         if let Some(input) = portable_text_input(event) {
             self.route_text_input(ctx, input);
-        }
-    }
-
-    fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
-        for child in &mut self.children {
-            ctx.register_child(child);
-        }
-    }
-
-    fn update(&mut self, ctx: &mut UpdateCtx<'_>, _props: &mut PropertiesMut<'_>, event: &Update) {
-        if matches!(event, Update::WidgetAdded | Update::StashedChanged(false))
-            && let Some(leaf) = self.layout.leaf()
-        {
-            leaf.added(ctx);
-        }
-        if let Update::HoveredChanged(hovered) = event
-            && let Some(leaf) = self.layout.leaf()
-            && leaf.hover(*hovered)
-        {
-            ctx.request_paint_only();
-        }
-        if matches!(event, Update::FocusChanged(false))
-            && let Some(engine) = &self.engine
-        {
-            engine.clear_focus();
-        }
-    }
-
-    fn on_anim_frame(
-        &mut self,
-        ctx: &mut UpdateCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        interval: u64,
-    ) {
-        if ctx.is_stashed() {
-            return;
-        }
-        if let Some(leaf) = self.layout.leaf() {
-            let repaint = leaf.repaint();
-            if let Some(action) = leaf.frame(Duration::from_nanos(interval)) {
-                ctx.submit_action::<HostAction>(action);
-            }
-            leaf.animate(ctx, repaint);
-        }
-    }
-
-    fn layout(
-        &mut self,
-        ctx: &mut LayoutCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        constraints: &BoxConstraints,
-    ) -> MasonrySize {
-        let limits = self.limits.unwrap_or_else(|| {
-            solve::Limits::new(
-                solve::Size::new(
-                    constraints.min().width.as_(),
-                    constraints.min().height.as_(),
-                ),
-                solve::Size::new(
-                    constraints.max().width.as_(),
-                    constraints.max().height.as_(),
-                ),
-            )
-        });
-        let size = self
-            .layout
-            .layout(ctx, &mut self.children, limits, self.declared);
-        MasonrySize::new(f64::from(size.width), f64::from(size.height))
-    }
-
-    fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
-        if let Some(engine) = &self.engine {
-            if let Some(area) = local_ime_area(engine, ctx.window_transform()) {
-                ctx.set_ime_area(area);
-            } else {
-                ctx.clear_ime_area();
-            }
         }
     }
 
@@ -705,80 +749,29 @@ impl Widget for Node {
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
 
-    fn accessibility_role(&self) -> Role {
-        Role::GenericContainer
-    }
-
-    fn accessibility(
-        &mut self,
-        _ctx: &mut AccessCtx<'_>,
-        _props: &PropertiesRef<'_>,
-        _node: &mut AccessNode,
-    ) {
-    }
-
-    fn children_ids(&self) -> ChildrenIds {
-        self.children.iter().map(WidgetPod::id).collect()
-    }
-
-    /// A leaf whose picture answers the hand is asked for too, even when the
-    /// gesture over it belongs to the engine: the hover edge only reaches a
-    /// widget Masonry counts as taking the pointer.
-    fn accepts_pointer_interaction(&self) -> bool {
-        self.primary.is_some()
-            || self.secondary.is_some()
-            || self.detent.is_some()
-            || self.spot.as_ref().is_some_and(Spot::grips)
-            || self.layout.accepts_input()
-            || self.layout.reads_pointer()
-    }
-
-    fn accepts_focus(&self) -> bool {
-        self.layout.accepts_input() || self.engine.is_some()
-    }
-
-    fn accepts_text_input(&self) -> bool {
-        self.layout.accepts_text_input()
-            || self
-                .engine
-                .as_ref()
-                .is_some_and(|engine| engine.accepts_text_input())
-    }
-
-    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
-        let local = ctx.window_transform().inverse() * pos;
-        let size = ctx.size();
-        let hit = Hit::new(
-            Some(Pt {
-                x: local.x.as_(),
-                y: local.y.as_(),
-            }),
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                w: size.width.as_(),
-                h: size.height.as_(),
-            },
-        );
-        if let Some(spot) = &self.spot
-            && spot.grips()
-            && hit.over()
-        {
-            return cursor_icon(spot.cursor());
+    fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
+        for child in &mut self.children {
+            ctx.register_child(child);
         }
-        let leaf = match &self.layout {
-            NodeLayout::Leaf(leaf) => leaf.cursor(&hit),
-            NodeLayout::Flex(_)
-            | NodeLayout::Measured(_)
-            | NodeLayout::Scroll(_)
-            | NodeLayout::Stack
-            | NodeLayout::Stage => CursorShape::None,
-        };
-        cursor_icon(leaf)
     }
 
-    fn make_trace_span(&self, id: WidgetId) -> Span {
-        trace_span!("KitharaMasonryNode", id = id.trace())
+    fn update(&mut self, ctx: &mut UpdateCtx<'_>, _props: &mut PropertiesMut<'_>, event: &Update) {
+        if matches!(event, Update::WidgetAdded | Update::StashedChanged(false))
+            && let Some(leaf) = self.layout.leaf()
+        {
+            leaf.added(ctx);
+        }
+        if let Update::HoveredChanged(hovered) = event
+            && let Some(leaf) = self.layout.leaf()
+            && leaf.hover(*hovered)
+        {
+            ctx.request_paint_only();
+        }
+        if matches!(event, Update::FocusChanged(false))
+            && let Some(engine) = &self.engine
+        {
+            engine.clear_focus();
+        }
     }
 }
 

@@ -78,13 +78,13 @@ static CENSUS_WAVE: [WaveBucket; 1] = [WaveBucket {
 }];
 
 struct VisReads {
-    left: Cell<f32>,
-    right: Cell<f32>,
-    volume: Cell<f32>,
-    time: Cell<f64>,
     first: Cell<f64>,
-    second: Cell<f64>,
+    left: Cell<f32>,
     levels_present: Cell<bool>,
+    right: Cell<f32>,
+    second: Cell<f64>,
+    time: Cell<f64>,
+    volume: Cell<f32>,
 }
 
 impl Reads for VisReads {
@@ -276,10 +276,10 @@ impl EndpointRegistry for FixtureRegistry {
 
 #[derive(Debug)]
 struct ExpectedRect {
-    path: String,
     /// The box the neutral host gave this node, or nothing when the room never
     /// reached it and neither host laid it out.
     placed: Option<[f64; 4]>,
+    path: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -344,10 +344,10 @@ enum TestAction {
 }
 
 struct WheelEmitter {
-    pending: VecDeque<WheelAction>,
-    pressed: bool,
-    long_pressed: bool,
     recognized: Rc<RefCell<Vec<PointerPhase>>>,
+    pending: VecDeque<WheelAction>,
+    long_pressed: bool,
+    pressed: bool,
 }
 
 impl WheelEmitter {
@@ -360,10 +360,10 @@ impl WheelEmitter {
         recognized: Rc<RefCell<Vec<PointerPhase>>>,
     ) -> Self {
         Self {
+            recognized,
             pending: actions.into_iter().collect(),
             pressed: false,
             long_pressed: false,
-            recognized,
         }
     }
 
@@ -375,8 +375,18 @@ impl WheelEmitter {
 impl CustomWidget for WheelEmitter {
     type Action = WheelAction;
 
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
+    fn frame(&mut self, _elapsed: Duration) -> Option<Self::Action> {
+        if !self.pressed || self.long_pressed {
+            return None;
+        }
+        self.long_pressed = true;
+        self.recognized.borrow_mut().push(PointerPhase::LongPress);
+        matches!(
+            self.pending.front(),
+            Some(WheelAction::CellLongPress { .. })
+        )
+        .then(|| self.take())
+        .flatten()
     }
 
     fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
@@ -441,18 +451,8 @@ impl CustomWidget for WheelEmitter {
         }
     }
 
-    fn frame(&mut self, _elapsed: Duration) -> Option<Self::Action> {
-        if !self.pressed || self.long_pressed {
-            return None;
-        }
-        self.long_pressed = true;
-        self.recognized.borrow_mut().push(PointerPhase::LongPress);
-        matches!(
-            self.pending.front(),
-            Some(WheelAction::CellLongPress { .. })
-        )
-        .then(|| self.take())
-        .flatten()
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
     }
 
     fn paint(
@@ -521,10 +521,6 @@ impl CustomWidget for MeasureProbe {
 impl CustomWidget for KeyProbe {
     type Action = ();
 
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
-    }
-
     fn input(&mut self, input: Input<'_>, _hit: Hit) -> Outcome<Self::Action> {
         let event = match input {
             Input::ModifiersChanged(_) => "modifiers",
@@ -536,6 +532,10 @@ impl CustomWidget for KeyProbe {
         };
         self.observed.borrow_mut().push(event);
         Outcome::captured()
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
     }
 
     fn paint(
@@ -551,13 +551,13 @@ impl CustomWidget for KeyProbe {
 impl CustomWidget for FrameProbe {
     type Action = ();
 
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
-    }
-
     fn frame(&mut self, _elapsed: Duration) -> Option<Self::Action> {
         self.pending = false;
         None
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
     }
 
     fn paint(
@@ -582,16 +582,16 @@ impl CustomWidget for FrameProbe {
 impl CustomWidget for ScrollProbe {
     type Action = ();
 
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
-    }
-
     fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
         let Input::Wheel(scroll) = input else {
             return Outcome::IGNORED;
         };
         self.observations.borrow_mut().push((scroll, hit));
         Outcome::captured()
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
     }
 
     fn paint(
@@ -607,10 +607,6 @@ impl CustomWidget for ScrollProbe {
 impl CustomWidget for CaptureProbe {
     type Action = ();
 
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
-    }
-
     fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
         let Input::Pointer(pointer) = input else {
             return Outcome::IGNORED;
@@ -625,6 +621,10 @@ impl CustomWidget for CaptureProbe {
             return Outcome::IGNORED.with_ownership(PointerOwnership::Release);
         }
         Outcome::IGNORED
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
     }
 
     fn paint(
@@ -2477,10 +2477,6 @@ struct PressExtension;
 impl CustomWidget for PressExtension {
     type Action = ();
 
-    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-        Size2::new(40.0, 40.0)
-    }
-
     fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
         let Input::Pointer(pointer) = input else {
             return Outcome::IGNORED;
@@ -2489,6 +2485,10 @@ impl CustomWidget for PressExtension {
             return Outcome::set(()).with_ownership(PointerOwnership::Claim);
         }
         Outcome::IGNORED
+    }
+
+    fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+        Size2::new(40.0, 40.0)
     }
 
     fn paint(
@@ -2667,8 +2667,8 @@ mod gesture_census {
 
     #[derive(Clone, Copy)]
     struct Row {
-        gestures: Gestures,
         name: &'static str,
+        gestures: Gestures,
     }
 
     const ROWS: &[Row] = &[
@@ -2861,8 +2861,8 @@ mod gesture_census {
     }
 
     struct Probe<'a> {
-        reading: Reading<'a>,
         skin: &'a Skin,
+        reading: Reading<'a>,
     }
 
     trait ProbeControl {
@@ -4164,9 +4164,9 @@ fn pointer_down_with_count(x: f64, y: f64, count: u8) -> PointerEvent {
     let mut state = pointer_state(x, y, true);
     state.count = count;
     PointerEvent::Down(PointerButtonEvent {
+        state,
         button: Some(MasonryPointerButton::Primary),
         pointer: pointer_info(),
-        state,
     })
 }
 
@@ -4178,9 +4178,9 @@ fn pointer_up_with_count(x: f64, y: f64, count: u8) -> PointerEvent {
     let mut state = pointer_state(x, y, false);
     state.count = count;
     PointerEvent::Up(PointerButtonEvent {
+        state,
         button: Some(MasonryPointerButton::Primary),
         pointer: pointer_info(),
-        state,
     })
 }
 
@@ -4204,8 +4204,8 @@ fn pointer_hover(x: f64, y: f64) -> PointerEvent {
 
 fn pointer_scroll(x: f64, y: f64, delta: ScrollDelta) -> PointerEvent {
     PointerEvent::Scroll(PointerScrollEvent {
-        pointer: pointer_info(),
         delta,
+        pointer: pointer_info(),
         state: pointer_state(x, y, false),
     })
 }
@@ -4249,8 +4249,8 @@ fn fixture_section(fixture: &str, preset: &str, width: u32, height: u32) -> Vec<
             Some([number(), number(), number(), number()])
         };
         rects.push(ExpectedRect {
-            path: path.to_owned(),
             placed,
+            path: path.to_owned(),
         });
         assert!(
             fields.next().is_none(),

@@ -92,8 +92,7 @@ impl PeakLimiter {
         } else {
             1.0
         };
-        // Release before the clamp: the reverse order lets the recovered gain
-        // overshoot the ceiling for one frame.
+        // WHY: Release before the clamp: the reverse order lets the recovered gain overshoot the ceiling for one frame.
         self.envelope = (1.0 - self.envelope).mul_add(-self.release_coeff, 1.0);
         if required < self.envelope {
             self.envelope = required;

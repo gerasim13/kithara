@@ -13,6 +13,21 @@ pub(super) struct PreparedTarget {
 }
 
 impl WarpRenderer {
+    fn config_for(
+        backend: StretchKind,
+        spec: AudioSpec,
+        sample_pool: &SamplePool,
+    ) -> Result<ElasticConfig, ElasticError> {
+        ElasticConfig::builder()
+            .backend(backend)
+            .sample_rate(spec.sample_rate.get())
+            .channels(usize::from(spec.channels.max(1)))
+            .pool(sample_pool.clone())
+            .max_source_frames(Self::MAX_SOURCE_FRAMES)
+            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
+            .build()
+    }
+
     pub(super) fn prepare_target(
         kind: StretchKind,
         spec: AudioSpec,
@@ -53,21 +68,6 @@ impl WarpRenderer {
                 PreparedTarget::default()
             }
         }
-    }
-
-    fn config_for(
-        backend: StretchKind,
-        spec: AudioSpec,
-        sample_pool: &SamplePool,
-    ) -> Result<ElasticConfig, ElasticError> {
-        ElasticConfig::builder()
-            .backend(backend)
-            .sample_rate(spec.sample_rate.get())
-            .channels(usize::from(spec.channels.max(1)))
-            .pool(sample_pool.clone())
-            .max_source_frames(Self::MAX_SOURCE_FRAMES)
-            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
-            .build()
     }
 
     fn scratch_samples(

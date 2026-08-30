@@ -10,8 +10,8 @@ use crate::{api::PlayerEvent, resource::Resource, rt::track::PlayerResource};
 
 pub(crate) struct TakenItem {
     pub(crate) abr_handle: Option<kithara_abr::AbrHandle>,
-    pub(crate) item_id: TrackId,
     pub(crate) player_resource: PlayerResource,
+    pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
 }
 
@@ -46,20 +46,6 @@ impl ItemQueue {
         }
     }
 
-    delegate::delegate! {
-        to self.playlist.lock() {
-            #[call(clear)]
-            pub(crate) fn clear_all(&self);
-            #[call(current)]
-            pub(crate) fn current_index(&self) -> usize;
-            pub(crate) fn has_resource(&self, index: usize) -> bool;
-            pub(crate) fn is_announced(&self, index: usize) -> bool;
-            #[call(len)]
-            pub(crate) fn item_count(&self) -> usize;
-            pub(crate) fn set_current(&self, index: usize);
-        }
-    }
-
     pub(crate) fn clear_item(&self, index: usize) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
@@ -72,7 +58,7 @@ impl ItemQueue {
     pub(crate) fn insert(&self, resource: Resource, item_id: TrackId, at_position: Option<usize>) {
         let (count, pos) = {
             let mut playlist = self.playlist.lock();
-            let pos = playlist.insert(QueuedResource { item_id, resource }, at_position);
+            let pos = playlist.insert(QueuedResource { resource, item_id }, at_position);
             (playlist.len(), pos)
         };
         debug!(count, pos, "item inserted");
@@ -90,7 +76,7 @@ impl ItemQueue {
     pub(crate) fn replace_item(&self, index: usize, resource: Resource, item_id: TrackId) {
         let mut playlist = self.playlist.lock();
         if index < playlist.len() {
-            playlist.replace(index, QueuedResource { item_id, resource });
+            playlist.replace(index, QueuedResource { resource, item_id });
             drop(playlist);
             debug!(index, "item replaced");
         }
@@ -127,10 +113,24 @@ impl ItemQueue {
 
         Some(TakenItem {
             abr_handle,
-            item_id,
             player_resource,
+            item_id,
             duration_seconds,
         })
+    }
+
+    delegate::delegate! {
+        to self.playlist.lock() {
+            #[call(clear)]
+            pub(crate) fn clear_all(&self);
+            #[call(current)]
+            pub(crate) fn current_index(&self) -> usize;
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) fn is_announced(&self, index: usize) -> bool;
+            #[call(len)]
+            pub(crate) fn item_count(&self) -> usize;
+            pub(crate) fn set_current(&self, index: usize);
+        }
     }
 }
 
@@ -148,8 +148,8 @@ mod tests {
     use super::*;
 
     struct EofReader {
-        bus: EventBus,
         spec: AudioSpec,
+        bus: EventBus,
         metadata: TrackMetadata,
     }
 

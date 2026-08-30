@@ -13,31 +13,6 @@ use crate::{
     shader::ShaderSpec,
 };
 
-const COMPOSITE: &str = r#"
-@group(0) @binding(0) var image_sampler: sampler;
-@group(0) @binding(1) var image: texture_2d<f32>;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    let x = f32((vertex_index << 1u) & 2u);
-    let y = f32(vertex_index & 2u);
-    var output: VertexOutput;
-    output.position = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
-    output.uv = vec2<f32>(x, y);
-    return output;
-}
-
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(image, image_sampler, input.uv);
-}
-"#;
-
 pub(crate) fn view<'a>(spec: &ShaderSpec, path: &str, ctx: Ctx<'_, '_>) -> Element<'a, UiEvent> {
     let frame = match ShaderFrame::read(spec, path, &ctx, ctx.ui) {
         Ok(frame) => frame,
@@ -190,12 +165,12 @@ fn offscreen(
 }
 
 struct Pipeline {
-    composite: wgpu::RenderPipeline,
     programs: BTreeMap<kithara_platform::sync::Arc<str>, wgpu::RenderPipeline>,
-    sampler: wgpu::Sampler,
     slots: BTreeMap<ImageId, Slot>,
     texture_layout: wgpu::BindGroupLayout,
     uniform_layout: wgpu::BindGroupLayout,
+    composite: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
 }
 
 impl shader::Pipeline for Pipeline {
@@ -211,23 +186,23 @@ impl shader::Pipeline for Pipeline {
         let composite = composite_pipeline(device, &texture_layout, format);
         Self {
             composite,
-            programs: BTreeMap::new(),
             sampler,
-            slots: BTreeMap::new(),
             texture_layout,
             uniform_layout,
+            programs: BTreeMap::new(),
+            slots: BTreeMap::new(),
         }
     }
 }
 
 struct Slot {
-    size: [u32; 2],
     source: kithara_platform::sync::Arc<str>,
     texture_bind_group: wgpu::BindGroup,
-    texture_view: wgpu::TextureView,
     uniform_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+    texture_view: wgpu::TextureView,
     uniform_bytes: Vec<u8>,
+    size: [u32; 2],
     uniform_size: usize,
 }
 
@@ -352,6 +327,31 @@ fn composite_pipeline(
     texture_layout: &wgpu::BindGroupLayout,
     format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
+    const COMPOSITE: &str = r#"
+@group(0) @binding(0) var image_sampler: sampler;
+@group(0) @binding(1) var image: texture_2d<f32>;
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    let x = f32((vertex_index << 1u) & 2u);
+    let y = f32(vertex_index & 2u);
+    var output: VertexOutput;
+    output.position = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    output.uv = vec2<f32>(x, y);
+    return output;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(image, image_sampler, input.uv);
+}
+"#;
+
     render_pipeline(
         device,
         texture_layout,
@@ -432,8 +432,8 @@ fn texture(
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(label),
         layout,
+        label: Some(label),
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,

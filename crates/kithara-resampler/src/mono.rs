@@ -19,11 +19,11 @@ pub struct MonoStreamConfig<B> {
     pub backend: B,
     pub source_sample_rate: NonZeroU32,
     pub target_sample_rate: NonZeroU32,
-    pub sample_pool: SamplePool,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
+    pub sample_pool: SamplePool,
 }
 
 impl<B> fmt::Debug for MonoStreamConfig<B>
@@ -46,11 +46,11 @@ pub struct MonoStream<B>
 where
     B: ResamplerBackend,
 {
+    resampler: B::Resampler,
     input_block: SampleBuffer,
     output_block: SampleBuffer,
     pending: SampleBuffer,
     ready: SampleBuffer,
-    resampler: B::Resampler,
     ratio: f64,
     total_in: u64,
     emitted: usize,

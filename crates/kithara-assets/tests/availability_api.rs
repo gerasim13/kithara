@@ -1,6 +1,5 @@
 //! Phase P-2 smoke tests for `AssetStore::{contains_range,
 //! available_ranges, final_len}`.
-
 mod support;
 
 use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend, WriteSide};

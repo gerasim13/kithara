@@ -18,16 +18,16 @@ impl Packager for Backend {
         match *live {}
     }
 
+    fn release(_host: &Host) -> BroadcastResult<()> {
+        Ok(())
+    }
+
     fn start(
         _host: &Host,
         _shutdown: &CancelToken,
         _tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
         Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
-    }
-
-    fn release(_host: &Host) -> BroadcastResult<()> {
-        Ok(())
     }
 
     fn stop(live: Stream) {

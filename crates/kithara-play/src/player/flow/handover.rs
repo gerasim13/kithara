@@ -90,9 +90,8 @@ impl Handover<'_> {
             return None;
         }
 
-        // Resolve any already-armed slot under a short phase lock: either the
-        // same index is already armed (return early), or it must be cleared
-        // and possibly unloaded outside the lock.
+        // WHY: Resolve any already-armed slot under a short phase lock: either the same index is already armed (return early), or it must be
+        // cleared and possibly unloaded outside the lock.
         let mut phase = self.phase.lock();
         let existing = phase.pending_mut().and_then(|slot| slot.as_ref());
         let decision = match existing {
@@ -153,7 +152,7 @@ impl Handover<'_> {
     /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
     ///   [`Self::armed_next`].
     fn commit_next(&self, index: usize) -> Result<(), PlayError> {
-        // `None` ⇒ the slot was already activated (idempotent no-op).
+        // WHY: `None` ⇒ the slot was already activated (idempotent no-op).
         let Some(activated) = self.activate_pending(index)? else {
             return Ok(());
         };

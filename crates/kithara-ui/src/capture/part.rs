@@ -10,9 +10,6 @@ use num_traits::cast::AsPrimitive;
 use super::{Geometry, Stage, write_png};
 use crate::draw::Rect;
 
-/// How many bytes one pixel of a photograph carries.
-const CHANNELS: usize = 4;
-
 /// A rectangle of one photograph, in that photograph's own pixels.
 ///
 /// A caller builds one to say which part of a frame a picture is cut from, so
@@ -67,6 +64,9 @@ impl Region {
         frame: Geometry,
         pixels: &[u8],
     ) -> Result<impl Iterator<Item = Range<usize>>, String> {
+        /// How many bytes one pixel of a photograph carries.
+        const CHANNELS: usize = 4;
+
         if self.width == 0 || self.height == 0 {
             return Err(format!(
                 "a region of {}x{} pixels photographs nothing",
@@ -192,8 +192,8 @@ mod tests {
     /// one control of them is.
     struct Card {
         frame: Geometry,
-        pixels: Vec<u8>,
         rect: Option<Rect>,
+        pixels: Vec<u8>,
     }
 
     impl Stage for Card {
@@ -203,14 +203,14 @@ mod tests {
             self.frame
         }
 
-        fn turn(&mut self, _page: &Self::Page) -> Result<(), String> {
-            Ok(())
+        fn shoot(&mut self) -> Result<&[u8], String> {
+            Ok(&self.pixels)
         }
 
         fn tick(&mut self) {}
 
-        fn shoot(&mut self) -> Result<&[u8], String> {
-            Ok(&self.pixels)
+        fn turn(&mut self, _page: &Self::Page) -> Result<(), String> {
+            Ok(())
         }
     }
 

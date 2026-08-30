@@ -44,12 +44,12 @@ impl Default for ResamplerOptions {
 #[non_exhaustive]
 pub struct ResamplerSettings {
     pub channels: NonZeroUsize,
-    pub sample_pool: SamplePool,
     pub mode: ResamplerMode,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
+    pub sample_pool: SamplePool,
 }
 
 impl ResamplerSettings {

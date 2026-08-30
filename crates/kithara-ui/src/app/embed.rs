@@ -1,12 +1,3 @@
-//! The embeddable layer: a UI that owns no window and no GPU device.
-//!
-//! A host that already has both — bevy, a plug-in shell, someone else's winit
-//! loop - drives this directly: hand it a size, hand it input, take the complete
-//! frame, prepare its shader images, draw its Vello scene and then its native
-//! effects. [`super::run`] is a
-//! thin window of its own built on top of this, for an application that has no
-//! host to live in.
-
 use kithara_platform::{sync::Arc, time::Duration};
 use masonry::{
     app::{RenderRootOptions, WindowSizePolicy},
@@ -57,19 +48,19 @@ pub struct Ui<'config, Application> {
     /// bound to it animates without the application having to keep a timer.
     #[field(get(copy), vis = "pub")]
     clock: Clock,
-    commands: Vec<WindowCommand>,
+    ui: CompiledUi,
     config: Config<'config>,
+    root: MasonryRoot<UiEvent>,
+    state: MasonryState,
+    pointer: PhysicalPosition<f64>,
+    size: PhysicalSize<u32>,
     /// What every document of this host is compiled against, built once so
     /// that the draw pools inside it outlive a redress. Compiling one per
     /// rebuild would hand each new document an empty pool family and throw the
     /// filled one away with the document it came from.
     doc: UiConfig,
-    pointer: PhysicalPosition<f64>,
-    root: MasonryRoot<UiEvent>,
+    commands: Vec<WindowCommand>,
     scale: f64,
-    size: PhysicalSize<u32>,
-    state: MasonryState,
-    ui: CompiledUi,
 }
 
 impl<'config, Application> Ui<'config, Application>
@@ -98,15 +89,15 @@ where
         Ok(Self {
             app,
             clock,
-            commands: Vec::new(),
             config,
             doc,
-            pointer: PhysicalPosition::new(0.0, 0.0),
             root,
             scale,
             size,
             state,
             ui,
+            commands: Vec::new(),
+            pointer: PhysicalPosition::new(0.0, 0.0),
         })
     }
 
@@ -127,66 +118,27 @@ where
         self.ui.draw_pool_stats()
     }
 
-    /// Resolves one control's document path to the rect its layout gave it, in
-    /// the same logical units [`Self::input`] takes a point in.
-    ///
-    /// A harness names a control by its path and acts at the rect this
-    /// returns instead of computing a pixel by hand: a scenario clicks it,
-    /// and a capture photographs it.
-    #[cfg(any(test, feature = "capture"))]
-    pub fn rect_of(&self, path: &str) -> Option<Rect> {
-        let id = self.state.widget_id(path)?;
-        let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
-        Some(Rect {
-            x: bounds.x0.as_(),
-            y: bounds.y0.as_(),
-            w: (bounds.x1 - bounds.x0).as_(),
-            h: (bounds.y1 - bounds.y0).as_(),
-        })
-    }
-
-    /// Takes what the document asked its window to do since the last call. A
-    /// document that draws its own title bar asks to be dragged, minimised,
-    /// maximised or closed this way; a host with no window can ignore it.
-    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
-        std::mem::take(&mut self.commands)
-    }
-
-    delegate::delegate! {
-        to self.root {
-            /// Satisfies the redraw signals covered by a frame the host completed.
-            ///
-            /// Returns whether another frame should follow. Every unrelated
-            /// platform signal remains queued on the retained root.
-            pub fn complete_frame(&mut self) -> bool;
-            /// Reports whether the next retained frame would change the picture.
-            pub fn needs_frame(&self) -> bool;
-            /// Takes the cursor the document last asked its window to show.
-            ///
-            /// A host that owns a window applies it; a host without one can
-            /// drop it, but takes it either way so the queue stays bounded.
-            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
-        }
-    }
-
-    /// Tells the UI how big its rectangle is now, in physical pixels.
-    pub fn resize(&mut self, size: (u32, u32), scale: f64) {
-        let scale_changed = self.scale != scale;
-        self.size = PhysicalSize::new(size.0, size.1);
-        self.scale = scale;
-        if scale_changed
-            && let Err(error) = self
-                .root
-                .handle_window_event(WindowEvent::Rescale(self.scale))
-        {
-            tracing::error!(%error, "masonry rescale");
-        }
+    /// Advances one frame's worth of animation.
+    pub fn frame(&mut self, elapsed: Duration) {
+        self.clock = self.clock.advance(elapsed);
+        self.app.tick();
+        let Self {
+            app,
+            clock,
+            root,
+            ui,
+            config,
+            ..
+        } = self;
+        let clock = *clock;
+        app.reads(|reads| root.refresh(frame_ctx(ui, reads, app.skin(), config, clock)));
         if let Err(error) = self
             .root
-            .handle_window_event(WindowEvent::Resize(self.size))
+            .handle_window_event(WindowEvent::AnimFrame(elapsed))
         {
-            tracing::error!(%error, "masonry resize");
+            tracing::error!(%error, "masonry frame");
         }
+        self.settle();
     }
 
     /// Feeds one neutral input event in. Whatever the document publishes in
@@ -215,8 +167,8 @@ where
                     ScrollDelta::LineDelta(x, y)
                 };
                 self.pointer_input(PointerEvent::Scroll(PointerScrollEvent {
-                    pointer: pointer_info(),
                     delta,
+                    pointer: pointer_info(),
                     state: pointer_state(self.pointer, false, self.scale, 1),
                 }));
             }
@@ -232,9 +184,31 @@ where
         self.settle();
     }
 
-    fn text(&mut self, event: TextEvent) {
-        if let Err(error) = self.root.handle_text_event(event) {
-            tracing::error!(%error, "masonry text");
+    fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {
+        let at = self.pointer;
+        let scale = self.scale;
+        match phase {
+            PointerPhase::Down => Some(PointerEvent::Down(PointerButtonEvent {
+                button: Some(MasonryPointerButton::Primary),
+                pointer: pointer_info(),
+                state: pointer_state(at, true, scale, clicks),
+            })),
+            PointerPhase::Up => Some(PointerEvent::Up(PointerButtonEvent {
+                button: Some(MasonryPointerButton::Primary),
+                pointer: pointer_info(),
+                state: pointer_state(at, false, scale, clicks),
+            })),
+            PointerPhase::Move => Some(PointerEvent::Move(PointerUpdate {
+                pointer: pointer_info(),
+                current: pointer_state(at, false, scale, clicks),
+                coalesced: Vec::new(),
+                predicted: Vec::new(),
+            })),
+            PointerPhase::Leave => Some(PointerEvent::Leave(pointer_info())),
+            PointerPhase::Cancel
+            | PointerPhase::DoubleClick
+            | PointerPhase::LongPress
+            | PointerPhase::MoveLongPress => None,
         }
     }
 
@@ -244,29 +218,47 @@ where
         }
     }
 
-    /// Advances one frame's worth of animation.
-    pub fn frame(&mut self, elapsed: Duration) {
-        // Before the refresh, so what this frame draws is the time this frame
-        // stands at rather than the one before it.
-        self.clock = self.clock.advance(elapsed);
-        self.app.tick();
-        let Self {
-            app,
-            clock,
-            root,
-            ui,
-            config,
-            ..
-        } = self;
-        let clock = *clock;
-        app.reads(|reads| root.refresh(frame_ctx(ui, reads, app.skin(), config, clock)));
-        if let Err(error) = self
-            .root
-            .handle_window_event(WindowEvent::AnimFrame(elapsed))
-        {
-            tracing::error!(%error, "masonry frame");
-        }
-        self.settle();
+    /// Resolves one control's document path to the rect its layout gave it, in
+    /// the same logical units [`Self::input`] takes a point in.
+    ///
+    /// A harness names a control by its path and acts at the rect this
+    /// returns instead of computing a pixel by hand: a scenario clicks it,
+    /// and a capture photographs it.
+    #[cfg(any(test, feature = "capture"))]
+    pub fn rect_of(&self, path: &str) -> Option<Rect> {
+        let id = self.state.widget_id(path)?;
+        let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
+        Some(Rect {
+            x: bounds.x0.as_(),
+            y: bounds.y0.as_(),
+            w: (bounds.x1 - bounds.x0).as_(),
+            h: (bounds.y1 - bounds.y0).as_(),
+        })
+    }
+
+    /// Compiles the application's document again and mounts what it produced,
+    /// in place of what this host is showing.
+    ///
+    /// The tree a host mounts is retained: its shape is settled where it is
+    /// built, so a document that now compiles to another shape - because the
+    /// application moved on, or because another skin measures it differently -
+    /// reaches the screen only by being built again.
+    fn remount(&mut self) -> Result<(), RunError> {
+        let ui = compile_document(&self.app, &self.config, &self.doc)?;
+        self.root = mount(
+            &self.app,
+            &self.config,
+            &self.state,
+            &ui,
+            self.size,
+            self.scale,
+            self.clock,
+        )?;
+        self.ui = ui;
+        self.root
+            .handle_window_event(WindowEvent::Resize(self.size))
+            .map(|_| ())
+            .map_err(|error| RunError::Host(error.to_string()))
     }
 
     /// Draws the current document, in the physical pixels the caller sized it
@@ -297,6 +289,26 @@ where
         Ok(Frame::new(scene, shaders, vis))
     }
 
+    /// Tells the UI how big its rectangle is now, in physical pixels.
+    pub fn resize(&mut self, size: (u32, u32), scale: f64) {
+        let scale_changed = self.scale != scale;
+        self.size = PhysicalSize::new(size.0, size.1);
+        self.scale = scale;
+        if scale_changed
+            && let Err(error) = self
+                .root
+                .handle_window_event(WindowEvent::Rescale(self.scale))
+        {
+            tracing::error!(%error, "masonry rescale");
+        }
+        if let Err(error) = self
+            .root
+            .handle_window_event(WindowEvent::Resize(self.size))
+        {
+            tracing::error!(%error, "masonry resize");
+        }
+    }
+
     /// Draws the current document through the same single paint path as
     /// [`Self::render`] and returns only its Vello scene.
     ///
@@ -304,36 +316,6 @@ where
     /// Returns [`RunError`] when the paint pass fails.
     pub fn scene(&mut self) -> Result<Scene, RunError> {
         self.render().map(Into::into)
-    }
-
-    fn pointer_event(&self, phase: PointerPhase, clicks: u8) -> Option<PointerEvent> {
-        let at = self.pointer;
-        let scale = self.scale;
-        match phase {
-            PointerPhase::Down => Some(PointerEvent::Down(PointerButtonEvent {
-                button: Some(MasonryPointerButton::Primary),
-                pointer: pointer_info(),
-                state: pointer_state(at, true, scale, clicks),
-            })),
-            PointerPhase::Up => Some(PointerEvent::Up(PointerButtonEvent {
-                button: Some(MasonryPointerButton::Primary),
-                pointer: pointer_info(),
-                state: pointer_state(at, false, scale, clicks),
-            })),
-            PointerPhase::Move => Some(PointerEvent::Move(PointerUpdate {
-                pointer: pointer_info(),
-                current: pointer_state(at, false, scale, clicks),
-                coalesced: Vec::new(),
-                predicted: Vec::new(),
-            })),
-            // The hand leaving the window ends every hover under it; without
-            // this the control it left keeps drawing itself lit.
-            PointerPhase::Leave => Some(PointerEvent::Leave(pointer_info())),
-            PointerPhase::Cancel
-            | PointerPhase::DoubleClick
-            | PointerPhase::LongPress
-            | PointerPhase::MoveLongPress => None,
-        }
     }
 
     /// Hands the application what the document published, then shows the new
@@ -378,29 +360,34 @@ where
         }
     }
 
-    /// Compiles the application's document again and mounts what it produced,
-    /// in place of what this host is showing.
-    ///
-    /// The tree a host mounts is retained: its shape is settled where it is
-    /// built, so a document that now compiles to another shape - because the
-    /// application moved on, or because another skin measures it differently -
-    /// reaches the screen only by being built again.
-    fn remount(&mut self) -> Result<(), RunError> {
-        let ui = compile_document(&self.app, &self.config, &self.doc)?;
-        self.root = mount(
-            &self.app,
-            &self.config,
-            &self.state,
-            &ui,
-            self.size,
-            self.scale,
-            self.clock,
-        )?;
-        self.ui = ui;
-        self.root
-            .handle_window_event(WindowEvent::Resize(self.size))
-            .map(|_| ())
-            .map_err(|error| RunError::Host(error.to_string()))
+    /// Takes what the document asked its window to do since the last call. A
+    /// document that draws its own title bar asks to be dragged, minimised,
+    /// maximised or closed this way; a host with no window can ignore it.
+    pub fn take_window_commands(&mut self) -> Vec<WindowCommand> {
+        std::mem::take(&mut self.commands)
+    }
+
+    fn text(&mut self, event: TextEvent) {
+        if let Err(error) = self.root.handle_text_event(event) {
+            tracing::error!(%error, "masonry text");
+        }
+    }
+
+    delegate::delegate! {
+        to self.root {
+            /// Satisfies the redraw signals covered by a frame the host completed.
+            ///
+            /// Returns whether another frame should follow. Every unrelated
+            /// platform signal remains queued on the retained root.
+            pub fn complete_frame(&mut self) -> bool;
+            /// Reports whether the next retained frame would change the picture.
+            pub fn needs_frame(&self) -> bool;
+            /// Takes the cursor the document last asked its window to show.
+            ///
+            /// A host that owns a window applies it; a host without one can
+            /// drop it, but takes it either way so the queue stays bounded.
+            pub fn take_cursor(&mut self) -> Option<CursorIcon>;
+        }
     }
 }
 
@@ -458,10 +445,10 @@ where
     MasonryRoot::new(
         node,
         RenderRootOptions {
+            size,
             default_properties: Arc::new(default_property_set()),
             use_system_fonts: false,
             size_policy: WindowSizePolicy::User,
-            size,
             scale_factor: scale,
             test_font: None,
         },

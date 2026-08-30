@@ -23,11 +23,11 @@ enum JoinState {
 
 pub(crate) struct GaplessBlender {
     active: BlenderProfile,
+    prepared: BlenderProfile,
     join: JoinState,
     outgoing: SampleBuffer,
-    pool: SamplePool,
-    prepared: BlenderProfile,
     prepared_outgoing: SampleBuffer,
+    pool: SamplePool,
 }
 
 impl GaplessBlender {
@@ -70,8 +70,25 @@ impl GaplessBlender {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn buffer_capacities(&self) -> (usize, usize) {
+        (self.outgoing.capacity(), self.prepared_outgoing.capacity())
+    }
+
+    pub(crate) fn commit_join(&mut self) {
+        self.swap_prepared();
+        self.join = JoinState::Active {
+            frame: 0,
+            frames: join_frames(self.active.spec()),
+        };
+    }
+
     pub(crate) fn is_steady(&self) -> bool {
         matches!(self.join, JoinState::Steady)
+    }
+
+    pub(crate) fn join_frame_count(&self) -> u64 {
+        u64::from(join_frames(self.active.spec()))
     }
 
     pub(crate) fn prepare_active(&mut self, active: BlenderProfile) {
@@ -86,18 +103,6 @@ impl GaplessBlender {
             return false;
         }
         copy_outgoing(&mut self.prepared_outgoing)
-    }
-
-    pub(crate) fn commit_join(&mut self) {
-        self.swap_prepared();
-        self.join = JoinState::Active {
-            frame: 0,
-            frames: join_frames(self.active.spec()),
-        };
-    }
-
-    pub(crate) fn join_frame_count(&self) -> u64 {
-        u64::from(join_frames(self.active.spec()))
     }
 
     pub(crate) fn process_active(&mut self, mut chunk: AudioChunk) -> AudioChunk {
@@ -124,11 +129,6 @@ impl GaplessBlender {
     fn swap_prepared(&mut self) {
         std::mem::swap(&mut self.active, &mut self.prepared);
         std::mem::swap(&mut self.outgoing, &mut self.prepared_outgoing);
-    }
-
-    #[cfg(test)]
-    pub(super) fn buffer_capacities(&self) -> (usize, usize) {
-        (self.outgoing.capacity(), self.prepared_outgoing.capacity())
     }
 }
 

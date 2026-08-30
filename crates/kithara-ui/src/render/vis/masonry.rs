@@ -12,13 +12,6 @@ pub struct VisDeclaration {
 }
 
 impl VisDeclaration {
-    pub(crate) fn logical(frame: VisFrame, rect: [f64; 4]) -> Option<Self> {
-        if rect.iter().any(|value| !value.is_finite()) || rect[2] <= rect[0] || rect[3] <= rect[1] {
-            return None;
-        }
-        Some(Self { frame, rect })
-    }
-
     /// Values read for this leaf in the current frame.
     #[must_use]
     #[cfg(test)]
@@ -26,11 +19,11 @@ impl VisDeclaration {
         self.frame
     }
 
-    /// Unclipped logical rectangle as left, top, right, and bottom.
-    #[must_use]
-    #[cfg(test)]
-    pub(crate) const fn rect(self) -> [f64; 4] {
-        self.rect
+    pub(crate) fn logical(frame: VisFrame, rect: [f64; 4]) -> Option<Self> {
+        if rect.iter().any(|value| !value.is_finite()) || rect[2] <= rect[0] || rect[3] <= rect[1] {
+            return None;
+        }
+        Some(Self { frame, rect })
     }
 
     fn prepare(self, scale: f64, target: [u32; 2]) -> Option<PreparedDraw> {
@@ -77,6 +70,13 @@ impl VisDeclaration {
             scissor: [x0, y0, width, height],
         })
     }
+
+    /// Unclipped logical rectangle as left, top, right, and bottom.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) const fn rect(self) -> [f64; 4] {
+        self.rect
+    }
 }
 
 fn physical_f32(value: f64) -> Option<f32> {
@@ -94,8 +94,8 @@ struct PreparedDraw {
 #[non_exhaustive]
 pub struct VisPass {
     bind_group_layout: wgpu::BindGroupLayout,
-    draws: Vec<PreparedDraw>,
     pipeline: wgpu::RenderPipeline,
+    draws: Vec<PreparedDraw>,
     slots: Vec<UniformSlot>,
 }
 
@@ -155,8 +155,8 @@ impl VisPass {
         });
         Self {
             bind_group_layout,
-            draws: Vec::new(),
             pipeline,
+            draws: Vec::new(),
             slots: Vec::new(),
         }
     }
@@ -239,8 +239,8 @@ impl UniformSlot {
             mapped_at_creation: false,
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("kithara_ui.vis.retained.bind_group"),
             layout,
+            label: Some("kithara_ui.vis.retained.bind_group"),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: buffer.as_entire_binding(),
@@ -258,8 +258,8 @@ mod declaration_tests {
 
     fn declaration(rect: [f64; 4]) -> VisDeclaration {
         VisDeclaration {
-            frame: VisFrame::new(0.75, 1.25, 2),
             rect,
+            frame: VisFrame::new(0.75, 1.25, 2),
         }
     }
 
@@ -268,7 +268,7 @@ mod declaration_tests {
         let declaration = declaration([1.6, 2.6, 7.4, 8.4]);
         let draw = declaration
             .prepare(1.0, [100, 100])
-            .unwrap_or_else(|| panic!("valid fractional geometry must prepare"));
+            .expect("valid fractional geometry must prepare");
 
         assert_eq!(
             draw.uniforms.bytes(),
@@ -282,7 +282,7 @@ mod declaration_tests {
         let declaration = declaration([-2.5, 1.6, 7.4, 10.0]);
         let draw = declaration
             .prepare(1.0, [6, 8])
-            .unwrap_or_else(|| panic!("a partially visible declaration must prepare"));
+            .expect("a partially visible declaration must prepare");
 
         assert_eq!(
             draw.uniforms.bytes(),
@@ -400,7 +400,7 @@ mod tests {
             &view,
             &[
                 VisDeclaration::logical(VisFrame::new(1.0, 0.5, 0), [16.0, 16.0, 48.0, 48.0])
-                    .unwrap_or_else(|| panic!("the test rectangle must be valid")),
+                    .expect("the test rectangle must be valid"),
             ],
             1.0,
             [SIDE, SIDE],

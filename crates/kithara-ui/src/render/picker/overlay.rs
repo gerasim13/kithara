@@ -17,18 +17,14 @@ use crate::{
 };
 
 pub(super) struct PickerPortal<'a, 'b> {
-    pub(super) anchor: Rectangle,
-    pub(super) owner: InputOwner,
     pub(super) paint: &'a PickerPaint<'a>,
-    pub(super) path: &'a str,
     pub(super) state: &'b mut PickerState,
+    pub(super) path: &'a str,
+    pub(super) owner: InputOwner,
+    pub(super) anchor: Rectangle,
 }
 
 impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
-    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
-        layout::Node::new(Size::ZERO)
-    }
-
     fn draw(
         &self,
         _renderer: &mut Renderer,
@@ -37,6 +33,10 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
         _layout: Layout<'_>,
         _cursor: mouse::Cursor,
     ) {
+    }
+
+    fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
+        layout::Node::new(Size::ZERO)
     }
 
     fn overlay<'a>(
@@ -55,14 +55,30 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerPortal<'_, '_> {
 }
 
 struct PickerOverlay<'a, 'b> {
-    anchor: Rectangle,
-    owner: InputOwner,
     paint: &'a PickerPaint<'a>,
-    path: &'a str,
     state: &'b mut PickerState,
+    path: &'a str,
+    owner: InputOwner,
+    anchor: Rectangle,
 }
 
 impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        _layout: Layout<'_>,
+        _cursor: mouse::Cursor,
+    ) {
+        let mut text = self.state.text().borrow_mut();
+        let text = text.get_or_insert_with(|| self.paint.skin().text_resources().into());
+        let layer =
+            self.paint
+                .popup_layer(text, self.anchor.into(), self.state.snapshot().highlighted);
+        draw_host_layer(renderer, &layer, self.paint.skin().text_resources());
+    }
+
     fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
         layout::Node::new(Size::new(
             self.anchor.width,
@@ -72,6 +88,19 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
             self.anchor.x,
             self.anchor.y + self.anchor.height,
         ))
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        if cursor.is_over(layout.bounds()) {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::None
+        }
     }
 
     fn update(
@@ -119,34 +148,5 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for PickerOverlay<'_, '_> {
             shell.request_redraw();
             shell.invalidate_layout();
         }
-    }
-
-    fn mouse_interaction(
-        &self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        if cursor.is_over(layout.bounds()) {
-            mouse::Interaction::Pointer
-        } else {
-            mouse::Interaction::None
-        }
-    }
-
-    fn draw(
-        &self,
-        renderer: &mut Renderer,
-        _theme: &Theme,
-        _style: &renderer::Style,
-        _layout: Layout<'_>,
-        _cursor: mouse::Cursor,
-    ) {
-        let mut text = self.state.text().borrow_mut();
-        let text = text.get_or_insert_with(|| self.paint.skin().text_resources().into());
-        let layer =
-            self.paint
-                .popup_layer(text, self.anchor.into(), self.state.snapshot().highlighted);
-        draw_host_layer(renderer, &layer, self.paint.skin().text_resources());
     }
 }

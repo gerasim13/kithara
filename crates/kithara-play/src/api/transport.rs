@@ -2,8 +2,6 @@ use kithara_warp::{
     BeatGridSnapshot, BeatGridStamp, SessionAnchor, SessionBeat, SessionEpoch, TransportRevision,
 };
 
-const SECONDS_PER_MINUTE: f64 = 60.0;
-
 /// A musical tempo in beats per minute, inside the range the session clock can
 /// carry.
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd, fieldwork::Fieldwork)]
@@ -15,14 +13,14 @@ pub struct Tempo(
 );
 
 impl Tempo {
-    /// The slowest accepted tempo.
-    pub const MIN_BEATS_PER_MINUTE: f64 = 1.0;
-
     /// The fastest accepted tempo. The upper bound is what keeps the anchor
     /// arithmetic finite: an unbounded tempo overflows the beat span of a
     /// single block, and the resulting failure strands the transport with an
     /// active commit and no anchor.
     pub const MAX_BEATS_PER_MINUTE: f64 = 1_000.0;
+
+    /// The slowest accepted tempo.
+    pub const MIN_BEATS_PER_MINUTE: f64 = 1.0;
 
     /// Creates a tempo, rejecting non-finite and out-of-range values.
     pub fn new(beats_per_minute: f64) -> Result<Self, TempoError> {
@@ -35,6 +33,8 @@ impl Tempo {
 
     #[must_use]
     pub fn beats_per_second(self) -> f64 {
+        const SECONDS_PER_MINUTE: f64 = 60.0;
+
         self.0 / SECONDS_PER_MINUTE
     }
 }
@@ -64,18 +64,18 @@ pub struct TempoError {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionTransportSnapshot {
-    /// Session-clock relation used to construct the public session-grid view.
-    #[field(skip)]
-    anchor: SessionAnchor,
-    /// Returns the session-grid generation defining the live frame axis.
-    #[field(get, copy)]
-    session_epoch: SessionEpoch,
     /// Returns the exact session-grid identity and geometry revision.
     #[field(get, copy)]
     session_grid_stamp: BeatGridStamp,
+    /// Session-clock relation used to construct the public session-grid view.
+    #[field(skip)]
+    anchor: SessionAnchor,
     /// Returns the processed position on the session beat grid.
     #[field(get, copy)]
     position: SessionBeat,
+    /// Returns the session-grid generation defining the live frame axis.
+    #[field(get, copy)]
+    session_epoch: SessionEpoch,
     /// Returns the tempo that produced this processed position.
     #[field(get, copy)]
     tempo: Tempo,
@@ -99,14 +99,21 @@ impl SessionTransportSnapshot {
         session_epoch: SessionEpoch,
     ) -> Self {
         Self {
-            anchor,
-            session_epoch,
             session_grid_stamp,
+            anchor,
             position,
+            session_epoch,
             tempo,
             revision,
             playing,
         }
+    }
+
+    /// Returns the exact session-clock anchor carried by this observation.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn anchor(self) -> SessionAnchor {
+        self.anchor
     }
 
     /// Builds a read-only session grid from this single atomic observation.
@@ -123,13 +130,6 @@ impl SessionTransportSnapshot {
             self.anchor,
             None,
         )
-    }
-
-    /// Returns the exact session-clock anchor carried by this observation.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn anchor(self) -> SessionAnchor {
-        self.anchor
     }
 }
 

@@ -1,9 +1,3 @@
-//! The gallery through the retained host: shown in a window, or drawn into a
-//! Vello scene, rasterised off-screen and written as PNG.
-//!
-//! `--host retained` shows it; adding `--shoot <dir>` photographs it instead,
-//! which is how the two hosts are compared page by page.
-
 use std::path::Path;
 
 use kithara_platform::time::Duration;
@@ -36,8 +30,6 @@ pub(super) fn show(args: &Args) -> Result<(), String> {
     let endpoints = demo::registry();
     let resolver = resolver();
     let kinds = custom::kinds();
-    // The document carries its own title bar and window buttons, so the system
-    // frame stays off, exactly as it does under the other host.
     let config = Config::builder()
         .endpoints(&endpoints)
         .resolver(&resolver)
@@ -82,7 +74,6 @@ pub(super) fn shoot(args: &Args, dir: &Path) -> Result<usize, String> {
         .as_deref()
         .map(|path| element(&film, path))
         .transpose()?;
-    // The registries outlive the stage that borrows them through the config.
     let resolver = resolver();
     let endpoints = demo::registry();
     let kinds = custom::kinds();
@@ -103,6 +94,8 @@ pub(super) fn shoot(args: &Args, dir: &Path) -> Result<usize, String> {
 /// document at a time.
 struct Masonry<'config> {
     config: Config<'config>,
+    /// How far this host's clock moves in one frame.
+    step: Duration,
     frame: Geometry,
     off: Offscreen,
     /// The page currently open. A stage holds no document until it is turned to
@@ -112,8 +105,6 @@ struct Masonry<'config> {
     /// The pixels read back from the last page photographed. Held here because
     /// the walk borrows them rather than owning storage it cannot size.
     pixels: Vec<u8>,
-    /// How far this host's clock moves in one frame.
-    step: Duration,
 }
 
 impl<'config> Masonry<'config> {
@@ -142,6 +133,24 @@ impl Stage for Masonry<'_> {
         self.frame
     }
 
+    fn shoot(&mut self) -> Result<&[u8], String> {
+        let page = self
+            .page
+            .as_mut()
+            .ok_or_else(|| "no page is open: turn to one before photographing".to_owned())?;
+        let drawn = page.render().map_err(|error| format!("draw: {error}"))?;
+        let background = page.background().into();
+        self.off
+            .rasterise(&drawn, self.frame.scale, background, &mut self.pixels)?;
+        Ok(&self.pixels)
+    }
+
+    fn tick(&mut self) {
+        if let Some(page) = self.page.as_mut() {
+            page.frame(self.step);
+        }
+    }
+
     fn turn(&mut self, page: &Shot) -> Result<(), String> {
         self.page = Some(
             Ui::new(
@@ -153,23 +162,5 @@ impl Stage for Masonry<'_> {
             .map_err(|error| format!("mount {page}: {error}"))?,
         );
         Ok(())
-    }
-
-    fn tick(&mut self) {
-        if let Some(page) = self.page.as_mut() {
-            page.frame(self.step);
-        }
-    }
-
-    fn shoot(&mut self) -> Result<&[u8], String> {
-        let page = self
-            .page
-            .as_mut()
-            .ok_or_else(|| "no page is open: turn to one before photographing".to_owned())?;
-        let drawn = page.render().map_err(|error| format!("draw: {error}"))?;
-        let background = page.background().into();
-        self.off
-            .rasterise(&drawn, self.frame.scale, background, &mut self.pixels)?;
-        Ok(&self.pixels)
     }
 }

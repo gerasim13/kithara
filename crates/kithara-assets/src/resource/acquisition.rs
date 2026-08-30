@@ -186,6 +186,15 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
     /// The reader phase produced by [`commit`](Self::commit).
     type Reader: ReadSide;
 
+    /// Release the writer without marking the resource failed and without
+    /// removing what it wrote.
+    ///
+    /// For a caller whose write was cancelled and who knows a successor is
+    /// already refilling the same resource: a failure stamp or a cleanup sweep
+    /// would hit that successor, not this writer. Every other release keeps
+    /// both — see [`fail`](Self::fail) and the drop paths.
+    fn abandon(self);
+
     /// Finalize the resource (running any processing) and consume the writer
     /// into a [`ReadSide`] reader.
     ///
@@ -195,15 +204,6 @@ pub trait WriteSide: Send + Sync + Debug + 'static {
 
     /// Mark the resource failed, waking any waiting reader.
     fn fail(self, reason: String);
-
-    /// Release the writer without marking the resource failed and without
-    /// removing what it wrote.
-    ///
-    /// For a caller whose write was cancelled and who knows a successor is
-    /// already refilling the same resource: a failure stamp or a cleanup sweep
-    /// would hit that successor, not this writer. Every other release keeps
-    /// both — see [`fail`](Self::fail) and the drop paths.
-    fn abandon(self);
 
     /// A clone-able raw-write handle for streaming pre-processing bytes into
     /// this writer's generation (see [`RawWriteHandle`]). Lets a `'static`

@@ -75,26 +75,6 @@ impl HostedControl {
             .map(|plan| Self::mounted(plan, cx.skin))
     }
 
-    pub(super) fn mounted(plan: HostedControlPlan, skin: &Skin) -> Self {
-        let skin = skin.at(plan.path());
-        let table = match &plan {
-            HostedControlPlan::Table(plan) => Some(Box::new(TableHost::new(
-                &plan.path,
-                plan.columns(),
-                plan.row_count(),
-                skin,
-            ))),
-            _ => None,
-        };
-        Self { plan, table }
-    }
-
-    delegate::delegate! {
-        to self.plan {
-            fn path(&self) -> &str;
-        }
-    }
-
     /// Narrows a control's rectangle to the part a pointer actually drives. A
     /// fader is one canvas holding a caption and a rail; only the rail answers.
     fn input_bounds(&self, bounds: Rect) -> Rect {
@@ -110,6 +90,20 @@ impl HostedControl {
         }
     }
 
+    pub(super) fn mounted(plan: HostedControlPlan, skin: &Skin) -> Self {
+        let skin = skin.at(plan.path());
+        let table = match &plan {
+            HostedControlPlan::Table(plan) => Some(Box::new(TableHost::new(
+                &plan.path,
+                plan.columns(),
+                plan.row_count(),
+                skin,
+            ))),
+            _ => None,
+        };
+        Self { plan, table }
+    }
+
     pub(super) fn picker(&self) -> Option<(&str, usize, f32)> {
         match &self.plan {
             HostedControlPlan::Picker {
@@ -119,6 +113,12 @@ impl HostedControl {
                 ..
             } => Some((path, items.len(), *item_height)),
             _ => None,
+        }
+    }
+
+    delegate::delegate! {
+        to self.plan {
+            fn path(&self) -> &str;
         }
     }
 }

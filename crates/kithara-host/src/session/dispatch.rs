@@ -37,8 +37,8 @@ fn run_sync_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: SyncCmd) -> H
                 Err(error) => return HostReply::Err(SessionError::from(error).into()),
             };
             SyncOperation::Topology {
-                base: topology.stamp(),
                 operations,
+                base: topology.stamp(),
             }
         }
         SyncCmd::Acknowledge(applied) => {
@@ -530,10 +530,10 @@ mod tests {
     fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd {
         Cmd::RegisterPlayer {
             grid_id,
+            sample_rate,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
             sample_pool: SamplePool::default(),
-            sample_rate,
         }
     }
 

@@ -189,8 +189,7 @@ impl Track<AwaitingResume> {
                 return TrackStep::Blocked(reason);
             }
         }
-        // Restore the phase so the decode loop's `resume_state()` /
-        // post-seek skip trimming sees the canonical `ResumeState`.
+        // WHY: Restore the phase so the decode loop's `resume_state()` / post-seek skip trimming sees the canonical `ResumeState`.
         src.update_state(Self::new(resume).erase());
         match decode_step(src) {
             DecodeStep::Produced(fetch) => TrackStep::Produced(fetch),
@@ -277,7 +276,7 @@ impl Track<WaitingForSource> {
         let phase = source_phase_for_wait_context(&src.shared_stream, &context);
 
         if let Some(reason) = src.readiness.source_park(&src.shared_stream, phase) {
-            // Still waiting — restore the phase with its stored reason.
+            // WHY: Still waiting - restore the phase with its stored reason.
             src.update_state(
                 Self::new(WaitState {
                     context,
@@ -296,9 +295,8 @@ impl Track<WaitingForSource> {
             return TrackStep::Failed;
         }
 
-        // Source ready — resume into the phase that initiated the wait. `Eof`
-        // resumes like `Ready`: byte-space EOF is not end of PCM, only the
-        // decode path finalizes `AtEof` (see CONTEXT.md, "Track FSM").
+        // WHY: Source ready - resume into the phase that initiated the wait. `Eof` resumes like `Ready`: byte-space EOF is not end of PCM,
+        // only the decode path finalizes `AtEof` (see CONTEXT.md, "Track FSM").
         match context {
             WaitContext::Playback => src.update_state(Track::<Decoding>::new(()).erase()),
             WaitContext::Seek(ctx) => src.update_state(Track::<SeekRequested>::new(ctx).erase()),

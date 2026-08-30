@@ -7,32 +7,32 @@ use crate::{
 
 #[derive(Clone, Copy)]
 pub(crate) struct Overlay<'a> {
-    pub(crate) title: &'a str,
     pub(crate) artist: &'a str,
+    pub(crate) badge: &'a str,
     pub(crate) bpm: &'a str,
     pub(crate) key: &'a str,
     pub(crate) remain: &'a str,
-    pub(crate) badge: &'a str,
+    pub(crate) title: &'a str,
     pub(crate) palette: OverlayPalette,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct OverlayPalette {
-    pub(crate) background: Rgba,
     pub(crate) art_background: Rgba,
     pub(crate) art_border: Rgba,
     pub(crate) art_label: Rgba,
-    pub(crate) title: Rgba,
     pub(crate) artist: Rgba,
-    pub(crate) readout_background: Rgba,
-    pub(crate) readout_border: Rgba,
-    pub(crate) readout_label: Rgba,
-    pub(crate) bpm: Rgba,
-    pub(crate) key: Rgba,
-    pub(crate) remain: Rgba,
+    pub(crate) background: Rgba,
     pub(crate) badge_background: Rgba,
     pub(crate) badge_border: Rgba,
     pub(crate) badge_text: Rgba,
+    pub(crate) bpm: Rgba,
+    pub(crate) key: Rgba,
+    pub(crate) readout_background: Rgba,
+    pub(crate) readout_border: Rgba,
+    pub(crate) readout_label: Rgba,
+    pub(crate) remain: Rgba,
+    pub(crate) title: Rgba,
 }
 
 pub(crate) fn strip(bounds: Rect, metrics: WaveOverlaySkin) -> Rect {
@@ -165,10 +165,10 @@ fn draw_telemetry(
 
 const fn readout_rect(right: f32, width: f32, y: f32, height: f32) -> Rect {
     Rect {
+        y,
         h: height,
         w: width,
         x: right - width,
-        y,
     }
 }
 

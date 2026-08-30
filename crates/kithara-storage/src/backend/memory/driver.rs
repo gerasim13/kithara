@@ -96,8 +96,7 @@ impl Driver for MemDriver {
             if len > 0 {
                 available.insert(0..len);
             }
-            // Zero-length committed data publishes no snapshot, matching the
-            // mmap `Empty` contract (`committed_len()` → `None`).
+            // WHY: Zero-length committed data publishes no snapshot, matching the mmap `Empty` contract (`committed_len()` -> `None`).
             let committed = if data.is_empty() {
                 ArcSwapOption::empty()
             } else {

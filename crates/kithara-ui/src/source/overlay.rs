@@ -26,16 +26,16 @@ impl<Over, Under> OverlayResolver<Over, Under> {
 }
 
 impl<Over: SourceResolver, Under: SourceResolver> SourceResolver for OverlayResolver<Over, Under> {
-    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
-        match self.over.load(base, rel) {
-            Err(UiDocError::NotFound { .. }) => self.under.load(base, rel),
+    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
+        match self.over.bytes(base, rel) {
+            Err(UiDocError::NotFound { .. }) => self.under.bytes(base, rel),
             answer => answer,
         }
     }
 
-    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
-        match self.over.bytes(base, rel) {
-            Err(UiDocError::NotFound { .. }) => self.under.bytes(base, rel),
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
+        match self.over.load(base, rel) {
+            Err(UiDocError::NotFound { .. }) => self.under.load(base, rel),
             answer => answer,
         }
     }

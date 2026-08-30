@@ -29,12 +29,6 @@ pub struct MmapOptions {
     /// Open mode controlling read/write behavior for existing files.
     #[builder(default)]
     pub mode: OpenMode,
-    /// Size a new file is created at. Ignored for existing files. The default
-    /// is one page-aligned block: enough that a small resource is written
-    /// without a single re-map, small enough that a resource that turns out to
-    /// be empty costs one sparse block.
-    #[builder(default = 64 * 1024)]
-    pub initial_len: u64,
     /// Multiplier applied to the current mapping length when a write runs
     /// past its end. The mapping grows to the larger of the write's end and
     /// `len * growth_factor`, so a factor of 1 grows to exactly what each
@@ -42,6 +36,12 @@ pub struct MmapOptions {
     /// the number of re-maps logarithmic in the final size.
     #[builder(default = 2)]
     pub growth_factor: u64,
+    /// Size a new file is created at. Ignored for existing files. The default
+    /// is one page-aligned block: enough that a small resource is written
+    /// without a single re-map, small enough that a resource that turns out to
+    /// be empty costs one sparse block.
+    #[builder(default = 64 * 1024)]
+    pub initial_len: u64,
 }
 
 /// Mmap state machine.
@@ -83,16 +83,16 @@ pub struct MmapDriver {
     pub(super) mmap: Mutex<MmapState>,
     pub(super) mode: OpenMode,
     pub(super) path: PathBuf,
+    /// Lock-free queue for fast-path range notifications.
+    pub(super) ready_ranges: SegQueue<Range<u64>>,
+    /// Multiplier a write past the mapping's end grows it by, from
+    /// `MmapOptions::growth_factor`.
+    pub(super) growth_factor: u64,
     /// Size a fresh mapping starts at, from `MmapOptions::initial_len`. A
     /// re-download reuses it so the rewrite generation is reserved exactly
     /// like the first one instead of restarting from the default and
     /// re-mapping its way back up.
     pub(super) initial_len: u64,
-    /// Multiplier a write past the mapping's end grows it by, from
-    /// `MmapOptions::growth_factor`.
-    pub(super) growth_factor: u64,
-    /// Lock-free queue for fast-path range notifications.
-    pub(super) ready_ranges: SegQueue<Range<u64>>,
 }
 
 impl fmt::Debug for MmapDriver {

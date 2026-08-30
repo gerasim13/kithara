@@ -9,9 +9,6 @@ use crate::blob::{self, Blob, BlobError, Reader, Writer};
 /// the analysis parameters, or the caller's bucket resolution changes.
 pub(crate) const WAVEFORM_BYTES_VERSION: u32 = 1;
 
-/// Bytes per serialized bucket: three little-endian `f32` band heights.
-const BUCKET_BYTES: usize = Band::COUNT * size_of::<f32>();
-
 /// One waveform column: three normalized frequency-band heights, each in
 /// `[0, 1]` on a shared scale after per-band perceptual gain. The deck paints
 /// them as concentric mirrored bars (low behind, high in front), so all three
@@ -47,6 +44,9 @@ impl Bucket {
 pub struct Waveform(Arc<[Bucket]>);
 
 impl Waveform {
+    /// Bytes per serialized bucket: three little-endian `f32` band heights.
+    const BUCKET_BYTES: usize = Band::COUNT * size_of::<f32>();
+
     #[must_use]
     pub fn buckets(&self) -> &[Bucket] {
         &self.0
@@ -92,18 +92,16 @@ impl Blob for Waveform {
     const VERSION: u32 = WAVEFORM_BYTES_VERSION;
 
     fn decode(r: &mut Reader<'_>) -> Result<Self, BlobError> {
-        if !r.remaining().is_multiple_of(BUCKET_BYTES) {
+        if !r.remaining().is_multiple_of(Self::BUCKET_BYTES) {
             return Err(BlobError::Corrupt);
         }
-        let count = r.remaining() / BUCKET_BYTES;
+        let count = r.remaining() / Self::BUCKET_BYTES;
         let mut buckets: Vec<Bucket> = Vec::with_capacity(count);
         for _ in 0..count {
             let mut heights = [0.0; Band::COUNT];
             for height in &mut heights {
                 *height = r.read_f32()?;
             }
-            // `(0.0..=1.0).contains` is false for NaN/infinities, so this one
-            // check covers finiteness and the `[0, 1]` invariant.
             let ok = |v: f32| (0.0..=1.0).contains(&v);
             if !heights.iter().copied().all(ok) {
                 return Err(BlobError::Corrupt);
@@ -118,7 +116,7 @@ impl Blob for Waveform {
     }
 
     fn encode(&self, w: &mut Writer<'_>) {
-        w.reserve(self.0.len() * BUCKET_BYTES);
+        w.reserve(self.0.len() * Self::BUCKET_BYTES);
         for b in self.0.iter() {
             for band in Band::ALL {
                 w.write_f32(b.band(band));

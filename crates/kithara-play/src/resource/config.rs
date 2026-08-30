@@ -29,12 +29,20 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
+    /// Live time-stretch controls shared with the resident Warp chain.
+    #[builder(default = StretchControls::new(1.0))]
+    pub(crate) stretch: Arc<StretchControls>,
     /// Shared asset store used by playback and derived resources.
     pub(crate) store: AssetStore,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default)]
     pub(crate) decoder: AudioDecoderConfig<B>,
+    /// Session-owned audio-consumer wake capability. This is populated by
+    /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
+    /// does not become a second public source of session policy.
+    #[builder(skip)]
+    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
@@ -65,17 +73,9 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Live time-stretch controls shared with the resident Warp chain.
-    #[builder(default = StretchControls::new(1.0))]
-    pub(crate) stretch: Arc<StretchControls>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker>,
-    /// Session-owned audio-consumer wake capability. This is populated by
-    /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
-    /// does not become a second public source of session policy.
-    #[builder(skip)]
-    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject

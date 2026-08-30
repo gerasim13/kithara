@@ -58,8 +58,8 @@ pub mod error {
     #[display("sending on a channel with no receivers")]
     pub struct SendError<T>(pub T);
 
-    // Debug/Display without a `T` bound (opaque payload) so the error is
-    // `Error` for every payload type, matching how callers use it.
+    // WHY: Debug/Display without a `T` bound (opaque payload) so the error is `Error` for every payload type, matching how callers use
+    // it.
     impl<T> std::fmt::Debug for SendError<T> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("SendError(..)")
@@ -174,9 +174,8 @@ impl<T> Clone for Sender<T> {
 
 impl<T> Drop for Sender<T> {
     fn drop(&mut self) {
-        // The last sender closes the channel. Marking `closed` and signalling
-        // happens here (the inner tokio sender field drops just after), so a
-        // woken receiver that re-checks during that window still sees `Closed`.
+        // WHY: The last sender closes the channel. Marking `closed` and signalling happens here (the inner tokio sender field drops just
+        // after), so a woken receiver that re-checks during that window still sees `Closed`.
         if self.shared.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.shared.close();
         }
@@ -208,7 +207,7 @@ impl<T: Clone> Sender<T> {
     /// Returns the value back when there are no live receivers.
     pub fn send(&self, value: T) -> Result<usize, SendError<T>> {
         let result = self.inner.send(value);
-        // Signal AFTER the inner append so the lost-wakeup handshake holds.
+        // WHY: Signal AFTER the inner append so the lost-wakeup handshake holds.
         self.shared.signal();
         result.map_err(|e| SendError(e.0))
     }
@@ -260,8 +259,8 @@ impl<T: Clone> Future for Recv<'_, T> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let rx = &mut *self.get_mut().rx;
-        // Engine wait resolves only when granted; a real wait re-checks the ring
-        // below (a spurious wake just re-parks). Clear the marker either way.
+        // WHY: Engine wait resolves only when granted; a real wait re-checks the ring below (a spurious wake just re-parks). Clear the
+        // marker either way.
         match rx.pending.as_ref() {
             Some(Parked::Engine(handle)) => {
                 if handle.granted() {
@@ -273,9 +272,8 @@ impl<T: Clone> Future for Recv<'_, T> {
             Some(Parked::Real(_)) => rx.pending = None,
             None => {}
         }
-        // Hold the gate across the try-op AND the registration so a concurrent
-        // `send` (inner append, then signal under the same gate) is either seen
-        // by this `try_recv` or wakes the waiter we register here.
+        // WHY: Hold the gate across the try-op AND the registration so a concurrent `send` (inner append, then signal under the same gate)
+        // is either seen by this `try_recv` or wakes the waiter we register here.
         let mut gate = rx.shared.gate.lock();
         match rx.inner.try_recv() {
             Ok(value) => {
@@ -320,9 +318,8 @@ impl<T: Clone> Future for Recv<'_, T> {
 impl<T> Drop for Recv<'_, T> {
     fn drop(&mut self) {
         match self.rx.pending.take() {
-            // Remove EXACTLY our own waker so a send does not wake a dropped
-            // future (mirrors `mpsc`/`oneshot`; the granted-then-dropped edge is
-            // the shared deferred wakeup hole, design §11).
+            // WHY: Remove EXACTLY our own waker so a send does not wake a dropped future (mirrors `mpsc`/`oneshot`; the granted-then-dropped
+            // edge is the shared deferred wakeup hole, design section 11).
             Some(Parked::Real(waker)) => {
                 self.rx
                     .shared

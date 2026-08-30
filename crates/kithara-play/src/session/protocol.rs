@@ -210,12 +210,12 @@ mod handle {
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
 
     pub trait SessionDispatcher: Send + Sync + 'static {
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
-
         /// Describe how audio consumers hosted by this session may wake workers.
         /// Every one of them reads from the render callback, offline backends
         /// included.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
+
+        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
 
         fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
@@ -255,11 +255,13 @@ mod handle {
             }))
         }
 
-        #[must_use]
-        pub(crate) fn pending() -> Self {
-            Self(Arc::new(SessionSlot {
-                dispatcher: Mutex::default(),
-            }))
+        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
+            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
+                Reply::SlotAllocated(allocated) => Ok(allocated),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session allocate slot".into(),
+                )),
+            }
         }
 
         pub(crate) fn bind(&self, binding: SessionBinding) -> Result<(), PlayError> {
@@ -272,13 +274,14 @@ mod handle {
             Ok(())
         }
 
-        pub fn allocate_slot(&self, player_id: PlayerId) -> Result<AllocatedSlot, PlayError> {
-            match self.exec_ok(Cmd::AllocateSlot { player_id })? {
-                Reply::SlotAllocated(allocated) => Ok(allocated),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session allocate slot".into(),
-                )),
-            }
+        #[must_use]
+        pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+            // WHY: An instance may prepare resources before Host insertion. The pending policy must therefore preserve the RT-safe production
+            // path; explicit offline dispatchers override it after binding.
+            self.dispatcher()
+                .map_or(ConsumerWakeMode::RealtimeDeferred, |dispatcher| {
+                    dispatcher.consumer_wake_mode()
+                })
         }
 
         pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher>, PlayError> {
@@ -287,17 +290,6 @@ mod handle {
                 .lock()
                 .clone()
                 .ok_or(PlayError::SessionUnbound)
-        }
-
-        #[must_use]
-        pub fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-            // An instance may prepare resources before Host insertion. The
-            // pending policy must therefore preserve the RT-safe production
-            // path; explicit offline dispatchers override it after binding.
-            self.dispatcher()
-                .map_or(ConsumerWakeMode::RealtimeDeferred, |dispatcher| {
-                    dispatcher.consumer_wake_mode()
-                })
         }
 
         pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
@@ -318,13 +310,11 @@ mod handle {
             .map(|_| ())
         }
 
-        pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-            match self.exec_ok(Cmd::QuerySampleRate)? {
-                Reply::SampleRate(sample_rate) => Ok(sample_rate),
-                _ => Err(PlayError::Internal(
-                    "unexpected reply for session sample rate query".into(),
-                )),
-            }
+        #[must_use]
+        pub(crate) fn pending() -> Self {
+            Self(Arc::new(SessionSlot {
+                dispatcher: Mutex::default(),
+            }))
         }
 
         pub fn register_player(
@@ -354,6 +344,15 @@ mod handle {
                 .map(|_| ())
         }
 
+        pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+            match self.exec_ok(Cmd::QuerySampleRate)? {
+                Reply::SampleRate(sample_rate) => Ok(sample_rate),
+                _ => Err(PlayError::Internal(
+                    "unexpected reply for session sample rate query".into(),
+                )),
+            }
+        }
+
         pub fn set_player_eq_gain(
             &self,
             player_id: PlayerId,
@@ -368,15 +367,6 @@ mod handle {
             .map(|_| ())
         }
 
-        #[cfg(any(test, feature = "probe"))]
-        pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
-            if levels.is_empty() {
-                return Ok(());
-            }
-            self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
-                .map(|_| ())
-        }
-
         pub fn set_player_eq_layout(
             &self,
             player_id: PlayerId,
@@ -387,6 +377,15 @@ mod handle {
                 player_id,
             })
             .map(|_| ())
+        }
+
+        #[cfg(any(test, feature = "probe"))]
+        pub fn set_player_master_volumes(&self, levels: Vec<PlayerLevel>) -> Result<(), PlayError> {
+            if levels.is_empty() {
+                return Ok(());
+            }
+            self.exec_ok(Cmd::SetPlayerMasterVolumes { levels })
+                .map(|_| ())
         }
 
         pub fn set_player_slot_volume(
@@ -447,12 +446,12 @@ mod tests {
     struct DefaultSession;
 
     impl SessionDispatcher for DefaultSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
-        }
-
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+            Ok(Reply::Ok)
         }
     }
 

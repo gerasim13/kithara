@@ -67,11 +67,11 @@ struct PcmOut {
 }
 
 pub(crate) struct WebCodecsCodec {
+    spec: AudioSpec,
     byte_pool: BytePool,
     config: CodecConfig,
     track_info: DecoderTrackInfo,
     decoded_pts: Duration,
-    spec: AudioSpec,
     out: mpsc::Receiver<HostOut>,
     cmd: mpsc::Sender<HostCmd>,
     eof_draining: bool,
@@ -302,9 +302,9 @@ impl WebCodecsCodec {
             .and_then(|frames| frames.checked_mul(usize::from(channels)));
         if expected != Some(interleaved.len()) {
             return Err(DecodeError::backend(WebCodecsError::OutputShape {
-                samples: interleaved.len(),
                 frames,
                 channels,
+                samples: interleaved.len(),
             }));
         }
         *out = interleaved;

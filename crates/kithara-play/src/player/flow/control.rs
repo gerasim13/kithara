@@ -88,20 +88,6 @@ impl PlayerRuntime {
             .set_master_eq_gain(band, f32::from(gain_db))
     }
 
-    delegate::delegate! {
-        to self.core.engine {
-            /// Replaces the master EQ layout and gains without releasing the running slot.
-            ///
-            /// # Errors
-            /// Returns a session graph error when a running player's EQ node cannot be
-            /// replaced.
-            #[call(set_master_eq_layout)]
-            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
-            /// Pump audio backend/runtime state.
-            pub fn tick(&self) -> Result<(), PlayError>;
-        }
-    }
-
     /// Set muted state.
     pub fn set_muted(&self, muted: bool) {
         let slot = self.slot();
@@ -142,5 +128,19 @@ impl PlayerRuntime {
             |slot, volume| self.core.engine.set_slot_volume(slot, volume),
             self.core.engine.bus(),
         );
+    }
+
+    delegate::delegate! {
+        to self.core.engine {
+            /// Replaces the master EQ layout and gains without releasing the running slot.
+            ///
+            /// # Errors
+            /// Returns a session graph error when a running player's EQ node cannot be
+            /// replaced.
+            #[call(set_master_eq_layout)]
+            pub fn set_eq_layout(&self, layout: Vec<EqBandConfig>) -> Result<(), PlayError>;
+            /// Pump audio backend/runtime state.
+            pub fn tick(&self) -> Result<(), PlayError>;
+        }
     }
 }

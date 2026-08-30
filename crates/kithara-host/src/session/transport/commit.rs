@@ -8,9 +8,9 @@ use crate::api::{SessionBeat, SessionTransportSnapshot, Tempo, TransportRevision
 #[fieldwork(opt_in, get)]
 pub(crate) struct SessionGridGeneration {
     id: BeatGridId,
+    revision: Option<BeatGridRevision>,
     #[field(get, copy, vis = "pub(crate)")]
     epoch: SessionEpoch,
-    revision: Option<BeatGridRevision>,
 }
 
 impl SessionGridGeneration {
@@ -20,19 +20,6 @@ impl SessionGridGeneration {
             epoch: SessionEpoch::new(0),
             revision: None,
         }
-    }
-
-    pub(crate) fn next_revision(self) -> Result<BeatGridRevision, TransportProcessError> {
-        self.revision
-            .map_or(Ok(BeatGridRevision::first()), |revision| {
-                revision
-                    .checked_next()
-                    .ok_or(TransportProcessError::SessionGridGenerationExhausted)
-            })
-    }
-
-    pub(crate) fn commit_revision(&mut self, revision: BeatGridRevision) {
-        self.revision = Some(revision);
     }
 
     pub(crate) fn advance_restart(&mut self) -> Result<(), TransportProcessError> {
@@ -51,10 +38,17 @@ impl SessionGridGeneration {
         Ok(())
     }
 
-    pub(crate) fn stamp(self) -> Result<BeatGridStamp, TransportProcessError> {
+    pub(crate) fn commit_revision(&mut self, revision: BeatGridRevision) {
+        self.revision = Some(revision);
+    }
+
+    pub(crate) fn next_revision(self) -> Result<BeatGridRevision, TransportProcessError> {
         self.revision
-            .map(|revision| BeatGridStamp::new(self.id, revision))
-            .ok_or(TransportProcessError::MissingSessionGridRevision)
+            .map_or(Ok(BeatGridRevision::first()), |revision| {
+                revision
+                    .checked_next()
+                    .ok_or(TransportProcessError::SessionGridGenerationExhausted)
+            })
     }
 
     pub(crate) fn promote(self, observed: Self) -> Result<Self, TransportProcessError> {
@@ -82,6 +76,12 @@ impl SessionGridGeneration {
             Ok(self)
         }
     }
+
+    pub(crate) fn stamp(self) -> Result<BeatGridStamp, TransportProcessError> {
+        self.revision
+            .map(|revision| BeatGridStamp::new(self.id, revision))
+            .ok_or(TransportProcessError::MissingSessionGridRevision)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -107,10 +107,10 @@ pub(crate) struct SessionTransportCommit {
 impl SessionTransportCommit {
     pub(crate) const fn new(tempo: Tempo, playing: bool, revision: TransportRevision) -> Self {
         Self {
-            boundary: TransportBoundary::Continuous,
             tempo,
             playing,
             revision,
+            boundary: TransportBoundary::Continuous,
         }
     }
 
@@ -121,10 +121,10 @@ impl SessionTransportCommit {
         target: SessionBeat,
     ) -> Self {
         Self {
-            boundary: TransportBoundary::Relocate(target),
             tempo,
             playing,
             revision,
+            boundary: TransportBoundary::Relocate(target),
         }
     }
 }

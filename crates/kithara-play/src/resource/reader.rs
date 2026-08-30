@@ -19,38 +19,7 @@ use crate::{
     worker::{ServiceClass, TrackPriority},
 };
 
-/// Type-erased audio resource wrapping any `AudioReader`.
-///
-/// Provides a unified interface for reading decoded audio
-/// regardless of the underlying source (file, HLS, custom).
-///
-/// # Example
-///
-/// ```ignore
-/// use kithara_assets::AssetStore;
-/// use kithara_bufpool::Region;
-/// use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig};
-///
-/// let region = Region::default();
-/// let worker = PlayWorker::new(
-///     PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-/// );
-///
-/// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
-///     "https://example.com/song.mp3",
-/// )?)
-/// .store(AssetStore::builder().pool(region.byte_pool()).build())
-/// .worker(worker)
-/// .build();
-/// let mut resource = Resource::new(config).await?;
-///
-/// let spec = resource.spec();
-/// let meta = resource.metadata();
-///
-/// let mut buf = [0.0f32; 1024];
-/// resource.read(&mut buf);
-/// ```
+/// Type-erased decoded-audio reader for file, HLS, and custom sources.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
@@ -58,13 +27,13 @@ pub struct Resource {
     /// cancellation. Disarmed when the live reader moves into analysis.
     cancel: CancelGuard,
     pub(crate) inner: Box<dyn AudioReader>,
-    priority: Option<TrackPriority>,
-    #[field(with)]
-    playback_rate: PlaybackRate,
     #[field(get, deref = false)]
     src: Arc<str>,
     #[field(get = event_bus)]
     bus: EventBus,
+    priority: Option<TrackPriority>,
+    #[field(with)]
+    playback_rate: PlaybackRate,
 }
 
 /// Cancels the wrapped per-track token on drop. A `Resource` field rather than
@@ -79,19 +48,19 @@ enum PlaybackRate {
 }
 
 impl PlaybackRate {
+    fn apply(&self, requested: f32) -> f32 {
+        if let Self::Warp(controls) = self {
+            controls.set_speed(requested);
+        }
+        self.into()
+    }
+
     fn for_warp(controls: Arc<StretchControls>) -> Self {
         if supports_playback_rate() {
             Self::Warp(controls)
         } else {
             Self::Fixed
         }
-    }
-
-    fn apply(&self, requested: f32) -> f32 {
-        if let Self::Warp(controls) = self {
-            controls.set_speed(requested);
-        }
-        self.into()
     }
 }
 
@@ -139,6 +108,62 @@ impl Resource {
         Self::open(config, None).await
     }
 
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.playback_rate.apply(rate)
+    }
+
+    /// Create a resource from any `AudioReader`.
+    ///
+    /// Custom sources are fixed-rate. Stream-backed resources reuse this
+    /// construction path and attach their resident Warp controls before return.
+    ///
+    /// The resource shares the reader's event bus directly.
+    ///
+    /// `src` rides along on `PlayerEvent::ItemDidPlayToEnd` and is what
+    /// the queue uses to tell which track ended. `None` defaults to
+    /// `"unknown"`.
+    #[must_use]
+    pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+        let bus = reader.event_bus().clone();
+        let mut inner: Box<dyn AudioReader> = Box::new(reader);
+        let src = src.unwrap_or_else(|| Arc::from("unknown"));
+        if let Err(e) = inner.preload() {
+            warn!(src = %src, error = %e, "resource preload failed");
+        }
+        Self {
+            inner,
+            bus,
+            src,
+            priority: None,
+            playback_rate: PlaybackRate::Fixed,
+            cancel: CancelGuard(None),
+        }
+    }
+
+    /// Create a resource from a concrete stream-backed audio config.
+    ///
+    /// Generic over any [`StreamType`] whose config carries an optional
+    /// `kithara_events::EventBus`. Callers wanting fine-grained control
+    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
+    pub(crate) async fn from_stream_audio<T, B>(
+        config: TrackConfig<T, B>,
+        src: Arc<str>,
+        worker: &PlayWorker,
+    ) -> DecodeResult<Self>
+    where
+        T: StreamType<Events = EventBus> + 'static,
+        B: Default + ResamplerBackend,
+        crate::RegisteredAudio<Stream<T>>: AudioReader + 'static,
+    {
+        let warp_controls = Arc::clone(config.warp().stretch());
+        let audio = worker.open(config).await?;
+        let priority = audio.priority();
+        let mut resource = Self::from_reader(audio, Some(src))
+            .with_playback_rate(PlaybackRate::for_warp(warp_controls));
+        resource.priority = Some(priority);
+        Ok(resource)
+    }
+
     /// Create a resource with a bounded observer of decoded audio attached.
     ///
     /// This is a narrow cross-crate composition seam used by queue-owned
@@ -168,8 +193,8 @@ impl Resource {
         })?;
         let stretch = Arc::clone(&config.stretch);
         let engine_load = config.engine_load.clone();
-        // Capture the per-track cancel before `build_*_config` consumes `config`
-        // (it is cloned by identity into both the inner stream and the Audio).
+        // WHY: Capture the per-track cancel before `build_*_config` consumes `config` (it is cloned by identity into both the inner stream
+        // and the Audio).
         let cancel = config.cancel.clone();
         let mut resource = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
@@ -193,70 +218,8 @@ impl Resource {
         Ok(resource)
     }
 
-    /// Create a resource from any `AudioReader`.
-    ///
-    /// Custom sources are fixed-rate. Stream-backed resources reuse this
-    /// construction path and attach their resident Warp controls before return.
-    ///
-    /// The resource shares the reader's event bus directly.
-    ///
-    /// `src` rides along on `PlayerEvent::ItemDidPlayToEnd` and is what
-    /// the queue uses to tell which track ended. `None` defaults to
-    /// `"unknown"`.
-    #[must_use]
-    pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
-        let bus = reader.event_bus().clone();
-        let mut inner: Box<dyn AudioReader> = Box::new(reader);
-        let src = src.unwrap_or_else(|| Arc::from("unknown"));
-        if let Err(e) = inner.preload() {
-            warn!(src = %src, error = %e, "resource preload failed");
-        }
-        Self {
-            inner,
-            priority: None,
-            playback_rate: PlaybackRate::Fixed,
-            bus,
-            src,
-            cancel: CancelGuard(None),
-        }
-    }
-
-    /// Create a resource from a concrete stream-backed audio config.
-    ///
-    /// Generic over any [`StreamType`] whose config carries an optional
-    /// `kithara_events::EventBus`. Callers wanting fine-grained control
-    /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
-    pub(crate) async fn from_stream_audio<T, B>(
-        config: TrackConfig<T, B>,
-        src: Arc<str>,
-        worker: &PlayWorker,
-    ) -> DecodeResult<Self>
-    where
-        T: StreamType<Events = EventBus> + 'static,
-        B: Default + ResamplerBackend,
-        crate::RegisteredAudio<Stream<T>>: AudioReader + 'static,
-    {
-        let warp_controls = Arc::clone(config.warp().stretch());
-        let audio = worker.open(config).await?;
-        let priority = audio.priority();
-        let mut resource = Self::from_reader(audio, Some(src))
-            .with_playback_rate(PlaybackRate::for_warp(warp_controls));
-        resource.priority = Some(priority);
-        Ok(resource)
-    }
-
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.playback_rate.apply(rate)
-    }
-
     pub(crate) fn playback_rate(&self) -> f32 {
         (&self.playback_rate).into()
-    }
-
-    pub(crate) fn set_service_class(&self, class: ServiceClass) {
-        if let Some(priority) = &self.priority {
-            priority.set(class);
-        }
     }
 
     /// Wait for first decoded chunk to be available, then move it to internal buffer.
@@ -273,6 +236,12 @@ impl Resource {
             gate.wait_for_epoch(self.inner.preload_epoch()).await;
         }
         self.inner.preload()
+    }
+
+    pub(crate) fn set_service_class(&self, class: ServiceClass) {
+        if let Some(priority) = &self.priority {
+            priority.set(class);
+        }
     }
 
     /// Subscribe to unified events.
@@ -413,8 +382,8 @@ mod tests {
     }
 
     struct EofReader {
-        bus: EventBus,
         spec: AudioSpec,
+        bus: EventBus,
         meta: TrackMetadata,
         position_frames: usize,
         total_frames: usize,
@@ -438,10 +407,9 @@ mod tests {
     }
 
     impl EofReader {
-        fn with_frames(total_frames: usize) -> Self {
-            Self {
-                total_frames,
-                ..Self::default()
+        fn eof(&self) -> ReadOutcome {
+            ReadOutcome::Eof {
+                position: self.position_duration(),
             }
         }
 
@@ -457,16 +425,17 @@ mod tests {
             Duration::from_secs_f64(f64::from(frames) / f64::from(Consts::SAMPLE_RATE))
         }
 
-        fn eof(&self) -> ReadOutcome {
-            ReadOutcome::Eof {
-                position: self.position_duration(),
-            }
-        }
-
         fn take_frames(&mut self, capacity: usize) -> Option<NonZeroUsize> {
             let frames = capacity.min(self.total_frames - self.position_frames);
             self.position_frames += frames;
             NonZeroUsize::new(frames)
+        }
+
+        fn with_frames(total_frames: usize) -> Self {
+            Self {
+                total_frames,
+                ..Self::default()
+            }
         }
     }
 

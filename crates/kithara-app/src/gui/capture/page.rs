@@ -1,6 +1,5 @@
 //! What a studio page is called, where it is photographed, and what it records
 //! about the draw pools it was drawn through.
-
 use std::fmt::{self, Display};
 
 use kithara_ui::{capture::Geometry, draw::PoolStats};
@@ -13,8 +12,8 @@ pub(super) fn studio() -> Geometry {
     let (width, height) = window_size();
     Geometry {
         height,
-        scale: 1.0,
         width,
+        scale: 1.0,
     }
 }
 

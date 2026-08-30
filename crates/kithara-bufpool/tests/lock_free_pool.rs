@@ -4,7 +4,6 @@
 //! allocation, byte-budget accounting returns to baseline once every handle
 //! drops, and concurrent get/put from many threads neither deadlocks nor
 //! leaks buffers beyond the configured per-pool capacity.
-
 use std::{sync::Barrier, thread};
 
 use kithara_bufpool::SharedPool;

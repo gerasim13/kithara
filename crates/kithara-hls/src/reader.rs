@@ -258,8 +258,8 @@ mod tests {
     };
 
     struct TestAbrPeer {
-        cancel: CancelToken,
         state: Arc<AbrState>,
+        cancel: CancelToken,
     }
 
     impl Abr for TestAbrPeer {
@@ -362,16 +362,16 @@ mod tests {
         let publisher = state.publisher();
         let cancel = CancelToken::never();
         let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-            cancel: cancel.clone(),
             state,
+            cancel: cancel.clone(),
         });
         let settings = AbrSettings::builder().cancel(cancel.clone()).build();
         let controller = AbrController::new(settings);
         let handle = controller.register(&peer);
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
-                scope: ctx.scope.clone(),
                 cancel,
+                scope: ctx.scope.clone(),
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal,

@@ -1,9 +1,3 @@
-//! Which pages the gallery offers, taken from the package it ships.
-//!
-//! A page is added by putting its document in the folder, naming it in the
-//! manifest and giving it a nav item. Nothing here lists the pages, so the
-//! list cannot disagree with the package that answers for them.
-
 use std::sync::LazyLock;
 
 use crate::fixture;

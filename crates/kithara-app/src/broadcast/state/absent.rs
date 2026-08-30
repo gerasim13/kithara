@@ -14,16 +14,16 @@ impl Packager for Absent {
         true
     }
 
+    fn release(_host: &Host) -> BroadcastResult<()> {
+        Ok(())
+    }
+
     fn start(
         _host: &Host,
         _shutdown: &CancelToken,
         _tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
         Err("no packager in this build".into())
-    }
-
-    fn release(_host: &Host) -> BroadcastResult<()> {
-        Ok(())
     }
 
     fn stop(_live: Stream) {}

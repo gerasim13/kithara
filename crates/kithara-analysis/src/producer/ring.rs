@@ -57,15 +57,13 @@ impl Writer {
 
         let written = self.samples.push_iter(mono.take(frames));
         if written != frames {
-            // The vacancy was checked above and this is the only writer, so a
-            // short write means the iterator ran out.
             warn!(
                 frames,
                 written, "analysis ingest: range shorter than declared; dropped"
             );
             return false;
         }
-        self.spans.try_push(Span { start: at, frames }).is_ok()
+        self.spans.try_push(Span { frames, start: at }).is_ok()
     }
 }
 

@@ -53,10 +53,10 @@ pub(crate) fn window_layers<'a>(
 }
 
 struct WindowLayers<'a> {
+    skin: &'a Skin,
     child: Element<'a, UiEvent>,
     ghost: Option<DragGhost>,
     resize_edges: bool,
-    skin: &'a Skin,
 }
 
 struct LayerState {
@@ -70,15 +70,38 @@ impl WindowLayers<'_> {
 }
 
 struct WindowOverlay<'a> {
+    text: &'a RefCell<Option<TextContext>>,
+    skin: &'a Skin,
+    ghost: Option<&'a DragGhost>,
     bounds: Rectangle,
     child: RefCell<Option<overlay::Nested<'a, UiEvent, Theme, Renderer>>>,
-    ghost: Option<&'a DragGhost>,
     resize_edges: bool,
-    skin: &'a Skin,
-    text: &'a RefCell<Option<TextContext>>,
 }
 
 impl WindowOverlay<'_> {
+    fn draw_layers(&self, renderer: &mut Renderer, pointer: mouse::Cursor) {
+        if let Some(layer) = self.resize_layer() {
+            draw_host_layer(renderer, &layer, self.skin.text_resources());
+        }
+        if let Some(ghost) = self.ghost {
+            let mut text = self.text.borrow_mut();
+            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+            let layer = ghost.layer(pointer.position().map(Into::into), self.bounds.into(), text);
+            draw_host_layer(renderer, &layer, self.skin.text_resources());
+        }
+    }
+
+    fn interaction(&self, pointer: mouse::Cursor) -> mouse::Interaction {
+        self.resize_layer()
+            .map_or(mouse::Interaction::None, |layer| {
+                cursor(
+                    std::slice::from_ref(&layer),
+                    pointer.position().map(Into::into),
+                )
+                .into()
+            })
+    }
+
     fn resize_layer(&self) -> Option<HostLayer<WindowCommand>> {
         self.resize_edges
             .then(|| WindowSurface::frame(self.bounds.into(), self.skin.window.resize_edge))
@@ -124,32 +147,25 @@ impl WindowOverlay<'_> {
             true
         })
     }
-
-    fn interaction(&self, pointer: mouse::Cursor) -> mouse::Interaction {
-        self.resize_layer()
-            .map_or(mouse::Interaction::None, |layer| {
-                cursor(
-                    std::slice::from_ref(&layer),
-                    pointer.position().map(Into::into),
-                )
-                .into()
-            })
-    }
-
-    fn draw_layers(&self, renderer: &mut Renderer, pointer: mouse::Cursor) {
-        if let Some(layer) = self.resize_layer() {
-            draw_host_layer(renderer, &layer, self.skin.text_resources());
-        }
-        if let Some(ghost) = self.ghost {
-            let mut text = self.text.borrow_mut();
-            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-            let layer = ghost.layer(pointer.position().map(Into::into), self.bounds.into(), text);
-            draw_host_layer(renderer, &layer, self.skin.text_resources());
-        }
-    }
 }
 
 impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        pointer: mouse::Cursor,
+    ) {
+        if let Some(child_layout) = layout.children().next()
+            && let Some(child) = self.child.borrow_mut().as_mut()
+        {
+            child.draw(renderer, theme, style, child_layout, pointer);
+        }
+        self.draw_layers(renderer, pointer);
+    }
+
     fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
         let children = self
             .child
@@ -159,27 +175,6 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
             .into_iter()
             .collect();
         layout::Node::with_children(bounds, children)
-    }
-
-    fn update(
-        &mut self,
-        event: &Event,
-        layout: Layout<'_>,
-        pointer: mouse::Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
-    ) {
-        if self.update_layers(event, pointer, shell) {
-            return;
-        }
-        let Some(child_layout) = layout.children().next() else {
-            return;
-        };
-        let Some(child) = self.child.get_mut().as_mut() else {
-            return;
-        };
-        child.update(event, child_layout, pointer, renderer, clipboard, shell);
     }
 
     fn mouse_interaction(
@@ -203,22 +198,6 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
             })
     }
 
-    fn draw(
-        &self,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        pointer: mouse::Cursor,
-    ) {
-        if let Some(child_layout) = layout.children().next()
-            && let Some(child) = self.child.borrow_mut().as_mut()
-        {
-            child.draw(renderer, theme, style, child_layout, pointer);
-        }
-        self.draw_layers(renderer, pointer);
-    }
-
     fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn Operation) {
         let Some(child_layout) = layout.children().next() else {
             return;
@@ -227,94 +206,36 @@ impl overlay::Overlay<UiEvent, Theme, Renderer> for WindowOverlay<'_> {
             child.operate(child_layout, renderer, operation);
         }
     }
-}
-
-impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<LayerState>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(LayerState {
-            text: RefCell::new(None),
-        })
-    }
-
-    fn children(&self) -> Vec<Tree> {
-        vec![Tree::new(&self.child)]
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(std::slice::from_ref(&self.child));
-    }
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
-
-    fn size_hint(&self) -> Size<Length> {
-        self.size()
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let limits = limits.width(Length::Fill).height(Length::Fill);
-        let child = self
-            .child
-            .as_widget_mut()
-            .layout(&mut tree.children[0], renderer, &limits);
-        let size = limits.resolve(Length::Fill, Length::Fill, child.size());
-        layout::Node::with_children(size, vec![child])
-    }
 
     fn update(
         &mut self,
-        tree: &mut Tree,
         event: &Event,
         layout: Layout<'_>,
         pointer: mouse::Cursor,
         renderer: &Renderer,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, UiEvent>,
-        viewport: &Rectangle,
     ) {
-        let Some(child_layout) = Self::child_layout(layout) else {
+        if self.update_layers(event, pointer, shell) {
+            return;
+        }
+        let Some(child_layout) = layout.children().next() else {
             return;
         };
-        self.child.as_widget_mut().update(
-            &mut tree.children[0],
-            event,
-            child_layout,
-            pointer,
-            renderer,
-            clipboard,
-            shell,
-            viewport,
-        );
+        let Some(child) = self.child.get_mut().as_mut() else {
+            return;
+        };
+        child.update(event, child_layout, pointer, renderer, clipboard, shell);
+    }
+}
+
+impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
+    fn children(&self) -> Vec<Tree> {
+        vec![Tree::new(&self.child)]
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        pointer: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let Some(child_layout) = Self::child_layout(layout) else {
-            return mouse::Interaction::None;
-        };
-        self.child.as_widget().mouse_interaction(
-            &tree.children[0],
-            child_layout,
-            pointer,
-            viewport,
-            renderer,
-        )
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(std::slice::from_ref(&self.child));
     }
 
     fn draw(
@@ -339,6 +260,41 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
             pointer,
             viewport,
         );
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let limits = limits.width(Length::Fill).height(Length::Fill);
+        let child = self
+            .child
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, &limits);
+        let size = limits.resolve(Length::Fill, Length::Fill, child.size());
+        layout::Node::with_children(size, vec![child])
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        pointer: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let Some(child_layout) = Self::child_layout(layout) else {
+            return mouse::Interaction::None;
+        };
+        self.child.as_widget().mouse_interaction(
+            &tree.children[0],
+            child_layout,
+            pointer,
+            viewport,
+            renderer,
+        )
     }
 
     fn operate(
@@ -388,6 +344,50 @@ impl IcedWidget<UiEvent, Theme, Renderer> for WindowLayers<'_> {
             text: &state.text,
         })))
     }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.size()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(LayerState {
+            text: RefCell::new(None),
+        })
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<LayerState>()
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        pointer: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, UiEvent>,
+        viewport: &Rectangle,
+    ) {
+        let Some(child_layout) = Self::child_layout(layout) else {
+            return;
+        };
+        self.child.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            child_layout,
+            pointer,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -435,7 +435,7 @@ mod tests {
         let mut overlay = element
             .as_widget_mut()
             .overlay(&mut tree, layout, &renderer, &bounds, Vector::ZERO)
-            .unwrap_or_else(|| panic!("window chrome must produce a root overlay"));
+            .expect("window chrome must produce a root overlay");
         let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
         let event = Event::Mouse(mouse::Event::ButtonPressed(Button::Left));
         let pointer = Cursor::Available(Point::new(x, 30.0));
@@ -469,19 +469,6 @@ mod tests {
     struct PressOverlayWidget;
 
     impl IcedWidget<UiEvent, Theme, Renderer> for PressOverlayWidget {
-        fn size(&self) -> Size<Length> {
-            Size::new(Length::Fill, Length::Fill)
-        }
-
-        fn layout(
-            &mut self,
-            _tree: &mut Tree,
-            _renderer: &Renderer,
-            limits: &Limits,
-        ) -> layout::Node {
-            layout::Node::new(limits.max())
-        }
-
         fn draw(
             &self,
             _tree: &Tree,
@@ -494,6 +481,15 @@ mod tests {
         ) {
         }
 
+        fn layout(
+            &mut self,
+            _tree: &mut Tree,
+            _renderer: &Renderer,
+            limits: &Limits,
+        ) -> layout::Node {
+            layout::Node::new(limits.max())
+        }
+
         fn overlay<'a>(
             &'a mut self,
             _tree: &'a mut Tree,
@@ -504,13 +500,40 @@ mod tests {
         ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
             Some(overlay::Element::new(Box::new(PressOverlay)))
         }
+
+        fn size(&self) -> Size<Length> {
+            Size::new(Length::Fill, Length::Fill)
+        }
     }
 
     struct PressOverlay;
 
     impl overlay::Overlay<UiEvent, Theme, Renderer> for PressOverlay {
+        fn draw(
+            &self,
+            _renderer: &mut Renderer,
+            _theme: &Theme,
+            _style: &renderer::Style,
+            _layout: Layout<'_>,
+            _cursor: Cursor,
+        ) {
+        }
+
         fn layout(&mut self, _renderer: &Renderer, bounds: Size) -> layout::Node {
             layout::Node::new(bounds)
+        }
+
+        fn mouse_interaction(
+            &self,
+            layout: Layout<'_>,
+            pointer: Cursor,
+            _renderer: &Renderer,
+        ) -> mouse::Interaction {
+            if pointer.is_over(layout.bounds()) {
+                mouse::Interaction::Pointer
+            } else {
+                mouse::Interaction::None
+            }
         }
 
         fn update(
@@ -530,29 +553,6 @@ mod tests {
                 shell.publish(UiEvent::OpenSettings);
                 shell.capture_event();
             }
-        }
-
-        fn mouse_interaction(
-            &self,
-            layout: Layout<'_>,
-            pointer: Cursor,
-            _renderer: &Renderer,
-        ) -> mouse::Interaction {
-            if pointer.is_over(layout.bounds()) {
-                mouse::Interaction::Pointer
-            } else {
-                mouse::Interaction::None
-            }
-        }
-
-        fn draw(
-            &self,
-            _renderer: &mut Renderer,
-            _theme: &Theme,
-            _style: &renderer::Style,
-            _layout: Layout<'_>,
-            _cursor: Cursor,
-        ) {
         }
     }
 
@@ -580,7 +580,7 @@ mod tests {
                 &bounds,
                 Vector::ZERO,
             )
-            .unwrap_or_else(|| panic!("window chrome must wrap the child overlay"));
+            .expect("window chrome must wrap the child overlay");
         let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
         overlay.as_overlay_mut().update(
             &Event::Mouse(mouse::Event::ButtonPressed(Button::Left)),
@@ -663,7 +663,7 @@ mod tests {
                 &bounds,
                 Vector::ZERO,
             )
-            .unwrap_or_else(|| panic!("the drag ghost must produce a root overlay"));
+            .expect("the drag ghost must produce a root overlay");
         let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
         overlay.as_overlay_mut().update(
             &Event::Mouse(mouse::Event::CursorMoved { position: pointer }),

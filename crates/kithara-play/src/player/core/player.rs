@@ -35,10 +35,6 @@ impl Deref for PlayerImpl {
 }
 
 impl PlayerImpl {
-    pub(in crate::player) fn make_control(&self) -> PlayerControl {
-        PlayerControl::new(Arc::clone(&self.runtime))
-    }
-
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(mut config: PlayerConfig) -> Self {
@@ -52,9 +48,8 @@ impl PlayerImpl {
 
         let bus = config.bus.clone().unwrap_or_default();
 
-        // Composed/standalone seam: `Some(parent)` → the player's master is a
-        // child of it (so a passed cancel reaches the player but the player's
-        // Drop never cancels the passed token); `None` → own root.
+        // WHY: Composed/standalone seam: `Some(parent)` -> the player's master is a child of it (so a passed cancel reaches the player but
+        // the player's Drop never cancels the passed token); `None` -> own root.
         let cancel = CancelScope::new(config.cancel.clone()).token();
         config.cancel = Some(cancel.clone());
 
@@ -73,28 +68,32 @@ impl PlayerImpl {
             config.abr = Some(AbrController::new(abr_settings));
         }
 
-        // Seed the single speed source with the configured default rate.
+        // WHY: Seed the single speed source with the configured default rate.
         config.timestretch.set_speed(config.default_rate);
         let params = PlayerParams::from(&config);
         let core = PlayerCore {
             engine,
+            params,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
-            params,
             timestretch: config.timestretch,
             gapless_mode: config.gapless_mode,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
         };
         Self {
+            sync,
             runtime: Arc::new(PlayerRuntime {
+                core,
                 lifecycle: PlayerLifecycle::open(),
                 operations: Mutex::default(),
-                core,
                 phase: Mutex::new(PlayerPhase::Idle),
             }),
-            sync,
         }
+    }
+
+    pub(in crate::player) fn make_control(&self) -> PlayerControl {
+        PlayerControl::new(Arc::clone(&self.runtime))
     }
 }
 

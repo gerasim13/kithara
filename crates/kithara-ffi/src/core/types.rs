@@ -521,7 +521,7 @@ impl From<AudioCodecKind> for FfiAudioCodecKind {
             AudioCodecKind::Alac => Self::Alac,
             AudioCodecKind::Pcm => Self::Pcm,
             AudioCodecKind::Adpcm => Self::Adpcm,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -555,7 +555,7 @@ impl From<ContainerKind> for FfiContainerKind {
             ContainerKind::Ogg => Self::Ogg,
             ContainerKind::Caf => Self::Caf,
             ContainerKind::Mkv => Self::Mkv,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -575,7 +575,7 @@ impl From<DecoderBackend> for FfiDecoderBackend {
             DecoderBackend::Symphonia => Self::Symphonia,
             DecoderBackend::Apple => Self::Apple,
             DecoderBackend::Android => Self::Android,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -601,7 +601,7 @@ impl From<DecoderChangeCause> for FfiDecoderChangeCause {
             DecoderChangeCause::SeekRecreate => Self::SeekRecreate,
             DecoderChangeCause::Recovery => Self::Recovery,
             DecoderChangeCause::HostRateChange => Self::HostRateChange,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -621,7 +621,7 @@ impl From<DecodeErrorClass> for FfiDecodeErrorClass {
             DecodeErrorClass::Interrupted => Self::Interrupted,
             DecodeErrorClass::VariantChange => Self::VariantChange,
             DecodeErrorClass::Other => Self::Other,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -661,7 +661,7 @@ impl From<DecodeErrorKind> for FfiDecodeErrorKind {
             DecodeErrorKind::BackendStatus => Self::BackendStatus,
             DecodeErrorKind::Interrupted => Self::Interrupted,
             DecodeErrorKind::Backend => Self::Backend,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -679,7 +679,7 @@ impl From<FrameDomain> for FfiFrameDomain {
         match value {
             FrameDomain::Source => Self::Source,
             FrameDomain::Output => Self::Output,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }
@@ -701,7 +701,7 @@ impl From<ResamplerKind> for FfiResamplerKind {
             ResamplerKind::Apple => Self::Apple,
             ResamplerKind::Glide => Self::Glide,
             ResamplerKind::None => Self::None,
-            _ => Self::Unknown, // Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
+            _ => Self::Unknown, // WHY: Honest catch-all: an unrecognized upstream #[non_exhaustive] variant maps to Unknown, never to a wrong concrete label.
         }
     }
 }

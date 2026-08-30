@@ -9,8 +9,8 @@ use crate::{
 #[derive(Builder)]
 pub(crate) struct Wave<'a> {
     pub(crate) badge: Option<InternId>,
-    pub(crate) style: WaveStyle,
     pub(crate) zoom: Option<&'a Binding>,
+    pub(crate) style: WaveStyle,
 }
 
 impl Control for Wave<'_> {
@@ -41,10 +41,6 @@ mod host {
     impl Draws for Wave<'_> {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(self.style, skin)
-        }
-
         /// A deck with no track loaded still draws its wave: an empty shape in
         /// the frame, and — on the hero wave — the panel saying so.
         fn data(&self, read: Reading<'_>) -> Option<Drawn> {
@@ -56,6 +52,10 @@ mod host {
                 &read.ctx,
                 read.scope,
             ))
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.style, skin)
         }
 
         #[cfg(feature = "masonry")]

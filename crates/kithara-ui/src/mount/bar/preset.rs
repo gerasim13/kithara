@@ -40,10 +40,6 @@ mod host {
     impl Draws for Preset {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<PresetData> {
             Some(Self::snapshot(read.ctx))
         }
@@ -56,6 +52,10 @@ mod host {
 
         fn index_event(&self) -> Option<IndexEvent<PresetData>> {
             Some(select)
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
 
         #[cfg(feature = "masonry")]
@@ -72,7 +72,7 @@ mod host {
         pub(crate) fn snapshot(ctx: Ctx<'_, '_>) -> PresetData {
             let items = &ITEMS;
             let active = active(items, ctx);
-            PresetData { active, items }
+            PresetData { items, active }
         }
     }
 

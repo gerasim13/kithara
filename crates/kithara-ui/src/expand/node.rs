@@ -419,9 +419,6 @@ impl ControlSpec {
     pub(crate) const fn paints_every_frame(&self) -> bool {
         match self {
             Self::Vis => true,
-            // A custom widget is not here either: it owns its state, so the
-            // only honest account of when it moves is the `Repaint` it declares
-            // per frame, which the leaf already asks for.
             Self::Shader(_)
             | Self::Custom { .. }
             | Self::Bpm { .. }
@@ -475,6 +472,9 @@ impl ControlSpec {
 /// accounts of when a document moves.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Unprompted {
+    /// Something here draws a new picture every frame of its own accord, with
+    /// no endpoint and no input involved.
+    pub(crate) continuous: bool,
     /// Something here is placed by an endpoint rather than by the document
     /// alone, so re-reading the endpoints can move a tree already mounted.
     ///
@@ -483,9 +483,6 @@ pub(crate) struct Unprompted {
     /// the object, both leave it exactly where the document wrote it. A host
     /// asks this to do no pose work on a page that cannot move.
     pub(crate) driven: bool,
-    /// Something here draws a new picture every frame of its own accord, with
-    /// no endpoint and no input involved.
-    pub(crate) continuous: bool,
 }
 
 impl Unprompted {
@@ -494,15 +491,15 @@ impl Unprompted {
         continuous: false,
     };
 
+    fn of(nodes: &[ExpandedNode]) -> Self {
+        nodes.iter().map(motion_of).fold(Self::default(), Self::or)
+    }
+
     pub(crate) fn or(self, other: Self) -> Self {
         Self {
             driven: self.driven || other.driven,
             continuous: self.continuous || other.continuous,
         }
-    }
-
-    fn of(nodes: &[ExpandedNode]) -> Self {
-        nodes.iter().map(motion_of).fold(Self::default(), Self::or)
     }
 }
 
@@ -535,8 +532,6 @@ pub(crate) fn motion_of(node: &ExpandedNode) -> Unprompted {
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Reveal { child, .. }
         | ExpandedNode::Scroll { child, .. } => motion_of(child),
-        // Which branch stands is settled by the room, so the node moves if any
-        // branch it may draw does.
         ExpandedNode::Adaptive { base, steps, .. } => steps
             .iter()
             .map(|(_, branch)| motion_of(branch))

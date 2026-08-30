@@ -35,21 +35,6 @@ impl SegmentGridView {
         })
     }
 
-    fn stale<T>(&self, given: BeatGridStamp) -> Option<BeatGridQuery<T>> {
-        let expected = self.stamp();
-        (given != expected).then_some(BeatGridQuery::Stale { expected, given })
-    }
-
-    fn missing_position<T>(&self, position: MapPosition) -> BeatGridQuery<T> {
-        match self.state {
-            BeatGridState::Complete => BeatGridQuery::OutsideDomain,
-            BeatGridState::Building | BeatGridState::Live => BeatGridQuery::Uncovered {
-                required: self.segments.uncovered_region(position),
-            },
-            BeatGridState::Unavailable(reason) => BeatGridQuery::Unavailable(reason),
-        }
-    }
-
     fn missing_beat<T>(&self, beat: Beat) -> BeatGridQuery<T> {
         match self.state {
             BeatGridState::Complete => BeatGridQuery::OutsideDomain,
@@ -70,45 +55,32 @@ impl SegmentGridView {
         }
     }
 
+    fn missing_position<T>(&self, position: MapPosition) -> BeatGridQuery<T> {
+        match self.state {
+            BeatGridState::Complete => BeatGridQuery::OutsideDomain,
+            BeatGridState::Building | BeatGridState::Live => BeatGridQuery::Uncovered {
+                required: self.segments.uncovered_region(position),
+            },
+            BeatGridState::Unavailable(reason) => BeatGridQuery::Unavailable(reason),
+        }
+    }
+
     fn outside_asset_extent(&self, position: MapPosition) -> bool {
         match (self.axis(), position) {
             (MapAxis::Asset(axis), MapPosition::Asset(frame)) => !axis.contains_or_eof(frame),
             _ => false,
         }
     }
+
+    fn stale<T>(&self, given: BeatGridStamp) -> Option<BeatGridQuery<T>> {
+        let expected = self.stamp();
+        (given != expected).then_some(BeatGridQuery::Stale { expected, given })
+    }
 }
 
 impl BeatGridView for SegmentGridView {
-    fn id(&self) -> BeatGridId {
-        self.id
-    }
-
-    fn revision(&self) -> BeatGridRevision {
-        self.revision
-    }
-
-    fn state(&self) -> BeatGridState {
-        self.state
-    }
-
     fn axis(&self) -> MapAxis {
         self.segments.axis()
-    }
-
-    fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
-        if let Some(stale) = self.stale(position.stamp()) {
-            return stale;
-        }
-        if position.value().kind() != self.axis().kind() {
-            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
-        }
-        if self.outside_asset_extent(*position.value()) {
-            return BeatGridQuery::OutsideDomain;
-        }
-        self.segments.by_position(*position.value()).map_or_else(
-            || self.missing_position(*position.value()),
-            |segment| BeatGridQuery::Resolved(BeatGridRegion::Bounded(segment.region())),
-        )
     }
 
     fn beat_at(
@@ -139,6 +111,28 @@ impl BeatGridView for SegmentGridView {
         ))
     }
 
+    fn id(&self) -> BeatGridId {
+        self.id
+    }
+
+    fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>> {
+        if let Some(stale) = self.stale(beat.stamp()) {
+            return stale;
+        }
+        let Some(segment) = self.segments.by_beat(*beat.value()) else {
+            return self.missing_beat(*beat.value());
+        };
+        let Some((meter, evidence, uncertainty)) = segment.meter_at(*beat.value()) else {
+            return self.missing_meter(segment.region());
+        };
+        BeatGridQuery::Resolved(BeatEstimate::new(
+            meter,
+            evidence,
+            uncertainty,
+            self.stamp(),
+        ))
+    }
+
     fn position_at(
         &self,
         beat: MapPoint<Beat>,
@@ -159,6 +153,30 @@ impl BeatGridView for SegmentGridView {
             uncertainty,
             self.stamp(),
         ))
+    }
+
+    fn region_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatGridRegion> {
+        if let Some(stale) = self.stale(position.stamp()) {
+            return stale;
+        }
+        if position.value().kind() != self.axis().kind() {
+            return BeatGridQuery::Unavailable(BeatGridUnavailable::AxisMismatch);
+        }
+        if self.outside_asset_extent(*position.value()) {
+            return BeatGridQuery::OutsideDomain;
+        }
+        self.segments.by_position(*position.value()).map_or_else(
+            || self.missing_position(*position.value()),
+            |segment| BeatGridQuery::Resolved(BeatGridRegion::Bounded(segment.region())),
+        )
+    }
+
+    fn revision(&self) -> BeatGridRevision {
+        self.revision
+    }
+
+    fn state(&self) -> BeatGridState {
+        self.state
     }
 
     fn tempo_at(
@@ -188,24 +206,6 @@ impl BeatGridView for SegmentGridView {
             self.stamp(),
         ))
     }
-
-    fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>> {
-        if let Some(stale) = self.stale(beat.stamp()) {
-            return stale;
-        }
-        let Some(segment) = self.segments.by_beat(*beat.value()) else {
-            return self.missing_beat(*beat.value());
-        };
-        let Some((meter, evidence, uncertainty)) = segment.meter_at(*beat.value()) else {
-            return self.missing_meter(segment.region());
-        };
-        BeatGridQuery::Resolved(BeatEstimate::new(
-            meter,
-            evidence,
-            uncertainty,
-            self.stamp(),
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -226,10 +226,10 @@ mod tests {
     struct Consts;
 
     impl Consts {
+        const AFTER_EOF_FRAME: f64 = 48_000.5;
+        const EOF_FRAME: f64 = 48_000.0;
         const FRAME_COUNT: u64 = 48_000;
         const SAMPLE_RATE: u32 = 48_000;
-        const EOF_FRAME: f64 = 48_000.0;
-        const AFTER_EOF_FRAME: f64 = 48_000.5;
     }
 
     fn sample_rate() -> NonZeroU32 {

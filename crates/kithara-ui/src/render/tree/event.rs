@@ -152,7 +152,7 @@ mod tests {
             Some("loop_start"),
             Outcome::set(EngineEvent::Scalar(0.14)),
         )
-        .unwrap_or_else(|| panic!("a child scalar emission must publish"));
+        .expect("a child scalar emission must publish");
 
         assert_eq!(
             action.into_inner().0,
@@ -166,7 +166,7 @@ mod tests {
     #[kithara::test]
     fn an_engine_index_emission_binds_to_select_index() {
         let action = engine("cells/beat", None, Outcome::set(EngineEvent::Index(3)))
-            .unwrap_or_else(|| panic!("an index emission must publish"));
+            .expect("an index emission must publish");
 
         assert_eq!(
             action.into_inner().0,
@@ -187,7 +187,7 @@ mod tests {
                 index: 3,
             }),
         )
-        .unwrap_or_else(|| panic!("an item drag must publish through the existing binder"));
+        .expect("an item drag must publish through the existing binder");
 
         assert_eq!(
             action.into_inner().0,
@@ -206,7 +206,7 @@ mod tests {
                 None,
                 Outcome::observed(EngineEvent::Crossing(over)),
             )
-            .unwrap_or_else(|| panic!("a crossing must publish"));
+            .expect("a crossing must publish");
 
             assert_eq!(
                 action.into_inner(),
@@ -225,7 +225,7 @@ mod tests {
     #[kithara::test]
     fn module_header_activation_binds_directly_to_toggle_module() {
         let action = toggle_module("app-deck", Outcome::set(()))
-            .unwrap_or_else(|| panic!("a module-header activation must publish"));
+            .expect("a module-header activation must publish");
 
         assert_eq!(
             action.into_inner().0,

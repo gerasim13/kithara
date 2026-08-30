@@ -3,7 +3,6 @@
 //! receives every `ResourceKey` evicted under its `asset_root`; keys
 //! under a different `asset_root` are not delivered to it; dropping the
 //! returned guard deregisters, so no further keys arrive.
-
 mod support;
 
 use std::num::NonZeroUsize;

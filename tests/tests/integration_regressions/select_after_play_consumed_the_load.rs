@@ -11,7 +11,6 @@
 //!
 //! The engine-start window is a session gate here, so the interleaving is a
 //! rendezvous rather than a timing window.
-
 use std::{fs, path::PathBuf};
 
 use kithara::{

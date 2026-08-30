@@ -62,9 +62,9 @@ pub(super) struct TableState {
 }
 
 pub(super) struct TableSource {
-    columns: Vec<TableColumn>,
     columns_state: Option<(String, String)>,
     rows: Option<String>,
+    columns: Vec<TableColumn>,
 }
 
 #[derive(Clone, Default)]
@@ -162,53 +162,33 @@ impl HostedControlPlan {
 }
 
 impl TreePlan {
+    fn append_targets<'a>(
+        &'a self,
+        bounds: Rect,
+        point: Option<Pt>,
+        engine: &Engine,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        if self.view(engine, point, bounds).is_none() {
+            return;
+        }
+        let picture = self.picture();
+        targets.push(Target::new(
+            &self.search_path,
+            Hit::new(point, picture.search_input_bounds(bounds)),
+        ));
+        targets.push(Target::new(
+            &self.path,
+            Hit::new(point, picture.rows_bounds(bounds)),
+        ));
+    }
+
     pub(crate) fn bind_projection(&self, projection: Weak<dyn TreeProjection>) {
         let _ = self.state.projection.get_or_init(|| projection);
     }
 
     pub(super) fn bind_source(&self, source: TreeSource) {
         let _ = self.state.source.get_or_init(|| source);
-    }
-
-    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
-        let Some(source) = self.state.source.get() else {
-            self.report_missing("tree source");
-            return false;
-        };
-        let skin = self.picture.borrow().skin().clone();
-        let next = source.picture(ctx, &skin);
-        if *self.picture.borrow() == next {
-            return false;
-        }
-        *self.picture.borrow_mut() = next;
-        if let Some(projection) = self.projection() {
-            projection.reconcile();
-        }
-        true
-    }
-
-    pub(crate) fn drawn(&self) -> Option<TreeDrawn> {
-        self.projection()
-            .and_then(|projection| projection.project(self))
-    }
-
-    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
-        self.picture.borrow()
-    }
-
-    pub(crate) fn view(
-        &self,
-        engine: &Engine,
-        point: Option<Pt>,
-        bounds: Rect,
-    ) -> Option<TreeDrawn> {
-        match self.complete_view(engine, point, bounds) {
-            Ok(view) => Some(view),
-            Err(missing) => {
-                self.report_missing(missing.entry);
-                None
-            }
-        }
     }
 
     fn complete_view<'a>(
@@ -233,12 +213,38 @@ impl TreePlan {
         })
     }
 
+    pub(crate) fn drawn(&self) -> Option<TreeDrawn> {
+        self.projection()
+            .and_then(|projection| projection.project(self))
+    }
+
+    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
+        self.picture.borrow()
+    }
+
     fn projection(&self) -> Option<Rc<dyn TreeProjection>> {
         let projection = self.state.projection.get().and_then(Weak::upgrade);
         if projection.is_none() {
             self.report_missing("retained projection");
         }
         projection
+    }
+
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        let Some(source) = self.state.source.get() else {
+            self.report_missing("tree source");
+            return false;
+        };
+        let skin = self.picture.borrow().skin().clone();
+        let next = source.picture(ctx, &skin);
+        if *self.picture.borrow() == next {
+            return false;
+        }
+        *self.picture.borrow_mut() = next;
+        if let Some(projection) = self.projection() {
+            projection.reconcile();
+        }
+        true
     }
 
     fn report_missing(&self, entry: &str) {
@@ -254,6 +260,23 @@ impl TreePlan {
         );
     }
 
+    pub(crate) fn view(
+        &self,
+        engine: &Engine,
+        point: Option<Pt>,
+        bounds: Rect,
+    ) -> Option<TreeDrawn> {
+        match self.complete_view(engine, point, bounds) {
+            Ok(view) => Some(view),
+            Err(missing) => {
+                self.report_missing(missing.entry);
+                None
+            }
+        }
+    }
+}
+
+impl TablePlan {
     fn append_targets<'a>(
         &'a self,
         bounds: Rect,
@@ -261,43 +284,46 @@ impl TreePlan {
         engine: &Engine,
         targets: &mut Vec<Target<'a>>,
     ) {
-        if self.view(engine, point, bounds).is_none() {
+        let Some(view) = self.view(engine, point, bounds) else {
             return;
-        }
+        };
         let picture = self.picture();
-        targets.push(Target::new(
-            &self.search_path,
-            Hit::new(point, picture.search_input_bounds(bounds)),
-        ));
+        let overflows = table_overflows(&view.columns, bounds.w);
+        if overflows {
+            targets.push(Target::new(&self.horizontal_path, Hit::new(point, bounds)));
+        }
         targets.push(Target::new(
             &self.path,
-            Hit::new(point, picture.rows_bounds(bounds)),
+            Hit::new(point, table_body(bounds, picture.skin())),
         ));
-    }
-}
-
-impl TablePlan {
-    #[cfg(test)]
-    pub(crate) fn fixture(
-        path: &str,
-        rows: Vec<TableRowData>,
-        columns: Vec<ColumnLayout>,
-        skin: &Skin,
-    ) -> Self {
-        let declared = columns.iter().map(|column| column.column.clone()).collect();
-        let plan = Self::new(path, rows, columns, skin);
-        plan.bind_source(TableSource::new(declared, None, None));
-        plan
-    }
-
-    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
-        if !self.refresh_picture(ctx) {
-            return false;
+        let row = view.hovered.and_then(|index| {
+            table_visible_row_rect(
+                bounds,
+                &view.columns,
+                picture.rows().len(),
+                index,
+                view.horizontal,
+                view.vertical,
+                picture.skin(),
+            )
+        });
+        match (view.hovered, row) {
+            (Some(index), Some(row)) => {
+                targets.push(Target::item(&self.row_target, Hit::new(point, row), index));
+            }
+            _ => targets.push(Target::new(
+                &self.row_target,
+                Hit::new(point, empty_bounds(bounds)),
+            )),
         }
-        if let Some(projection) = self.projection() {
-            projection.reconcile();
+        for divider in table_dividers(bounds, &view.columns, view.horizontal, picture.skin()) {
+            let divider_path = self.divider_path(&divider.column);
+            let hit = table_visible_divider_hit(bounds, divider.hit)
+                .or_else(|| engine.captures(divider_path).then(|| empty_bounds(bounds)));
+            if let Some(hit) = hit {
+                targets.push(Target::new(divider_path, Hit::new(point, hit)));
+            }
         }
-        true
     }
 
     pub(crate) fn bind_projection(&self, projection: Weak<dyn TableProjection>) {
@@ -306,60 +332,6 @@ impl TablePlan {
 
     pub(super) fn bind_source(&self, source: TableSource) {
         let _ = self.state.source.get_or_init(|| source);
-    }
-
-    fn refresh_picture(&self, ctx: Ctx<'_, '_>) -> bool {
-        let Some(source) = self.state.source.get() else {
-            self.report_missing("track-list source");
-            return false;
-        };
-        let skin = self.picture.borrow().skin().clone();
-        let next = source.picture(ctx, &skin);
-        if *self.picture.borrow() == next {
-            return false;
-        }
-        *self.picture.borrow_mut() = next;
-        true
-    }
-
-    pub(crate) fn drawn(&self) -> Option<Drawn> {
-        self.projection()
-            .and_then(|projection| projection.project(self))
-    }
-
-    pub(crate) fn picture(&self) -> Ref<'_, TableFace> {
-        self.picture.borrow()
-    }
-
-    fn projection(&self) -> Option<Rc<dyn TableProjection>> {
-        let projection = self.state.projection.get().and_then(Weak::upgrade);
-        if projection.is_none() {
-            self.report_missing("retained projection");
-        }
-        projection
-    }
-
-    pub(super) fn report_missing(&self, entry: &str) {
-        let mut reported = self.state.reported_missing.borrow_mut();
-        if reported.iter().any(|candidate| candidate == entry) {
-            return;
-        }
-        reported.push(entry.to_owned());
-        tracing::error!(
-            control_path = self.path,
-            engine_entry = entry,
-            "Table projection is incomplete"
-        );
-    }
-
-    pub(crate) fn view(&self, engine: &Engine, point: Option<Pt>, bounds: Rect) -> Option<Drawn> {
-        match self.complete_view(engine, point, bounds) {
-            Ok(view) => Some(view),
-            Err(missing) => {
-                self.report_missing(missing.entry);
-                None
-            }
-        }
     }
 
     fn complete_view<'a>(
@@ -416,51 +388,79 @@ impl TablePlan {
         })
     }
 
-    fn append_targets<'a>(
-        &'a self,
-        bounds: Rect,
-        point: Option<Pt>,
-        engine: &Engine,
-        targets: &mut Vec<Target<'a>>,
-    ) {
-        let Some(view) = self.view(engine, point, bounds) else {
-            return;
+    pub(crate) fn drawn(&self) -> Option<Drawn> {
+        self.projection()
+            .and_then(|projection| projection.project(self))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        path: &str,
+        rows: Vec<TableRowData>,
+        columns: Vec<ColumnLayout>,
+        skin: &Skin,
+    ) -> Self {
+        let declared = columns.iter().map(|column| column.column.clone()).collect();
+        let plan = Self::new(path, rows, columns, skin);
+        plan.bind_source(TableSource::new(declared, None, None));
+        plan
+    }
+
+    pub(crate) fn picture(&self) -> Ref<'_, TableFace> {
+        self.picture.borrow()
+    }
+
+    fn projection(&self) -> Option<Rc<dyn TableProjection>> {
+        let projection = self.state.projection.get().and_then(Weak::upgrade);
+        if projection.is_none() {
+            self.report_missing("retained projection");
+        }
+        projection
+    }
+
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        if !self.refresh_picture(ctx) {
+            return false;
+        }
+        if let Some(projection) = self.projection() {
+            projection.reconcile();
+        }
+        true
+    }
+
+    fn refresh_picture(&self, ctx: Ctx<'_, '_>) -> bool {
+        let Some(source) = self.state.source.get() else {
+            self.report_missing("track-list source");
+            return false;
         };
-        let picture = self.picture();
-        let overflows = table_overflows(&view.columns, bounds.w);
-        if overflows {
-            targets.push(Target::new(&self.horizontal_path, Hit::new(point, bounds)));
+        let skin = self.picture.borrow().skin().clone();
+        let next = source.picture(ctx, &skin);
+        if *self.picture.borrow() == next {
+            return false;
         }
-        targets.push(Target::new(
-            &self.path,
-            Hit::new(point, table_body(bounds, picture.skin())),
-        ));
-        let row = view.hovered.and_then(|index| {
-            table_visible_row_rect(
-                bounds,
-                &view.columns,
-                picture.rows().len(),
-                index,
-                view.horizontal,
-                view.vertical,
-                picture.skin(),
-            )
-        });
-        match (view.hovered, row) {
-            (Some(index), Some(row)) => {
-                targets.push(Target::item(&self.row_target, Hit::new(point, row), index));
-            }
-            _ => targets.push(Target::new(
-                &self.row_target,
-                Hit::new(point, empty_bounds(bounds)),
-            )),
+        *self.picture.borrow_mut() = next;
+        true
+    }
+
+    pub(super) fn report_missing(&self, entry: &str) {
+        let mut reported = self.state.reported_missing.borrow_mut();
+        if reported.iter().any(|candidate| candidate == entry) {
+            return;
         }
-        for divider in table_dividers(bounds, &view.columns, view.horizontal, picture.skin()) {
-            let divider_path = self.divider_path(&divider.column);
-            let hit = table_visible_divider_hit(bounds, divider.hit)
-                .or_else(|| engine.captures(divider_path).then(|| empty_bounds(bounds)));
-            if let Some(hit) = hit {
-                targets.push(Target::new(divider_path, Hit::new(point, hit)));
+        reported.push(entry.to_owned());
+        tracing::error!(
+            control_path = self.path,
+            engine_entry = entry,
+            "Table projection is incomplete"
+        );
+    }
+
+    pub(crate) fn view(&self, engine: &Engine, point: Option<Pt>, bounds: Rect) -> Option<Drawn> {
+        match self.complete_view(engine, point, bounds) {
+            Ok(view) => Some(view),
+            Err(missing) => {
+                self.report_missing(missing.entry);
+                None
             }
         }
     }

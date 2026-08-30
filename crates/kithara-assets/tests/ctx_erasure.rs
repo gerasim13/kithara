@@ -1,7 +1,6 @@
 //! One non-generic `AssetStore` serves both `ctx = None` (file passthrough) and
 //! `ctx = Some(ProcessCtx)` (per-acquire processing): covers chunk chaining and
 //! per-acquire application of the processor.
-
 mod support;
 
 use std::{

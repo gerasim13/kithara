@@ -161,10 +161,8 @@ impl HlsCoord {
             reader: Some(reader),
         });
         drop(state);
-        // The outgoing look-ahead holds the downloader capacity this slot's
-        // construction needs, and its bytes lie past the cut the transition
-        // latches. Retired after the lock drops: cancellation settles claims,
-        // and those settle paths take variant locks of their own.
+        // WHY: The outgoing look-ahead holds the downloader capacity this slot's construction needs, and its bytes lie past the cut the
+        // transition latches.
         outgoing.retire_lookahead();
         self.signal().wake_peer();
         Ok(Some(transition))

@@ -6,15 +6,15 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct HostLayer<A> {
+    draw: DrawList,
     #[field(get(copy))]
     bounds: Rect,
-    draw: DrawList,
     hits: Vec<LayerHit<A>>,
 }
 
 impl<A> HostLayer<A> {
     pub(crate) const fn new(bounds: Rect, draw: DrawList, hits: Vec<LayerHit<A>>) -> Self {
-        Self { bounds, draw, hits }
+        Self { draw, bounds, hits }
     }
 
     pub(crate) fn handle(&self, input: Input<'_>, pointer: Option<Pt>) -> Outcome<A>
@@ -31,6 +31,13 @@ impl<A> HostLayer<A> {
             .map_or(Outcome::IGNORED, |hit| Outcome::set(*hit.action()))
     }
 
+    fn hit(&self, pointer: Option<Pt>) -> Option<&LayerHit<A>> {
+        self.hits()
+            .iter()
+            .rev()
+            .find(|region| Hit::new(pointer, region.area).over())
+    }
+
     delegate::delegate! {
         to self {
             #[expr($.map_or(CursorShape::None, LayerHit::cursor))]
@@ -41,31 +48,24 @@ impl<A> HostLayer<A> {
             pub(crate) fn action_at(&self, pointer: Option<Pt>) -> Option<&A>;
         }
     }
-
-    fn hit(&self, pointer: Option<Pt>) -> Option<&LayerHit<A>> {
-        self.hits()
-            .iter()
-            .rev()
-            .find(|region| Hit::new(pointer, region.area).over())
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct LayerHit<A> {
-    #[field(get(copy))]
-    area: Rect,
+    action: A,
     #[field(get(copy))]
     cursor: CursorShape,
-    action: A,
+    #[field(get(copy))]
+    area: Rect,
 }
 
 impl<A> LayerHit<A> {
     pub(crate) const fn new(area: Rect, cursor: CursorShape, action: A) -> Self {
         Self {
-            area,
-            cursor,
             action,
+            cursor,
+            area,
         }
     }
 }

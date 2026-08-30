@@ -9,11 +9,79 @@ use crate::interact::{CursorShape, Input, InputMethodRequest, Rect};
 
 #[derive(Default)]
 pub(crate) struct Engine {
-    components: Vec<RetainedComponent>,
     router: Router,
+    components: Vec<RetainedComponent>,
 }
 
 impl Engine {
+    #[cfg(feature = "masonry")]
+    pub(crate) fn clear_focus(&mut self) {
+        self.router.clear_focus(&mut self.components);
+    }
+
+    #[cfg(feature = "masonry")]
+    pub(crate) fn column_divider_value(&self, path: &str) -> Option<f32> {
+        self.components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::ColumnDivider)
+            .and_then(RetainedComponent::column_divider_value)
+    }
+
+    pub(crate) fn cursor(&self, targets: &[Target<'_>]) -> CursorShape {
+        self.router.cursor(&self.components, targets)
+    }
+
+    pub(crate) fn handle(
+        &mut self,
+        input: Input<'_>,
+        targets: &[Target<'_>],
+        now: Instant,
+    ) -> Option<Emission> {
+        self.router
+            .handle(&mut self.components, input, targets, now)
+    }
+
+    pub(crate) fn has_pressed_item(&self) -> bool {
+        self.components
+            .iter()
+            .any(|component| component.pressed_item_index().is_some())
+    }
+
+    pub(crate) fn input_method<'a>(
+        &'a self,
+        targets: &[Target<'_>],
+    ) -> Option<InputMethodRequest<'a>> {
+        let path = self.router.focused_path()?;
+        let component = self
+            .components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::TextInput)?;
+        let area = targets
+            .iter()
+            .find(|target| target.path == path)?
+            .hit
+            .area();
+        component.input_method(area)
+    }
+
+    pub(crate) fn item_pressed(&self, path: &str) -> Option<Option<usize>> {
+        self.components
+            .iter()
+            .find(|component| component.kind() == Kind::Item && component.event_path() == path)
+            .map(RetainedComponent::pressed_item_index)
+    }
+
+    pub(crate) fn picker_snapshot(&self, path: &str) -> Option<PickerSnapshot> {
+        self.components
+            .iter()
+            .find(|component| component.path() == path && component.kind() == Kind::Picker)
+            .and_then(RetainedComponent::picker_snapshot)
+    }
+
+    pub(crate) fn pressed_item_index(&self, path: &str) -> Option<usize> {
+        self.item_pressed(path).flatten()
+    }
+
     pub(crate) fn reconcile(&mut self, descriptors: impl IntoIterator<Item = Descriptor>) {
         let mut retained = std::mem::take(&mut self.components);
         self.components = descriptors
@@ -31,20 +99,6 @@ impl Engine {
         self.router.reconcile(&self.components);
     }
 
-    pub(crate) fn handle(
-        &mut self,
-        input: Input<'_>,
-        targets: &[Target<'_>],
-        now: Instant,
-    ) -> Option<Emission> {
-        self.router
-            .handle(&mut self.components, input, targets, now)
-    }
-
-    pub(crate) fn cursor(&self, targets: &[Target<'_>]) -> CursorShape {
-        self.router.cursor(&self.components, targets)
-    }
-
     pub(crate) fn scroll_offset(&self, path: &str) -> Option<f32> {
         self.components
             .iter()
@@ -52,30 +106,14 @@ impl Engine {
             .and_then(RetainedComponent::scroll_offset)
     }
 
-    #[cfg(feature = "masonry")]
-    pub(crate) fn column_divider_value(&self, path: &str) -> Option<f32> {
-        self.components
-            .iter()
-            .find(|component| component.path() == path && component.kind() == Kind::ColumnDivider)
-            .and_then(RetainedComponent::column_divider_value)
-    }
-
-    pub(crate) fn pressed_item_index(&self, path: &str) -> Option<usize> {
-        self.item_pressed(path).flatten()
-    }
-
-    pub(crate) fn item_pressed(&self, path: &str) -> Option<Option<usize>> {
-        self.components
-            .iter()
-            .find(|component| component.kind() == Kind::Item && component.event_path() == path)
-            .map(RetainedComponent::pressed_item_index)
-    }
-
-    pub(crate) fn picker_snapshot(&self, path: &str) -> Option<PickerSnapshot> {
-        self.components
-            .iter()
-            .find(|component| component.path() == path && component.kind() == Kind::Picker)
-            .and_then(RetainedComponent::picker_snapshot)
+    pub(crate) fn set_scroll_viewport(&mut self, path: &str, area: Rect) {
+        if let Some(component) = self
+            .components
+            .iter_mut()
+            .find(|component| component.path() == path && component.kind() == Kind::Scroll)
+        {
+            component.set_scroll_viewport(area);
+        }
     }
 
     pub(crate) fn text_input_snapshot(&self, path: &str) -> Option<TextInputSnapshot> {
@@ -96,44 +134,6 @@ impl Engine {
                     .map(|snapshot| (component.path().to_owned(), snapshot))
             })
             .collect()
-    }
-
-    pub(crate) fn input_method<'a>(
-        &'a self,
-        targets: &[Target<'_>],
-    ) -> Option<InputMethodRequest<'a>> {
-        let path = self.router.focused_path()?;
-        let component = self
-            .components
-            .iter()
-            .find(|component| component.path() == path && component.kind() == Kind::TextInput)?;
-        let area = targets
-            .iter()
-            .find(|target| target.path == path)?
-            .hit
-            .area();
-        component.input_method(area)
-    }
-
-    pub(crate) fn has_pressed_item(&self) -> bool {
-        self.components
-            .iter()
-            .any(|component| component.pressed_item_index().is_some())
-    }
-
-    pub(crate) fn set_scroll_viewport(&mut self, path: &str, area: Rect) {
-        if let Some(component) = self
-            .components
-            .iter_mut()
-            .find(|component| component.path() == path && component.kind() == Kind::Scroll)
-        {
-            component.set_scroll_viewport(area);
-        }
-    }
-
-    #[cfg(feature = "masonry")]
-    pub(crate) fn clear_focus(&mut self) {
-        self.router.clear_focus(&mut self.components);
     }
 
     delegate::delegate! {
@@ -442,7 +442,7 @@ mod tests {
                 &[target(path, 50.0, 50.0)],
                 Instant::now(),
             )
-            .unwrap_or_else(|| panic!("entering the drop zone must publish"));
+            .expect("entering the drop zone must publish");
         assert_eq!(enter.path, path);
         assert_eq!(enter.child, None);
         assert!(!enter.outcome.is_captured());
@@ -467,7 +467,7 @@ mod tests {
                 &[target(path, 55.0, 50.0)],
                 Instant::now(),
             )
-            .unwrap_or_else(|| panic!("leaving the drop zone must publish"));
+            .expect("leaving the drop zone must publish");
         assert!(!leave.outcome.is_captured());
         assert_eq!(leave.outcome.value(), Some(EngineEvent::Crossing(false)));
         assert!(!engine.captures_pointer());
@@ -509,7 +509,7 @@ mod tests {
                     &[Target::new(path, Hit::new(Some(Pt { x, y: 30.0 }), area))],
                     Instant::now(),
                 )
-                .unwrap_or_else(|| panic!("a segmented press must publish its cell index"));
+                .expect("a segmented press must publish its cell index");
             assert_eq!(emission.outcome.value(), Some(EngineEvent::Index(expected)));
             assert!(!engine.captures_pointer());
         }
@@ -562,7 +562,7 @@ mod tests {
                 &[item_target(target_path, 3, 40.0, 13.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("crossing the threshold must start the row drag"));
+            .expect("crossing the threshold must start the row drag");
 
         assert_eq!(started.path, path);
         assert_eq!(
@@ -580,7 +580,7 @@ mod tests {
                 &[target(target_path, 200.0, 200.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("the row watcher must publish after its hit leaves view"));
+            .expect("the row watcher must publish after its hit leaves view");
         assert_eq!(
             dropped.outcome,
             Outcome::observed(EngineEvent::Drag {
@@ -610,7 +610,7 @@ mod tests {
                 &[item_target(target_path, 2, 10.0, 13.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("a plain row release must publish its index"));
+            .expect("a plain row release must publish its index");
 
         assert_eq!(selected.path, path);
         assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(2)));
@@ -823,7 +823,7 @@ mod tests {
                 &[target(path, 25.0, 50.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("a shifted press must publish the loop start"));
+            .expect("a shifted press must publish the loop start");
         assert_eq!(start.child, Some("loop_start"));
         assert_eq!(start.outcome.value(), Some(EngineEvent::Scalar(0.375)));
         assert!(engine.captures_pointer());
@@ -834,7 +834,7 @@ mod tests {
                 &[target(path, 75.0, 50.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("a shifted drag must publish the loop end"));
+            .expect("a shifted drag must publish the loop end");
         assert_eq!(end.child, Some("loop_end"));
         assert_eq!(end.outcome.value(), Some(EngineEvent::Scalar(0.625)));
         assert!(engine.captures_pointer());
@@ -845,7 +845,7 @@ mod tests {
                 &[target(path, 75.0, 50.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("the loop release must finish the gesture"));
+            .expect("the loop release must finish the gesture");
         assert_eq!(release.child, None);
         assert_eq!(
             release.outcome,
@@ -874,7 +874,7 @@ mod tests {
                 &[target(path, 50.0, 50.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("cancel must release the retained component"));
+            .expect("cancel must release the retained component");
         assert_eq!(
             cancel.outcome,
             Outcome::IGNORED.with_ownership(PointerOwnership::Release)
@@ -955,7 +955,7 @@ mod tests {
                     &[target(path, 50.0, 50.0)],
                     Instant::now(),
                 )
-                .unwrap_or_else(|| panic!("a hero wave wheel must publish zoom"));
+                .expect("a hero wave wheel must publish zoom");
             assert_eq!(emission.child, Some("zoom"));
             assert_eq!(
                 emission.outcome.value(),
@@ -1218,7 +1218,7 @@ mod tests {
                 &[target("outer", 50.0, 50.0), target("inner", 50.0, 50.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("the innermost movable scroll must consume the wheel"));
+            .expect("the innermost movable scroll must consume the wheel");
 
         assert_eq!(emission.path, "inner");
         assert_eq!(emission.outcome, Outcome::captured());
@@ -1244,7 +1244,7 @@ mod tests {
                 ],
                 now,
             )
-            .unwrap_or_else(|| panic!("the outer horizontal scroll must consume the wheel"));
+            .expect("the outer horizontal scroll must consume the wheel");
 
         assert_eq!(emission.path, "table/scroll-x");
         assert_eq!(emission.outcome, Outcome::captured());
@@ -1325,7 +1325,7 @@ mod tests {
                 &[target("outer", 50.0, 50.0), inner],
                 now,
             )
-            .unwrap_or_else(|| panic!("the movable outer scroll must receive the wheel"));
+            .expect("the movable outer scroll must receive the wheel");
 
         assert_eq!(emission.path, "outer");
         assert_eq!(emission.outcome, Outcome::captured());
@@ -1343,7 +1343,7 @@ mod tests {
 
         let down = engine
             .handle(Input::Wheel(Scroll::pixels(-1_000.0)), &[target], now)
-            .unwrap_or_else(|| panic!("the scroll must consume travel to the bottom"));
+            .expect("the scroll must consume travel to the bottom");
         assert_eq!(down.outcome, Outcome::captured());
         assert_eq!(engine.scroll_offset(path), Some(100.0));
 
@@ -1356,7 +1356,7 @@ mod tests {
 
         let up = engine
             .handle(Input::Wheel(Scroll::lines(1.0)), &[target], now)
-            .unwrap_or_else(|| panic!("an upward wheel at the bottom must be consumed"));
+            .expect("an upward wheel at the bottom must be consumed");
         assert_eq!(up.outcome, Outcome::captured());
         assert_eq!(engine.scroll_offset(path), Some(40.0));
     }
@@ -1428,13 +1428,13 @@ mod tests {
 
         let wheel = engine
             .handle(Input::Wheel(Scroll::lines(-1.0)), &[target], now)
-            .unwrap_or_else(|| panic!("the tree must scroll before the row click"));
+            .expect("the tree must scroll before the row click");
         assert_eq!(wheel.outcome, Outcome::captured());
         assert_eq!(wheel.outcome.value(), None);
 
         let click = engine
             .handle(pointer_input(PointerPhase::Down, None), &[target], now)
-            .unwrap_or_else(|| panic!("the visible row must activate"));
+            .expect("the visible row must activate");
         assert_eq!(click.outcome, Outcome::set(EngineEvent::Index(3)));
     }
 
@@ -1523,7 +1523,7 @@ mod tests {
         engine.reconcile([text_input(path, "ab")]);
         let focused = engine
             .handle(pointer_input(PointerPhase::Down, None), &[at_end], now)
-            .unwrap_or_else(|| panic!("pressing the text input must focus it"));
+            .expect("pressing the text input must focus it");
         assert_eq!(
             focused.outcome,
             Outcome::captured().with_ownership(PointerOwnership::Claim)
@@ -1531,11 +1531,11 @@ mod tests {
 
         let moved = engine
             .handle(key_pressed(Key::ArrowLeft), &[at_end], now)
-            .unwrap_or_else(|| panic!("moving the focused caret must be consumed"));
+            .expect("moving the focused caret must be consumed");
         assert_eq!(moved.outcome, Outcome::captured());
         let selected = engine
             .handle(shifted(Key::ArrowLeft), &[at_end], now)
-            .unwrap_or_else(|| panic!("extending the focused selection must be consumed"));
+            .expect("extending the focused selection must be consumed");
         assert_eq!(selected.outcome, Outcome::captured());
         assert_eq!(
             engine.text_input_snapshot(path),
@@ -1550,21 +1550,21 @@ mod tests {
         let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[at_end], now);
         let first = engine
             .handle(typed("x"), &[at_end], now)
-            .unwrap_or_else(|| panic!("ordinary typing must publish the resulting query"));
+            .expect("ordinary typing must publish the resulting query");
         assert_eq!(
             first.outcome,
             Outcome::set(EngineEvent::Text("abx".to_owned()))
         );
         let second = engine
             .handle(typed("y"), &[at_end], now)
-            .unwrap_or_else(|| panic!("each ordinary key must publish the next query"));
+            .expect("each ordinary key must publish the next query");
         assert_eq!(
             second.outcome,
             Outcome::set(EngineEvent::Text("abxy".to_owned()))
         );
         let backspaced = engine
             .handle(key_pressed(Key::Backspace), &[at_end], now)
-            .unwrap_or_else(|| panic!("backspace must edit the current working query"));
+            .expect("backspace must edit the current working query");
         assert_eq!(
             backspaced.outcome,
             Outcome::set(EngineEvent::Text("abx".to_owned()))
@@ -1586,7 +1586,7 @@ mod tests {
 
         let inserted = engine
             .handle(typed("🇦"), &[at_start], now)
-            .unwrap_or_else(|| panic!("typing must publish the merged flag grapheme"));
+            .expect("typing must publish the merged flag grapheme");
         assert_eq!(
             inserted.outcome,
             Outcome::set(EngineEvent::Text("🇦🇧".to_owned()))
@@ -1600,7 +1600,7 @@ mod tests {
 
         let backspaced = engine
             .handle(key_pressed(Key::Backspace), &[at_start], now)
-            .unwrap_or_else(|| panic!("backspace must remove the whole merged grapheme"));
+            .expect("backspace must remove the whole merged grapheme");
         assert_eq!(
             backspaced.outcome,
             Outcome::set(EngineEvent::Text(String::new()))
@@ -1628,15 +1628,15 @@ mod tests {
         ] {
             let preedit = engine
                 .handle(input, &[at_end], now)
-                .unwrap_or_else(|| panic!("preedit changes must be answered"));
+                .expect("preedit changes must be answered");
             assert_eq!(preedit.outcome, Outcome::captured());
         }
         let snapshot = engine
             .text_input_snapshot(path)
-            .unwrap_or_else(|| panic!("composition must remain engine-owned"));
+            .expect("composition must remain engine-owned");
         let preedit = snapshot
             .preedit
-            .unwrap_or_else(|| panic!("the latest preedit must be retained"));
+            .expect("the latest preedit must be retained");
         assert_eq!(preedit.content, "日本");
         assert_eq!(preedit.selection, Some(3..6));
 
@@ -1646,7 +1646,7 @@ mod tests {
                 &[at_end],
                 now,
             )
-            .unwrap_or_else(|| panic!("commit must publish the resulting query"));
+            .expect("commit must publish the resulting query");
         assert_eq!(
             committed.outcome,
             Outcome::set(EngineEvent::Text("ab日".to_owned()))
@@ -1668,14 +1668,14 @@ mod tests {
         let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[first], now);
         let first_caret = engine
             .input_method(&[first])
-            .unwrap_or_else(|| panic!("focused input must enable the input method"))
+            .expect("focused input must enable the input method")
             .caret;
 
         let last = text_target(path, 70.0, 40.0, 20.0);
         let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[last], now);
         let last_caret = engine
             .input_method(&[last])
-            .unwrap_or_else(|| panic!("moving the caret must update its rectangle"))
+            .expect("moving the caret must update its rectangle")
             .caret;
 
         assert_eq!(
@@ -1731,17 +1731,17 @@ mod tests {
 
         let opened = engine
             .handle(pointer_input(PointerPhase::Down, None), &[target], now)
-            .unwrap_or_else(|| panic!("pressing the picker anchor must open it"));
+            .expect("pressing the picker anchor must open it");
         assert_eq!(opened.outcome, Outcome::captured());
         let snapshot = engine
             .picker_snapshot(path)
-            .unwrap_or_else(|| panic!("the picker must expose its retained paint state"));
+            .expect("the picker must expose its retained paint state");
         assert!(snapshot.open);
         assert_eq!(snapshot.highlighted, Some(1));
 
         let navigated = engine
             .handle(key_pressed(Key::ArrowDown), &[], now)
-            .unwrap_or_else(|| panic!("a focused picker must consume arrow navigation"));
+            .expect("a focused picker must consume arrow navigation");
         assert_eq!(navigated.outcome, Outcome::captured());
         assert_eq!(
             engine
@@ -1752,7 +1752,7 @@ mod tests {
 
         let selected = engine
             .handle(key_pressed(Key::Enter), &[], now)
-            .unwrap_or_else(|| panic!("enter must select the highlighted option"));
+            .expect("enter must select the highlighted option");
         assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(2)));
         assert_eq!(
             engine.picker_snapshot(path).map(|snapshot| snapshot.open),
@@ -1762,7 +1762,7 @@ mod tests {
         for expected in [true, false] {
             let toggled = engine
                 .handle(key_pressed(Key::Space), &[], now)
-                .unwrap_or_else(|| panic!("space must toggle a focused picker"));
+                .expect("space must toggle a focused picker");
             assert_eq!(toggled.outcome, Outcome::captured());
             assert_eq!(
                 engine.picker_snapshot(path).map(|snapshot| snapshot.open),
@@ -1788,11 +1788,11 @@ mod tests {
 
         let selected = engine
             .handle(key_pressed(Key::Enter), &[], now)
-            .unwrap_or_else(|| panic!("the first Enter must commit the highlighted option"));
+            .expect("the first Enter must commit the highlighted option");
         assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(0)));
         let repeated = engine
             .handle(key_pressed(Key::Enter), &[], now)
-            .unwrap_or_else(|| panic!("the repeated Enter must remain owned"));
+            .expect("the repeated Enter must remain owned");
         assert_eq!(repeated.outcome, Outcome::captured());
         assert_eq!(
             engine.picker_snapshot(path).map(|snapshot| snapshot.open),
@@ -1815,7 +1815,7 @@ mod tests {
         let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[anchor], now);
         let selected = engine
             .handle(key_pressed(Key::Enter), &[], now)
-            .unwrap_or_else(|| panic!("blur must release retained key-down state"));
+            .expect("blur must release retained key-down state");
         assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(0)));
     }
 
@@ -1932,7 +1932,7 @@ mod tests {
                 &[target(knob, 150.0, 150.0), target(picker, 50.0, 50.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("keyboard focus must route before pointer capture"));
+            .expect("keyboard focus must route before pointer capture");
         assert_eq!(opened.path, picker);
         assert_eq!(opened.outcome, Outcome::captured());
         assert!(engine.captures(knob));
@@ -1945,7 +1945,7 @@ mod tests {
         assert!(!engine.captures_pointer());
         let closed = engine
             .handle(key_pressed(Key::Escape), &[target(picker, 50.0, 50.0)], now)
-            .unwrap_or_else(|| panic!("releasing capture must not change focus"));
+            .expect("releasing capture must not change focus");
         assert_eq!(closed.path, picker);
         assert_eq!(closed.outcome, Outcome::captured());
     }
@@ -1966,7 +1966,7 @@ mod tests {
                 &[option],
                 now,
             )
-            .unwrap_or_else(|| panic!("moving over an open option must be consumed"));
+            .expect("moving over an open option must be consumed");
         assert_eq!(hovered.outcome, Outcome::captured());
         assert_eq!(
             engine
@@ -1977,7 +1977,7 @@ mod tests {
 
         let selected = engine
             .handle(pointer_input(PointerPhase::Down, None), &[option], now)
-            .unwrap_or_else(|| panic!("pressing an open option must select it"));
+            .expect("pressing an open option must select it");
         assert_eq!(selected.outcome, Outcome::set(EngineEvent::Index(3)));
         let _ = engine.handle(pointer_input(PointerPhase::Down, None), &[anchor], now);
         let dismissed = engine
@@ -1986,7 +1986,7 @@ mod tests {
                 &[target(path, 150.0, 150.0)],
                 now,
             )
-            .unwrap_or_else(|| panic!("an outside press must dismiss an open picker"));
+            .expect("an outside press must dismiss an open picker");
         assert_eq!(dismissed.outcome, Outcome::captured());
         assert_eq!(dismissed.outcome.value(), None);
         assert_eq!(
@@ -2058,7 +2058,7 @@ mod tests {
 
         let escaped = engine
             .handle(key_pressed(Key::Escape), &[target], now)
-            .unwrap_or_else(|| panic!("escape must close a focused picker"));
+            .expect("escape must close a focused picker");
         assert_eq!(escaped.outcome, Outcome::captured());
         assert_eq!(escaped.outcome.value(), None);
         assert_eq!(
@@ -2152,7 +2152,7 @@ mod tests {
                 &anchor_targets,
                 now,
             )
-            .unwrap_or_else(|| panic!("the open anchor must route past option misses"));
+            .expect("the open anchor must route past option misses");
         assert_eq!(closed.outcome, Outcome::captured());
         assert_eq!(
             engine.picker_snapshot(path).map(|snapshot| snapshot.open),

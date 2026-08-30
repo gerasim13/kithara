@@ -47,7 +47,7 @@ where
         }
     }
 
-    // Stable address order: two batches sharing players cannot deadlock.
+    // WHY: Stable address order: two batches sharing players cannot deadlock.
     let mut ordered: Vec<&EngineImpl> = inputs.iter().map(|&(engine, _)| engine).collect();
     ordered.sort_by_key(|engine| std::ptr::from_ref(*engine).addr());
     let _guards: Vec<_> = ordered
@@ -88,12 +88,12 @@ mod tests {
     struct ForeignSession;
 
     impl SessionDispatcher for ForeignSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-            Ok(Reply::Ok)
-        }
-
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
+        }
+
+        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+            Ok(Reply::Ok)
         }
     }
 

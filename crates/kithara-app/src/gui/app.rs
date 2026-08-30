@@ -26,23 +26,23 @@ use crate::{
 /// what belongs to no single deck: the highlighted catalog row and the app
 /// window.
 pub(crate) struct Kithara {
-    pub(crate) broadcast: crate::broadcast::Broadcaster,
     /// Needed to build a track source when the catalog loads onto a deck.
     pub(crate) config: AppConfig,
+    /// The compiled UI and its host-owned view state.
+    pub(crate) ui: AppUi,
+    pub(crate) broadcast: crate::broadcast::Broadcaster,
     /// The app's track list; decks load from it.
     pub(crate) catalog: Catalog,
     pub(crate) session: DeckSet,
     pub(crate) decks: Decks,
     /// One EQ topology shared by every deck.
     pub(crate) eq_mode: EqMode,
-    pub(crate) palette: gui::GuiPalette,
 
+    pub(crate) palette: gui::GuiPalette,
     /// The app window; window-chrome commands execute against it.
     pub(crate) window_id: window::Id,
     /// Highlighted catalog row, shared by every deck's load buttons.
     pub(crate) selected_track: Option<usize>,
-    /// The compiled UI and its host-owned view state.
-    pub(crate) ui: AppUi,
 }
 
 /// A non-empty set of deck view-models, addressed by id.
@@ -115,13 +115,23 @@ impl Kithara {
             catalog,
             config,
             ui,
-            eq_mode: EqMode::default(),
             palette,
             window_id,
+            eq_mode: EqMode::default(),
             selected_track: None,
         };
         state.ui.cache.refresh(&state.decks, &state.catalog);
         state
+    }
+
+    /// The window paints no ground of its own: the document lays down the page
+    /// in the shape the skin gives the window, and whatever the shape leaves
+    /// out is the desktop behind it.
+    pub(crate) fn style(_state: &Self, theme: &Theme) -> Style {
+        Style {
+            background_color: Color::TRANSPARENT,
+            text_color: theme.base().text_color,
+        }
     }
 
     /// Time-tick subscription for player state sync plus keyboard. Tick
@@ -138,7 +148,6 @@ impl Kithara {
         subs.push(window::resize_events().map(|(_, size)| Message::WindowResized(size)));
         if cfg.is_keyboard_enabled {
             subs.push(event::listen_with(|e, status, _window| match e {
-                // Only act on what the focused widget left
                 IcedEvent::Keyboard(KeyboardEvent::KeyPressed {
                     ref key, modifiers, ..
                 }) if status == Status::Ignored => subscription::shortcut(key, modifiers),
@@ -151,16 +160,6 @@ impl Kithara {
     /// The dark + gold theme.
     pub(crate) fn theme(&self, _window: window::Id) -> Theme {
         theme::kithara_theme(&self.palette)
-    }
-
-    /// The window paints no ground of its own: the document lays down the page
-    /// in the shape the skin gives the window, and whatever the shape leaves
-    /// out is the desktop behind it.
-    pub(crate) fn style(_state: &Self, theme: &Theme) -> Style {
-        Style {
-            background_color: Color::TRANSPARENT,
-            text_color: theme.base().text_color,
-        }
     }
 
     /// Window title.

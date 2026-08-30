@@ -48,14 +48,13 @@ impl ResumeCursor {
         }
     }
 
-    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
-        self.decode_head
-            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
-            .map(|(_, frame, rate)| (frame, rate))
+    pub(crate) fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
+        self.rendered_source_head =
+            Some((epoch, source_end.frame(), source_end.sample_rate().get()));
     }
 
-    pub(crate) fn rendered_source_head(&self, epoch: u64) -> Option<(u64, u32)> {
-        self.rendered_source_head
+    pub(crate) fn decode_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.decode_head
             .filter(|&(head_epoch, _, _)| head_epoch == epoch)
             .map(|(_, frame, rate)| (frame, rate))
     }
@@ -69,6 +68,12 @@ impl ResumeCursor {
         self.host_rate.load(Ordering::Acquire)
     }
 
+    pub(crate) fn rebase_decode_to_rendered(&mut self, epoch: u64) {
+        self.decode_head = self
+            .rendered_source_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch);
+    }
+
     pub(crate) fn record(&mut self, chunk: &AudioChunk, epoch: u64) {
         self.decode_head = Some((
             epoch,
@@ -80,15 +85,10 @@ impl ResumeCursor {
         ));
     }
 
-    pub(crate) fn commit_source_end(&mut self, source_end: crate::SourceEnd, epoch: u64) {
-        self.rendered_source_head =
-            Some((epoch, source_end.frame(), source_end.sample_rate().get()));
-    }
-
-    pub(crate) fn rebase_decode_to_rendered(&mut self, epoch: u64) {
-        self.decode_head = self
-            .rendered_source_head
-            .filter(|&(head_epoch, _, _)| head_epoch == epoch);
+    pub(crate) fn rendered_source_head(&self, epoch: u64) -> Option<(u64, u32)> {
+        self.rendered_source_head
+            .filter(|&(head_epoch, _, _)| head_epoch == epoch)
+            .map(|(_, frame, rate)| (frame, rate))
     }
 
     pub(crate) fn resume_position(
@@ -137,9 +137,8 @@ impl ResumeCursor {
             .media_info()
             .cloned()
             .or_else(|| ctx.stream.media_info())?;
-        // A route change keeps the container, so the rebuilt demuxer must start
-        // where the container starts — not at the byte the resume time maps to.
-        // Seeking the anchor by time lands past the init and the demuxer never
+        // WHY: A route change keeps the container, so the rebuilt demuxer must start where the container starts - not at the byte the resume
+        // time maps to.
         let offset = if ctx.stream.has_variant_surface() {
             anchor::recreate_offset(
                 ctx.stream,

@@ -2,7 +2,6 @@
 //!
 //! Each test drives one failure branch of `process()` and asserts the matching counter moved, so a
 //! change that reintroduces a log — or drops the signal altogether — fails here.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;

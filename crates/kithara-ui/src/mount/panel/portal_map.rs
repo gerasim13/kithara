@@ -23,10 +23,6 @@ mod host {
     impl Draws for PortalMap {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// A host that reports no map draws nothing: an axis with no tempo on
         /// it would claim a range the host never named.
         fn data(&self, read: Reading<'_>) -> Option<PortalMapData> {
@@ -34,6 +30,10 @@ mod host {
                 Some(ReadValue::PortalMap(view)) => Some((*view).into()),
                 _ => None,
             }
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

@@ -239,6 +239,14 @@ struct ReadyProbe {
 }
 
 impl SourceProbe for ReadyProbe {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.state) as Arc<dyn ByteMap>)
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(u64::try_from(self.state.active_layout().blob.len()).expect("blob length fits u64"))
+    }
+
     fn phase(&self) -> SourcePhase {
         SourcePhase::Ready
     }
@@ -253,14 +261,6 @@ impl SourceProbe for ReadyProbe {
 
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
-    }
-
-    fn len(&self) -> Option<u64> {
-        Some(u64::try_from(self.state.active_layout().blob.len()).expect("blob length fits u64"))
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.state) as Arc<dyn ByteMap>)
     }
 }
 
@@ -289,13 +289,6 @@ impl Source for SpliceSource {
         SourcePhase::Ready
     }
 
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(ReadyProbe {
-            position: Arc::clone(&self.position),
-            state: Arc::clone(&self.state),
-        })
-    }
-
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
     }
@@ -306,6 +299,13 @@ impl Source for SpliceSource {
 
     fn position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(ReadyProbe {
+            position: Arc::clone(&self.position),
+            state: Arc::clone(&self.state),
+        })
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -376,9 +376,9 @@ impl StreamType for SpliceStream {
 struct TestWake;
 
 impl WorkerWake for TestWake {
-    fn wake(&self) {}
-
     fn defer(&self) {}
+
+    fn wake(&self) {}
 }
 
 fn asset_bytes(name: &str) -> Vec<u8> {

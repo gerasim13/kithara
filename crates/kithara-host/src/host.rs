@@ -99,38 +99,76 @@ impl Host {
         #[cfg(target_arch = "wasm32")]
         let dispatcher = crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
         Ok(Self {
-            id: grid_id,
-            owns_session: true,
             root_view,
             dispatcher,
+            id: grid_id,
+            owns_session: true,
             #[cfg(target_arch = "wasm32")]
             remote_routes: Mutex::default(),
         })
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn remote(
-        id: BeatGridId,
-        root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher>,
-    ) -> Self {
-        Self {
-            id,
-            owns_session: false,
-            root_view,
-            dispatcher,
-            remote_routes: Mutex::default(),
+    /// Applies one validated, atomic batch of final player levels.
+    ///
+    /// # Errors
+    /// Returns an error for invalid members, levels, or graph dispatch failure.
+    pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
+    where
+        I: IntoIterator<Item = HostLevel>,
+    {
+        let levels = levels.into_iter().collect();
+        match self
+            .dispatcher
+            .exec_host(HostCmd::ApplyMix { levels })
+            .map_err(PlayError::from)?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for mix update".into(),
+            )),
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
-        (self.id, self.root_view.clone())
+    /// Removes the post-limiter mix tap.
+    ///
+    /// # Errors
+    /// Returns an error when graph dispatch fails.
+    pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::DisableMixTap)
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn register_remote_route(&self, route: Arc<crate::wasm::HostRoute>) {
-        self.remote_routes.lock().push(route);
+    /// Reads the shared output-session ducking mode.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session cannot answer the query.
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
+        match self.dispatcher.exec(Cmd::SessionDucking)? {
+            Reply::SessionDucking(mode) => Ok(mode),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for ducking query".into(),
+            )),
+        }
+    }
+
+    /// Installs the single post-limiter mix tap.
+    ///
+    /// # Errors
+    /// Returns an error when a tap is active or graph dispatch fails.
+    pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::EnableMixTap { writer })
+    }
+
+    fn exec_play_ok(&self, cmd: Cmd) -> Result<(), PlayError> {
+        match self.dispatcher.exec(cmd)? {
+            Reply::Ok => Ok(()),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for session command".into(),
+            )),
+        }
     }
 
     /// Attaches and transfers one fully configured player or decorator into
@@ -154,11 +192,36 @@ impl Host {
         }]);
         require_topology_change(self.dispatcher.transact_current(operations))?;
         Ok(HostOwned {
+            control,
             host_id: self.id,
             id: grid_id,
-            control,
             marker: PhantomData,
         })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn register_remote_route(&self, route: Arc<crate::wasm::HostRoute>) {
+        self.remote_routes.lock().push(route);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn remote(
+        id: BeatGridId,
+        root_view: RootView,
+        dispatcher: Arc<dyn HostDispatcher>,
+    ) -> Self {
+        Self {
+            id,
+            root_view,
+            dispatcher,
+            owns_session: false,
+            remote_routes: Mutex::default(),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
+        (self.id, self.root_view.clone())
     }
 
     /// Closes the lower runtime on the caller thread, then detaches its
@@ -192,28 +255,6 @@ impl Host {
         require_topology_change(self.dispatcher.transact_current(operations))
     }
 
-    /// Applies one validated, atomic batch of final player levels.
-    ///
-    /// # Errors
-    /// Returns an error for invalid members, levels, or graph dispatch failure.
-    pub fn apply_mix<I>(&self, levels: I) -> Result<(), PlayError>
-    where
-        I: IntoIterator<Item = HostLevel>,
-    {
-        let levels = levels.into_iter().collect();
-        match self
-            .dispatcher
-            .exec_host(HostCmd::ApplyMix { levels })
-            .map_err(PlayError::from)?
-        {
-            HostReply::Ok => Ok(()),
-            HostReply::Err(error) => Err(error),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for mix update".into(),
-            )),
-        }
-    }
-
     /// Reads the current output-rate observation without exposing the lower
     /// session handle.
     ///
@@ -229,22 +270,6 @@ impl Host {
         }
     }
 
-    /// Installs the single post-limiter mix tap.
-    ///
-    /// # Errors
-    /// Returns an error when a tap is active or graph dispatch fails.
-    pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::EnableMixTap { writer })
-    }
-
-    /// Removes the post-limiter mix tap.
-    ///
-    /// # Errors
-    /// Returns an error when graph dispatch fails.
-    pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::DisableMixTap)
-    }
-
     /// Updates the shared output-session ducking mode.
     ///
     /// # Errors
@@ -252,31 +277,6 @@ impl Host {
     #[cfg(any(test, feature = "probe"))]
     pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::SetSessionDucking { mode })
-    }
-
-    /// Reads the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn ducking_mode(&self) -> Result<SessionDuckingMode, PlayError> {
-        match self.dispatcher.exec(Cmd::SessionDucking)? {
-            Reply::SessionDucking(mode) => Ok(mode),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for ducking query".into(),
-            )),
-        }
-    }
-
-    fn exec_play_ok(&self, cmd: Cmd) -> Result<(), PlayError> {
-        match self.dispatcher.exec(cmd)? {
-            Reply::Ok => Ok(()),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for session command".into(),
-            )),
-        }
     }
 }
 

@@ -2,7 +2,6 @@
 //! WAV end to end through the production `TrackAnalysisRunner` (resource
 //! open + shared analysis-worker thread) and assert the source-analysis
 //! contract.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;

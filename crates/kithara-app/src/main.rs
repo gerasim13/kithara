@@ -26,14 +26,6 @@ use kithara_worker::{RayonConfig, Worker, WorkerConfig};
 #[derive(Parser)]
 #[command(name = "kithara", about = "Audio player")]
 struct Args {
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
-
-    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
-    /// Enabled by default during testing phase.
-    #[arg(long, default_value_t = true)]
-    insecure: bool,
-
     /// Which host draws the studio. A build without the `masonry` feature has
     /// only the immediate one.
     #[arg(long, value_enum, default_value_t)]
@@ -43,6 +35,14 @@ struct Args {
     /// beside the executable.
     #[arg(long)]
     ui_package: Option<std::path::PathBuf>,
+
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
+
+    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
+    /// Enabled by default during testing phase.
+    #[arg(long, default_value_t = true)]
+    insecure: bool,
 }
 
 /// Where a release lays its UI documents out: beside the executable.
@@ -74,9 +74,6 @@ fn main() -> AppResult {
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
-    // App master root held for the whole process: it goes into `AppConfig` and
-    // every subsystem derives from `shutdown.child()`, so a frontend
-    // `config.shutdown.cancel()` propagates through the whole app subtree.
     let shutdown = CancelToken::root();
     let region = Region::default();
     let byte_pool = region.byte_pool();

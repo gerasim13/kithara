@@ -18,9 +18,9 @@ pub(super) struct ReadinessGate {
 impl ReadinessGate {
     pub(super) fn new(initial: bool, poll_interval: Duration) -> Self {
         Self {
+            poll_interval,
             gate: CondvarGate::new(initial),
             failed: AtomicBool::new(false),
-            poll_interval,
         }
     }
 

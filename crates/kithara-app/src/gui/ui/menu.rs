@@ -2,12 +2,12 @@
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(in crate::gui) struct MenuState {
-    #[field(get = is_open, vis = "pub(in crate::gui)", copy)]
-    open: bool,
     #[field(get = are_layouts_open, vis = "pub(in crate::gui)", copy)]
     layouts_open: bool,
     #[field(get = are_modules_open, vis = "pub(in crate::gui)", copy)]
     modules_open: bool,
+    #[field(get = is_open, vis = "pub(in crate::gui)", copy)]
+    open: bool,
 }
 
 impl MenuState {

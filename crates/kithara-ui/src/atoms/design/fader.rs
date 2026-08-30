@@ -13,22 +13,22 @@ use crate::{
 /// or a speaker icon beside a segmented volume strip.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Fader {
+    metrics: FaderSkin,
+    style: FaderStyle,
     accent: Rgba,
     background: Rgba,
     handle: Rgba,
     handle_border: Rgba,
-    icon: char,
     icon_color: Rgba,
     label_color: Rgba,
-    label_role: TextRoleSkin,
     lit: Rgba,
-    metrics: FaderSkin,
     panel: Rgba,
     rail_border: Rgba,
     segment_dim: Rgba,
     strip_border: Rgba,
-    style: FaderStyle,
     ticks: Rgba,
+    label_role: TextRoleSkin,
+    icon: char,
 }
 
 impl Fader {
@@ -51,32 +51,6 @@ impl Fader {
             strip_border: skin.rgba(metrics.strip_frame.border),
             style,
             ticks: skin.rgba(metrics.tick_color),
-        }
-    }
-
-    pub(crate) fn paint(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        value: f32,
-        label: Option<&str>,
-        bounds: Rect,
-    ) {
-        list.fill_rect(bounds, self.panel);
-        let value = value.clamp(0.0, 1.0);
-        let rail = self.rail(bounds, label.is_some());
-        match self.style {
-            FaderStyle::Default => {
-                if let Some(label) = label {
-                    self.caption(list, text, label, bounds);
-                }
-                self.paint_ticks(list, rail);
-                self.paint_rail(list, value, rail);
-            }
-            FaderStyle::Volume => {
-                self.paint_icon(list, text, bounds);
-                self.paint_strip(list, value, rail);
-            }
         }
     }
 
@@ -113,6 +87,32 @@ impl Fader {
         list.clip(band, caption.finish());
     }
 
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        value: f32,
+        label: Option<&str>,
+        bounds: Rect,
+    ) {
+        list.fill_rect(bounds, self.panel);
+        let value = value.clamp(0.0, 1.0);
+        let rail = self.rail(bounds, label.is_some());
+        match self.style {
+            FaderStyle::Default => {
+                if let Some(label) = label {
+                    self.caption(list, text, label, bounds);
+                }
+                self.paint_ticks(list, rail);
+                self.paint_rail(list, value, rail);
+            }
+            FaderStyle::Volume => {
+                self.paint_icon(list, text, bounds);
+                self.paint_strip(list, value, rail);
+            }
+        }
+    }
+
     fn paint_icon(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
         let metrics = self.metrics;
         let glyph = self.icon.to_string();
@@ -126,29 +126,6 @@ impl Fader {
             }),
             self.icon_color,
         );
-    }
-
-    /// The tick row sits under the rail, filling the band the rail is centred
-    /// in, so the two share one left edge.
-    fn paint_ticks(&self, list: &mut DrawListBuilder, rail: Rect) {
-        let metrics = self.metrics;
-        if metrics.tick_step <= 0.0 {
-            return;
-        }
-        let y = rail.y + (metrics.ticks_height - metrics.tick_height).max(0.0);
-        let mut x = 0.0;
-        while x <= rail.w {
-            list.fill_rect(
-                Rect {
-                    h: metrics.tick_height,
-                    w: metrics.tick_width,
-                    x: rail.x + x,
-                    y,
-                },
-                self.ticks,
-            );
-            x += metrics.tick_step;
-        }
     }
 
     /// Just the rail and its handle, for a host that placed the box itself.
@@ -217,10 +194,10 @@ impl Fader {
             let ordinal = AsPrimitive::<f32>::as_(index);
             list.fill_rect(
                 Rect {
+                    y,
                     h: height,
                     w: width,
                     x: strip.x + metrics.strip_padding + ordinal * (width + metrics.segment_gap),
-                    y,
                 },
                 if ordinal < lit {
                     self.lit
@@ -230,6 +207,29 @@ impl Fader {
             );
         }
         border(list, strip, metrics.strip_frame, self.strip_border);
+    }
+
+    /// The tick row sits under the rail, filling the band the rail is centred
+    /// in, so the two share one left edge.
+    fn paint_ticks(&self, list: &mut DrawListBuilder, rail: Rect) {
+        let metrics = self.metrics;
+        if metrics.tick_step <= 0.0 {
+            return;
+        }
+        let y = rail.y + (metrics.ticks_height - metrics.tick_height).max(0.0);
+        let mut x = 0.0;
+        while x <= rail.w {
+            list.fill_rect(
+                Rect {
+                    y,
+                    h: metrics.tick_height,
+                    w: metrics.tick_width,
+                    x: rail.x + x,
+                },
+                self.ticks,
+            );
+            x += metrics.tick_step;
+        }
     }
 }
 
@@ -354,7 +354,7 @@ mod tests {
                 } if rect.h == skin.fader.rail_width => Some(*color),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("the fader must draw its rail"))
+            .expect("the fader must draw its rail")
     }
 
     #[kithara::test]

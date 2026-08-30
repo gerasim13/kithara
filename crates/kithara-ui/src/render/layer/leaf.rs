@@ -30,29 +30,6 @@ impl<P> IcedWidget<UiEvent, Theme, Renderer> for WindowLayerLeaf<P>
 where
     P: WindowLayerProgram,
 {
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<(P::State, Option<PointerId>)>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new((P::State::default(), None::<PointerId>))
-    }
-
-    fn size(&self) -> Size<Length> {
-        let size = self.program.size();
-        Size::new(iced_length(size.width), iced_length(size.height))
-    }
-
-    fn layout(
-        &mut self,
-        _tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let size = self.size();
-        layout::Node::new(limits.resolve(size.width, size.height, Size::ZERO))
-    }
-
     fn draw(
         &self,
         _tree: &Tree,
@@ -63,6 +40,16 @@ where
         _cursor: mouse::Cursor,
         _viewport: &Rectangle,
     ) {
+    }
+
+    fn layout(
+        &mut self,
+        _tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let size = self.size();
+        layout::Node::new(limits.resolve(size.width, size.height, Size::ZERO))
     }
 
     fn overlay<'a>(
@@ -76,11 +63,24 @@ where
         let state = tree.state.downcast_mut::<(P::State, Option<PointerId>)>();
         let (state, pointer_owner) = state;
         Some(overlay::Element::new(Box::new(WindowLayerOverlay {
-            bounds: (layout.bounds() + translation).into(),
             pointer_owner,
-            program: &self.program,
             state,
+            bounds: (layout.bounds() + translation).into(),
+            program: &self.program,
         })))
+    }
+
+    fn size(&self) -> Size<Length> {
+        let size = self.program.size();
+        Size::new(iced_length(size.width), iced_length(size.height))
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new((P::State::default(), None::<PointerId>))
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<(P::State, Option<PointerId>)>()
     }
 }
 
@@ -97,19 +97,48 @@ struct WindowLayerOverlay<'a, P>
 where
     P: WindowLayerProgram,
 {
-    bounds: Rect,
     pointer_owner: &'a mut Option<PointerId>,
     program: &'a P,
     state: &'a mut P::State,
+    bounds: Rect,
 }
 
 impl<P> overlay::Overlay<UiEvent, Theme, Renderer> for WindowLayerOverlay<'_, P>
 where
     P: WindowLayerProgram,
 {
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        _theme: &Theme,
+        _style: &renderer::Style,
+        _layout: Layout<'_>,
+        pointer: mouse::Cursor,
+    ) {
+        let layer = self
+            .program
+            .layer(self.state, self.bounds, pointer.position().map(Into::into));
+        if let Some(resources) = self.program.resources() {
+            draw_host_layer(renderer, &layer, resources);
+        }
+    }
+
     fn layout(&mut self, _renderer: &Renderer, _bounds: Size) -> layout::Node {
         layout::Node::new(Size::new(self.bounds.w, self.bounds.h))
             .move_to(Point::new(self.bounds.x, self.bounds.y))
+    }
+
+    fn mouse_interaction(
+        &self,
+        _layout: Layout<'_>,
+        pointer: mouse::Cursor,
+        _renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let pointer = pointer.position().map(Into::into);
+        self.program
+            .hit_layer(self.state, self.bounds)
+            .cursor_at(pointer)
+            .into()
     }
 
     fn update(
@@ -175,35 +204,6 @@ where
             shell.capture_event();
         }
     }
-
-    fn mouse_interaction(
-        &self,
-        _layout: Layout<'_>,
-        pointer: mouse::Cursor,
-        _renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let pointer = pointer.position().map(Into::into);
-        self.program
-            .hit_layer(self.state, self.bounds)
-            .cursor_at(pointer)
-            .into()
-    }
-
-    fn draw(
-        &self,
-        renderer: &mut Renderer,
-        _theme: &Theme,
-        _style: &renderer::Style,
-        _layout: Layout<'_>,
-        pointer: mouse::Cursor,
-    ) {
-        let layer = self
-            .program
-            .layer(self.state, self.bounds, pointer.position().map(Into::into));
-        if let Some(resources) = self.program.resources() {
-            draw_host_layer(renderer, &layer, resources);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -236,10 +236,6 @@ mod tests {
     impl WindowLayerProgram for TestProgram {
         type State = ();
 
-        fn size(&self) -> SolveSize<SolveLength> {
-            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
-        }
-
         fn layer(
             &self,
             _state: &(),
@@ -260,16 +256,16 @@ mod tests {
         fn resources(&self) -> Option<&TextResources> {
             Some(&self.resources)
         }
+
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
+        }
     }
 
     struct CaptureProgram;
 
     impl WindowLayerProgram for CaptureProgram {
         type State = ();
-
-        fn size(&self) -> SolveSize<SolveLength> {
-            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
-        }
 
         fn layer(
             &self,
@@ -278,6 +274,14 @@ mod tests {
             _pointer: Option<Pt>,
         ) -> HostLayer<WindowCommand> {
             HostLayer::new(bounds, DrawList::default(), Vec::new())
+        }
+
+        fn resources(&self) -> Option<&TextResources> {
+            None
+        }
+
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fixed(20.0), SolveLength::Fixed(10.0))
         }
 
         fn update(
@@ -304,10 +308,6 @@ mod tests {
                 | PointerPhase::Down => Outcome::IGNORED,
             };
             (outcome, false)
-        }
-
-        fn resources(&self) -> Option<&TextResources> {
-            None
         }
     }
 
@@ -364,7 +364,7 @@ mod tests {
                 &bounds,
                 Vector::ZERO,
             )
-            .unwrap_or_else(|| panic!("a window layer leaf must expose an overlay"));
+            .expect("a window layer leaf must expose an overlay");
         let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
         overlay.as_overlay_mut().update(
             &event,
@@ -407,7 +407,7 @@ mod tests {
                 &bounds,
                 Vector::ZERO,
             )
-            .unwrap_or_else(|| panic!("a window layer leaf must expose an overlay"));
+            .expect("a window layer leaf must expose an overlay");
         let overlay_node = overlay.as_overlay_mut().layout(&renderer, viewport);
         let inside = Cursor::Available(Point::new(5.0, 5.0));
         let outside = Cursor::Available(Point::new(50.0, 30.0));

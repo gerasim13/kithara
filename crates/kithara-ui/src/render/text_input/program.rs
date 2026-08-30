@@ -13,8 +13,8 @@ use crate::{
 };
 
 pub(super) struct InputProgram<'a> {
-    paint: TextInputPaint<'a>,
     path: String,
+    paint: TextInputPaint<'a>,
 }
 
 impl<'a> InputProgram<'a> {
@@ -28,6 +28,29 @@ impl<'a> InputProgram<'a> {
 
 impl canvas::Program<UiEvent> for InputProgram<'_> {
     type State = TextInputState;
+
+    fn draw(
+        &self,
+        state: &TextInputState,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        _cursor: Cursor,
+    ) -> Vec<Geometry> {
+        self.paint.geometry(state.snapshot(), renderer, bounds)
+    }
+
+    fn mouse_interaction(
+        &self,
+        state: &TextInputState,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Interaction {
+        let target = Target::new(&self.path, iced_interact::hit(bounds, cursor));
+        state
+            .engine()
+            .map_or(Interaction::None, |engine| engine.cursor(&[target]).into())
+    }
 
     fn update(
         &self,
@@ -53,29 +76,6 @@ impl canvas::Program<UiEvent> for InputProgram<'_> {
             });
         }
         engine_event(&emission.path, emission.child, emission.outcome)
-    }
-
-    fn draw(
-        &self,
-        state: &TextInputState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: Cursor,
-    ) -> Vec<Geometry> {
-        self.paint.geometry(state.snapshot(), renderer, bounds)
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &TextInputState,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Interaction {
-        let target = Target::new(&self.path, iced_interact::hit(bounds, cursor));
-        state
-            .engine()
-            .map_or(Interaction::None, |engine| engine.cursor(&[target]).into())
     }
 }
 

@@ -52,9 +52,8 @@ impl<D: DriverIo> ResourceCore<D> {
             })
         });
 
-        // How far the available prefix of `range` reaches. Bytes arrive
-        // front-to-back for a sequential fetch, so this advancing means the
-        // wait is making progress (not deadlocked) and the watchdog resets.
+        // WHY: How far the available prefix of `range` reaches. Bytes arrive front-to-back for a sequential fetch, so this advancing means
+        // the wait is making progress (not deadlocked) and the watchdog resets.
         let mut filled_front = range.start;
 
         loop {
@@ -103,8 +102,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 hang_reset!();
             }
 
-            // Park until a readiness transition notifies the gate (bytes,
-            // commit, fail, reactivate, or cancel) — event-driven, no timer.
+            // WHY: Park until a readiness transition notifies the gate (bytes, commit, fail, reactivate, or cancel) - event-driven, no timer.
             let _state = self.inner.gate.wait(state);
         }
     }

@@ -13,24 +13,19 @@ pub trait QueueProbe {
 }
 
 impl QueueProbe for QueueControl {
-    fn complete_load_for_test(&self, id: TrackId, resource: Resource) {
-        self.probe_complete_load(id, resource);
-    }
-
-    fn insert_loaded_for_test(&self, resource: Resource) -> TrackId {
-        self.probe_insert_loaded(resource)
-    }
-
-    fn mark_played_for_test(&self, id: TrackId) {
-        self.probe_mark_played(id);
-    }
-
-    fn register_for_test(&self) -> TrackId {
-        self.probe_register()
-    }
-
-    fn supply_test_resource_for_respawn(&self, id: TrackId, resource: Resource) {
-        self.probe_supply_respawn_resource(id, resource);
+    delegate::delegate! {
+        to self {
+            #[call(probe_complete_load)]
+            fn complete_load_for_test(&self, id: TrackId, resource: Resource);
+            #[call(probe_insert_loaded)]
+            fn insert_loaded_for_test(&self, resource: Resource) -> TrackId;
+            #[call(probe_mark_played)]
+            fn mark_played_for_test(&self, id: TrackId);
+            #[call(probe_register)]
+            fn register_for_test(&self) -> TrackId;
+            #[call(probe_supply_respawn_resource)]
+            fn supply_test_resource_for_respawn(&self, id: TrackId, resource: Resource);
+        }
     }
 }
 

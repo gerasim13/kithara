@@ -32,10 +32,6 @@ mod host {
     impl Draws for Bpm {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// A measured tempo if the analysis found one; otherwise the deck's
         /// position, but only where the document asked for that stand-in. A
         /// deck that asked for neither draws nothing.
@@ -45,6 +41,10 @@ mod host {
             }
             let placeholder = self.placeholder.map(|id| read.ctx.ui.resolve(id));
             (placeholder == Some(ELAPSED)).then(|| Beat::Position(position(read)))
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 

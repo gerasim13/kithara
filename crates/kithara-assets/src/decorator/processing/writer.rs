@@ -72,11 +72,11 @@ pub(super) const DEFAULT_GATE_POLL_INTERVAL: Duration = Duration::from_millis(10
 /// Write handle that processes a resource atomically when it is committed.
 pub struct ProcessedWriter<W> {
     pool: BytePool,
-    chunk_size: usize,
     gate_poll_interval: Duration,
     guard: GateGuard,
     processor: Option<ProcessCtx>,
     inner: W,
+    chunk_size: usize,
 }
 
 impl<W: fmt::Debug> fmt::Debug for ProcessedWriter<W> {
@@ -135,6 +135,12 @@ where
 {
     type Reader = ProcessedReader<W::Reader>;
 
+    fn abandon(mut self) {
+        self.inner.abandon();
+        // WHY: Failing this shared gate would poison readers during generation teardown.
+        self.guard.disarm();
+    }
+
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader>> {
         let needs_processing = self.processor.is_some() && !self.guard.is_ready();
         let actual_len = match (needs_processing, final_len, self.processor.as_ref()) {
@@ -166,14 +172,6 @@ where
     fn fail(mut self, reason: String) {
         self.inner.fail(reason);
         self.guard.fail();
-        self.guard.disarm();
-    }
-
-    fn abandon(mut self) {
-        self.inner.abandon();
-        // Disarm without failing: the readiness gate is shared with readers of
-        // this generation, and the cancel that brought us here is tearing that
-        // generation down. Failing it would reach the successor's readers.
         self.guard.disarm();
     }
 

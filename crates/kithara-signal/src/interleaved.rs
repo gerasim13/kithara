@@ -6,9 +6,9 @@ use crate::{AudioSpec, FrameCount, SignalError};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct InterleavedView<'a> {
-    frames: FrameCount,
     samples: &'a [f32],
     spec: AudioSpec,
+    frames: FrameCount,
 }
 
 impl<'a> InterleavedView<'a> {
@@ -30,63 +30,10 @@ impl<'a> InterleavedView<'a> {
             });
         }
         Ok(Self {
-            frames,
             samples,
             spec,
+            frames,
         })
-    }
-
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
-    #[must_use]
-    pub const fn frames(&self) -> FrameCount {
-        self.frames
-    }
-
-    #[must_use]
-    pub const fn samples(&self) -> &'a [f32] {
-        self.samples
-    }
-
-    /// Select a relative frame range.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when `range` exceeds this view.
-    pub fn range(self, range: Range<usize>) -> Result<Self, SignalError> {
-        let available = self.frames.get();
-        if range.start > range.end || range.end > available {
-            return Err(SignalError::FrameRange {
-                start: range.start,
-                end: range.end,
-                frames: available,
-            });
-        }
-        let channels = self.spec.channel_count()?.get();
-        let sample_start =
-            range
-                .start
-                .checked_mul(channels)
-                .ok_or(SignalError::SampleCountOverflow {
-                    frames: range.start,
-                    channels,
-                })?;
-        let sample_end =
-            range
-                .end
-                .checked_mul(channels)
-                .ok_or(SignalError::SampleCountOverflow {
-                    frames: range.end,
-                    channels,
-                })?;
-        Self::new(
-            &self.samples[sample_start..sample_end],
-            self.spec,
-            FrameCount::new(range.end - range.start),
-        )
     }
 
     /// Deinterleave into caller-owned channel slices without allocating metadata.
@@ -122,6 +69,59 @@ impl<'a> InterleavedView<'a> {
         }
         fast_interleave::deinterleave_variable(self.samples, channel_count, output, 0..required);
         Ok(())
+    }
+
+    #[must_use]
+    pub const fn frames(&self) -> FrameCount {
+        self.frames
+    }
+
+    /// Select a relative frame range.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when `range` exceeds this view.
+    pub fn range(self, range: Range<usize>) -> Result<Self, SignalError> {
+        let available = self.frames.get();
+        if range.start > range.end || range.end > available {
+            return Err(SignalError::FrameRange {
+                start: range.start,
+                end: range.end,
+                frames: available,
+            });
+        }
+        let channels = self.spec.channel_count()?.get();
+        let sample_start =
+            range
+                .start
+                .checked_mul(channels)
+                .ok_or(SignalError::SampleCountOverflow {
+                    channels,
+                    frames: range.start,
+                })?;
+        let sample_end =
+            range
+                .end
+                .checked_mul(channels)
+                .ok_or(SignalError::SampleCountOverflow {
+                    channels,
+                    frames: range.end,
+                })?;
+        Self::new(
+            &self.samples[sample_start..sample_end],
+            self.spec,
+            FrameCount::new(range.end - range.start),
+        )
+    }
+
+    #[must_use]
+    pub const fn samples(&self) -> &'a [f32] {
+        self.samples
+    }
+
+    #[must_use]
+    pub const fn spec(&self) -> AudioSpec {
+        self.spec
     }
 }
 

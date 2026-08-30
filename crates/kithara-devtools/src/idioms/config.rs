@@ -91,14 +91,14 @@ pub(crate) enum DerivableSeverity {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableGetterConfig {
+    #[serde(default)]
+    pub(crate) severity: DerivableSeverity,
     #[serde(default = "default_blocking_impl_attrs")]
     pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_qualified_deref_remaps")]
     pub(crate) qualified_deref_remaps: Vec<QualifiedDerefRemap>,
     #[serde(default = "default_true")]
     pub(crate) enabled: bool,
-    #[serde(default)]
-    pub(crate) severity: DerivableSeverity,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,6 +129,8 @@ impl Default for DerivableGetterConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DerivableDelegationConfig {
+    #[serde(default)]
+    pub(crate) severity: DerivableSeverity,
     #[serde(default = "default_blocking_impl_attrs")]
     pub(crate) blocking_impl_attrs: Vec<String>,
     #[serde(default = "default_keep_manual_method_attrs")]
@@ -137,8 +139,6 @@ pub(crate) struct DerivableDelegationConfig {
     pub(crate) enabled: bool,
     #[serde(default = "default_inherent_delegation_methods")]
     pub(crate) inherent_min_methods: usize,
-    #[serde(default)]
-    pub(crate) severity: DerivableSeverity,
     #[serde(default = "default_trait_delegation_methods")]
     pub(crate) trait_min_methods: usize,
 }

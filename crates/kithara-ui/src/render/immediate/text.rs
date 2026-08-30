@@ -24,12 +24,12 @@ pub(crate) struct Text<'value, 'data, 'skin> {
     skin: &'skin Skin,
     active_color: Option<ColorRole>,
     color: Option<ColorRole>,
+    font: Option<FontFamily>,
     label: Option<&'data str>,
     value: Option<&'value ReadValue<'data>>,
+    weight: Option<FontWeight>,
     style: TextStyle,
     active: bool,
-    font: Option<FontFamily>,
-    weight: Option<FontWeight>,
 }
 
 impl<'a, 'value, 'data, 'skin> Widget<'a> for Text<'value, 'data, 'skin>
@@ -66,10 +66,10 @@ where
 }
 
 struct Painted<'skin> {
-    content: String,
-    padding_x: f32,
-    role: TextRoleSkin,
     skin: &'skin Skin,
+    content: String,
+    role: TextRoleSkin,
+    padding_x: f32,
 }
 
 /// Everything a paragraph's picture is a function of: the words, the role they
@@ -85,11 +85,11 @@ struct Painted<'skin> {
 /// not copy them to find out that they did not.
 #[derive(PartialEq)]
 struct TextKey<Content> {
+    content: Content,
     bounds: Rect,
     colour: Rgba,
-    content: Content,
-    padding_x: f32,
     role: TextRoleSkin,
+    padding_x: f32,
 }
 
 /// The key a paragraph keeps between frames.
@@ -155,31 +155,6 @@ impl Painted<'_> {
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Shrink, Length::Fill)
-    }
-
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PaintState<Words>>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PaintState::<Words>::default())
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let state = tree.state.downcast_mut::<PaintState<Words>>();
-        let (width, height) = state.shaped(self.skin.text_resources(), |text| {
-            TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
-        });
-        layout::Node::new(limits.resolve(Length::Shrink, Length::Fill, Size::new(width, height)))
-    }
-
     /// Words are drawn as outlines through the canvas, so tessellating them is
     /// the most expensive thing on a page of prose. The list a paragraph draws
     /// is kept and the geometry behind it reused, exactly as a painted control
@@ -215,6 +190,31 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
             |_| Rectangle::with_size(bounds.size()),
             self.skin.text_resources(),
         );
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let state = tree.state.downcast_mut::<PaintState<Words>>();
+        let (width, height) = state.shaped(self.skin.text_resources(), |text| {
+            TextAtom::new(&self.content, self.role, self.padding_x, self.skin).measure(text)
+        });
+        layout::Node::new(limits.resolve(Length::Shrink, Length::Fill, Size::new(width, height)))
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Shrink, Length::Fill)
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(PaintState::<Words>::default())
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<PaintState<Words>>()
     }
 }
 

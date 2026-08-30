@@ -12,8 +12,8 @@ use crate::{
 pub(crate) struct BungeeElastic {
     capabilities: ElasticCapabilities,
     core: StreamCore,
-    pitch: f64,
     tail_armed: bool,
+    pitch: f64,
 }
 
 impl BungeeElastic {
@@ -61,6 +61,27 @@ impl fmt::Debug for BungeeElastic {
 }
 
 impl ElasticEngine for BungeeElastic {
+    fn capabilities(&self) -> ElasticCapabilities {
+        self.capabilities
+    }
+
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
+        if !self.tail_armed {
+            return Ok(ElasticDrain::new(0, true));
+        }
+        let tail_frames = self.capabilities.terminal_chunk_frames();
+        let expected = self.capabilities.samples(tail_frames)?;
+        if output.len() != expected {
+            return Err(ElasticError::OutputSampleCount {
+                expected,
+                actual: output.len(),
+            });
+        }
+        let chunk = self.core.terminal_tail(output, tail_frames)?;
+        self.tail_armed = !chunk.complete();
+        Ok(chunk)
+    }
+
     fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
         let mut core = StreamCore::new(&config, config.max_source_frames())?;
         let latency = Self::latency(&mut core, &config)?;
@@ -92,10 +113,6 @@ impl ElasticEngine for BungeeElastic {
             pitch: 1.0,
             tail_armed: false,
         })
-    }
-
-    fn capabilities(&self) -> ElasticCapabilities {
-        self.capabilities
     }
 
     fn prime(
@@ -140,32 +157,15 @@ impl ElasticEngine for BungeeElastic {
         Ok(())
     }
 
-    fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
-        self.pitch =
-            f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
-        Ok(())
-    }
-
-    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
-        if !self.tail_armed {
-            return Ok(ElasticDrain::new(0, true));
-        }
-        let tail_frames = self.capabilities.terminal_chunk_frames();
-        let expected = self.capabilities.samples(tail_frames)?;
-        if output.len() != expected {
-            return Err(ElasticError::OutputSampleCount {
-                actual: output.len(),
-                expected,
-            });
-        }
-        let chunk = self.core.terminal_tail(output, tail_frames)?;
-        self.tail_armed = !chunk.complete();
-        Ok(chunk)
-    }
-
     fn reset(&mut self) -> Result<(), ElasticError> {
         self.core.discard()?;
         self.tail_armed = false;
+        Ok(())
+    }
+
+    fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
+        self.pitch =
+            f64::from(PitchScale::checked(scale).ok_or(ElasticError::InvalidPitch(scale))?);
         Ok(())
     }
 }

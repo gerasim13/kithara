@@ -31,8 +31,6 @@ pub(crate) fn placements(node: &CompiledNode, ctx: Ctx<'_, '_>) -> BTreeMap<Inte
     let mut poses = Poses {
         placed: BTreeMap::new(),
     };
-    // This host mounts nothing, so the walk's own output is empty and what it
-    // collected on the way is the answer.
     let () = render(node, ctx, &mut poses);
     poses.placed
 }
@@ -44,19 +42,29 @@ struct Poses {
 impl Host for &mut Poses {
     type Output = ();
 
-    fn split(
+    fn control(
         &mut self,
-        _axis: Axis,
-        _measure: Option<MeasureAxis>,
-        _children: Vec<SplitMount<Self::Output>>,
+        path: InternId,
+        _spec: &ControlSpec,
+        _read: Option<&Binding>,
+        _owner: InputOwner,
+        _size: Option<SizeSpec>,
+        transform: Transform,
     ) {
+        self.placed.insert(path, transform);
     }
+
+    fn group(&mut self, _group: Group<'_>, _children: Vec<GroupMount<Self::Output>>) {}
+
+    fn hosted(&mut self, _node: &ExpandedNode, _child: Self::Output) {}
 
     fn measured(&mut self, _plan: Measured, _branches: Vec<Self::Output>) {}
 
     fn module(&mut self, _module: Module<'_>, _content: Option<Self::Output>) {}
 
-    fn group(&mut self, _group: Group<'_>, _children: Vec<GroupMount<Self::Output>>) {}
+    /// A placement is laid out where its point puts it rather than offset
+    /// from where it stands, so there is no pose here to collect.
+    fn placed(&mut self, _placement: PlacedMount<'_>, _child: Self::Output) {}
 
     /// Poses only what the document shows. A host that mounts a shut surface
     /// anyway keeps its content in the tree, but placing objects nobody can see
@@ -72,31 +80,21 @@ impl Host for &mut Poses {
         }
     }
 
-    /// A placement is laid out where its point puts it rather than offset
-    /// from where it stands, so there is no pose here to collect.
-    fn placed(&mut self, _placement: PlacedMount<'_>, _child: Self::Output) {}
-
     fn pressable(&mut self, _path: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}
 
     fn scroll(&mut self, _id: InternId, _child: Self::Output, _size: Option<SizeSpec>) {}
 
     fn slot(&mut self, _children: Vec<Self::Output>, _size: Option<SizeSpec>) {}
 
-    fn stage(&mut self, _children: Vec<Self::Output>, _size: Option<SizeSpec>) {}
-
-    fn control(
+    fn split(
         &mut self,
-        path: InternId,
-        _spec: &ControlSpec,
-        _read: Option<&Binding>,
-        _owner: InputOwner,
-        _size: Option<SizeSpec>,
-        transform: Transform,
+        _axis: Axis,
+        _measure: Option<MeasureAxis>,
+        _children: Vec<SplitMount<Self::Output>>,
     ) {
-        self.placed.insert(path, transform);
     }
 
-    fn hosted(&mut self, _node: &ExpandedNode, _child: Self::Output) {}
+    fn stage(&mut self, _children: Vec<Self::Output>, _size: Option<SizeSpec>) {}
 
     fn window(&mut self, _content: Self::Output, _carried: Option<&Binding>, _resize_edges: bool) {}
 }

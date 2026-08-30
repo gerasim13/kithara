@@ -16,13 +16,13 @@ use crate::gui::ui::package::Package;
 /// The studio drawn by the retained host into a Vello scene, one mounted
 /// document at a time.
 pub(super) struct Retained<'config> {
+    pub(super) pools: String,
     config: Config<'config>,
     geometry: Geometry,
     off: Offscreen,
     open: Option<(Page, Ui<'config, Fixture>)>,
     package: Rc<Package>,
     pixels: Vec<u8>,
-    pub(super) pools: String,
 }
 
 impl<'config> Retained<'config> {
@@ -50,20 +50,6 @@ impl Stage for Retained<'_> {
         self.geometry
     }
 
-    fn turn(&mut self, page: &Page) -> Result<(), String> {
-        let ui = Ui::new(
-            Fixture::new(page.0, Rc::clone(&self.package)),
-            self.config,
-            (self.geometry.width, self.geometry.height),
-            self.geometry.scale,
-        )
-        .map_err(|error| format!("mount {}: {error}", self.package.document(page.0)))?;
-        self.open = Some((*page, ui));
-        Ok(())
-    }
-
-    fn tick(&mut self) {}
-
     fn shoot(&mut self) -> Result<&[u8], String> {
         let (page, ui) = self
             .open
@@ -74,8 +60,6 @@ impl Stage for Retained<'_> {
             .map_err(|error| format!("draw {page}: {error}"))?;
         let background = ui.background().into();
         let first = ui.draw_pool_stats();
-        // The second frame is drawn for the pools alone: a frame that allocates
-        // again once the pools are warm is the defect this watches for.
         drop(
             ui.render()
                 .map_err(|error| format!("second draw {page}: {error}"))?,
@@ -89,5 +73,19 @@ impl Stage for Retained<'_> {
             .rasterise(&frame, self.geometry.scale, background, &mut self.pixels)?;
         pooled(&mut self.pools, page, &sample)?;
         Ok(&self.pixels)
+    }
+
+    fn tick(&mut self) {}
+
+    fn turn(&mut self, page: &Page) -> Result<(), String> {
+        let ui = Ui::new(
+            Fixture::new(page.0, Rc::clone(&self.package)),
+            self.config,
+            (self.geometry.width, self.geometry.height),
+            self.geometry.scale,
+        )
+        .map_err(|error| format!("mount {}: {error}", self.package.document(page.0)))?;
+        self.open = Some((*page, ui));
+        Ok(())
     }
 }

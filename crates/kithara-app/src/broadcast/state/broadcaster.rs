@@ -10,8 +10,8 @@ use kithara_platform::{
 use super::Packager;
 
 pub(crate) struct Broadcaster<P: Packager> {
-    shutdown: CancelToken,
     pub(super) phase: Phase<P>,
+    shutdown: CancelToken,
     tap_lead: Duration,
 }
 
@@ -29,22 +29,14 @@ impl<P: Packager> Broadcaster<P> {
     pub(crate) const fn new(shutdown: CancelToken, tap_lead: Duration) -> Self {
         Self {
             shutdown,
-            phase: Phase::Off,
             tap_lead,
+            phase: Phase::Off,
         }
     }
 
     pub(crate) fn complete_stop(&mut self) {
         if matches!(self.phase, Phase::Stopping) {
             self.phase = Phase::Off;
-        }
-    }
-
-    pub(crate) fn release(&mut self, host: &Host) {
-        if matches!(self.phase, Phase::Running { .. })
-            && let Err(error) = P::release(host)
-        {
-            tracing::error!(%error, "failed to release broadcast mix tap during shutdown");
         }
     }
 
@@ -78,6 +70,14 @@ impl<P: Packager> Broadcaster<P> {
                 tracing::error!(%error, "broadcast did not start");
                 self.phase = Phase::Off;
             }
+        }
+    }
+
+    pub(crate) fn release(&mut self, host: &Host) {
+        if matches!(self.phase, Phase::Running { .. })
+            && let Err(error) = P::release(host)
+        {
+            tracing::error!(%error, "failed to release broadcast mix tap during shutdown");
         }
     }
 

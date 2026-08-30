@@ -40,9 +40,9 @@ impl Consts {
 /// parses MP4 `udta`/`iTunSMPB` and stamps it into `TrackInfo.gapless`).
 pub(crate) struct AndroidCodec {
     pcm_encoding: AndroidPcmEncoding,
+    spec: AudioSpec,
     track_info: DecoderTrackInfo,
     codec: OwnedCodec,
-    spec: AudioSpec,
 }
 
 impl AndroidCodec {

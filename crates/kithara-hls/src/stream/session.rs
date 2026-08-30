@@ -103,37 +103,6 @@ impl HlsSession {
         }
     }
 
-    delegate::delegate! {
-        to self.cancel {
-            pub(crate) fn abort(&self);
-            /// Retire this session's look-ahead fetches — queued and in
-            /// flight — while keeping the owed window live. Called when an
-            /// incoming variant slot is installed: the capacity those fetches
-            /// hold is what the construction needs, and their bytes lie past
-            /// the cut the transition latches.
-            pub(crate) fn retire_lookahead(&self);
-        }
-        to self.signal {
-            pub(crate) fn arm_peer(&self);
-            /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
-            /// `false`. Call it only with no transition lock held.
-            #[call(wake_peer)]
-            pub(crate) fn wake_peer_for_readiness(&self);
-        }
-        to self.construction_gate {
-            #[call(is_armed)]
-            pub(crate) fn construction_blocking(&self) -> bool;
-            #[call(clone)]
-            pub(crate) fn construction_gate(&self) -> ConstructionGate;
-        }
-        to self.variant {
-            pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
-            #[call(stream_len)]
-            pub(crate) fn len(&self) -> Option<u64>;
-            pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo;
-        }
-    }
-
     fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
             return Err(Error::other("HLS reader session cancelled"));
@@ -179,6 +148,30 @@ impl HlsSession {
         )
     }
 
+    /// Fetches for an incoming session whose reader has not been handed to a
+    /// decoder yet.
+    ///
+    /// Capped at the construction window, because until the transfer the
+    /// session has no reader position to follow and would otherwise queue the
+    /// whole variant against the audible one. The cap ends at the transfer:
+    /// that window is sized to *build* a decoder, not to feed one, and a
+    /// priming decoder that must stage seconds of audio starves behind it —
+    /// its reads stop being served, the staged span stops growing, and the
+    /// outgoing frontier it is chasing walks away for good.
+    pub(crate) fn dispatch_constructing(
+        &self,
+        ctx: &crate::variant::PlanCtx,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let cap = match &self.readiness {
+            SessionReadiness::Active => None,
+            SessionReadiness::Profiled { preparation, .. } => {
+                Some(self.variant.construction_segment_end(&preparation.lock()))
+            }
+        };
+        self.dispatch_capped(ctx, budget, cap)
+    }
+
     /// Fetches for the audible session while a variant transition is building.
     ///
     /// Capped at the owed window, so the outgoing look-ahead cannot hold
@@ -210,30 +203,6 @@ impl HlsSession {
             .map(|(seg_idx, _, _)| seg_idx);
         let owed_end = [read_end, latch_end, wait_end].into_iter().flatten().max();
         self.dispatch_capped(ctx, budget, owed_end)
-    }
-
-    /// Fetches for an incoming session whose reader has not been handed to a
-    /// decoder yet.
-    ///
-    /// Capped at the construction window, because until the transfer the
-    /// session has no reader position to follow and would otherwise queue the
-    /// whole variant against the audible one. The cap ends at the transfer:
-    /// that window is sized to *build* a decoder, not to feed one, and a
-    /// priming decoder that must stage seconds of audio starves behind it —
-    /// its reads stop being served, the staged span stops growing, and the
-    /// outgoing frontier it is chasing walks away for good.
-    pub(crate) fn dispatch_constructing(
-        &self,
-        ctx: &crate::variant::PlanCtx,
-        budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
-        let cap = match &self.readiness {
-            SessionReadiness::Active => None,
-            SessionReadiness::Profiled { preparation, .. } => {
-                Some(self.variant.construction_segment_end(&preparation.lock()))
-            }
-        };
-        self.dispatch_capped(ctx, budget, cap)
     }
 
     pub(crate) fn incoming(
@@ -404,11 +373,46 @@ impl HlsSession {
             }),
         }
     }
+
+    delegate::delegate! {
+        to self.cancel {
+            pub(crate) fn abort(&self);
+            /// Retire this session's look-ahead fetches — queued and in
+            /// flight — while keeping the owed window live. Called when an
+            /// incoming variant slot is installed: the capacity those fetches
+            /// hold is what the construction needs, and their bytes lie past
+            /// the cut the transition latches.
+            pub(crate) fn retire_lookahead(&self);
+        }
+        to self.signal {
+            pub(crate) fn arm_peer(&self);
+            /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
+            /// `false`. Call it only with no transition lock held.
+            #[call(wake_peer)]
+            pub(crate) fn wake_peer_for_readiness(&self);
+        }
+        to self.construction_gate {
+            #[call(is_armed)]
+            pub(crate) fn construction_blocking(&self) -> bool;
+            #[call(clone)]
+            pub(crate) fn construction_gate(&self) -> ConstructionGate;
+        }
+        to self.variant {
+            pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
+            #[call(stream_len)]
+            pub(crate) fn len(&self) -> Option<u64>;
+            pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo;
+        }
+    }
 }
 
 impl ByteMap for HlsSession {
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         self.prepare_at(position).map(Some)
+    }
+
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.variant.descriptor(segment_index as usize)
     }
 
     delegate::delegate! {
@@ -427,10 +431,6 @@ impl ByteMap for HlsSession {
             #[call(num_segments)]
             fn segment_count(&self) -> Option<u32>;
         }
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.variant.descriptor(segment_index as usize)
     }
 }
 

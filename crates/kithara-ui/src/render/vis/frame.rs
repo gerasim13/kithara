@@ -16,6 +16,27 @@ impl VisFrame {
     const MASTER_LEVEL: &'static str = "player.output.levels";
     const PRESET_COUNT: u32 = 3;
 
+    #[cfg(all(test, any(feature = "gpu", feature = "masonry")))]
+    pub(crate) const fn new(level: f32, time: f32, preset: u32) -> Self {
+        Self {
+            level,
+            time,
+            preset,
+        }
+    }
+
+    /// Master reaction level after volume and range projection.
+    #[must_use]
+    pub(crate) const fn level(self) -> f32 {
+        self.level
+    }
+
+    /// Rounded shader preset index in `0..=2`.
+    #[must_use]
+    pub(crate) const fn preset(self) -> u32 {
+        self.preset
+    }
+
     pub(crate) fn read(preset: Option<ReadValue<'_>>, reads: &dyn Reads) -> Option<Self> {
         let Some(ReadValue::Scalar(preset)) = preset else {
             return None;
@@ -49,31 +70,10 @@ impl VisFrame {
         })
     }
 
-    #[cfg(all(test, any(feature = "gpu", feature = "masonry")))]
-    pub(crate) const fn new(level: f32, time: f32, preset: u32) -> Self {
-        Self {
-            level,
-            time,
-            preset,
-        }
-    }
-
-    /// Master reaction level after volume and range projection.
-    #[must_use]
-    pub(crate) const fn level(self) -> f32 {
-        self.level
-    }
-
     /// Host-provided animation time in seconds.
     #[must_use]
     pub(crate) const fn time(self) -> f32 {
         self.time
-    }
-
-    /// Rounded shader preset index in `0..=2`.
-    #[must_use]
-    pub(crate) const fn preset(self) -> u32 {
-        self.preset
     }
 }
 

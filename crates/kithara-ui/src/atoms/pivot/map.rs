@@ -8,15 +8,15 @@ use crate::{
 /// A tempo axis with one arc from the master tempo to each target.
 #[derive(Clone, PartialEq)]
 pub(crate) struct PortalMap {
+    metrics: PortalMapSkin,
     accent: Rgba,
     background: Rgba,
     line: Rgba,
     line_inner: Rgba,
-    metrics: PortalMapSkin,
     muted: Rgba,
+    selected: Rgba,
     tick: Rgba,
     role: TextRoleSkin,
-    selected: Rgba,
 }
 
 /// The tempi a portal map draws, owned for as long as the control is mounted.
@@ -26,10 +26,10 @@ pub(crate) struct PortalMap {
 /// snapshot rather than the slice behind it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PortalMapData {
-    pub(crate) master: f32,
-    pub(crate) min: f32,
-    pub(crate) max: f32,
     pub(crate) targets: Vec<PortalTarget>,
+    pub(crate) master: f32,
+    pub(crate) max: f32,
+    pub(crate) min: f32,
 }
 
 impl From<PortalMapView<'_>> for PortalMapData {
@@ -56,80 +56,6 @@ impl PortalMap {
             tick: skin.rgba(metrics.tick_color),
             role: metrics.label,
             selected: skin.rgba(metrics.target_color),
-        }
-    }
-
-    pub(crate) fn paint(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &PortalMapData,
-        bounds: Rect,
-    ) {
-        list.fill_rect(bounds, self.background);
-        let axis = self.axis(bounds);
-        list.fill_rect(axis, self.line);
-        let Some(scale) = Scale::new(data.min, data.max, axis) else {
-            return;
-        };
-        self.ticks(list, text, scale, axis.y);
-        let master_x = scale.x(data.master);
-        for target in &data.targets {
-            self.arc(
-                list,
-                master_x,
-                scale.x(target.bpm),
-                axis.y,
-                target.is_selected,
-            );
-        }
-        self.marker(list, master_x, axis.y, self.accent);
-        if let Some(target) = data.targets.iter().find(|target| target.is_selected) {
-            self.marker(list, scale.x(target.bpm), axis.y, self.selected);
-        }
-    }
-
-    /// The hairline the tempi are measured against, inset from both ends so the
-    /// outermost label still has room beside it.
-    fn axis(&self, bounds: Rect) -> Rect {
-        Rect {
-            h: 1.0,
-            w: (bounds.w - self.metrics.axis_inset_x * 2.0).max(0.0),
-            x: bounds.x + self.metrics.axis_inset_x.min(bounds.w / 2.0),
-            y: bounds.y + (bounds.h - self.metrics.axis_offset_bottom).max(0.0),
-        }
-    }
-
-    fn ticks(&self, list: &mut DrawListBuilder, text: &mut TextContext, scale: Scale, axis_y: f32) {
-        let step = self.metrics.tick_step;
-        if !step.is_finite() || step <= 0.0 || scale.span / step > MAX_TICKS {
-            return;
-        }
-        let mut bpm = (scale.min / step).ceil() * step;
-        let max = scale.min + scale.span;
-        while bpm <= max {
-            let x = scale.x(bpm).round();
-            list.fill_rect(
-                Rect {
-                    h: self.metrics.tick_height,
-                    w: 1.0,
-                    x,
-                    y: axis_y - self.metrics.tick_height,
-                },
-                self.tick,
-            );
-            let label = format!("{bpm:.0}");
-            let run = text.shape(&label, self.role, None);
-            list.text(
-                &run,
-                &label,
-                Transform::translate(Pt {
-                    x: x - self.metrics.label_offset_x,
-                    y: axis_y + self.metrics.label_offset_y - run.height() / 2.0,
-                }),
-                self.muted,
-            );
-            bpm += step;
         }
     }
 
@@ -174,6 +100,17 @@ impl PortalMap {
         list.stroke_path(path, color, width);
     }
 
+    /// The hairline the tempi are measured against, inset from both ends so the
+    /// outermost label still has room beside it.
+    fn axis(&self, bounds: Rect) -> Rect {
+        Rect {
+            h: 1.0,
+            w: (bounds.w - self.metrics.axis_inset_x * 2.0).max(0.0),
+            x: bounds.x + self.metrics.axis_inset_x.min(bounds.w / 2.0),
+            y: bounds.y + (bounds.h - self.metrics.axis_offset_bottom).max(0.0),
+        }
+    }
+
     fn marker(&self, list: &mut DrawListBuilder, x: f32, axis_y: f32, color: Rgba) {
         let size = self.metrics.marker_size;
         list.fill_rect(
@@ -186,19 +123,84 @@ impl PortalMap {
             color,
         );
     }
+
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &PortalMapData,
+        bounds: Rect,
+    ) {
+        list.fill_rect(bounds, self.background);
+        let axis = self.axis(bounds);
+        list.fill_rect(axis, self.line);
+        let Some(scale) = Scale::new(data.min, data.max, axis) else {
+            return;
+        };
+        self.ticks(list, text, scale, axis.y);
+        let master_x = scale.x(data.master);
+        for target in &data.targets {
+            self.arc(
+                list,
+                master_x,
+                scale.x(target.bpm),
+                axis.y,
+                target.is_selected,
+            );
+        }
+        self.marker(list, master_x, axis.y, self.accent);
+        if let Some(target) = data.targets.iter().find(|target| target.is_selected) {
+            self.marker(list, scale.x(target.bpm), axis.y, self.selected);
+        }
+    }
+
+    fn ticks(&self, list: &mut DrawListBuilder, text: &mut TextContext, scale: Scale, axis_y: f32) {
+        const MAX_TICKS: f32 = 512.0;
+
+        let step = self.metrics.tick_step;
+        if !step.is_finite() || step <= 0.0 || scale.span / step > MAX_TICKS {
+            return;
+        }
+        let mut bpm = (scale.min / step).ceil() * step;
+        let max = scale.min + scale.span;
+        while bpm <= max {
+            let x = scale.x(bpm).round();
+            list.fill_rect(
+                Rect {
+                    x,
+                    h: self.metrics.tick_height,
+                    w: 1.0,
+                    y: axis_y - self.metrics.tick_height,
+                },
+                self.tick,
+            );
+            let label = format!("{bpm:.0}");
+            let run = text.shape(&label, self.role, None);
+            list.text(
+                &run,
+                &label,
+                Transform::translate(Pt {
+                    x: x - self.metrics.label_offset_x,
+                    y: axis_y + self.metrics.label_offset_y - run.height() / 2.0,
+                }),
+                self.muted,
+            );
+            bpm += step;
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 struct Scale {
+    axis: Rect,
     min: f32,
     span: f32,
-    axis: Rect,
 }
 
 impl Scale {
     fn new(min: f32, max: f32, axis: Rect) -> Option<Self> {
         let span = max - min;
-        (min.is_finite() && max.is_finite() && span > 0.0).then_some(Self { min, span, axis })
+        (min.is_finite() && max.is_finite() && span > 0.0).then_some(Self { axis, min, span })
     }
 
     fn x(self, bpm: f32) -> f32 {
@@ -206,8 +208,6 @@ impl Scale {
         self.axis.x + unit * self.axis.w
     }
 }
-
-const MAX_TICKS: f32 = 512.0;
 
 #[cfg(test)]
 mod tests {
@@ -281,7 +281,7 @@ mod tests {
                 } if rect.h == size && rect.w == size => Some(*color),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("the map must mark the master tempo"))
+            .expect("the map must mark the master tempo")
     }
 
     #[kithara::test]

@@ -42,22 +42,22 @@ pub(crate) struct HostCmdMsg {
 }
 
 pub(crate) struct HostDispatchError {
-    error: PlayError,
     command: Option<Box<HostCmd>>,
+    error: PlayError,
 }
 
 impl HostDispatchError {
-    pub(crate) fn before_send(error: PlayError, command: HostCmd) -> Self {
-        Self {
-            error,
-            command: Some(Box::new(command)),
-        }
-    }
-
     pub(crate) const fn after_send(error: PlayError) -> Self {
         Self {
             error,
             command: None,
+        }
+    }
+
+    pub(crate) fn before_send(error: PlayError, command: HostCmd) -> Self {
+        Self {
+            error,
+            command: Some(Box::new(command)),
         }
     }
 }
@@ -75,6 +75,22 @@ impl From<HostDispatchError> for (PlayError, Option<Box<HostCmd>>) {
 }
 
 pub(crate) trait HostDispatcher: SessionDispatcher {
+    fn acknowledge(&self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(applied))) {
+            Ok(HostReply::Acknowledged(result)) => result,
+            Err(error) => {
+                let (reason, command) = error.into();
+                if command.as_deref().is_some_and(|command| {
+                    matches!(command, HostCmd::Sync(SyncCmd::Acknowledge(_)))
+                }) {
+                    return Err(SyncError::OwnerUnavailable);
+                }
+                owner_thread_fail_fast(&reason)
+            }
+            Ok(_) => owner_thread_fail_fast("unexpected acknowledgement reply"),
+        }
+    }
+
     fn exec_host(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError>;
 
     fn transact(
@@ -116,22 +132,6 @@ pub(crate) trait HostDispatcher: SessionDispatcher {
                 owner_thread_fail_fast(&reason)
             }
             Ok(_) => owner_thread_fail_fast("unexpected current-topology transaction reply"),
-        }
-    }
-
-    fn acknowledge(&self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(applied))) {
-            Ok(HostReply::Acknowledged(result)) => result,
-            Err(error) => {
-                let (reason, command) = error.into();
-                if command.as_deref().is_some_and(|command| {
-                    matches!(command, HostCmd::Sync(SyncCmd::Acknowledge(_)))
-                }) {
-                    return Err(SyncError::OwnerUnavailable);
-                }
-                owner_thread_fail_fast(&reason)
-            }
-            Ok(_) => owner_thread_fail_fast("unexpected acknowledgement reply"),
         }
     }
 }

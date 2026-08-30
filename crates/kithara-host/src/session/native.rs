@@ -47,6 +47,10 @@ impl SessionClient {
 }
 
 impl SessionDispatcher for SessionClient {
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
+
     fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
@@ -55,10 +59,6 @@ impl SessionDispatcher for SessionClient {
                 "unexpected host reply for player session command".into(),
             )),
         }
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
     }
 }
 
@@ -73,8 +73,7 @@ fn complete_shutdown<B: AudioBackend>(
     state: SessionState<B>,
     reply_tx: &mpsc::Sender<HostReply>,
 ) {
-    // Disconnect queued callers before PlayerRuntime::drop takes its
-    // admission gate; otherwise each side can wait on the other.
+    // WHY: Disconnect queued callers before PlayerRuntime::drop takes its admission gate; otherwise each side can wait on the other.
     drop(cmd_rx);
     drop(state);
     if reply_tx.send(HostReply::Ok).is_err() {

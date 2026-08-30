@@ -3,7 +3,6 @@
 //! network download. This exercises the production
 //! `kithara_app::waveform::TrackAnalysisRunner` (open + preload + shared
 //! analysis-worker decode), not a bare `Resource`.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

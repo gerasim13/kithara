@@ -20,16 +20,16 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[non_exhaustive]
 pub struct Clock {
-    /// How many frames this host has drawn.
-    pub frame: u64,
     /// How long the host has been running.
     pub elapsed: Duration,
+    /// How many frames this host has drawn.
+    pub frame: u64,
 }
 
 impl Clock {
     #[must_use]
     pub const fn new(frame: u64, elapsed: Duration) -> Self {
-        Self { frame, elapsed }
+        Self { elapsed, frame }
     }
 
     /// The next frame, `step` later.
@@ -88,28 +88,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
             ui,
             skin,
             clock,
-            kinds: None,
             reads,
-        }
-    }
-
-    /// The value at one endpoint, with the host's own answered before the
-    /// application is asked.
-    #[must_use]
-    pub fn get(self, endpoint: &str) -> Option<ReadValue<'r>> {
-        if endpoint == SECONDS {
-            return Some(ReadValue::Scalar(self.clock.seconds()));
-        }
-        self.reads.get(endpoint)
-    }
-
-    /// What one binding reads to. A command binding writes and never reads, so
-    /// it has no value on this side.
-    #[must_use]
-    pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
-        match binding.kind {
-            BindingKind::Command => None,
-            _ => self.get(self.ui.resolve(binding.key)),
+            kinds: None,
         }
     }
 
@@ -124,16 +104,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
             .map(|binding| self.ui.resolve(binding.key))
     }
 
-    /// What one text binding answers, or nothing when there is no binding, no
-    /// answer, or an empty answer.
-    #[must_use]
-    pub fn label(self, binding: Option<&Binding>) -> Option<&'r str> {
-        match self.read(binding?)? {
-            ReadValue::Text(label) if !label.is_empty() => Some(label),
-            _ => None,
-        }
-    }
-
     /// Whether a binding reads true. An absent binding, or one that reads
     /// anything but a true flag, is false.
     #[must_use]
@@ -144,6 +114,26 @@ impl<'a, 'r> Ctx<'a, 'r> {
         )
     }
 
+    /// The value at one endpoint, with the host's own answered before the
+    /// application is asked.
+    #[must_use]
+    pub fn get(self, endpoint: &str) -> Option<ReadValue<'r>> {
+        if endpoint == SECONDS {
+            return Some(ReadValue::Scalar(self.clock.seconds()));
+        }
+        self.reads.get(endpoint)
+    }
+
+    /// What one text binding answers, or nothing when there is no binding, no
+    /// answer, or an empty answer.
+    #[must_use]
+    pub fn label(self, binding: Option<&Binding>) -> Option<&'r str> {
+        match self.read(binding?)? {
+            ReadValue::Text(label) if !label.is_empty() => Some(label),
+            _ => None,
+        }
+    }
+
     /// The point one binding answers with, or nothing when there is no
     /// binding, no answer, or an answer that is not a point.
     #[must_use]
@@ -151,6 +141,16 @@ impl<'a, 'r> Ctx<'a, 'r> {
         match self.read(binding?)? {
             ReadValue::Point(at) if at.x.is_finite() && at.y.is_finite() => Some(at),
             _ => None,
+        }
+    }
+
+    /// What one binding reads to. A command binding writes and never reads, so
+    /// it has no value on this side.
+    #[must_use]
+    pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
+        match binding.kind {
+            BindingKind::Command => None,
+            _ => self.get(self.ui.resolve(binding.key)),
         }
     }
 

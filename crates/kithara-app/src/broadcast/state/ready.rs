@@ -17,12 +17,12 @@ static LIVE: AtomicBool = AtomicBool::new(true);
 impl Ready {
     pub(super) const URL: &str = "http://packager.test/master.m3u8";
 
-    fn stream() -> Stream {
-        Stream(Self::URL.to_owned())
-    }
-
     fn end_stream() {
         LIVE.store(false, Ordering::Relaxed);
+    }
+
+    fn stream() -> Stream {
+        Stream(Self::URL.to_owned())
     }
 }
 
@@ -35,6 +35,10 @@ impl Packager for Ready {
         LIVE.load(Ordering::Relaxed)
     }
 
+    fn release(_host: &Host) -> BroadcastResult<()> {
+        Ok(())
+    }
+
     fn start(
         _host: &Host,
         _shutdown: &CancelToken,
@@ -42,10 +46,6 @@ impl Packager for Ready {
     ) -> BroadcastResult<Option<Stream>> {
         LIVE.store(true, Ordering::Relaxed);
         Ok(Some(Self::stream()))
-    }
-
-    fn release(_host: &Host) -> BroadcastResult<()> {
-        Ok(())
     }
 
     fn stop(_live: Stream) {}

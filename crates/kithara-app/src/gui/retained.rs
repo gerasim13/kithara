@@ -49,10 +49,6 @@ impl Studio {
 }
 
 impl App for Studio {
-    fn skin(&self) -> &Skin {
-        self.state.ui.package.skin()
-    }
-
     fn document(&self) -> &str {
         self.state.ui.package.document(self.state.ui.cache.layout())
     }
@@ -64,13 +60,15 @@ impl App for Studio {
         with(&Walk::new(&root))
     }
 
+    fn skin(&self) -> &Skin {
+        self.state.ui.package.skin()
+    }
+
     fn tick(&mut self) {
         drop(update::update(&mut self.state, Message::Tick));
     }
 
     fn update(&mut self, event: UiEvent) {
-        // A window command is the host's to carry out, and this host takes it
-        // from `take_window_commands` instead.
         if matches!(event, UiEvent::Window(_)) {
             return;
         }
@@ -127,16 +125,16 @@ mod tests {
     }
 
     impl App for Empty {
-        fn skin(&self) -> &Skin {
-            self.package.skin()
-        }
-
         fn document(&self) -> &str {
             self.package.document(ui::cache::DeckLayout::Dual)
         }
 
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
             with(self)
+        }
+
+        fn skin(&self) -> &Skin {
+            self.package.skin()
         }
 
         fn update(&mut self, _event: kithara_ui::render::UiEvent) {}

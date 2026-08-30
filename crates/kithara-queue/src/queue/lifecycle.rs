@@ -68,20 +68,6 @@ impl QueueControl {
         }
     }
 
-    /// Test helper: drive a pre-built [`kithara_play::Resource`] into the
-    /// player slot for an id previously created via
-    /// [`Self::register_for_test`]. Mirrors the synchronous portion of
-    /// the loader's `apply_after_load` callback.
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_complete_load(
-        &self,
-        id: TrackId,
-        resource: kithara_play::Resource,
-    ) {
-        let _admission = self.lock_admission();
-        self.complete_load_for_test_inner(id, resource);
-    }
-
     #[cfg(any(test, feature = "probe"))]
     fn complete_load_for_test_inner(&self, id: TrackId, resource: kithara_play::Resource) {
         let index = {
@@ -148,20 +134,6 @@ impl QueueControl {
         id
     }
 
-    /// Test helper: convenience for the common case where load order
-    /// matches register order. Equivalent to
-    /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_insert_loaded(
-        &self,
-        resource: kithara_play::Resource,
-    ) -> TrackId {
-        let _admission = self.lock_admission();
-        let id = self.register_for_test_inner();
-        self.complete_load_for_test_inner(id, resource);
-        id
-    }
-
     /// Insert a track with a caller-supplied id. See
     /// [`Self::append_with_id`] for why the id MUST come from
     /// [`TrackId::allocate`].
@@ -199,31 +171,31 @@ impl QueueControl {
         Ok(self.insert_entry(id, source, Placement::At(pos)))
     }
 
-    /// Test helper: register a placeholder track entry without starting
-    /// a real loader. Pair with [`Self::complete_load_for_test`] to
-    /// drive the loaded resource into the player on demand.
+    /// Test helper: drive a pre-built [`kithara_play::Resource`] into the
+    /// player slot for an id previously created via
+    /// [`Self::register_for_test`]. Mirrors the synchronous portion of
+    /// the loader's `apply_after_load` callback.
     #[cfg(any(test, feature = "probe"))]
-    #[must_use]
-    pub(in crate::queue) fn probe_register(&self) -> TrackId {
+    pub(in crate::queue) fn probe_complete_load(
+        &self,
+        id: TrackId,
+        resource: kithara_play::Resource,
+    ) {
         let _admission = self.lock_admission();
-        self.register_for_test_inner()
+        self.complete_load_for_test_inner(id, resource);
     }
 
+    /// Test helper: convenience for the common case where load order
+    /// matches register order. Equivalent to
+    /// [`Self::register_for_test`] + [`Self::complete_load_for_test`].
     #[cfg(any(test, feature = "probe"))]
-    fn register_for_test_inner(&self) -> TrackId {
-        let id = TrackId::allocate();
-        let url = format!("test://memory/{}", id.as_u64());
-        let record = TrackRecord::new(id, format!("test-{}", id.as_u64()), TrackSource::Uri(url));
-        let index = {
-            let mut guard = self.lock_tracks_mut();
-            guard.push(record);
-            guard.len() - 1
-        };
-        self.player.reserve_slots(self.len());
-        if self.should_autoplay {
-            let _ = self.autoplay_target.arm_if_disarmed(id);
-        }
-        self.bus.publish(QueueEvent::TrackAdded { id, index });
+    pub(in crate::queue) fn probe_insert_loaded(
+        &self,
+        resource: kithara_play::Resource,
+    ) -> TrackId {
+        let _admission = self.lock_admission();
+        let id = self.register_for_test_inner();
+        self.complete_load_for_test_inner(id, resource);
         id
     }
 
@@ -242,6 +214,52 @@ impl QueueControl {
             self.lock_navigation_mut().select(index);
             self.set_status(id, TrackStatus::Consumed);
         }
+    }
+
+    /// Test helper: register a placeholder track entry without starting
+    /// a real loader. Pair with [`Self::complete_load_for_test`] to
+    /// drive the loaded resource into the player on demand.
+    #[cfg(any(test, feature = "probe"))]
+    #[must_use]
+    pub(in crate::queue) fn probe_register(&self) -> TrackId {
+        let _admission = self.lock_admission();
+        self.register_for_test_inner()
+    }
+
+    /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
+    /// `Queue::select` should plant when a `Consumed` / `Cancelled` /
+    /// `Failed` track is re-selected. This emulates the loader-respawn
+    /// path the production code uses without dispatching the real
+    /// loader, so harness tests can exercise replay-after-EOF.
+    #[cfg(any(test, feature = "probe"))]
+    pub(in crate::queue) fn probe_supply_respawn_resource(
+        &self,
+        id: TrackId,
+        resource: kithara_play::Resource,
+    ) {
+        let _admission = self.lock_admission();
+        self.test_resources
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, resource);
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    fn register_for_test_inner(&self) -> TrackId {
+        let id = TrackId::allocate();
+        let url = format!("test://memory/{}", id.as_u64());
+        let record = TrackRecord::new(id, format!("test-{}", id.as_u64()), TrackSource::Uri(url));
+        let index = {
+            let mut guard = self.lock_tracks_mut();
+            guard.push(record);
+            guard.len() - 1
+        };
+        self.player.reserve_slots(self.len());
+        if self.should_autoplay {
+            let _ = self.autoplay_target.arm_if_disarmed(id);
+        }
+        self.bus.publish(QueueEvent::TrackAdded { id, index });
+        id
     }
 
     /// Remove a track from the queue by id.
@@ -308,24 +326,6 @@ impl QueueControl {
                 queue.insert_entry(TrackId::allocate(), source.into(), Placement::Append);
             }
         });
-    }
-
-    /// Test helper: pre-supply a fresh [`kithara_play::Resource`] that
-    /// `Queue::select` should plant when a `Consumed` / `Cancelled` /
-    /// `Failed` track is re-selected. This emulates the loader-respawn
-    /// path the production code uses without dispatching the real
-    /// loader, so harness tests can exercise replay-after-EOF.
-    #[cfg(any(test, feature = "probe"))]
-    pub(in crate::queue) fn probe_supply_respawn_resource(
-        &self,
-        id: TrackId,
-        resource: kithara_play::Resource,
-    ) {
-        let _admission = self.lock_admission();
-        self.test_resources
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, resource);
     }
 }
 

@@ -31,10 +31,10 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
-    worker: Arc<AnalysisWorker>,
-    current: Option<RunHandle>,
     /// What this configuration produces, per artifact: the cache keys off it.
     fingerprint: AnalysisFingerprint,
+    worker: Arc<AnalysisWorker>,
+    current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
     #[field(get = is_active)]
@@ -84,12 +84,6 @@ impl TrackAnalysisRunner {
             active,
             current: None,
         })
-    }
-
-    /// What the active configuration produces, per artifact.
-    #[must_use]
-    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
-        &self.fingerprint
     }
 
     /// Cancel any prior run and queue `config` for analysis on the `rate`
@@ -165,6 +159,12 @@ impl TrackAnalysisRunner {
             prev.cancel.cancel();
             prev.task.abort();
         }
+    }
+
+    /// What the active configuration produces, per artifact.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
     }
 }
 

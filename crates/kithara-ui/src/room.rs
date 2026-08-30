@@ -88,8 +88,6 @@ fn walk(
         | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Pressable { child, .. }
         | ExpandedNode::Scroll { child, .. } => walk(child, path, skin, origin),
-        // Every layer of a stage is handed the first one's box, so that is the
-        // room the stage has to answer for.
         ExpandedNode::Stage { size, children, .. } => {
             check_box(
                 *size,
@@ -136,11 +134,11 @@ fn check_steps<N>(
         let needs = axis_min(min(branch), axis);
         if needs > *from {
             return Err(UiDocError::AdaptiveStepRoom {
+                needs,
                 origin: origin.clone(),
                 path: path.push(format!("steps[{index}]")).render(),
                 axis: axis.name(),
                 from: *from,
-                needs,
             });
         }
     }
@@ -163,11 +161,11 @@ pub(crate) fn check_box(
         let needs = axis_min(composed, axis);
         if needs > room {
             return Err(UiDocError::DeclaredRoom {
+                needs,
+                room,
                 origin: origin.clone(),
                 path: path.render(),
                 axis: axis.name(),
-                needs,
-                room,
             });
         }
     }
@@ -203,11 +201,11 @@ fn check_rooms(
     for (room, needs) in rooms.iter().copied() {
         if needs > room {
             return Err(UiDocError::RevealRoom {
+                needs,
+                room,
                 origin: origin.clone(),
                 path: path.render(),
                 axis: axis.name(),
-                needs,
-                room,
             });
         }
     }

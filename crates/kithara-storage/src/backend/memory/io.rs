@@ -18,33 +18,21 @@ impl DriverIo for MemDriver {
                 "memory commit: len {end} does not fit usize: {err}"
             ))
         })?;
-        // Buffer released by a prior commit (repeat commit, no `reactivate`): it
-        // no longer covers `end`, so the published snapshot stays authoritative.
+        // WHY: Buffer released by a prior commit (repeat commit, no `reactivate`): it no longer covers `end`, so the published snapshot
+        // stays authoritative.
         if end_usize > state.buf.len() {
             return Ok(());
         }
-        // Publish (or clear) the snapshot AND release the working buffer
-        // atomically under the state lock, then shrink `state.len` to the
-        // committed length. `read_at` is working-buffer-first under this same
-        // lock, so a concurrent slow-path read either sees the full pre-commit
-        // buffer or — post-commit — an empty buffer (length 0) and falls through
-        // to the snapshot; it can never read a freed buffer as if it held data
-        // (the bug a non-atomic publish caused). Zero-length committed publishes
-        // no snapshot — matching the mmap `Empty` contract (`committed_len()` →
-        // `None`).
+        // WHY: Publish (or clear) the snapshot AND release the working buffer atomically under the state lock, then shrink `state.len` to
+        // the committed length.
         if end_usize == 0 {
             self.committed.store(None);
         } else {
             let snapshot = state.buf[..end_usize].to_vec();
             self.committed.store(Some(Arc::new(snapshot)));
         }
-        // Release the working buffer THROUGH THE POOL: replacing it drops the
-        // old `PooledOwned`, whose `Drop` returns the buffer to the pool and
-        // credits its bytes back to the byte budget (and trims it). A manual
-        // `clear`/`shrink_to_fit` via `DerefMut` would free the memory but leak
-        // the budget — `ensure_len` charges the pool on growth and only `put`
-        // (on drop) releases it — eventually exhausting the budget and stalling
-        // later allocations. Shrink `state.len` to the committed length.
+        // WHY: Release the working buffer THROUGH THE POOL: replacing it drops the old `PooledOwned`, whose `Drop` returns the buffer to the
+        // pool and credits its bytes back to the byte budget (and trims it).
         state.buf = state.pool.get();
         state.len = end;
         drop(state);
@@ -63,13 +51,8 @@ impl DriverIo for MemDriver {
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Repopulate the working buffer from the committed snapshot so the
-        // re-download can rewrite incrementally on top of the prior generation
-        // (e.g. extend `hello` -> `hello world`). The snapshot stays published:
-        // reads keep taking the lock-free snapshot fast path and observe the
-        // immutable prior generation until the next `commit` atomically swaps in
-        // the new one — never the half-rewritten working buffer. The lifecycle
-        // flag (`ResourceCore::committed`) is what flips to active; the snapshot
+        // WHY: Repopulate the working buffer from the committed snapshot so the re-download can rewrite incrementally on top of the prior
+        // generation (e.g. extend `hello` -> `hello world`).
         if let Some(snapshot) = self.committed.load_full() {
             let mut state = self.state.lock();
             let snap_len = snapshot.len();
@@ -92,15 +75,9 @@ impl DriverIo for MemDriver {
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock();
 
-        // Working-buffer first. While a generation is in flight (initial write,
-        // or a re-download rewriting on top of a still-published prior snapshot)
-        // the working buffer holds the *current* bytes — the writer's own
-        // read-back (decrypt on commit) must observe them, not the stale
-        // snapshot. `commit` frees the working buffer (length 0) AND publishes
-        // the snapshot atomically under this same lock, so once the buffer no
-        // longer covers `offset` the committed snapshot is the source of truth.
-        // `load_full` keeps the `Arc` valid even if a later `reactivate` clears
-        // `committed` after we drop the lock.
+        // WHY: Working-buffer first. While a generation is in flight (initial write, or a re-download rewriting on top of a still-published
+        // prior snapshot) the working buffer holds the *current* bytes - the writer's own read-back (decrypt on commit) must observe them,
+        // not the stale snapshot.
         let start = usize::try_from(offset).map_err(|err| {
             StorageError::Failed(format!(
                 "memory read: offset {offset} does not fit usize: {err}"

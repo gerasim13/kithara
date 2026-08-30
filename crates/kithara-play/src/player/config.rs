@@ -30,19 +30,21 @@ fn allocate_grid_id() -> BeatGridId {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct PlayerConfig {
-    /// Stable synchronization-group identity owned by this player.
-    #[builder(default = allocate_grid_id())]
-    pub(crate) grid_id: BeatGridId,
     /// Per-deck time-stretch control handle, shared with the UI and the
     /// worker Warp chain (see `kithara_warp::StretchControls`).
     #[builder(default = StretchControls::new(1.0))]
     pub(crate) timestretch: Arc<StretchControls>,
-    /// Explicit shared playback worker. Its pools and cancellation lifetime
-    /// are configured once in [`crate::PlayWorkerConfig`].
-    pub(crate) worker: PlayWorker,
+    /// Stable synchronization-group identity owned by this player.
+    #[builder(default = allocate_grid_id())]
+    pub(crate) grid_id: BeatGridId,
     /// How resources created for this player trim leading/trailing audio.
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
+    /// Sample rate passed to the engine/runtime backend as a hint.
+    /// Default: 44100. Offline/test harnesses set this to drive
+    /// deterministic render at a known rate.
+    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    pub(crate) sample_rate: NonZeroU32,
     /// Shared ABR controller. When `None`, a default one is created.
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
@@ -52,6 +54,9 @@ pub struct PlayerConfig {
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
     pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
+    /// Explicit shared playback worker. Its pools and cancellation lifetime
+    /// are configured once in [`crate::PlayWorkerConfig`].
+    pub(crate) worker: PlayWorker,
     /// EQ band layout. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
@@ -67,11 +72,6 @@ pub struct PlayerConfig {
     /// Secondary lead time before EOF at which the next queued item is loaded.
     #[builder(default = 3.5)]
     pub(crate) prefetch_duration: f32,
-    /// Sample rate passed to the engine/runtime backend as a hint.
-    /// Default: 44100. Offline/test harnesses set this to drive
-    /// deterministic render at a known rate.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
-    pub(crate) sample_rate: NonZeroU32,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
     pub(crate) max_slots: usize,

@@ -332,8 +332,6 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
-    // The document shader binds these by name; the page is a capture fixture, so
-    // they hold still rather than animating.
     for id in ["shader.energy", "shader.level"] {
         registry.insert(
             EndpointCategory::Model,
@@ -444,8 +442,6 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
         "gallery.motion.clock",
         EndpointDesc::new(ValueKind::Scalar),
     );
-    // One second per frame of the sheet, held still, and the scrub the fader
-    // beside the played sprite writes.
     for id in [
         "gallery.sprite.frame.0",
         "gallery.sprite.frame.1",
@@ -482,8 +478,6 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    // Named from the pages themselves, so the nav offering a page and the
-    // reading answering for it cannot come to differ.
     for id in sections::pages()
         .iter()
         .map(|tab| format!("gallery.tab.{tab}"))
@@ -499,7 +493,6 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    // Named from the shipped skins themselves, for the same reason.
     for skin in builtin::skins() {
         registry.insert(
             EndpointCategory::Model,
@@ -507,8 +500,6 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    // The specimen switch reads two answers per family: whether it is the one
-    // chosen, which lights its item, and whether its block stays folded away.
     for family in FONT_FAMILIES {
         for id in [
             format!("gallery.font.{family}"),

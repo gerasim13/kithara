@@ -68,16 +68,16 @@ impl Reads for Tempo {
 }
 
 impl App for Tempo {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         "tempo.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -103,7 +103,7 @@ fn retained() -> Vec<UiEvent> {
     .unwrap_or_else(|error| panic!("the tempo fixture must mount: {error}"));
     let label = ui
         .rect_of("deck/label")
-        .unwrap_or_else(|| panic!("the row that writes the tempo must be laid out"));
+        .expect("the row that writes the tempo must be laid out");
     ui.input(Input::Pointer(PointerInput::new(
         MOUSE,
         None,

@@ -11,11 +11,11 @@ use crate::{
 };
 
 pub(super) struct LibraryNode<'a> {
-    rows: Vec<TableRow<'a>>,
-    tree: Vec<TreeRow<'a>>,
-    breadcrumb: String,
     query: &'a str,
     scope: LibraryScope,
+    breadcrumb: String,
+    rows: Vec<TableRow<'a>>,
+    tree: Vec<TreeRow<'a>>,
 }
 
 impl<'a> LibraryNode<'a> {

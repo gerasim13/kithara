@@ -6,7 +6,6 @@
 //! source alone answers with whichever entry holds that URL first,
 //! which is the wrong track as soon as the second copy is the one
 //! playing.
-
 use std::num::NonZero;
 
 use kithara::{

@@ -157,11 +157,8 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    // Use the consumer-registered shim name (see `set_wasm_shim_name`); fall
-    // back to `wasm_safe_thread`'s Performance-API auto-detection only when
-    // unset. Hardcoding here would couple this primitive crate to one
-    // consumer's wasm-bindgen output filename, and a stale name silently
-    // serves the SPA-fallback HTML to `initSync` so the worker never boots.
+    // WHY: Use the consumer-registered shim name (see `set_wasm_shim_name`); fall back to `wasm_safe_thread`'s Performance-API
+    // auto-detection only when unset.
     let mut builder = WasmThreadBuilder::new();
     if let Some(shim) = wasm_shim_name().get() {
         builder = builder.shim_name(shim.clone());

@@ -31,15 +31,8 @@ mod host {
         },
     };
 
-    /// Where a double click puts a knob: the middle of its travel.
-    const RESET: f32 = 0.5;
-
     impl Draws for Knob {
         type Painter = Face;
-
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
 
         /// A knob is the fraction it points at, so one whose endpoint has not
         /// reported a fraction draws nothing rather than a dial at rest.
@@ -58,6 +51,9 @@ mod host {
         /// The hand walks a knob up and down rather than pointing at a
         /// position, so the drag counts travel from the value it is on.
         fn grip(&self, skin: &Skin, data: &Captioned) -> Grip {
+            /// Where a double click puts a knob: the middle of its travel.
+            const RESET: f32 = 0.5;
+
             Grip::Drag(
                 Drag::builder()
                     .cursor(CursorShape::ResizeV)
@@ -72,6 +68,10 @@ mod host {
                     })
                     .build(),
             )
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

@@ -13,8 +13,6 @@ use kithara_ui::{
 
 use super::cache::DeckLayout;
 
-// `DOCS`: every document this application's own UI folder holds, read from the
-// folder at build time. See `build.rs`.
 include!(concat!(env!("OUT_DIR"), "/ui_documents.rs"));
 
 /// What this application asks a package for, one role per deck arrangement.
@@ -62,6 +60,10 @@ impl Package {
     /// cannot play, and nothing about drawing it would say so.
     pub(crate) const REQUIRED: &'static [&'static str] = &["deck-a/play", "deck-a/wave"];
 
+    pub(in crate::gui) fn document(&self, layout: DeckLayout) -> &str {
+        self.screens.document(layout)
+    }
+
     /// Reads the package laid out at `root` over the documents this build
     /// carries, or only those documents when `root` names nothing.
     ///
@@ -95,10 +97,6 @@ impl Package {
         }))
     }
 
-    pub(in crate::gui) fn document(&self, layout: DeckLayout) -> &str {
-        self.screens.document(layout)
-    }
-
     pub(in crate::gui) fn resolver(&self) -> &dyn SourceResolver {
         self.resolver.as_ref()
     }
@@ -115,18 +113,18 @@ struct Screens {
 }
 
 impl Screens {
-    fn resolve(manifest: &PackageDoc, resolver: &dyn SourceResolver) -> Result<Self, UiDocError> {
-        Ok(Self {
-            dual: manifest.screen(resolver, &role(DeckLayout::Dual))?,
-            single: manifest.screen(resolver, &role(DeckLayout::Single))?,
-        })
-    }
-
     fn document(&self, layout: DeckLayout) -> &str {
         match layout {
             DeckLayout::Single => &self.single,
             DeckLayout::Dual => &self.dual,
         }
+    }
+
+    fn resolve(manifest: &PackageDoc, resolver: &dyn SourceResolver) -> Result<Self, UiDocError> {
+        Ok(Self {
+            dual: manifest.screen(resolver, &role(DeckLayout::Dual))?,
+            single: manifest.screen(resolver, &role(DeckLayout::Single))?,
+        })
     }
 }
 

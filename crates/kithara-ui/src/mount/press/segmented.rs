@@ -30,10 +30,6 @@ mod host {
     impl Draws for Segmented<'_> {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// The picked cell is the reading rounded to a whole cell; a reading
         /// past the end of the row picks nothing rather than the last one.
         fn data(&self, read: Reading<'_>) -> Option<SegmentedData> {
@@ -57,6 +53,10 @@ mod host {
             Grip::Index {
                 count: data.items.len(),
             }
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

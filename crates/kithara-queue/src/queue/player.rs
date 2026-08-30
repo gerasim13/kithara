@@ -19,6 +19,10 @@ impl BeatGrid for Queue {
 impl SyncGroup for Queue {
     type NestedGroup = PlayerMember;
 
+    fn status(&self) -> SyncStatusSnapshot {
+        SyncGroup::status(&self.player)
+    }
+
     delegate::delegate! {
         to self.player {
             fn topology(&self) -> Result<SyncGroupSnapshot, SyncError>;
@@ -34,13 +38,13 @@ impl SyncGroup for Queue {
             ) -> Result<SyncStatusSnapshot, SyncError>;
         }
     }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(&self.player)
-    }
 }
 
 impl Player for Queue {
+    fn set_host_level(&self, level: f32) {
+        Player::set_host_level(&self.player, level);
+    }
+
     delegate::delegate! {
         to self.control {
             fn play(&self);
@@ -55,18 +59,10 @@ impl Player for Queue {
             fn tick(&self) -> Result<(), PlayError>;
         }
     }
-
-    fn set_host_level(&self, level: f32) {
-        Player::set_host_level(&self.player, level);
-    }
 }
 
 impl PlayerControlSource for Queue {
     type Control = super::QueueControl;
-
-    fn control(&self) -> Self::Control {
-        self.control.clone()
-    }
 
     fn attach_session(&mut self, binding: SessionBinding) -> Result<(), PlayError> {
         self.player.attach_session(binding)
@@ -74,5 +70,9 @@ impl PlayerControlSource for Queue {
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
+    }
+
+    fn control(&self) -> Self::Control {
+        self.control.clone()
     }
 }

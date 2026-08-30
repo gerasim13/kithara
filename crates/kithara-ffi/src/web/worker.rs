@@ -79,10 +79,8 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>, host_sender: wasm::
     const CROSSFADE_SECONDS: f32 = 5.0;
 
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
-    // Without this the Worker's spawn closure returns immediately (it only
-    // spawns async tasks) and `wasm_safe_thread` `close()`s the Worker, killing
-    // the command + tick loops. Keeps the Worker's event loop pumping for the
-    // page's lifetime so the spawned futures keep running.
+    // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
+    // the Worker, killing the command + tick loops.
     keep_worker_alive();
 
     task_spawn(async move {
@@ -293,10 +291,10 @@ fn apply_peak_bitrate(queue: &QueueControl, wifi_bps: f64, cellular_bps: f64) {
 }
 
 struct SetupHlsAesArgs {
-    salt: String,
-    domains: Vec<String>,
     headers: Option<HashMap<String, String>>,
     query_params: Option<HashMap<String, String>>,
+    salt: String,
+    domains: Vec<String>,
 }
 
 /// Fold a DRM rule into the worker's [`BuildState`]. Builds the
@@ -369,9 +367,9 @@ fn build_source(state: &BuildState, url: String) -> TrackSource {
 }
 
 struct ReplaceTrackArgs {
-    index: u32,
-    id: TrackId,
     url: String,
+    id: TrackId,
+    index: u32,
 }
 
 /// Mirror of [`NativeInner::replace_item`](crate::native::inner::NativeInner::replace_item):

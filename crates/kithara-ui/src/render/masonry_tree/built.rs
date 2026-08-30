@@ -34,19 +34,19 @@ pub(crate) struct BlockState {
 }
 
 impl BlockState {
+    /// Records what the document says now, answering whether that is news.
+    pub(crate) fn latch(&self, hidden: bool) -> bool {
+        let changed = self.hidden.get() != hidden;
+        self.hidden.set(hidden);
+        changed
+    }
+
     delegate::delegate! {
         to self.hidden {
             /// Whether the document hides the block right now.
             #[call(get)]
             pub(crate) fn is_hidden(&self) -> bool;
         }
-    }
-
-    /// Records what the document says now, answering whether that is news.
-    pub(crate) fn latch(&self, hidden: bool) -> bool {
-        let changed = self.hidden.get() != hidden;
-        self.hidden.set(hidden);
-        changed
     }
 }
 
@@ -69,23 +69,23 @@ pub(crate) struct BlockRegistration {
 /// beside it: the surface opening is not a value inside the content, it is
 /// whether the content stands in the picture at all.
 pub(crate) struct PopoverRegistration {
+    /// What the document reads to know whether the surface stands open.
+    pub(crate) flag: Binding,
+    pub(crate) dismiss: Rc<dyn Fn() -> HostAction>,
+    pub(crate) state: Rc<PopoverState>,
     /// The node the surface opens from.
     pub(crate) anchor: WidgetId,
     /// The layer the surface is drawn in.
     pub(crate) layer: WidgetId,
-    /// What the document reads to know whether the surface stands open.
-    pub(crate) flag: Binding,
-    pub(crate) state: Rc<PopoverState>,
-    pub(crate) dismiss: Rc<dyn Fn() -> HostAction>,
 }
 
 /// The window layer one tree mounted, and what a root needs to keep it in step
 /// with the document it came from.
 pub(crate) struct WindowTracker {
-    pub(crate) pointer: Rc<Cell<Option<Pt>>>,
-    pub(crate) layer: Option<WidgetId>,
     /// What the pointer carries, re-read whenever the document is shown again.
     pub(crate) carried: Option<Binding>,
+    pub(crate) layer: Option<WidgetId>,
+    pub(crate) pointer: Rc<Cell<Option<Pt>>>,
     /// Whether the last reading found anything, which is when the layer has to
     /// be painted again as the pointer moves.
     pub(crate) carrying: bool,
@@ -177,6 +177,54 @@ pub struct MasonryNode<Action> {
 }
 
 impl<Action> MasonryNode<Action> {
+    pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
+        let Some(target) = EngineTarget::new(self.geometry(), plan) else {
+            return;
+        };
+        let index = if prepend {
+            0
+        } else {
+            self.engine_targets.len()
+        };
+        self.engine_targets.insert(index, target);
+    }
+
+    pub(crate) fn add_popover(
+        &mut self,
+        layer: WidgetId,
+        flag: &Binding,
+        state: Rc<PopoverState>,
+        dismiss: Rc<dyn Fn() -> HostAction>,
+    ) {
+        self.popovers.push(PopoverRegistration {
+            layer,
+            state,
+            dismiss,
+            anchor: self.widget.id(),
+            flag: flag.clone(),
+        });
+    }
+
+    /// The module shell's own bars, and whatever they hold.
+    ///
+    /// Chrome is furniture that holds furniture: it names no document path, so
+    /// it must not answer as a document node when a test counts them.
+    pub(super) fn chrome(
+        layout: NodeLayout,
+        declared: solve::Size<solve::Length>,
+        children: Vec<Self>,
+        background: Option<Rgba>,
+        frame: Option<(FrameSides, Rgba, f32)>,
+    ) -> Self {
+        let node = Self::document(layout, declared, children, false, background, frame);
+        #[cfg(test)]
+        let node = Self {
+            document_ids: Vec::new(),
+            ..node
+        };
+        node
+    }
+
     pub(super) fn document(
         layout: NodeLayout,
         declared: solve::Size<solve::Length>,
@@ -233,51 +281,25 @@ impl<Action> MasonryNode<Action> {
         Self {
             widget,
             declared,
-            action: PhantomData,
             layers,
             popovers,
             blocks,
             engine_targets,
             engines,
-            geometry: None,
             boxes,
             watched,
             native,
             window,
             #[cfg(test)]
             document_ids,
+            action: PhantomData,
+            geometry: None,
         }
     }
 
-    /// Rounds the corners of this node's own box that the layout says are the
-    /// window's own.
-    ///
-    /// The shape belongs to the node that paints the box, so it is set on the
-    /// node after it is built rather than threaded through every constructor
-    /// that never rounds anything.
-    pub(super) fn rounded(mut self, round: FrameCorners, radius: f32) -> Self {
-        self.widget.widget.set_round(round, radius);
-        self
-    }
-
-    /// The module shell's own bars, and whatever they hold.
-    ///
-    /// Chrome is furniture that holds furniture: it names no document path, so
-    /// it must not answer as a document node when a test counts them.
-    pub(super) fn chrome(
-        layout: NodeLayout,
-        declared: solve::Size<solve::Length>,
-        children: Vec<Self>,
-        background: Option<Rgba>,
-        frame: Option<(FrameSides, Rgba, f32)>,
-    ) -> Self {
-        let node = Self::document(layout, declared, children, false, background, frame);
-        #[cfg(test)]
-        let node = Self {
-            document_ids: Vec::new(),
-            ..node
-        };
-        node
+    #[cfg(test)]
+    pub(crate) fn document_ids(&self) -> &[WidgetId] {
+        &self.document_ids
     }
 
     pub(super) fn furniture(
@@ -303,6 +325,136 @@ impl<Action> MasonryNode<Action> {
             #[cfg(test)]
             document_ids: Vec::new(),
         }
+    }
+
+    /// The cell the root fills with the box this node stands in.
+    pub(crate) fn geometry(&mut self) -> Rc<Cell<MasonryRect>> {
+        if let Some(area) = &self.geometry {
+            return Rc::clone(area);
+        }
+        let area = Rc::new(Cell::new(MasonryRect::ZERO));
+        self.geometry = Some(Rc::clone(&area));
+        self.boxes.push(NodeBox {
+            area: Rc::clone(&area),
+            node: self.widget.id(),
+        });
+        area
+    }
+
+    /// Remembers that this node hides the blocks among its own children, so
+    /// the root can read them again and lay this node out when one changes.
+    pub(crate) fn hides(&mut self, blocks: Vec<(Binding, Rc<BlockState>)>) {
+        let flow = self.widget.id();
+        self.blocks
+            .extend(blocks.into_iter().map(|(hidden, state)| BlockRegistration {
+                hidden,
+                state,
+                flow,
+            }));
+    }
+
+    pub(crate) fn host_engine(
+        &mut self,
+        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+        skin: &Skin,
+    ) {
+        if self.engine_targets.is_empty() {
+            return;
+        }
+        let targets = std::mem::take(&mut self.engine_targets);
+        let raises_menu = targets
+            .iter()
+            .any(|target| matches!(target.plan, HostedControlPlan::Picker { .. }));
+        let engine = HostedEngine::new(self.widget.id(), targets, map_event);
+        if raises_menu {
+            let layer = NewWidget::new(PickerLayer::new(Rc::clone(&engine), skin));
+            engine.set_menu_layer(layer.id());
+            self.layers.push(layer.erased());
+        }
+        self.engines.push(Rc::clone(&engine));
+        self.widget.widget.set_engine(engine);
+    }
+
+    /// Rounds the corners of this node's own box that the layout says are the
+    /// window's own.
+    ///
+    /// The shape belongs to the node that paints the box, so it is set on the
+    /// node after it is built rather than threaded through every constructor
+    /// that never rounds anything.
+    pub(super) fn rounded(mut self, round: FrameCorners, radius: f32) -> Self {
+        self.widget.widget.set_round(round, radius);
+        self
+    }
+
+    pub(crate) fn set_window_layer(
+        &mut self,
+        pointer: Rc<Cell<Option<Pt>>>,
+        layer: WidgetId,
+        carried: Option<Binding>,
+        carrying: bool,
+    ) {
+        self.window = Some(WindowTracker {
+            pointer,
+            carried,
+            carrying,
+            layer: Some(layer),
+        });
+    }
+
+    pub(crate) fn set_window_pointer(&mut self, pointer: Rc<Cell<Option<Pt>>>) {
+        match &mut self.window {
+            Some(window) => window.pointer = pointer,
+            None => {
+                self.window = Some(WindowTracker {
+                    pointer,
+                    layer: None,
+                    carried: None,
+                    carrying: false,
+                });
+            }
+        }
+    }
+
+    pub(crate) fn set_window_tracker(&mut self, tracker: WindowTracker) {
+        self.window = Some(tracker);
+    }
+
+    /// Remembers that this node's leaf shows one endpoint, so its value can be
+    /// re-read into the mounted tree instead of rebuilding the tree to show it.
+    pub(crate) fn watch(&mut self, binding: &Binding) {
+        self.watched.push(Watched::Read {
+            id: self.widget.id(),
+            binding: binding.clone(),
+        });
+    }
+
+    /// Remembers that an object places this node, so the document walk can put
+    /// it somewhere else without the tree being rebuilt around it.
+    pub(crate) fn watch_placement(&mut self, path: InternId) {
+        self.watched.push(Watched::Placed {
+            path,
+            id: self.widget.id(),
+        });
+    }
+
+    pub(crate) fn watch_snapshot(&mut self) {
+        self.watched.push(Watched::Snapshot {
+            id: self.widget.id(),
+        });
+    }
+
+    /// Remembers that this placement reads its point from an endpoint, so the
+    /// stage lays it out again where the point moves.
+    pub(crate) fn watch_spot(&mut self, binding: &Binding) {
+        self.watched.push(Watched::Spot {
+            id: self.widget.id(),
+            binding: binding.clone(),
+        });
+    }
+
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) fn widget_id(&self) -> WidgetId {
+        self.widget.id()
     }
 
     delegate::delegate! {
@@ -356,160 +508,6 @@ impl<Action> MasonryNode<Action> {
             #[call(extend)]
             pub(crate) fn append_native(&mut self, native: Vec<WidgetId>);
         }
-    }
-
-    pub(crate) fn add_popover(
-        &mut self,
-        layer: WidgetId,
-        flag: &Binding,
-        state: Rc<PopoverState>,
-        dismiss: Rc<dyn Fn() -> HostAction>,
-    ) {
-        self.popovers.push(PopoverRegistration {
-            anchor: self.widget.id(),
-            layer,
-            flag: flag.clone(),
-            state,
-            dismiss,
-        });
-    }
-
-    /// Remembers that this node hides the blocks among its own children, so
-    /// the root can read them again and lay this node out when one changes.
-    pub(crate) fn hides(&mut self, blocks: Vec<(Binding, Rc<BlockState>)>) {
-        let flow = self.widget.id();
-        self.blocks
-            .extend(blocks.into_iter().map(|(hidden, state)| BlockRegistration {
-                hidden,
-                state,
-                flow,
-            }));
-    }
-
-    /// The cell the root fills with the box this node stands in.
-    pub(crate) fn geometry(&mut self) -> Rc<Cell<MasonryRect>> {
-        if let Some(area) = &self.geometry {
-            return Rc::clone(area);
-        }
-        let area = Rc::new(Cell::new(MasonryRect::ZERO));
-        self.geometry = Some(Rc::clone(&area));
-        self.boxes.push(NodeBox {
-            area: Rc::clone(&area),
-            node: self.widget.id(),
-        });
-        area
-    }
-
-    pub(crate) fn add_engine_control(&mut self, plan: HostedControlPlan, prepend: bool) {
-        let Some(target) = EngineTarget::new(self.geometry(), plan) else {
-            return;
-        };
-        let index = if prepend {
-            0
-        } else {
-            self.engine_targets.len()
-        };
-        self.engine_targets.insert(index, target);
-    }
-
-    /// Remembers that this node's leaf shows one endpoint, so its value can be
-    /// re-read into the mounted tree instead of rebuilding the tree to show it.
-    pub(crate) fn watch(&mut self, binding: &Binding) {
-        self.watched.push(Watched::Read {
-            id: self.widget.id(),
-            binding: binding.clone(),
-        });
-    }
-
-    /// Remembers that this placement reads its point from an endpoint, so the
-    /// stage lays it out again where the point moves.
-    pub(crate) fn watch_spot(&mut self, binding: &Binding) {
-        self.watched.push(Watched::Spot {
-            id: self.widget.id(),
-            binding: binding.clone(),
-        });
-    }
-
-    pub(crate) fn watch_snapshot(&mut self) {
-        self.watched.push(Watched::Snapshot {
-            id: self.widget.id(),
-        });
-    }
-
-    /// Remembers that an object places this node, so the document walk can put
-    /// it somewhere else without the tree being rebuilt around it.
-    pub(crate) fn watch_placement(&mut self, path: InternId) {
-        self.watched.push(Watched::Placed {
-            id: self.widget.id(),
-            path,
-        });
-    }
-
-    pub(crate) fn host_engine(
-        &mut self,
-        map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-        skin: &Skin,
-    ) {
-        if self.engine_targets.is_empty() {
-            return;
-        }
-        let targets = std::mem::take(&mut self.engine_targets);
-        let raises_menu = targets
-            .iter()
-            .any(|target| matches!(target.plan, HostedControlPlan::Picker { .. }));
-        let engine = HostedEngine::new(self.widget.id(), targets, map_event);
-        // The menu hangs outside every box in the tree, so it is drawn by a
-        // layer above it rather than by the control that owns the engine.
-        if raises_menu {
-            let layer = NewWidget::new(PickerLayer::new(Rc::clone(&engine), skin));
-            engine.set_menu_layer(layer.id());
-            self.layers.push(layer.erased());
-        }
-        self.engines.push(Rc::clone(&engine));
-        self.widget.widget.set_engine(engine);
-    }
-
-    pub(crate) fn set_window_pointer(&mut self, pointer: Rc<Cell<Option<Pt>>>) {
-        match &mut self.window {
-            Some(window) => window.pointer = pointer,
-            None => {
-                self.window = Some(WindowTracker {
-                    pointer,
-                    layer: None,
-                    carried: None,
-                    carrying: false,
-                });
-            }
-        }
-    }
-
-    pub(crate) fn set_window_layer(
-        &mut self,
-        pointer: Rc<Cell<Option<Pt>>>,
-        layer: WidgetId,
-        carried: Option<Binding>,
-        carrying: bool,
-    ) {
-        self.window = Some(WindowTracker {
-            pointer,
-            layer: Some(layer),
-            carried,
-            carrying,
-        });
-    }
-
-    pub(crate) fn set_window_tracker(&mut self, tracker: WindowTracker) {
-        self.window = Some(tracker);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn document_ids(&self) -> &[WidgetId] {
-        &self.document_ids
-    }
-
-    #[cfg(any(test, feature = "capture"))]
-    pub(crate) fn widget_id(&self) -> WidgetId {
-        self.widget.id()
     }
 }
 

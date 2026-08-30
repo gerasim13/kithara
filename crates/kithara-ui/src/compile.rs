@@ -56,17 +56,17 @@ pub struct CompiledUi {
 }
 
 impl CompiledUi {
-    #[cfg(feature = "render")]
-    #[must_use]
-    pub(crate) const fn draw_pools(&self) -> &DrawPools {
-        &self.draw_pools
-    }
-
     /// Current allocation-reuse counters for this compiled document.
     #[cfg(feature = "render")]
     #[must_use]
     pub fn draw_pool_stats(&self) -> PoolStats {
         self.draw_pools.stats()
+    }
+
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub(crate) const fn draw_pools(&self) -> &DrawPools {
+        &self.draw_pools
     }
 
     #[cfg(feature = "render")]
@@ -142,8 +142,8 @@ impl Address<'_> {
     /// The address one step further down, at `index` among this node's children.
     pub(crate) const fn child(&self, index: usize) -> Address<'_> {
         Address::Child {
-            parent: self,
             index,
+            parent: self,
         }
     }
 
@@ -218,9 +218,9 @@ pub enum CompiledNode {
 #[non_exhaustive]
 pub struct SplitCell {
     pub node: CompiledNode,
-    pub weight: f32,
-    pub from: f32,
     pub until: Option<f32>,
+    pub from: f32,
+    pub weight: f32,
 }
 
 impl CompiledNode {
@@ -254,8 +254,6 @@ pub fn compile(
     text: &TextDoc,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
-    // Over the application's own declarations, so a document may bind to what
-    // the host answers for itself without every application registering it.
     let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
@@ -366,11 +364,11 @@ const fn cell_corners(
 struct Compiler<'a> {
     budget: &'a mut Budget,
     interner: &'a mut Interner,
+    shaders: &'a mut ShaderCache,
     skin: &'a SkinDoc,
     text: &'a TextDoc,
     config: &'a UiConfig,
     includes: &'a mut Vec<IncludedModule>,
-    shaders: &'a mut ShaderCache,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
 }
@@ -570,8 +568,6 @@ fn motion_of_layout(node: &CompiledNode) -> Unprompted {
             .map(|cell| motion_of_layout(&cell.node))
             .fold(Unprompted::default(), Unprompted::or),
         CompiledNode::Optional { child, .. } => motion_of_layout(child),
-        // Which branch stands is settled by the room, which this side of the
-        // walk does not know, so the layout moves if any of them does.
         CompiledNode::Adaptive { base, steps, .. } => steps
             .iter()
             .map(|(_, branch)| motion_of_layout(branch))

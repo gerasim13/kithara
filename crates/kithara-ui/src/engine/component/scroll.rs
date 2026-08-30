@@ -8,8 +8,6 @@ use crate::{
     interact::{CursorShape, Hit, Input, Outcome, Scroll, ScrollAxis, recognizers::click},
 };
 
-const LINE_STEP_PX: f32 = 60.0;
-
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ScrollState {
@@ -34,18 +32,8 @@ impl ScrollState {
         }
     }
 
-    pub(crate) fn reconcile(&mut self, config: ScrollConfig) {
-        self.config = config;
-        self.clamp_offset();
-    }
-
-    pub(crate) fn sync_offset(&mut self, offset: f32) {
-        self.offset = offset.clamp(0.0, self.max_offset());
-    }
-
-    pub(crate) fn set_viewport(&mut self, extent: f32) {
-        self.viewport_extent = extent.max(0.0);
-        self.clamp_offset();
+    fn clamp_offset(&mut self) {
+        self.offset = self.offset.clamp(0.0, self.max_offset());
     }
 
     pub(crate) fn handle(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<usize> {
@@ -58,7 +46,48 @@ impl ScrollState {
         self.row_at(hit).map_or(Outcome::IGNORED, Outcome::set)
     }
 
+    fn max_offset(&self) -> f32 {
+        (self.config.content_extent().max(0.0) - self.viewport_extent).max(0.0)
+    }
+
+    pub(crate) fn reconcile(&mut self, config: ScrollConfig) {
+        self.config = config;
+        self.clamp_offset();
+    }
+
+    fn row_at(&self, hit: &Hit) -> Option<usize> {
+        let point = hit.inside()?;
+        let items = self.config.item_layout()?;
+        if self.config.axis() != ScrollAxis::Vertical || items.extent <= 0.0 || items.size <= 0.0 {
+            return None;
+        }
+        let row_right = hit.area().x + (hit.area().w - items.cross_inset).max(0.0);
+        if self.max_offset() > 0.0 && point.x >= row_right {
+            return None;
+        }
+        let y = point.y - hit.area().y + self.offset;
+        if y < 0.0 {
+            return None;
+        }
+        let index = (y / items.extent).floor().to_usize()?;
+        if index >= items.count || y - index.to_f32()? * items.extent >= items.size {
+            return None;
+        }
+        Some(index)
+    }
+
+    pub(crate) fn set_viewport(&mut self, extent: f32) {
+        self.viewport_extent = extent.max(0.0);
+        self.clamp_offset();
+    }
+
+    pub(crate) fn sync_offset(&mut self, offset: f32) {
+        self.offset = offset.clamp(0.0, self.max_offset());
+    }
+
     fn wheel(&mut self, scroll: Scroll, hit: &Hit) -> Outcome<usize> {
+        const LINE_STEP_PX: f32 = 60.0;
+
         if !hit.over() {
             return Outcome::IGNORED;
         }
@@ -83,40 +112,11 @@ impl ScrollState {
         self.offset = next;
         Outcome::captured()
     }
-
-    fn row_at(&self, hit: &Hit) -> Option<usize> {
-        let point = hit.inside()?;
-        let items = self.config.item_layout()?;
-        if self.config.axis() != ScrollAxis::Vertical || items.extent <= 0.0 || items.size <= 0.0 {
-            return None;
-        }
-        let row_right = hit.area().x + (hit.area().w - items.cross_inset).max(0.0);
-        if self.max_offset() > 0.0 && point.x >= row_right {
-            return None;
-        }
-        let y = point.y - hit.area().y + self.offset;
-        if y < 0.0 {
-            return None;
-        }
-        let index = (y / items.extent).floor().to_usize()?;
-        if index >= items.count || y - index.to_f32()? * items.extent >= items.size {
-            return None;
-        }
-        Some(index)
-    }
-
-    fn clamp_offset(&mut self) {
-        self.offset = self.offset.clamp(0.0, self.max_offset());
-    }
-
-    fn max_offset(&self) -> f32 {
-        (self.config.content_extent().max(0.0) - self.viewport_extent).max(0.0)
-    }
 }
 
 pub(in crate::engine) struct ScrollComponent {
-    path: String,
     state: ScrollState,
+    path: String,
 }
 
 impl ScrollComponent {
@@ -127,14 +127,14 @@ impl ScrollComponent {
         }
     }
 
+    pub(super) fn offset(&self) -> f32 {
+        self.state.offset()
+    }
+
     pub(super) fn reconcile(mut self, next: Self) -> Self {
         self.path = next.path;
         self.state.reconcile(next.state.config);
         self
-    }
-
-    pub(super) fn offset(&self) -> f32 {
-        self.state.offset()
     }
 
     pub(super) fn set_viewport(&mut self, area: Rect) {
@@ -146,12 +146,16 @@ impl ScrollComponent {
 }
 
 impl Component for ScrollComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn captures_pointer(&self) -> bool {
+        false
     }
 
-    fn kind(&self) -> Kind {
-        Kind::Scroll
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        if self.state.row_at(hit).is_some() {
+            CursorShape::Pointer
+        } else {
+            CursorShape::None
+        }
     }
 
     fn handle(
@@ -164,15 +168,11 @@ impl Component for ScrollComponent {
         (self.state.handle(input, hit).map(EngineEvent::Index), None)
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        if self.state.row_at(hit).is_some() {
-            CursorShape::Pointer
-        } else {
-            CursorShape::None
-        }
+    fn kind(&self) -> Kind {
+        Kind::Scroll
     }
 
-    fn captures_pointer(&self) -> bool {
-        false
+    fn path(&self) -> &str {
+        &self.path
     }
 }

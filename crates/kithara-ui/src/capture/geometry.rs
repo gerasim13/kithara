@@ -12,8 +12,8 @@ use std::{
 /// anything. A caller builds one, so its fields stay open.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Geometry {
-    pub height: u32,
     pub scale: f64,
+    pub height: u32,
     pub width: u32,
 }
 

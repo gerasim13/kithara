@@ -3,6 +3,7 @@
     clippy::unwrap_used,
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
+
 //! The tests that reach a host this workspace does not own, and that a runner
 //! can reach: the public zvuk CDN and silvercomet.
 //!
@@ -20,7 +21,6 @@
 //! ```text
 //! just test run --lane=network
 //! ```
-
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     mod silvercomet_seek_hang;

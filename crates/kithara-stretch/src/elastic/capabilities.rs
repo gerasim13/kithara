@@ -8,11 +8,11 @@ use crate::elastic::config::ElasticShape;
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct ElasticCapabilities {
-    #[field(skip)]
-    shape: ElasticShape,
     /// Unity-rate algorithmic latency in both coordinate spaces.
     #[field(get, copy)]
     latency: ElasticLatency,
+    #[field(skip)]
+    shape: ElasticShape,
     /// Fixed caller-owned storage span for one terminal-drain chunk.
     #[field(get, copy)]
     terminal_chunk_frames: usize,
@@ -25,8 +25,8 @@ impl ElasticCapabilities {
         terminal_chunk_frames: usize,
     ) -> Self {
         Self {
-            shape,
             latency,
+            shape,
             terminal_chunk_frames,
         }
     }
@@ -94,26 +94,6 @@ impl ElasticCapabilities {
         self.validate_spans(request, source_samples, output_samples)
     }
 
-    /// Buffer shape and rate checks shared by rendering and priming; priming
-    /// spans are bounded by the declared latency rather than by the block
-    /// limits, so it validates these without the limit checks.
-    pub(crate) fn validate_spans(
-        self,
-        request: ElasticRequest,
-        source_samples: usize,
-        output_samples: usize,
-    ) -> Result<(), ElasticError> {
-        self.validate_samples(request, source_samples, output_samples)?;
-        if self.rate_envelope().contains(request) {
-            Ok(())
-        } else {
-            Err(ElasticError::RateOutsideEnvelope {
-                source_frames: request.source_frames(),
-                output_frames: request.output_frames(),
-            })
-        }
-    }
-
     fn validate_samples(
         self,
         request: ElasticRequest,
@@ -135,6 +115,26 @@ impl ElasticCapabilities {
             });
         }
         Ok(())
+    }
+
+    /// Buffer shape and rate checks shared by rendering and priming; priming
+    /// spans are bounded by the declared latency rather than by the block
+    /// limits, so it validates these without the limit checks.
+    pub(crate) fn validate_spans(
+        self,
+        request: ElasticRequest,
+        source_samples: usize,
+        output_samples: usize,
+    ) -> Result<(), ElasticError> {
+        self.validate_samples(request, source_samples, output_samples)?;
+        if self.rate_envelope().contains(request) {
+            Ok(())
+        } else {
+            Err(ElasticError::RateOutsideEnvelope {
+                source_frames: request.source_frames(),
+                output_frames: request.output_frames(),
+            })
+        }
     }
 
     delegate::delegate! {

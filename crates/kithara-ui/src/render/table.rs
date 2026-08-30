@@ -92,53 +92,6 @@ struct TableProgram {
 impl canvas::Program<UiEvent> for TableProgram {
     type State = TableState;
 
-    fn update(
-        &self,
-        state: &mut TableState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        let input = iced_interact::input(event)?;
-        let drag_point = cursor.position().map(Into::into);
-        let point = cursor.position_in(bounds).map(Into::into);
-        let viewport = bounds.size();
-        let origin = Pt {
-            x: bounds.x,
-            y: bounds.y,
-        };
-        let bounds = local_rect(bounds);
-        state.reconcile(&self.paint.path, &self.config);
-        state.set_viewport(viewport, &self.config);
-
-        if let Some(action) = self.divider_input(state, input, bounds, drag_point, origin) {
-            return Some(action);
-        }
-        if let Some(action) = self.row_drag_input(state, input, bounds, point) {
-            return Some(action);
-        }
-
-        let body = table_body(bounds, self.paint.face.skin());
-        let vertical_hit = Hit::new(point, body);
-        let before = state.vertical.offset();
-        let outcome = state.vertical.handle(input, &vertical_hit);
-        let after = state.vertical.offset();
-        if outcome.is_captured() || outcome.value().is_some() {
-            return scroll_action(&self.paint.path, outcome, before, after);
-        }
-
-        let horizontal_hit = Hit::new(point, bounds);
-        let before = state.horizontal.offset();
-        let outcome = state.horizontal.handle(input, &horizontal_hit);
-        let after = state.horizontal.offset();
-        scroll_action(
-            &format!("{}/scroll-x", self.paint.path),
-            outcome,
-            before,
-            after,
-        )
-    }
-
     fn draw(
         &self,
         state: &TableState,
@@ -197,6 +150,53 @@ impl canvas::Program<UiEvent> for TableProgram {
         } else {
             Interaction::None
         }
+    }
+
+    fn update(
+        &self,
+        state: &mut TableState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        let input = iced_interact::input(event)?;
+        let drag_point = cursor.position().map(Into::into);
+        let point = cursor.position_in(bounds).map(Into::into);
+        let viewport = bounds.size();
+        let origin = Pt {
+            x: bounds.x,
+            y: bounds.y,
+        };
+        let bounds = local_rect(bounds);
+        state.reconcile(&self.paint.path, &self.config);
+        state.set_viewport(viewport, &self.config);
+
+        if let Some(action) = self.divider_input(state, input, bounds, drag_point, origin) {
+            return Some(action);
+        }
+        if let Some(action) = self.row_drag_input(state, input, bounds, point) {
+            return Some(action);
+        }
+
+        let body = table_body(bounds, self.paint.face.skin());
+        let vertical_hit = Hit::new(point, body);
+        let before = state.vertical.offset();
+        let outcome = state.vertical.handle(input, &vertical_hit);
+        let after = state.vertical.offset();
+        if outcome.is_captured() || outcome.value().is_some() {
+            return scroll_action(&self.paint.path, outcome, before, after);
+        }
+
+        let horizontal_hit = Hit::new(point, bounds);
+        let before = state.horizontal.offset();
+        let outcome = state.horizontal.handle(input, &horizontal_hit);
+        let after = state.horizontal.offset();
+        scroll_action(
+            &format!("{}/scroll-x", self.paint.path),
+            outcome,
+            before,
+            after,
+        )
     }
 }
 
@@ -692,7 +692,7 @@ mod tests {
             bounds,
             Cursor::Available(point),
         )
-        .unwrap_or_else(|| panic!("pressing the wider divider hit area must capture"));
+        .expect("pressing the wider divider hit area must capture");
         assert_eq!(action.into_inner().2, event::Status::Captured);
 
         let moved = Point::new(point.x + 20.0, point.y);
@@ -703,7 +703,7 @@ mod tests {
             bounds,
             Cursor::Available(moved),
         )
-        .unwrap_or_else(|| panic!("dragging the divider must publish its new width"));
+        .expect("dragging the divider must publish its new width");
         assert!(matches!(
             action.into_inner().0,
             Some(UiEvent::Control {
@@ -734,7 +734,7 @@ mod tests {
             bounds,
             Cursor::Available(point),
         )
-        .unwrap_or_else(|| panic!("the index divider press must be retained"));
+        .expect("the index divider press must be retained");
 
         let mut reordered = columns();
         reordered.push(ColumnLayout {
@@ -759,7 +759,7 @@ mod tests {
             bounds,
             Cursor::Available(moved),
         )
-        .unwrap_or_else(|| panic!("the armed divider must survive a column reorder"));
+        .expect("the armed divider must survive a column reorder");
         assert!(matches!(
             action.into_inner().0,
             Some(UiEvent::Control { path, .. }) if path == "library/tracks/width/index"
@@ -812,7 +812,7 @@ mod tests {
         );
         canvas::Program::update(&program, &mut state, &moved(11.0), bounds, at(11.0));
         let started = canvas::Program::update(&program, &mut state, &moved(40.0), bounds, at(40.0))
-            .unwrap_or_else(|| panic!("crossing the threshold must publish"));
+            .expect("crossing the threshold must publish");
 
         assert_eq!(
             started.into_inner(),
@@ -848,7 +848,7 @@ mod tests {
             bounds,
             cursor,
         )
-        .unwrap_or_else(|| panic!("a row press must arm and capture the row"));
+        .expect("a row press must arm and capture the row");
 
         assert_eq!(
             pressed.into_inner(),
@@ -863,7 +863,7 @@ mod tests {
             bounds,
             cursor,
         )
-        .unwrap_or_else(|| panic!("a plain row release must repaint its pressed state"));
+        .expect("a plain row release must repaint its pressed state");
         assert_eq!(state.pressed_index, None);
         assert_eq!(
             released.into_inner(),
@@ -906,7 +906,7 @@ mod tests {
             bounds,
             Cursor::Unavailable,
         )
-        .unwrap_or_else(|| panic!("release outside must clear and repaint the armed row"));
+        .expect("release outside must clear and repaint the armed row");
 
         assert_eq!(state.pressed_index, None);
         assert_eq!(
@@ -930,7 +930,7 @@ mod tests {
             bounds,
             cursor,
         )
-        .unwrap_or_else(|| panic!("the horizontal scroll must consume its matching wheel"));
+        .expect("the horizontal scroll must consume its matching wheel");
 
         assert_eq!(state.vertical.offset(), 0.0);
         assert!(state.horizontal.offset() > 0.0);

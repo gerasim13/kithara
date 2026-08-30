@@ -6,6 +6,57 @@ use super::stream::StreamCore;
 use crate::{ElasticError, ElasticRequest};
 
 impl StreamCore {
+    pub(super) fn discard_before(&mut self, source_position: f64) -> Result<(), ElasticError> {
+        let Some(chunk) = self
+            .output_chunk
+            .as_ref()
+            .filter(|chunk| chunk.valid && chunk.end.is_finite() && chunk.frames > 0)
+        else {
+            return Ok(());
+        };
+        let frames = chunk
+            .frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let discard = if chunk.end <= chunk.begin {
+            chunk.frames
+        } else {
+            ((source_position - chunk.begin) * frames / (chunk.end - chunk.begin))
+                .ceil()
+                .clamp(0.0, frames)
+                .to_usize()
+                .ok_or(ElasticError::SampleCountOverflow)?
+        };
+        self.output_consumed = self.output_consumed.max(discard);
+        Ok(())
+    }
+
+    fn discard_pre_cue(
+        &mut self,
+        output: &mut [f32],
+        target_frames: usize,
+        discarded_frames: &mut usize,
+    ) -> Result<(), ElasticError> {
+        let Some((end, frames)) = self.output_chunk.as_ref().and_then(|chunk| {
+            (chunk.valid && chunk.end.is_finite() && chunk.frames > 0)
+                .then_some((chunk.end, chunk.frames))
+        }) else {
+            return Ok(());
+        };
+        if end > 0.0 {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee preroll produced post-cue output",
+            ));
+        }
+        let remaining = target_frames.saturating_sub(*discarded_frames);
+        let copied = self.consume(remaining.min(frames), Some(output), *discarded_frames)?;
+        *discarded_frames = discarded_frames
+            .checked_add(copied)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        self.output_consumed = frames;
+        Ok(())
+    }
+
     #[cfg_attr(test, kithara::hang_watchdog)]
     pub(super) fn prime(
         &mut self,
@@ -109,57 +160,6 @@ impl StreamCore {
         self.samples_needed = 0.0;
         self.anchor = Some(0.0);
         self.cue_grain_pending = true;
-        Ok(())
-    }
-
-    fn discard_pre_cue(
-        &mut self,
-        output: &mut [f32],
-        target_frames: usize,
-        discarded_frames: &mut usize,
-    ) -> Result<(), ElasticError> {
-        let Some((end, frames)) = self.output_chunk.as_ref().and_then(|chunk| {
-            (chunk.valid && chunk.end.is_finite() && chunk.frames > 0)
-                .then_some((chunk.end, chunk.frames))
-        }) else {
-            return Ok(());
-        };
-        if end > 0.0 {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee preroll produced post-cue output",
-            ));
-        }
-        let remaining = target_frames.saturating_sub(*discarded_frames);
-        let copied = self.consume(remaining.min(frames), Some(output), *discarded_frames)?;
-        *discarded_frames = discarded_frames
-            .checked_add(copied)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        self.output_consumed = frames;
-        Ok(())
-    }
-
-    pub(super) fn discard_before(&mut self, source_position: f64) -> Result<(), ElasticError> {
-        let Some(chunk) = self
-            .output_chunk
-            .as_ref()
-            .filter(|chunk| chunk.valid && chunk.end.is_finite() && chunk.frames > 0)
-        else {
-            return Ok(());
-        };
-        let frames = chunk
-            .frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let discard = if chunk.end <= chunk.begin {
-            chunk.frames
-        } else {
-            ((source_position - chunk.begin) * frames / (chunk.end - chunk.begin))
-                .ceil()
-                .clamp(0.0, frames)
-                .to_usize()
-                .ok_or(ElasticError::SampleCountOverflow)?
-        };
-        self.output_consumed = self.output_consumed.max(discard);
         Ok(())
     }
 }

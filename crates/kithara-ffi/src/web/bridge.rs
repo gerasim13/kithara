@@ -36,8 +36,8 @@ fn ensure_host_channel() -> Result<wasm::HostSender, JsValue> {
     let (sender, receiver) = wasm::worker_host_channel(&host);
     wasm::warm_up_audio();
     *guard = Some(HostChannel {
-        _host: host,
         receiver,
+        _host: host,
         sender: sender.clone(),
     });
     Ok(sender)

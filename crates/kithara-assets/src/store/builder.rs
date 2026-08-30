@@ -98,13 +98,11 @@ impl AssetStore {
         segment_reservation: Option<u64>,
     ) -> Self {
         let availability = AvailabilityIndex::new();
-        // The pending-resource index is a consumer-driven sibling of `availability`:
-        // no observer / decorator threading, just a shared field. Each
-        // slot's `writer_cancel` is a child of this store cancel.
+        // WHY: The pending-resource index is a consumer-driven sibling of `availability`: no observer / decorator threading, just a shared
+        // field.
         let pending_resources = PendingResourceIndex::new(CancelScope::new(cancel.clone()).token());
         let transactions = ResourceTransactionIndex::default();
-        // The eviction router is the third consumer-driven sibling: the
-        // memory cache's `on_invalidated` hook routes evicted keys into
+        // WHY: The eviction router is the third consumer-driven sibling: the memory cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
         let eviction = EvictionRouter::default();
         let layouts = layouts.unwrap_or_default();
@@ -134,14 +132,14 @@ impl AssetStore {
                     pool,
                     event_bus,
                     cache_capacity,
+                    processing_chunk_size,
+                    processing_gate_poll_interval,
+                    segment_reservation,
                     availability: availability.clone(),
                     evict_cfg: EvictConfig {
                         max_assets,
                         max_bytes,
                     },
-                    processing_chunk_size,
-                    processing_gate_poll_interval,
-                    segment_reservation,
                 }),
                 availability,
             });
@@ -168,8 +166,8 @@ impl AssetStore {
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             MemStoreSetup {
                 active_resources,
-                cancel: cancel.clone(),
                 mem_resource_capacity,
+                cancel: cancel.clone(),
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
                 pool: pool.clone(),
@@ -193,7 +191,7 @@ impl AssetStore {
             processing_chunk_size,
             processing_gate_poll_interval,
         ));
-        // Memory bytes do not survive displacement, so indexes must be invalidated.
+        // WHY: Memory bytes do not survive displacement, so indexes must be invalidated.
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
         let on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
@@ -231,17 +229,17 @@ impl AssetStore {
 /// branch is a function instead of another sixty lines in the builder.
 #[cfg(not(target_arch = "wasm32"))]
 struct DiskStoreSetup {
-    root_dir: PathBuf,
-    cancel: Option<CancelToken>,
-    flush_hub: Option<Arc<FlushHub>>,
-    pool: BytePool,
-    event_bus: Option<EventBus>,
-    cache_capacity: Option<NonZeroUsize>,
     availability: AvailabilityIndex,
+    pool: BytePool,
     evict_cfg: EvictConfig,
+    cache_capacity: Option<NonZeroUsize>,
+    cancel: Option<CancelToken>,
+    event_bus: Option<EventBus>,
+    flush_hub: Option<Arc<FlushHub>>,
     processing_chunk_size: Option<usize>,
     processing_gate_poll_interval: Option<Duration>,
     segment_reservation: Option<u64>,
+    root_dir: PathBuf,
 }
 
 /// Assemble the disk decorator chain: evict over the disk store, processing
@@ -309,7 +307,7 @@ fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
         processing_gate_poll_interval,
     ));
     let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-    // Disk bytes survive LRU displacement, so it needs no invalidation hook.
+    // WHY: Disk bytes survive LRU displacement, so it needs no invalidation hook.
     let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
     let byte_recorder: Option<Arc<dyn ByteRecorder>> =
         Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);

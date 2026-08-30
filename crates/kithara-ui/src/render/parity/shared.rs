@@ -10,9 +10,9 @@ use crate::{
 
 pub(super) struct Endpoints {
     hidden: EndpointDesc,
-    rate: EndpointDesc,
     open: EndpointDesc,
     press: EndpointDesc,
+    rate: EndpointDesc,
 }
 
 impl Default for Endpoints {

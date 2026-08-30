@@ -81,8 +81,8 @@ where
         let element_size = size_of::<U>();
         let old_bytes = old_cap.checked_mul(element_size).ok_or(BudgetExhausted)?;
 
-        // Amortized doubling keeps repeated incremental growth O(n); when the
-        // budget cannot afford the doubled capacity, retry with the exact fit.
+        // WHY: Amortized doubling keeps repeated incremental growth O(n); when the budget cannot afford the doubled capacity, retry with the
+        // exact fit.
         let amortized_cap = min_len.max(old_cap.saturating_mul(2));
         let mut grown = match reserve_charged(&self.pool, amortized_cap, old_bytes, element_size) {
             Ok(grown) => grown,

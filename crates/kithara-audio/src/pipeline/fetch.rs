@@ -5,19 +5,19 @@ use std::num::NonZeroU32;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SourceEnd {
-    /// Exclusive decoded source frame.
-    #[field(get, copy)]
-    frame: u64,
     /// Sample rate of the decoded source coordinate.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Exclusive decoded source frame.
+    #[field(get, copy)]
+    frame: u64,
 }
 
 impl SourceEnd {
     /// Construct a decoded-source boundary.
     #[must_use]
     pub const fn new(frame: u64, sample_rate: NonZeroU32) -> Self {
-        Self { frame, sample_rate }
+        Self { sample_rate, frame }
     }
 }
 
@@ -48,16 +48,6 @@ impl<C> Fetch<C> {
         }
     }
 
-    /// Create rendered data with its exact decoded-source boundary.
-    #[must_use]
-    pub const fn rendered(data: C, epoch: u64, source_end: SourceEnd) -> Self {
-        Self::Data {
-            data,
-            epoch,
-            source_end: Some(source_end),
-        }
-    }
-
     /// Create a natural end-of-stream marker.
     #[must_use]
     pub const fn eof(epoch: u64) -> Self {
@@ -77,6 +67,16 @@ impl<C> Fetch<C> {
     #[must_use]
     pub const fn failure(epoch: u64) -> Self {
         Self::Failure { epoch }
+    }
+
+    /// Create rendered data with its exact decoded-source boundary.
+    #[must_use]
+    pub const fn rendered(data: C, epoch: u64, source_end: SourceEnd) -> Self {
+        Self::Data {
+            data,
+            epoch,
+            source_end: Some(source_end),
+        }
     }
 }
 

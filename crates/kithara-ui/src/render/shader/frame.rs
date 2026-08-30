@@ -14,11 +14,11 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ShaderFrame {
-    #[field(get, vis = "pub(crate)")]
-    image: ImageId,
     #[field(get, vis = "pub(crate)", deref = false)]
     source: Arc<str>,
     values: Arc<[[f32; 4]]>,
+    #[field(get, vis = "pub(crate)")]
+    image: ImageId,
 }
 
 /// A compiled shader binding that the live reader did not satisfy.

@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
+
 //! The user-simulation scenarios that drive real production tracks: HE-AAC v2
 //! behind AES-128 with per-segment key signing, reached over the live CDN with
 //! credentials baked at build time. Reproduces by script what the user
@@ -8,7 +9,6 @@
 //! Compiled only into `suite_network`, which needs the `network` feature.
 //! Everything here is on the public internet: the scenario that reached the
 //! corporate slicer moved out with the rest of what CI cannot serve.
-
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     bufpool::{BytePool, SamplePool},

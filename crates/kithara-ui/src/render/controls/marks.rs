@@ -84,6 +84,13 @@ impl<Key> Marks<Key>
 where
     Key: PartialEq,
 {
+    /// The kept picture and the geometry drawn from it, for as long as it takes
+    /// to replay them. Nothing at all before the first [`Self::mark`].
+    pub(crate) fn drawn<T>(&self, with: impl FnOnce(&canvas::Cache, &DrawList) -> T) -> Option<T> {
+        let kept = self.kept.borrow();
+        kept.value().map(|list| with(&self.geometry, list))
+    }
+
     /// Builds the picture only when the key it hangs on moved, drops the kept
     /// geometry only when the picture that came out differs, and reports which
     /// of the two it had to do. Those answers are the whole of this cache, so
@@ -111,13 +118,6 @@ where
         } else {
             Marked::Same
         }
-    }
-
-    /// The kept picture and the geometry drawn from it, for as long as it takes
-    /// to replay them. Nothing at all before the first [`Self::mark`].
-    pub(crate) fn drawn<T>(&self, with: impl FnOnce(&canvas::Cache, &DrawList) -> T) -> Option<T> {
-        let kept = self.kept.borrow();
-        kept.value().map(|list| with(&self.geometry, list))
     }
 }
 

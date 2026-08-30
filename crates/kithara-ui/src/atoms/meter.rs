@@ -8,8 +8,8 @@ use crate::{
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct StereoMeter {
-    metrics: VuStereoSkin,
     palette: RenderPalette,
+    metrics: VuStereoSkin,
 }
 
 impl StereoMeter {

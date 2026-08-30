@@ -63,6 +63,10 @@ impl<B: AudioBackend> GraphSession<B> {
         }
     }
 
+    pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
+        self.state.ctx.as_mut()
+    }
+
     #[must_use]
     pub fn exec(&mut self, cmd: Cmd) -> Reply {
         if let Cmd::RegisterPlayer { grid_id, .. } = &cmd
@@ -72,21 +76,17 @@ impl<B: AudioBackend> GraphSession<B> {
         }
         run_cmd(&mut self.state, cmd)
     }
-
-    pub fn ctx_mut(&mut self) -> Option<&mut FirewheelCtx<B>> {
-        self.state.ctx.as_mut()
-    }
 }
 
 struct FixtureSession;
 
 impl SessionDispatcher for FixtureSession {
-    fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
-        Ok(Reply::Ok)
-    }
-
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::RealtimeDeferred
+    }
+
+    fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+        Ok(Reply::Ok)
     }
 }
 

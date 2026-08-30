@@ -20,17 +20,34 @@ impl Consts {
 
 pub(crate) struct FdkStream {
     encoder: Encoder,
-    channels: usize,
-    frame_samples: usize,
     pending: [i16; Consts::MAX_FRAME_INPUT_SAMPLES],
-    pending_len: usize,
     output: [u8; Consts::ACCESS_UNIT_CAPACITY],
-    emitted: u64,
     sample_rate: u32,
     timescale: u32,
+    emitted: u64,
+    channels: usize,
+    frame_samples: usize,
+    pending_len: usize,
 }
 
 impl AacStream for FdkStream {
+    fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        let mut units: Vec<EncodedAccessUnit> = Vec::new();
+        if self.pending_len > 0 {
+            let frame_input = self.frame_input();
+            self.pending[self.pending_len..frame_input].fill(0);
+            self.pending_len = frame_input;
+            self.encode_pending(&mut units)?;
+        }
+
+        while let Some(encoded) = self.encoder.flush(&mut self.output)? {
+            if encoded.output_size > 0 {
+                units.push(self.access_unit(encoded.output_size)?);
+            }
+        }
+        Ok(units)
+    }
+
     fn push(&mut self, mut samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
         let frame_input = self.frame_input();
         let mut units: Vec<EncodedAccessUnit> = Vec::new();
@@ -48,23 +65,6 @@ impl AacStream for FdkStream {
 
             if self.pending_len == frame_input {
                 self.encode_pending(&mut units)?;
-            }
-        }
-        Ok(units)
-    }
-
-    fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        let mut units: Vec<EncodedAccessUnit> = Vec::new();
-        if self.pending_len > 0 {
-            let frame_input = self.frame_input();
-            self.pending[self.pending_len..frame_input].fill(0);
-            self.pending_len = frame_input;
-            self.encode_pending(&mut units)?;
-        }
-
-        while let Some(encoded) = self.encoder.flush(&mut self.output)? {
-            if encoded.output_size > 0 {
-                units.push(self.access_unit(encoded.output_size)?);
             }
         }
         Ok(units)
@@ -93,12 +93,12 @@ impl FdkStream {
         }
 
         let encoder = Encoder::new(&EncoderParams {
+            channels,
+            sample_rate,
             aot: sys::AUDIO_OBJECT_TYPE_AOT_AAC_LC,
             bit_rate: u32::try_from(bit_rate).map_err(|_| {
                 EncodeError::InvalidInput("bit_rate does not fit into u32".to_owned())
             })?,
-            channels,
-            sample_rate,
             sbr: false,
         })?;
 
@@ -115,12 +115,34 @@ impl FdkStream {
             encoder,
             channels,
             frame_samples,
+            sample_rate,
+            timescale,
             pending: [0; Consts::MAX_FRAME_INPUT_SAMPLES],
             pending_len: 0,
             output: [0; Consts::ACCESS_UNIT_CAPACITY],
             emitted: 0,
-            sample_rate,
-            timescale,
+        })
+    }
+
+    fn access_unit(&mut self, size: usize) -> EncodeResult<EncodedAccessUnit> {
+        let frame_samples = u64::try_from(self.frame_samples).map_err(|_| {
+            EncodeError::backend_message("frame size does not fit into u64".to_owned())
+        })?;
+        let pts = self.rescale(self.emitted * frame_samples)?;
+        let end = self.rescale((self.emitted + 1) * frame_samples)?;
+        let duration = u32::try_from(end.saturating_sub(pts)).map_err(|_| {
+            EncodeError::backend_message(
+                "access-unit duration does not fit into u32 in the target time base".to_owned(),
+            )
+        })?;
+        self.emitted += 1;
+
+        Ok(EncodedAccessUnit {
+            bytes: self.output[..size].to_vec(),
+            pts,
+            dts: pts,
+            duration,
+            is_sync: true,
         })
     }
 
@@ -144,28 +166,6 @@ impl FdkStream {
 
     const fn frame_input(&self) -> usize {
         self.frame_samples * self.channels
-    }
-
-    fn access_unit(&mut self, size: usize) -> EncodeResult<EncodedAccessUnit> {
-        let frame_samples = u64::try_from(self.frame_samples).map_err(|_| {
-            EncodeError::backend_message("frame size does not fit into u64".to_owned())
-        })?;
-        let pts = self.rescale(self.emitted * frame_samples)?;
-        let end = self.rescale((self.emitted + 1) * frame_samples)?;
-        let duration = u32::try_from(end.saturating_sub(pts)).map_err(|_| {
-            EncodeError::backend_message(
-                "access-unit duration does not fit into u32 in the target time base".to_owned(),
-            )
-        })?;
-        self.emitted += 1;
-
-        Ok(EncodedAccessUnit {
-            bytes: self.output[..size].to_vec(),
-            pts,
-            dts: pts,
-            duration,
-            is_sync: true,
-        })
     }
 
     fn rescale(&self, frames: u64) -> EncodeResult<u64> {

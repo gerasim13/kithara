@@ -33,10 +33,6 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
         | ControlNode::Toggle { .. }
         | ControlNode::Checkbox { .. }
         | ControlNode::Chip { .. } => (Some(ValueKind::Bool), Some(ValueKind::Trigger)),
-        // An adaptive block reads the number that picks its branch, a sprite
-        // how far its sheet has run, an artwork how far its pass has, and an
-        // object how far its motion has, and nothing writes back through any
-        // of them.
         ControlNode::Adaptive { .. }
         | ControlNode::Time { .. }
         | ControlNode::Scalar { .. }
@@ -58,8 +54,6 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
             (Some(ValueKind::Stereo), Some(ValueKind::Scalar))
         }
         ControlNode::Row { .. } | ControlNode::Column { .. } => (None, Some(ValueKind::Scalar)),
-        // A placement reads the point it stands on and publishes the point a
-        // drag leaves it on, which is the same point either way round.
         ControlNode::Placed { .. } => (Some(ValueKind::Point), Some(ValueKind::Point)),
         ControlNode::Include { .. }
         | ControlNode::Reveal { .. }

@@ -35,7 +35,7 @@ impl<T: Default> Default for Mutex<T> {
     }
 }
 
-// crate-internal: condvar needs the raw guard
+// WHY: crate-internal: condvar needs the raw guard
 pub struct MutexGuard<'a, T>(pub(crate) parking_lot::MutexGuard<'a, T>);
 
 impl<T> MutexGuard<'_, T> {

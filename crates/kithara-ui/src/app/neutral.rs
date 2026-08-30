@@ -16,13 +16,6 @@ pub trait App {
     /// The layout entry to compile for the state the application is in now.
     fn document(&self) -> &str;
 
-    /// The skin to paint the state the application is in now.
-    ///
-    /// A skin is the application's, not the host's: which one it wears is part
-    /// of what it is showing, and it can turn to another one whenever it likes.
-    /// The host follows that the same way it follows a change of document.
-    fn skin(&self) -> &Skin;
-
     /// Hands the host the values the document binds to, for as long as the
     /// call lasts.
     ///
@@ -31,6 +24,13 @@ pub trait App {
     /// borrows the application, so there is nothing inside the application to
     /// hand back a reference to.
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R;
+
+    /// The skin to paint the state the application is in now.
+    ///
+    /// A skin is the application's, not the host's: which one it wears is part
+    /// of what it is showing, and it can turn to another one whenever it likes.
+    /// The host follows that the same way it follows a change of document.
+    fn skin(&self) -> &Skin;
 
     /// Advances anything that moves on its own. Called once per frame.
     fn tick(&mut self) {}
@@ -43,17 +43,23 @@ pub trait App {
 #[derive(bon::Builder, Clone, Copy)]
 #[non_exhaustive]
 pub struct Config<'a> {
+    /// The caption catalog every `@key` in the document resolves against.
+    pub text: &'a TextDoc,
     /// Which endpoints the document may bind to.
     pub endpoints: &'a dyn EndpointRegistry,
     /// Where document sources are read from.
     pub resolver: &'a dyn SourceResolver,
-    /// The caption catalog every `@key` in the document resolves against.
-    pub text: &'a TextDoc,
+    /// Window title. Ignored by a host that does not own a window.
+    #[builder(default = "")]
+    pub title: &'a str,
     /// The extensions this application registers, which is what a `Custom`
     /// control resolves its kind against. The same set is what the document is
     /// compiled against, so a kind nothing registered is refused there rather
     /// than mounted as a blank box.
     pub kinds: Option<&'a CustomKinds>,
+    /// Smallest window the document is laid out for, in logical points.
+    /// Ignored by a host that does not own a window.
+    pub min_size: Option<(u32, u32)>,
     /// Whether the system draws the window frame. A document that carries its
     /// own title bar, drag region and window buttons wants this off, or the two
     /// frames are drawn one inside the other.
@@ -61,12 +67,6 @@ pub struct Config<'a> {
     /// Ignored by a host that does not own a window.
     #[builder(default = true)]
     pub decorations: bool,
-    /// Smallest window the document is laid out for, in logical points.
-    /// Ignored by a host that does not own a window.
-    pub min_size: Option<(u32, u32)>,
-    /// Window title. Ignored by a host that does not own a window.
-    #[builder(default = "")]
-    pub title: &'a str,
 }
 
 /// Why a UI could not be brought up or kept running.

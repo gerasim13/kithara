@@ -19,8 +19,8 @@ pub(super) struct FetchWriter {
     pub(super) invalid_response: Arc<AtomicBool>,
     pub(super) offset: Arc<AtomicU64>,
     pub(super) cancel: CancelToken,
-    pub(super) epoch: WriterEpoch,
     pub(super) inner: Weak<FileInner>,
+    pub(super) epoch: WriterEpoch,
 }
 
 impl FetchWriter {
@@ -97,6 +97,20 @@ impl FileInner {
         true
     }
 
+    fn commit_fetch_if_complete(
+        &self,
+        epoch: &WriterEpoch,
+        completion: FetchCompletion<'_>,
+    ) -> bool {
+        if !epoch.is_current() {
+            return false;
+        }
+        let Some(final_len) = self.resolved_final_len(completion) else {
+            return false;
+        };
+        self.commit_if_complete(epoch, final_len)
+    }
+
     pub(super) fn complete_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
         if completion.invalid_response && !matches!(completion.error, Some(NetError::Cancelled)) {
             self.fail_current_epoch(
@@ -136,20 +150,6 @@ impl FileInner {
             return;
         }
         let _ = self.commit_fetch_if_complete(epoch, completion);
-    }
-
-    fn commit_fetch_if_complete(
-        &self,
-        epoch: &WriterEpoch,
-        completion: FetchCompletion<'_>,
-    ) -> bool {
-        if !epoch.is_current() {
-            return false;
-        }
-        let Some(final_len) = self.resolved_final_len(completion) else {
-            return false;
-        };
-        self.commit_if_complete(epoch, final_len)
     }
 
     fn resolved_final_len(&self, completion: FetchCompletion<'_>) -> Option<u64> {

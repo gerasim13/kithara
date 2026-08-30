@@ -57,10 +57,10 @@ impl BeatThis {
         #[builder(default)] config: BeatConfig,
     ) -> Result<Self, BeatError> {
         Ok(Self {
+            sample_pool,
             mel: MelExtractor::try_from(mel_model)?,
             predictor: BeatPredictor::try_from(beat_model)?,
             picker: PeakPicker::new(config),
-            sample_pool,
         })
     }
 

@@ -9,24 +9,24 @@ use crate::{
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Segment {
-    pub seq: u64,
     pub bytes: Bytes,
-    pub duration_ts: u32,
     pub discontinuity: bool,
+    pub duration_ts: u32,
+    pub seq: u64,
 }
 
 /// Frames access units into ADTS and rotates segments on the media clock.
 #[derive(Debug)]
 pub struct Segmenter {
     packer: AdtsPacker,
+    frames: Vec<u8>,
+    discontinuity: bool,
+    duration_ts: u32,
     timescale: u32,
-    target_ts: u64,
     next_seq: u64,
     stream_ts: u64,
-    frames: Vec<u8>,
+    target_ts: u64,
     units: usize,
-    duration_ts: u32,
-    discontinuity: bool,
 }
 
 impl Segmenter {
@@ -49,39 +49,6 @@ impl Segmenter {
             duration_ts: 0,
             discontinuity: false,
         })
-    }
-
-    /// Append an access unit and close the segment once it reaches the target.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an oversized ADTS frame or segment duration.
-    pub fn push(&mut self, unit: &EncodedAccessUnit) -> BroadcastResult<Option<Segment>> {
-        let duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
-            BroadcastError::DurationOutOfRange {
-                duration_ts: u64::from(self.duration_ts) + u64::from(unit.duration),
-            }
-        })?;
-        self.packer.pack_into(&unit.bytes, &mut self.frames)?;
-        self.duration_ts = duration_ts;
-        self.units += 1;
-
-        if u64::from(self.duration_ts) >= self.target_ts {
-            return Ok(self.close());
-        }
-        Ok(None)
-    }
-
-    /// Close the open segment and mark the next one discontinuous.
-    pub fn mark_drop(&mut self) -> Option<Segment> {
-        let closed = self.close();
-        self.discontinuity = true;
-        closed
-    }
-
-    /// Close the open segment.
-    pub fn flush(&mut self) -> Option<Segment> {
-        self.close()
     }
 
     fn close(&mut self) -> Option<Segment> {
@@ -107,6 +74,39 @@ impl Segmenter {
         self.discontinuity = false;
         Some(segment)
     }
+
+    /// Close the open segment.
+    pub fn flush(&mut self) -> Option<Segment> {
+        self.close()
+    }
+
+    /// Close the open segment and mark the next one discontinuous.
+    pub fn mark_drop(&mut self) -> Option<Segment> {
+        let closed = self.close();
+        self.discontinuity = true;
+        closed
+    }
+
+    /// Append an access unit and close the segment once it reaches the target.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an oversized ADTS frame or segment duration.
+    pub fn push(&mut self, unit: &EncodedAccessUnit) -> BroadcastResult<Option<Segment>> {
+        let duration_ts = self.duration_ts.checked_add(unit.duration).ok_or_else(|| {
+            BroadcastError::DurationOutOfRange {
+                duration_ts: u64::from(self.duration_ts) + u64::from(unit.duration),
+            }
+        })?;
+        self.packer.pack_into(&unit.bytes, &mut self.frames)?;
+        self.duration_ts = duration_ts;
+        self.units += 1;
+
+        if u64::from(self.duration_ts) >= self.target_ts {
+            return Ok(self.close());
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -123,8 +123,8 @@ mod tests {
     impl Consts {
         const PAYLOAD: usize = 200;
         const SAMPLE_RATE: u32 = 48_000;
-        const UNIT_DURATION: u32 = 1_024;
         const UNITS_PER_TARGET: usize = 188;
+        const UNIT_DURATION: u32 = 1_024;
     }
 
     fn segmenter() -> Segmenter {

@@ -27,31 +27,9 @@ impl IsolatorEq {
         }
     }
 
-    delegate::delegate! {
-        to self.gains {
-            #[must_use]
-            #[call(len)]
-            pub const fn band_count(&self) -> usize;
-            #[must_use]
-            #[call(target)]
-            pub fn target_gain(&self, band: usize) -> Option<GainDb>;
-            #[cfg(test)]
-            pub(crate) fn bypass_active(&self) -> bool;
-            #[cfg(test)]
-            pub(crate) fn is_smoothing(&self) -> bool;
-            #[call(set)]
-            pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
-            #[cfg(test)]
-            #[call(settle)]
-            pub(crate) fn settle_gain(&mut self, band: usize);
-            #[cfg(test)]
-            pub(crate) fn silence_active(&self) -> bool;
-        }
-    }
-
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        // Guarding the input covers the bypass and silence paths too.
+        // WHY: Guarding the input covers the bypass and silence paths too.
         let input = sanitize_sample(input);
         self.gains.tick();
         if self.gains.silence_active() {
@@ -85,6 +63,28 @@ impl IsolatorEq {
         let sample_rate = sample_rate.as_();
         self.gains.update_sample_rate(sample_rate);
         self.filters.update_sample_rate(sample_rate);
+    }
+
+    delegate::delegate! {
+        to self.gains {
+            #[must_use]
+            #[call(len)]
+            pub const fn band_count(&self) -> usize;
+            #[must_use]
+            #[call(target)]
+            pub fn target_gain(&self, band: usize) -> Option<GainDb>;
+            #[cfg(test)]
+            pub(crate) fn bypass_active(&self) -> bool;
+            #[cfg(test)]
+            pub(crate) fn is_smoothing(&self) -> bool;
+            #[call(set)]
+            pub fn set_gain(&mut self, band: usize, gain_db: GainDb);
+            #[cfg(test)]
+            #[call(settle)]
+            pub(crate) fn settle_gain(&mut self, band: usize);
+            #[cfg(test)]
+            pub(crate) fn silence_active(&self) -> bool;
+        }
     }
 }
 

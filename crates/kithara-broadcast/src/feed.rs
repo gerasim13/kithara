@@ -10,27 +10,27 @@ use ringbuf::{
 /// Result of one non-blocking feed poll.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeedChunk {
-    /// Samples lost after the audio appended by this poll.
-    pub dropped: u64,
     /// The producer will send nothing further.
     pub has_ended: bool,
+    /// Samples lost after the audio appended by this poll.
+    pub dropped: u64,
 }
 
 /// Non-blocking interleaved-f32 intake for a live broadcast.
 pub trait LivePcmFeed: Send {
-    /// Append ready audio and report the gap behind it without waiting.
-    fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk;
-
     /// Bound the feed at already handed-over audio and report its end finitely.
     fn close(&mut self);
+
+    /// Append ready audio and report the gap behind it without waiting.
+    fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk;
 }
 
 /// Feed over an SPSC PCM ring and its monotonic dropped-sample counter.
 pub struct RingFeed {
-    pcm: HeapCons<f32>,
     drops: Arc<AtomicU64>,
-    counted: u64,
+    pcm: HeapCons<f32>,
     last: Option<usize>,
+    counted: u64,
 }
 
 impl RingFeed {
@@ -47,6 +47,10 @@ impl RingFeed {
 }
 
 impl LivePcmFeed for RingFeed {
+    fn close(&mut self) {
+        self.last = Some(self.pcm.occupied_len());
+    }
+
     fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
         let held = self.pcm.write_is_held();
         let take = self.last.unwrap_or_else(|| self.pcm.occupied_len());
@@ -63,11 +67,7 @@ impl LivePcmFeed for RingFeed {
             *last -= taken;
             *last == 0
         });
-        FeedChunk { dropped, has_ended }
-    }
-
-    fn close(&mut self) {
-        self.last = Some(self.pcm.occupied_len());
+        FeedChunk { has_ended, dropped }
     }
 }
 
@@ -81,9 +81,9 @@ mod tests {
 
     use super::{Arc, AtomicU64, LivePcmFeed, Ordering, RingFeed};
 
-    const CAPACITY: usize = 16;
-
     fn ring() -> (HeapProd<f32>, Arc<AtomicU64>, RingFeed) {
+        const CAPACITY: usize = 16;
+
         let (producer, consumer) = HeapRb::<f32>::new(CAPACITY).split();
         let drops = Arc::new(AtomicU64::new(0));
         let feed = RingFeed::new(consumer, Arc::clone(&drops));

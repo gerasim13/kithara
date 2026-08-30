@@ -18,12 +18,12 @@ pub(in crate::gui) struct ReadRoot<'a> {
     engine: EngineNode,
     library: LibraryNode<'a>,
     mix: MixNode<'a>,
-    mixer: StripsNode<'a>,
     player: PlayerNode<'a>,
+    mixer: StripsNode<'a>,
     tempo: TempoNode<'a>,
-    vis: VisNode<'a>,
     ui: UiNode<'a>,
     decks: Vec<DeckNode<'a>>,
+    vis: VisNode<'a>,
 }
 
 impl<'a> ReadRoot<'a> {
@@ -63,14 +63,14 @@ impl<'a> ReadRoot<'a> {
         );
 
         Self {
+            library,
+            decks,
+            engine,
             broadcast: BroadcastNode::new(
                 state.broadcast.is_on_air(),
                 state.broadcast.url().unwrap_or_default(),
                 Broadcaster::is_available(),
             ),
-            library,
-            decks,
-            engine,
             mix: MixNode::new(state.session.mix()),
             mixer: StripsNode::new(state.session.mix()),
             player: PlayerNode::new(state.session.mix()),
@@ -135,21 +135,19 @@ mod tests {
         state::{AbrVariant, UiState, covered},
     };
 
-    const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
-
     struct Fixture {
         catalog: Catalog,
         marks: CatalogRowMarks,
         collapsed: CollapsedModules,
+        eq_mode: EqMode,
         library: LibraryView,
         menu: MenuState,
-        modules: Modules,
-        window: WindowState,
         mix: MixState,
+        modules: Modules,
         stage: StageView,
-        eq_mode: EqMode,
-        broadcast_available: bool,
         decks: Vec<(UiState, DeckCache)>,
+        window: WindowState,
+        broadcast_available: bool,
     }
 
     impl Fixture {
@@ -194,10 +192,10 @@ mod tests {
             let drag = DragNode::new(library.title(0), Some(1), decks.len());
 
             ReadRoot {
-                broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 library,
                 decks,
                 engine,
+                broadcast: BroadcastNode::new(false, "", self.broadcast_available),
                 mix: MixNode::new(&self.mix),
                 mixer: StripsNode::new(&self.mix),
                 player: PlayerNode::new(&self.mix),
@@ -313,6 +311,8 @@ mod tests {
 
     #[kithara::test]
     fn the_read_tree_answers_every_key_the_renderer_asks_for() {
+        const DERIVED: [&str; 1] = ["deck.playback.position_normalized"];
+
         let documented = readable_endpoints().map(|(id, scopes)| {
             let scope: Vec<String> = scopes
                 .iter()

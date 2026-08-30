@@ -94,6 +94,19 @@ pub enum SourcePhase {
 /// Implementations answer from self-synchronizing state and must not take
 /// locks a reader wait can hold.
 pub trait SourceProbe: Send + Sync + 'static {
+    /// Optional byte-map handle — the same answer as [`Source::byte_map`],
+    /// including its over-time `None` → `Some` transition.
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+
+    /// Whether the source currently reports zero bytes — the same
+    /// convention as [`Source::is_empty`].
+    fn is_empty(&self) -> bool {
+        self.len().is_none_or(|n| n == 0)
+    }
+
+    /// Total length if known — the same answer as [`Source::len`].
+    fn len(&self) -> Option<u64>;
+
     /// Overall source readiness at the current position.
     fn phase(&self) -> SourcePhase;
 
@@ -107,19 +120,6 @@ pub trait SourceProbe: Send + Sync + 'static {
     /// Absolute byte-position set — the same atomic cursor as
     /// [`Source::set_position`].
     fn set_position(&self, pos: u64);
-
-    /// Total length if known — the same answer as [`Source::len`].
-    fn len(&self) -> Option<u64>;
-
-    /// Whether the source currently reports zero bytes — the same
-    /// convention as [`Source::is_empty`].
-    fn is_empty(&self) -> bool {
-        self.len().is_none_or(|n| n == 0)
-    }
-
-    /// Optional byte-map handle — the same answer as [`Source::byte_map`],
-    /// including its over-time `None` → `Some` transition.
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
 }
 
 /// Reason a [`ReadOutcome::Pending`] was returned — i.e. why the source
@@ -274,12 +274,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
         None
     }
 
-    /// Control-plane hook run once per seek, before the epoch is minted. Sources with a fixed byte
-    /// space keep the default `None`.
-    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
-        None
-    }
-
     /// Overall source readiness at the current timeline position.
     ///
     /// Uses the source's internal knowledge of chunk/segment boundaries
@@ -301,13 +295,6 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     /// by `wait_range()` implementations for fast-path dispatch.
     fn phase_at(&self, range: Range<u64>) -> SourcePhase;
 
-    /// Narrow byte-space handle serving the same snapshots as
-    /// [`Source::phase_at`], [`Source::position`], [`Source::len`], and
-    /// [`Source::byte_map`] without going through the stream's control-plane
-    /// lock. The forbid-blocking audio produce core answers every byte-space
-    /// question through this handle only.
-    fn probe(&self) -> Arc<dyn SourceProbe>;
-
     /// Narrow read-only handle to the playhead position and total duration.
     fn playhead_read(&self) -> Arc<dyn PlayheadRead>;
 
@@ -318,6 +305,13 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
     ///
     /// HLS delegates to active variant; file owns its own atomic cursor.
     fn position(&self) -> u64;
+
+    /// Narrow byte-space handle serving the same snapshots as
+    /// [`Source::phase_at`], [`Source::position`], [`Source::len`], and
+    /// [`Source::byte_map`] without going through the stream's control-plane
+    /// lock. The forbid-blocking audio produce core answers every byte-space
+    /// question through this handle only.
+    fn probe(&self) -> Arc<dyn SourceProbe>;
 
     /// Read data at offset into buffer.
     ///
@@ -337,6 +331,12 @@ pub trait Source: MaybeSend + MaybeSync + 'static {
 
     /// Narrow read-only handle to seek/flush coordination state.
     fn seek_observe(&self) -> Arc<dyn SeekObserve>;
+
+    /// Control-plane hook run once per seek, before the epoch is minted. Sources with a fixed byte
+    /// space keep the default `None`.
+    fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
+        None
+    }
 
     /// Absolute set of the byte cursor — used by [`Stream::seek`] and
     /// post-seek landings. Sources implement this via the same atomic
@@ -452,16 +452,6 @@ pub trait VariantControl: Send + Sync + 'static {
     /// automatic selection wins even while transition publication is locked.
     fn selected_variant_for_seek(&self) -> usize;
 
-    /// Whether the named pending transition is stalled on a source demand
-    /// that is actually being serviced — the incoming session's next byte
-    /// waits on a planned or in-flight fetch. Drives the audio worker's
-    /// hang classification: `true` parks the worker without ticking its
-    /// watchdog, `false` keeps a wedged transition visible to it. The
-    /// default is the strict answer.
-    fn transition_demand_in_flight(&self, _transition: VariantTransition) -> bool {
-        false
-    }
-
     /// Transfer the prepared reader exactly once. The typed result keeps
     /// readiness, prior transfer, and stale identity distinct.
     ///
@@ -472,6 +462,16 @@ pub trait VariantControl: Send + Sync + 'static {
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake>;
+
+    /// Whether the named pending transition is stalled on a source demand
+    /// that is actually being serviced — the incoming session's next byte
+    /// waits on a planned or in-flight fetch. Drives the audio worker's
+    /// hang classification: `true` parks the worker without ticking its
+    /// watchdog, `false` keeps a wedged transition visible to it. The
+    /// default is the strict answer.
+    fn transition_demand_in_flight(&self, _transition: VariantTransition) -> bool {
+        false
+    }
 }
 
 /// Rebuilds a source's byte space for a seek about to begin.
@@ -569,12 +569,18 @@ mod tests {
     /// Constant-phase probe for the minimal test sources below; shares the
     /// source's cursor cell and mirrors its `len`.
     struct FixedPhase {
-        phase: SourcePhase,
-        len: Option<u64>,
         position: Arc<AtomicU64>,
+        len: Option<u64>,
+        phase: SourcePhase,
     }
 
     impl SourceProbe for FixedPhase {
+        fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+            None
+        }
+        fn len(&self) -> Option<u64> {
+            self.len
+        }
         fn phase(&self) -> SourcePhase {
             self.phase
         }
@@ -586,12 +592,6 @@ mod tests {
         }
         fn set_position(&self, pos: u64) {
             self.position.store(pos, Ordering::Release);
-        }
-        fn len(&self) -> Option<u64> {
-            self.len
-        }
-        fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-            None
         }
     }
 

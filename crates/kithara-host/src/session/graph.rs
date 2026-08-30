@@ -19,8 +19,8 @@ use crate::{
 pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     mode.gain()
 }
-// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
-// squares its argument, so it must be converted rather than passed through.
+// WHY: A level is a linear amplitude, but `Volume::Linear` is a fader taper that squares its argument, so it must be converted
+// rather than passed through.
 pub(super) fn master_gain(level: f32) -> Volume {
     Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
 }
@@ -247,11 +247,8 @@ pub(super) mod lifecycle {
                     .map_err(|error| graph_state(error.message()))?,
                 None => observed_session_grid,
             };
-            // Backends may defer processor drop after `stop_stream`. Reserve a
-            // successor before stopping so teardown never depends on the RT
-            // `stream_stopped` callback reaching this control handle. Control
-            // admits at most one unobserved commit; the next context advances
-            // once more before publishing.
+            // WHY: Backends may defer processor drop after `stop_stream`. Reserve a successor before stopping so teardown never depends on the
+            // RT `stream_stopped` callback reaching this control handle.
             session_grid_generation
                 .advance_restart()
                 .map_err(|error| graph_state(error.message()))?;
@@ -422,8 +419,8 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
-    // Validates the whole request before mutating anything, so an invalid
-    // entry leaves the batch untouched. Omitted players are unchanged.
+    // WHY: Validates the whole request before mutating anything, so an invalid entry leaves the batch untouched. Omitted players are
+    // unchanged.
     pub(in crate::session) fn set_player_master_volumes<B: AudioBackend>(
         state: &mut SessionState<B>,
         levels: &[PlayerLevel],
@@ -440,8 +437,7 @@ pub(super) mod controls {
             if resolved.iter().any(|&(seen, _)| seen == idx) {
                 return Err(SessionError::DuplicatePlayer(player_id));
             }
-            // Checked here so the apply pass below is infallible
-            // (all-or-nothing).
+            // WHY: Checked here so the apply pass below is infallible (all-or-nothing).
             let player = deck_at(state, idx)?;
             if player.started
                 && (state.ctx.is_none()

@@ -20,13 +20,16 @@ impl Marked {
         Self { mark, size }
     }
 
-    /// How much room it takes across. A glyph is as wide as it was shaped; an
-    /// outline is drawn in a square, so it is as wide as it is tall.
-    pub(crate) fn width(&self, text: &mut TextContext) -> f32 {
-        match self.mark {
-            Mark::Glyph(ch) => text.shape_lucide(&ch.to_string(), self.size).width(),
-            Mark::Outline(_) => self.size,
-        }
+    /// Draws it in the middle of the box, across as well as down.
+    pub(crate) fn centred(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        color: Rgba,
+    ) {
+        let x = bounds.x + (bounds.w - self.width(text)) / 2.0;
+        self.paint(list, text, x, bounds, color);
     }
 
     /// Draws it with its left edge at `x`, centred down the box, and answers
@@ -59,9 +62,9 @@ impl Marked {
                 let path = outline.placed_with(
                     list,
                     Rect {
+                        x,
                         h: self.size,
                         w: self.size,
-                        x,
                         y: bounds.y + (bounds.h - self.size) / 2.0,
                     },
                 );
@@ -71,15 +74,12 @@ impl Marked {
         }
     }
 
-    /// Draws it in the middle of the box, across as well as down.
-    pub(crate) fn centred(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        bounds: Rect,
-        color: Rgba,
-    ) {
-        let x = bounds.x + (bounds.w - self.width(text)) / 2.0;
-        self.paint(list, text, x, bounds, color);
+    /// How much room it takes across. A glyph is as wide as it was shaped; an
+    /// outline is drawn in a square, so it is as wide as it is tall.
+    pub(crate) fn width(&self, text: &mut TextContext) -> f32 {
+        match self.mark {
+            Mark::Glyph(ch) => text.shape_lucide(&ch.to_string(), self.size).width(),
+            Mark::Outline(_) => self.size,
+        }
     }
 }

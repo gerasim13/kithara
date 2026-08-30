@@ -33,19 +33,19 @@ enum Glyph {
 
 #[derive(Clone, Copy)]
 struct ControlRegion {
+    glyph: Glyph,
     bounds: Rect,
     command: WindowCommand,
-    glyph: Glyph,
     icon_size: f32,
 }
 
 pub(crate) struct ControlsProgram {
-    color: Rgba,
-    controls: WindowControlSkin,
     divider_color: Option<Rgba>,
     frame_color: Option<Rgba>,
+    color: Rgba,
     hover_color: Rgba,
     resources: TextResources,
+    controls: WindowControlSkin,
     stroke_width: f32,
 }
 
@@ -72,26 +72,13 @@ impl ControlsProgram {
             WindowControlSkin::Buttons { .. } | WindowControlSkin::Close { .. } => None,
         };
         Self {
-            color: skin.rgba(skin.window.icon_color),
             controls,
             divider_color,
             frame_color,
+            color: skin.rgba(skin.window.icon_color),
             hover_color: skin.rgba(skin.window.icon_hover_color),
             resources: skin.text_resources().clone(),
             stroke_width: skin.window.icon_stroke_width,
-        }
-    }
-
-    fn width(&self) -> f32 {
-        match self.controls {
-            WindowControlSkin::Buttons {
-                minus_icon_size,
-                maximize_icon_size,
-                close_icon_size,
-                gap,
-                padding,
-            } => minus_icon_size + maximize_icon_size + close_icon_size + gap * 2.0 + padding * 2.0,
-            WindowControlSkin::Close { cell_size, .. } => cell_size,
         }
     }
 
@@ -104,6 +91,62 @@ impl ControlsProgram {
             } => Length::Fixed(cell_size),
             WindowControlSkin::Buttons { .. } | WindowControlSkin::Close { .. } => Length::Fill,
         }
+    }
+
+    fn hits(&self, bounds: Rect) -> Vec<LayerHit<WindowCommand>> {
+        let (regions, count) = self.regions(bounds);
+        regions
+            .into_iter()
+            .take(count)
+            .map(|region| LayerHit::new(region.bounds, CursorShape::Pointer, region.command))
+            .collect()
+    }
+
+    fn paint(&self, bounds: Rect, at: Option<Pt>) -> DrawList {
+        let mut builder = DrawListBuilder::default();
+        if let (
+            WindowControlSkin::Close {
+                frame: Some(frame), ..
+            },
+            Some(color),
+        ) = (self.controls, self.frame_color)
+        {
+            paint_frame(&mut builder, bounds, frame, color);
+        }
+        let (regions, count) = self.regions(bounds);
+        for region in regions.into_iter().take(count) {
+            let color = if Hit::new(at, region.bounds).over() {
+                self.hover_color
+            } else {
+                self.color
+            };
+            paint_glyph(
+                &mut builder,
+                region.glyph,
+                region.bounds,
+                region.icon_size,
+                color,
+                self.stroke_width,
+            );
+        }
+        if let (
+            WindowControlSkin::Close {
+                divider: Some((width, _)),
+                ..
+            },
+            Some(color),
+        ) = (self.controls, self.divider_color)
+        {
+            builder.fill_rect(
+                Rect {
+                    h: bounds.h,
+                    w: width.min(bounds.w),
+                    ..bounds
+                },
+                color,
+            );
+        }
+        builder.finish()
     }
 
     fn regions(&self, bounds: Rect) -> ([ControlRegion; 3], usize) {
@@ -163,6 +206,7 @@ impl ControlsProgram {
                 ..
             } => {
                 let close = ControlRegion {
+                    icon_size,
                     bounds: Rect {
                         h: bounds.h,
                         w: cell_size,
@@ -171,67 +215,23 @@ impl ControlsProgram {
                     },
                     command: WindowCommand::Close,
                     glyph: Glyph::Close,
-                    icon_size,
                 };
                 ([close; 3], 1)
             }
         }
     }
 
-    fn hits(&self, bounds: Rect) -> Vec<LayerHit<WindowCommand>> {
-        let (regions, count) = self.regions(bounds);
-        regions
-            .into_iter()
-            .take(count)
-            .map(|region| LayerHit::new(region.bounds, CursorShape::Pointer, region.command))
-            .collect()
-    }
-
-    fn paint(&self, bounds: Rect, at: Option<Pt>) -> DrawList {
-        let mut builder = DrawListBuilder::default();
-        if let (
-            WindowControlSkin::Close {
-                frame: Some(frame), ..
-            },
-            Some(color),
-        ) = (self.controls, self.frame_color)
-        {
-            paint_frame(&mut builder, bounds, frame, color);
+    fn width(&self) -> f32 {
+        match self.controls {
+            WindowControlSkin::Buttons {
+                minus_icon_size,
+                maximize_icon_size,
+                close_icon_size,
+                gap,
+                padding,
+            } => minus_icon_size + maximize_icon_size + close_icon_size + gap * 2.0 + padding * 2.0,
+            WindowControlSkin::Close { cell_size, .. } => cell_size,
         }
-        let (regions, count) = self.regions(bounds);
-        for region in regions.into_iter().take(count) {
-            let color = if Hit::new(at, region.bounds).over() {
-                self.hover_color
-            } else {
-                self.color
-            };
-            paint_glyph(
-                &mut builder,
-                region.glyph,
-                region.bounds,
-                region.icon_size,
-                color,
-                self.stroke_width,
-            );
-        }
-        if let (
-            WindowControlSkin::Close {
-                divider: Some((width, _)),
-                ..
-            },
-            Some(color),
-        ) = (self.controls, self.divider_color)
-        {
-            builder.fill_rect(
-                Rect {
-                    h: bounds.h,
-                    w: width.min(bounds.w),
-                    ..bounds
-                },
-                color,
-            );
-        }
-        builder.finish()
     }
 }
 
@@ -322,8 +322,8 @@ fn paint_glyph(
 impl WindowLayerProgram for ControlsProgram {
     type State = ControlsState;
 
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fixed(self.width()), self.height())
+    fn hit_layer(&self, _state: &ControlsState, bounds: Rect) -> HostLayer<WindowCommand> {
+        HostLayer::new(bounds, DrawList::default(), self.hits(bounds))
     }
 
     fn layer(
@@ -348,8 +348,12 @@ impl WindowLayerProgram for ControlsProgram {
         )
     }
 
-    fn hit_layer(&self, _state: &ControlsState, bounds: Rect) -> HostLayer<WindowCommand> {
-        HostLayer::new(bounds, DrawList::default(), self.hits(bounds))
+    fn resources(&self) -> Option<&TextResources> {
+        Some(&self.resources)
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fixed(self.width()), self.height())
     }
 
     fn update(
@@ -406,10 +410,6 @@ impl WindowLayerProgram for ControlsProgram {
         let redraw = state.hovered != hovered;
         state.hovered = hovered;
         (outcome, redraw)
-    }
-
-    fn resources(&self) -> Option<&TextResources> {
-        Some(&self.resources)
     }
 }
 

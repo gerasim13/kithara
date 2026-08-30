@@ -19,14 +19,15 @@ pub(crate) struct Stream {
 }
 
 trait BroadcastHost {
-    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>>;
-    fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()>;
     fn disable_tap(&self) -> BroadcastResult<()>;
+    fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()>;
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>>;
 }
 
 impl BroadcastHost for Host {
-    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-        Ok(self.sample_rate()?.measured)
+    fn disable_tap(&self) -> BroadcastResult<()> {
+        self.disable_mix_tap()?;
+        Ok(())
     }
 
     fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()> {
@@ -34,9 +35,8 @@ impl BroadcastHost for Host {
         Ok(())
     }
 
-    fn disable_tap(&self) -> BroadcastResult<()> {
-        self.disable_mix_tap()?;
-        Ok(())
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+        Ok(self.sample_rate()?.measured)
     }
 }
 
@@ -49,6 +49,10 @@ impl Packager for Backend {
         live.handle.status().is_live
     }
 
+    fn release(host: &Host) -> BroadcastResult<()> {
+        release(host)
+    }
+
     fn start(
         host: &Host,
         shutdown: &CancelToken,
@@ -58,10 +62,6 @@ impl Packager for Backend {
             return Ok(None);
         };
         start(host, shutdown, &config, tap_lead).map(Some)
-    }
-
-    fn release(host: &Host) -> BroadcastResult<()> {
-        release(host)
     }
 
     fn stop(live: Stream) {
@@ -205,8 +205,9 @@ mod tests {
     }
 
     impl BroadcastHost for SessionHandle {
-        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-            Ok(self.sample_rate()?.measured)
+        fn disable_tap(&self) -> BroadcastResult<()> {
+            self.exec_ok(Cmd::DisableMixTap)?;
+            Ok(())
         }
 
         fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()> {
@@ -214,9 +215,8 @@ mod tests {
             Ok(())
         }
 
-        fn disable_tap(&self) -> BroadcastResult<()> {
-            self.exec_ok(Cmd::DisableMixTap)?;
-            Ok(())
+        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+            Ok(self.sample_rate()?.measured)
         }
     }
 

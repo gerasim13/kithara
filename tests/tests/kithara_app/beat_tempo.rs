@@ -1,7 +1,6 @@
 //! Real-record regression tests for production beat analysis.
 //!
 //! Set `KITHARA_TEMPO_RECORDS` to `/path=bpm;/path=bpm` before running ignored tests.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;

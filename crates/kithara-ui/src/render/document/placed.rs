@@ -9,12 +9,12 @@ use crate::{draw::Pt, expand::Binding, ids::InternId};
 #[non_exhaustive]
 pub struct PlacedMount<'a> {
     pub path: InternId,
-    pub at: Pt,
     /// Where the point comes from, for a host that re-reads endpoints into a
     /// tree it keeps rather than mounting the document again.
     pub read: Option<&'a Binding>,
-    pub write: Option<&'a Binding>,
     pub snap: Option<Snap>,
+    pub write: Option<&'a Binding>,
+    pub at: Pt,
 }
 
 /// What takes a carried placement: the points of the placements its magnet

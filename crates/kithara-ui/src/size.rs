@@ -262,8 +262,6 @@ pub(crate) fn effective_size(
     snapshot: &dyn Snapshot,
 ) -> Option<SizeSpec> {
     let declared = match node {
-        // A node that declares no box of its own shows the branch it draws,
-        // which is the only branch whose box the parent ever sees.
         ExpandedNode::Adaptive {
             measure,
             size,
@@ -387,11 +385,6 @@ pub(crate) fn compute_size(
                 Pad::new(*pad, *pad_x, *pad_y, skin.layout.grid_pad),
             )
         }
-        // The first child sets the box and the rest are handed it, which is
-        // what both hosts do — `Stack` in iced and `NodeLayout::Stack` on
-        // masonry each measure the first layer and give every layer that size.
-        // A stack whose children disagree is therefore the first child's size,
-        // not the largest, and saying so here keeps the two hosts honest.
         ExpandedNode::Stage { children, .. } => visible(children, snapshot)
             .next()
             .map_or(SizeSpec::FILL, |first| compute_size(first, skin, snapshot)),
@@ -425,8 +418,6 @@ pub(crate) fn min_size(node: &ExpandedNode, skin: &SkinDoc) -> SizeSpec {
         | ExpandedNode::Reveal { child, .. } => min_size(child, skin),
         ExpandedNode::Popover { anchor, .. } => min_size(anchor, skin),
         ExpandedNode::Adaptive { size, base, .. } => at_least(*size, min_size(base, skin)),
-        // A stage hands every layer the first child's box, so what it needs is
-        // what that layer needs.
         ExpandedNode::Stage { size, children, .. } => at_least(
             *size,
             children
@@ -472,14 +463,14 @@ pub(crate) fn axis_min(size: SizeSpec, axis: MeasureAxis) -> f32 {
 }
 
 pub(crate) struct Cell {
-    from: f32,
     until: Option<f32>,
     min: SizeSpec,
+    from: f32,
 }
 
 impl Cell {
     pub(crate) const fn new(from: f32, until: Option<f32>, min: SizeSpec) -> Self {
-        Self { from, until, min }
+        Self { until, min, from }
     }
 }
 
@@ -497,9 +488,9 @@ fn thresholds(cells: &[Cell]) -> usize {
 
 pub(crate) struct Cells {
     along: Axis,
+    pad: Pad,
     cells: Vec<Cell>,
     gap: f32,
-    pad: Pad,
 }
 
 impl Cells {
@@ -509,6 +500,20 @@ impl Cells {
             cells,
             gap: 0.0,
             pad: Pad::NONE,
+        }
+    }
+
+    fn need(&self, room: Option<f32>) -> SizeSpec {
+        let standing: Vec<_> = self
+            .cells
+            .iter()
+            .filter(|cell| room.is_none_or(|room| stands(cell.from, cell.until, room)))
+            .map(|cell| cell.min)
+            .collect();
+        let gaps = gap_total(self.gap, standing.len());
+        match self.along {
+            Axis::Horizontal => inset(combine_horizontal(standing), gaps, 0.0, self.pad),
+            Axis::Vertical => inset(combine_vertical(standing), 0.0, gaps, self.pad),
         }
     }
 
@@ -550,18 +555,16 @@ impl Cells {
         })
     }
 
-    fn need(&self, room: Option<f32>) -> SizeSpec {
-        let standing: Vec<_> = self
-            .cells
-            .iter()
-            .filter(|cell| room.is_none_or(|room| stands(cell.from, cell.until, room)))
-            .map(|cell| cell.min)
-            .collect();
-        let gaps = gap_total(self.gap, standing.len());
-        match self.along {
-            Axis::Horizontal => inset(combine_horizontal(standing), gaps, 0.0, self.pad),
-            Axis::Vertical => inset(combine_vertical(standing), 0.0, gaps, self.pad),
-        }
+    pub(crate) fn rooms(&self, axis: MeasureAxis, least: f32) -> Vec<(f32, f32)> {
+        std::iter::once(least)
+            .chain(
+                self.cells
+                    .iter()
+                    .map(|cell| cell.from)
+                    .filter(|from| *from > least),
+            )
+            .map(|room| (room, axis_min(self.need(Some(room)), axis)))
+            .collect()
     }
 
     pub(crate) fn settled(&self, measure: Option<MeasureAxis>) -> SizeSpec {
@@ -573,18 +576,6 @@ impl Cells {
             size = covering(size, self.need(Some(axis_min(size, axis))));
         }
         size
-    }
-
-    pub(crate) fn rooms(&self, axis: MeasureAxis, least: f32) -> Vec<(f32, f32)> {
-        std::iter::once(least)
-            .chain(
-                self.cells
-                    .iter()
-                    .map(|cell| cell.from)
-                    .filter(|from| *from > least),
-            )
-            .map(|room| (room, axis_min(self.need(Some(room)), axis)))
-            .collect()
     }
 }
 

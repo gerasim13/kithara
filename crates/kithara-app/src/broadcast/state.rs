@@ -30,15 +30,15 @@ pub(crate) trait Packager: 'static {
 
     fn is_live(live: &Self::Live) -> bool;
 
+    /// Releases the host mix tap before the packager drains.
+    fn release(host: &Host) -> BroadcastResult<()>;
+
     /// `Ok(None)`: no device rate measured yet, so the request stands.
     fn start(
         host: &Host,
         shutdown: &CancelToken,
         tap_lead: Duration,
     ) -> BroadcastResult<Option<Self::Live>>;
-
-    /// Releases the host mix tap before the packager drains.
-    fn release(host: &Host) -> BroadcastResult<()>;
 
     /// Drains the stream and shuts it down. Blocking.
     fn stop(live: Self::Live);

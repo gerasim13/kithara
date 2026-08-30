@@ -120,6 +120,10 @@ impl Source for HlsSource {
         self.peer_wake.clone()
     }
 
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
+    }
+
     fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
         Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
     }
@@ -131,10 +135,6 @@ impl Source for HlsSource {
             self.coord.seek_epoch_handle(),
         );
         Some(Box::new(sink))
-    }
-
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
     }
 
     fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
@@ -187,8 +187,8 @@ mod tests {
     };
 
     struct TestAbrPeer {
-        cancel: CancelToken,
         state: Arc<AbrState>,
+        cancel: CancelToken,
     }
 
     impl Abr for TestAbrPeer {
@@ -244,8 +244,8 @@ mod tests {
             let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
             let publisher = state.publisher();
             let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-                cancel: cancel.clone(),
                 state,
+                cancel: cancel.clone(),
             });
             let settings = AbrSettings::builder().cancel(cancel.clone()).build();
             let controller = AbrController::new(settings);

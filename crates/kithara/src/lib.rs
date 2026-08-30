@@ -1,35 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! # Kithara
-//!
-//! Facade crate providing a unified API for audio streaming and decoding.
-//!
-//! ## Quick start
-//!
-//! ```ignore
-//! use kithara::{
-//!     assets::AssetStore,
-//!     bufpool::Region,
-//!     prelude::*,
-//! };
-//!
-//! let region = Region::default();
-//! let worker = PlayWorker::new(
-//!     PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-//! );
-//! // Auto-detect from URL
-//! let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
-//!     "https://example.com/song.mp3",
-//! )?)
-//! .store(AssetStore::builder().pool(region.byte_pool()).build())
-//! .worker(worker)
-//! .build();
-//! let mut resource = Resource::new(config).await?;
-//!
-//! // Read interleaved PCM
-//! let mut buf = [0.0f32; 1024];
-//! resource.read(&mut buf);
-//! ```
+//! Unified Kithara audio streaming, decoding, and playback API.
 
 pub mod audio {
     pub use kithara_audio::*;

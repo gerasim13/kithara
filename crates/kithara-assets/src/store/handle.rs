@@ -47,8 +47,8 @@ pub struct AssetStore {
 pub(super) struct AssetStoreInner {
     pub(super) layouts: AssetLayoutRegistry,
     pub(super) availability: AvailabilityIndex,
-    pub(super) pending_resources: PendingResourceIndex,
     pub(super) eviction: EvictionRouter,
+    pub(super) pending_resources: PendingResourceIndex,
     pub(super) transactions: ResourceTransactionIndex,
     pub(super) backend: StoreBackendInner,
 }
@@ -66,11 +66,6 @@ pub(super) enum StoreBackendInner {
 }
 
 impl AssetStore {
-    #[cfg(test)]
-    pub(super) fn capabilities(&self) -> Capabilities {
-        delegate_to_store!(self, capabilities)
-    }
-
     /// Acquire a resource explicitly for mutation.
     ///
     /// # Errors
@@ -126,28 +121,15 @@ impl AssetStore {
             })
     }
 
-    delegate::delegate! {
-        to self.inner {
-            /// Return the crate-private aggregate availability handle.
-            #[field(&availability)]
-            pub(crate) fn availability(&self) -> &AvailabilityIndex;
-            /// Return the crate-private aggregate demand handle.
-            #[field(&pending_resources)]
-            fn pending_resources(&self) -> &PendingResourceIndex;
-            /// Return the crate-private eviction-router handle.
-            #[field(&eviction)]
-            fn eviction(&self) -> &EvictionRouter;
-            #[field(&layouts)]
-            fn layouts(&self) -> &AssetLayoutRegistry;
-            #[field(&transactions)]
-            fn transactions(&self) -> &ResourceTransactionIndex;
-        }
-    }
-
     /// Byte ranges known to the availability aggregate for this resource.
     #[must_use]
     pub fn available_ranges(&self, key: &ResourceKey) -> RangeSet<u64> {
         self.availability().available_ranges(key)
+    }
+
+    #[cfg(test)]
+    pub(super) fn capabilities(&self) -> Capabilities {
+        delegate_to_store!(self, capabilities)
     }
 
     /// Persist the in-memory byte-availability aggregate snapshot to
@@ -305,6 +287,24 @@ impl AssetStore {
         Fut: Future<Output = T>,
     {
         self.transactions().run(key, operation).await
+    }
+
+    delegate::delegate! {
+        to self.inner {
+            /// Return the crate-private aggregate availability handle.
+            #[field(&availability)]
+            pub(crate) fn availability(&self) -> &AvailabilityIndex;
+            /// Return the crate-private aggregate demand handle.
+            #[field(&pending_resources)]
+            fn pending_resources(&self) -> &PendingResourceIndex;
+            /// Return the crate-private eviction-router handle.
+            #[field(&eviction)]
+            fn eviction(&self) -> &EvictionRouter;
+            #[field(&layouts)]
+            fn layouts(&self) -> &AssetLayoutRegistry;
+            #[field(&transactions)]
+            fn transactions(&self) -> &ResourceTransactionIndex;
+        }
     }
 }
 

@@ -60,7 +60,6 @@ pub(super) fn route(instance: &str) -> Option<Route> {
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     let target = route(instance)?;
-    // A match guard would read better, but `if let` guards are above the MSRV.
     if let Some(row) = rest.strip_prefix("menu/")
         && matches!(target, Route::MicroBar | Route::Bar)
     {
@@ -199,15 +198,12 @@ fn menu_control(cache: &mut ViewCache, control: &str, action: &ControlAction) ->
     }
     match control {
         "burger" => cache.menu.toggle(),
-        // The popover publishes its dismissal on its own path.
         "pop" | "header-close" => cache.menu.close(),
         "layouts-head" => cache.menu.toggle_layouts(),
         "modules-head" => cache.menu.toggle_modules(),
         "full-screen" => return Some(Message::Window(WindowCommand::ToggleFullScreen)),
         "cast" => return Some(Message::BroadcastToggle),
         row => {
-            // A grid cell reaches the host through its own include, so the
-            // module is the first segment of the path.
             let (row, _) = row.split_once('/').unwrap_or((row, ""));
             if let Some(module) = row.strip_prefix("module-") {
                 cache.modules.toggle(module);

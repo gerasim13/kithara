@@ -49,10 +49,10 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct MasonryHost<'a, Action = UiEvent> {
-    pub(super) ctx: Ctx<'a, 'a>,
     pub(super) skin: &'a Skin,
-    custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
+    pub(super) ctx: Ctx<'a, 'a>,
     pub(super) map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
+    custom: BTreeMap<String, Box<dyn MountedCustom<HostAction>>>,
     #[field(with)]
     state: MasonryState,
     action: std::marker::PhantomData<fn() -> Action>,
@@ -74,16 +74,6 @@ impl MasonryState {
         self.paths.borrow_mut().clear();
     }
 
-    #[cfg(any(test, feature = "capture"))]
-    pub(crate) fn tag_path(&self, path: &str, id: WidgetId) {
-        self.paths.borrow_mut().insert(path.to_owned(), id);
-    }
-
-    #[cfg(any(test, feature = "capture"))]
-    pub(crate) fn widget_id(&self, path: &str) -> Option<WidgetId> {
-        self.paths.borrow().get(path).copied()
-    }
-
     fn popover(&self, path: &str, open: bool) -> Rc<PopoverState> {
         let mut popovers = self.popovers.borrow_mut();
         let state = Rc::clone(
@@ -93,6 +83,16 @@ impl MasonryState {
         );
         state.latch(open);
         state
+    }
+
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) fn tag_path(&self, path: &str, id: WidgetId) {
+        self.paths.borrow_mut().insert(path.to_owned(), id);
+    }
+
+    #[cfg(any(test, feature = "capture"))]
+    pub(crate) fn widget_id(&self, path: &str) -> Option<WidgetId> {
+        self.paths.borrow().get(path).copied()
     }
 
     /// The window one scroll of the document looks through.
@@ -162,43 +162,21 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    /// The text leaf `spec` describes, carrying `content` and whether the
-    /// control reads as active right now. Both are resolved by the caller,
-    /// which is the only thing that can reach the readings.
-    pub(super) fn text_leaf(
+    /// The state one child of a flow is hidden by, read once for the tree it
+    /// is mounted into and kept for the root to read again.
+    ///
+    /// The child is mounted whether the document hides it or not, so the flow
+    /// above it can show it again without anything being rebuilt.
+    fn block(
         &self,
-        spec: &mount::Text<'_>,
-        content: String,
-        active: bool,
-        declared: solve::Size<solve::Length>,
-    ) -> MasonryNode<Action> {
-        let style = spec.style;
-        let role = self
-            .skin
-            .text_role(style, spec.color, spec.active_color, active)
-            .faced(spec.font, spec.weight);
-        let padding_x = match style {
-            TextStyle::VisFooter => self.skin.vis.footer_padding_x,
-            TextStyle::VisMeta => self.skin.vis.index_padding_x,
-            TextStyle::VisTitle => self.skin.vis.name_padding_x,
-            _ => 0.0,
-        };
-        let content = style.cased(content);
-        MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Text {
-                align: spec.align,
-                content,
-                role,
-                padding_x,
-                color: self.skin.rgba(role.color),
-                text: Box::new(TextContext::from(self.skin.text_resources())),
-            }),
-            declared,
-            Vec::new(),
-            false,
-            None,
-            None,
-        )
+        binding: Option<Binding>,
+        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
+    ) -> Option<Rc<BlockState>> {
+        let binding = binding?;
+        let state = Rc::new(BlockState::default());
+        state.latch(self.ctx.flag(Some(&binding)));
+        blocks.push((binding, Rc::clone(&state)));
+        Some(state)
     }
 
     /// A leaf drawing content this toolkit does not own.
@@ -220,22 +198,6 @@ where
                 skin: kind.map_or_else(CustomSkin::default, |kind| self.skin.custom(kind).clone()),
                 text: Box::new(TextContext::from(self.skin.text_resources())),
             }),
-            declared,
-            Vec::new(),
-            false,
-            None,
-            None,
-        )
-    }
-
-    pub(super) fn vis_leaf(
-        &self,
-        preset: Option<String>,
-        value: Option<ReadValue<'_>>,
-        declared: solve::Size<solve::Length>,
-    ) -> MasonryNode<Action> {
-        MasonryNode::document(
-            NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.ctx))),
             declared,
             Vec::new(),
             false,
@@ -363,23 +325,6 @@ where
         output
     }
 
-    /// The state one child of a flow is hidden by, read once for the tree it
-    /// is mounted into and kept for the root to read again.
-    ///
-    /// The child is mounted whether the document hides it or not, so the flow
-    /// above it can show it again without anything being rebuilt.
-    fn block(
-        &self,
-        binding: Option<Binding>,
-        blocks: &mut Vec<(Binding, Rc<BlockState>)>,
-    ) -> Option<Rc<BlockState>> {
-        let binding = binding?;
-        let state = Rc::new(BlockState::default());
-        state.latch(self.ctx.flag(Some(&binding)));
-        blocks.push((binding, Rc::clone(&state)));
-        Some(state)
-    }
-
     pub(super) fn shader_leaf(
         &self,
         spec: crate::shader::ShaderSpec,
@@ -388,6 +333,61 @@ where
     ) -> MasonryNode<Action> {
         MasonryNode::document(
             NodeLayout::Leaf(Leaf::Shader(ShaderLeaf::new(spec, path, self.ctx))),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
+
+    /// The text leaf `spec` describes, carrying `content` and whether the
+    /// control reads as active right now. Both are resolved by the caller,
+    /// which is the only thing that can reach the readings.
+    pub(super) fn text_leaf(
+        &self,
+        spec: &mount::Text<'_>,
+        content: String,
+        active: bool,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action> {
+        let style = spec.style;
+        let role = self
+            .skin
+            .text_role(style, spec.color, spec.active_color, active)
+            .faced(spec.font, spec.weight);
+        let padding_x = match style {
+            TextStyle::VisFooter => self.skin.vis.footer_padding_x,
+            TextStyle::VisMeta => self.skin.vis.index_padding_x,
+            TextStyle::VisTitle => self.skin.vis.name_padding_x,
+            _ => 0.0,
+        };
+        let content = style.cased(content);
+        MasonryNode::document(
+            NodeLayout::Leaf(Leaf::Text {
+                align: spec.align,
+                content,
+                role,
+                padding_x,
+                color: self.skin.rgba(role.color),
+                text: Box::new(TextContext::from(self.skin.text_resources())),
+            }),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
+
+    pub(super) fn vis_leaf(
+        &self,
+        preset: Option<String>,
+        value: Option<ReadValue<'_>>,
+        declared: solve::Size<solve::Length>,
+    ) -> MasonryNode<Action> {
+        MasonryNode::document(
+            NodeLayout::Leaf(Leaf::Vis(VisLeaf::new(preset, value, self.ctx))),
             declared,
             Vec::new(),
             false,
@@ -405,47 +405,6 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    pub(super) fn reads_true(&self, read: Option<&Binding>) -> bool {
-        read.and_then(|binding| self.ctx.read(binding))
-            .is_some_and(|value| matches!(value, ReadValue::Bool(true)))
-    }
-
-    /// Gives a control its own click gesture only where the document says the
-    /// leaf owns input; an engine-owned control is painted and left alone.
-    pub(super) fn owned<Control>(
-        &self,
-        control: Control,
-        owner: InputOwner,
-        path: &str,
-        interactive: impl FnOnce(Control, String, Rc<dyn Fn(UiEvent) -> HostAction>) -> Control,
-    ) -> Control {
-        match owner {
-            InputOwner::Leaf => interactive(control, path.to_owned(), Rc::clone(&self.map_event)),
-            InputOwner::Engine => control,
-        }
-    }
-
-    pub(super) fn event(
-        &self,
-        event: impl Fn() -> UiEvent + 'static,
-    ) -> Box<dyn Fn() -> HostAction> {
-        let map = Rc::clone(&self.map_event);
-        Box::new(move || map(event()))
-    }
-
-    fn control_action(&self, path: String, action: ControlAction) -> Box<dyn Fn() -> HostAction> {
-        self.event(move || crate::render::control_event(&path, action.clone()))
-    }
-
-    fn shared_control_action(
-        &self,
-        path: String,
-        action: ControlAction,
-    ) -> Rc<dyn Fn() -> HostAction> {
-        let map = Rc::clone(&self.map_event);
-        Rc::new(move || map(crate::render::control_event(&path, action.clone())))
-    }
-
     pub(super) fn add_window_layer<Program>(
         &self,
         output: &mut MasonryNode<Action>,
@@ -464,6 +423,47 @@ where
         output.add_layer(masonry::core::NewWidget::new(layer).erased());
         output.set_window_pointer(pointer);
     }
+
+    fn control_action(&self, path: String, action: ControlAction) -> Box<dyn Fn() -> HostAction> {
+        self.event(move || crate::render::control_event(&path, action.clone()))
+    }
+
+    pub(super) fn event(
+        &self,
+        event: impl Fn() -> UiEvent + 'static,
+    ) -> Box<dyn Fn() -> HostAction> {
+        let map = Rc::clone(&self.map_event);
+        Box::new(move || map(event()))
+    }
+
+    /// Gives a control its own click gesture only where the document says the
+    /// leaf owns input; an engine-owned control is painted and left alone.
+    pub(super) fn owned<Control>(
+        &self,
+        control: Control,
+        owner: InputOwner,
+        path: &str,
+        interactive: impl FnOnce(Control, String, Rc<dyn Fn(UiEvent) -> HostAction>) -> Control,
+    ) -> Control {
+        match owner {
+            InputOwner::Leaf => interactive(control, path.to_owned(), Rc::clone(&self.map_event)),
+            InputOwner::Engine => control,
+        }
+    }
+
+    pub(super) fn reads_true(&self, read: Option<&Binding>) -> bool {
+        read.and_then(|binding| self.ctx.read(binding))
+            .is_some_and(|value| matches!(value, ReadValue::Bool(true)))
+    }
+
+    fn shared_control_action(
+        &self,
+        path: String,
+        action: ControlAction,
+    ) -> Rc<dyn Fn() -> HostAction> {
+        let map = Rc::clone(&self.map_event);
+        Rc::new(move || map(crate::render::control_event(&path, action.clone())))
+    }
 }
 
 impl<Action> Host for MasonryHost<'_, Action>
@@ -477,32 +477,80 @@ where
     /// the tree being rebuilt around it.
     const MOUNTS_HIDDEN: bool = true;
 
-    fn split(
+    fn control(
         &mut self,
-        axis: Axis,
-        measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
+        path: InternId,
+        spec: &ControlSpec,
+        read: Option<&Binding>,
+        owner: InputOwner,
+        size: Option<SizeSpec>,
+        transform: Transform,
     ) -> Self::Output {
-        self.mount_split(axis, measure, children)
-    }
-
-    fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
-        let size = declared(plan.size);
-        MasonryNode::document(NodeLayout::Measured(plan), size, branches, true, None, None)
-    }
-
-    fn module(&mut self, mut module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
-        let mut output = self
-            .mount_module(&mut module, content)
-            .rounded(module.round(), self.skin.chrome.frame.radius);
-        // A module that takes drops reports the pointer crossing it, and the
-        // hand carrying a track never belongs to the module: it belongs to the
-        // list it came from. So the module observes without capturing, and
-        // every control inside keeps the events it would have had.
-        if module.drop().is_some() {
-            let instance = self.ctx.ui.resolve(module.instance());
-            output.add_engine_control(HostedControlPlan::crossing(instance), true);
-            output.host_engine(Rc::clone(&self.map_event), self.skin);
+        let declared = control_declared(spec, size, self.skin);
+        let plan = hosted_control_plan(path, spec, read, self.ctx, self.skin);
+        let path_id = path;
+        let path = self.ctx.ui.resolve(path);
+        let owns_pointer = pointer_owner(owner, spec);
+        let custom = self.custom.remove(path);
+        let custom_installed = custom.is_some();
+        let cx = Cx {
+            declared,
+            owner: owns_pointer,
+            path,
+            plan: plan.as_ref(),
+            read,
+            skin: self.skin.at(path),
+        };
+        let mut output = custom.map_or_else(
+            || {
+                mount::controls!(
+                    spec,
+                    Mount {
+                        cx: &cx,
+                        host: &*self
+                    }
+                )
+            },
+            |widget| self.custom_leaf(widget, None, declared),
+        );
+        output.place(transform);
+        if self.ctx.ui.driven {
+            output.watch_placement(path_id);
+        }
+        #[cfg(any(test, feature = "capture"))]
+        self.state.tag_path(path, output.widget_id());
+        if custom_installed {
+            return output;
+        }
+        if matches!(
+            spec,
+            ControlSpec::Vis | ControlSpec::Table { .. } | ControlSpec::Tree { .. }
+        ) {
+            output.watch_snapshot();
+        } else if let Some(read) = read {
+            output.watch(read);
+        }
+        if owns_pointer == InputOwner::Leaf {
+            return output;
+        }
+        mount::controls!(
+            spec,
+            Wire {
+                host: &*self,
+                cx: &cx,
+                output: &mut output
+            }
+        );
+        if let Some(plan) = plan {
+            output.add_engine_control(plan, false);
+            if owner == InputOwner::Leaf {
+                output.host_engine(Rc::clone(&self.map_event), self.skin);
+            }
+        } else if activates(spec) {
+            output.set_actions(
+                Some(self.control_action(path.to_owned(), ControlAction::Activate)),
+                None,
+            );
         }
         output
     }
@@ -568,15 +616,56 @@ where
         output
     }
 
+    fn hosted(&mut self, _node: &ExpandedNode, mut child: Self::Output) -> Self::Output {
+        child.host_engine(Rc::clone(&self.map_event), self.skin);
+        child
+    }
+
+    fn measured(&mut self, plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
+        let size = declared(plan.size);
+        MasonryNode::document(NodeLayout::Measured(plan), size, branches, true, None, None)
+    }
+
+    fn module(&mut self, mut module: Module<'_>, content: Option<Self::Output>) -> Self::Output {
+        let mut output = self
+            .mount_module(&mut module, content)
+            .rounded(module.round(), self.skin.chrome.frame.radius);
+        if module.drop().is_some() {
+            let instance = self.ctx.ui.resolve(module.instance());
+            output.add_engine_control(HostedControlPlan::crossing(instance), true);
+            output.host_engine(Rc::clone(&self.map_event), self.skin);
+        }
+        output
+    }
+
+    /// One placement of a stage: the child keeps the box it asked for, and the
+    /// stage lays it out at the point the placement carries. A placement with
+    /// somewhere to write also carries the grip that moves that point, and the
+    /// endpoint it is re-read from between mounts.
+    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        let declared = child.declared();
+        let mut output =
+            MasonryNode::document(NodeLayout::Stack, declared, vec![child], false, None, None);
+        let grip = placement.write.map(|_| {
+            Grip::new(
+                self.ctx.ui.resolve(placement.path).to_owned(),
+                placement.snap.clone(),
+                Rc::clone(&self.map_event),
+            )
+        });
+        output.set_spot(Spot::new(placement.at, grip));
+        if let Some(read) = placement.read {
+            output.watch_spot(read);
+        }
+        output
+    }
+
     fn popover(
         &mut self,
         popover: Popover<'_>,
         anchor: Self::Output,
         content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
-        // The surface is mounted whether the document holds it open or shut:
-        // this tree keeps the shape it mounts, and a surface left out of it
-        // could never be opened again without rebuilding everything around it.
         let content = content(self);
         let path = self.ctx.ui.resolve(popover.path()).to_owned();
         let state = self.state.popover(&path, popover.is_open());
@@ -626,28 +715,6 @@ where
         output
     }
 
-    /// One placement of a stage: the child keeps the box it asked for, and the
-    /// stage lays it out at the point the placement carries. A placement with
-    /// somewhere to write also carries the grip that moves that point, and the
-    /// endpoint it is re-read from between mounts.
-    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
-        let declared = child.declared();
-        let mut output =
-            MasonryNode::document(NodeLayout::Stack, declared, vec![child], false, None, None);
-        let grip = placement.write.map(|_| {
-            Grip::new(
-                self.ctx.ui.resolve(placement.path).to_owned(),
-                placement.snap.clone(),
-                Rc::clone(&self.map_event),
-            )
-        });
-        output.set_spot(Spot::new(placement.at, grip));
-        if let Some(read) = placement.read {
-            output.watch_spot(read);
-        }
-        output
-    }
-
     fn pressable(
         &mut self,
         path: InternId,
@@ -692,21 +759,6 @@ where
         )
     }
 
-    /// The stack measures its first child and hands every child that box, so
-    /// the document's own size rule and the immediate host's `Stack` agree with
-    /// it without either of them being told about the other.
-    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
-        let declared = size.map_or_else(
-            || {
-                children
-                    .first()
-                    .map_or_else(|| declared(SizeSpec::FILL), MasonryNode::declared)
-            },
-            declared,
-        );
-        MasonryNode::document(NodeLayout::Stage, declared, children, true, None, None)
-    }
-
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
         let declared = size.map_or(
             solve::Size::new(solve::Length::Fill, solve::Length::Shrink),
@@ -737,92 +789,28 @@ where
         )
     }
 
-    fn control(
+    fn split(
         &mut self,
-        path: InternId,
-        spec: &ControlSpec,
-        read: Option<&Binding>,
-        owner: InputOwner,
-        size: Option<SizeSpec>,
-        transform: Transform,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
     ) -> Self::Output {
-        let declared = control_declared(spec, size, self.skin);
-        let plan = hosted_control_plan(path, spec, read, self.ctx, self.skin);
-        let path_id = path;
-        let path = self.ctx.ui.resolve(path);
-        // What the document says, narrowed to what this host actually paints:
-        // a control it still mounts as an empty box is driven by the engine
-        // plan below, whatever the document said about its leaf.
-        let owns_pointer = pointer_owner(owner, spec);
-        let custom = self.custom.remove(path);
-        let custom_installed = custom.is_some();
-        let cx = Cx {
-            declared,
-            owner: owns_pointer,
-            path,
-            plan: plan.as_ref(),
-            read,
-            skin: self.skin.at(path),
-        };
-        let mut output = custom.map_or_else(
-            || {
-                mount::controls!(
-                    spec,
-                    Mount {
-                        cx: &cx,
-                        host: &*self
-                    }
-                )
-            },
-            |widget| self.custom_leaf(widget, None, declared),
-        );
-        output.place(transform);
-        // A document that places nothing off an endpoint can never move this
-        // node, so it is not worth re-reading its pose every frame.
-        if self.ctx.ui.driven {
-            output.watch_placement(path_id);
-        }
-        #[cfg(any(test, feature = "capture"))]
-        self.state.tag_path(path, output.widget_id());
-        if custom_installed {
-            return output;
-        }
-        if matches!(
-            spec,
-            ControlSpec::Vis | ControlSpec::Table { .. } | ControlSpec::Tree { .. }
-        ) {
-            output.watch_snapshot();
-        } else if let Some(read) = read {
-            output.watch(read);
-        }
-        if owns_pointer == InputOwner::Leaf {
-            return output;
-        }
-        mount::controls!(
-            spec,
-            Wire {
-                host: &*self,
-                cx: &cx,
-                output: &mut output
-            }
-        );
-        if let Some(plan) = plan {
-            output.add_engine_control(plan, false);
-            if owner == InputOwner::Leaf {
-                output.host_engine(Rc::clone(&self.map_event), self.skin);
-            }
-        } else if activates(spec) {
-            output.set_actions(
-                Some(self.control_action(path.to_owned(), ControlAction::Activate)),
-                None,
-            );
-        }
-        output
+        self.mount_split(axis, measure, children)
     }
 
-    fn hosted(&mut self, _node: &ExpandedNode, mut child: Self::Output) -> Self::Output {
-        child.host_engine(Rc::clone(&self.map_event), self.skin);
-        child
+    /// The stack measures its first child and hands every child that box, so
+    /// the document's own size rule and the immediate host's `Stack` agree with
+    /// it without either of them being told about the other.
+    fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
+        let declared = size.map_or_else(
+            || {
+                children
+                    .first()
+                    .map_or_else(|| declared(SizeSpec::FILL), MasonryNode::declared)
+            },
+            declared,
+        );
+        MasonryNode::document(NodeLayout::Stage, declared, children, true, None, None)
     }
 
     fn window(
@@ -834,9 +822,6 @@ where
         if carried.is_none() && !resize_edges {
             return content;
         }
-        // A window that names what it carries gets its ghost whether or not the
-        // pointer is carrying anything yet: this tree keeps the shape it mounts,
-        // and the load arrives long after the window is standing.
         let label = self.ctx.label(carried);
         let ghost = carried.is_some().then(|| DragGhost::new(label, self.skin));
         let pointer = Rc::clone(&self.state.pointer);
@@ -881,8 +866,8 @@ where
 /// Asks whichever control the document named to attach whatever it still needs
 /// beyond its own leaf.
 struct Wire<'out, 'host, 'cx, 'a, Action> {
-    host: &'host MasonryHost<'a, Action>,
     cx: &'cx Cx<'cx>,
+    host: &'host MasonryHost<'a, Action>,
     output: &'out mut MasonryNode<Action>,
 }
 

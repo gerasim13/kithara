@@ -19,8 +19,8 @@ pub(super) struct ExtraBindings {
     pub(super) columns_state: Option<BindingRef>,
     pub(super) query: Option<BindingRef>,
     pub(super) scope: Option<BindingRef>,
-    pub(super) uniforms: Vec<(String, BindingRef)>,
     pub(super) zoom: Option<BindingRef>,
+    pub(super) uniforms: Vec<(String, BindingRef)>,
 }
 
 #[derive(Clone, Copy)]
@@ -85,8 +85,8 @@ impl ExtraBindings {
             columns_state,
             query,
             scope,
-            uniforms,
             zoom,
+            uniforms,
         })
     }
 }

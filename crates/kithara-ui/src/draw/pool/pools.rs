@@ -25,10 +25,10 @@ pub struct PoolStats {
 /// Shared reusable storage for retained commands, paths, and text.
 #[derive(Clone, Debug)]
 pub struct DrawPools {
+    limits: DrawPoolLimits,
+    text: TextPool,
     commands: VecPool<DrawCmd>,
     paths: VecPool<Verb>,
-    text: TextPool,
-    limits: DrawPoolLimits,
 }
 
 impl DrawPools {
@@ -41,6 +41,15 @@ impl DrawPools {
             text: SharedPool::new(max_buffers, limits.text_capacity),
             limits,
         }
+    }
+
+    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
+        Buffer::pooled(&self.commands)
+    }
+
+    #[must_use]
+    pub const fn limits(&self) -> DrawPoolLimits {
+        self.limits
     }
 
     /// Starts an empty command list backed by this pool family.
@@ -60,15 +69,8 @@ impl DrawPools {
         path
     }
 
-    /// Copies UTF-8 content into a buffer that returns here when unused.
-    #[must_use]
-    pub fn text(&self, content: &str) -> PoolText {
-        PoolText::pooled(content, &self.text)
-    }
-
-    #[must_use]
-    pub const fn limits(&self) -> DrawPoolLimits {
-        self.limits
+    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
+        path.into_pooled(&self.paths)
     }
 
     #[must_use]
@@ -82,12 +84,10 @@ impl DrawPools {
         }
     }
 
-    pub(in crate::draw) fn commands(&self) -> Buffer<DrawCmd> {
-        Buffer::pooled(&self.commands)
-    }
-
-    pub(in crate::draw) fn pooled_path(&self, path: PoolPath) -> PoolPath {
-        path.into_pooled(&self.paths)
+    /// Copies UTF-8 content into a buffer that returns here when unused.
+    #[must_use]
+    pub fn text(&self, content: &str) -> PoolText {
+        PoolText::pooled(content, &self.text)
     }
 }
 

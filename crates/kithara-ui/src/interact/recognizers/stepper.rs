@@ -17,17 +17,27 @@ pub(crate) enum StepEvent {
 /// It owns no configuration, so the gesture and its state are one value.
 #[derive(Default)]
 pub(crate) struct Stepper {
-    last_step: Option<Instant>,
     double_click: DoubleClick,
     drag: Option<f32>,
+    last_step: Option<Instant>,
 }
 
 impl Stepper {
+    const DRAG_STEPS_PER_PIXEL: f32 = 0.25;
     /// How long one trackpad gesture owns the surface. A flick arrives as a
     /// long tail of shrinking pixel deltas, and every one of them would be its
     /// own detent without this.
     const STEP_INTERVAL_MS: u128 = 200;
-    const DRAG_STEPS_PER_PIXEL: f32 = 0.25;
+
+    fn drag_steps(&mut self, y: f32) -> Option<f32> {
+        let from = self.drag?;
+        self.drag = Some(y);
+        Some((from - y) * Self::DRAG_STEPS_PER_PIXEL)
+    }
+
+    pub(crate) const fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
 
     pub(crate) fn on_input(
         &mut self,
@@ -81,16 +91,6 @@ impl Stepper {
             | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
         }
-    }
-
-    pub(crate) const fn dragging(&self) -> bool {
-        self.drag.is_some()
-    }
-
-    fn drag_steps(&mut self, y: f32) -> Option<f32> {
-        let from = self.drag?;
-        self.drag = Some(y);
-        Some((from - y) * Self::DRAG_STEPS_PER_PIXEL)
     }
 
     /// A line delta is one detent. A pixel delta is also one detent, not an

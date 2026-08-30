@@ -23,9 +23,9 @@ fn fs_main(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 /// document actually reaches: a fraction and a pair of levels.
 #[derive(Default)]
 struct Fixture {
-    level: f64,
     meter: StereoLevels,
     wrong_kind: bool,
+    level: f64,
 }
 
 impl Reads for Fixture {

@@ -1,8 +1,6 @@
 use super::{RubatoAlgorithm, RubatoConfig, resampler::RubatoResampler};
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
-const BACKEND_RUBATO: &str = "rubato";
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RubatoBackend {
     config: RubatoConfig,
@@ -39,6 +37,8 @@ impl ResamplerBackend for RubatoBackend {
     }
 
     fn name(&self) -> &'static str {
+        const BACKEND_RUBATO: &str = "rubato";
+
         BACKEND_RUBATO
     }
 }

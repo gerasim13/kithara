@@ -223,11 +223,8 @@ where
         let ResourceStatus::Committed { final_len } = reader.status() else {
             return None;
         };
-        // A committed resource of unknown length counts as unbounded so it
-        // cannot stay in a byte-bounded cache — see CONTEXT.md "Memory byte
-        // bound". Not a hidden-missing-value sentinel: `retained_bytes`'s
-        // eviction loop is designed to keep targeting an unbounded entry
-        // until it is the one removed.
+        // WHY: A committed resource of unknown length counts as unbounded so it cannot stay in a byte-bounded cache - see CONTEXT.md "Memory
+        // byte bound".
         Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
     }
 
@@ -302,8 +299,7 @@ where
                 }
                 Some((key.clone(), Self::entry_hits(entry)))
             })
-            // Frequency-aware victim: fewest hits wins; ties fall to the
-            // least-recently-used end (iter yields MRU->LRU, so a later equal
+            // WHY: Frequency-aware victim: fewest hits wins; ties fall to the least-recently-used end (iter yields MRU->LRU, so a later equal
             // candidate is the better victim).
             .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
             .map(|(key, _)| key)?;
@@ -472,10 +468,8 @@ where
                 drop(cache);
                 return Ok(AcquisitionResult::Ready(self.wrap_reader(key, reader)));
             }
-            // In-flight slot: reactivate mints a fresh-generation writer; cache
-            // its current-generation reader-view so concurrent opens block on
-            // the new generation's gate. No invalidation — same key, same bytes.
-            // Carry the hit count across the re-put so frequency survives.
+            // WHY: In-flight slot: reactivate mints a fresh-generation writer; cache its current-generation reader-view so concurrent opens
+            // block on the new generation's gate.
             let writer = reader.reactivate()?;
             cache.put(
                 cache_key,

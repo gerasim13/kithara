@@ -30,15 +30,15 @@ impl DrainState {
 
 /// The sole producer-side Warp/effect stage before the play output ring.
 pub(crate) struct WarpSource<S> {
-    source: S,
-    warp: kithara_warp::WarpRenderer,
-    effects: Vec<Box<dyn AudioEffect>>,
-    drain: EffectDrain,
     seek: Arc<dyn SeekObserve>,
-    discontinuity: Option<SourceDiscontinuity>,
     spec: AudioSpec,
     drain_state: DrainState,
+    drain: EffectDrain,
+    discontinuity: Option<SourceDiscontinuity>,
     reset_epoch: Option<u64>,
+    source: S,
+    effects: Vec<Box<dyn AudioEffect>>,
+    warp: kithara_warp::WarpRenderer,
 }
 
 impl<S> WarpSource<S>
@@ -67,41 +67,8 @@ where
         }
     }
 
-    fn sync_discontinuity(&mut self) {
-        let next = self.source.discontinuity();
-        let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
-            != self
-                .discontinuity
-                .as_ref()
-                .map(SourceDiscontinuity::revision);
-        if let Some(discontinuity) = next.as_ref() {
-            self.spec = *discontinuity.spec();
-        }
-        self.discontinuity = next;
-        let already_reset = self.reset_epoch == Some(self.source.decode_epoch());
-        if !revision_changed {
-            return;
-        }
-        if already_reset {
-            self.reset_epoch = None;
-        } else {
-            self.reset_renderers();
-        }
-        self.drain.reset();
-        self.drain_state = DrainState::Open;
-    }
-
-    fn reset_renderers(&mut self) {
-        self.warp.reset();
-        reset_effects(&mut self.effects);
-    }
-
-    fn prepare_renderers(&mut self, spec: AudioSpec) {
-        self.spec = spec;
-        self.warp.prepare(spec);
-        for effect in &mut self.effects {
-            effect.service_deferred(spec);
-        }
+    fn begin_drain(&mut self, epoch: u64) {
+        self.drain_state = DrainState::Warp(epoch);
     }
 
     fn cancel_stale_drain(&mut self) -> bool {
@@ -118,33 +85,6 @@ where
         self.drain_state = DrainState::Open;
         self.reset_epoch = Some(epoch);
         true
-    }
-
-    fn begin_drain(&mut self, epoch: u64) {
-        self.drain_state = DrainState::Warp(epoch);
-    }
-
-    fn fetch(&self, data: AudioChunk, epoch: u64) -> Fetch<AudioChunk> {
-        let source_end = self.warp.rendered_source_end().map(|(frame, sample_rate)| {
-            SourceEnd::new(
-                frame.saturating_sub(held_source_frames(&self.effects)),
-                sample_rate,
-            )
-        });
-        match source_end {
-            Some(source_end) => Fetch::rendered(data, epoch, source_end),
-            None => Fetch::data(data, epoch),
-        }
-    }
-
-    fn render(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
-        let chunk = self.warp.render(chunk);
-        if self.warp.transition_pending() {
-            self.drain_state = DrainState::LiveWarp(epoch);
-        }
-        let chunk = chunk?;
-        let output = apply_effects(&mut self.effects, chunk)?;
-        Some(self.fetch(output, epoch))
     }
 
     fn drain_step(&mut self) -> Option<TrackStep<AudioChunk>> {
@@ -186,6 +126,66 @@ where
             }
         })
     }
+
+    fn fetch(&self, data: AudioChunk, epoch: u64) -> Fetch<AudioChunk> {
+        let source_end = self.warp.rendered_source_end().map(|(frame, sample_rate)| {
+            SourceEnd::new(
+                frame.saturating_sub(held_source_frames(&self.effects)),
+                sample_rate,
+            )
+        });
+        match source_end {
+            Some(source_end) => Fetch::rendered(data, epoch, source_end),
+            None => Fetch::data(data, epoch),
+        }
+    }
+
+    fn prepare_renderers(&mut self, spec: AudioSpec) {
+        self.spec = spec;
+        self.warp.prepare(spec);
+        for effect in &mut self.effects {
+            effect.service_deferred(spec);
+        }
+    }
+
+    fn render(&mut self, chunk: AudioChunk, epoch: u64) -> Option<Fetch<AudioChunk>> {
+        let chunk = self.warp.render(chunk);
+        if self.warp.transition_pending() {
+            self.drain_state = DrainState::LiveWarp(epoch);
+        }
+        let chunk = chunk?;
+        let output = apply_effects(&mut self.effects, chunk)?;
+        Some(self.fetch(output, epoch))
+    }
+
+    fn reset_renderers(&mut self) {
+        self.warp.reset();
+        reset_effects(&mut self.effects);
+    }
+
+    fn sync_discontinuity(&mut self) {
+        let next = self.source.discontinuity();
+        let revision_changed = next.as_ref().map(SourceDiscontinuity::revision)
+            != self
+                .discontinuity
+                .as_ref()
+                .map(SourceDiscontinuity::revision);
+        if let Some(discontinuity) = next.as_ref() {
+            self.spec = *discontinuity.spec();
+        }
+        self.discontinuity = next;
+        let already_reset = self.reset_epoch == Some(self.source.decode_epoch());
+        if !revision_changed {
+            return;
+        }
+        if already_reset {
+            self.reset_epoch = None;
+        } else {
+            self.reset_renderers();
+        }
+        self.drain.reset();
+        self.drain_state = DrainState::Open;
+    }
 }
 
 impl<S> AudioSource for WarpSource<S>
@@ -194,18 +194,15 @@ where
 {
     type Chunk = AudioChunk;
 
-    delegate::delegate! {
-        to self.source {
-            fn decode_epoch(&self) -> u64;
-            fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64);
-            fn retire_chunk(&self, chunk: AudioChunk);
-            fn finish_deferred(&mut self);
-            fn warm_up(&mut self);
-        }
-    }
-
     fn discontinuity(&self) -> Option<SourceDiscontinuity> {
         self.discontinuity
+    }
+
+    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
+        let spec = self.source.prepare_deferred();
+        self.sync_discontinuity();
+        self.prepare_renderers(spec.unwrap_or(self.spec));
+        spec
     }
 
     fn seek_observe(&self) -> Arc<dyn SeekObserve> {
@@ -246,11 +243,14 @@ where
         }
     }
 
-    fn prepare_deferred(&mut self) -> Option<AudioSpec> {
-        let spec = self.source.prepare_deferred();
-        self.sync_discontinuity();
-        self.prepare_renderers(spec.unwrap_or(self.spec));
-        spec
+    delegate::delegate! {
+        to self.source {
+            fn decode_epoch(&self) -> u64;
+            fn commit_source_end(&mut self, source_end: SourceEnd, epoch: u64);
+            fn retire_chunk(&self, chunk: AudioChunk);
+            fn finish_deferred(&mut self);
+            fn warm_up(&mut self);
+        }
     }
 }
 
@@ -295,9 +295,9 @@ mod tests {
     }
 
     struct RawSource {
-        chunks: VecDeque<AudioChunk>,
         head: Arc<AtomicU64>,
         seek: Arc<SeekState>,
+        chunks: VecDeque<AudioChunk>,
     }
 
     impl AudioSource for RawSource {
@@ -328,22 +328,25 @@ mod tests {
     }
 
     impl AudioEffect for BufferThenHalveFrames {
-        fn flush(&mut self) -> Option<AudioChunk> {
-            self.buffered.take().and_then(halve_frames)
-        }
-
         fn held_source_frames(&self) -> u64 {
             self.buffered
                 .as_ref()
                 .map_or(0, |chunk| u64::from(chunk.meta.frames))
         }
 
-        fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-            self.buffered.replace(chunk).and_then(halve_frames)
-        }
-
         fn reset(&mut self) {
             self.buffered = None;
+        }
+
+        delegate::delegate! {
+            to self.buffered {
+                #[expr($.and_then(halve_frames))]
+                #[call(take)]
+                fn flush(&mut self) -> Option<AudioChunk>;
+                #[expr($.and_then(halve_frames))]
+                #[call(replace)]
+                fn process(&mut self, chunk: AudioChunk) -> Option<AudioChunk>;
+            }
         }
     }
 
@@ -371,13 +374,13 @@ mod tests {
     impl AudioSource for DeferredSource {
         type Chunk = AudioChunk;
 
+        fn finish_deferred(&mut self) {
+            self.log.lock().push("source.finish");
+        }
+
         fn prepare_deferred(&mut self) -> Option<AudioSpec> {
             self.log.lock().push("source.prepare");
             Some(self.spec)
-        }
-
-        fn finish_deferred(&mut self) {
-            self.log.lock().push("source.finish");
         }
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
@@ -395,11 +398,6 @@ mod tests {
     }
 
     impl AudioEffect for DeferredEffect {
-        fn service_deferred(&mut self, spec: AudioSpec) {
-            self.log.lock().push("effect.service");
-            *self.serviced.lock() = Some(spec);
-        }
-
         fn flush(&mut self) -> Option<AudioChunk> {
             None
         }
@@ -413,12 +411,17 @@ mod tests {
         }
 
         fn reset(&mut self) {}
+
+        fn service_deferred(&mut self, spec: AudioSpec) {
+            self.log.lock().push("effect.service");
+            *self.serviced.lock() = Some(spec);
+        }
     }
 
     struct RevisionSource {
-        chunks: VecDeque<AudioChunk>,
         discontinuity: Arc<Mutex<SourceDiscontinuity>>,
         seek: Arc<SeekState>,
+        chunks: VecDeque<AudioChunk>,
     }
 
     impl AudioSource for RevisionSource {
@@ -465,8 +468,8 @@ mod tests {
 
     struct CountingEofSource {
         discontinuity: Arc<Mutex<Option<SourceDiscontinuity>>>,
-        steps: Arc<AtomicU64>,
         seek: Arc<SeekState>,
+        steps: Arc<AtomicU64>,
     }
 
     impl AudioSource for CountingEofSource {
@@ -511,10 +514,10 @@ mod tests {
     }
 
     struct SeekApplyingSource {
-        decode_epoch: u64,
-        revision: u64,
         seek: Arc<SeekState>,
         spec: AudioSpec,
+        decode_epoch: u64,
+        revision: u64,
     }
 
     impl AudioSource for SeekApplyingSource {
@@ -678,9 +681,9 @@ mod tests {
         let log = Arc::new(Mutex::new(Vec::new()));
         let serviced = Arc::new(Mutex::new(None));
         let source = DeferredSource {
+            spec,
             log: Arc::clone(&log),
             seek: Arc::new(SeekState::new()),
-            spec,
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(DeferredEffect {
             log: Arc::clone(&log),
@@ -947,10 +950,10 @@ mod tests {
         let seek = Arc::new(SeekState::new());
         let resets = Arc::new(AtomicU64::new(0));
         let source = SeekApplyingSource {
+            spec,
             decode_epoch: 0,
             revision: 0,
             seek: Arc::clone(&seek),
-            spec,
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),

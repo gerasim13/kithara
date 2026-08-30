@@ -25,6 +25,14 @@ impl GainDb {
         Self::from(2.0 * offset * Self::half_span(offset))
     }
 
+    fn half_span(side: f32) -> f32 {
+        if side < 0.0 {
+            -f32::from(Self::MIN)
+        } else {
+            f32::from(Self::MAX)
+        }
+    }
+
     /// The knob position this gain sits at. Inverse of [`Self::at_knob`].
     #[must_use]
     pub fn knob(self) -> f32 {
@@ -40,14 +48,6 @@ impl GainDb {
             return 0.0;
         }
         Consts::DB_LOG_BASE.powf(f32::from(self) / Consts::DB_DIVISOR)
-    }
-
-    fn half_span(side: f32) -> f32 {
-        if side < 0.0 {
-            -f32::from(Self::MIN)
-        } else {
-            f32::from(Self::MAX)
-        }
     }
 }
 

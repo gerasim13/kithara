@@ -25,7 +25,9 @@ impl WarpRenderer {
     }
 
     #[doc(hidden)]
-    pub const fn prepare(&mut self, _spec: AudioSpec) {}
+    pub const fn accepts_input(&self) -> bool {
+        true
+    }
 
     #[doc(hidden)]
     pub const fn flush(&mut self) -> Option<AudioChunk> {
@@ -33,14 +35,7 @@ impl WarpRenderer {
     }
 
     #[doc(hidden)]
-    pub const fn transition_pending(&self) -> bool {
-        false
-    }
-
-    #[doc(hidden)]
-    pub const fn accepts_input(&self) -> bool {
-        true
-    }
+    pub const fn prepare(&mut self, _spec: AudioSpec) {}
 
     #[doc(hidden)]
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
@@ -62,6 +57,11 @@ impl WarpRenderer {
     #[doc(hidden)]
     pub const fn reset(&mut self) {
         self.rendered_source_end = None;
+    }
+
+    #[doc(hidden)]
+    pub const fn transition_pending(&self) -> bool {
+        false
     }
 }
 

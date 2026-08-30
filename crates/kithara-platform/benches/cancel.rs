@@ -14,7 +14,6 @@
 //! - creation / `child` — allocation cost (`Arc<Node>`).
 //! - `group/*` — the `CancelGroup` fan-in: `is_cancelled` polls each source
 //!   (N×O(1)); `cancelled` parks one slot per source in a single future.
-
 use std::{
     future::Future,
     hint::black_box,

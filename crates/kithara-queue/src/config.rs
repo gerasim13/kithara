@@ -38,11 +38,11 @@ pub struct QueueConfig {
     /// `None` on the production app path.
     pub cancel: Option<CancelToken>,
 
-    /// Player owned and decorated by this queue.
-    pub player: PlayerImpl,
-
     /// Shared store used for bare URI track sources.
     pub store: Option<AssetStore>,
+
+    /// Player owned and decorated by this queue.
+    pub player: PlayerImpl,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]

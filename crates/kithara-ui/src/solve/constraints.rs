@@ -33,9 +33,9 @@ pub(crate) const fn length(dim: Dim) -> Length {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Limits {
-    min: Size,
-    max: Size,
     compression: Size<bool>,
+    max: Size,
+    min: Size,
 }
 
 impl Limits {
@@ -43,38 +43,8 @@ impl Limits {
         Self::with_compression(min, max, Size::new(false, false))
     }
 
-    pub(crate) const fn with_compression(min: Size, max: Size, compression: Size<bool>) -> Self {
-        Self {
-            min,
-            max,
-            compression,
-        }
-    }
-
-    pub(crate) const fn min(self) -> Size {
-        self.min
-    }
-
-    pub(crate) const fn max(self) -> Size {
-        self.max
-    }
-
     pub(crate) const fn compression(self) -> Size<bool> {
         self.compression
-    }
-
-    pub(crate) fn width(mut self, width: Length) -> Self {
-        match width {
-            Length::Shrink => self.compression.width = true,
-            Length::Fixed(amount) => {
-                let width = amount.min(self.max.width).max(self.min.width);
-                self.min.width = width;
-                self.max.width = width;
-                self.compression.width = false;
-            }
-            Length::Fill | Length::FillPortion(_) => {}
-        }
-        self
     }
 
     pub(crate) fn height(mut self, height: Length) -> Self {
@@ -89,6 +59,36 @@ impl Limits {
             Length::Fill | Length::FillPortion(_) => {}
         }
         self
+    }
+
+    pub(crate) const fn loose(self) -> Self {
+        Self {
+            min: Size::ZERO,
+            max: self.max,
+            compression: self.compression,
+        }
+    }
+
+    pub(crate) const fn max(self) -> Size {
+        self.max
+    }
+
+    pub(crate) const fn min(self) -> Size {
+        self.min
+    }
+
+    pub(crate) fn resolve(self, width: Length, height: Length, intrinsic: Size) -> Size {
+        let width = match width {
+            Length::Fill | Length::FillPortion(_) if !self.compression.width => self.max.width,
+            Length::Fixed(amount) => amount.min(self.max.width).max(self.min.width),
+            _ => intrinsic.width.min(self.max.width).max(self.min.width),
+        };
+        let height = match height {
+            Length::Fill | Length::FillPortion(_) if !self.compression.height => self.max.height,
+            Length::Fixed(amount) => amount.min(self.max.height).max(self.min.height),
+            _ => intrinsic.height.min(self.max.height).max(self.min.height),
+        };
+        Size::new(width, height)
     }
 
     pub(crate) fn shrink(self, size: impl Into<Size>) -> Self {
@@ -106,25 +106,25 @@ impl Limits {
         }
     }
 
-    pub(crate) const fn loose(self) -> Self {
-        Self {
-            min: Size::ZERO,
-            max: self.max,
-            compression: self.compression,
+    pub(crate) fn width(mut self, width: Length) -> Self {
+        match width {
+            Length::Shrink => self.compression.width = true,
+            Length::Fixed(amount) => {
+                let width = amount.min(self.max.width).max(self.min.width);
+                self.min.width = width;
+                self.max.width = width;
+                self.compression.width = false;
+            }
+            Length::Fill | Length::FillPortion(_) => {}
         }
+        self
     }
 
-    pub(crate) fn resolve(self, width: Length, height: Length, intrinsic: Size) -> Size {
-        let width = match width {
-            Length::Fill | Length::FillPortion(_) if !self.compression.width => self.max.width,
-            Length::Fixed(amount) => amount.min(self.max.width).max(self.min.width),
-            _ => intrinsic.width.min(self.max.width).max(self.min.width),
-        };
-        let height = match height {
-            Length::Fill | Length::FillPortion(_) if !self.compression.height => self.max.height,
-            Length::Fixed(amount) => amount.min(self.max.height).max(self.min.height),
-            _ => intrinsic.height.min(self.max.height).max(self.min.height),
-        };
-        Size::new(width, height)
+    pub(crate) const fn with_compression(min: Size, max: Size, compression: Size<bool>) -> Self {
+        Self {
+            compression,
+            max,
+            min,
+        }
     }
 }

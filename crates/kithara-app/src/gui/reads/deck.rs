@@ -217,8 +217,8 @@ impl<'a> Node<'a> for StreamNode<'a> {
 
 #[derive(Clone, Copy)]
 struct EqNode<'a> {
-    ui: &'a UiState,
     cache: &'a DeckCache,
+    ui: &'a UiState,
     mode: EqMode,
 }
 

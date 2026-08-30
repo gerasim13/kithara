@@ -24,13 +24,13 @@ use crate::{
 
 /// The studio drawn by iced into a texture, one layout at a time.
 pub(super) struct Immediate {
+    pub(super) pools: String,
     geometry: Geometry,
     open: Option<(Page, CompiledUi, Fixture)>,
-    package: Rc<Package>,
     photographer: Photographer,
-    pixels: Vec<u8>,
-    pub(super) pools: String,
+    package: Rc<Package>,
     theme: Theme,
+    pixels: Vec<u8>,
 }
 
 impl Immediate {
@@ -54,16 +54,6 @@ impl Stage for Immediate {
         self.geometry
     }
 
-    fn turn(&mut self, page: &Page) -> Result<(), String> {
-        let compiled = ui::compile_ui(page.0)
-            .map_err(|error| format!("compile {}: {error}", self.package.document(page.0)))?;
-        let reads = Fixture::new(page.0, Rc::clone(&self.package));
-        self.open = Some((*page, compiled, reads));
-        Ok(())
-    }
-
-    fn tick(&mut self) {}
-
     fn shoot(&mut self) -> Result<&[u8], String> {
         let (page, compiled, reads) = self
             .open
@@ -83,8 +73,6 @@ impl Stage for Immediate {
         self.pixels = self
             .photographer
             .shoot(draw(), &self.theme, self.geometry)?;
-        // The second page is drawn for the pools alone: a frame that allocates
-        // again once the pools are warm is the defect this watches for.
         let first = compiled.draw_pool_stats();
         drop(
             self.photographer
@@ -96,5 +84,15 @@ impl Stage for Immediate {
         };
         pooled(&mut self.pools, *page, &sample)?;
         Ok(&self.pixels)
+    }
+
+    fn tick(&mut self) {}
+
+    fn turn(&mut self, page: &Page) -> Result<(), String> {
+        let compiled = ui::compile_ui(page.0)
+            .map_err(|error| format!("compile {}: {error}", self.package.document(page.0)))?;
+        let reads = Fixture::new(page.0, Rc::clone(&self.package));
+        self.open = Some((*page, compiled, reads));
+        Ok(())
     }
 }

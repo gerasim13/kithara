@@ -77,6 +77,33 @@ impl BeatGridSnapshot {
         Self::wrap(UnavailableGridView { id, revision, axis })
     }
 
+    fn validate(axis: MapAxis, state: BeatGridState) -> Result<(), BeatGridSnapshotError> {
+        let valid = matches!(
+            (axis, state),
+            (
+                MapAxis::Asset(_),
+                BeatGridState::Building | BeatGridState::Complete | BeatGridState::Unavailable(_)
+            ) | (
+                MapAxis::Session(_),
+                BeatGridState::Live | BeatGridState::Unavailable(_)
+            )
+        );
+        if valid {
+            Ok(())
+        } else {
+            Err(BeatGridSnapshotError::InvalidState { axis, state })
+        }
+    }
+
+    fn wrap<V>(view: V) -> Self
+    where
+        V: BeatGridView,
+    {
+        Self {
+            view: Arc::new(view),
+        }
+    }
+
     delegate::delegate! {
         to self.view {
             /// Returns the stable grid identity.
@@ -104,33 +131,6 @@ impl BeatGridSnapshot {
             pub fn tempo_at(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<BeatEstimate<BeatsPerMinute>>;
             /// Resolves meter at a stamped beat.
             pub fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
-        }
-    }
-
-    fn wrap<V>(view: V) -> Self
-    where
-        V: BeatGridView,
-    {
-        Self {
-            view: Arc::new(view),
-        }
-    }
-
-    fn validate(axis: MapAxis, state: BeatGridState) -> Result<(), BeatGridSnapshotError> {
-        let valid = matches!(
-            (axis, state),
-            (
-                MapAxis::Asset(_),
-                BeatGridState::Building | BeatGridState::Complete | BeatGridState::Unavailable(_)
-            ) | (
-                MapAxis::Session(_),
-                BeatGridState::Live | BeatGridState::Unavailable(_)
-            )
-        );
-        if valid {
-            Ok(())
-        } else {
-            Err(BeatGridSnapshotError::InvalidState { axis, state })
         }
     }
 }
@@ -175,6 +175,10 @@ impl UnavailableGridView {
         }
     }
 
+    fn unavailable_beat<T>(&self, beat: MapPoint<Beat>) -> BeatGridQuery<T> {
+        self.unavailable(beat.stamp())
+    }
+
     fn unavailable_position<T>(&self, position: MapPoint<MapPosition>) -> BeatGridQuery<T> {
         let expected = self.stamp();
         let given = position.stamp();
@@ -186,13 +190,13 @@ impl UnavailableGridView {
         }
         BeatGridQuery::Unavailable(BeatGridUnavailable::NoGeometry)
     }
-
-    fn unavailable_beat<T>(&self, beat: MapPoint<Beat>) -> BeatGridQuery<T> {
-        self.unavailable(beat.stamp())
-    }
 }
 
 impl BeatGridView for UnavailableGridView {
+    fn state(&self) -> BeatGridState {
+        BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
+    }
+
     delegate::delegate! {
         to self {
             #[expr(*$)]
@@ -212,10 +216,6 @@ impl BeatGridView for UnavailableGridView {
             #[call(unavailable_beat)]
             fn meter_at(&self, beat: MapPoint<Beat>) -> BeatGridQuery<BeatEstimate<Meter>>;
         }
-    }
-
-    fn state(&self) -> BeatGridState {
-        BeatGridState::Unavailable(BeatGridUnavailable::NoGeometry)
     }
 }
 

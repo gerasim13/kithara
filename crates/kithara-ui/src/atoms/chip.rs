@@ -20,9 +20,9 @@ pub(crate) struct Chip {
 /// than a reason to rebuild the control.
 #[derive(Clone, PartialEq)]
 struct Face {
+    frame: FrameSkin,
     border: Rgba,
     fill: Rgba,
-    frame: FrameSkin,
     text: Rgba,
 }
 
@@ -65,6 +65,8 @@ impl Chip {
             ),
         };
         Self {
+            padding,
+            role,
             active: Face {
                 border: active_border,
                 fill: skin.tint(skin.chip.active.fill),
@@ -77,8 +79,6 @@ impl Chip {
                 frame: idle_frame,
                 text: skin.rgba(skin.chip.idle.content),
             },
-            padding,
-            role,
         }
     }
 

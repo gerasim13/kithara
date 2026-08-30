@@ -66,30 +66,21 @@ impl Feed {
 pub(crate) struct DemoReads {
     table_widths: BTreeMap<String, f64>,
     collapsed: BTreeSet<String>,
-    context: ContextState,
     clock: ClockState,
+    context: ContextState,
     transport: DeckTransport,
     menu: MenuState,
-    pivot: PivotState,
     mixer: MixerState,
     #[field(get, vis = "pub(crate)", copy)]
     active_module: Page,
+    #[field(get, vis = "pub(crate)", copy)]
+    active_tab: Page,
+    pivot: PivotState,
     quality: QualityState,
     scene: SceneState,
     stress: StressState,
     #[field(set, vis = "pub(crate)")]
     library_query: String,
-    #[field(get, vis = "pub(crate)", copy)]
-    active_tab: Page,
-    /// Which shipped skin the gallery wears, as an index into
-    /// [`builtin::skins`]. It lives beside the page rather than on it, so a
-    /// skin chosen here outlives every page turned afterwards.
-    #[field(get, vis = "pub(crate)", copy)]
-    active_skin: usize,
-    /// Which family the assets page sets its specimen in, as an index into
-    /// [`FONT_FAMILIES`]. It sits beside the skin for the same reason: the
-    /// choice outlives the page it was made on.
-    active_font: usize,
     tree_expanded: Vec<bool>,
     tree_rows: Vec<TreeRow<'static>>,
     tree_visible_indices: Vec<usize>,
@@ -108,16 +99,25 @@ pub(crate) struct DemoReads {
     chip_inactive: bool,
     toggle_off: bool,
     toggle_on: bool,
-    motion_phase: f32,
-    motion_clock: f32,
-    sprite_scrub: f32,
     lottie_scrub: f32,
+    motion_clock: f32,
+    motion_phase: f32,
+    sprite_scrub: f32,
     vis_phase: f32,
     levels_volume: f64,
     segmented_index: f64,
     vis_time_secs: f64,
     volume: f64,
     vis_rng: u32,
+    /// Which family the assets page sets its specimen in, as an index into
+    /// [`FONT_FAMILIES`]. It sits beside the skin for the same reason: the
+    /// choice outlives the page it was made on.
+    active_font: usize,
+    /// Which shipped skin the gallery wears, as an index into
+    /// [`builtin::skins`]. It lives beside the page rather than on it, so a
+    /// skin chosen here outlives every page turned afterwards.
+    #[field(get, vis = "pub(crate)", copy)]
+    active_skin: usize,
     library_scope: usize,
     table_preset: usize,
     tree_selected: usize,
@@ -290,6 +290,11 @@ impl DemoReads {
         }
     }
 
+    /// Whether the application moves a reading on the page it is showing.
+    pub(crate) fn feeds(&self) -> bool {
+        Feed::of(self.active_tab).is_some()
+    }
+
     fn rebuild_tree(&mut self) {
         self.tree_rows.clear();
         self.tree_visible_indices.clear();
@@ -316,6 +321,14 @@ impl DemoReads {
         self.set_table_preset(self.table_preset);
     }
 
+    /// Sets the specimen in the family of that name. A name no shipped family
+    /// answers to leaves the specimen in the one it is set in.
+    fn select_font(&mut self, family: &str) {
+        if let Some(index) = FONT_FAMILIES.iter().position(|named| *named == family) {
+            self.active_font = index;
+        }
+    }
+
     fn select_index(&mut self, path: &str, index: usize) {
         if path == "cells/beat" {
             self.segmented_index = index.as_();
@@ -330,19 +343,8 @@ impl DemoReads {
         }
     }
 
-    pub(crate) fn select_tab(&mut self, tab: Page) {
-        if self.active_tab != tab {
-            self.stress.reset_clock();
-        }
-        self.active_tab = tab;
-        self.menu.set_open(tab == "menu");
-        self.clock.set_open(tab == "clock");
-    }
-
-    /// The skin the gallery is dressed in, which every host asks for and no
-    /// page turn touches.
-    pub(crate) fn skin(&self) -> &'static Skin {
-        &builtin::skins()[self.active_skin]
+    pub(crate) const fn select_module(&mut self, module: Page) {
+        self.active_module = module;
     }
 
     /// Turns to the shipped skin of that name. A name no shipped skin answers
@@ -353,24 +355,13 @@ impl DemoReads {
         }
     }
 
-    /// Sets the specimen in the family of that name. A name no shipped family
-    /// answers to leaves the specimen in the one it is set in.
-    fn select_font(&mut self, family: &str) {
-        if let Some(index) = FONT_FAMILIES.iter().position(|named| *named == family) {
-            self.active_font = index;
+    pub(crate) fn select_tab(&mut self, tab: Page) {
+        if self.active_tab != tab {
+            self.stress.reset_clock();
         }
-    }
-
-    pub(crate) const fn select_module(&mut self, module: Page) {
-        self.active_module = module;
-    }
-
-    /// Rebuilds the stress page's waveforms at a different bucket count, which
-    /// is the one weight of that page a measurement can vary. The gallery shows
-    /// the page at its own count; only a harness sweeps it.
-    #[cfg(test)]
-    pub(crate) fn set_wave_buckets(&mut self, buckets: u16) {
-        self.stress = StressState::new(buckets);
+        self.active_tab = tab;
+        self.menu.set_open(tab == "menu");
+        self.clock.set_open(tab == "clock");
     }
 
     fn select_tree_row(&mut self, index: usize) {
@@ -459,6 +450,14 @@ impl DemoReads {
         }
     }
 
+    /// Rebuilds the stress page's waveforms at a different bucket count, which
+    /// is the one weight of that page a measurement can vary. The gallery shows
+    /// the page at its own count; only a harness sweeps it.
+    #[cfg(test)]
+    pub(crate) fn set_wave_buckets(&mut self, buckets: u16) {
+        self.stress = StressState::new(buckets);
+    }
+
     fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
             endpoint if let Some(slug) = endpoint.strip_prefix("gallery.tab.") => {
@@ -480,9 +479,10 @@ impl DemoReads {
         Some(ReadValue::Bool(value))
     }
 
-    /// Whether the application moves a reading on the page it is showing.
-    pub(crate) fn feeds(&self) -> bool {
-        Feed::of(self.active_tab).is_some()
+    /// The skin the gallery is dressed in, which every host asks for and no
+    /// page turn touches.
+    pub(crate) fn skin(&self) -> &'static Skin {
+        &builtin::skins()[self.active_skin]
     }
 
     pub(crate) fn tick(&mut self) {
@@ -495,18 +495,18 @@ impl DemoReads {
         }
     }
 
-    /// One sawtooth from 0 to 1, which is every track on the objects page: an
-    /// application that already knows how far along each object is hands the
-    /// number over and the document spends it.
-    fn tick_phase(&mut self) {
-        self.motion_phase = (self.motion_phase + Consts::MOTION_STEP).fract();
-    }
-
     /// Plain seconds, which is all the motion page's application knows: how far
     /// along that puts each object is the document's business, not its own.
     fn tick_clock(&mut self) {
         self.motion_clock =
             (self.motion_clock + Consts::MOTION_TICK_SECS) % Consts::MOTION_CLOCK_PERIOD;
+    }
+
+    /// One sawtooth from 0 to 1, which is every track on the objects page: an
+    /// application that already knows how far along each object is hands the
+    /// number over and the document spends it.
+    fn tick_phase(&mut self) {
+        self.motion_phase = (self.motion_phase + Consts::MOTION_STEP).fract();
     }
 
     fn tick_vis(&mut self) {
@@ -551,8 +551,6 @@ impl DemoReads {
 
 impl Reads for DemoReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
-        // The menu axes are genuinely per-window, per-module and per-row, so
-        // they answer the scoped key before it is dropped below.
         if let Some(value) = self.menu.get(endpoint) {
             return Some(value);
         }
@@ -571,8 +569,6 @@ impl Reads for DemoReads {
         if let Some(value) = self.scene.get(endpoint) {
             return Some(value);
         }
-        // The gallery hosts one virtual deck: every scope suffix resolves to
-        // the same state, so the canonical `@scope` qualifier is dropped here.
         let endpoint = endpoint.split_once('@').map_or(endpoint, |(base, _)| base);
         if let Some(value) = self.mixer.get(endpoint) {
             return Some(value);
@@ -589,8 +585,6 @@ impl Reads for DemoReads {
         {
             return Some(ReadValue::Bool(self.collapsed.contains(module)));
         }
-        // One second apart over an eight second pass, so the row shows the
-        // sheet frame by frame in the order it was cut.
         if let Some(index) = endpoint
             .strip_prefix("gallery.sprite.frame.")
             .and_then(|index| index.parse::<u8>().ok())
@@ -620,9 +614,6 @@ impl Reads for DemoReads {
             "gallery.label.text" => ReadValue::Text("TEXT STYLES"),
             "gallery.label.faders" => ReadValue::Text("HORIZONTAL FADERS"),
             "gallery.label.scalar" => ReadValue::Text("SCALAR TELEMETRY"),
-            // Held still: a value that moved between the two captures would make
-            // the comparison measure the clock instead of the two hosts. That
-            // the uniforms reach the shader at all is proved by the frame tests.
             "shader.energy" => ReadValue::Scalar(0.62),
             "shader.level" => ReadValue::Scalar(0.28),
             "gallery.motion.phase" => ReadValue::Scalar(f64::from(self.motion_phase)),
@@ -735,7 +726,6 @@ fn waveform() -> Vec<WaveBucket> {
                 .iter()
                 .any(|hole| phase >= hole[0] && phase < hole[1])
             {
-                // Nothing decoded a hole, so its buckets carry no level.
                 return WaveBucket::default();
             }
             WaveBucket {

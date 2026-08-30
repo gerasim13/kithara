@@ -5,10 +5,6 @@ use crate::{
     layout::{FrameCorners, FrameSides},
 };
 
-/// How far a cubic control point sits along the tangent to draw a quarter
-/// circle. The classic circle-from-cubics constant.
-const BOW: f32 = 0.552_284_8;
-
 /// A box with `radius` taken off the corners `corners` names and the rest left
 /// square.
 ///
@@ -21,6 +17,10 @@ pub(crate) fn corner_path(bounds: Rect, radius: f32, corners: FrameCorners) -> P
 
 /// The moves that draw [`corner_path`], so a ring can hold two of them.
 fn corner_verbs(bounds: Rect, radius: f32, corners: FrameCorners) -> Vec<Verb> {
+    /// How far a cubic control point sits along the tangent to draw a quarter
+    /// circle. The classic circle-from-cubics constant.
+    const BOW: f32 = 0.552_284_8;
+
     let radius = radius.min(bounds.w / 2.0).min(bounds.h / 2.0).max(0.0);
     let (left, right) = (bounds.x, bounds.x + bounds.w);
     let (top, bottom) = (bounds.y, bounds.y + bounds.h);

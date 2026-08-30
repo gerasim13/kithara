@@ -90,6 +90,16 @@ pub(crate) trait ControlPainter: Clone + PartialEq {
         self.draw(list, text, data, bounds, VisualState::Idle);
     }
 
+    /// The part of its box the pointer works, when that is not all of it.
+    ///
+    /// A fader is a rail with a caption beside it, and the hand drives the rail
+    /// alone — measuring the gesture against the whole control would put the
+    /// zero of the value under the caption. Only the painter knows where it put
+    /// the rail, so it is asked rather than told.
+    fn grip_bounds(&self, _data: &Self::Data, bounds: Rect) -> Rect {
+        bounds
+    }
+
     /// Resolves the painted cell under the pointer.
     fn index_at(&self, _data: &Self::Data, hit: &Hit, count: usize) -> Option<usize> {
         hit.uniform_horizontal_index(count)
@@ -114,23 +124,13 @@ pub(crate) trait ControlPainter: Clone + PartialEq {
     fn measure(&self, _text: &mut TextContext, _data: &Self::Data) -> Size {
         Size::ZERO
     }
-
-    /// The part of its box the pointer works, when that is not all of it.
-    ///
-    /// A fader is a rail with a caption beside it, and the hand drives the rail
-    /// alone — measuring the gesture against the whole control would put the
-    /// zero of the value under the caption. Only the painter knows where it put
-    /// the rail, so it is asked rather than told.
-    fn grip_bounds(&self, _data: &Self::Data, bounds: Rect) -> Rect {
-        bounds
-    }
 }
 
 /// What a control that shows one word and a state is handed each frame.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Labelled {
-    pub(crate) active: bool,
     pub(crate) label: String,
+    pub(crate) active: bool,
 }
 
 impl ControlPainter for Chip {
@@ -156,9 +156,9 @@ impl ControlPainter for Chip {
 /// at all rather than a row with a hole in it.
 #[derive(Clone, PartialEq)]
 pub(crate) struct NavData {
-    pub(crate) active: bool,
-    pub(crate) label: String,
     pub(crate) mark: Mark,
+    pub(crate) label: String,
+    pub(crate) active: bool,
 }
 
 impl ControlPainter for NavItem {
@@ -308,8 +308,8 @@ impl ControlPainter for StereoMeter {
 /// which state it is in.
 #[derive(Clone, PartialEq)]
 pub(crate) struct ButtonData {
-    pub(crate) active: bool,
     pub(crate) label: ButtonLabel<String>,
+    pub(crate) active: bool,
 }
 
 impl ControlPainter for Button {
@@ -422,8 +422,8 @@ impl ControlPainter for StatusDot {
 /// picked out.
 #[derive(Clone, PartialEq)]
 pub(crate) struct CellData {
-    pub(crate) highlighted: bool,
     pub(crate) label: Option<String>,
+    pub(crate) highlighted: bool,
 }
 
 impl ControlPainter for Cell {

@@ -36,14 +36,14 @@ impl Support {
         AudioCodec::Flac,
     ];
 
+    const FLAC_DESCRIPTION_LEN: usize = 42;
     /// Minimal 44.1 kHz, stereo, 16-bit FLAC STREAMINFO for capability probing.
     const FLAC_PROBE_STREAMINFO: [u8; 34] = [
         0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
+        // WHY: sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
         0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
-    const FLAC_DESCRIPTION_LEN: usize = 42;
 
     fn set(&mut self, codec: AudioCodec, supported: bool) {
         match codec {
@@ -107,9 +107,8 @@ async fn probe(codec: AudioCodec) -> bool {
     }
     let promise = AudioDecoder::is_config_supported(&config);
     let supported = match JsFuture::from(promise).await {
-        // The promise resolves to an AudioDecoderSupport DICTIONARY (a plain
-        // JS object with no prototype), so instanceof-based `dyn_into` always
-        // fails; cast unchecked and read the member.
+        // WHY: The promise resolves to an AudioDecoderSupport DICTIONARY (a plain JS object with no prototype), so instanceof-based
+        // `dyn_into` always fails; cast unchecked and read the member.
         Ok(value) => value
             .unchecked_into::<AudioDecoderSupport>()
             .get_supported()

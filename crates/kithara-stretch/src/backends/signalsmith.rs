@@ -29,9 +29,9 @@ enum TerminalState {
 /// Exact-span Signalsmith engine, prepared for fixed maximum source and output
 /// blocks.
 pub(crate) struct SignalsmithElastic {
-    inner: Stretch,
     capabilities: ElasticCapabilities,
     prime_input: SampleBuffer,
+    inner: Stretch,
     terminal: TerminalState,
 }
 
@@ -45,6 +45,51 @@ impl fmt::Debug for SignalsmithElastic {
 }
 
 impl ElasticEngine for SignalsmithElastic {
+    fn capabilities(&self) -> ElasticCapabilities {
+        self.capabilities
+    }
+
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
+        if matches!(self.terminal, TerminalState::Idle) {
+            return Ok(ElasticDrain::new(0, true));
+        }
+        let chunk_frames = self.capabilities.terminal_chunk_frames();
+        let expected = self.capabilities.samples(chunk_frames)?;
+        if output.len() != expected {
+            return Err(ElasticError::OutputSampleCount {
+                expected,
+                actual: output.len(),
+            });
+        }
+        match self.terminal {
+            TerminalState::Armed { rate } => {
+                let source_frames = self.capabilities.latency().source_frames();
+                let output_frames = source_frames
+                    .to_f64()
+                    .map(|frames| (frames / rate).ceil())
+                    .and_then(|frames| frames.to_usize())
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+                let source_samples = self.capabilities.samples(source_frames)?;
+                let output_samples = self.capabilities.samples(output_frames)?;
+                self.prime_input[..source_samples].fill(0.0);
+                self.inner.process(
+                    &self.prime_input[..source_samples],
+                    &mut output[..output_samples],
+                );
+                self.terminal = TerminalState::Flush;
+                Ok(ElasticDrain::new(output_frames, false))
+            }
+            TerminalState::Flush => {
+                let output_frames = self.capabilities.latency().output_frames();
+                let output_samples = self.capabilities.samples(output_frames)?;
+                self.inner.flush(&mut output[..output_samples]);
+                self.terminal = TerminalState::Idle;
+                Ok(ElasticDrain::new(output_frames, true))
+            }
+            TerminalState::Idle => Ok(ElasticDrain::new(0, true)),
+        }
+    }
+
     fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
         let channels = u32::try_from(config.channels())
             .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
@@ -73,10 +118,6 @@ impl ElasticEngine for SignalsmithElastic {
             prime_input,
             terminal: TerminalState::Idle,
         })
-    }
-
-    fn capabilities(&self) -> ElasticCapabilities {
-        self.capabilities
     }
 
     fn prime(
@@ -125,6 +166,12 @@ impl ElasticEngine for SignalsmithElastic {
         Ok(())
     }
 
+    fn reset(&mut self) -> Result<(), ElasticError> {
+        self.inner.reset();
+        self.terminal = TerminalState::Idle;
+        Ok(())
+    }
+
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError> {
         let factor = PitchScale::checked(scale)
             .map(f64::from)
@@ -132,53 +179,6 @@ impl ElasticEngine for SignalsmithElastic {
             .to_f32()
             .ok_or(ElasticError::InvalidPitch(scale))?;
         self.inner.set_transpose_factor(factor, None);
-        Ok(())
-    }
-
-    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError> {
-        if matches!(self.terminal, TerminalState::Idle) {
-            return Ok(ElasticDrain::new(0, true));
-        }
-        let chunk_frames = self.capabilities.terminal_chunk_frames();
-        let expected = self.capabilities.samples(chunk_frames)?;
-        if output.len() != expected {
-            return Err(ElasticError::OutputSampleCount {
-                actual: output.len(),
-                expected,
-            });
-        }
-        match self.terminal {
-            TerminalState::Armed { rate } => {
-                let source_frames = self.capabilities.latency().source_frames();
-                let output_frames = source_frames
-                    .to_f64()
-                    .map(|frames| (frames / rate).ceil())
-                    .and_then(|frames| frames.to_usize())
-                    .ok_or(ElasticError::SampleCountOverflow)?;
-                let source_samples = self.capabilities.samples(source_frames)?;
-                let output_samples = self.capabilities.samples(output_frames)?;
-                self.prime_input[..source_samples].fill(0.0);
-                self.inner.process(
-                    &self.prime_input[..source_samples],
-                    &mut output[..output_samples],
-                );
-                self.terminal = TerminalState::Flush;
-                Ok(ElasticDrain::new(output_frames, false))
-            }
-            TerminalState::Flush => {
-                let output_frames = self.capabilities.latency().output_frames();
-                let output_samples = self.capabilities.samples(output_frames)?;
-                self.inner.flush(&mut output[..output_samples]);
-                self.terminal = TerminalState::Idle;
-                Ok(ElasticDrain::new(output_frames, true))
-            }
-            TerminalState::Idle => Ok(ElasticDrain::new(0, true)),
-        }
-    }
-
-    fn reset(&mut self) -> Result<(), ElasticError> {
-        self.inner.reset();
-        self.terminal = TerminalState::Idle;
         Ok(())
     }
 }

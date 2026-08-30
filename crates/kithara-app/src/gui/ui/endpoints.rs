@@ -17,8 +17,8 @@ impl Endpoint {
     const GROUP: &[&str] = &["group"];
     const LAYOUT: &[&str] = &["layout"];
     const MODULE: &[&str] = &["module"];
-    const WINDOW: &[&str] = &["window"];
     const VARIANT: &[&str] = &["deck", "variant"];
+    const WINDOW: &[&str] = &["window"];
 
     fn desc(&self) -> EndpointDesc {
         self.scopes

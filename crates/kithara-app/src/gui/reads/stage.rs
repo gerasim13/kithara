@@ -46,9 +46,9 @@ impl<'a, 'b: 'a> Node<'a> for &'a TempoNode<'b> {
         let (min, max) = self.view.bpm_window();
         let value = match segment {
             "map" => ReadValue::PortalMap(PortalMapView {
-                master: self.master,
                 min,
                 max,
+                master: self.master,
                 targets: &self.targets,
             }),
             "window" => ReadValue::Range(ScalarRange {

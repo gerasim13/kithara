@@ -67,12 +67,12 @@ impl AacHeEncoder {
         }
 
         let mut encoder = Encoder::new(&EncoderParams {
+            channels,
+            sample_rate,
             aot: profile.aot(),
             bit_rate: request.bit_rate.try_into().map_err(|_| {
                 EncodeError::InvalidInput("bit_rate does not fit into u32".to_owned())
             })?,
-            channels,
-            sample_rate,
             sbr: true,
         })?;
         let info = encoder.info()?;
@@ -234,9 +234,9 @@ mod tests {
     use crate::{EncodeError, PcmSource};
 
     struct ChunkedPcm {
+        reads: AtomicUsize,
         bytes: Vec<u8>,
         max_read: usize,
-        reads: AtomicUsize,
     }
 
     impl ChunkedPcm {

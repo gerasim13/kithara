@@ -30,6 +30,10 @@ impl EffectDrain {
         }
     }
 
+    pub(crate) const fn reset(&mut self) {
+        self.active = false;
+    }
+
     pub(crate) fn step(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> EffectDrainStep {
         if effects.is_empty() {
             return EffectDrainStep::Exhausted;
@@ -39,10 +43,6 @@ impl EffectDrain {
             self.active = true;
         }
         pull(effects, &mut self.exhausted, effects.len() - 1)
-    }
-
-    pub(crate) const fn reset(&mut self) {
-        self.active = false;
     }
 }
 
