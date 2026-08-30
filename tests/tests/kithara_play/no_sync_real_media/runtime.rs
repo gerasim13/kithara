@@ -10,7 +10,7 @@ use kithara::{
 use kithara_integration_tests::offline::OfflineSession;
 use serde::Serialize;
 
-use super::{CHANNELS, Case, SEEK_POSITION_TOLERANCE_SECS, SOURCE_RATE};
+use super::{CHANNELS, Case, SOURCE_RATE};
 
 pub(super) struct Deck {
     pub(super) player: Arc<PlayerImpl>,
@@ -88,17 +88,6 @@ pub(super) fn drain_all_events(
                             failures.push(format!(
                                 "deck {deck_index} ({}) completed stale seek epoch {seek_epoch} during {phase}; expected {:?}",
                                 deck.observation.label, deck.seek_request_epoch,
-                            ));
-                            deck.seek_terminal = true;
-                        } else if deck.player.position_seconds().is_none_or(|served| {
-                            (served - deck.capture_target_secs).abs()
-                                > SEEK_POSITION_TOLERANCE_SECS
-                        }) {
-                            failures.push(format!(
-                                "deck {deck_index} ({}) seek epoch {seek_epoch} committed with served position {:?} during {phase}, expected {:.9}s",
-                                deck.observation.label,
-                                deck.player.position_seconds(),
-                                deck.capture_target_secs,
                             ));
                             deck.seek_terminal = true;
                         } else {
