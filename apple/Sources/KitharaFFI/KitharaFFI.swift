@@ -2265,14 +2265,10 @@ open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
     }
     /**
      * Create an asset store rooted at `root` with a snapshot of `layouts`.
-     *
-     * # Errors
-     *
-     * Returns [`FfiError::Internal`] when the buffer pools cannot be initialized.
      */
-public convenience init(root: String?, layouts: FfiAssetLayoutRegistry)throws  {
+public convenience init(root: String?, layouts: FfiAssetLayoutRegistry) {
     let handle =
-        try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        try! rustCall() {
     uniffi_kithara_ffi_fn_constructor_ffiassetstore_new(
         FfiConverterOptionString.lower(root),
         FfiConverterTypeFfiAssetLayoutRegistry_lower(layouts),$0
@@ -5407,7 +5403,7 @@ public func FfiConverterTypeFfiDecoderChangeCause_lower(_ value: FfiDecoderChang
 
 
 /**
- * FFI-friendly error type bridging native failures into platform bindings.
+ * FFI-friendly error type bridging playback failures into platform bindings.
  */
 public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -8660,7 +8656,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 23050) {
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 1980) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {

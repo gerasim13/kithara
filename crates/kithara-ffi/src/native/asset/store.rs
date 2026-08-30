@@ -5,10 +5,7 @@ use kithara_bufpool::PoolError;
 use kithara_platform::{CancelScope, sync::Arc};
 
 use super::FfiAssetLayoutRegistry;
-use crate::{
-    pools::{FfiStore, Pools, build as build_pools},
-    types::FfiError,
-};
+use crate::pools::{FfiStore, Pools, build as build_pools};
 
 struct Consts;
 
@@ -71,17 +68,18 @@ impl FfiAssetStore {
 impl FfiAssetStore {
     /// Create an asset store rooted at `root` with a snapshot of `layouts`.
     ///
-    /// # Errors
+    /// # Panics
     ///
-    /// Returns [`FfiError::Internal`] when the buffer pools cannot be initialized.
+    /// Panics if Kithara's built-in FFI buffer pools cannot be initialized.
+    #[must_use]
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
-    pub fn new(
-        root: Option<String>,
-        layouts: Arc<FfiAssetLayoutRegistry>,
-    ) -> Result<Arc<Self>, FfiError> {
+    pub fn new(root: Option<String>, layouts: Arc<FfiAssetLayoutRegistry>) -> Arc<Self> {
         let snapshot = layouts.snapshot();
         drop(layouts);
-        Ok(Arc::new(Self::build(root, snapshot)?))
+        Arc::new(
+            Self::build(root, snapshot)
+                .unwrap_or_else(|error| panic!("failed to initialize built-in FFI pools: {error}")),
+        )
     }
 }
 
@@ -181,8 +179,7 @@ mod tests {
         let store = FfiAssetStore::new(
             Some(dir.path().to_string_lossy().into_owned()),
             FfiAssetLayoutRegistry::new(),
-        )
-        .expect("asset store");
+        );
 
         assert_eq!(store.handle().root_dir(), dir.path());
     }
@@ -217,12 +214,11 @@ mod tests {
         let (first, lifetime) = layout("first");
         registry.register(FfiAssetLayoutTarget::File, first.clone());
         drop(first);
-        let store = FfiAssetStore::new(None, Arc::clone(&registry)).expect("asset store");
+        let store = FfiAssetStore::new(None, Arc::clone(&registry));
 
         let (second, _) = layout("second");
         registry.register(FfiAssetLayoutTarget::File, second);
-        let second_store =
-            FfiAssetStore::new(None, Arc::clone(&registry)).expect("second asset store");
+        let second_store = FfiAssetStore::new(None, Arc::clone(&registry));
         drop(registry);
 
         assert!(lifetime.upgrade().is_some());
@@ -244,7 +240,7 @@ mod tests {
         let (hls, _) = layout("hls");
         registry.register(FfiAssetLayoutTarget::File, file);
         registry.register(FfiAssetLayoutTarget::Hls, hls);
-        let store = FfiAssetStore::new(None, registry).expect("asset store");
+        let store = FfiAssetStore::new(None, registry);
 
         assert_layout::<kithara::file::File<FfiPools>>(&store, "file-root", "file/resource.bin");
         assert_layout::<kithara::hls::Hls<FfiPools>>(&store, "hls-root", "hls/resource.bin");
@@ -257,7 +253,7 @@ mod tests {
         let (second, _) = layout("second");
         registry.register(FfiAssetLayoutTarget::File, first);
         registry.register(FfiAssetLayoutTarget::File, second);
-        let store = FfiAssetStore::new(None, registry).expect("asset store");
+        let store = FfiAssetStore::new(None, registry);
 
         assert_layout::<kithara::file::File<FfiPools>>(
             &store,

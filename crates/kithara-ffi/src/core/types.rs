@@ -1,4 +1,3 @@
-use kithara_bufpool::PoolError;
 use kithara_events::{
     AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
     DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
@@ -8,7 +7,7 @@ use kithara_events::{
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
-/// FFI-friendly error type bridging native failures into platform bindings.
+/// FFI-friendly error type bridging playback failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum FfiError {
@@ -49,14 +48,6 @@ impl From<PlayError> for FfiError {
             err => Self::Internal {
                 description: err.to_string(),
             },
-        }
-    }
-}
-
-impl From<PoolError> for FfiError {
-    fn from(error: PoolError) -> Self {
-        Self::Internal {
-            description: error.to_string(),
         }
     }
 }
@@ -1128,22 +1119,6 @@ mod tests {
     ) {
         let ffi: FfiError = input.into();
         assert!(matches_variant(&ffi));
-    }
-
-    #[kithara::test]
-    fn pool_error_maps_to_internal_ffi_error() {
-        let error = PoolError::InvalidConfig {
-            field: "samples",
-            reason: "test configuration",
-        };
-        let FfiError::Internal { description } = FfiError::from(error) else {
-            panic!("pool initialization failure must be an internal FFI error");
-        };
-
-        assert_eq!(
-            description,
-            "invalid pool configuration for samples: test configuration"
-        );
     }
 
     #[kithara::test]

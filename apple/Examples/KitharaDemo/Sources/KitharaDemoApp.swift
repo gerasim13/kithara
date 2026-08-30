@@ -2,13 +2,9 @@ import Kithara
 import SwiftUI
 
 @main
-@MainActor
 struct KitharaDemoApp: App {
-    private let viewModel: Result<PlayerViewModel, Error>?
-
     init() {
         Kithara.initLogging(level: .debug)
-        viewModel = Self.isHostingTests ? nil : Result { try PlayerViewModel() }
     }
 
     #if os(macOS)
@@ -27,15 +23,8 @@ struct KitharaDemoApp: App {
         WindowGroup {
             if Self.isHostingTests {
                 Color.clear
-            } else if let viewModel {
-                Group {
-                    switch viewModel {
-                    case .success(let viewModel):
-                        PlayerView(viewModel: viewModel)
-                    case .failure(let error):
-                        Text("Kithara initialization failed: \(error)")
-                    }
-                }
+            } else {
+                PlayerView()
                 #if os(macOS)
                 .onAppear {
                     // CLI-launched executables (not .app bundles) don't
@@ -45,8 +34,6 @@ struct KitharaDemoApp: App {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                 }
                 #endif
-            } else {
-                Color.clear
             }
         }
         #if os(macOS)

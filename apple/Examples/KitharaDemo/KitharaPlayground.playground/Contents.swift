@@ -16,11 +16,10 @@ final class PlaygroundModel: ObservableObject {
     @Published var rate: Float = 1.0
     @Published var log = "Ready"
 
-    private let player: KitharaPlayer
+    private let player = KitharaPlayer()
     private var cancellables = Set<AnyCancellable>()
 
-    init() throws {
-        player = KitharaPlayer(config: .init(store: try AssetStore()))
+    init() {
         player.eventPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] event in
@@ -100,11 +99,7 @@ final class PlaygroundModel: ObservableObject {
 }
 
 struct PlaygroundView: View {
-    @StateObject private var model: PlaygroundModel
-
-    init(model: PlaygroundModel) {
-        _model = StateObject(wrappedValue: model)
-    }
+    @StateObject private var model = PlaygroundModel()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -153,8 +148,4 @@ struct PlaygroundView: View {
     }
 }
 
-do {
-    PlaygroundPage.current.setLiveView(PlaygroundView(model: try PlaygroundModel()))
-} catch {
-    PlaygroundPage.current.setLiveView(Text("Kithara initialization failed: \(error)"))
-}
+PlaygroundPage.current.setLiveView(PlaygroundView())

@@ -22,7 +22,7 @@ extension IntegrationRegressionsIOS {
         try audioSession.setActive(true)
 
         let player = KitharaPlayer(
-            config: .init(store: try AssetStore(root: cacheURL.path))
+            config: .init(store: AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(
             url: try TestServerFixture.asset("test.mp3").absoluteString

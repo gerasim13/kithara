@@ -13,8 +13,7 @@ import AVFoundation
 /// updates through ``eventPublisher``.
 ///
 /// ```swift
-/// let store = try AssetStore()
-/// let player = KitharaPlayer(config: .init(store: store))
+/// let player = KitharaPlayer()
 /// let item = KitharaPlayerItem(url: "https://example.com/song.mp3")
 /// try player.insert(item)
 /// player.play()
@@ -334,20 +333,21 @@ open class KitharaPlayer: KitharaPlayerProtocol, @unchecked Sendable {
         /// Shared Rust-owned asset store used by this player.
         public var store: AssetStore
 
-        /// Construct a player config. Pass DRM `keyRules` for encrypted streams.
+        /// Construct a player config. All parameters have sensible
+        /// defaults; pass DRM `keyRules` for encrypted streams.
         public init(
-            store: AssetStore,
             eqBandCount: Int = 10,
-            keyRules: [KeyRule] = []
+            keyRules: [KeyRule] = [],
+            store: AssetStore = AssetStore()
         ) {
-            self.store = store
             self.eqBandCount = eqBandCount
             self.keyRules = keyRules
+            self.store = store
         }
     }
 
     /// Create a new player instance.
-    public init(config: Config) {
+    public init(config: Config = Config()) {
         let ffiRules = config.keyRules.map { rule -> FfiKeyRule in
             FfiKeyRule(
                 processor: KeyProcessorBridge(processor: rule.processor),

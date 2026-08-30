@@ -66,8 +66,7 @@ KITHARA_LOCAL_DEV=1 swift build            # build Swift package with local bina
 ```swift
 import Kithara
 
-let store = try AssetStore()
-let player = KitharaPlayer(config: .init(store: store))
+let player = KitharaPlayer()
 let item = KitharaPlayerItem(url: "https://example.com/track.mp3")
 
 try player.insert(item)
@@ -118,7 +117,7 @@ let layouts = AssetLayoutRegistry()
 layouts.register(MyFileAssetLayout(), for: .file)
 layouts.register(MyHlsAssetLayout(), for: .hls)
 
-let store = try AssetStore(
+let store = AssetStore(
     root: appSupportDirectory.path,
     layouts: layouts
 )

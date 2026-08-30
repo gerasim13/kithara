@@ -42,7 +42,7 @@ struct AssetStoreTests {
             let layout = TestAssetLayout(id: "captured")
             captured = layout
             registry.register(layout, for: .file)
-            store = try AssetStore(layouts: registry)
+            store = AssetStore(layouts: registry)
         }
         registry.register(TestAssetLayout(id: "replacement"), for: .file)
 
@@ -65,7 +65,7 @@ struct AssetStoreTests {
         registry.register(layout, for: .file)
         registry.register(layout, for: .hls)
 
-        _ = try AssetStore(layouts: registry)
+        _ = AssetStore(layouts: registry)
     }
 }
 

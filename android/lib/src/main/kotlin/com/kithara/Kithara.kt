@@ -58,9 +58,7 @@ object Kithara {
      *
      * @param context Any [Context]; the application context is used internally.
      * @param logLevel Minimum log level forwarded from Rust to logcat. Defaults to [LogLevel.Warn].
-     * @throws KitharaError if the process-wide asset store cannot be initialized.
      */
-    @Throws(KitharaError::class)
     fun initialize(context: Context, logLevel: LogLevel = LogLevel.Warn) {
         if (initializedStore != null) return
         synchronized(this) {

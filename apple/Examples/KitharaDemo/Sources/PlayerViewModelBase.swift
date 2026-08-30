@@ -59,7 +59,11 @@ class PlayerViewModelBase: ObservableObject {
 
     /// Engine instance. Subclasses install event subscriptions during
     /// `bindEvents()` (invoked from `init`).
-    let player: KitharaPlayer
+    let player = KitharaPlayer(
+        config: KitharaPlayer.Config(
+            store: AssetStore(root: PlayerViewModelBase.defaultCacheDir)
+        )
+    )
 
     /// Self-managed cache directory: `~/Library/Application Support/kithara`.
     ///
@@ -112,9 +116,7 @@ class PlayerViewModelBase: ObservableObject {
         "https://cdn-hls-slicer.zvuk.com/drm/track/59232754_2/master.m3u8",
     ]
 
-    init() throws {
-        let store = try AssetStore(root: Self.defaultCacheDir)
-        player = KitharaPlayer(config: .init(store: store))
+    init() {
         volume = player.volume
         isMuted = player.isMuted
         player.playingRate = selectedRate

@@ -8,6 +8,12 @@ import Testing
 struct KitharaPlayerTests {
     final class LegacyItem {}
 
+    @Test("default initializer remains source compatible")
+    func defaultInitializerRemainsSourceCompatible() {
+        let player = KitharaPlayer()
+        #expect(player.status == .unknown)
+    }
+
     @Test("init creates player with unknown status")
     func initCreatesPlayerWithUnknownStatus() throws {
         let player = try makePlayer()
@@ -162,6 +168,6 @@ struct KitharaPlayerTests {
     }
 
     private func makePlayer() throws -> KitharaPlayer {
-        KitharaPlayer(config: .init(store: try AssetStore()))
+        KitharaPlayer(config: .init(store: AssetStore()))
     }
 }
