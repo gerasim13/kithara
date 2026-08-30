@@ -1,0 +1,81 @@
+// Soft: how far a skin alone can move the look. Nothing here is a new widget
+// or a new document — it is the same pages under a violet palette, with every
+// frame rounded, every word reset in the sans face, roomier navigation and
+// fatter borders on the controls that carry one. The two blanket blocks are
+// the point: `frames` and `text_roles` reach every frame and every
+// typographic role the design declares, and the sections below them restate
+// only where this skin differs from the blanket it just laid down.
+(
+    schema: "kithara.skin",
+    version: 1,
+    id: "kithara-soft",
+    base: "kithara-dark.kskin.ron",
+    frames: (radius: 12.0),
+    text_roles: (font: Sans, weight: Semibold),
+    palette: (
+        bg: "#1b1035",
+        bg_deep: "#120a24",
+        bg_inset: "#241546",
+        bg_panel: "#2b1a52",
+        bg_footer: "#241546",
+        bg_panel_2: "#372066",
+        bg_select: "#452a7d",
+        line: "#6b45b8",
+        line_dim: "#33205e",
+        line_inner: "#4a2f86",
+        line_soft: "#4a2f86",
+        line_hi: "#8a5cf0",
+        line_pop: "#5c3aa0",
+        text: "#f6efff",
+        text_dim: "#cbb6f0",
+        muted: "#9b86c4",
+        accent: "#ff4fa3",
+        accent_strong: "#ff7bbd",
+        accent_soft: "#ff4fa33d",
+        danger: "#ff5c5c",
+        success: "#3ddc97",
+        warning: "#ffc857",
+        wave_low: "#ff4fa3",
+        wave_mid: "#ffc857",
+        wave_high: "#4fd8ff",
+        shadow: "#0a0518",
+    ),
+    chrome: (
+        frame: (radius: 14.0, border_width: 2.0, border: LineHi),
+        secondary_frame: (radius: 12.0, border_width: 2.0, border: Line),
+        header_height: 34.0,
+        footer_height: 26.0,
+        corner_size: 0.0,
+    ),
+    button: (
+        frame: (radius: 12.0, border_width: 2.0, border: Line),
+        primary_frame: (radius: 12.0, border_width: 2.0, border: Line),
+    ),
+    toggle: (
+        thumb_radius: 8.0,
+    ),
+    checkbox: (
+        active_frame: (radius: 6.0, border_width: 2.0, border: Line),
+        inactive_frame: (radius: 6.0, border_width: 2.0, border: Muted),
+    ),
+    crossfader: (
+        rail_frame: (radius: 3.0, border_width: 1.0, border: LineSoft),
+    ),
+    fader: (
+        rail_frame: (radius: 3.0, border_width: 1.0, border: LineSoft),
+        handle_frame: (radius: 5.0, border_width: 0.0, border: Accent),
+        strip_frame: (radius: 7.0, border_width: 2.0, border: Line),
+    ),
+    meter: (
+        frame: (radius: 7.0, border_width: 1.0, border: LineInner),
+    ),
+    nav: (
+        item_height: 40.0,
+        marker_width: 6.0,
+        text_pad_x: 18.0,
+        icon_gap: 12.0,
+    ),
+    text: (
+        section: (font: Display, weight: Semibold, size: 9.0, spacing: 0.12, color: Accent),
+    ),
+)

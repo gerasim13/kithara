@@ -117,6 +117,7 @@ impl<'a> Node<'a> for PlaybackNode<'a> {
         let value = match segment {
             "waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.cache.wave,
+                revision: self.cache.wave_revision,
                 beats: &self.ui.beat_marks,
                 downbeats: &self.ui.downbeat_marks,
                 unready: &self.ui.unready_ranges,

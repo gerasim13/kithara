@@ -5,6 +5,8 @@
     chrome: Plain,
     parameters: ["label"],
     root: Column(
+        size: (w: Fill, h: Fill),
+        background: Bg,
         pad: Some(22.0),
         children: [
             Text(

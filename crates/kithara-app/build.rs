@@ -18,7 +18,13 @@
 //!
 //! `app.yaml` and `.env` are both `rerun-if-changed`.
 
-use std::{collections::HashMap, env, fmt::Write, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env,
+    fmt::Write,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::Deserialize;
 
@@ -208,6 +214,61 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by cargo"));
     let out_path = out_dir.join("app_config_baked.rs");
     fs::write(&out_path, code).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
+
+    emit_ui_documents(&manifest_dir, &out_dir);
+}
+
+/// Embed this application's own UI folder, read from the folder itself.
+///
+/// A document added to the folder ships by that alone, so the screens the
+/// application draws and the files it is written in cannot drift apart. A
+/// package laid out on disk still wins over these when the application runs.
+fn emit_ui_documents(manifest_dir: &Path, out_dir: &Path) {
+    let root = manifest_dir.join("assets").join("ui");
+    println!("cargo:rerun-if-changed={}", root.display());
+
+    let mut documents = Vec::new();
+    collect_documents(&root, &root, &mut documents);
+    documents.sort();
+
+    let mut code = String::from("const DOCS: &[(&str, &str)] = &[\n");
+    for (named, read) in &documents {
+        writeln!(code, "    ({named:?}, include_str!({read:?})),")
+            .expect("write to String never fails");
+    }
+    code.push_str("];\n");
+
+    let out_path = out_dir.join("ui_documents.rs");
+    fs::write(&out_path, code).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
+}
+
+/// Every document under `dir`, as the path a package names it by and the path
+/// the build reads it from.
+fn collect_documents(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
+    let entries = fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .path();
+        if path.is_dir() {
+            collect_documents(root, &path, out);
+            continue;
+        }
+        if path.extension().is_none_or(|extension| extension != "ron") {
+            continue;
+        }
+        let named = path
+            .strip_prefix(root)
+            .expect("every file walked sits under the folder")
+            .to_str()
+            .expect("the shipped folder holds no unnameable path")
+            .replace('\\', "/");
+        let read = path
+            .to_str()
+            .expect("the checkout holds no unnameable path")
+            .to_owned();
+        out.push((named, read));
+    }
 }
 
 fn emit_scalars(code: &mut String, app: &AppConfig) {

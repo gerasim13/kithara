@@ -1,0 +1,34 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-skins-tab",
+    root: Column(
+        gap: Some(14.0),
+        pad: Some(24.0),
+        children: [
+            Text(id: "heading", style: Section, label: "SKINS", size: (w: Fill, h: Fixed(20.0))),
+            Row(gap: Some(12.0), size: (w: Fill, h: Shrink), children: [
+                Include(id: "kithara-dark", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "DARK", "tab": "gallery.skin.kithara-dark" }),
+                Include(id: "kithara-light", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "LIGHT", "tab": "gallery.skin.kithara-light" }),
+                Include(id: "kithara-neon", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "NEON", "tab": "gallery.skin.kithara-neon" }),
+                Include(id: "kithara-soft", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "SOFT", "tab": "gallery.skin.kithara-soft" }),
+            ]),
+            Text(id: "palette-heading", style: Section, label: "PALETTE", size: (w: Fill, h: Fixed(20.0))),
+            Row(gap: Some(20.0), size: (w: Fill, h: Shrink), children: [
+                Swatch(id: "bg", role: Bg, label: "BG"),
+                Swatch(id: "panel", role: BgPanel, label: "PANEL"),
+                Swatch(id: "line", role: Line, label: "LINE"),
+                Swatch(id: "text", role: Text, label: "TEXT"),
+                Swatch(id: "accent", role: Accent, label: "ACCENT"),
+            ]),
+            Row(gap: Some(20.0), size: (w: Fill, h: Shrink), children: [
+                Swatch(id: "wave-low", role: WaveLow, label: "WAVE LOW"),
+                Swatch(id: "wave-mid", role: WaveMid, label: "WAVE MID"),
+                Swatch(id: "wave-high", role: WaveHigh, label: "WAVE HIGH"),
+                Swatch(id: "ok", role: Success, label: "OK"),
+                Swatch(id: "alert", role: Danger, label: "ALERT"),
+            ]),
+            Spacer(id: "rest", size: (w: Fill, h: Fill)),
+        ],
+    ),
+)

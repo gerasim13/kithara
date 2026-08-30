@@ -7,10 +7,12 @@ use kithara_platform::{
 };
 use kithara_ui::render::fonts;
 use kithara_worker::{DispatcherConfig, TaskConfig};
+#[cfg(feature = "masonry")]
+use num_traits::cast::AsPrimitive;
 
 use super::{
     app::{Decks, Kithara},
-    ui::{AppUi, window::WINDOW_SIZE},
+    ui::{AppUi, package::Package, window::WINDOW_SIZE},
     update, view,
 };
 use crate::{
@@ -18,12 +20,91 @@ use crate::{
     config::AppConfig,
     deck::{DeckId, DeckSet},
     state::StateController,
-    theme::gui,
     wave_cache::{AnalysisPersistence, persistence::AnalysisPersistenceConfig},
 };
 
 /// Error returned by the GUI frontend.
 pub type FrontendError = Box<dyn Error + Send + Sync>;
+
+/// Which host draws the studio.
+///
+/// The retained host is a build the `masonry` feature turns on; without it
+/// there is only one host to pick. Both read the same documents and the same
+/// state, so the choice is the shell and nothing else.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum Host {
+    /// iced: the tree is rebuilt from the state on every message.
+    #[cfg_attr(not(feature = "masonry"), default)]
+    Immediate,
+    /// masonry and Vello: the tree is kept and told what changed.
+    #[cfg(feature = "masonry")]
+    #[default]
+    Retained,
+}
+
+fn immediate(boot: Boot) -> Result<(), FrontendError> {
+    let boot = Mutex::new(Some(boot));
+    let daemon = iced::daemon(
+        move || {
+            let boot = boot
+                .lock()
+                .take()
+                .expect("invariant: iced boots the application exactly once");
+            Kithara::new(
+                boot.session,
+                boot.decks,
+                boot.catalog,
+                boot.config,
+                boot.ui,
+                boot.broadcast,
+            )
+        },
+        update::update,
+        view::view,
+    )
+    .title(Kithara::title)
+    .theme(Kithara::theme)
+    .style(Kithara::style)
+    .subscription(Kithara::subscription)
+    .default_font(fonts::SANS);
+    fonts::FONT_BYTES
+        .iter()
+        .fold(daemon, |daemon, bytes| daemon.font(*bytes))
+        .run()?;
+    Ok(())
+}
+
+#[cfg(feature = "masonry")]
+fn retained(boot: Boot) -> Result<(), FrontendError> {
+    super::retained::run(super::retained::Studio::new(
+        boot.session,
+        boot.decks,
+        boot.catalog,
+        boot.config,
+        boot.ui,
+        boot.broadcast,
+    ))?;
+    Ok(())
+}
+
+/// The box the app window opens at, in whole logical points. Both hosts open
+/// the same window.
+#[cfg(feature = "masonry")]
+pub(crate) fn window_size() -> (u32, u32) {
+    (whole(WINDOW_SIZE.width), whole(WINDOW_SIZE.height))
+}
+
+/// The smallest box the compiled documents are laid out for, in whole logical
+/// points.
+#[cfg(feature = "masonry")]
+pub(crate) fn window_min(min: Size) -> (u32, u32) {
+    (whole(min.width), whole(min.height))
+}
+
+#[cfg(feature = "masonry")]
+fn whole(value: f32) -> u32 {
+    value.as_()
+}
 
 /// Settings for the app window. The bar draws the window chrome itself, so
 /// the system decorations stay off; close goes through `close_requests()`,
@@ -34,6 +115,7 @@ pub(crate) fn window_settings(min: Size) -> Settings {
         min_size: Some(min),
         decorations: false,
         exit_on_close_request: false,
+        transparent: true,
         ..Settings::default()
     }
 }
@@ -47,11 +129,11 @@ struct Boot {
     ui: AppUi,
 }
 
-/// GUI frontend using iced.
+/// GUI frontend for the studio.
 pub struct GuiFrontend {
     broadcast: Option<crate::broadcast::Broadcaster>,
     config: AppConfig,
-    palette: gui::GuiPalette,
+    host: Host,
 }
 
 impl GuiFrontend {
@@ -59,10 +141,10 @@ impl GuiFrontend {
     ///
     /// # Errors
     /// Returns an error if GUI initialization fails.
-    pub fn new(config: &AppConfig) -> Result<Self, FrontendError> {
+    pub fn new(config: &AppConfig, host: Host) -> Result<Self, FrontendError> {
         Ok(Self {
             broadcast: None,
-            palette: config.palette.into(),
+            host,
             config: config.clone(),
         })
     }
@@ -84,9 +166,8 @@ impl GuiFrontend {
     /// Panics if iced boots the application more than once; the boot
     /// state is handed over exactly once by construction.
     pub fn run_loop(&mut self, session: DeckSet) -> Result<(), FrontendError> {
-        let palette = self.palette;
         let config = self.config.clone();
-        let ui = AppUi::new()?;
+        let ui = AppUi::new(Package::load(config.ui_package.as_deref())?)?;
         let base_worker = config
             .base_worker
             .clone()
@@ -122,7 +203,7 @@ impl GuiFrontend {
             })
             .collect();
 
-        let boot = Mutex::new(Some(Boot {
+        let boot = Boot {
             broadcast: self
                 .broadcast
                 .take()
@@ -132,40 +213,15 @@ impl GuiFrontend {
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),
-        }));
-
-        let daemon = iced::daemon(
-            move || {
-                let boot = boot
-                    .lock()
-                    .take()
-                    .expect("invariant: iced boots the application exactly once");
-                Kithara::new(
-                    boot.session,
-                    boot.decks,
-                    boot.catalog,
-                    boot.config,
-                    boot.ui,
-                    palette,
-                    boot.broadcast,
-                )
-            },
-            update::update,
-            view::view,
-        )
-        .title(Kithara::title)
-        .theme(Kithara::theme)
-        .subscription(Kithara::subscription)
-        .default_font(fonts::SANS);
-        let result = fonts::FONT_BYTES
-            .iter()
-            .fold(daemon, |daemon, bytes| daemon.font(*bytes))
-            .run();
+        };
+        let result = match self.host {
+            Host::Immediate => immediate(boot),
+            #[cfg(feature = "masonry")]
+            Host::Retained => retained(boot),
+        };
 
         config.shutdown.cancel();
-        result?;
-
-        Ok(())
+        result
     }
 
     /// Completes GUI shutdown.

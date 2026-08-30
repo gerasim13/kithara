@@ -4,6 +4,8 @@
     id: "gallery-tree-tab",
     chrome: Plain,
     root: Row(
+        size: (w: Fill, h: Fill),
+        background: Bg,
         children: [
             Tree(
                 id: "browser",
