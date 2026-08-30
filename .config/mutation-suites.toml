@@ -55,13 +55,14 @@ files = ["crates/kithara-hls/src/stream/coord.rs"]
 test_filters = ["test(/stream::coord::tests::/)"]
 timeout_seconds = 180
 
-# The worker scheduler is ordering and nothing else: which command runs next,
-# which deadline has passed, which wake is redundant.
+# The worker dispatcher is ordering and nothing else: which slot precedes
+# which, which pass produced work, which park follows an outcome. It moved out
+# of `kithara-play` into the shared runtime, and its own tests moved with it.
 [[suite]]
 name = "worker-scheduler"
-package = "kithara-play"
-files = ["crates/kithara-play/src/worker/scheduler/core.rs"]
-test_filters = ["test(/worker::scheduler::core::tests::/)"]
+package = "kithara-worker"
+files = ["crates/kithara-worker/src/dispatcher/core.rs"]
+test_filters = ["test(/dispatcher::tests::/)"]
 timeout_seconds = 180
 
 # Durations, byte ranges and container boundaries: arithmetic whose off-by-one
