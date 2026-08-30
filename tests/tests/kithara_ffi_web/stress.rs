@@ -959,7 +959,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
 
     let mut audio = create_pipeline().await;
-    let mut events_rx = audio.events();
+    let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let mut buf = vec![0.0f32; 4096];

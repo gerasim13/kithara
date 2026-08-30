@@ -93,5 +93,6 @@ impl Consts {
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
     /// Block size used by offline render harnesses (audio block budget).
+    #[cfg(not(target_arch = "wasm32"))]
     pub const OFFLINE_BLOCK_FRAMES: usize = crate::offline::session::OFFLINE_BLOCK_FRAMES;
 }
