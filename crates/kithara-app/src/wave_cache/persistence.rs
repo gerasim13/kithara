@@ -15,6 +15,7 @@ use kithara::{
 };
 use kithara_platform::{
     CancelGroup,
+    sync::Arc,
     time::Duration,
     tokio::{
         self,
@@ -64,7 +65,7 @@ impl AnalysisPersistenceConfig {
 /// Cloneable handle to one ordered, bounded analysis persistence actor.
 #[derive(Clone)]
 pub(crate) struct AnalysisPersistence {
-    inner: kithara_platform::sync::Arc<AnalysisPersistenceInner>,
+    inner: Arc<AnalysisPersistenceInner>,
 }
 
 impl AnalysisPersistence {
@@ -91,7 +92,7 @@ impl AnalysisPersistence {
         })?;
 
         Ok(Self {
-            inner: kithara_platform::sync::Arc::new(AnalysisPersistenceInner {
+            inner: Arc::new(AnalysisPersistenceInner {
                 tx,
                 _owner: PersistenceOwner {
                     task,

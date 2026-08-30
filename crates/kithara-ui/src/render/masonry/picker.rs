@@ -3,6 +3,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use kithara_platform::time::Instant;
 use masonry::{
     core::{EventCtx, PointerEvent, WidgetId},
     kurbo::{Affine, Rect as MasonryRect},
@@ -230,7 +231,7 @@ impl HostedEngine {
         for target in &targets {
             engine.set_scroll_viewport(target.path, target.hit.area());
         }
-        let emission = engine.handle(input, &targets, kithara_platform::time::Instant::now());
+        let emission = engine.handle(input, &targets, Instant::now());
         let focused = engine.focused_path().is_some();
         let menu_changed = picker_before != self.picker_views(&engine);
         if menu_changed {

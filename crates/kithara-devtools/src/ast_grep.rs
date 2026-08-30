@@ -386,6 +386,34 @@ fn target_function() {
     }
 
     #[test]
+    fn inline_qualified_path_rule_only_reports_production_functions() {
+        let source = r#"
+fn production() {
+    let _ = std::io::ErrorKind::NotFound;
+}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() {
+        let _ = std::io::ErrorKind::NotFound;
+    }
+}
+
+#[kithara::test]
+fn macro_test() {
+    let _ = std::io::ErrorKind::NotFound;
+}
+
+#[cfg(test)]
+fn cfg_test() {
+    let _ = std::io::ErrorKind::NotFound;
+}
+"#;
+
+        assert_eq!(rule_hits("style.no-inline-qualified-paths.yml", source), 1);
+    }
+
+    #[test]
     fn default_rule_ignores_types_that_already_implement_default() {
         let source = r#"
 struct Existing;

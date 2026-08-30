@@ -1,10 +1,16 @@
-use std::sync::{
-    LazyLock,
-    atomic::{AtomicI64, Ordering},
+use std::{
+    mem,
+    sync::{
+        LazyLock,
+        atomic::{AtomicI64, Ordering},
+    },
 };
 
 use kithara_host::{Host, HostConfig, wasm};
-use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
+use kithara_platform::{
+    sync::{Mutex, MutexGuard, mpsc},
+    thread,
+};
 use wasm_bindgen::JsValue;
 
 use crate::web::commands::WorkerCmd;
@@ -113,10 +119,10 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = kithara_platform::thread::spawn(move || {
+        let worker = thread::spawn(move || {
             crate::web::worker::worker_main(cmd_rx, host_sender);
         });
-        std::mem::forget(worker);
+        mem::forget(worker);
     }
 
     /// Whether the worker's audio session is currently playing.

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, num::NonZeroU32};
+use std::{collections::VecDeque, future::pending, num::NonZeroU32};
 
 use kithara::{
     analysis::AnalysisProgress,
@@ -12,7 +12,7 @@ use kithara_platform::{
     tokio::{
         self,
         sync::{broadcast::error::RecvError, watch},
-        task::JoinHandle,
+        task::{JoinHandle, spawn},
     },
 };
 use kithara_queue::{QueueControl, QueueEvent, TrackSource};
@@ -191,7 +191,7 @@ impl AnalysisController {
                 self.activity = None;
                 self.pump(queue, state, config);
             }
-            None => std::future::pending::<()>().await,
+            None => pending::<()>().await,
         }
     }
 
@@ -212,7 +212,7 @@ impl AnalysisController {
         let (Some(target), Some(persistence)) = (run.target, self.persistence.clone()) else {
             return;
         };
-        let task = tokio::task::spawn(async move { persistence.store(target, progress).await });
+        let task = spawn(async move { persistence.store(target, progress).await });
         self.activity = Some(Activity::Committing(Commit { task }));
     }
 
