@@ -41,6 +41,9 @@ impl<'a> From<&'a Write> for ViewWrite<'a> {
 #[non_exhaustive]
 pub struct PageStanding {
     pub initial: String,
+    /// Every page the screen offers, so what a harness may turn to comes from
+    /// the document rather than from a list beside it that can disagree.
+    pub offered: BTreeSet<String>,
     pub shown: String,
 }
 
@@ -175,11 +178,12 @@ impl Census {
     /// Notes the pages one `Tabs` offers, which of them it showed, and that it
     /// reads the state naming which of them stands.
     pub(crate) fn note_pages(&mut self, tabs: Tabs<'_>) {
+        let pages = tabs.pages;
         self.read.insert(tabs.state.to_owned());
         self.declared
             .entry(tabs.state.to_owned())
             .or_default()
-            .extend(tabs.pages);
+            .extend(pages.iter().cloned());
         self.origin
             .entry(tabs.state.to_owned())
             .or_insert_with(|| (tabs.origin.clone(), tabs.path.to_owned()));
@@ -187,6 +191,7 @@ impl Census {
             tabs.state.to_owned(),
             PageStanding {
                 initial: tabs.initial.to_owned(),
+                offered: pages,
                 shown: tabs.shown.to_owned(),
             },
         );

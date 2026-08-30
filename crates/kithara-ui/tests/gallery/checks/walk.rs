@@ -182,13 +182,15 @@ mod retained {
         builtin,
         compile::compile,
         render::{Reads, Skin, UiEvent},
+        view::ViewState,
     };
 
     use super::{FRAMES, Shot, Walked};
     use crate::{
         custom, demo,
         fixture::{Consts, resolver},
-        host::Gallery,
+        host::{self, Gallery},
+        sections,
     };
 
     /// The gallery with its own clock held unless the page says it moves.
@@ -208,6 +210,7 @@ mod retained {
             to self.gallery {
                 fn document(&self) -> &str;
                 fn skin(&self) -> &Skin;
+                fn turned(&mut self, view: &ViewState);
                 fn update(&mut self, event: UiEvent);
             }
         }
@@ -256,27 +259,28 @@ mod retained {
             num_traits::cast::AsPrimitive::<u32>::as_(Consts::WIDTH),
             num_traits::cast::AsPrimitive::<u32>::as_(Consts::HEIGHT),
         );
-        let at = Gallery::at(page);
         // Read from the document rather than from the host, so the two sides of
         // the comparison come from two places: what the page says, and what the
         // window then does about it.
         let animates = compile(
-            at.document(),
+            sections::entry(),
             &resolver,
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
-            &kithara_ui::view::EMPTY,
+            &page.standing(),
         )
         .unwrap_or_else(|error| panic!("page {} must compile: {error}", page))
         .animates;
         let still = Still {
-            gallery: at,
+            gallery: Gallery::default(),
             ticks: ticks || animates,
         };
         let mut ui = Ui::new(still, config, size, 1.0)
             .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
+        host::stand(&mut ui, page)
+            .unwrap_or_else(|error| panic!("page {} must open: {error}", page));
         // One frame at sixty a second, which is what the window tells the pass.
         let frame = Duration::from_millis(16);
         // The window asks for the first frame itself, once the surface is up.

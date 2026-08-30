@@ -7,7 +7,10 @@ use std::{
 };
 
 use iced::window::Screenshot;
-use kithara_ui::capture::{Geometry, page_file, write_geometry, write_png};
+use kithara_ui::{
+    capture::{Geometry, page_file, write_geometry, write_png},
+    view::ViewState,
+};
 
 use crate::sections::{self, Page};
 
@@ -19,6 +22,27 @@ pub(super) struct Shot {
 }
 
 impl Shot {
+    /// Which screen states this shot stands, and where: the page the nav
+    /// turns, and for the modules page the demo it stands at.
+    pub(super) fn stands(&self) -> impl Iterator<Item = (&'static str, Page)> {
+        [
+            (sections::PAGE, Some(self.tab)),
+            (sections::MODULE, self.module),
+        ]
+        .into_iter()
+        .filter_map(|(state, page)| page.map(|page| (state, page)))
+    }
+
+    /// The screen's own state standing at this page, which is how a harness
+    /// opens one page of the screen every page lives in.
+    pub(super) fn standing(&self) -> ViewState {
+        let mut view = ViewState::default();
+        for (state, page) in self.stands() {
+            view.stand(state, page);
+        }
+        view
+    }
+
     /// Every gallery page in tab order, with the modules tab expanded per demo.
     pub(super) fn all() -> Vec<Self> {
         let mut pages = Vec::new();

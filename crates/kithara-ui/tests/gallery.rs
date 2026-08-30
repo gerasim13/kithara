@@ -54,26 +54,25 @@ mod tests {
         registry::SECONDS,
         render::{ControlAction, ReadValue, Reads},
         source::SourceResolver,
+        view::ViewWrite,
     };
     use num_traits::cast::AsPrimitive;
 
     use super::*;
 
-    /// Every page the gallery draws is the file on disk, so editing one and
+    /// The screen the gallery draws is the file on disk, so editing it and
     /// opening the gallery again shows the edit rather than what this build
     /// happened to embed.
     #[kithara::test]
-    fn every_page_is_read_from_the_folder_it_ships_in() {
-        let resolver = resolver();
-        for tab in sections::pages().iter().copied() {
-            let entry = sections::entry(tab);
-            let on_disk = std::fs::read_to_string(fixture::package_root().join(entry))
-                .expect("the gallery ships every page it names");
-            let answered = resolver
-                .load(None, entry)
-                .expect("the gallery resolver answers for every page it names");
-            assert_eq!(answered.text, on_disk, "{entry} must be answered from disk");
-        }
+    fn the_screen_is_read_from_the_folder_it_ships_in() {
+        let entry = sections::entry();
+        let on_disk = std::fs::read_to_string(fixture::package_root().join(entry))
+            .expect("the gallery ships the screen it names");
+        let answered = resolver()
+            .load(None, entry)
+            .expect("the gallery resolver answers for the screen it names");
+
+        assert_eq!(answered.text, on_disk, "{entry} must be answered from disk");
     }
 
     fn shot(tab: Page) -> Shot {
@@ -93,7 +92,7 @@ mod tests {
     #[kithara::test]
     fn turning_to_another_skin_compiles_the_pages_again() {
         let mut gallery = Gallery::mounted();
-        gallery.reads.select_tab("skins");
+        gallery.select(shot("skins"));
         let dark = gallery.compiled().min;
 
         drop(update(
@@ -114,7 +113,7 @@ mod tests {
     #[kithara::test]
     fn pressing_a_face_family_unfolds_that_specimen_and_folds_the_others() {
         let mut gallery = Gallery::mounted();
-        gallery.reads.select_tab("assets");
+        gallery.select(shot("assets"));
 
         drop(update(
             &mut gallery,
@@ -184,20 +183,8 @@ mod tests {
 
     #[kithara::test]
     fn every_module_demo_compiles_with_full_chrome() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-
         for module in sections::modules().iter().copied() {
-            let ui = compile(
-                sections::module_entry(module),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                custom::config(),
-                &kithara_ui::view::EMPTY,
-            )
-            .unwrap();
+            let ui = module_page(module);
             let CompiledNode::Split { children, .. } = &ui.root else {
                 panic!("expected gallery split");
             };
@@ -226,34 +213,17 @@ mod tests {
                 panic!("expected module demo");
             };
 
-            assert_eq!(
-                *chrome,
-                ChromeStyle::Full,
-                "{}",
-                sections::module_entry(module)
-            );
-            assert!(title.is_some(), "{}", sections::module_entry(module));
-            assert!(chip.is_some(), "{}", sections::module_entry(module));
-            assert!(footer.is_some(), "{}", sections::module_entry(module));
+            assert_eq!(*chrome, ChromeStyle::Full, "{module}");
+            assert!(title.is_some(), "{module}");
+            assert!(chip.is_some(), "{module}");
+            assert!(footer.is_some(), "{module}");
         }
     }
 
     #[kithara::test]
     fn every_gallery_tab_compiles() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-
         for tab in sections::pages().iter().copied() {
-            compile(
-                sections::entry(tab),
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                custom::config(),
-                &kithara_ui::view::EMPTY,
-            )
-            .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry(tab)));
+            drop(page(tab));
         }
     }
 
@@ -262,29 +232,14 @@ mod tests {
     /// complete the mount registry looks.
     #[kithara::test]
     fn every_control_appears_on_a_gallery_page() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-        let entries = sections::pages()
+        let pages = sections::pages()
             .iter()
-            .map(|tab| sections::entry(tab))
-            .chain(
-                sections::modules()
-                    .iter()
-                    .map(|demo| sections::module_entry(demo)),
-            );
+            .copied()
+            .map(page)
+            .chain(sections::modules().iter().copied().map(module_page));
 
         let mut drawn = BTreeSet::new();
-        for entry in entries {
-            let ui = compile(
-                entry,
-                &resolver,
-                &endpoints,
-                builtin::skin_doc(),
-                builtin::text_doc(),
-                custom::config(),
-                &kithara_ui::view::EMPTY,
-            )
-            .unwrap_or_else(|error| panic!("{entry} must compile: {error}"));
+        for ui in pages {
             each_control(&ui, &mut |_, spec| {
                 drawn.insert(spec.kind());
             });
@@ -534,20 +489,11 @@ mod tests {
 
     fn assert_hosted_page_claims(
         tab: Page,
-        page: &str,
+        section: &str,
         belongs: impl Fn(&str) -> bool,
         expected: &[(&str, &str)],
     ) {
-        let ui = compile(
-            sections::entry(tab),
-            &resolver(),
-            &demo::registry(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap_or_else(|error| panic!("the {tab:?} tab must compile: {error}"));
+        let ui = page(tab);
         let mut claims = Vec::new();
         each_control(&ui, &mut |path, spec| {
             if belongs(path) {
@@ -570,8 +516,8 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(
             claims, expected,
-            "the hosted {page} page's engine claims changed; unported controls, passive controls, \
-             and containers are intentionally absent"
+            "the hosted {section} page's engine claims changed; unported controls, passive \
+             controls, and containers are intentionally absent"
         );
     }
 
@@ -682,34 +628,37 @@ mod tests {
         }
     }
 
+    /// The nav is what a reader presses to turn the screen, so every one of its
+    /// rows must write the screen's own page state, and between them they must
+    /// name every page that screen offers.
     #[kithara::test]
-    fn every_nav_item_path_selects_its_tab() {
-        let ui = compile(
-            sections::entry("atoms"),
-            &resolver(),
-            &demo::registry(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap();
+    fn every_nav_item_path_turns_the_screen_to_its_page() {
+        let ui = page("atoms");
         let mut paths = Vec::new();
         collect_nav_item_paths(&ui.root, &ui, &mut paths);
 
-        let mut selected: Vec<Page> = paths
-            .iter()
-            .map(|path| sections::pressed(path).unwrap_or_else(|| panic!("{path}")))
-            .collect();
-        selected.sort_unstable();
+        let mut turned = turned_to(&ui, sections::PAGE, &paths);
+        turned.sort_unstable();
 
         let mut declared = sections::pages().to_vec();
         declared.sort_unstable();
 
         assert_eq!(
-            selected, declared,
-            "the nav offers every page the package declares, once each"
+            turned, declared,
+            "the nav offers every page the screen declares, once each"
         );
+    }
+
+    /// What each of `paths` writes into `state`, which the document says and
+    /// the compiled screen carries.
+    fn turned_to<'a>(ui: &'a CompiledUi, state: &str, paths: &[String]) -> Vec<&'a str> {
+        paths
+            .iter()
+            .map(|path| match ui.views().at(path) {
+                Some((wrote, ViewWrite::Page(page))) if wrote == state => page,
+                other => panic!("{path} must turn {state}, and writes {other:?}"),
+            })
+            .collect()
     }
 
     /// The page offering a choice of skins and the skins the crate ships are
@@ -717,16 +666,7 @@ mod tests {
     /// a row nothing answers or a skin nobody can reach.
     #[kithara::test]
     fn the_skins_page_offers_every_shipped_skin() {
-        let ui = compile(
-            sections::entry("skins"),
-            &resolver(),
-            &demo::registry(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("skins")));
+        let ui = page("skins");
         let mut paths = Vec::new();
         collect_nav_item_paths(&ui.root, &ui, &mut paths);
 
@@ -746,16 +686,7 @@ mod tests {
     /// nothing answers or a face nobody can reach.
     #[kithara::test]
     fn the_assets_page_offers_every_face_family() {
-        let ui = compile(
-            sections::entry("assets"),
-            &resolver(),
-            &demo::registry(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("assets")));
+        let ui = page("assets");
         let mut paths = Vec::new();
         collect_nav_item_paths(&ui.root, &ui, &mut paths);
 
@@ -774,16 +705,7 @@ mod tests {
     /// nothing to look at first.
     #[kithara::test]
     fn the_assets_page_shows_every_icon_the_toolkit_draws() {
-        let ui = compile(
-            sections::entry("assets"),
-            &resolver(),
-            &demo::registry(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap_or_else(|error| panic!("{} must compile: {error}", sections::entry("assets")));
+        let ui = page("assets");
         let mut shown = Vec::new();
         each_control(&ui, &mut |path, spec| {
             if let ControlSpec::Glyph { icon, .. } = spec
@@ -830,55 +752,26 @@ mod tests {
     }
 
     #[kithara::test]
-    fn module_demo_tabs_activate_their_compiled_control_paths() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-        let ui = compile(
-            sections::entry("modules"),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap();
+    fn module_demo_tabs_turn_the_modules_page_to_their_demo() {
+        let ui = page("modules");
         let mut paths = Vec::new();
         collect_tab_large_paths(&ui.root, &ui, &mut paths);
 
-        let mut reads = DemoReads::default();
-        let mut activated: Vec<Page> = paths
-            .iter()
-            .map(|path| {
-                reads.apply(path, &ControlAction::Activate);
-                reads.active_module()
-            })
-            .collect();
-        activated.sort_unstable();
+        let mut turned = turned_to(&ui, sections::MODULE, &paths);
+        turned.sort_unstable();
 
         let mut declared = sections::modules().to_vec();
         declared.sort_unstable();
 
         assert_eq!(
-            activated, declared,
-            "the modules page offers every demo the package declares, once each"
+            turned, declared,
+            "the modules page offers every demo the screen declares, once each"
         );
     }
 
     #[kithara::test]
     fn menu_tab_carries_the_app_menu_and_one_popover_per_track() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-        let ui = compile(
-            sections::entry("menu"),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap();
+        let ui = page("menu");
         let mut found = MenuTab::default();
         collect_menu_tab(&ui.root, &ui, &mut found);
 
@@ -970,17 +863,33 @@ mod tests {
         found
     }
 
+    /// The gallery's one screen, standing at the page named. Every page lives
+    /// in that screen, so opening one is turning its state rather than
+    /// compiling a document of its own.
     fn page(tab: Page) -> CompiledUi {
+        standing(Shot { tab, module: None })
+    }
+
+    /// The modules page standing at one demo, which is the second state that
+    /// screen turns.
+    fn module_page(module: Page) -> CompiledUi {
+        standing(Shot {
+            tab: sections::MODULES,
+            module: Some(module),
+        })
+    }
+
+    fn standing(at: Shot) -> CompiledUi {
         compile(
-            sections::entry(tab),
+            sections::entry(),
             &resolver(),
             &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
-            &kithara_ui::view::EMPTY,
+            &at.standing(),
         )
-        .unwrap_or_else(|error| panic!("the {tab} page must compile: {error}"))
+        .unwrap_or_else(|error| panic!("the {at:?} page must compile: {error}"))
     }
 
     /// Poses, tracks and the stage that holds them.
@@ -1620,18 +1529,7 @@ mod tests {
 
     #[kithara::test]
     fn the_demo_answers_every_read_the_menu_tab_names() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-        let ui = compile(
-            sections::entry("menu"),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap();
+        let ui = page("menu");
         let mut keys = Vec::new();
         collect_menu_reads(&ui.root, &ui, &mut keys);
         assert!(!keys.is_empty());
@@ -1649,18 +1547,7 @@ mod tests {
 
     #[kithara::test]
     fn tree_query_binding_reaches_the_compiled_control() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-        let ui = compile(
-            sections::entry("tree"),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap();
+        let ui = page("tree");
         let mut queries = Vec::new();
         collect_tree_queries(&ui.root, &ui, &mut queries);
 
@@ -1669,18 +1556,7 @@ mod tests {
 
     #[kithara::test]
     fn context_scope_binding_reaches_the_compiled_control() {
-        let resolver = resolver();
-        let endpoints = demo::registry();
-        let ui = compile(
-            sections::entry("library2"),
-            &resolver,
-            &endpoints,
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            custom::config(),
-            &kithara_ui::view::EMPTY,
-        )
-        .unwrap();
+        let ui = page("library2");
         let mut contexts = Vec::new();
         collect_context_scopes(&ui.root, &ui, &mut contexts);
 
@@ -1856,8 +1732,15 @@ mod tests {
 
     /// The endpoint one binding names, or nothing when it names state the page
     /// keeps for itself, which no application is asked to answer.
+    /// The endpoint this binding names, or nothing when it names none: state
+    /// the screen keeps for itself is answered by the screen rather than by the
+    /// application, on either side.
     fn endpoint_key<'a>(ui: &'a CompiledUi, binding: &Binding) -> Option<&'a str> {
-        (!matches!(binding.kind, BindingKind::View { .. })).then(|| ui.resolve(binding.key))
+        (!matches!(
+            binding.kind,
+            BindingKind::View { .. } | BindingKind::Page { .. }
+        ))
+        .then(|| ui.resolve(binding.key))
     }
 
     fn collect_tree_queries<'a>(

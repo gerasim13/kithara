@@ -682,6 +682,7 @@ impl Fixture {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::builder().custom_kinds(self.kinds.names()).build(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the frame-perf fixture must compile: {error}"))
     }

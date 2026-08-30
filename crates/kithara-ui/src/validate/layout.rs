@@ -4,7 +4,7 @@ use super::{
     binding::{BLOCK_HIDDEN, BindingSide, check_binding},
     measure::{Sibling, check_block_position, check_measured_box, check_reveal, check_thresholds},
     module::{claim, record_block},
-    path::{NodePath, check_id},
+    path::{NodePath, check_id, check_state_id},
 };
 use crate::{
     error::UiDocError,
@@ -112,7 +112,7 @@ pub(super) fn walk_layout(
             initial,
             pages,
         } => {
-            check_id(&state.0, origin)?;
+            check_state_id(&state.0, origin)?;
             let here = path.push(format!("Tabs({state})"));
             if !pages.contains_key(initial) {
                 return Err(UiDocError::UnknownPage {

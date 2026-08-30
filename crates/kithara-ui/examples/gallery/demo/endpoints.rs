@@ -11,7 +11,6 @@ use super::{
     pages::{mixer, stress},
     reads::FONT_FAMILIES,
 };
-use crate::sections;
 
 #[derive(Default)]
 pub(crate) struct DemoRegistry {
@@ -476,23 +475,6 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
         registry.insert(
             EndpointCategory::Model,
             id,
-            EndpointDesc::new(ValueKind::Bool),
-        );
-    }
-    // Named from the pages themselves, so the nav offering a page and the
-    // reading answering for it cannot come to differ.
-    for id in sections::pages()
-        .iter()
-        .map(|tab| format!("gallery.tab.{tab}"))
-        .chain(
-            sections::modules()
-                .iter()
-                .map(|demo| format!("gallery.module.{demo}")),
-        )
-    {
-        registry.insert(
-            EndpointCategory::Model,
-            &id,
             EndpointDesc::new(ValueKind::Bool),
         );
     }

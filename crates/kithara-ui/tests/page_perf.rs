@@ -81,7 +81,7 @@ use kithara_ui::{
         vis::VisPass,
     },
     source::{MemResolver, OverlayResolver, UiConfig},
-    view,
+    view::{self, ViewState},
 };
 use masonry::vello::{
     AaConfig, AaSupport, RenderParams, Renderer as VelloRenderer, RendererOptions,
@@ -122,11 +122,32 @@ const DRAG_STEP: f32 = 1.5;
 /// outgrows its viewport, and a wheel over a viewport nothing overflows is a
 /// measurement of a clamp rather than of a scroll.
 const SCROLL_VIS_LAYOUT: &str = "perf-scroll-vis.klayout.ron";
-const SCROLL_VIS_RON: &str = r#"(schema: "kithara.layout", version: 1, id: "perf-scroll-vis",
-    root: Split(axis: Horizontal, children: [
-        (weight: 1.0, node: Module(instance: "nav", source: "modules/nav.kmodule.ron", corners: true, size: (w: Fixed(198.0), h: Fill))),
-        (weight: 1.0, node: Module(instance: "vis", source: "modules/tabs/vis.kmodule.ron", corners: true, size: (w: Fill, h: Fill))),
-    ]))"#;
+/// The gallery's nav beside a full-bleed visualiser: the wheel goes to the
+/// nav's own scroll while the visualiser animates, which is the pair this
+/// measures and no page of the gallery puts together.
+///
+/// The nav turns the screen's page state, so a layout holding it has to offer
+/// the pages it names. Every one of them stands the same visualiser, because
+/// what is measured here is the scroll beside it rather than the page.
+fn scroll_vis_ron() -> String {
+    let pages: String = sections::pages()
+        .iter()
+        .map(|page| {
+            format!(
+                r#""{page}": Module(instance: "vis", source: "modules/tabs/vis.kmodule.ron", corners: true, size: (w: Fill, h: Fill)),"#
+            )
+        })
+        .collect();
+    format!(
+        r#"(schema: "kithara.layout", version: 1, id: "perf-scroll-vis",
+            root: Split(axis: Horizontal, children: [
+                (weight: 1.0, node: Module(instance: "nav", source: "modules/nav.kmodule.ron", corners: true, size: (w: Fixed(198.0), h: Fill))),
+                (weight: 1.0, node: Tabs(state: "{state}", initial: "{initial}", pages: {{{pages}}})),
+            ]))"#,
+        state = sections::PAGE,
+        initial = sections::first(),
+    )
+}
 
 /// What drives a page from one frame to the next.
 #[derive(Clone, Copy)]
@@ -210,7 +231,9 @@ enum Group {
 struct Page {
     name: &'static str,
     group: Group,
-    entry: &'static str,
+    /// The document this page is the harness's own, when it is not one of the
+    /// pages the gallery's screen offers.
+    own: Option<&'static str>,
     /// Which demo state the page's tick advances. The gallery's reads move the
     /// stress waveforms only on the stress tab and the visualiser only on the
     /// vis one, so a page measured under the wrong tab is a still picture.
@@ -236,7 +259,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-buttons",
         group: Group::Pages,
-        entry: "gallery-buttons.klayout.ron",
+        own: None,
         tab: "buttons",
         frames: 120,
         program: Program::Idle,
@@ -253,7 +276,7 @@ const PAGES: &[Page] = &[
         // demo opens by default, which is most of the page's tree.
         name: "gallery-clock",
         group: Group::Pages,
-        entry: "gallery-clock.klayout.ron",
+        own: None,
         tab: "clock",
         frames: 120,
         program: Program::Idle,
@@ -270,7 +293,7 @@ const PAGES: &[Page] = &[
         // list and no tessellated geometry, and rebuilds both on every draw.
         name: "gallery-table",
         group: Group::Pages,
-        entry: "gallery-table.klayout.ron",
+        own: None,
         tab: "table",
         frames: 120,
         program: Program::Idle,
@@ -283,7 +306,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-stress",
         group: Group::Pages,
-        entry: "gallery-stress.klayout.ron",
+        own: None,
         tab: "stress",
         frames: 120,
         program: Program::Buckets(&[8_192, 4_096, 1_024, 256]),
@@ -296,7 +319,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-vis",
         group: Group::Native,
-        entry: "gallery-vis.klayout.ron",
+        own: None,
         tab: "vis",
         frames: 120,
         program: Program::Tick,
@@ -312,7 +335,7 @@ const PAGES: &[Page] = &[
         // fragment every frame regardless.
         name: "gallery-shader",
         group: Group::Native,
-        entry: "gallery-shader.klayout.ron",
+        own: None,
         tab: "shader",
         frames: 120,
         program: Program::Tick,
@@ -325,7 +348,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-pivot",
         group: Group::Scroll,
-        entry: "gallery-pivot.klayout.ron",
+        own: None,
         tab: "pivot",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
@@ -338,7 +361,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-library2",
         group: Group::Scroll,
-        entry: "gallery-library2.klayout.ron",
+        own: None,
         tab: "library2",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
@@ -355,7 +378,7 @@ const PAGES: &[Page] = &[
         // hold and the marks have to be built anyway.
         name: "gallery-table-long",
         group: Group::Scroll,
-        entry: "gallery-table-long.klayout.ron",
+        own: None,
         tab: "table-long",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
@@ -368,7 +391,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-tree",
         group: Group::Scroll,
-        entry: "gallery-tree.klayout.ron",
+        own: None,
         tab: "tree",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
@@ -385,7 +408,7 @@ const PAGES: &[Page] = &[
         // rail leaves it where it was.
         name: "gallery-faders",
         group: Group::Drag,
-        entry: "gallery-faders.klayout.ron",
+        own: None,
         tab: "faders",
         frames: 60,
         program: Program::Drag(&[0, 1, 4, 8]),
@@ -403,7 +426,7 @@ const PAGES: &[Page] = &[
         // all.
         name: "gallery-objects",
         group: Group::Pages,
-        entry: "gallery-objects.klayout.ron",
+        own: None,
         tab: "objects",
         frames: 120,
         program: Program::Idle,
@@ -420,7 +443,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-motion",
         group: Group::Pages,
-        entry: "gallery-motion.klayout.ron",
+        own: None,
         tab: "motion",
         frames: 120,
         program: Program::Tick,
@@ -433,7 +456,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-sprites",
         group: Group::Pages,
-        entry: "gallery-sprites.klayout.ron",
+        own: None,
         tab: "sprites",
         frames: 120,
         program: Program::Tick,
@@ -446,7 +469,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-lottie",
         group: Group::Pages,
-        entry: "gallery-lottie.klayout.ron",
+        own: None,
         tab: "lottie",
         frames: 120,
         program: Program::Tick,
@@ -459,7 +482,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "gallery-scene",
         group: Group::Pages,
-        entry: "gallery-scene.klayout.ron",
+        own: None,
         tab: "scene",
         frames: 120,
         program: Program::Tick,
@@ -472,7 +495,7 @@ const PAGES: &[Page] = &[
     Page {
         name: "perf-scroll-vis",
         group: Group::Scroll,
-        entry: SCROLL_VIS_LAYOUT,
+        own: Some(SCROLL_VIS_LAYOUT),
         tab: "vis",
         frames: 60,
         program: Program::Wheels(&[0, 1, 4, 8]),
@@ -483,6 +506,35 @@ const PAGES: &[Page] = &[
         retained_guard: "vello.perf-scroll-vis",
     },
 ];
+
+impl Page {
+    /// The document this page is read from: the gallery's one screen, unless
+    /// the harness wrote a page of its own.
+    fn document(&self) -> &'static str {
+        self.own.unwrap_or_else(sections::entry)
+    }
+
+    /// The screen's own state standing at this page, which is how the one
+    /// screen the gallery ships is opened at the page under measurement.
+    fn standing(&self) -> ViewState {
+        let mut view = ViewState::default();
+        if self.own.is_none() {
+            view.stand(sections::PAGE, self.tab);
+        }
+        view
+    }
+
+    /// Turns a mounted screen to this page. A page the harness wrote is the
+    /// whole document, so there is nothing to turn.
+    fn open(&self, ui: &mut Ui<'_, PageApp>) {
+        if self.own.is_some() {
+            return;
+        }
+        ui.stand(sections::PAGE, self.tab).unwrap_or_else(|error| {
+            panic!("the page-perf fixture must open {}: {error}", self.name)
+        });
+    }
+}
 
 /// The gallery as an application, with the page it shows fixed by the harness.
 ///
@@ -506,13 +558,13 @@ struct PageApp {
 impl PageApp {
     fn new(page: &Page, run: Run) -> Self {
         let mut reads = DemoReads::default();
-        reads.select_tab(page.tab);
+        reads.show(page.tab);
         if let Run::Buckets(count) = run {
             reads.set_wave_buckets(count);
         }
         Self {
             closes_loop: matches!(run, Run::Moves(_)),
-            entry: page.entry,
+            entry: page.document(),
             published: 0,
             reads,
         }
@@ -558,11 +610,8 @@ impl App for PageApp {
 
     fn update(&mut self, event: UiEvent) {
         self.published += 1;
-        // A nav path would turn the page mid-run, which is the one thing the
-        // harness fixes; everything else the document publishes is applied.
         if self.closes_loop
             && let UiEvent::Control { path, action } = event
-            && sections::pressed(&path).is_none()
         {
             self.reads.apply(&path, &action);
         }
@@ -959,8 +1008,9 @@ struct Retained<'a> {
 
 impl<'a> Retained<'a> {
     fn new(config: Config<'a>, page: &Page, app: PageApp, gpu: &'a mut RetainedGpu) -> Self {
-        let ui = Ui::new(app, config, (width(), height()), 1.0)
+        let mut ui = Ui::new(app, config, (width(), height()), 1.0)
             .unwrap_or_else(|error| panic!("the page-perf fixture must mount: {error}"));
+        page.open(&mut ui);
         Self {
             gpu,
             picture: 0,
@@ -1122,7 +1172,7 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let mut extra = MemResolver::default();
-        extra.insert(SCROLL_VIS_LAYOUT, SCROLL_VIS_RON);
+        extra.insert(SCROLL_VIS_LAYOUT, &scroll_vis_ron());
         Self {
             registry: Box::new(demo::registry()),
             resolver: OverlayResolver::new(extra, fixture::resolver()),
@@ -1137,7 +1187,8 @@ impl Fixture {
             .build()
     }
 
-    fn compiled(&self, entry: &str) -> CompiledUi {
+    fn compiled(&self, page: &Page) -> CompiledUi {
+        let entry = page.document();
         compile(
             entry,
             &self.resolver,
@@ -1145,6 +1196,7 @@ impl Fixture {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &page.standing(),
         )
         .unwrap_or_else(|error| panic!("the page-perf document {entry} must compile: {error}"))
     }
@@ -1672,7 +1724,7 @@ fn measure_one(label: &'static str, host: Host, group: Group, name: &'static str
             return;
         }
     };
-    let expected = leaves(&fixture.compiled(page.entry));
+    let expected = leaves(&fixture.compiled(page));
     let mut outcomes = Vec::new();
     {
         let _guard = HotpathGuardBuilder::new(host.guard(page))
@@ -1734,9 +1786,7 @@ fn measure<'run>(
 ) -> Outcome<'run> {
     let app = PageApp::new(page, run);
     let mut driver: Box<dyn PageHost + '_> = match gpu {
-        Gpu::Immediate(gpu) => {
-            Box::new(Immediate::new(fixture.compiled(page.entry), page, app, gpu))
-        }
+        Gpu::Immediate(gpu) => Box::new(Immediate::new(fixture.compiled(page), page, app, gpu)),
         Gpu::Retained(gpu) => Box::new(Retained::new(fixture.config(), page, app, gpu)),
     };
     driver.place_pointer();
@@ -1962,54 +2012,34 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
 #[kithara::test]
 fn the_page_table_is_pinned_to_the_gallery() {
     let fixture = Fixture::new();
-    let mut reads = DemoReads::default();
-    // The modules page and the first module demo name the same document, and
-    // the gallery reaches a demo through the application's own selection rather
-    // than through the tab.
-    let mut gallery: Vec<(usize, &'static str)> = sections::pages()
+    let tabs = sections::pages();
+    // The modules page turns a second state of its own, so its demos are pages
+    // of the gallery as much as the tabs are, and are counted with them.
+    let demos = sections::modules();
+    let unmeasured: Vec<&str> = tabs
         .iter()
+        .chain(demos)
         .copied()
-        .filter(|tab| *tab != sections::MODULES)
-        .map(|tab| (sections::index(tab), sections::entry(tab)))
+        .filter(|tab| {
+            !PAGES
+                .iter()
+                .any(|page| page.own.is_none() && page.tab == *tab)
+        })
         .collect();
-    gallery.extend(sections::modules().iter().copied().map(|demo| {
-        reads.select_module(demo);
-        (
-            sections::pages().len() + sections::module_index(demo),
-            sections::module_entry(reads.active_module()),
-        )
-    }));
-    gallery.sort_unstable();
-
-    let unmeasured: Vec<&str> = gallery
-        .iter()
-        .map(|(_, entry)| *entry)
-        .filter(|entry| !PAGES.iter().any(|page| page.entry == *entry))
-        .collect();
+    let offered = tabs.len() + demos.len();
     println!(
-        "page_perf measures {} of the gallery's {} pages; unmeasured: {unmeasured:?}",
-        gallery.len() - unmeasured.len(),
-        gallery.len()
+        "page_perf measures {} of the gallery's {offered} pages; unmeasured: {unmeasured:?}",
+        offered - unmeasured.len()
     );
 
     for page in PAGES {
         assert!(
-            page.entry == SCROLL_VIS_LAYOUT
-                || gallery.iter().any(|(_, entry)| *entry == page.entry),
-            "{} names {}, which is neither a gallery page nor this harness's own",
+            page.own.is_some() || tabs.contains(&page.tab),
+            "{} names {}, which is neither a page of the gallery's screen nor this harness's own",
             page.name,
-            page.entry
+            page.tab
         );
-        // The gallery's reads only advance on the tab they belong to, so a
-        // page mounted under the wrong one is measured as a still picture.
-        let app = PageApp::new(page, Run::Plain);
-        assert_eq!(
-            app.reads.active_tab(),
-            page.tab,
-            "{} is measured under a tab whose readings it does not move",
-            page.name
-        );
-        let natives = leaves(&fixture.compiled(page.entry));
+        let natives = leaves(&fixture.compiled(page));
         println!(
             "page_perf {:<17} vis {} shader {}",
             page.name, natives.vis, natives.shaders

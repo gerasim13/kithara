@@ -482,25 +482,17 @@ fn drag(control: &Draggable) -> Dragged {
 /// Counts every source the compiler read, so a test can see whether the
 /// document was compiled again at all.
 struct Counted<'a> {
-    inner: &'a dyn crate::source::SourceResolver,
+    inner: &'a dyn SourceResolver,
     loads: Cell<usize>,
 }
 
-impl crate::source::SourceResolver for Counted<'_> {
-    fn load(
-        &self,
-        base: Option<&SourceUri>,
-        rel: &str,
-    ) -> Result<crate::source::LoadedSource, UiDocError> {
+impl SourceResolver for Counted<'_> {
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.load(base, rel)
     }
 
-    fn bytes(
-        &self,
-        base: Option<&SourceUri>,
-        rel: &str,
-    ) -> Result<crate::source::LoadedBytes, UiDocError> {
+    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.bytes(base, rel)
     }

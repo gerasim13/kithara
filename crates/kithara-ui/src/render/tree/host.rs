@@ -1162,12 +1162,33 @@ mod tests {
         .unwrap_or_else(|error| panic!("gallery faders fixture must compile: {error}"))
     }
 
+    /// A layout that stands `node` inside a `Tabs` offering `pages`.
+    ///
+    /// A control naming a page no `Tabs` offers is refused, so a module the
+    /// gallery reaches through the screen's own tabs is looked at through one
+    /// here too. Every page stands the same node, which is the one this looks
+    /// at.
+    fn tabs_over(state: &str, node: &str, pages: &[&str]) -> String {
+        let offered: String = pages
+            .iter()
+            .map(|page| format!(r#""{page}": {node},"#))
+            .collect();
+        let initial = pages[0];
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "tabs-host",
+                root: Tabs(state: "{state}", initial: "{initial}", pages: {{{offered}}}))"#
+        )
+    }
+
     fn compiled_gallery_tabs() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
             "gallery.klayout.ron",
-            r#"(schema: "kithara.layout", version: 1, id: "gallery-tabs-host",
-                root: Module(instance: "modules-tabs", source: "module-tabs.kmodule.ron"))"#,
+            &tabs_over(
+                "module",
+                r#"Module(instance: "modules-tabs", source: "module-tabs.kmodule.ron")"#,
+                &["deck", "deck-micro", "global-bar", "layout", "telemetry"],
+            ),
         );
         resolver.insert(
             "module-tabs.kmodule.ron",
@@ -1186,11 +1207,48 @@ mod tests {
     }
 
     fn compiled_gallery_nav() -> CompiledUi {
+        /// Every page the gallery's nav turns to, in the order it lists them.
+        const NAV_PAGES: &[&str] = &[
+            "atoms",
+            "buttons",
+            "faders",
+            "modules",
+            "typography",
+            "assets",
+            "cells",
+            "sizes",
+            "tokens",
+            "micro",
+            "mixer",
+            "vis",
+            "chrome",
+            "titlebars",
+            "table",
+            "tree",
+            "library2",
+            "stress",
+            "menu",
+            "clock",
+            "pivot",
+            "shader",
+            "objects",
+            "motion",
+            "sprites",
+            "lottie",
+            "scene",
+            "table-long",
+            "custom",
+            "skins",
+        ];
+
         let mut resolver = MemResolver::default();
         resolver.insert(
             "gallery.klayout.ron",
-            r#"(schema: "kithara.layout", version: 1, id: "gallery-nav-host",
-                root: Module(instance: "gallery", source: "modules/nav.kmodule.ron"))"#,
+            &tabs_over(
+                "page",
+                r#"Module(instance: "gallery", source: "modules/nav.kmodule.ron")"#,
+                NAV_PAGES,
+            ),
         );
         resolver.insert(
             "modules/nav.kmodule.ron",

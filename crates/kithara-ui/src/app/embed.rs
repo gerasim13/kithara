@@ -35,6 +35,8 @@ use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
     draw::{PoolStats, Rgba},
+    error::UiDocError,
+    ids::SourceUri,
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
     render::{
         ControlAction, Reads, Skin, UiEvent, WindowCommand,
@@ -135,6 +137,35 @@ where
     #[must_use]
     pub const fn view(&self) -> &ViewState {
         &self.view
+    }
+
+    /// Stands the screen's own state at one page, and shows that page.
+    ///
+    /// A page named here comes from the application rather than from a
+    /// document, so it is checked against what the shown screen offers before
+    /// anything moves: a name no screen offers leaves the screen where it is.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::UnknownPage`] when the shown screen turns no such
+    /// state, or turns it between pages that do not include `page`, and
+    /// whatever compiling the page it does offer fails with.
+    pub fn stand(&mut self, state: &str, page: &str) -> Result<(), RunError> {
+        let views = self.screens.shown().views();
+        if !views
+            .pages()
+            .get(state)
+            .is_some_and(|at| at.offered.contains(page))
+        {
+            return Err(UiDocError::UnknownPage {
+                origin: SourceUri(self.app.document().to_owned()),
+                id: state.to_owned(),
+                page: page.to_owned(),
+                path: String::new(),
+            }
+            .into());
+        }
+        self.view.stand(state, page);
+        self.turn().map(|_| ())
     }
 
     /// Current allocation-reuse counters for this mounted document.
@@ -480,6 +511,7 @@ where
         // shown does not name is gone rather than kept to answer for a state
         // this document does not have.
         self.view.retain(self.screens.shown().views().named());
+        self.app.turned(&self.view);
         self.root = mount(
             &self.app,
             &self.config,

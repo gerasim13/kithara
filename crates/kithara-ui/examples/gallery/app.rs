@@ -1,12 +1,15 @@
+use std::convert::Infallible;
+
 use iced::{Element, Task, Theme, theme, window};
 use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
     module::ViewSet,
+    registry::EndpointRegistry,
     render::{Clock, ControlAction, Skin, UiEvent, WindowCommand, custom::CustomKinds, tree},
     skin::SkinDoc,
-    view::ViewState,
+    view::{Screens, ViewState},
 };
 
 use crate::{
@@ -39,8 +42,8 @@ pub(crate) struct Gallery {
     /// The extensions this application registers, offered to whichever host
     /// draws the page that names one.
     pub(crate) kinds: CustomKinds,
-    pub(crate) layouts: Vec<CompiledUi>,
-    pub(crate) module_layouts: Vec<CompiledUi>,
+    /// The screen the gallery shows, and the pages of it compiled before.
+    pub(crate) screens: Screens,
     pub(crate) capture: Option<Capture>,
     /// State the documents keep for themselves, which no endpoint of this
     /// application answers.
@@ -60,16 +63,19 @@ impl Gallery {
         let resolver = resolver();
         let endpoints = crate::demo::registry();
         let skin = builtin::skin().document();
+        let view = ViewState::default();
         Self {
-            layouts: pages(&resolver, &endpoints, skin),
-            module_layouts: module_pages(&resolver, &endpoints, skin),
+            screens: Screens::new(
+                crate::custom::config().screen_cache,
+                compiled(&resolver, &endpoints, skin, &view),
+            ),
             window_id: window::Id::unique(),
             clock: Clock::default(),
             step: Duration::from_millis(Consts::STRESS_TICK_MS),
             reads: DemoReads::default(),
             kinds: crate::custom::kinds(),
             capture: None,
-            view: ViewState::default(),
+            view,
         }
     }
 
@@ -101,42 +107,60 @@ impl Gallery {
     pub(crate) fn select(&mut self, shot: Shot) {
         self.clock = Clock::default();
         self.reads = DemoReads::default();
-        self.view = ViewState::default();
-        self.select_tab(shot.tab);
-        if let Some(module) = shot.module {
-            self.reads.select_module(module);
+        self.view = shot.standing();
+        self.demonstrate(shot.tab);
+        self.turn();
+    }
+
+    pub(crate) const fn compiled(&self) -> &CompiledUi {
+        self.screens.shown()
+    }
+
+    /// Applies whatever the press at `path` writes to the screen's own state,
+    /// then shows the page that state now stands at.
+    pub(crate) fn press(&mut self, path: &str) {
+        let Self { screens, view, .. } = self;
+        if let Some((state, write)) = screens.shown().views().at(path) {
+            view.apply(state, write);
+        }
+        self.turn();
+    }
+
+    /// Shows the page the screen's state stands at, and tells the demo model
+    /// which page that is: a page with a feed of its own is fed only while it
+    /// is the page on screen.
+    fn turn(&mut self) {
+        let Self {
+            reads,
+            screens,
+            view,
+            ..
+        } = self;
+        let resolver = resolver();
+        let endpoints = crate::demo::registry();
+        let skin = reads.skin().document();
+        screens
+            .show(view, || {
+                Ok::<_, Infallible>(compiled(&resolver, &endpoints, skin, view))
+            })
+            .unwrap_or_else(|never| match never {});
+        let page = screens.shown().views().standing(view, sections::PAGE);
+        if let Some(page) = page.and_then(sections::named) {
+            reads.show(page);
+            self.demonstrate(page);
         }
     }
 
-    /// Turns to a page, and stands the module that page demonstrates open: a
-    /// menu page whose menu is shut demonstrates a burger.
-    pub(crate) fn select_tab(&mut self, tab: Page) {
-        self.reads.select_tab(tab);
-        for (page, state) in DEMONSTRATED {
-            let set = if tab == page {
+    /// Stands open the module a page demonstrates: a menu page whose menu is
+    /// shut demonstrates a burger.
+    fn demonstrate(&mut self, page: Page) {
+        for (demonstrated, state) in DEMONSTRATED {
+            let set = if page == demonstrated {
                 ViewSet::On
             } else {
                 ViewSet::Off
             };
             self.view.set(state, set);
-        }
-    }
-
-    pub(crate) fn compiled(&self) -> &CompiledUi {
-        shown(&self.reads, &self.layouts, &self.module_layouts)
-    }
-
-    /// Applies whatever the press at `path` writes to the page's own state.
-    pub(crate) fn press(&mut self, path: &str) {
-        let Self {
-            layouts,
-            module_layouts,
-            reads,
-            view,
-            ..
-        } = self;
-        if let Some((state, write)) = shown(reads, layouts, module_layouts).views().at(path) {
-            view.apply(state, write);
         }
     }
 
@@ -149,8 +173,8 @@ impl Gallery {
         let resolver = resolver();
         let endpoints = crate::demo::registry();
         let skin = self.skin().document();
-        self.layouts = pages(&resolver, &endpoints, skin);
-        self.module_layouts = module_pages(&resolver, &endpoints, skin);
+        let ui = compiled(&resolver, &endpoints, skin, &self.view);
+        self.screens.reset(ui);
     }
 
     /// Selects the next page and lets one frame render before the shot.
@@ -190,14 +214,10 @@ pub(crate) fn update(state: &mut Gallery, message: Message) -> Task<Message> {
             if matches!(action, ControlAction::Activate) {
                 state.press(&path);
             }
-            if let Some(tab) = sections::pressed(&path) {
-                state.select_tab(tab);
-            } else {
-                let was = state.reads.active_skin();
-                state.reads.apply(&path, &action);
-                if state.reads.active_skin() != was {
-                    state.dress();
-                }
+            let was = state.reads.active_skin();
+            state.reads.apply(&path, &action);
+            if state.reads.active_skin() != was {
+                state.dress();
             }
             Task::none()
         }
@@ -238,20 +258,6 @@ pub(crate) fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message>
     .map(Message::Ui)
 }
 
-/// The page the gallery is showing, which is a module demo when the nav stands
-/// on the modules section and a page of the package otherwise.
-fn shown<'a>(
-    reads: &DemoReads,
-    layouts: &'a [CompiledUi],
-    module_layouts: &'a [CompiledUi],
-) -> &'a CompiledUi {
-    if reads.active_tab() == sections::MODULES {
-        &module_layouts[sections::module_index(reads.active_module())]
-    } else {
-        &layouts[sections::index(reads.active_tab())]
-    }
-}
-
 /// The state each page stands its own module in, by the name that page's
 /// document gave it.
 const DEMONSTRATED: [(Page, &str); 2] = [
@@ -259,36 +265,14 @@ const DEMONSTRATED: [(Page, &str); 2] = [
     ("clock", "clock-components/clock"),
 ];
 
-/// Every nav page, compiled in the order the package declares them.
-fn pages(
-    resolver: &Resolver,
-    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
-    skin: &SkinDoc,
-) -> Vec<CompiledUi> {
-    sections::pages()
-        .iter()
-        .map(|page| compiled(sections::entry(page), resolver, endpoints, skin))
-        .collect()
-}
-
-/// Every demo the modules page offers, compiled in the order it lists them.
-fn module_pages(
-    resolver: &Resolver,
-    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
-    skin: &SkinDoc,
-) -> Vec<CompiledUi> {
-    sections::modules()
-        .iter()
-        .map(|module| compiled(sections::module_entry(module), resolver, endpoints, skin))
-        .collect()
-}
-
+/// The gallery's screen as it stands for `view`.
 fn compiled(
-    entry: &str,
     resolver: &Resolver,
-    endpoints: &dyn kithara_ui::registry::EndpointRegistry,
+    endpoints: &dyn EndpointRegistry,
     skin: &SkinDoc,
+    view: &ViewState,
 ) -> CompiledUi {
+    let entry = sections::entry();
     compile(
         entry,
         resolver,
@@ -296,9 +280,9 @@ fn compiled(
         skin,
         builtin::text_doc(),
         crate::custom::config(),
-        &kithara_ui::view::EMPTY,
+        view,
     )
-    .unwrap_or_else(|error| panic!("embedded gallery document {entry} must compile: {error}"))
+    .unwrap_or_else(|error| panic!("the gallery document {entry} must compile: {error}"))
 }
 
 pub(crate) fn theme(skin: &Skin) -> Theme {
