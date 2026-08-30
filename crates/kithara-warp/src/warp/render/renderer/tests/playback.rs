@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_platform::{sync::Arc, time::Duration};
-use kithara_signal::AudioSpec;
+use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
@@ -126,6 +126,17 @@ fn assert_unity_contract(kind: StretchKind) {
 fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
     assert_half_speed_contract(backend);
     assert_unity_contract(backend);
+}
+
+#[kithara::test]
+fn unity_passthrough_admits_the_whole_source_chunk() {
+    let mut renderer = renderer(StretchControls::new(1.0));
+    let frames = WarpRenderer::RENDER_QUANTUM_FRAMES.get() * 2;
+
+    assert_eq!(
+        renderer.prepare_quantum(AudioChunkInfo::default(), frames),
+        Some(FrameCount::new(frames)),
+    );
 }
 
 #[kithara::test]

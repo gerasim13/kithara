@@ -186,7 +186,7 @@ impl WarpRenderer {
             return Err(ElasticError::EmptySource);
         }
         if self.can_passthrough(speed) {
-            return Ok(remaining.min(Self::RENDER_QUANTUM_FRAMES.get()));
+            return Ok(remaining);
         }
 
         let channels = usize::from(self.spec.channels.max(1));

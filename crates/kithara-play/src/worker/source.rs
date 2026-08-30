@@ -398,11 +398,21 @@ where
 
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
+                let same_spec = data.spec() == self.spec;
                 self.pending_input = Some(PendingInput {
                     chunk: data,
                     consumed_frames: 0,
                     epoch,
                 });
+                if same_spec {
+                    self.prepared_quantum = self.prepare_quantum_shape();
+                    if self
+                        .prepared_quantum
+                        .is_some_and(|prepared| prepared.whole_input)
+                    {
+                        return self.render_pending();
+                    }
+                }
                 TrackStep::StateChanged
             }
             TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
@@ -811,12 +821,6 @@ mod tests {
             "one worker pass advances exactly one source transition"
         );
         flush_deferred(&mut source);
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(head.load(Ordering::Acquire), 128);
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(head.load(Ordering::Acquire), 256);
-        flush_deferred(&mut source);
-
         let TrackStep::Produced(Fetch::Data {
             data, source_end, ..
         }) = source.step_track()
@@ -941,8 +945,6 @@ mod tests {
         let drain = EffectDrain::new(effects.len(), &BytePool::default());
         let mut source = source_stage(source, effects, drain, initial);
 
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        flush_deferred(&mut source);
         let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
             panic!("initial unity span must pass through");
         };
@@ -951,8 +953,6 @@ mod tests {
         assert_eq!(&data.samples[..], &first_samples);
 
         *discontinuity.lock() = SourceDiscontinuity::new(8, changed);
-        flush_deferred(&mut source);
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
         flush_deferred(&mut source);
         let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
             panic!("post-discontinuity unity span must pass through");
@@ -1053,12 +1053,10 @@ mod tests {
         assert_eq!(head.load(Ordering::Acquire), rate_change_end);
 
         flush_deferred(&mut source);
-        assert!(matches!(source.step_track(), TrackStep::StateChanged));
-        assert_eq!(head.load(Ordering::Acquire), sentinel_end);
-        flush_deferred(&mut source);
         let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
             panic!("playback must resume with the post-seek source chunk");
         };
+        assert_eq!(head.load(Ordering::Acquire), sentinel_end);
         assert_eq!(data.samples.as_ptr(), sentinel_ptr);
         assert_eq!(&data.samples[..], &sentinel_samples);
     }
