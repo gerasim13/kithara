@@ -1,6 +1,7 @@
 use std::fmt;
 
 use kithara_audio::SeekOutcome;
+use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
     SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
@@ -15,7 +16,9 @@ use crate::{PlayError, SessionBinding};
 /// Queue-specific item, EQ, volume, and event APIs remain on their concrete
 /// facade. This contract contains only playback operations shared by every
 /// host member plus the synchronization-group protocol.
-pub trait Player: BeatGrid + SyncGroup<NestedGroup = PlayerMember> + Send + Sync + 'static {
+pub trait Player:
+    BeatGrid + SyncGroup<NestedGroup = PlayerMember> + MaybeSend + MaybeSync + 'static
+{
     /// Start or resume playback.
     fn play(&self);
 
@@ -42,7 +45,7 @@ pub trait Player: BeatGrid + SyncGroup<NestedGroup = PlayerMember> + Send + Sync
 /// synchronization topology.
 pub trait PlayerControlSource: Player {
     /// Concrete command capability retained by typed host-owned handles.
-    type Control: Clone + Send + Sync + 'static;
+    type Control: Clone + MaybeSend + MaybeSync + 'static;
 
     /// Creates a command capability for this player.
     fn control(&self) -> Self::Control;

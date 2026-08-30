@@ -201,7 +201,10 @@ mod handle {
     use kithara_audio::ConsumerWakeMode;
     use kithara_bufpool::SamplePool;
     use kithara_events::EventBus;
-    use kithara_platform::sync::{Arc, Mutex};
+    use kithara_platform::{
+        maybe_send::{MaybeSend, MaybeSync},
+        sync::{Arc, Mutex},
+    };
     use kithara_warp::BeatGridId;
 
     #[cfg(any(test, feature = "probe"))]
@@ -209,7 +212,12 @@ mod handle {
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
 
-    pub trait SessionDispatcher: Send + Sync + 'static {
+    /// Handle used by resident players to reach their session owner.
+    ///
+    /// The handle stays inside the thread that built it: on wasm that is one
+    /// worker, so the bound is [`MaybeSend`], which is `Send` on every
+    /// threaded target and nothing on wasm.
+    pub trait SessionDispatcher: MaybeSend + MaybeSync + 'static {
         fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
 
         /// Describe how audio consumers hosted by this session may wake workers.
