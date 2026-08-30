@@ -213,6 +213,8 @@ mod handle {
         fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError>;
 
         /// Describe how audio consumers hosted by this session may wake workers.
+        /// Every one of them reads from the render callback, offline backends
+        /// included.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
         fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
