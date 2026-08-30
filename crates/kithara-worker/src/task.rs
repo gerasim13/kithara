@@ -187,7 +187,6 @@ impl TaskContext {
         self.compute.submit(
             &self.compute_budget,
             &self.token,
-            &self.cancel,
             self.control.wake_handle(),
             payload,
             job,

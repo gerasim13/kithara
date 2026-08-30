@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
+use kithara_platform::{CancelToken, sync::Arc};
 
 use super::{ComputeContext, ComputeRejected, ComputeSubmitError};
 use crate::{Wake, config::PoolConfig};
@@ -17,7 +17,6 @@ impl ComputeRuntime {
         &self,
         task_budget: &Arc<Budget>,
         task_token: &CancelToken,
-        task_cancel: &CancelGroup,
         wake: Wake,
         payload: T,
         job: F,
@@ -27,7 +26,7 @@ impl ComputeRuntime {
         F: FnOnce(ComputeContext, T) + Send + 'static,
     {
         let _ = (task_budget, task_token, wake, job);
-        let reason = if task_cancel.is_cancelled() {
+        let reason = if task_token.is_cancelled() {
             ComputeSubmitError::Cancelled
         } else {
             ComputeSubmitError::Unavailable

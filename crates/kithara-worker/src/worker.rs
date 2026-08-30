@@ -63,7 +63,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     use kithara_platform::{
         CancelScope,
-        sync::{Arc, mpsc},
+        sync::{Arc, ThreadGate, WaitGate, mpsc},
         thread,
         time::{Duration, Instant},
     };
@@ -290,9 +290,10 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn parent_cancel_reaches_worker_dispatcher_task_and_compute_job() {
         let parent = CancelScope::new(None);
+        let parent_token = parent.token();
         let worker = Worker::new(
             WorkerConfig::new()
-                .with_cancel(parent.token())
+                .with_cancel(parent_token.clone())
                 .with_owned_pool(RayonConfig::new(NonZeroUsize::MIN, "cancel-compute-test")),
         );
         let dispatcher = worker.dispatcher(DispatcherConfig::new("cancel-lineage-test"));
@@ -302,6 +303,19 @@ mod tests {
         let context = pending.context().clone();
         let (started, started_rx) = mpsc::channel();
         let (cancelled, cancelled_rx) = mpsc::channel();
+        let task_cancelled = Arc::new(ThreadGate::default());
+        let task_cancelled_since = task_cancelled.current();
+        let release_cancel = Arc::new(ThreadGate::default());
+        let release_cancel_since = release_cancel.current();
+        let cancel_seen = Arc::clone(&task_cancelled);
+        let cancel_release = Arc::clone(&release_cancel);
+        let _cancel_guard = context.token().on_cancel(move || {
+            cancel_seen.signal();
+            assert!(
+                cancel_release.wait_timeout(release_cancel_since, Duration::from_secs(2)),
+                "task cancellation propagation was not released"
+            );
+        });
         context
             .submit_compute((), move |compute, ()| {
                 started.send(()).ok();
@@ -315,11 +329,19 @@ mod tests {
             .recv_timeout(Instant::now() + Duration::from_secs(2))
             .expect("compute started");
 
-        parent.cancel();
+        let cancel_thread = thread::spawn(move || parent_token.cancel());
+        assert!(
+            task_cancelled.wait_timeout(task_cancelled_since, Duration::from_secs(2)),
+            "task cancellation did not reach the propagation barrier"
+        );
 
         assert!(worker.is_cancelled());
         assert!(dispatcher.is_cancelled());
         assert!(context.token().is_cancelled());
+        release_cancel.signal();
+        cancel_thread
+            .join()
+            .expect("parent cancellation must finish");
         assert!(
             cancelled_rx
                 .recv_timeout(Instant::now() + Duration::from_secs(2))

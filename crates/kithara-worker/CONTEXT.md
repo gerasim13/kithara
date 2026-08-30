@@ -16,6 +16,10 @@ Additional domain cancellation sources are OR-composed with the derived task
 token. They cancel only that task token and wake its dispatcher; they never
 replace or widen the vertical lineage.
 
+A compute job observes only its child token. Task and domain cancellation have
+already been folded into the task token, so repeating ancestor sources in the
+compute group would expose cancellation before propagation reaches the child.
+
 ## Scheduling and compute
 
 The scheduler thread owns task order and lifecycle callbacks. A slot also owns

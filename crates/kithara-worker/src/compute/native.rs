@@ -35,7 +35,6 @@ impl ComputeRuntime {
         &self,
         task_budget: &Arc<Budget>,
         task_token: &CancelToken,
-        task_cancel: &CancelGroup,
         wake: Wake,
         payload: T,
         job: F,
@@ -44,7 +43,7 @@ impl ComputeRuntime {
         T: Send + 'static,
         F: FnOnce(ComputeContext, T) + Send + 'static,
     {
-        if task_cancel.is_cancelled() {
+        if task_token.is_cancelled() {
             return Err(ComputeRejected::new(ComputeSubmitError::Cancelled, payload));
         }
         if matches!(self.pool, ComputePool::Disabled) {
@@ -59,19 +58,19 @@ impl ComputeRuntime {
         let Some(worker_permit) = Budget::try_acquire(&self.budget) else {
             return Err(ComputeRejected::new(ComputeSubmitError::Saturated, payload));
         };
-        if task_cancel.is_cancelled() {
+        if task_token.is_cancelled() {
             return Err(ComputeRejected::new(ComputeSubmitError::Cancelled, payload));
         }
         let pool = match self.pool.get() {
             Ok(pool) => pool,
             Err(reason) => return Err(ComputeRejected::new(reason, payload)),
         };
-        if task_cancel.is_cancelled() {
+        if task_token.is_cancelled() {
             return Err(ComputeRejected::new(ComputeSubmitError::Cancelled, payload));
         }
         let token = task_token.child();
         let context = ComputeContext {
-            cancel: CancelGroup::from(token.clone()) | task_cancel.clone(),
+            cancel: CancelGroup::from(token.clone()),
             token,
         };
         let permit = ComputePermit {
@@ -196,7 +195,7 @@ impl Drop for ComputePermit {
 #[cfg(test)]
 mod tests {
     use kithara_platform::{
-        CancelGroup, CancelScope,
+        CancelScope,
         sync::{Arc, OnceLock, atomic::Ordering},
     };
     use kithara_test_utils::kithara;
@@ -218,13 +217,10 @@ mod tests {
         let task_budget = Arc::new(Budget::new(std::num::NonZeroUsize::MIN));
         let scope = CancelScope::new(None);
         let token = scope.token().child();
-        let cancel = CancelGroup::from(token.clone());
-
         let rejected = runtime
             .submit(
                 &task_budget,
                 &token,
-                &cancel,
                 Wake::default(),
                 String::from("detector"),
                 |_, _| {},

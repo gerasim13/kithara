@@ -25,7 +25,7 @@ impl ComputeContext {
         &self.token
     }
 
-    /// OR-composed task and domain cancellation sources.
+    /// Cancellation group containing only this compute job's derived token.
     #[must_use]
     pub const fn cancel_group(&self) -> &CancelGroup {
         &self.cancel
