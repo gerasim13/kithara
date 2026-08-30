@@ -150,6 +150,7 @@ backend-cpal = ["kithara-host/backend-cpal"]
 backend-web-audio = ["kithara-host/backend-web-audio", "kithara-host/wasm-bindgen"]
 probe = [
     "kithara-abr?/probe",
+    "kithara-analysis/probe",
     "kithara-assets?/probe",
     "kithara-audio/probe",
     "kithara-decode/probe",

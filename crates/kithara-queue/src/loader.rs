@@ -6,7 +6,7 @@ use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
 use kithara_platform::{
-    CancelToken,
+    CancelGroup, CancelToken,
     sync::Arc,
     tokio,
     tokio::{
@@ -15,6 +15,7 @@ use kithara_platform::{
     },
 };
 use kithara_play::{Resource, ResourceConfig, player::PlayerControl};
+use kithara_test_utils::kithara;
 
 use crate::{
     attempts::{LoadClass, Ticket},
@@ -25,6 +26,7 @@ use crate::{
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
 pub(crate) struct Loader {
+    cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
     player: PlayerControl,
@@ -42,13 +44,15 @@ impl Loader {
         store: AssetStore,
         max_concurrent_loads: NonZeroUsize,
         tracks: Arc<Tracks>,
+        cancel: CancelToken,
     ) -> Self {
         Self {
-            player,
-            store,
-            tracks,
-            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            cancel,
             interactive_lane: Arc::new(Semaphore::new(1)),
+            player,
+            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
+            tracks,
+            store,
         }
     }
 
@@ -140,23 +144,30 @@ impl Loader {
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
     }
 
+    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
+        cancel.cancelled().await;
+        track_cancel.cancel();
+    }
+
     fn spawn_attempt(
         self: &Arc<Self>,
         ticket: Ticket,
         config: ResourceConfig,
-        cancel: CancelToken,
+        track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
         let this = Arc::clone(self);
         spawn(async move {
             let id = ticket.id;
+            let cancel = CancelGroup::new(vec![track_cancel.clone(), this.cancel.clone()]);
             let lane = match class {
                 LoadClass::Interactive => &this.interactive_lane,
                 LoadClass::Prefetch => &this.prefetch_lane,
             };
+            admission_started(id);
             let permit = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => {
+                _ = Self::wait_and_cancel_track(&cancel, &track_cancel) => {
                     this.tracks.finish_attempt(&ticket, None);
                     return Err(QueueError::Cancelled(id));
                 }
@@ -170,7 +181,8 @@ impl Loader {
 
             let result = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => Err(QueueError::Cancelled(id)),
+                _ = Self::wait_and_cancel_track(&cancel, &track_cancel) =>
+                    Err(QueueError::Cancelled(id)),
                 result = this.load(id, config) => result,
             };
             drop(permit);
@@ -239,21 +251,39 @@ impl Loader {
     }
 }
 
+#[kithara::probe(track_id = id.as_u64())]
+fn admission_started(id: TrackId) {}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        future,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use kithara_assets::{AssetStore, StorageBackend};
     use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
-    use kithara_platform::time::Duration;
+    use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
     };
-    use kithara_test_utils::kithara;
+    use kithara_test_utils::{kithara, probe::capture as probe_capture};
 
     use super::*;
     use crate::track::TrackRecord;
+
+    struct CancelDropProbe {
+        cancel: CancelToken,
+        state: Arc<AtomicUsize>,
+    }
+
+    impl Drop for CancelDropProbe {
+        fn drop(&mut self) {
+            self.state
+                .store(usize::from(self.cancel.is_cancelled()), Ordering::SeqCst);
+        }
+    }
 
     /// Builder for test [`Loader`] fixtures. Defaults cover most tests;
     /// override via setters when a specific concurrency cap matters.
@@ -277,6 +307,84 @@ mod tests {
             self.cap = cap;
             self
         }
+    }
+
+    #[kithara::test(tokio)]
+    async fn cancellation_precedes_in_flight_future_drop() {
+        let owner = CancelToken::root();
+        let queue_cancel = owner.child();
+        let track_cancel = owner.child();
+        let group = CancelGroup::new(vec![queue_cancel.clone(), track_cancel.clone()]);
+        let state = Arc::new(AtomicUsize::new(0));
+        let probe_state = Arc::clone(&state);
+        let probe_cancel = track_cancel.clone();
+        let (started_tx, started_rx) = oneshot::channel();
+        let in_flight = async move {
+            let _probe = CancelDropProbe {
+                cancel: probe_cancel,
+                state: probe_state,
+            };
+            let _ = started_tx.send(());
+            future::pending::<()>().await;
+        };
+        let canceller = spawn(async move {
+            started_rx.await.expect("in-flight future must start");
+            queue_cancel.cancel();
+        });
+
+        tokio::select! {
+            biased;
+            _ = Loader::wait_and_cancel_track(&group, &track_cancel) => {}
+            () = in_flight => panic!("in-flight future must stay pending"),
+        }
+        canceller.await.expect("canceller task must not panic");
+
+        assert_eq!(state.load(Ordering::SeqCst), 1);
+    }
+
+    #[kithara::test(tokio)]
+    async fn cancellation_wakes_an_attempt_waiting_for_admission() {
+        let probes = probe_capture::install();
+        let fixture = LoaderFixtureSpec::default()
+            .with_cap(NonZeroUsize::MIN)
+            .build();
+        let permit = Arc::clone(&fixture.loader.prefetch_lane)
+            .acquire_owned()
+            .await
+            .expect("loader keeps the prefetch semaphore open");
+        let id = TrackId::allocate();
+        let source = TrackSource::Uri("https://example.com/pending.mp3".into());
+        fixture
+            .tracks
+            .lock()
+            .push(TrackRecord::new(id, "pending".into(), source.clone()));
+        let handle = fixture
+            .loader
+            .spawn_load(id, source, LoadClass::Prefetch)
+            .expect("fresh track starts one load attempt");
+        let admitted = probes
+            .wait_for_probe_async(
+                |event| {
+                    event.target == "kithara_queue_probe"
+                        && event.probe_name() == Some("admission_started")
+                        && event.u64("track_id") == Some(id.as_u64())
+                },
+                Duration::from_secs(1),
+            )
+            .await;
+        assert!(admitted.is_some(), "loader never reached admission");
+
+        fixture.loader.cancel.cancel();
+
+        let result = kithara_platform::tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("cancellation must wake the pending loader")
+            .expect("loader task must not panic");
+        assert!(matches!(
+            result,
+            Err(QueueError::Cancelled(cancelled)) if cancelled == id
+        ));
+        drop(permit);
     }
 
     /// Test fixture: the [`Loader`] under test, the shared
@@ -311,6 +419,7 @@ mod tests {
                 store,
                 self.cap,
                 Arc::clone(&tracks),
+                CancelToken::root(),
             ));
             LoaderFixture {
                 loader,

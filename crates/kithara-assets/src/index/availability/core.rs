@@ -91,6 +91,9 @@ pub(super) type Entry = Arc<ArcSwap<Availability>>;
 /// snapshots in [`Retired`] and the write side pays the frees when it drains.
 pub(super) type AssetTree = HashMap<String, Arc<HashMap<String, Entry>>>;
 
+/// The asset root an absolute key is filed under.
+pub(crate) const ABSOLUTE_ROOT: &str = "__absolute__";
+
 pub(super) struct InnerIndex {
     /// Maps `asset_root` -> `RelativePath` -> `Availability`
     pub(super) assets: ArcSwap<AssetTree>,
@@ -162,6 +165,26 @@ impl AvailabilityIndex {
         let mut removed = false;
         self.edit_tree(|tree| removed = tree.remove(asset_root).is_some());
         if removed {
+            self.mark_dirty();
+        }
+    }
+
+    /// Keep only the entries `keep` accepts, by asset root and relative path.
+    pub(crate) fn retain<F: Fn(&str, &str) -> bool>(&self, keep: F) {
+        let mut dropped = false;
+        self.edit_tree(|tree| {
+            tree.retain(|root, entries| {
+                let kept: HashMap<String, Entry> = entries
+                    .iter()
+                    .filter(|(path, _)| keep(root, path))
+                    .map(|(path, entry)| (path.clone(), Arc::clone(entry)))
+                    .collect();
+                dropped |= kept.len() != entries.len();
+                *entries = Arc::new(kept);
+                !entries.is_empty()
+            });
+        });
+        if dropped {
             self.mark_dirty();
         }
     }
@@ -334,7 +357,7 @@ impl AvailabilityIndex {
                 asset_root,
                 rel_path,
             } => (asset_root, rel_path),
-            ResourceKeyKind::Absolute(path) => ("__absolute__", path.to_str().unwrap_or("")),
+            ResourceKeyKind::Absolute(path) => (ABSOLUTE_ROOT, path.to_str().unwrap_or("")),
         }
     }
 }

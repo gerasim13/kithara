@@ -1,4 +1,5 @@
 pub(crate) mod frame;
+mod progress;
 mod read;
 mod track;
 mod write;

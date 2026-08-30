@@ -3,9 +3,24 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::SamplePool;
 use kithara_resampler::ResamplerBackend;
 
-use crate::{BeatAnalysisConfig, BeatArtifact, coverage::FrameRange};
+use crate::{
+    BeatAnalysisConfig, BeatArtifact, BlobError, coverage::FrameRange, progress::BeatResume,
+};
 
 pub(crate) type Detector = ();
+
+pub(crate) struct DetectionRequest;
+pub(crate) struct DetectionOutput;
+
+impl DetectionRequest {
+    pub(crate) fn detect(self, _detector: &mut Detector) -> DetectionOutput {
+        DetectionOutput
+    }
+}
+
+pub(crate) fn detect(request: DetectionRequest, detector: &mut Detector) -> DetectionOutput {
+    request.detect(detector)
+}
 
 pub(crate) struct Config<B>(PhantomData<B>);
 
@@ -64,5 +79,23 @@ where
         _at: u64,
         _detector: Option<&mut Detector>,
     ) {
+    }
+
+    pub(crate) fn prepare_detection(&mut self, _trailing: bool) -> Option<DetectionRequest> {
+        None
+    }
+
+    pub(crate) fn apply_detection(&mut self, _output: DetectionOutput) {}
+
+    pub(crate) const fn write_resume(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+
+    pub(crate) fn restore(&mut self, resume: Option<BeatResume>) -> Result<(), BlobError> {
+        if resume.is_none() {
+            Ok(())
+        } else {
+            Err(BlobError::Corrupt)
+        }
     }
 }

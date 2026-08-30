@@ -1,3 +1,5 @@
+use std::num::{NonZeroU32, NonZeroUsize};
+
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
@@ -7,23 +9,26 @@ use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
     tokio::sync::watch,
 };
 use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_test_utils::kithara;
+use kithara_worker::TickResult;
 use num_traits::cast::ToPrimitive;
 
 use super::{
     super::{
         analyzer::{AnalyzerBuilder, BeatAnalysisConfig, TrackAnalysis},
         producer::{AnalysisProducer, ring},
-        worker::{AnalysisNode, Job},
+        worker::Job,
     },
     fixtures::{SR, chunk, sine_from, spec},
+    node::NodeHarness,
 };
-use crate::coverage::FrameRange;
+use crate::{AnalysisProgress, coverage::FrameRange};
 
 struct Consts;
 
@@ -251,9 +256,9 @@ struct Pass<B>
 where
     B: ResamplerBackend,
 {
-    node: AnalysisNode<B>,
+    node: NodeHarness<B>,
     producer: AnalysisProducer,
-    results: watch::Receiver<Option<TrackAnalysis>>,
+    results: watch::Receiver<Option<AnalysisProgress>>,
     log: Log,
     _jobs: mpsc::Sender<Job>,
 }
@@ -275,6 +280,7 @@ where
             rate,
             ingest,
             cancel: CancelToken::root(),
+            resume: None,
         })
         .expect("analysis node accepts the test job");
 
@@ -282,7 +288,13 @@ where
             log,
             results,
             _jobs: jobs,
-            node: AnalysisNode::new(builder, receiver),
+            node: NodeHarness::with_settings(
+                builder,
+                receiver,
+                NonZeroU32::new(Consts::WINDOW_SECONDS).expect("test chunk duration is non-zero"),
+                NonZeroUsize::new(8).expect("test drain limit is non-zero"),
+                NonZeroU32::new(5).expect("test publish duration is non-zero"),
+            ),
             producer: AnalysisProducer::new(writer, rate, Consts::TOKEN.into()),
         }
     }
@@ -301,11 +313,14 @@ where
     }
 
     fn drive(&mut self, ticks: usize) -> bool {
-        for _ in 0..ticks {
-            if self.has_ended() {
-                return true;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut remaining = ticks;
+        while remaining > 0 && !self.has_ended() {
+            match self.node.tick() {
+                TickResult::Backpressured if Instant::now() < deadline => thread::yield_now(),
+                TickResult::Backpressured => return false,
+                _ => remaining -= 1,
             }
-            let _ = self.node.tick();
         }
         self.has_ended()
     }
@@ -317,7 +332,8 @@ where
     fn analysis(&self) -> TrackAnalysis {
         self.results
             .borrow()
-            .clone()
+            .as_ref()
+            .map(|progress| progress.analysis().clone())
             .expect("the pass publishes what it covered")
     }
 
@@ -347,11 +363,11 @@ fn decoded_at(calls: &[Call]) -> Vec<u64> {
 }
 
 /// Runs it takes to cover the fixture track at best: its length over the
-/// window one run carries. A schedule that leaves part of a gap behind pays
-/// a halving sequence on top of this, which is what the bound catches.
+/// configured chunk one run carries. A schedule that leaves part of a gap
+/// behind pays a halving sequence on top, which is what the bound catches.
 fn least_runs() -> usize {
-    let window = u64::from(SR).saturating_mul(u64::from(Consts::WINDOW_SECONDS));
-    usize::try_from(Consts::EXTENT.div_ceil(window)).unwrap_or(usize::MAX)
+    let chunk = u64::from(SR).saturating_mul(u64::from(Consts::WINDOW_SECONDS));
+    usize::try_from(Consts::EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
 }
 
 fn run_lengths(calls: &[Call]) -> Vec<usize> {
@@ -378,12 +394,13 @@ fn a_scheduled_pass_seeks_before_it_decodes_anything() {
     );
     pass.drive(2);
 
-    // A one-second run inside a four-second track spans [1.5s, 2.5s).
+    // Four fixed one-second chunks start with chunk one, the midpoint of the
+    // first half of the track.
     assert_eq!(
         pass.calls().first(),
         Some(&Call::Seek {
-            to: 66_150,
-            landed: 66_150,
+            to: 44_100,
+            landed: 44_100,
         }),
         "the source reports its length, so where the run goes is known before \
          the first chunk is decoded"
@@ -404,8 +421,8 @@ fn a_growing_duration_replaces_the_one_the_schedule_had() {
     pass.drive(2);
     assert_eq!(
         targets(&pass.calls()),
-        vec![22_050],
-        "the first run is placed inside the length reported so far"
+        vec![0],
+        "the first run is a fixed chunk inside the length reported so far"
     );
 
     assert!(pass.drive(Consts::TICKS), "the pass ends");
@@ -416,7 +433,7 @@ fn a_growing_duration_replaces_the_one_the_schedule_had() {
 }
 
 #[kithara::test]
-fn a_run_starts_where_the_seek_landed_and_the_next_choice_follows_it() {
+fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk() {
     // The decoder snaps every seek down to a whole 30 000 frames.
     const SNAP: u64 = 30_000;
     let mut pass = Pass::open(
@@ -429,31 +446,25 @@ fn a_run_starts_where_the_seek_landed_and_the_next_choice_follows_it() {
     assert_eq!(
         calls.first(),
         Some(&Call::Seek {
-            to: 66_150,
-            landed: 60_000,
+            to: 44_100,
+            landed: 30_000,
         })
     );
     assert_eq!(
         decoded_at(&calls).first(),
-        Some(&60_000),
+        Some(&30_000),
         "decoding starts where the seek landed, not where it was asked to go"
     );
 
-    // Five chunks make the one-second run, so the coverage is
-    // [60 000, 104 100); the wider of the two gaps left is the tail, and a
-    // run centred in it starts at 118 200. Had the schedule planned on the
-    // requested 66 150, the head would have looked like the wider gap.
+    // The first fixed chunk touched its identity even though the seek landed
+    // earlier, so the second half's fixed identity is next.
     pass.drive(Consts::TICKS);
     let next = targets(&pass.calls()).get(1).copied().unwrap_or(0);
-    assert!(
-        next.abs_diff(118_200) <= 1,
-        "the next choice is computed from what was covered, not from what \
-         was asked for: {next}"
-    );
+    assert_eq!(next, 132_300);
 }
 
 #[kithara::test]
-fn covering_a_track_costs_the_runs_its_window_divides_it_into() {
+fn covering_a_track_costs_the_runs_its_chunk_divides_it_into() {
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT),
         scheduled(Consts::WINDOW_SECONDS),
@@ -476,19 +487,19 @@ fn covering_a_track_costs_the_runs_its_window_divides_it_into() {
 }
 
 #[kithara::test]
-fn a_run_carries_the_detector_window_it_is_derived_from() {
+fn a_run_length_is_independent_of_the_detector_window() {
     let lengths = |seconds: u32| {
         let mut pass = Pass::open(Source::new(Consts::EXTENT), scheduled(seconds));
         pass.drive(64);
         run_lengths(&pass.calls()).first().copied().unwrap_or(0)
     };
 
-    // One second is five chunks of a fifth of a second each.
-    assert_eq!(lengths(1), 5, "a run carries one detector window");
+    // The configured one-second schedule chunk is five decoder chunks.
+    assert_eq!(lengths(1), 5, "a run carries one schedule chunk");
     assert_eq!(
         lengths(2),
-        10,
-        "the run length is derived from the window, not set beside it"
+        5,
+        "changing the detector window does not change scheduling"
     );
 }
 
@@ -645,7 +656,7 @@ fn a_snapping_source_has_its_gaps_closed_rather_than_halved() {
 fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
     // Seeks land on whole 88 200 frames, so the two gaps left between them
     // are further from a landing than a run is long: the run spends its
-    // window on covered audio and never reaches them. Each such position
+    // chunk on covered audio and never reaches them. Each such position
     // costs one run to find out and is then retired, which bounds this.
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).snapping(88_200),
@@ -827,7 +838,7 @@ fn a_decode_error_still_publishes_what_the_pass_covered() {
 fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
     // The readers this runs against answer a seek with the position they
     // were asked for while the decoder resumes at a boundary of its own, so
-    // a run sized against the seek's answer outlasts its window.
+    // a run sized against the seek's answer outlasts its chunk.
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).snapping(30_000).echoing(),
         scheduled(Consts::WINDOW_SECONDS),
@@ -835,14 +846,14 @@ fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
     assert!(pass.drive(Consts::TICKS), "the pass ends");
 
     let lengths = run_lengths(&pass.calls());
-    // A one-second window is five chunks at a fifth of a second each.
+    // A one-second schedule chunk is five decoder chunks.
     assert!(
         lengths.iter().any(|len| *len == 5),
-        "a run must carry the window it was sized for: {lengths:?}"
+        "a run must carry the chunk it was sized for: {lengths:?}"
     );
     assert!(
         lengths.iter().all(|len| *len <= 5),
-        "no run may outlast the window it was sized for: {lengths:?}"
+        "no run may outlast the chunk it was sized for: {lengths:?}"
     );
 }
 
@@ -871,11 +882,11 @@ mod artifacts {
         reclaimed: bool,
     }
 
-    /// Runs it takes to cover this track at best: its length over the window
-    /// one run carries.
+    /// Runs it takes to cover this track at best: its length over the fixed
+    /// schedule chunk one run carries.
     fn least_runs() -> usize {
-        let window = u64::from(SR).saturating_mul(u64::from(WINDOW_SECONDS));
-        usize::try_from(EXTENT.div_ceil(window)).unwrap_or(usize::MAX)
+        let chunk = u64::from(SR).saturating_mul(u64::from(Consts::WINDOW_SECONDS));
+        usize::try_from(EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
     }
 
     fn beat_pass() -> AnalyzerBuilder<RubatoBackend> {

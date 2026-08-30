@@ -31,6 +31,7 @@ use kithara_integration_tests::{TestHttpServer, create_test_wav};
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
 /// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
+const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
 const WAVEFORM_BUCKETS: usize = 100;
 
@@ -115,10 +116,13 @@ async fn waveform_and_player_share_one_get() {
     let master = CancelToken::never();
     let mut runner = TrackAnalysisRunner::new(
         &master,
+        None,
+        CHUNK_SECONDS,
         WAVEFORM_BUCKETS,
         BeatAnalysisConfig::default(),
         region.sample_pool(),
-    );
+    )
+    .expect("analysis runner task is admitted");
     let mut analysis_rx = runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, drop);
 
     let player = worker.open(player_cfg).await.expect("open player audio");
@@ -136,6 +140,7 @@ async fn waveform_and_player_share_one_get() {
         .borrow()
         .clone()
         .expect("analysis result present")
+        .analysis()
         .waveform()
         .cloned()
         .expect("waveform analyzer fills its slot");
