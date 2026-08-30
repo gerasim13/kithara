@@ -12,8 +12,8 @@
 
 // Transitional: `kithara-test-fixtures` owns the encoder-version fingerprint now.
 // This build script and its L2 cache both disappear in the migration's stage 2.
-#[path = "../crates/kithara-test-fixtures/src/encoder_crates.rs"]
-mod encoder_crates;
+#[path = "../crates/kithara-test-fixtures/src/encoders.rs"]
+mod encoders;
 
 use std::{
     collections::hash_map::DefaultHasher,
@@ -22,7 +22,7 @@ use std::{
     path::Path,
 };
 
-use encoder_crates::Lockfile;
+use encoders::Lockfile;
 
 /// Hash every `.rs` file under `dir` (path + contents) and register each for
 /// change-tracking so the fingerprint refreshes whenever encoding code changes.
@@ -99,7 +99,7 @@ fn main() {
     }
     hash_encoder_versions(&mut hasher);
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../crates/kithara-test-fixtures/src/encoder_crates.rs");
+    println!("cargo:rerun-if-changed=../crates/kithara-test-fixtures/src/encoders.rs");
 
     println!(
         "cargo:rustc-env=KITHARA_FIXTURE_BUILD={:016x}",
