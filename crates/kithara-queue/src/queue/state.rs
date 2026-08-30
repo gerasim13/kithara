@@ -177,6 +177,7 @@ impl Queue {
             store,
             max_concurrent_loads,
             Arc::clone(&tracks),
+            cancel.child(),
         ));
         let player_rx = player.subscribe();
         let runtime = Arc::new(QueueRuntime {
@@ -471,6 +472,7 @@ pub(crate) mod tests {
 
         control.close().expect("unstarted fixture must close");
 
+        assert!(control.runtime.shutdown.is_cancelled());
         assert!(matches!(
             control.append("https://example.com/a.mp3"),
             Err(crate::QueueError::Play(PlayError::Closed))

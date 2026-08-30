@@ -3,5 +3,5 @@ pub use crate::waveform::WaveformAnalyzer;
 pub use crate::{
     analyzer::{AnalyzerBuilder, BeatAnalysisConfig},
     producer::AnalysisProducer,
-    worker::{AnalysisPass, AnalysisWorker},
+    worker::{AnalysisOpen, AnalysisPass, AnalysisWorker, AnalysisWorkerConfig},
 };

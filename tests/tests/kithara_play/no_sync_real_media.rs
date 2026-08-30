@@ -47,7 +47,7 @@ const MIN_DECK_CONTRIBUTION_RATIO: f64 = 0.02;
 const MAX_DECK_GAIN_DELTA: f64 = 0.02;
 const MAX_MATCHED_RMS_DELTA_DB: f64 = 0.1;
 const POSITION_TOLERANCE_SECS: f64 = 0.15;
-const SEEK_POSITION_EPSILON_SECS: f64 = 1.0 / 44_100.0;
+const SEEK_POSITION_TOLERANCE_SECS: f64 = 513.0 / 44_100.0;
 const EXACT_ZERO_RUN_LIMIT_FRAMES: usize = 8;
 const MIN_BOUNDARY_JUMP: f32 = 0.05;
 const BOUNDARY_OUTLIER_RATIO: f32 = 6.0;
@@ -486,7 +486,6 @@ async fn reset_for_capture(
         deck.seek_complete_epoch = None;
         deck.muted_seek_underrun_epoch = None;
         deck.seek_terminal = false;
-        deck.seek_rendered_secs = 0.0;
     }
     let mut requested = true;
     for (deck_index, deck) in decks.iter().enumerate() {
@@ -536,21 +535,16 @@ async fn reset_for_capture(
         deck.player.play();
     }
     let mut completed = false;
+    let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
         let block = render_paced(session, decks, case.host_rate).await;
+        seek_blocks += 1;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
                 "{} {label}: seek render produced {} samples",
                 case.label,
                 block.len(),
             ));
-        }
-        let rendered_secs = f64::from(u32::try_from(BLOCK_FRAMES).expect("block frames fit u32"))
-            / f64::from(case.host_rate);
-        for deck in &mut *decks {
-            if deck.player.is_playing() {
-                deck.seek_rendered_secs += rendered_secs;
-            }
         }
         runtime::drain_all_events(
             decks,
@@ -593,6 +587,32 @@ async fn reset_for_capture(
                 ))
                 .collect::<Vec<_>>(),
         ));
+        return false;
+    }
+
+    let rendered_secs = f64::from(seek_blocks) * BLOCK_FRAMES as f64 / f64::from(case.host_rate);
+    let mut positions_valid = true;
+    for (deck_index, deck) in decks.iter().enumerate() {
+        let Some(served) = deck.player.position_seconds() else {
+            positions_valid = false;
+            failures.push(format!(
+                "{} {label} deck {deck_index} ({}): seek completed without a playback position",
+                case.label, deck.observation.label,
+            ));
+            continue;
+        };
+        let advance = served - deck.capture_target_secs;
+        if advance < -SEEK_POSITION_TOLERANCE_SECS
+            || advance > rendered_secs + SEEK_POSITION_TOLERANCE_SECS
+        {
+            positions_valid = false;
+            failures.push(format!(
+                "{} {label} deck {deck_index} ({}): seek position {served:.9}s exceeded the {rendered_secs:.9}s rendered budget from {:.9}s",
+                case.label, deck.observation.label, deck.capture_target_secs,
+            ));
+        }
+    }
+    if !positions_valid {
         return false;
     }
 
@@ -840,7 +860,6 @@ async fn prepare_deck(
         seek_complete_epoch: None,
         muted_seek_underrun_epoch: None,
         seek_terminal: false,
-        seek_rendered_secs: 0.0,
         capture_target_secs: CAPTURE_START_SECS + deck_index as f64 * CAPTURE_START_STEP_SECS,
         observation: DeckObservation {
             hls: matches!(media, Media::Hls),

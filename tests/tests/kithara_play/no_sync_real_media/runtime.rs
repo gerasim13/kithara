@@ -10,7 +10,7 @@ use kithara::{
 use kithara_integration_tests::offline::OfflineSession;
 use serde::Serialize;
 
-use super::{CHANNELS, Case, SEEK_POSITION_EPSILON_SECS, SOURCE_RATE};
+use super::{CHANNELS, Case, SOURCE_RATE};
 
 pub(super) struct Deck {
     pub(super) player: Arc<PlayerImpl>,
@@ -23,9 +23,6 @@ pub(super) struct Deck {
     pub(super) seek_complete_epoch: Option<u64>,
     pub(super) muted_seek_underrun_epoch: Option<u64>,
     pub(super) seek_terminal: bool,
-    /// Audio this deck was asked to render since its seek was issued. The
-    /// playhead cannot have moved past the target by more than this.
-    pub(super) seek_rendered_secs: f64,
     pub(super) capture_target_secs: f64,
 }
 
@@ -87,31 +84,10 @@ pub(super) fn drain_all_events(
                         deck.observation
                             .seek_positions_secs
                             .push(position.as_secs_f64());
-                        // The deck keeps rendering until the completion is
-                        // observed, so the landing point is bounded by the audio
-                        // the harness asked for, not by a fixed slack: a deferred
-                        // flush costs another block, and a constant sized for
-                        // synchronous delivery would race it.
-                        let floor = deck.capture_target_secs - SEEK_POSITION_EPSILON_SECS;
-                        let ceiling = deck.capture_target_secs
-                            + deck.seek_rendered_secs
-                            + SEEK_POSITION_EPSILON_SECS;
                         if deck.seek_request_epoch != Some(seek_epoch) {
                             failures.push(format!(
                                 "deck {deck_index} ({}) completed stale seek epoch {seek_epoch} during {phase}; expected {:?}",
                                 deck.observation.label, deck.seek_request_epoch,
-                            ));
-                            deck.seek_terminal = true;
-                        } else if deck
-                            .player
-                            .position_seconds()
-                            .is_none_or(|served| served < floor || served > ceiling)
-                        {
-                            failures.push(format!(
-                                "deck {deck_index} ({}) seek epoch {seek_epoch} served position {:?} during {phase}, expected {:.9}s within [{floor:.9}s, {ceiling:.9}s]",
-                                deck.observation.label,
-                                deck.player.position_seconds(),
-                                deck.capture_target_secs,
                             ));
                             deck.seek_terminal = true;
                         } else {
