@@ -38,7 +38,13 @@ pub struct Replay {
     pub start_phase: i32,
 }
 
-/// Detect phase-continuity violations inside a contiguous ascending sawtooth.
+/// Detect phase-continuity violations inside an ascending sawtooth.
+///
+/// Silence is a gap the audio did not fill, not audio of its own: an output
+/// that underran and resumed carries the track's next frame after the gap, so
+/// the expected phase advances with the audio the run actually contains and
+/// not with the position in the buffer. A run that resumes further along than
+/// the audio between the gaps accounts for is what this reports.
 pub fn ascending_phase_replays(
     left: &[f32],
     start: usize,
@@ -53,11 +59,16 @@ pub fn ascending_phase_replays(
     let base_phase = phase_units(left[start]);
     let mut replays = Vec::new();
     let mut active: Option<Replay> = None;
+    let mut audio_frames = 0usize;
 
     for (offset, sample) in left[start..end].iter().copied().enumerate() {
         let frame = start + offset;
-        let is_violation = !is_silence(sample)
-            && expected_phase_error(sample, base_phase, offset).abs() > tol_units;
+        let expected = expected_phase(base_phase, audio_frames);
+        let is_violation =
+            !is_silence(sample) && modular_delta(expected, phase_units(sample)).abs() > tol_units;
+        if !is_gap(sample, expected) {
+            audio_frames += 1;
+        }
 
         match (is_violation, active.as_mut()) {
             (true, Some(replay)) => {
@@ -106,10 +117,46 @@ fn classify_window(samples: &[f32], tol: f32) -> FrameClass {
     }
 }
 
-fn expected_phase_error(sample: f32, base_phase: i32, frame_offset: usize) -> i32 {
+/// Frames of the track's own audio inside `start..end`.
+///
+/// An output that underran carries silence the track never played, so a span
+/// of the render buffer is longer than the audio it delivered. Callers that
+/// measure how much of a track was heard count this rather than the distance
+/// between two buffer positions.
+pub fn audio_frames(left: &[f32], start: usize, end: usize) -> usize {
+    let end = end.min(left.len());
+    if start >= end {
+        return 0;
+    }
+
+    let base_phase = phase_units(left[start]);
+    let mut audio = 0usize;
+    for sample in left[start..end].iter().copied() {
+        if !is_gap(sample, expected_phase(base_phase, audio)) {
+            audio += 1;
+        }
+    }
+
+    audio
+}
+
+fn is_gap(sample: f32, expected: i32) -> bool {
+    is_silence(sample) && !crosses_zero(expected)
+}
+
+fn expected_phase(base_phase: i32, frame_offset: usize) -> i32 {
     let offset = (frame_offset % SAWTOOTH_PERIOD_FRAMES) as i32;
-    let expected = (base_phase + offset).rem_euclid(SAWTOOTH_PERIOD_UNITS);
-    modular_delta(expected, phase_units(sample))
+    (base_phase + offset).rem_euclid(SAWTOOTH_PERIOD_UNITS)
+}
+
+/// A sawtooth passes through zero once per period, and the frames around that
+/// crossing read as silent while being the track's own audio. Only the phase
+/// the silence threshold covers qualifies, so the same threshold decides both
+/// questions.
+fn crosses_zero(expected: i32) -> bool {
+    const HALF_WIDTH: i32 = (SILENCE_THRESHOLD * 32_768.0) as i32 + 1;
+
+    (expected - SAWTOOTH_HALF_PERIOD_UNITS).abs() <= HALF_WIDTH
 }
 
 const fn modular_delta(current: i32, next: i32) -> i32 {
@@ -207,6 +254,42 @@ mod tests {
                 start_frame: descending_start,
                 len: descending_len,
                 start_phase: 65_535,
+            },
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn ascending_phase_replays_reads_through_an_underrun_gap() {
+        const HEAD: usize = 256;
+        const GAP: usize = 128;
+
+        let mut left = ascending_signal(0, HEAD);
+        left.resize(HEAD + GAP, 0.0);
+        left.extend(ascending_signal(HEAD, 256));
+
+        assert!(ascending_phase_replays(&left, 0, left.len(), 3).is_empty());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn ascending_phase_replays_reports_audio_missing_across_a_gap() {
+        const HEAD: usize = 256;
+        const GAP: usize = 128;
+        const LOST: usize = 64;
+        const TAIL: usize = 256;
+
+        let mut left = ascending_signal(0, HEAD);
+        left.resize(HEAD + GAP, 0.0);
+        left.extend(ascending_signal(HEAD + LOST, TAIL));
+
+        let replays = ascending_phase_replays(&left, 0, left.len(), 3);
+
+        assert_eq!(replays.len(), 1);
+        assert_replay(
+            replays[0],
+            Replay {
+                start_frame: HEAD + GAP,
+                len: TAIL,
+                start_phase: i32::try_from(HEAD + LOST).expect("phase fits i32"),
             },
         );
     }

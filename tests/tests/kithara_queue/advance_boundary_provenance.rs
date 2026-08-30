@@ -22,8 +22,8 @@ use kithara_integration_tests::{
     goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     pcm_provenance::{
-        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, classify_windows,
-        phase_units,
+        FrameClass, Replay, SAWTOOTH_PERIOD_FRAMES, ascending_phase_replays, audio_frames,
+        classify_windows, phase_units,
     },
     temp_dir,
 };
@@ -783,7 +783,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
         )
     );
 
-    let ascending_frames = last_ascending_end_frame.saturating_sub(landing_frame);
+    let ascending_frames = audio_frames(&left, landing_frame, last_ascending_end_frame);
     assert_close_len(
         ascending_frames,
         EXPECTED_POST_SEEK_FRAMES,
