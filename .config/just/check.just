@@ -10,7 +10,7 @@ workspace:
 # way, and sccache aborts outright rather than fall back when it meets the
 # incremental build that keeps this fast.
 clippy:
-    RUSTC_WRAPPER= CARGO_INCREMENTAL=1 cargo clippy --workspace -- -D warnings
+    env -u CARGO_INCREMENTAL RUSTC_WRAPPER= cargo clippy --workspace -- -D warnings
 
 [positional-arguments]
 clippy-fix *ARGS:
