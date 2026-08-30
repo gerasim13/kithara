@@ -7,7 +7,6 @@ mod kithara {
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Barrier};
 
-use kithara_bufpool::{BytePool, Region, RegionConfig};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_platform::thread;
 use kithara_platform::{CancelToken, time::Duration};
@@ -18,16 +17,20 @@ use crate::{
     Driver, DriverIo, ResourceRead,
     backend::memory::driver::{MemDriver, MemOptions, MemResource},
     resource::{ResourceStatus, WaitOutcome},
+    test_pools::{byte_buffer, pools},
 };
 
 fn create_resource() -> MemResource {
-    MemResource::new(CancelToken::never(), BytePool::default())
+    MemResource::new(CancelToken::never(), byte_buffer())
 }
 
 fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
     MemResource::open(
         cancel,
-        MemOptions::builder().initial_data(data.to_vec()).build(),
+        MemOptions::builder()
+            .buffer(byte_buffer())
+            .initial_data(data.to_vec())
+            .build(),
     )
     .expect("BUG: MemDriver::open with initial_data is infallible")
 }
@@ -42,16 +45,20 @@ fn test_create_new_resource() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn post_commit_replacement_uses_injected_pool() {
-    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let pool = region.byte_pool();
-    let (driver, _) =
-        MemDriver::open(MemOptions::builder().capacity(32).pool(pool).build()).unwrap();
+    let pools = pools(1024);
+    let (driver, _) = MemDriver::open(
+        MemOptions::builder()
+            .buffer(pools.get::<u8>())
+            .capacity(32)
+            .build(),
+    )
+    .unwrap();
     DriverIo::commit(&driver, Some(0)).unwrap();
-    let allocated_before = region.stats().allocated_bytes;
+    let allocated_before = pools.stats().allocated_bytes;
 
     DriverIo::write_at(&driver, 0, &[1; 64], false).unwrap();
 
-    assert!(region.stats().allocated_bytes > allocated_before);
+    assert!(pools.stats().allocated_bytes > allocated_before);
 }
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
@@ -153,7 +160,7 @@ fn test_fail_wakes_waiters() {
 #[kithara::test(native)]
 fn test_cancel_wakes_waiters() {
     let cancel = CancelToken::never();
-    let res = MemResource::new(cancel.clone(), BytePool::default());
+    let res = MemResource::new(cancel.clone(), byte_buffer());
 
     let handle = thread::spawn({
         let cancel = cancel;
@@ -171,7 +178,7 @@ fn test_cancel_wakes_waiters() {
 #[kithara::test(native)]
 fn external_cancel_wakes_waiter_without_cancelling_resource() {
     let resource_cancel = CancelToken::never();
-    let writer = MemResource::new(resource_cancel.clone(), BytePool::default());
+    let writer = MemResource::new(resource_cancel.clone(), byte_buffer());
     let reader = writer.reader();
     let wait_cancel = CancelToken::never();
     let entering_wait = Arc::new(Barrier::new(2));
@@ -328,7 +335,10 @@ fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
 fn test_growable_write_beyond_initial_capacity() {
     let res = MemResource::open(
         CancelToken::never(),
-        MemOptions::builder().capacity(64).build(),
+        MemOptions::builder()
+            .buffer(byte_buffer())
+            .capacity(64)
+            .build(),
     )
     .unwrap();
 

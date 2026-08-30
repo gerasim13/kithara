@@ -12,11 +12,15 @@ use kithara::{
 };
 use url::Url;
 
-use crate::TestTempDir;
+use crate::{
+    TestTempDir,
+    bufpool_ext::{Pools, TestPools, pools},
+};
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {
-    assets: AssetStore,
+    assets: AssetStore<TestPools>,
+    pools: Pools,
     source: AssetSource,
     #[cfg(not(target_arch = "wasm32"))]
     _temp_dir: Arc<TestTempDir>,
@@ -50,19 +54,23 @@ fn test_source(asset_root: &str) -> AssetSource {
 }
 
 fn test_layouts() -> AssetLayoutRegistry {
-    AssetLayoutRegistry::default().with::<Hls>(Arc::new(TestHlsLayout))
+    AssetLayoutRegistry::default().with::<Hls<TestPools>>(Arc::new(TestHlsLayout))
 }
 
 impl TestAssets {
-    pub const fn assets(&self) -> &AssetStore {
+    pub const fn assets(&self) -> &AssetStore<TestPools> {
         &self.assets
+    }
+
+    pub const fn pools(&self) -> &Pools {
+        &self.pools
     }
 
     /// Scope bound to this fixture's `asset_root`, mirroring how
     /// `Hls::create` scopes its per-stream store.
-    pub fn scope(&self) -> AssetScope {
+    pub fn scope(&self) -> AssetScope<TestPools> {
         self.assets
-            .scope::<Hls>(&self.source)
+            .scope::<Hls<TestPools>>(&self.source)
             .expect("valid test HLS source")
     }
 }
@@ -78,7 +86,8 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = TestTempDir::new();
     let temp_dir = Arc::new(temp_dir);
 
-    let assets = AssetStore::builder()
+    let pools = pools();
+    let assets = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
@@ -88,6 +97,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 
     TestAssets {
         assets,
+        pools,
         source: test_source(asset_root),
         _temp_dir: temp_dir,
     }
@@ -96,20 +106,22 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 /// Create test assets with custom asset root (WASM: ephemeral in-memory store)
 #[cfg(target_arch = "wasm32")]
 pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
-    let assets = AssetStore::builder()
+    let pools = pools();
+    let assets = AssetStore::builder(pools.clone())
         .cancel(CancelToken::never())
         .layouts(test_layouts())
         .build();
 
     TestAssets {
         assets,
+        pools,
         source: test_source(asset_root),
     }
 }
 
 /// Create test HTTP client with default options
 pub fn create_test_net() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancelToken::never())
+    HttpClient::new(NetOptions::default(), pools(), CancelToken::never())
 }
 
 /// Create a private test [`Downloader`] with a fresh cancel token.
@@ -118,7 +130,7 @@ pub fn create_test_downloader() -> Downloader {
 }
 
 /// Create a private test [`PeerHandle`] via `Downloader::register`.
-fn create_test_peer_handle() -> PeerHandle {
+fn create_test_peer_handle(pools: &Pools) -> PeerHandle {
     struct TestPeer {
         cancel: CancelToken,
     }
@@ -129,8 +141,9 @@ fn create_test_peer_handle() -> PeerHandle {
     }
     impl Peer for TestPeer {}
     let cancel = CancelToken::never();
+    let client = HttpClient::new(NetOptions::default(), pools.clone(), CancelToken::never());
     let dl = Downloader::new(
-        DownloaderConfig::for_client(create_test_net())
+        DownloaderConfig::for_client(client)
             .cancel(cancel.child())
             .build(),
     );
@@ -141,11 +154,11 @@ fn create_test_peer_handle() -> PeerHandle {
 
 /// Build a test [`PlaylistCache`] backed by the supplied
 /// [`TestAssets`] + a fresh private [`PeerHandle`].
-pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache {
+pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCache<TestPools> {
     PlaylistCache::new(
         assets.scope(),
-        create_test_peer_handle(),
-        kithara::bufpool::BytePool::default(),
+        create_test_peer_handle(assets.pools()),
+        assets.pools().clone(),
     )
 }
 
@@ -155,14 +168,14 @@ pub fn test_playlist_cache(assets: &TestAssets, _net: HttpClient) -> PlaylistCac
 pub fn test_key_store(
     assets: &TestAssets,
     key_registry: Option<kithara::drm::KeyProcessorRegistry>,
-) -> KeyStore {
+) -> KeyStore<TestPools> {
     KeyStore::new(
-        create_test_peer_handle(),
+        create_test_peer_handle(assets.pools()),
         assets.scope(),
         kithara::events::EventBus::new(8),
         None,
         key_registry,
-        kithara::bufpool::BytePool::default(),
+        assets.pools().clone(),
     )
 }
 

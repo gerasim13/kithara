@@ -331,14 +331,17 @@ fn wake_worker(worker: Option<&dyn WorkerWake>, mode: ConsumerWakeMode) {
 mod tests {
     use std::sync::atomic::AtomicU64;
 
-    use kithara_bufpool::SamplePool;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ConsumerWakeMode, audio::ReadOutcome};
+    use crate::{
+        ConsumerWakeMode,
+        audio::ReadOutcome,
+        test_pools::{pools, sample_buffer},
+    };
 
     struct RingFixture {
         playhead: Arc<PlayheadState>,
@@ -361,7 +364,6 @@ mod tests {
         ) -> Self {
             let (data_tx, audio_rx) = connect::<Fetch<AudioChunk>>(4, None);
             let (trash_tx, trash_rx) = connect::<AudioChunk>(8, None);
-            let pool = SamplePool::default();
             let mut ring = RingConsumer::new(RingParts {
                 audio_rx,
                 trash_tx,
@@ -374,7 +376,8 @@ mod tests {
             Self {
                 ring,
                 data_tx,
-                cursor: ChunkCursor::new(&pool, AudioChunkInfo::default().spec),
+                cursor: ChunkCursor::new(&pools(), AudioChunkInfo::default().spec)
+                    .expect("cursor scratch fits test pools"),
                 events: crate::audio::event::AudioEvents::test(),
                 playhead: Arc::new(PlayheadState::new()),
                 _trash_rx: trash_rx,
@@ -398,7 +401,7 @@ mod tests {
         let mut meta = AudioChunkInfo::default();
         meta.spec.channels = 1;
         meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
-        AudioChunk::new(meta, SamplePool::default().attach(samples.to_vec()))
+        AudioChunk::new(meta, sample_buffer(samples))
     }
 
     #[kithara::test]

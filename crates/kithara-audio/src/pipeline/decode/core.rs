@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_decode::{
     BlenderProfile, ChunkRetire, DecodeError, DecodeResult, Decoder, DecoderChunkOutcome,
     DecoderFactory as BackendDecoderFactory, DecoderSeekOutcome, GaplessMode,
@@ -91,7 +91,7 @@ impl DecoderFactory {
 }
 
 /// Decoder construction state shared by initial installation and later rebuilds.
-pub(crate) struct DecodeInit {
+pub(crate) struct DecodeInit<S> {
     pub(crate) playback_resampler_backend: &'static str,
     pub(crate) host_sample_rate: Arc<AtomicU32>,
     pub(crate) decoder: Box<dyn Decoder>,
@@ -99,7 +99,7 @@ pub(crate) struct DecodeInit {
     pub(crate) decoder_factory: DecoderFactory,
     pub(crate) gapless_mode: GaplessMode,
     pub(crate) media_info: Option<MediaInfo>,
-    pub(crate) sample_pool: SamplePool,
+    pub(crate) pools: PoolRegion<S>,
     pub(crate) recreate_on_host_rate_change: bool,
 }
 
@@ -113,7 +113,10 @@ pub(crate) struct DecodeParts {
     pub(crate) decoder_host_sample_rate: u32,
 }
 
-impl DecodeInit {
+impl<S> DecodeInit<S>
+where
+    S: HasPool<f32>,
+{
     pub(crate) fn decoder_host_sample_rate(&self) -> u32 {
         self.host_sample_rate.load(Ordering::Acquire)
     }
@@ -122,7 +125,7 @@ impl DecodeInit {
         self,
         observer: Option<Box<dyn AudioObserver>>,
         installed_at_seek_epoch: u64,
-    ) -> DecodeParts {
+    ) -> Result<DecodeParts, DecodeError> {
         let decoder_host_sample_rate = self.decoder_host_sample_rate();
         let Self {
             decoder,
@@ -131,7 +134,7 @@ impl DecodeInit {
             gapless_mode,
             host_sample_rate,
             media_info,
-            sample_pool,
+            pools,
             playback_resampler_backend,
             recreate_on_host_rate_change,
         } = self;
@@ -143,15 +146,17 @@ impl DecodeInit {
             None,
             gapless_mode,
         );
-        DecodeParts {
+        let active = ActiveDecode::new(active, gapless_mode, observer, &pools)
+            .map_err(DecodeError::backend)?;
+        Ok(DecodeParts {
             host_sample_rate,
             recreate_on_host_rate_change,
             decoder_host_sample_rate,
             decoder_backend,
             playback_resampler_backend,
-            active: ActiveDecode::new(active, gapless_mode, observer, &sample_pool),
+            active,
             factory: decoder_factory,
-        }
+        })
     }
 }
 
@@ -195,14 +200,17 @@ pub(crate) enum DecodeAction {
 }
 
 impl ActiveDecode {
-    fn new(
+    fn new<S>(
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
         observer: Option<Box<dyn AudioObserver>>,
-        sample_pool: &SamplePool,
-    ) -> Self {
-        let blender = GaplessBlender::new(active.blender_profile(), sample_pool);
-        Self {
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let blender = GaplessBlender::new(active.blender_profile(), pools)?;
+        Ok(Self {
             active,
             gapless_mode,
             blender,
@@ -213,7 +221,7 @@ impl ActiveDecode {
             announced_hold: None,
             rejected_chunk: None,
             stage_error: None,
-        }
+        })
     }
 
     pub(crate) fn flush_reader_signals(&mut self) {
@@ -318,11 +326,15 @@ impl ActiveDecode {
             );
         }
         to self.blender {
-            #[call(prepare_active)]
-            pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile);
             #[cfg(test)]
             #[call(is_steady)]
             pub(crate) fn blender_is_steady(&self) -> bool;
+        }
+    }
+
+    pub(crate) fn prepare_replacement_profile(&mut self, profile: BlenderProfile) {
+        if let Err(error) = self.blender.prepare_active(profile) {
+            self.stage_error = Some(DecodeError::backend(error));
         }
     }
 
@@ -338,7 +350,10 @@ impl ActiveDecode {
     }
 
     pub(crate) fn prepare_incoming_profile(&mut self, profile: BlenderProfile) {
-        self.blender.prepare_active(profile);
+        if let Err(error) = self.blender.prepare_active(profile) {
+            self.stage_error = Some(DecodeError::backend(error));
+            return;
+        }
         if self.active.blender_profile().spec() != profile.spec() {
             return;
         }
@@ -429,7 +444,6 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-    use kithara_bufpool::SamplePool;
     use kithara_decode::{BlenderProfile, DecoderSeekOutcome};
     use kithara_platform::time::Duration;
     use kithara_signal::{AudioChunkInfo, AudioSpec};
@@ -442,6 +456,7 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::decode::transition::IncomingPrime,
+        test_pools::{pools, sample_buffer},
         traits::{AudioObserveError, AudioObserverMock},
     };
 
@@ -454,8 +469,8 @@ mod tests {
         gapless_mode: GaplessMode,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> ActiveDecode {
-        let sample_pool = SamplePool::default();
-        ActiveDecode::new(active, gapless_mode, observer, &sample_pool)
+        ActiveDecode::new(active, gapless_mode, observer, &pools())
+            .expect("blender scratch fits test pools")
     }
 
     #[kithara::test]
@@ -498,7 +513,7 @@ mod tests {
                     frames: 64,
                     ..Default::default()
                 },
-                SamplePool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+                sample_buffer(&vec![0.25; 64 * usize::from(spec.channels)]),
             ))
             .expect("steady fixture PCM is valid");
 
@@ -544,7 +559,7 @@ mod tests {
                     frames: 64,
                     ..Default::default()
                 },
-                SamplePool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+                sample_buffer(&vec![0.25; 64 * usize::from(spec.channels)]),
             ))
             .expect("fixture PCM is valid");
         let mut cursor = ResumeCursor::new(
@@ -592,7 +607,7 @@ mod tests {
                     frames: 4,
                     ..Default::default()
                 },
-                SamplePool::default().attach(vec![0.25; 4 * usize::from(spec.channels)]),
+                sample_buffer(&vec![0.25; 4 * usize::from(spec.channels)]),
             )
         };
         decode
@@ -620,7 +635,7 @@ mod tests {
                 frames: 4,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![0.25; 4 * usize::from(spec.channels)]),
+            sample_buffer(&vec![0.25; 4 * usize::from(spec.channels)]),
         ));
         let rejected = AudioChunk::new(
             AudioChunkInfo {
@@ -629,7 +644,7 @@ mod tests {
                 frames: 4,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![0.5; 4 * usize::from(spec.channels)]),
+            sample_buffer(&vec![0.5; 4 * usize::from(spec.channels)]),
         );
         let rejected_samples = rejected.samples.as_ptr();
         active.stage(rejected);
@@ -702,7 +717,7 @@ mod tests {
                     frames: 128,
                     ..Default::default()
                 },
-                SamplePool::default().attach(samples),
+                sample_buffer(&samples),
             ))
             .expect("valid fixture PCM enters prepared holdback");
         let mut cursor = ResumeCursor::new(
@@ -754,7 +769,7 @@ mod tests {
                 frames: INCOMING_FRAMES,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![
+            sample_buffer(&vec![
                 0.5;
                 usize::try_from(INCOMING_FRAMES)
                     .expect("test frames fit usize")
@@ -778,7 +793,7 @@ mod tests {
                     frames: OUTGOING_FRAMES,
                     ..Default::default()
                 },
-                SamplePool::default().attach(vec![
+                sample_buffer(&vec![
                     0.25;
                     usize::try_from(OUTGOING_FRAMES)
                         .expect("test frames fit usize")
@@ -819,7 +834,7 @@ mod tests {
                     frames: FRAMES,
                     ..Default::default()
                 },
-                SamplePool::default().attach(vec![
+                sample_buffer(&vec![
                     0.25;
                     usize::try_from(FRAMES)
                         .expect("test frames fit usize")
@@ -922,9 +937,12 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![0.25; samples]),
+            sample_buffer(&vec![0.25; samples]),
         ));
-        decode.blender.prepare_active(BlenderProfile::new(spec));
+        decode
+            .blender
+            .prepare_active(BlenderProfile::new(spec))
+            .expect("join scratch fits test pools");
         assert!(decode.blender.prepare_join(|outgoing| {
             outgoing.fill(-0.25);
             true
@@ -976,7 +994,7 @@ mod tests {
                 frames: 64,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![0.25; 64 * usize::from(spec.channels)]),
+            sample_buffer(&vec![0.25; 64 * usize::from(spec.channels)]),
         ));
         decode.incoming = Some(IncomingDecode::Preparing {
             transition,

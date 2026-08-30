@@ -7,12 +7,15 @@ use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead},
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 use memory_stats::memory_stats;
 use tracing::info;
 
@@ -48,22 +51,19 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
         let server = TestServerHelper::new().await;
         let url = server.asset("hls/master.m3u8");
 
-        let region = Region::default();
-        let byte_pool = region.byte_pool();
-        let store = AssetStore::builder()
+        let pools = pools();
+        let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().into(),
             })
-            .pool(byte_pool.clone())
             .build();
         let hls_config = HlsConfig::for_url(url)
             .store(store)
-            .pool(byte_pool.clone())
+            .pools(pools.clone())
             .initial_abr_mode(auto(0))
             .build();
-        let config = AudioConfig::<Hls>::for_stream(hls_config).build();
-        let worker =
-            PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+        let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let mut audio = worker.open(config).await.expect("audio creation");
 
         let samples = spawn_blocking(move || {
@@ -143,22 +143,19 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.asset("hls/master.m3u8");
 
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker.open(config).await.expect("audio creation");
 
     let (warmup_rss, final_rss) = spawn_blocking(move || {

@@ -1,7 +1,7 @@
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -23,7 +23,10 @@ use super::{
     },
     fixtures::{SR, chunk, sine_from, spec},
 };
-use crate::coverage::FrameRange;
+use crate::{
+    coverage::FrameRange,
+    test_pools::{TestPools, pools},
+};
 
 struct Consts;
 
@@ -237,8 +240,8 @@ fn decoded(at: u64, frames: u64) -> AudioChunk {
     chunk(&sine_from(at, frames.to_usize().unwrap_or(0)), at)
 }
 
-fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend> {
-    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_beat_config(
+fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_beat_config(
         BeatAnalysisConfig::builder()
             .resampler_backend(NoResamplerBackend)
             .detector_window_seconds(window_seconds)
@@ -247,22 +250,23 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend> {
     )
 }
 
-struct Pass<B>
+struct Pass<B, S>
 where
     B: ResamplerBackend,
 {
-    node: AnalysisNode<B>,
+    node: AnalysisNode<B, S>,
     producer: AnalysisProducer,
     results: watch::Receiver<Option<TrackAnalysis>>,
     log: Log,
     _jobs: mpsc::Sender<Job>,
 }
 
-impl<B> Pass<B>
+impl<B, S> Pass<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn open(source: Source, builder: AnalyzerBuilder<B>) -> Self {
+    fn open(source: Source, builder: AnalyzerBuilder<B, S>) -> Self {
         let rate = spec().sample_rate;
         let log = source.log();
         let (jobs, receiver) = mpsc::channel();
@@ -848,7 +852,6 @@ fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod artifacts {
-    use kithara_bufpool::SamplePool;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
@@ -859,7 +862,10 @@ mod artifacts {
         },
         Consts, Pass, Source, targets,
     };
-    use crate::BeatAnalysisConfig;
+    use crate::{
+        BeatAnalysisConfig,
+        test_pools::{TestPools, pools},
+    };
 
     const BUCKETS: usize = 64;
     const WINDOW_SECONDS: u32 = 2;
@@ -878,8 +884,8 @@ mod artifacts {
         usize::try_from(EXTENT.div_ceil(window)).unwrap_or(usize::MAX)
     }
 
-    fn beat_pass() -> AnalyzerBuilder<RubatoBackend> {
-        AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+    fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
+        AnalyzerBuilder::<RubatoBackend, _>::new(pools())
             .with_waveform(BUCKETS)
             .with_beat_config(
                 BeatAnalysisConfig::builder()

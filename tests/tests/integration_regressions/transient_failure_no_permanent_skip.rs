@@ -11,13 +11,14 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
     audio_fixture::EmbeddedAudio,
+    bufpool_ext::{TestPools, pools},
     kithara,
     offline::OfflineSession,
     temp_dir,
@@ -43,7 +44,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -70,8 +71,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     });
     let fallback_url = fallback_fixture.child_url("fallback.mp3");
 
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -81,21 +81,20 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
                 .max_delay(Duration::from_millis(200))
                 .build(),
         )
-        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -110,7 +109,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     let target = queue
         .append(TrackSource::Config(Box::new(
             ResourceConfig::for_src(
-                ResourceConfig::parse_src(target_url.as_str()).expect("valid HLS URL"),
+                ResourceSrc::parse(target_url.as_str()).expect("valid HLS URL"),
             )
             .downloader(downloader.clone())
             .initial_abr_mode(AbrMode::manual(0))
@@ -124,7 +123,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     let fallback = queue
         .append(TrackSource::Config(Box::new(
             ResourceConfig::for_src(
-                ResourceConfig::parse_src(fallback_url.as_str()).expect("valid fallback URL"),
+                ResourceSrc::parse(fallback_url.as_str()).expect("valid fallback URL"),
             )
             .downloader(downloader)
             .store(store)

@@ -6,6 +6,8 @@ mod mel;
 mod models;
 mod postprocess;
 mod runtime;
+#[cfg(test)]
+mod test_pools;
 
 pub use api::{BeatError, BeatMark, BeatThis, RawBeats};
 pub use config::BeatConfig;

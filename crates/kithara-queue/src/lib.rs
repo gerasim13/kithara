@@ -8,6 +8,8 @@ mod error;
 mod loader;
 mod navigation;
 mod queue;
+#[cfg(test)]
+mod test_pools;
 mod track;
 
 pub use config::QueueConfig;

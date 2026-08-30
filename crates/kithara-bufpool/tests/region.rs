@@ -1,258 +1,311 @@
-use std::mem::size_of;
+use std::{mem::size_of, sync::Barrier, thread};
 
-use kithara_bufpool::{BudgetExhausted, Region, RegionConfig};
+use kithara_bufpool::{
+    HasPool, OverallBudget, Percent, PoolAlias, PoolConfig, PoolError, PoolRegion, pool_schema,
+};
+use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
 
-#[kithara::test]
-fn byte_growth_exhausts_shared_budget_for_samples() {
-    let region = Region::new(RegionConfig::builder().max_bytes(16).build());
-    let byte_pool = region.byte_pool();
-    let sample_pool = region.sample_pool();
-
-    let mut bytes = byte_pool.get();
-    bytes.ensure_len(16).unwrap();
-
-    let mut samples = sample_pool.get();
-    assert_eq!(samples.ensure_len(1), Err(BudgetExhausted));
-}
-
-#[kithara::test]
-fn samples_growth_exhausts_shared_budget_for_bytes() {
-    let region = Region::new(RegionConfig::builder().max_bytes(16).build());
-    let byte_pool = region.byte_pool();
-    let sample_pool = region.sample_pool();
-
-    let mut samples = sample_pool.get();
-    samples.ensure_len(4).unwrap();
-
-    let mut bytes = byte_pool.get();
-    assert_eq!(bytes.ensure_len(1), Err(BudgetExhausted));
-}
-
-// A single-threaded test returns all buffers to one 16-slot home shard, making
-// the 17th return deterministically overflow that queue.
-const SAMPLE_SHARD_SLOTS: usize = 16;
-
-const SAMPLE_BUF_BYTES: usize = 4 * size_of::<f32>();
-
-#[kithara::test]
-fn rejected_drop_releases_shared_budget() {
-    let region = Region::new(RegionConfig::default());
-    let sample_pool = region.sample_pool();
-
-    let held: Vec<_> = (0..SAMPLE_SHARD_SLOTS + 1)
-        .map(|_| {
-            let mut buf = sample_pool.get();
-            buf.ensure_len(4).unwrap();
-            buf
-        })
-        .collect();
-    assert_eq!(
-        region.stats().allocated_bytes,
-        (SAMPLE_SHARD_SLOTS + 1) * SAMPLE_BUF_BYTES
-    );
-    drop(held);
-
-    assert_eq!(
-        region.stats().allocated_bytes,
-        SAMPLE_SHARD_SLOTS * SAMPLE_BUF_BYTES
-    );
-}
-
-#[kithara::test]
-fn rejected_recycle_releases_shared_budget() {
-    let region = Region::new(RegionConfig::default());
-    let sample_pool = region.sample_pool();
-
-    let mut extra = sample_pool.get();
-    extra.ensure_len(4).unwrap();
-    let extra = extra.into_inner();
-
-    let held: Vec<_> = (0..SAMPLE_SHARD_SLOTS)
-        .map(|_| {
-            let mut buf = sample_pool.get();
-            buf.ensure_len(4).unwrap();
-            buf
-        })
-        .collect();
-    drop(held);
-    sample_pool.recycle(extra);
-
-    assert_eq!(
-        region.stats().allocated_bytes,
-        SAMPLE_SHARD_SLOTS * SAMPLE_BUF_BYTES
-    );
-}
-
-#[kithara::test]
-fn stats_combine_budget_and_keep_pool_hits_separate() {
-    let region = Region::new(RegionConfig::builder().max_bytes(64).build());
-    let byte_pool = region.byte_pool();
-    let sample_pool = region.sample_pool();
-
-    {
-        let mut bytes = byte_pool.get();
-        bytes.ensure_len(16).unwrap();
+pool_schema! {
+    pub TestPools {
+        bytes: u8,
+        samples: f32,
     }
-    drop(byte_pool.get());
-    {
-        let mut samples = sample_pool.get();
-        samples.ensure_len(4).unwrap();
-    }
-    drop(sample_pool.get());
+}
 
-    let stats = region.stats();
-    assert_eq!(stats.allocated_bytes, 32);
-    assert_eq!(stats.max_bytes, 64);
-    assert_eq!(stats.byte_pool_hits, 1);
-    assert_eq!(stats.byte_pool_misses, 1);
-    assert_eq!(stats.sample_pool_hits, 1);
-    assert_eq!(stats.sample_pool_misses, 1);
+fn config(max_buffers: usize) -> PoolConfig {
+    PoolConfig::builder().max_buffers(max_buffers).build()
+}
+
+fn pools(max_bytes: usize) -> PoolRegion<TestPools> {
+    TestPools::builder(OverallBudget(max_bytes))
+        .bytes(config(usize::MAX))
+        .samples(config(128))
+        .build()
+        .unwrap_or_else(|error| panic!("test region: {error}"))
+}
+
+struct ForgedPools {
+    bytes: kithara_bufpool::__private::PoolSlot<u8>,
+}
+
+impl HasPool<u8> for ForgedPools {
+    fn __slot(&self) -> &kithara_bufpool::__private::PoolSlot<u8> {
+        &self.bytes
+    }
 }
 
 #[kithara::test]
-fn failed_growth_preserves_buffer_and_budget() {
-    let region = Region::new(RegionConfig::builder().max_bytes(4).build());
-    let byte_pool = region.byte_pool();
-    let mut bytes = byte_pool.get();
+#[should_panic(expected = "pool slot belongs to a different region")]
+fn a_slot_cannot_escape_into_another_region() {
+    let mut escaped = None;
+    let _donor: PoolRegion<()> = PoolRegion::__build(OverallBudget(1024), |context| {
+        escaped = Some(context.slot::<u8>(config(32))?);
+        Ok(())
+    })
+    .unwrap_or_else(|error| panic!("donor region: {error}"));
+    let forged = PoolRegion::__build(OverallBudget(1), |_| {
+        Ok(ForgedPools {
+            bytes: escaped.unwrap_or_else(|| panic!("slot escaped donor build")),
+        })
+    })
+    .unwrap_or_else(|error| panic!("forged region: {error}"));
 
-    bytes.ensure_len(4).unwrap();
+    let _ = forged.get_with_len::<u8>(2);
+}
+
+#[kithara::test]
+fn direct_keys_return_nominal_checked_guards() {
+    let pools = pools(1024);
+
+    let bytes = pools
+        .get_with_len::<u8>(4)
+        .unwrap_or_else(|error| panic!("bytes: {error}"));
+    let samples = pools
+        .get_with_len::<f32>(4)
+        .unwrap_or_else(|error| panic!("samples: {error}"));
+
+    assert_eq!(&*bytes, &[0; 4]);
+    assert_eq!(&*samples, &[0.0; 4]);
+}
+
+#[kithara::test]
+fn byte_growth_exhausts_the_shared_budget_for_samples() {
+    let pools = pools(16);
+    let _bytes = pools
+        .get_with_len::<u8>(16)
+        .unwrap_or_else(|error| panic!("bytes: {error}"));
+
+    assert!(matches!(
+        pools.get_with_len::<f32>(1),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+}
+
+#[kithara::test]
+fn a_slot_cap_rejects_growth_while_global_capacity_remains() {
+    let pools = TestPools::builder(OverallBudget(100))
+        .bytes(
+            PoolConfig::builder()
+                .max_buffers(32)
+                .max_share(Percent(50))
+                .build(),
+        )
+        .samples(config(32))
+        .build()
+        .unwrap_or_else(|error| panic!("test region: {error}"));
+
+    assert!(matches!(
+        pools.get_with_len::<u8>(51),
+        Err(PoolError::PoolBudgetExceeded { .. })
+    ));
+    assert_eq!(pools.stats().allocated_bytes, 0);
+}
+
+#[kithara::test]
+fn two_full_shares_still_compete_for_one_global_cap() {
+    let pools = pools(16);
+    let _samples = pools
+        .get_with_len::<f32>(4)
+        .unwrap_or_else(|error| panic!("samples: {error}"));
+
+    assert!(matches!(
+        pools.get_with_len::<u8>(1),
+        Err(PoolError::OverallBudgetExceeded { .. })
+    ));
+}
+
+#[kithara::test]
+fn failed_growth_and_append_preserve_buffer_and_counters() {
+    let pools = pools(4);
+    let mut bytes = pools
+        .get_with_len::<u8>(4)
+        .unwrap_or_else(|error| panic!("bytes: {error}"));
     bytes.copy_from_slice(&[1, 2, 3, 4]);
-    let allocated = region.stats().allocated_bytes;
+    let capacity = bytes.capacity();
+    let stats = pools.stats();
 
-    assert_eq!(bytes.ensure_len(5), Err(BudgetExhausted));
-    assert_eq!(&bytes[..], &[1, 2, 3, 4]);
-    assert_eq!(region.stats().allocated_bytes, allocated);
-
-    bytes.clear();
-    bytes.ensure_len(4).unwrap();
-    assert_eq!(bytes.len(), 4);
+    assert!(bytes.ensure_len(5).is_err());
+    assert!(bytes.try_extend_from_slice(&[5]).is_err());
+    assert_eq!(&*bytes, &[1, 2, 3, 4]);
+    assert_eq!(bytes.capacity(), capacity);
+    assert_eq!(pools.stats().allocated_bytes, stats.allocated_bytes);
 }
 
 #[kithara::test]
-fn successful_growth_charges_actual_capacity() {
-    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let sample_pool = region.sample_pool();
-    let mut samples = sample_pool.get();
+fn incremental_growth_keeps_amortized_capacity() {
+    let pools = pools(4096);
+    let mut bytes = pools
+        .get_with_len::<u8>(8)
+        .unwrap_or_else(|error| panic!("bytes: {error}"));
+    let initial_capacity = bytes.capacity();
 
-    samples.ensure_len(17).unwrap();
+    bytes
+        .ensure_len(initial_capacity + 1)
+        .unwrap_or_else(|error| panic!("grow bytes: {error}"));
 
-    assert_eq!(
-        region.stats().allocated_bytes,
-        samples.capacity() * size_of::<f32>()
-    );
+    assert!(bytes.capacity() >= initial_capacity.saturating_mul(2));
 }
 
 #[kithara::test]
-fn attach_round_trip_keeps_travelling_charge_balanced() {
-    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let sample_pool = region.sample_pool();
+fn eager_payload_is_a_hit_on_another_thread() {
+    let pools = TestPools::builder(OverallBudget(1024))
+        .bytes(config(32))
+        .samples(
+            PoolConfig::builder()
+                .initial_buffers(1)
+                .initial_capacity(8)
+                .max_buffers(128)
+                .build(),
+        )
+        .build()
+        .unwrap_or_else(|error| panic!("test region: {error}"));
+    let worker_pools = pools.clone();
+    let initial_peak = pools.stats().peak_allocated_bytes;
 
-    let mut samples = sample_pool.get();
-    samples.ensure_len(4).unwrap();
-    let charged = region.stats().allocated_bytes;
+    let buffer = thread::spawn(move || worker_pools.get_with_len::<f32>(8))
+        .join()
+        .unwrap_or_else(|_| panic!("worker panicked"))
+        .unwrap_or_else(|error| panic!("samples: {error}"));
 
-    let inner = samples.into_inner();
-    assert_eq!(region.stats().allocated_bytes, charged);
-    let reattached = sample_pool.attach(inner);
-    assert_eq!(region.stats().allocated_bytes, charged);
-    drop(reattached);
-
-    assert_eq!(region.stats().allocated_bytes, charged);
+    assert!(buffer.capacity() >= 8);
+    assert_eq!(pools.stats().peak_allocated_bytes, initial_peak);
+    drop(buffer);
 }
 
 #[kithara::test]
-fn smaller_ensure_len_keeps_capacity_charged() {
-    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let sample_pool = region.sample_pool();
-    let mut samples = sample_pool.get();
+fn zero_initial_buffers_allocate_no_payload_capacity() {
+    let pools = pools(1024);
 
-    samples.ensure_len(17).unwrap();
-    let capacity = samples.capacity();
-    let allocated = region.stats().allocated_bytes;
-    samples.ensure_len(4).unwrap();
-
-    assert_eq!(samples.len(), 17);
-    assert_eq!(samples.capacity(), capacity);
-    assert_eq!(region.stats().allocated_bytes, allocated);
+    assert_eq!(pools.stats().allocated_bytes, 0);
 }
 
 #[kithara::test]
-fn get_with_budget_overshoot_is_observable() {
-    let region = Region::new(RegionConfig::builder().max_bytes(1).build());
-    let byte_pool = region.byte_pool();
-
-    let bytes = byte_pool.get_with(|buf| buf.resize(2, 0));
-
-    assert!(region.stats().allocated_bytes > 1);
-    assert_eq!(region.stats().budget_overshoots, 1);
-    assert_eq!(byte_pool.stats().budget_overshoots, 1);
-    drop(bytes);
-}
-
-#[kithara::test]
-fn growth_beyond_capacity_amortizes() {
-    let region = Region::new(RegionConfig::builder().max_bytes(1024).build());
-    let sample_pool = region.sample_pool();
-    let mut samples = sample_pool.get();
-
-    samples.ensure_len(16).unwrap();
-    let first_cap = samples.capacity();
-    samples.ensure_len(first_cap + 1).unwrap();
-    assert!(samples.capacity() >= first_cap * 2);
-
-    let doubled = samples.capacity();
-    samples.ensure_len(doubled).unwrap();
-    assert_eq!(samples.capacity(), doubled);
-}
-
-#[kithara::test]
-fn amortized_growth_falls_back_to_exact_fit_under_budget() {
-    let region = Region::new(RegionConfig::builder().max_bytes(6).build());
-    let byte_pool = region.byte_pool();
-    let mut bytes = byte_pool.get();
-
-    bytes.ensure_len(4).unwrap();
-    bytes.ensure_len(6).unwrap();
-
-    assert_eq!(bytes.capacity(), 6);
-    assert_eq!(region.stats().allocated_bytes, 6);
-}
-
-/// Default sample policy trims a returned buffer to 200_000 elements once its
-/// capacity is past twice that.
-const SAMPLE_TRIM_LEN: usize = 200_000;
-
-#[kithara::test]
-fn a_trimmed_return_releases_what_it_gave_back() {
-    let region = Region::new(RegionConfig::default());
-    let sample_pool = region.sample_pool();
-
-    let mut buf = sample_pool.get();
-    buf.ensure_len(SAMPLE_TRIM_LEN * 4).unwrap();
-    let charged = region.stats().allocated_bytes;
-    drop(buf);
+fn invalid_configuration_is_rejected_before_publication() {
+    let cases = [
+        TestPools::builder(OverallBudget(1024))
+            .bytes(
+                PoolConfig::builder()
+                    .max_buffers(32)
+                    .max_share(Percent(101))
+                    .build(),
+            )
+            .samples(config(128))
+            .build(),
+        TestPools::builder(OverallBudget(1024))
+            .bytes(config(32))
+            .samples(
+                PoolConfig::builder()
+                    .initial_buffers(9)
+                    .initial_capacity(1)
+                    .max_buffers(8)
+                    .build(),
+            )
+            .build(),
+        TestPools::builder(OverallBudget(usize::MAX))
+            .bytes(config(32))
+            .samples(
+                PoolConfig::builder()
+                    .initial_buffers(1)
+                    .initial_capacity(usize::MAX)
+                    .max_buffers(128)
+                    .build(),
+            )
+            .build(),
+    ];
 
     assert!(
-        region.stats().allocated_bytes < charged,
-        "a return that shrank the buffer still holds {} of the {charged} bytes it charged",
-        region.stats().allocated_bytes
+        cases
+            .into_iter()
+            .all(|result| matches!(result, Err(PoolError::InvalidConfig { .. })))
     );
 }
 
-#[kithara::test]
-fn cycling_one_oversized_buffer_does_not_drain_the_budget() {
-    let region = Region::new(RegionConfig::default());
-    let sample_pool = region.sample_pool();
+mod aliases {
+    use super::*;
 
-    for _ in 0..64 {
-        let mut buf = sample_pool.get();
-        buf.ensure_len(SAMPLE_TRIM_LEN * 4).unwrap();
+    pub(super) enum FirstTag {}
+    pub(super) enum SecondTag {}
+    pub(super) type First = PoolAlias<FirstTag, f32>;
+    pub(super) type Second = PoolAlias<SecondTag, f32>;
+
+    pool_schema! {
+        pub(super) AliasPools {
+            first: First,
+            second: Second,
+        }
     }
 
-    let held = region.stats().allocated_bytes;
-    assert!(
-        held < SAMPLE_TRIM_LEN * 4 * size_of::<f32>() * 2,
-        "reusing one buffer 64 times charges {held} bytes"
-    );
+    pub(super) fn pools() -> PoolRegion<AliasPools> {
+        AliasPools::builder(OverallBudget(1024))
+            .first(config(32))
+            .second(config(32))
+            .build()
+            .unwrap_or_else(|error| panic!("alias region: {error}"))
+    }
+}
+
+#[kithara::test]
+fn aliases_of_one_item_type_own_distinct_physical_slots() {
+    let pools = aliases::pools();
+    let first = pools
+        .get_with_len::<aliases::First>(4)
+        .unwrap_or_else(|error| panic!("first: {error}"));
+    let second = pools.get::<aliases::Second>();
+
+    assert!(first.capacity() > 0);
+    assert_eq!(second.capacity(), 0);
+}
+
+#[kithara::test]
+fn racing_typed_slots_never_admit_past_the_global_limit() {
+    let pools = pools(64);
+    let barrier = Arc::new(Barrier::new(3));
+
+    let byte_pools = pools.clone();
+    let byte_barrier = Arc::clone(&barrier);
+    let bytes = thread::spawn(move || {
+        byte_barrier.wait();
+        byte_pools.get_with_len::<u8>(64)
+    });
+
+    let sample_pools = pools.clone();
+    let sample_barrier = Arc::clone(&barrier);
+    let samples = thread::spawn(move || {
+        sample_barrier.wait();
+        sample_pools.get_with_len::<f32>(64 / size_of::<f32>())
+    });
+
+    barrier.wait();
+    let bytes = bytes
+        .join()
+        .unwrap_or_else(|_| panic!("byte worker panicked"));
+    let samples = samples
+        .join()
+        .unwrap_or_else(|_| panic!("sample worker panicked"));
+
+    assert_eq!(usize::from(bytes.is_ok()) + usize::from(samples.is_ok()), 1);
+    assert!(pools.stats().allocated_bytes <= pools.stats().max_bytes);
+}
+
+#[kithara::test]
+fn trimmed_returns_release_both_pool_and_region_charges() {
+    let pools = TestPools::builder(OverallBudget(4096))
+        .bytes(config(32))
+        .samples(
+            PoolConfig::builder()
+                .max_buffers(128)
+                .trim_capacity(4)
+                .build(),
+        )
+        .build()
+        .unwrap_or_else(|error| panic!("test region: {error}"));
+    let samples = pools
+        .get_with_len::<f32>(32)
+        .unwrap_or_else(|error| panic!("samples: {error}"));
+    let charged = pools.stats().allocated_bytes;
+
+    drop(samples);
+
+    assert!(pools.stats().allocated_bytes < charged);
 }

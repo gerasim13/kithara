@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{AudioReader, ChunkOutcome, SeekOutcome};
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioSpec;
@@ -49,13 +49,13 @@ struct Run {
     grew: bool,
 }
 
-pub(crate) struct AnalysisTask<B>
+pub(crate) struct AnalysisTask<B, S>
 where
     B: ResamplerBackend,
 {
     reader: Box<dyn AudioReader>,
     cancel: CancelToken,
-    analyzers: Option<TrackAnalyzers<B>>,
+    analyzers: Option<TrackAnalyzers<B, S>>,
     ingest: ring::Reader,
     scratch: Option<SampleBuffer>,
     rate: NonZeroU32,
@@ -68,9 +68,10 @@ where
     run: Option<Run>,
 }
 
-impl<B> AnalysisTask<B>
+impl<B, S> AnalysisTask<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn new(job: Job) -> Self {
         Self {
@@ -113,13 +114,17 @@ where
 
     fn decode(
         &mut self,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> AnalysisStep {
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 let range = FrameRange::from(&chunk.meta);
-                let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token);
+                let Ok(analyzers) = open(&mut self.analyzers, builder, self.rate, &self.token)
+                else {
+                    self.phase = TaskPhase::Done;
+                    return AnalysisStep::Progress;
+                };
                 let before = analyzers.covered_frames();
                 let outcome = analyzers.push(&chunk, detector);
                 if outcome != Ingest::Accepted {
@@ -163,11 +168,15 @@ where
         }
     }
 
-    fn drain(&mut self, builder: &AnalyzerBuilder<B>, detector: Option<&mut Detector>) -> bool {
+    fn drain(
+        &mut self,
+        builder: &AnalyzerBuilder<B, S>,
+        detector: Option<&mut Detector>,
+    ) -> Result<bool, PoolError> {
         let scratch = self
             .scratch
-            .get_or_insert_with(|| builder.sample_pool().get_with(Vec::clear));
-        let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token);
+            .get_or_insert_with(|| builder.pools().get::<f32>());
+        let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token)?;
         let mut detector = detector;
         let mut folded = false;
 
@@ -178,7 +187,7 @@ where
             }
             folded = true;
         }
-        folded
+        Ok(folded)
     }
 
     fn due(&self) -> bool {
@@ -309,7 +318,7 @@ where
 
     fn step(
         &mut self,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> AnalysisStep {
         if self.extent.frames().is_none() {
@@ -328,7 +337,7 @@ where
 
     pub(crate) fn tick(
         &mut self,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> AnalysisStep {
         if self.cancel.is_cancelled() {
@@ -340,7 +349,10 @@ where
         match self.phase {
             TaskPhase::Decode => {
                 let mut detector = detector;
-                let drained = self.drain(builder, detector.as_deref_mut());
+                let Ok(drained) = self.drain(builder, detector.as_deref_mut()) else {
+                    self.phase = TaskPhase::Done;
+                    return AnalysisStep::Progress;
+                };
                 // Re-read: the decode path refines a duration upward as it goes.
                 self.extent.report(self.reader.duration(), self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
@@ -363,14 +375,22 @@ where
     }
 }
 
-fn open<'a, B>(
-    slot: &'a mut Option<TrackAnalyzers<B>>,
-    builder: &AnalyzerBuilder<B>,
+fn open<'a, B, S>(
+    slot: &'a mut Option<TrackAnalyzers<B, S>>,
+    builder: &AnalyzerBuilder<B, S>,
     rate: NonZeroU32,
     token: &AnalysisToken,
-) -> &'a mut TrackAnalyzers<B>
+) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
-    slot.get_or_insert_with(|| builder.build(rate, token.clone()))
+    if let Some(analyzers) = slot {
+        Ok(analyzers)
+    } else {
+        let analyzers = builder.build(rate, token.clone()).inspect_err(|error| {
+            warn!(?error, "analysis: analyzer buffer initialization failed");
+        })?;
+        Ok(slot.insert(analyzers))
+    }
 }

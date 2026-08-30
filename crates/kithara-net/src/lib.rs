@@ -9,6 +9,8 @@ mod observe;
 mod range_response;
 mod resumable;
 mod retry;
+#[cfg(test)]
+mod test_pools;
 mod timeout;
 mod traits;
 mod types;

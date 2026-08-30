@@ -3,12 +3,14 @@ use std::{collections::HashSet, fmt, num::NonZeroUsize, path::Path};
 use kithara::{
     self,
     assets::{
-        AcquisitionResult, AssetResourceState, AssetStore, BytePool, ChunkSink, DiskAssetStore,
-        ProcessCtx, ReadSide, ResourceProcessor, StorageBackend, WriteSide,
+        AcquisitionResult, AssetResourceState, AssetStore, ChunkSink, DiskAssetStore, ProcessCtx,
+        ReadSide, ResourceProcessor, StorageBackend, WriteSide,
     },
     platform::{CancelToken, sync::Arc, time::Duration},
 };
-use kithara_integration_tests::{asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt};
+use kithara_integration_tests::{
+    asset_fixture::PinsIndex, assets_ext::AssetStoreTestExt, bufpool_ext::pools,
+};
 use tempfile::tempdir;
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
@@ -68,8 +70,8 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
 }
 
 fn load_pins(root_dir: &Path) -> HashSet<String> {
-    let disk = DiskAssetStore::new(root_dir, CancelToken::never(), &BytePool::default());
-    PinsIndex::open(&disk, &BytePool::default())
+    let disk = DiskAssetStore::new(root_dir, CancelToken::never());
+    PinsIndex::open(&disk, &pools())
         .and_then(|index| index.load())
         .unwrap_or_default()
 }
@@ -77,7 +79,7 @@ fn load_pins(root_dir: &Path) -> HashSet<String> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
     let dir = tempdir().unwrap();
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -130,7 +132,7 @@ fn disk_resource_state_is_side_effect_free_and_tracks_multiple_files() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
     let dir = tempdir().unwrap();
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -163,7 +165,7 @@ fn disk_resource_state_keeps_active_status_after_handle_cache_eviction() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
     let dir = tempdir().unwrap();
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -193,7 +195,7 @@ fn disk_drop_of_uncommitted_write_handle_does_not_leave_ghost_resource() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
     let dir = tempdir().unwrap();
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -235,7 +237,7 @@ fn disk_open_resource_on_missing_key_does_not_create_ghost_file() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_resource_state_tracks_fail_remove_and_lru_eviction() {
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .cache_capacity(NonZeroUsize::new(3).unwrap())
         .backend(StorageBackend::Memory)
         .layouts(literal_layouts())
@@ -313,7 +315,7 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
     // `_index/pins.bin`: it hydrates its own copy at build time, and its flush
     // hub later republishes that snapshot over the first store's unpin. See
     // `crates/kithara-assets/CONTEXT.md`.
-    let scope_a = AssetStore::builder()
+    let scope_a = AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -356,9 +358,9 @@ fn disk_resource_state_tracks_processing_pins_and_asset_eviction() {
         .store()
         .open_resource_with_ctx(&key_a, None, Some(Arc::clone(&proc_a)))
         .unwrap();
-    let mut processed = Vec::new();
+    let mut processed = pools().get::<u8>();
     reopened.read_into(&mut processed).unwrap();
-    assert_eq!(processed, vec![0x45, 0x75, 0x65]);
+    assert_eq!(&*processed, [0x45, 0x75, 0x65]);
 
     let scope_b = scope_a
         .store()

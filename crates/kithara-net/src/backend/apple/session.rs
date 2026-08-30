@@ -8,7 +8,7 @@ use kithara_apple::foundation::{
     objc::rc::Retained,
     urlsession::{self, DataCompletion, UrlSessionDelegate},
 };
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex, OnceLock},
@@ -19,7 +19,7 @@ use url::Url;
 use super::{
     delegate::{AppleSessionEvents, StreamState, make_delegate},
     request::AppleRequest,
-    response::{AppleDataResponse, completion_result, send_once},
+    response::{AppleDataResponse, ByteBuffers, completion_result, send_once},
     stream::{
         AppleBodyQueue, AppleStreamResponse, StartedStream, wait_for_data, wait_for_stream_head,
     },
@@ -37,19 +37,14 @@ type DataStart = (oneshot::Receiver<DataResult>, AppleTask);
 
 struct DataCompletionSink {
     accept_encoding: AcceptEncodingPolicy,
-    byte_pool: BytePool,
+    buffers: ByteBuffers,
     sender: DataSender,
     url: Url,
 }
 
 impl urlsession::DataTaskCompletion for DataCompletionSink {
     fn complete(&self, completion: DataCompletion<'_>) {
-        let result = completion_result(
-            &completion,
-            &self.byte_pool,
-            self.accept_encoding,
-            &self.url,
-        );
+        let result = completion_result(&completion, &self.buffers, self.accept_encoding, &self.url);
         send_once(&self.sender, result);
     }
 }
@@ -70,7 +65,7 @@ struct SharedSession {
 
 #[derive(Clone)]
 pub(crate) struct AppleSession {
-    byte_pool: BytePool,
+    buffers: ByteBuffers,
     connection_metrics: ConnectionMetrics,
     shared: SharedSession,
     accept_encoding: String,
@@ -79,14 +74,20 @@ pub(crate) struct AppleSession {
 }
 
 impl AppleSession {
-    pub(crate) fn new(options: &NetOptions, connection_metrics: ConnectionMetrics) -> Self {
+    pub(crate) fn new<S>(
+        options: &NetOptions,
+        pools: PoolRegion<S>,
+        connection_metrics: ConnectionMetrics,
+    ) -> Self
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         let shared = shared_session(options);
         let accept_encoding = accept_encoding_value(options.compression);
-        let byte_pool = options.byte_pool.clone();
 
         Self {
             accept_encoding,
-            byte_pool,
+            buffers: ByteBuffers::new(pools),
             connection_metrics,
             shared,
             body_queue_capacity: options.body_queue_capacity,
@@ -114,7 +115,7 @@ impl AppleSession {
         let completion: Arc<dyn urlsession::DataTaskCompletion> = Arc::new(DataCompletionSink {
             accept_encoding,
             url,
-            byte_pool: self.byte_pool.clone(),
+            buffers: self.buffers.clone(),
             sender: Arc::clone(&sender),
         });
 
@@ -140,7 +141,7 @@ impl AppleSession {
             task.clone(),
             self.body_queue_capacity,
             self.body_queue_resume_at,
-            self.byte_pool.clone(),
+            self.buffers.clone(),
         ));
         let task_id = task.id();
         self.shared
@@ -259,36 +260,34 @@ impl AppleTask {
 #[cfg(test)]
 mod tests {
     use kithara_apple::foundation::ns::NSData;
-    use kithara_bufpool::ByteBudget;
     use kithara_test_utils::kithara;
 
     use super::{super::response::copy_data, *};
 
     #[kithara::test(native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {
-        let pool = BytePool::with_byte_budget(usize::MAX, 0, ByteBudget(64));
-        let options = NetOptions::builder().byte_pool(pool.clone()).build();
-        let session = AppleSession::new(&options, ConnectionMetrics::default());
+        let pools = crate::test_pools::pools(64);
+        let options = NetOptions::default();
+        let session = AppleSession::new(&options, pools.clone(), ConnectionMetrics::default());
         let data = NSData::with_bytes(b"abc");
 
-        let bytes = copy_data(&data, &session.byte_pool).expect("copy into configured pool");
+        let bytes = copy_data(&data, &session.buffers).expect("copy into configured pool");
         assert_eq!(&bytes[..], b"abc");
-        assert!(pool.allocated_bytes() > 0);
+        assert!(pools.stats().allocated_bytes > 0);
+        let ptr = bytes.as_ptr();
         drop(bytes);
 
-        let before = pool.stats();
-        let bytes = copy_data(&data, &session.byte_pool).expect("reuse configured pool");
+        let bytes = copy_data(&data, &session.buffers).expect("reuse configured pool");
         assert_eq!(&bytes[..], b"abc");
-        let after = pool.stats();
-        assert!(after.home_hits + after.steal_hits > before.home_hits + before.steal_hits);
+        assert_eq!(bytes.as_ptr(), ptr);
     }
 
     #[kithara::test(native, flash(false))]
     fn response_copy_reports_byte_budget_exhaustion() {
-        let pool = BytePool::with_byte_budget(usize::MAX, 0, ByteBudget(1));
+        let buffers = ByteBuffers::new(crate::test_pools::pools(1));
         let data = NSData::with_bytes(b"ab");
 
-        let error = copy_data(&data, &pool).expect_err("budget must reject two-byte body");
-        assert!(matches!(error, NetError::Network(message) if message == "byte budget exhausted"));
+        let error = copy_data(&data, &buffers).expect_err("budget must reject two-byte body");
+        assert!(matches!(error, NetError::Network(message) if message.contains("budget")));
     }
 }

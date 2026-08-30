@@ -22,7 +22,7 @@ use crate::{
 /// Writer (Pending) phase of a leased resource. Pins the asset while alive,
 /// records bytes + updates the live mirror on `commit`, and removes the partial
 /// resource if dropped without committing.
-pub struct LeaseWriter<W: WriteSide, L> {
+pub struct LeaseWriter<W, L> {
     _lease: L,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     inner: W,
@@ -56,7 +56,7 @@ impl<W: WriteSide, L> LeaseWriter<W, L> {
 /// Reader (Ready) phase of a leased resource. Pins the asset while any clone is
 /// alive; read-only. Carries the write-side machinery (`byte_recorder`,
 /// `remove`) so [`reactivate`](ReadSide::reactivate) can rebuild a full writer.
-pub struct LeaseReader<R: ReadSide, L> {
+pub struct LeaseReader<R, L> {
     lease: L,
     events: LeaseEvents,
     byte_recorder: Option<Arc<dyn ByteRecorder>>,

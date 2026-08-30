@@ -21,9 +21,7 @@ fn byte_encoding_reports_the_missing_backend() {
 
 #[test]
 fn a_codec_whose_backend_is_absent_is_unsupported() {
-    let error = OfflineEncoder
-        .packaged_frame_samples(AudioCodec::Flac)
-        .expect_err("no FFmpeg, no FLAC");
+    let error = OfflineEncoder::frame_samples(AudioCodec::Flac).expect_err("no FFmpeg, no FLAC");
 
     assert!(matches!(error, EncodeError::UnsupportedCodec(_)), "{error}");
 }

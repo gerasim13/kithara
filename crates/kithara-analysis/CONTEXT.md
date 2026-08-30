@@ -14,7 +14,9 @@ publication remain in `kithara-audio`; playback scheduling and effects remain in
 
 The crate owns analysis state, scheduling, waveform/beat DSP, and pure versioned
 bytes. It does not own `AssetStore` I/O, cache-key policy, or eviction: the
-application persists and reads the composite `TrackAnalysis` bytes.
+application persists and reads the composite `TrackAnalysis` bytes. The
+caller-owned `Vec<u8>` writer remains available, while `write_to_buffer` reports
+checked `ByteBuffer` growth failures through `BlobError`.
 
 `BeatArtifact` is identity-free detector output, not a live beat grid. The only
 live grid contract is `kithara-warp::BeatGrid`, whose owning Track/Player
@@ -26,11 +28,14 @@ substitute zero or reinterpret confidence as timing error.
 
 ## Track analysis
 
-`AnalyzerBuilder<B>` is the public selector. `new(SamplePool)` requires the
-caller to inject the shared sample pool; `with_waveform`, `with_beat` — which
+`AnalyzerBuilder<B, S>` is the public selector. `new(PoolRegion<S>)` requires
+the caller to inject its typed region, and `S: HasPool<f32>` makes sample-pool
+registration a compile-time requirement. `with_waveform`, `with_beat` - which
 requires `B: Default` — and `with_beat_config` select analyzers, and `is_empty()`
-lets callers skip scheduling a pass entirely. `TrackAnalyzers` is the
-crate-private per-track set; each analyzer is fed every decoded chunk once.
+lets callers skip scheduling a pass entirely. `TrackAnalyzers<B, S>` is the
+crate-private per-track set; it retains one clone of the facade because later
+waveform windows and beat runs acquire guards as coverage arrives. Each
+analyzer is fed every decoded chunk once.
 
 `TrackAnalysis` is the public snapshot: caller token, revision, rate axis,
 extent, coverage, per-artifact fingerprint, waveform, and beat. It is
@@ -56,7 +61,9 @@ stored beat results. The rate axis is named when the pass opens, not discovered
 from the first chunk: `AnalysisWorker::analyze` takes it, the caller opens its
 reader onto the same one, and a range on another axis is refused rather than
 redefining what a frame number means. Analyzers are built lazily by whichever
-range arrives first, so a pass that covers nothing allocates nothing.
+range arrives first, so a pass that covers nothing allocates nothing. A checked
+scratch-allocation failure ends that pass and closes its result channel without
+publishing a value.
 
 `Coverage` is the canonical record of which source ranges a pass has observed,
 kept as sorted, disjoint, non-adjacent runs; `TrackAnalyzers` owns it and every
@@ -132,7 +139,7 @@ Defaults are 1024-frame mono resampler blocks, 22 050 Hz detector input,
 30-second detector windows with 2 seconds of overlap, and
 `ResamplerQuality::High`. The analyzer never stores whole-track source PCM: it
 downmixes to mono and keeps covered spans at detector rate in buffers borrowed
-from the caller-injected shared `SamplePool`.
+from the caller's typed region.
 
 The contiguous run, not the pass, owns the sequential `MonoStream`. A range
 decoded later cannot be pushed through the stream that produced an earlier one:
@@ -146,15 +153,19 @@ orders within the resampler's splice tolerance.
 A run reaching `detector_min_window_seconds` is detected immediately, then
 re-detected when its full window fills. Once the extent is known, the artifact is
 spread across it at its own tempo while retaining detected marker positions. Run
-mono comes from the injected `SamplePool`; all runs share a four-detector-window
-mono budget. Detection consumes a run front-first. Reclaimed spans remain
-covered for every other consumer but are reported as no longer beat-analyzable.
-Grid-cleanup scratch uses that same injected pool; it never constructs another.
+mono comes from sample guards acquired through `TrackAnalyzers`; the logical run
+set retains at most four detector windows while every physical allocation still
+competes under the region-wide hard byte budget. Detection consumes a run
+front-first. Reclaimed spans remain covered for every other consumer but are
+reported as no longer beat-analyzable. Downmix and grid-cleanup scratch stay as
+guards for the pass lifetime; no lower component constructs or stores another
+pool facade.
 
 `AnalysisWorker` is the public handle over the private `AnalysisRunner` and one
-long-lived `AnalysisNode<B>` (absent on wasm32). The backend type is consumed by
-`new` and stays inside that node rather than leaking into the handle. The worker neither constructs nor
-shares the playback scheduler. `open` gives every pass a child of the worker's
+long-lived `AnalysisNode<B, S>` (absent on wasm32). The backend and pool-schema
+types are consumed by `new` and stay inside that node rather than leaking into
+the handle. The worker neither constructs nor shares the playback scheduler.
+`open` gives every pass a child of the worker's
 job scope; callers may clone that pass token for the reader before submitting
 the pass. Results arrive on a `watch` channel: waveform first, then waveform plus
 beat when configured; on failure or cancellation the sender drops without a

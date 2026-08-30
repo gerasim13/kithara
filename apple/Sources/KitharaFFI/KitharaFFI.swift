@@ -2265,10 +2265,14 @@ open class FfiAssetStore: FfiAssetStoreProtocol, @unchecked Sendable {
     }
     /**
      * Create an asset store rooted at `root` with a snapshot of `layouts`.
+     *
+     * # Errors
+     *
+     * Returns [`FfiError::Internal`] when the buffer pools cannot be initialized.
      */
-public convenience init(root: String?, layouts: FfiAssetLayoutRegistry) {
+public convenience init(root: String?, layouts: FfiAssetLayoutRegistry)throws  {
     let handle =
-        try! rustCall() {
+        try rustCallWithError(FfiConverterTypeFfiError_lift) {
     uniffi_kithara_ffi_fn_constructor_ffiassetstore_new(
         FfiConverterOptionString.lower(root),
         FfiConverterTypeFfiAssetLayoutRegistry_lower(layouts),$0
@@ -3576,7 +3580,7 @@ public struct FfiItemConfig: Equatable, Hashable {
      * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
      * `https://…/master.m3u8`) **or** an absolute local file path
      * (`/Users/…/song.flac`). Parsed via
-     * [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+     * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
      * to [`kithara::play::ResourceConfig::for_src`].
      */
     public let url: String
@@ -3614,7 +3618,7 @@ public struct FfiItemConfig: Equatable, Hashable {
          * Audio source. Accepts a network URL (`https://example.com/song.mp3`,
          * `https://…/master.m3u8`) **or** an absolute local file path
          * (`/Users/…/song.flac`). Parsed via
-         * [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+         * [`kithara::play::ResourceSrc::parse`] at insert time, then passed
          * to [`kithara::play::ResourceConfig::for_src`].
          */url: String,
         /**
@@ -5403,7 +5407,7 @@ public func FfiConverterTypeFfiDecoderChangeCause_lower(_ value: FfiDecoderChang
 
 
 /**
- * FFI-friendly error type bridging playback failures into platform bindings.
+ * FFI-friendly error type bridging native failures into platform bindings.
  */
 public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
@@ -8656,7 +8660,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_kithara_ffi_checksum_constructor_ffiassetlayoutregistry_new() != 47006) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 1980) {
+    if (uniffi_kithara_ffi_checksum_constructor_ffiassetstore_new() != 23050) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_kithara_ffi_checksum_constructor_fficipher_new() != 23745) {

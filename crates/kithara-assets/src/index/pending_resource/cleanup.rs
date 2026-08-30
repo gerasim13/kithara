@@ -49,7 +49,7 @@ impl StdError for PendingResourceCleanupError {
     }
 }
 
-impl PendingResource {
+impl<S> PendingResource<S> {
     pub(super) fn record_cleanup_failure(
         &self,
         key: &ResourceKey,

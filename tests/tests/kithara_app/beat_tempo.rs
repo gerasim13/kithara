@@ -8,13 +8,15 @@ use std::num::NonZeroU32;
 
 use kithara::{
     analysis::{BeatAnalysisConfig, BeatArtifact},
-    bufpool::{BytePool, SamplePool},
+    assets::StorageBackend,
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
-    prelude::ResourceConfig,
+    prelude::{ResourceConfig, ResourceSrc},
 };
-use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
-use kithara_integration_tests::memory_asset_store;
+use kithara_app::{
+    pools::{AppPools, AppStore, build},
+    waveform::{TrackAnalysis, TrackAnalysisRunner},
+};
 use num_traits::ToPrimitive;
 
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
@@ -59,13 +61,15 @@ fn records() -> Vec<(String, f64)> {
 }
 
 async fn analyse(path: &str) -> TrackAnalysis {
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-    );
-    let src = ResourceConfig::parse_src(path)
+    let pools = build().expect("app pools");
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let src = ResourceSrc::parse(path)
         .unwrap_or_else(|error| panic!("{path} must name a source: {error}"));
-    let config = ResourceConfig::for_src(src)
-        .store(memory_asset_store())
+    let store = AppStore::builder(pools.clone())
+        .backend(StorageBackend::Memory)
+        .build();
+    let config = ResourceConfig::<AppPools>::for_src(src)
+        .store(store)
         .worker(worker)
         .build();
 
@@ -73,7 +77,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         &CancelToken::never(),
         Consts::BUCKETS,
         BeatAnalysisConfig::default(),
-        SamplePool::default(),
+        pools,
     );
     let mut rx = runner.analyze(config, "integration-track".into(), RATE, drop);
 

@@ -15,12 +15,17 @@ use kithara_integration_tests::{
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
 
+use crate::bufpool_ext::TestPools;
+
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
 const MAX_BLOCKS: usize = 1024;
 
-fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig {
+fn with_autoplay(
+    mut config: QueueConfig<TestPools>,
+    should_autoplay: bool,
+) -> QueueConfig<TestPools> {
     config.should_autoplay = should_autoplay;
     config
 }
@@ -58,7 +63,11 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 
 /// Render until either EOF count or block budget is reached. Returns the
 /// concatenated stereo-interleaved PCM.
-fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usize) -> Vec<f32> {
+fn render_loop(
+    queue: &Queue<TestPools>,
+    harness: &OfflinePlayerHarness,
+    block_budget: usize,
+) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
         let _ = queue.tick();

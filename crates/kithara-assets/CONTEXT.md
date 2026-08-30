@@ -5,12 +5,17 @@ Contracts and invariants for kithara-assets; the README is the overview.
 ## Storage backend
 
 `StorageBackend` selects where committed bytes live: `Memory` (dies with the process) or
-`Disk { root }`. `AssetStore::builder()` with no `backend` gets a fresh unique temp directory on
+`Disk { root }`. `AssetStore::builder(pools)` requires an application-owned `PoolRegion<S>`;
+with no `backend` it gets a fresh unique temp directory on
 native; wasm ignores the argument and is always in-memory. Capabilities come from the base store
 and gate every decorator per call: `DiskAssetStore` reports
 `Capabilities::all()`, `MemAssetStore` only `CACHE | PROCESSING`. Eviction and lease/pin logic are
 therefore inert on a memory store, where `max_bytes` is enforced by the cache instead (see "Memory
 byte bound").
+
+`S` is a closed pool schema with `HasPool<u8>`. `AssetStore<S>` keeps a cheap clone of the region
+and obtains every growable byte buffer through that facade. Region clones share the same hard
+overall budget; there is no global pool, implicit default, or per-component fallback allocation.
 
 ## Key mapping (normative)
 
@@ -120,7 +125,7 @@ shared resource.
 
 The store is **not** generic over a processing context. Processing travels per acquire as
 `ProcessCtx = Arc<dyn ResourceProcessor>`; `None` is identity passthrough. That is what lets one
-non-generic `AssetStore` serve plain (file) and decrypting (HLS) scopes with no second store
+`AssetStore<S>` serve plain (file) and decrypting (HLS) scopes with no second store
 instance and no second `_index/` set. There is no build-time `process_fn` and no AES primitive in
 this crate, only the trait. `ResourceProcessor` is implemented by consumers (HLS
 `DecryptProcessor`): `identity() -> &[u8]` is the immutable cache identity (e.g. `key||iv`);

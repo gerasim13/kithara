@@ -13,7 +13,7 @@ extension IntegrationRegressionsIOS {
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let player = KitharaPlayer(config: .init(store: try AssetStore(root: cacheURL.path)))
         let events = RepeatModeEvents()
         let cancellable = player.eventPublisher.sink { event in
             if case let .repeatModeChanged(mode) = event {

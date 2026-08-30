@@ -1,9 +1,13 @@
 use kithara_assets::ResourceKey;
+use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 
 use super::HlsVariant;
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Returns evicted `seg_idx` (`-1` for init), or `None` if `key` doesn't belong to this variant.
     /// State flips `Loaded -> Missing`; queue reseeding is the caller's job
     /// (see `HlsCoord::broadcast_eviction` for resident reader sessions;

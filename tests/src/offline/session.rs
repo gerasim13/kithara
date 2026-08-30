@@ -5,6 +5,7 @@ use std::{
 
 use kithara::{
     audio::ConsumerWakeMode,
+    bufpool::HasPool,
     host::testing::GraphSession,
     platform::{
         sync::{Arc, Mutex, mpsc},
@@ -20,6 +21,7 @@ use ringbuf::{
 use tracing::warn;
 
 use super::backend::{OfflineBackend, OfflineConfig};
+use crate::bufpool_ext::TestPools;
 
 pub const OFFLINE_BLOCK_FRAMES: usize = 512;
 pub const OFFLINE_PARK_MS: u64 = 10;
@@ -45,16 +47,16 @@ const ENDPOINT_SLACK_SECS: f64 = 0.5;
 /// broken cadence (extra blocks per park) overshoots the ceiling anyway.
 #[must_use]
 pub fn offline_gain_window(window_secs: f64) -> RangeInclusive<f64> {
-    let default_rate = GraphSession::<OfflineBackend>::DEFAULT_SAMPLE_RATE;
+    let default_rate = GraphSession::<OfflineBackend, TestPools>::DEFAULT_SAMPLE_RATE;
     let block_frames = f64::from(u32::try_from(OFFLINE_BLOCK_FRAMES).unwrap_or(u32::MAX));
     let park_ms = f64::from(u32::try_from(OFFLINE_PARK_MS).unwrap_or(u32::MAX));
     let rate = (block_frames / f64::from(default_rate)) / (park_ms / 1_000.0);
     GAIN_FLOOR_SECS..=(rate * (window_secs + ENDPOINT_SLACK_SECS))
 }
 
-enum OfflineMsg {
+enum OfflineMsg<S> {
     Cmd {
-        cmd: Cmd,
+        cmd: Cmd<S>,
         reply_tx: mpsc::Sender<Reply>,
     },
     Render {
@@ -64,12 +66,15 @@ enum OfflineMsg {
     Shutdown,
 }
 
-pub struct OfflineSession {
-    cmd_tx: Mutex<mpsc::Sender<OfflineMsg>>,
+pub struct OfflineSession<S = TestPools> {
+    cmd_tx: Mutex<mpsc::Sender<OfflineMsg<S>>>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
-impl OfflineSession {
+impl<S> OfflineSession<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     /// Auto-render mode: the worker periodically pulls one block of
     /// audio through the graph so playback advances even when the test
     /// thread never calls [`render`](Self::render).
@@ -90,7 +95,7 @@ impl OfflineSession {
     /// into [`kithara::play::EngineConfig::session`] and never calls
     /// [`render`](Self::render) directly.
     #[must_use]
-    pub fn arc_auto() -> Arc<dyn SessionDispatcher> {
+    pub fn arc_auto() -> Arc<dyn SessionDispatcher<S>> {
         Arc::new(Self::new())
     }
 
@@ -100,12 +105,12 @@ impl OfflineSession {
     /// `Arc<OfflineSession>` so they can keep both the dyn handle and
     /// the render API).
     #[must_use]
-    pub fn arc_manual() -> Arc<dyn SessionDispatcher> {
+    pub fn arc_manual() -> Arc<dyn SessionDispatcher<S>> {
         Arc::new(Self::new_manual())
     }
 
     fn spawn(auto_render: bool) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg<S>>();
         let handle = spawn_named("kithara-engine-offline-instance", move || {
             offline_session_thread(&cmd_rx, auto_render);
         });
@@ -143,7 +148,10 @@ impl OfflineSession {
     }
 }
 
-impl Default for OfflineSession {
+impl<S> Default for OfflineSession<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn default() -> Self {
         Self::new()
     }
@@ -170,7 +178,7 @@ impl MixTapProbe {
     }
 }
 
-impl Drop for OfflineSession {
+impl<S> Drop for OfflineSession<S> {
     fn drop(&mut self) {
         // `Shutdown` lands on the engine-aware command channel; `run_auto`/
         // `run_manual` block on its arrival event (`recv`/`recv_timeout`),
@@ -184,14 +192,17 @@ impl Drop for OfflineSession {
     }
 }
 
-impl SessionDispatcher for OfflineSession {
+impl<S> SessionDispatcher<S> for OfflineSession<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         ConsumerWakeMode::ImmediateOffRt
     }
 
     /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
     #[kithara::allow_block]
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx
             .lock()
@@ -214,8 +225,11 @@ fn start_stream_offline(
     ctx.start_stream(config).map_err(|err| err.to_string())
 }
 
-fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool) {
-    let mut state = GraphSession::<OfflineBackend>::new(start_stream_offline);
+fn offline_session_thread<S>(cmd_rx: &mpsc::Receiver<OfflineMsg<S>>, auto_render: bool)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let mut state = GraphSession::<OfflineBackend, S>::new(start_stream_offline);
     if auto_render {
         run_auto(&mut state, cmd_rx);
     } else {
@@ -223,7 +237,12 @@ fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool
     }
 }
 
-fn run_manual(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
+fn run_manual<S>(
+    state: &mut GraphSession<OfflineBackend, S>,
+    cmd_rx: &mpsc::Receiver<OfflineMsg<S>>,
+) where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     for msg in cmd_rx.iter() {
         match msg {
             OfflineMsg::Cmd { cmd, reply_tx } => {
@@ -239,7 +258,10 @@ fn run_manual(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<
     }
 }
 
-fn run_auto(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
+fn run_auto<S>(state: &mut GraphSession<OfflineBackend, S>, cmd_rx: &mpsc::Receiver<OfflineMsg<S>>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     loop {
         // Block on the next command, but no longer than one render budget: a
         // command (or `Shutdown`) wakes us at once through the engine-aware
@@ -264,7 +286,10 @@ fn run_auto(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<Of
     }
 }
 
-fn render_block(state: &mut GraphSession<OfflineBackend>, frames: usize) -> Vec<f32> {
+fn render_block<S>(state: &mut GraphSession<OfflineBackend, S>, frames: usize) -> Vec<f32>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     let Some(ctx) = state.ctx_mut() else {
         return Vec::new();
     };
@@ -283,7 +308,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn offline_session_requests_immediate_off_rt_consumer_wakes() {
-        let session = OfflineSession::new_manual();
+        let session = OfflineSession::<TestPools>::new_manual();
 
         assert_eq!(
             session.consumer_wake_mode(),

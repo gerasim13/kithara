@@ -7,7 +7,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::HasPool;
 use kithara_decode::{
     DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, DecoderSeekOutcome,
 };
@@ -19,6 +19,11 @@ use kithara_resampler::{
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
+
+#[path = "../src/test_pools.rs"]
+mod test_pools;
+
+use test_pools::{TestPools, default_pools};
 
 const CHANNELS: u16 = 2;
 const FRAMES: usize = 4;
@@ -63,7 +68,13 @@ struct AdapterProbeBackend;
 impl ResamplerBackend for AdapterProbeBackend {
     type Resampler = AdapterProbeResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         Ok(AdapterProbeResampler {
             channels: settings.channels,
             mode: settings.mode,
@@ -139,7 +150,13 @@ struct CaptureProbeBackend(Captured);
 impl ResamplerBackend for CaptureProbeBackend {
     type Resampler = CaptureProbeResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         Ok(CaptureProbeResampler {
             captured: Arc::clone(&self.0),
             channels: settings.channels,
@@ -221,7 +238,13 @@ struct DelayedProbeBackend;
 impl ResamplerBackend for DelayedProbeBackend {
     type Resampler = DelayedProbeResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         Ok(DelayedProbeResampler {
             channels: settings.channels,
             has_pending: false,
@@ -458,12 +481,10 @@ fn resampler_never_sees_a_sample_the_file_poisoned() {
 }
 
 #[kithara::test(native, flash(false))]
-fn decoder_factory_uses_configured_sample_pool() {
-    let sample_pool = SamplePool::new(4, 4_096);
-    let config: DecoderConfig = DecoderConfig::builder()
-        .byte_pool(BytePool::new(4, 4_096))
-        .sample_pool(sample_pool.clone())
-        .build();
+fn decoder_factory_uses_configured_pool_region() {
+    let pools = default_pools();
+    let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+        DecoderConfig::builder().pools(pools.clone()).build();
     let media_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
@@ -472,14 +493,14 @@ fn decoder_factory_uses_configured_sample_pool() {
         DecoderFactory::create_from_media_info(Cursor::new(test_wav()), &media_info, config)
             .expect("decoder builds");
 
-    assert_eq!(sample_pool.allocated_bytes(), 0);
+    assert_eq!(pools.stats().allocated_bytes, 0);
     let chunk: AudioChunk = decoder
         .next_chunk()
         .expect("next chunk")
         .try_into()
         .expect("decoded chunk");
     assert!(!chunk.samples.is_empty());
-    assert!(sample_pool.allocated_bytes() > 0);
+    assert!(pools.stats().allocated_bytes > 0);
 }
 
 fn decoder_with_resampler<B>(
@@ -505,8 +526,7 @@ where
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
     let config = DecoderConfig::builder()
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
+        .pools(default_pools())
         .resampler(
             DecoderResamplerConfig::builder()
                 .target_sample_rate(target_rate)

@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 
 use super::{
@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub struct AnalyzerBuilder<B>
+pub struct AnalyzerBuilder<B, S>
 where
     B: ResamplerBackend,
 {
@@ -24,28 +24,33 @@ where
     waveform: waveform::Config,
     beat_config: Option<BeatAnalysisConfig<B>>,
     #[field(get, vis = "pub(crate)")]
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
 }
 
-impl<B> AnalyzerBuilder<B>
+impl<B, S> AnalyzerBuilder<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     /// Starts an analyzer configuration with caller-owned pooled storage.
     #[must_use]
-    pub fn new(sample_pool: SamplePool) -> Self {
+    pub fn new(pools: PoolRegion<S>) -> Self {
         Self {
             beat: Config::default(),
             waveform: waveform::Config::default(),
             beat_config: None,
-            sample_pool,
+            pools,
         }
     }
 
-    pub(crate) fn build(&self, rate: NonZeroU32, token: AnalysisToken) -> TrackAnalyzers<B> {
-        TrackAnalyzers {
-            beat: Config::build(&self.beat, rate, &self.sample_pool),
-            waveform: waveform::build(&self.waveform, rate, &self.sample_pool),
+    pub(crate) fn build(
+        &self,
+        rate: NonZeroU32,
+        token: AnalysisToken,
+    ) -> Result<TrackAnalyzers<B, S>, PoolError> {
+        Ok(TrackAnalyzers {
+            beat: Config::build(&self.beat, rate, &self.pools),
+            waveform: waveform::build(&self.waveform, rate, &self.pools)?,
             coverage: Coverage::default(),
             fingerprint: self.fingerprint(),
             extent: None,
@@ -53,7 +58,8 @@ where
             settled: false,
             source_sample_rate: rate,
             token,
-        }
+            pools: self.pools.clone(),
+        })
     }
 
     /// What this configuration produces, per artifact. The two tags are
@@ -83,7 +89,7 @@ where
 
     pub(crate) fn take_detector(&mut self) -> Option<beat::Detector> {
         let beat_enabled = !Config::is_empty(&self.beat);
-        let detector = Config::take_detector(&mut self.beat, &self.sample_pool);
+        let detector = Config::take_detector(&mut self.beat, &self.pools);
         if beat_enabled && detector.is_none() {
             self.beat_config = None;
         }
@@ -141,7 +147,6 @@ where
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_platform::sync::Arc;
     use kithara_resampler::{NoResamplerBackend, rubato::RubatoBackend};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -156,6 +161,7 @@ mod tests {
         BeatState,
         beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats},
         coverage::FrameRange,
+        test_pools::{TestPools, pools, sample_buffer},
     };
 
     fn spec() -> AudioSpec {
@@ -174,7 +180,7 @@ mod tests {
                 frame_offset: at,
                 ..Default::default()
             },
-            SamplePool::default().attach(samples),
+            sample_buffer(&samples),
         )
     }
 
@@ -191,10 +197,11 @@ mod tests {
         Box::new(mock)
     }
 
-    fn waveform_pass(buckets: usize) -> TrackAnalyzers<NoResamplerBackend> {
-        AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+    fn waveform_pass(buckets: usize) -> TrackAnalyzers<NoResamplerBackend, TestPools> {
+        AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
             .with_waveform(buckets)
             .build(spec().sample_rate, "track-a".into())
+            .expect("waveform buffers fit the test region")
     }
 
     #[kithara::test(native, flash(false))]
@@ -209,11 +216,13 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_beat_pass_publishes_both_artifacts_at_once() {
-        let mut builder = AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+        let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
             .with_waveform(8)
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
-        let mut analyzers = builder.build(spec().sample_rate, "track-a".into());
+        let mut analyzers = builder
+            .build(spec().sample_rate, "track-a".into())
+            .expect("analysis buffers fit the test region");
         analyzers.push(&chunk(8192, 0), detector.as_mut());
 
         let snapshot = analyzers.snapshot(detector.as_mut(), true);
@@ -253,7 +262,7 @@ mod tests {
                 frame_offset: 0,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![0.0_f32; 2048]),
+            sample_buffer(&vec![0.0_f32; 2048]),
         );
         assert_eq!(analyzers.push(&foreign, None), Ingest::ForeignRate);
         assert_eq!(
@@ -271,9 +280,10 @@ mod tests {
     fn a_pass_keeps_the_axis_it_was_opened_on() {
         // Opened at 48 kHz; the reader turns out to decode at 44.1 kHz.
         let axis = NonZeroU32::new(48_000).expect("test rate is non-zero");
-        let mut analyzers = AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+        let mut analyzers = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
             .with_waveform(8)
-            .build(axis, "track-a".into());
+            .build(axis, "track-a".into())
+            .expect("analysis buffers fit the test region");
 
         assert_eq!(
             analyzers.push(&chunk(8192, 0), None),
@@ -318,7 +328,7 @@ mod tests {
     fn a_run_is_sized_by_the_window_the_detector_really_uses() {
         let rate = NonZeroU32::new(44_100).unwrap_or(NonZeroU32::MIN);
         let sized = |window, overlap| {
-            AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
                 .with_beat_config(
                     BeatAnalysisConfig::builder()
                         .resampler_backend(NoResamplerBackend)
@@ -341,7 +351,7 @@ mod tests {
             "a window of nothing is one second, and takes no overlap with it"
         );
         assert_eq!(
-            AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).run_frames(rate),
+            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).run_frames(rate),
             None,
             "a pass with no beat configuration names no window"
         );
@@ -402,12 +412,14 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_snapshot_carries_the_token_its_pass_was_opened_with() {
-        let mut first = AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+        let mut first = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-a".into());
-        let mut second = AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+            .build(spec().sample_rate, "track-a".into())
+            .expect("analysis buffers fit the test region");
+        let mut second = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
             .with_waveform(8)
-            .build(spec().sample_rate, "track-b".into());
+            .build(spec().sample_rate, "track-b".into())
+            .expect("analysis buffers fit the test region");
         first.push(&chunk(8192, 0), None);
         second.push(&chunk(8192, 0), None);
 
@@ -418,10 +430,11 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_waveform_resolution_change_leaves_the_beat_fingerprint_alone() {
         let fingerprint = |buckets: usize| {
-            AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+            AnalyzerBuilder::<RubatoBackend, _>::new(pools())
                 .with_waveform(buckets)
                 .with_beat()
                 .build(spec().sample_rate, "track-a".into())
+                .expect("analysis buffers fit the test region")
                 .snapshot(None, false)
                 .fingerprint()
                 .clone()
@@ -443,11 +456,13 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_grid_is_provisional_until_the_extent_is_covered() {
-        let mut builder = AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+        let mut builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
             .with_waveform(8)
             .with_beat_detector(beat_detector(), GridParams::default());
         let mut detector = builder.take_detector();
-        let mut analyzers = builder.build(spec().sample_rate, "track-a".into());
+        let mut analyzers = builder
+            .build(spec().sample_rate, "track-a".into())
+            .expect("analysis buffers fit the test region");
         analyzers.push(&chunk(8192, 0), detector.as_mut());
 
         let early = analyzers.snapshot(detector.as_mut(), false);

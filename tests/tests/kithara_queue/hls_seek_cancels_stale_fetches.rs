@@ -15,7 +15,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -25,6 +25,8 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -96,7 +98,7 @@ async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
 /// on the virtual clock, so the scheduler poll loop never cycles to observe the
 /// seek-epoch bump and `kithara_hls_probe::seek_epoch_reset` never fires.
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -108,21 +110,15 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    Arc<Queue<TestPools>>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -134,9 +130,13 @@ fn build_queue_with_tick(
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .max_concurrent(Consts::MAX_CONCURRENT)
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .max_concurrent(Consts::MAX_CONCURRENT)
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
@@ -192,18 +192,17 @@ async fn hls_seek_near_end_skips_prefix(#[case] backend: DecoderBackend) {
 
     let mut rx = queue.subscribe();
 
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("ResourceConfig::parse_src"),
-    )
-    .downloader(downloader.clone())
-    .store(store)
-    .initial_abr_mode(AbrMode::Auto(None))
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .build();
+    let cfg =
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("ResourceSrc::parse"))
+            .downloader(downloader.clone())
+            .store(store)
+            .initial_abr_mode(AbrMode::Auto(None))
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
 
     let track_id = queue
         .append(TrackSource::Config(Box::new(cfg)))

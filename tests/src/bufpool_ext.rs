@@ -1,14 +1,31 @@
-use kithara::bufpool::{Pool, Reuse};
+use kithara::bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 
-pub trait PoolShardTestExt {
-    /// Instance-form of [`Pool::shard_index`] so tests holding a `&Pool`
-    /// can read the calling thread's home shard without spelling out the
-    /// generics.
-    fn shard_index_of(&self) -> usize;
+pool_schema! {
+    pub TestPools {
+        bytes: u8,
+        samples: f32,
+    }
 }
 
-impl<const SHARDS: usize, T: Reuse> PoolShardTestExt for Pool<SHARDS, T> {
-    fn shard_index_of(&self) -> usize {
-        Self::shard_index()
-    }
+pub type Pools = PoolRegion<TestPools>;
+
+#[must_use]
+pub fn pools() -> Pools {
+    pools_with(
+        256 * 1024 * 1024,
+        PoolConfig::builder().max_buffers(usize::MAX).build(),
+        PoolConfig::builder()
+            .max_buffers(128)
+            .trim_capacity(200_000)
+            .build(),
+    )
+}
+
+#[must_use]
+pub fn pools_with(overall_bytes: usize, bytes: PoolConfig, samples: PoolConfig) -> Pools {
+    TestPools::builder(OverallBudget(overall_bytes))
+        .bytes(bytes)
+        .samples(samples)
+        .build()
+        .unwrap_or_else(|error| panic!("test pool region: {error}"))
 }

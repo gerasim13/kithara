@@ -6,7 +6,6 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     events::{
         AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
@@ -25,6 +24,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{read_to_eof, read_until_samples},
@@ -317,7 +317,7 @@ struct PhaseReadStats {
 }
 
 fn read_phase_until_samples<S: StreamType>(
-    audio: &mut RegisteredAudio<Stream<S>>,
+    audio: &mut RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
 ) -> PhaseReadStats {
@@ -347,7 +347,7 @@ fn read_phase_until_samples<S: StreamType>(
 /// assertion itself is unchanged.
 #[kithara::flash(true)]
 fn read_phase_until<S: StreamType>(
-    audio: &mut RegisteredAudio<Stream<S>>,
+    audio: &mut RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
     settled: impl Fn() -> bool,
@@ -399,13 +399,13 @@ fn read_phase_until<S: StreamType>(
 }
 
 async fn read_until_samples_blocking<S>(
-    mut audio: RegisteredAudio<Stream<S>>,
+    mut audio: RegisteredAudio<Stream<S>, TestPools>,
     target_samples: u64,
     label: &str,
-) -> (RegisteredAudio<Stream<S>>, u64)
+) -> (RegisteredAudio<Stream<S>, TestPools>, u64)
 where
     S: StreamType + 'static,
-    RegisteredAudio<Stream<S>>: Send + 'static,
+    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
 {
     spawn_blocking(move || {
         let samples = read_until_samples(&mut audio, target_samples);
@@ -422,12 +422,12 @@ struct BlockingReadStep {
 }
 
 async fn read_one_chunk_blocking<S>(
-    mut audio: RegisteredAudio<Stream<S>>,
+    mut audio: RegisteredAudio<Stream<S>, TestPools>,
     label: &str,
-) -> (RegisteredAudio<Stream<S>>, BlockingReadStep)
+) -> (RegisteredAudio<Stream<S>, TestPools>, BlockingReadStep)
 where
     S: StreamType + 'static,
-    RegisteredAudio<Stream<S>>: Send + 'static,
+    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
 {
     let read_label = label.to_owned();
     let join_label = read_label.clone();
@@ -467,15 +467,15 @@ where
 }
 
 async fn read_until_manual_applied<S>(
-    mut audio: RegisteredAudio<Stream<S>>,
+    mut audio: RegisteredAudio<Stream<S>, TestPools>,
     collector: &EventCollector,
     applied_before: usize,
     target: usize,
     label: &str,
-) -> (RegisteredAudio<Stream<S>>, PhaseReadStats)
+) -> (RegisteredAudio<Stream<S>, TestPools>, PhaseReadStats)
 where
     S: StreamType + 'static,
-    RegisteredAudio<Stream<S>>: Send + 'static,
+    RegisteredAudio<Stream<S>, TestPools>: Send + 'static,
 {
     let mut stats = PhaseReadStats {
         samples: 0,
@@ -559,24 +559,23 @@ async fn vod_manual_switch_affects_future_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
     let bus = EventBus::new(8192);
     let collector = EventCollector::new(&bus);
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .pool(worker.byte_pool().clone())
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -586,7 +585,7 @@ async fn vod_manual_switch_affects_future_segments() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -719,9 +718,9 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -730,15 +729,14 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
 
     let mut rescue_rx = bus.subscribe();
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .pool(worker.byte_pool().clone())
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -748,7 +746,7 @@ async fn stalled_boundary_escape_rescues_reader_blocked_on_slow_variant() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -900,17 +898,16 @@ async fn multi_track_shared_abr_with_cache() {
     let url2 = server2.url("/master.m3u8");
 
     let temp_dir = TestTempDir::new();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(CancelToken::never())
             .build(),
     );
-    let shared_store = AssetStore::builder()
+    let shared_store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .pool(worker.byte_pool().clone())
         .build();
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
@@ -923,13 +920,13 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls1 = HlsConfig::for_url(url1.clone())
         .store(shared_store.clone())
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .events(bus1.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config1 = AudioConfig::<Hls>::for_stream(hls1)
+    let config1 = AudioConfig::<Hls<TestPools>>::for_stream(hls1)
         .events(bus1)
         .media_info(wav_info.clone())
         .build();
@@ -960,13 +957,13 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls2 = HlsConfig::for_url(url2)
         .store(shared_store.clone())
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .events(bus2.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
 
-    let config2 = AudioConfig::<Hls>::for_stream(hls2)
+    let config2 = AudioConfig::<Hls<TestPools>>::for_stream(hls2)
         .events(bus2)
         .media_info(wav_info.clone())
         .build();
@@ -996,13 +993,13 @@ async fn multi_track_shared_abr_with_cache() {
 
     let hls3 = HlsConfig::for_url(url1)
         .store(shared_store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .events(bus3.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config3 = AudioConfig::<Hls>::for_stream(hls3)
+    let config3 = AudioConfig::<Hls<TestPools>>::for_stream(hls3)
         .events(bus3)
         .media_info(wav_info)
         .build();
@@ -1082,9 +1079,9 @@ async fn abr_switch_must_not_redownload_covered_segments() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1093,14 +1090,13 @@ async fn abr_switch_must_not_redownload_covered_segments() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1110,7 +1106,7 @@ async fn abr_switch_must_not_redownload_covered_segments() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1190,9 +1186,9 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1201,14 +1197,13 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1218,7 +1213,7 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1328,9 +1323,9 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1341,20 +1336,19 @@ async fn runtime_cross_codec_manual_switch_no_hang() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
     let audio = worker.open(config).await.expect("create audio");
@@ -1447,9 +1441,9 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1467,14 +1461,13 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     // user never asked for.
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1487,7 +1480,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .build();
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the warmup loop needs no wall-clock deadline.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .block_on_underrun(true)
@@ -1596,9 +1589,9 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1610,14 +1603,13 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1628,7 +1620,7 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .block_on_underrun(true)
@@ -1739,9 +1731,9 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1752,14 +1744,13 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // DownSwitch that races against the explicit Manual(1) below.
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
@@ -1774,7 +1765,7 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
     // `ReaderSeek` event is retained in the broadcast buffer for the
     // seek-settled wait below.
     let mut seek_rx = bus.subscribe();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -1930,9 +1921,9 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -1942,14 +1933,13 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
     // Crucially: NO `with_settings(abr_fast())` — production defaults.
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1959,7 +1949,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();
@@ -2041,9 +2031,9 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -2053,20 +2043,19 @@ async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .build();
     let audio = worker.open(config).await.expect("create audio");
@@ -2181,9 +2170,9 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -2192,20 +2181,19 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(2))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -2413,9 +2401,9 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -2441,20 +2429,19 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

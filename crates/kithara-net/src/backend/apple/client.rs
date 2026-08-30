@@ -2,6 +2,7 @@ use std::{fmt::Write, num::NonZeroU16};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{
     CancelToken,
     sync::Arc,
@@ -187,9 +188,12 @@ pub struct AppleNet {
 
 impl AppleNet {
     #[must_use]
-    pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
+    pub fn new<S>(options: NetOptions, pools: PoolRegion<S>, cancel: CancelToken) -> Self
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         let connection_metrics = ConnectionMetrics::default();
-        let session = AppleSession::new(&options, connection_metrics.clone());
+        let session = AppleSession::new(&options, pools, connection_metrics.clone());
         let raw = RawAppleNet {
             session: session.clone(),
             cancel: cancel.clone(),

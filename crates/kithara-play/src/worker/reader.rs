@@ -35,15 +35,15 @@ impl TrackPriority {
     }
 }
 
-pub(crate) struct TrackLease {
+pub(crate) struct TrackLease<S> {
     task_id: Option<TaskId>,
-    worker: PlayWorker,
+    worker: PlayWorker<S>,
     priority: TrackPriority,
 }
 
-impl TrackLease {
+impl<S> TrackLease<S> {
     pub(crate) const fn new(
-        worker: PlayWorker,
+        worker: PlayWorker<S>,
         task_id: TaskId,
         service_class: Arc<AtomicServiceClass>,
         wake: Wake,
@@ -60,7 +60,7 @@ impl TrackLease {
     }
 }
 
-impl Drop for TrackLease {
+impl<S> Drop for TrackLease<S> {
     fn drop(&mut self) {
         if let Some(task_id) = self.task_id.take() {
             self.worker.unregister(task_id);
@@ -72,13 +72,13 @@ impl Drop for TrackLease {
 ///
 /// The reader drops before its registration lease, so its wake handles and
 /// buffers are released before the final worker owner can shut down.
-pub struct RegisteredAudio<S> {
-    warp: Warp<Audio<S>>,
-    _lease: TrackLease,
+pub struct RegisteredAudio<T, S> {
+    warp: Warp<Audio<T>>,
+    _lease: TrackLease<S>,
 }
 
-impl<S> RegisteredAudio<S> {
-    pub(super) const fn new(warp: Warp<Audio<S>>, lease: TrackLease) -> Self {
+impl<T, S> RegisteredAudio<T, S> {
+    pub(super) const fn new(warp: Warp<Audio<T>>, lease: TrackLease<S>) -> Self {
         Self {
             warp,
             _lease: lease,
@@ -90,7 +90,7 @@ impl<S> RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> AudioRead for RegisteredAudio<S> {
+impl<T: MaybeSend, S> AudioRead for RegisteredAudio<T, S> {
     delegate::delegate! {
         to self.warp.source() {
             fn cached_span(&self) -> Duration;
@@ -109,7 +109,7 @@ impl<S: MaybeSend> AudioRead for RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> AudioSession for RegisteredAudio<S> {
+impl<T: MaybeSend, S> AudioSession for RegisteredAudio<T, S> {
     delegate::delegate! {
         to self.warp.source() {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -123,7 +123,7 @@ impl<S: MaybeSend> AudioSession for RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> AudioControl for RegisteredAudio<S> {
+impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
     delegate::delegate! {
         to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;

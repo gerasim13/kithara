@@ -16,6 +16,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
     goertzel::goertzel_magnitude,
     signal_pcm::signal::{SignalFn, SineWave},
     waits::wait_until,
@@ -139,9 +140,8 @@ pub(super) fn decode_adts_left(bytes: Vec<u8>) -> Vec<f32> {
             .codec(AudioCodec::AacLc)
             .container(ContainerFormat::Adts)
             .build(),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .expect("create the ADTS AAC-LC decoder");
@@ -231,7 +231,7 @@ impl Origin {
         };
         let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
-        let client = HttpClient::new(NetOptions::default(), scope.token());
+        let client = HttpClient::new(NetOptions::default(), pools(), scope.token());
 
         Self {
             handle,

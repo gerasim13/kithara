@@ -52,11 +52,11 @@ for block in blocks {
     scratch.shrink_to_fit();         // hands the pages right back
 }
 // good
-let mut scratch = sample_pool.get_with(|b| b.resize(n, 0.0));
-for block in blocks { scratch.clear(); scratch.resize(n, 0.0); dsp(block, &mut scratch); }
+let mut scratch = pools.get_with_len::<f32>(n)?;
+for block in blocks { scratch.fill(0.0); dsp(block, &mut scratch); }
 ```
 
-`clear()` keeps capacity for the next pass; `shrink` only at lifecycle boundaries (track unload / cache evict) to a watermark, as bufpool's `shrink_to(trim)` does.
+`clear()` keeps guard capacity for the next pass. `ensure_len()` and `try_extend_from_slice()` grow only after checking both budgets; `PoolConfig::trim_capacity` trims oversized returns at the lifecycle boundary.
 *tier: hot | detector: none (manual; overlaps `perf.prefer-*-pool`) | preventive*
 
 **Decoded-sample/byte buffers outside kithara-bufpool** (flagship)
@@ -64,13 +64,13 @@ for block in blocks { scratch.clear(); scratch.resize(n, 0.0); dsp(block, &mut s
 ```rust
 // bad
 let mut buf = vec![0.0f32; frames * channels];  // RT/decode path
-let raw = SamplePool::default();                 // global accessor
 // good
-let mut buf = self.sample_pool.get_with(|b| { b.clear(); b.resize(frames * channels, 0.0); });
-// PooledOwned recycles on drop; inject SamplePool/BytePool from the app top
+let mut buf = self.pools.get::<f32>();
+buf.ensure_len(frames * channels)?;
+// the guard recycles on drop; inject PoolRegion<S> from the composition root
 ```
 
-*tier: hot | detector: `perf.prefer-primitive-pool` / `perf.no-global-pool-accessor` (ast-grep) | already-enforced*
+*tier: hot | detector: `perf.prefer-primitive-pool` / `perf.no-component-pool-construction` (ast-grep) | already-enforced*
 
 **format! for concat / owned compare**
 
@@ -169,9 +169,10 @@ loop {
 }
 // good: lease from the pool, clear + refill, returns on drop
 loop {
-    let mut buf = pool.get();      // kithara-bufpool, fixed size class
+    let mut buf = pools.get::<u8>();
     buf.clear();
-    fill(&mut buf, packet); decode(&buf);
+    buf.try_extend_from_slice(packet)?;
+    decode(&buf);
 }
 ```
 
@@ -224,12 +225,12 @@ Use snapshot/command models across threads, not per-field Arcs. `Rc<RefCell<Node
 ```rust
 // bad: whole-segment collect + worst-case scratch on a wasm path
 let pcm: Vec<f32> = decode_all(seg).collect();   // peak is permanent
-// good: stream through a pre-warmed pooled buffer
-let mut buf = pool.get();                         // pre-warmed at init
-for frame in decode(seg) { sink.push(&mut buf, frame); }
+// good: stream through a typed guard prepared by the root configuration
+let mut buf = pools.get_with_len::<f32>(max_frame_samples)?;
+for frame in decode(seg) { sink.push(&mut buf[..frame.len()], frame); }
 ```
 
-WASM `memory.grow` is one-way, so every transient peak stays resident. Pre-warm the dlmalloc `thread_local` at init; never `wee_alloc`. *tier: warm | detector: manual | preventive (kithara ships a wasm build)*
+WASM `memory.grow` is one-way, so every transient peak stays resident. Set `PoolConfig::initial_buffers` and `initial_capacity` at the composition root; there is no separate warm-up path. Never use `wee_alloc`. *tier: warm | detector: manual | preventive (kithara ships a wasm build)*
 
 **Global-allocator swap without a target benchmark**
 

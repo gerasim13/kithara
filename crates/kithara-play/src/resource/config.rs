@@ -4,6 +4,7 @@ use bon::Builder;
 use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
+use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
@@ -19,10 +20,13 @@ use crate::{EngineLoad, PlayWorker};
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 /// Unified configuration for opening an audio resource.
-#[derive(Clone, Builder)]
+#[derive(Builder)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
-pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
+pub struct ResourceConfig<S, B: Default = PlaybackResamplerBackend>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Audio resource source (URL or local path).
     #[builder(start_fn)]
     pub(crate) src: ResourceSrc,
@@ -30,7 +34,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
     /// Shared asset store used by playback and derived resources.
-    pub(crate) store: AssetStore,
+    pub(crate) store: AssetStore<S>,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default)]
@@ -70,7 +74,7 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) stretch: Arc<StretchControls>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
-    pub(crate) worker: Option<PlayWorker>,
+    pub(crate) worker: Option<PlayWorker<S>>,
     /// Session-owned audio-consumer wake capability. This is populated by
     /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
     /// does not become a second public source of session policy.
@@ -87,37 +91,69 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) preferred_peak_bitrate: f64,
 }
 
+impl<S, B> Clone for ResourceConfig<S, B>
+where
+    B: Clone + Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            src: self.src.clone(),
+            initial_abr_mode: self.initial_abr_mode,
+            store: self.store.clone(),
+            decoder: self.decoder.clone(),
+            keys: self.keys.clone(),
+            preload_chunks: self.preload_chunks,
+            bus: self.bus.clone(),
+            cancel: self.cancel.clone(),
+            discriminator: self.discriminator.clone(),
+            downloader: self.downloader.clone(),
+            engine_load: self.engine_load.clone(),
+            headers: self.headers.clone(),
+            hint: self.hint.clone(),
+            hls_base_url: self.hls_base_url.clone(),
+            host_sample_rate: self.host_sample_rate,
+            look_ahead_bytes: self.look_ahead_bytes,
+            stretch: Arc::clone(&self.stretch),
+            worker: self.worker.clone(),
+            consumer_wake_mode: self.consumer_wake_mode,
+            size_probe_method: self.size_probe_method,
+            preferred_peak_bitrate: self.preferred_peak_bitrate,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
     use kithara_assets::AssetStore;
     use kithara_audio::{DecoderResamplerSettings, ResamplerBackend, ResamplerOptions};
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_decode::DecodeError;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorkerConfig, resource::source::parse_src};
+    use crate::{
+        PlayWorkerConfig,
+        test_pools::{TestPools, default_pools},
+    };
 
-    fn store() -> AssetStore {
-        AssetStore::builder().build()
+    fn store() -> AssetStore<TestPools> {
+        AssetStore::builder(default_pools()).build()
     }
 
     fn valid_src(input: &str) -> ResourceSrc {
-        parse_src(input).expect("valid test source")
+        ResourceSrc::parse(input).expect("valid test source")
     }
 
-    fn test_config<S: AsRef<str>>(input: S) -> Result<ResourceConfig, DecodeError> {
-        Ok(ResourceConfig::for_src(parse_src(input)?)
+    fn test_config<S: AsRef<str>>(input: S) -> Result<ResourceConfig<TestPools>, DecodeError> {
+        Ok(ResourceConfig::for_src(ResourceSrc::parse(input)?)
             .store(store())
             .build())
     }
 
-    fn worker() -> PlayWorker {
-        PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        )
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build())
     }
 
     #[kithara::test]
@@ -167,7 +203,7 @@ mod tests {
     #[case(false)]
     #[case(true)]
     fn config_bus_presence(#[case] with_events: bool) {
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .maybe_events(with_events.then(|| EventBus::new(32)))
@@ -178,7 +214,7 @@ mod tests {
     #[kithara::test]
     fn config_bus_propagates_to_file_config() {
         let worker = worker();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .events(EventBus::new(32))
@@ -190,7 +226,7 @@ mod tests {
     #[kithara::test]
     fn config_bus_propagates_to_hls_config() {
         let worker = worker();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
                 .events(EventBus::new(32))
@@ -210,7 +246,7 @@ mod tests {
                     .build(),
             )
             .build();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .decoder(decoder)
@@ -238,7 +274,7 @@ mod tests {
                     .build(),
             )
             .build();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
                 .decoder(decoder)
@@ -260,7 +296,7 @@ mod tests {
     fn config_with_headers() {
         let mut headers = Headers::default();
         headers.insert("Authorization", "Bearer test");
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .headers(headers)
@@ -275,7 +311,7 @@ mod tests {
 
     #[kithara::test]
     fn config_builder_chain() {
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .events(EventBus::new(32))
@@ -298,7 +334,7 @@ mod tests {
     #[kithara::test]
     fn config_bitrate_propagates_to_hls_abr() {
         let worker = worker();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
                 .preferred_peak_bitrate(512_000.0)
@@ -321,14 +357,13 @@ mod tests {
     #[kithara::test]
     fn config_with_worker_sets_field() {
         let worker = worker();
-        let config: ResourceConfig =
+        let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
                 .store(store())
                 .worker(worker.clone())
                 .build();
         let configured = config.worker.as_ref().expect("worker must be configured");
-        assert!(std::ptr::eq(configured.byte_pool(), worker.byte_pool()));
-        assert!(std::ptr::eq(configured.sample_pool(), worker.sample_pool()));
+        assert!(std::ptr::eq(configured.pools(), worker.pools()));
     }
 
     #[kithara::test]

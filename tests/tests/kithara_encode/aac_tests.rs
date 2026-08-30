@@ -1,10 +1,9 @@
 use kithara::{
     self,
-    bufpool::{BytePool, SamplePool},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
-use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
+use kithara_integration_tests::{bufpool_ext::pools, encode_test_pcm::SawtoothPcmFixture};
 
 #[kithara::test]
 fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
@@ -20,8 +19,10 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
         .container(ContainerFormat::Fmp4)
         .build();
 
+    let pools = pools();
     let encoded = EncoderFactory::encode_packaged(
-        PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &pools,
+        &PackagedEncodeRequest::builder()
             .media_info(media_info)
             .pcm(&pcm)
             .timescale(SAMPLE_RATE)
@@ -77,10 +78,11 @@ fn encode_packaged_aac_he_reuses_injected_byte_pool() {
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacHe)
         .expect("BUG: AacHe must be supported by the packaged encoder");
     let pcm = SawtoothPcmFixture::new(4 * frame_samples, SAMPLE_RATE, CHANNELS);
-    let byte_pool = BytePool::new(1, 0);
+    let pools = pools();
     let encode = || {
         EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(byte_pool.clone(), SamplePool::default())
+            &pools,
+            &PackagedEncodeRequest::builder()
                 .pcm(&pcm)
                 .media_info(
                     MediaInfo::builder()
@@ -99,18 +101,13 @@ fn encode_packaged_aac_he_reuses_injected_byte_pool() {
     };
 
     let first = encode();
-    let after_first = byte_pool.stats();
+    let after_first = pools.stats().allocated_bytes;
     let second = encode();
-    let after_second = byte_pool.stats();
+    let after_second = pools.stats().allocated_bytes;
 
     assert!(!first.access_units.is_empty());
     assert!(!second.access_units.is_empty());
-    assert_eq!(after_second.alloc_misses, after_first.alloc_misses);
-    assert!(
-        after_second.home_hits + after_second.steal_hits
-            > after_first.home_hits + after_first.steal_hits,
-        "second encode did not reuse the injected byte pool"
-    );
+    assert_eq!(after_second, after_first);
 }
 
 #[kithara::test]
@@ -121,11 +118,11 @@ fn encode_packaged_aac_lc_reuses_injected_conversion_pools() {
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc)
         .expect("BUG: AacLc must be supported by the packaged encoder");
     let pcm = SawtoothPcmFixture::new(4 * frame_samples, SAMPLE_RATE, CHANNELS);
-    let byte_pool = BytePool::new(1, 0);
-    let sample_pool = SamplePool::new(1, 0);
+    let pools = pools();
     let encode = || {
         EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(byte_pool.clone(), sample_pool.clone())
+            &pools,
+            &PackagedEncodeRequest::builder()
                 .pcm(&pcm)
                 .media_info(
                     MediaInfo::builder()
@@ -144,30 +141,11 @@ fn encode_packaged_aac_lc_reuses_injected_conversion_pools() {
     };
 
     let first = encode();
-    let byte_after_first = byte_pool.stats();
-    let sample_after_first = sample_pool.stats();
+    let after_first = pools.stats().allocated_bytes;
     let second = encode();
-    let byte_after_second = byte_pool.stats();
-    let sample_after_second = sample_pool.stats();
+    let after_second = pools.stats().allocated_bytes;
 
     assert!(!first.access_units.is_empty());
     assert!(!second.access_units.is_empty());
-    assert_eq!(
-        byte_after_second.alloc_misses,
-        byte_after_first.alloc_misses
-    );
-    assert_eq!(
-        sample_after_second.alloc_misses,
-        sample_after_first.alloc_misses
-    );
-    assert!(
-        byte_after_second.home_hits + byte_after_second.steal_hits
-            > byte_after_first.home_hits + byte_after_first.steal_hits,
-        "second encode did not reuse the injected byte pool"
-    );
-    assert!(
-        sample_after_second.home_hits + sample_after_second.steal_hits
-            > sample_after_first.home_hits + sample_after_first.steal_hits,
-        "second encode did not reuse the injected sample pool"
-    );
+    assert_eq!(after_second, after_first);
 }

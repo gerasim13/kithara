@@ -2,18 +2,18 @@ use std::fmt;
 
 use bon::Builder;
 use kithara::{
-    analysis::BeatAnalysisConfig,
-    assets::AssetStore,
-    hls::SizeProbeMethod,
-    play::{PlayWorker, policy::DomainKeyPolicy},
-    prelude::PlaybackResamplerBackend,
-    stream::dl::Downloader,
+    analysis::BeatAnalysisConfig, hls::SizeProbeMethod, play::policy::DomainKeyPolicy,
+    prelude::PlaybackResamplerBackend, stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use url::Url;
 
-use crate::{baked, theme::Palette};
+use crate::{
+    baked,
+    pools::{AppStore, AppWorker},
+    theme::Palette,
+};
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -61,12 +61,12 @@ pub struct AppConfig {
     #[builder(default)]
     pub drm: AppDrm,
     /// App-wide shared asset store.
-    pub store: AssetStore,
+    pub store: AppStore,
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
     /// One playback worker shared by every deck in this app session.
-    pub worker: PlayWorker,
+    pub worker: AppWorker,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the playback worker and HLS

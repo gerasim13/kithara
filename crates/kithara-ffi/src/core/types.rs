@@ -1,3 +1,4 @@
+use kithara_bufpool::PoolError;
 use kithara_events::{
     AdvanceReason, AudioCodecKind, CancelReason, ContainerKind, DecodeErrorClass, DecodeErrorKind,
     DecoderBackend, DecoderChangeCause, EvictReason, FrameDomain, KeyFailureStage, KeySource,
@@ -7,7 +8,7 @@ use kithara_events::{
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_play::{ItemStatus, PlayError, PlayerStatus, TimeControlStatus, TimeRange};
 
-/// FFI-friendly error type bridging playback failures into platform bindings.
+/// FFI-friendly error type bridging native failures into platform bindings.
 #[derive(Clone, Debug, thiserror::Error)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
 pub enum FfiError {
@@ -48,6 +49,14 @@ impl From<PlayError> for FfiError {
             err => Self::Internal {
                 description: err.to_string(),
             },
+        }
+    }
+}
+
+impl From<PoolError> for FfiError {
+    fn from(error: PoolError) -> Self {
+        Self::Internal {
+            description: error.to_string(),
         }
     }
 }
@@ -133,7 +142,7 @@ pub struct FfiItemConfig {
     /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
     /// `https://…/master.m3u8`) **or** an absolute local file path
     /// (`/Users/…/song.flac`). Parsed via
-    /// [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+    /// [`kithara::play::ResourceSrc::parse`] at insert time, then passed
     /// to [`kithara::play::ResourceConfig::for_src`].
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a
@@ -1119,6 +1128,22 @@ mod tests {
     ) {
         let ffi: FfiError = input.into();
         assert!(matches_variant(&ffi));
+    }
+
+    #[kithara::test]
+    fn pool_error_maps_to_internal_ffi_error() {
+        let error = PoolError::InvalidConfig {
+            field: "samples",
+            reason: "test configuration",
+        };
+        let FfiError::Internal { description } = FfiError::from(error) else {
+            panic!("pool initialization failure must be an internal FFI error");
+        };
+
+        assert_eq!(
+            description,
+            "invalid pool configuration for samples: test configuration"
+        );
     }
 
     #[kithara::test]

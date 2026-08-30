@@ -4,6 +4,8 @@
 
 mod error;
 mod guard;
+#[cfg(test)]
+mod test_pools;
 
 pub mod api;
 pub mod bridge;

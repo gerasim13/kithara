@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioChunk;
 use num_traits::cast::ToPrimitive;
@@ -25,7 +26,7 @@ pub(crate) enum Ingest {
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct TrackAnalyzers<B>
+pub(crate) struct TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
 {
@@ -39,11 +40,13 @@ where
     #[field(get, copy, vis = "pub(crate)")]
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) token: AnalysisToken,
+    pub(super) pools: PoolRegion<S>,
 }
 
-impl<B> TrackAnalyzers<B>
+impl<B, S> TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32>,
 {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn coverage(&self) -> &Coverage {
@@ -115,8 +118,21 @@ where
         }
         self.coverage.insert(range);
 
-        waveform::push(&mut self.waveform, pcm, channels, range.start());
-        Slot::push(&mut self.beat, pcm, channels, range.start(), detector);
+        waveform::push(
+            &mut self.waveform,
+            &self.pools,
+            pcm,
+            channels,
+            range.start(),
+        );
+        Slot::push(
+            &mut self.beat,
+            &self.pools,
+            pcm,
+            channels,
+            range.start(),
+            detector,
+        );
         Ingest::Accepted
     }
 

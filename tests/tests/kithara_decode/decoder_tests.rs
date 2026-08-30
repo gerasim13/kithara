@@ -4,18 +4,20 @@ use std::io::Cursor;
 
 use kithara::{
     decode::{DecoderConfig, DecoderFactory},
+    resampler::NoResamplerBackend,
     signal::{AudioChunk, AudioSpec},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    audio_fixture::EmbeddedAudio, decode_ext::DecoderChunkOutcomeTestExt,
+    audio_fixture::EmbeddedAudio,
+    bufpool_ext::{TestPools, pools},
+    decode_ext::DecoderChunkOutcomeTestExt,
 };
 
-fn test_config() -> DecoderConfig {
-    DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .sample_pool(kithara::bufpool::SamplePool::default())
-        .build()
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+
+fn test_config() -> TestDecoderConfig {
+    TestDecoderConfig::builder().pools(pools()).build()
 }
 
 #[kithara::fixture]

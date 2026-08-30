@@ -3,10 +3,11 @@ use std::sync::atomic::Ordering;
 
 use firewheel::{
     channel_config::{ChannelConfig, ChannelCount},
-    diff::{Diff, Patch},
+    diff::{Diff, Patch, PatchError},
+    event::ParamData,
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::{Arc, Mutex};
 
 use super::processor::{PlayerNodeProcessor, StreamShape};
@@ -14,11 +15,10 @@ use crate::bridge::{NodeInputs, SharedEq, slot_channels};
 
 /// A player source node that outputs mixed audio from loaded tracks.
 ///
-/// Commands (load, unload, seek, pause, fade) are sent to the processor
-/// via channels stored in the node. The `Diff`/`Patch` derives
-/// only apply to the `active` field; all runtime state is `#[diff(skip)]`.
-#[derive(Clone, Diff, Patch)]
-pub struct PlayerNode {
+/// Commands (load, unload, seek, pause, fade) are sent through channels stored
+/// in the node. Only `active` participates in Firewheel parameter updates.
+#[derive(Diff)]
+pub struct PlayerNode<S> {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
 
@@ -26,23 +26,60 @@ pub struct PlayerNode {
     #[diff(skip)]
     inputs: Arc<Mutex<Option<NodeInputs>>>,
 
-    /// Sample pool for scratch buffer allocation.
+    /// Typed pool facade for scratch buffer allocation.
     #[diff(skip)]
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
 }
 
-impl PlayerNode {
-    /// Create a player node wired to RT input channels.
-    pub fn new(inputs: NodeInputs, sample_pool: SamplePool) -> Self {
+/// A runtime parameter patch for [`PlayerNode`].
+#[non_exhaustive]
+pub enum PlayerNodePatch {
+    /// Updates whether the node is active.
+    Active(<bool as Patch>::Patch),
+}
+
+impl<S> Patch for PlayerNode<S> {
+    type Patch = PlayerNodePatch;
+
+    fn patch(data: &ParamData, path: &[u32]) -> Result<Self::Patch, PatchError> {
+        match path {
+            [0, tail @ ..] => Ok(PlayerNodePatch::Active(bool::patch(data, tail)?)),
+            _ => Err(PatchError::InvalidPath),
+        }
+    }
+
+    fn apply(&mut self, patch: Self::Patch) {
+        match patch {
+            PlayerNodePatch::Active(patch) => self.active.apply(patch),
+        }
+    }
+}
+
+impl<S> Clone for PlayerNode<S> {
+    fn clone(&self) -> Self {
         Self {
-            sample_pool,
+            active: self.active,
+            inputs: Arc::clone(&self.inputs),
+            pools: self.pools.clone(),
+        }
+    }
+}
+
+impl<S> PlayerNode<S> {
+    /// Create a player node wired to RT input channels.
+    pub fn new(inputs: NodeInputs, pools: PoolRegion<S>) -> Self {
+        Self {
+            pools,
             active: true,
             inputs: Arc::new(Mutex::new(Some(inputs))),
         }
     }
 }
 
-impl AudioNode for PlayerNode {
+impl<S> AudioNode for PlayerNode<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     type Configuration = EmptyConfig;
 
     fn construct_processor(
@@ -61,7 +98,7 @@ impl AudioNode for PlayerNode {
             .lock()
             .take()
             .unwrap_or_else(|| slot_channels(SharedEq::new(0)).0);
-        PlayerNodeProcessor::new(inputs, shape, &self.sample_pool)
+        PlayerNodeProcessor::new(inputs, shape, &self.pools)
     }
 
     fn info(&self, _config: &Self::Configuration) -> AudioNodeInfo {
@@ -80,11 +117,14 @@ mod tests {
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
-    use crate::bridge::SharedEq;
+    use crate::{
+        bridge::SharedEq,
+        test_pools::{TestPools, default_pools},
+    };
 
-    fn make_node() -> (PlayerNode, crate::bridge::SlotControl) {
+    fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, SamplePool::default());
+        let node = PlayerNode::new(inputs, default_pools());
         (node, control)
     }
 

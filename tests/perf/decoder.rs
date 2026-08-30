@@ -4,18 +4,18 @@ use std::io::Cursor;
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::{BytePool, SamplePool},
     decode::{Decoder, DecoderConfig, DecoderFactory},
     platform::time::Instant,
+    resampler::NoResamplerBackend,
     signal::AudioChunk,
 };
-use kithara_integration_tests::create_test_wav;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    create_test_wav,
+};
 
-fn decoder_config() -> DecoderConfig {
-    DecoderConfig::builder()
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
-        .build()
+fn decoder_config() -> DecoderConfig<NoResamplerBackend, TestPools> {
+    DecoderConfig::builder().pools(pools()).build()
 }
 
 fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {

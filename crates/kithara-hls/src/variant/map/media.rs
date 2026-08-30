@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_stream::{MediaInfo, StreamResult};
 
@@ -9,7 +10,10 @@ use crate::{
     segment::{MediaSegment, Segment},
 };
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Committed on-disk length for media segment `seg_idx` when its resource
     /// is `Committed` with a known `final_len` — the skip-fetch guard's size
     /// source. `None` when the index is out of range.
@@ -74,7 +78,7 @@ impl HlsVariant {
             .is_some_and(|s| s.state().is_failed())
     }
 
-    pub(super) fn segment_handle(&self, seg_idx: u32) -> Option<ResourceHandle<'_>> {
+    pub(super) fn segment_handle(&self, seg_idx: u32) -> Option<ResourceHandle<'_, S>> {
         Some(
             self.segments
                 .get(seg_idx as usize)?

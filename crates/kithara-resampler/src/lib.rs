@@ -15,6 +15,8 @@ mod mode;
 mod mono;
 #[cfg(feature = "resample-rubato")]
 pub mod rubato;
+#[cfg(test)]
+mod test_pools;
 mod traits;
 
 pub use backend::{NoResamplerBackend, ResamplerBackend};

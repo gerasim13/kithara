@@ -129,11 +129,10 @@ impl<'a> InterleavedView<'a> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::PlanarBuffer;
+    use crate::{PlanarBuffer, test_pools::pools};
 
     const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
@@ -166,9 +165,9 @@ mod tests {
         let source = signal(usize::from(channels), frames.get());
         let interleaved =
             InterleavedView::new(&source, spec(channels), frames).expect("fixture shape is exact");
-        let sample_pool = SamplePool::new(4, 128);
-        let mut planar = PlanarBuffer::new(&sample_pool, spec(channels), frames)
-            .expect("fixture planar storage fits");
+        let pools = pools(128 * size_of::<f32>());
+        let mut planar =
+            PlanarBuffer::new(&pools, spec(channels), frames).expect("fixture planar storage fits");
         let mut channel_samples = (0..usize::from(channels))
             .map(|_| vec![0.0; frames.get()])
             .collect::<Vec<_>>();
@@ -238,9 +237,9 @@ mod tests {
 
     #[kithara::test]
     fn non_zero_planar_range_interleaves_only_selected_frames() {
-        let sample_pool = SamplePool::new(2, 64);
-        let mut planar = PlanarBuffer::new(&sample_pool, spec(2), FrameCount::new(4))
-            .expect("planar storage fits");
+        let pools = pools(64 * size_of::<f32>());
+        let mut planar =
+            PlanarBuffer::new(&pools, spec(2), FrameCount::new(4)).expect("planar storage fits");
         planar
             .channel_mut(0)
             .expect("left channel exists")

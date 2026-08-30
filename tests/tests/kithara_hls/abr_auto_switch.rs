@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioSession},
-    bufpool::Region,
     events::EventBus,
     hls::{Hls, HlsConfig},
     platform::{
@@ -17,6 +16,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, abr_fast, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::read_to_eof,
@@ -101,9 +101,9 @@ async fn abr_auto_switch_during_playback(
     info!(%url, "HLS server ready with 2 variants");
 
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -132,14 +132,13 @@ async fn abr_auto_switch_during_playback(
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -149,7 +148,7 @@ async fn abr_auto_switch_during_playback(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
         .build();

@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 use tracing::warn;
 
@@ -19,20 +20,27 @@ impl<B> BeatPass<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn new(config: BeatPassConfig<B>) -> Self {
+    pub(crate) fn new<S>(config: BeatPassConfig<B, S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
         Self {
             analyzer: BeatAnalyzer::new(config),
         }
     }
 
-    pub(crate) fn push(
+    pub(crate) fn push<S>(
         &mut self,
+        pools: &PoolRegion<S>,
         pcm: &[f32],
         channels: usize,
         at: u64,
         detector: &mut dyn BeatDetector,
-    ) {
-        self.analyzer.push_interleaved(pcm, channels, at, detector);
+    ) where
+        S: HasPool<f32>,
+    {
+        self.analyzer
+            .push_interleaved(pools, pcm, channels, at, detector);
     }
 
     pub(crate) fn snapshot(

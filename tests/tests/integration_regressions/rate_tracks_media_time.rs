@@ -6,7 +6,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{PlayerEvent, TrackId},
     platform::time::{self, Duration},
-    play::{Resource, ResourceConfig},
+    play::{Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     TestTempDir,
@@ -32,17 +32,16 @@ const DRAIN_SHARE_NUM: usize = 3;
 const DRAIN_SHARE_DEN: usize = 4;
 
 async fn file_resource(harness: &OfflinePlayerHarness, path: &Path, store_dir: &Path) -> Resource {
-    let byte_pool = harness.with_player(|player| player.byte_pool().clone());
+    let pools = harness.with_player(|player| player.pools().clone());
     let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
+        ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
     )
     .store(
-        AssetStore::builder()
+        AssetStore::builder(pools)
             .backend(StorageBackend::Disk {
                 root: store_dir.into(),
             })
-            .pool(byte_pool)
             .build(),
     )
     .build();

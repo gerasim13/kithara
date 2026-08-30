@@ -1,7 +1,6 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
@@ -9,7 +8,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, SignalDirection as Direction, TestServerHelper, TestTempDir, Xorshift64,
-    auto, detect_direction,
+    auto,
+    bufpool_ext::{TestPools, pools},
+    detect_direction,
     fixture_protocol::{DelayRule, PcmPattern},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
@@ -254,28 +255,27 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(fixture.media_info())
         .block_on_underrun(true)
         .build();

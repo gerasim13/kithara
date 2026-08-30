@@ -14,6 +14,7 @@ use axum::{
 use bytes::Bytes;
 use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::{Abr, AbrSettings, AbrState};
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 use kithara_events::{
     AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, Event, EventBus, VariantDuration,
     VariantIndex, VariantInfo,
@@ -38,6 +39,19 @@ const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
 const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
 const SLOW_DEADLINE_SECS: u64 = 5;
+
+pool_schema! {
+    TestPools {
+        bytes: u8,
+    }
+}
+
+fn test_pools() -> PoolRegion<TestPools> {
+    TestPools::builder(OverallBudget(64 * 1024 * 1024))
+        .bytes(PoolConfig::builder().max_buffers(32).build())
+        .build()
+        .unwrap_or_else(|error| panic!("test pool region: {error}"))
+}
 
 struct MockPeer {
     cancel: CancelToken,
@@ -96,7 +110,11 @@ impl Abr for ScheduledAbrPeer {
 impl Peer for ScheduledAbrPeer {}
 
 fn test_client() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancelToken::never())
+    test_client_with_options(NetOptions::default())
+}
+
+fn test_client_with_options(options: NetOptions) -> HttpClient {
+    HttpClient::new(options, test_pools(), CancelToken::never())
 }
 
 fn test_config() -> DownloaderConfig {
@@ -386,9 +404,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
     let handle = dl.register(Arc::new(MockPeer::new()));
 
     let h2 = handle.clone();
@@ -772,11 +788,10 @@ async fn shared_client_keepalive_bounds_connection_count() {
     });
 
     let url = Url::parse(&format!("http://{addr}/head")).expect("url");
-    let shared_client = HttpClient::new(
+    let shared_client = test_client_with_options(
         NetOptions::builder()
             .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
             .build(),
-        CancelToken::never(),
     );
 
     let mut total_ok = 0;
@@ -1131,9 +1146,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
@@ -1190,9 +1203,7 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();

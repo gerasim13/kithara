@@ -15,7 +15,6 @@ use std::{
 use firewheel::node::ProcBuffers;
 use kithara::{
     self,
-    bufpool::SamplePool,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -29,6 +28,8 @@ use kithara_integration_tests::audio_mock::{
     SampleRateTrackingReader, SeekTrackingReader, TestPcmReader,
 };
 use ringbuf::traits::{Consumer, Producer};
+
+use crate::bufpool_ext::pools;
 
 #[derive(Clone, Copy)]
 enum TrackCommandScenario {
@@ -49,8 +50,7 @@ fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
 fn make_processor() -> (PlayerNodeProcessor, SlotControl) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero");
-    let processor =
-        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &SamplePool::default());
+    let processor = PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &pools());
     (processor, control)
 }
 
@@ -62,11 +62,10 @@ fn create_mock_player_resource_with_duration(src: &str, duration_secs: f64) -> B
     let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
     let reader = TestPcmReader::new(spec, duration_secs);
     let resource = Resource::from_reader(reader, None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &SamplePool::default(),
-    ))
+    Box::new(
+        PlayerResource::new(resource, Arc::from(src), &pools())
+            .expect("player resource fits the test pool budget"),
+    )
 }
 
 fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerResource> {
@@ -75,11 +74,10 @@ fn create_duration_player_resource(src: &str, duration: Duration) -> Box<PlayerR
         duration,
     );
     let resource = Resource::from_reader(reader, None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &SamplePool::default(),
-    ))
+    Box::new(
+        PlayerResource::new(resource, Arc::from(src), &pools())
+            .expect("player resource fits the test pool budget"),
+    )
 }
 
 fn create_tracking_player_resource(
@@ -87,11 +85,10 @@ fn create_tracking_player_resource(
     seek_log: Arc<Mutex<Vec<u64>>>,
 ) -> Box<PlayerResource> {
     let resource = Resource::from_reader(SeekTrackingReader::new(seek_log), None);
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &SamplePool::default(),
-    ))
+    Box::new(
+        PlayerResource::new(resource, Arc::from(src), &pools())
+            .expect("player resource fits the test pool budget"),
+    )
 }
 
 #[kithara::test(tokio)]
@@ -102,16 +99,14 @@ async fn load_track_propagates_host_sample_rate() {
         NonZeroU32::new(44100).expect("test rate"),
     ));
     let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::from("track.mp3"),
-        &SamplePool::default(),
-    ));
+    let player_resource = Box::new(
+        PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
+            .expect("player resource fits the test pool budget"),
+    );
 
     let (inputs, mut control) = slot_channels(SharedEq::new(0));
     let sample_rate = NonZeroU32::new(host_rate).expect("BUG: non-zero");
-    let mut processor =
-        PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &SamplePool::default());
+    let mut processor = PlayerNodeProcessor::new(inputs, stream_shape(sample_rate), &pools());
 
     control
         .cmd_tx
@@ -174,11 +169,10 @@ async fn processor_clear_unloads_tracks_and_resets_snapshot() {
         NonZeroU32::new(44100).expect("test rate"),
     ));
     let resource = Resource::from_reader(reader, None);
-    let player_resource = Box::new(PlayerResource::new(
-        resource,
-        Arc::from("track.mp3"),
-        &SamplePool::default(),
-    ));
+    let player_resource = Box::new(
+        PlayerResource::new(resource, Arc::from("track.mp3"), &pools())
+            .expect("player resource fits the test pool budget"),
+    );
 
     let (mut processor, mut control) = make_processor();
 

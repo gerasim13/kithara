@@ -6,6 +6,7 @@ use std::{
 };
 
 use kithara_assets::{AssetStore, StorageBackend};
+use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, EventReceiver, TrackId};
 use kithara_platform::{CancelScope, CancelToken, sync::Arc};
 use kithara_play::{
@@ -37,7 +38,10 @@ pub(super) type TestResources = HashMap<TrackId, kithara_play::Resource>;
 /// [`EventBus`] alongside player / audio / hls / file events so
 /// [`Queue::subscribe`] returns a single unified stream.
 #[doc(hidden)]
-pub struct QueueRuntime {
+pub struct QueueRuntime<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Serializes every state-changing command against terminal close.
     pub(super) admission: Mutex<()>,
     /// Authoritative playback position updated on every `tick`. Filters
@@ -73,7 +77,7 @@ pub struct QueueRuntime {
     /// [`CrossfadeArm::Disarmed`] = no pending target.
     #[cfg(any(test, feature = "probe"))]
     pub(super) autoplay_target: AtomicTrackId,
-    pub(super) loader: Arc<Loader>,
+    pub(super) loader: Arc<Loader<S>>,
     pub(super) navigation: Arc<Mutex<NavigationState>>,
     pub(super) pending_select: Arc<Mutex<SelectPhase>>,
     /// Serialises a selection-apply against a concurrent [`Queue::select`].
@@ -98,7 +102,7 @@ pub struct QueueRuntime {
     /// `Arc<Tracks>`; every status transition goes through
     /// [`Tracks::set_status`](crate::track::Tracks::set_status) so polling
     /// and the event stream stay in sync.
-    pub(super) tracks: Arc<Tracks>,
+    pub(super) tracks: Arc<Tracks<S>>,
     pub(super) bus: EventBus,
     /// Subscription to the shared bus; drained in `tick()` to convert
     /// engine events into queue-level side-effects (auto-advance / current
@@ -109,44 +113,70 @@ pub struct QueueRuntime {
 }
 
 /// Cloneable queue command capability without beat-grid identity or topology.
-#[derive(Clone)]
-pub struct QueueControl {
-    pub(super) player: PlayerControl,
-    runtime: Arc<QueueRuntime>,
+pub struct QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(super) player: PlayerControl<S>,
+    runtime: Arc<QueueRuntime<S>>,
+}
+
+impl<S> Clone for QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            player: self.player.clone(),
+            runtime: Arc::clone(&self.runtime),
+        }
+    }
 }
 
 /// AVQueuePlayer-analogue orchestration facade.
 ///
 /// Owns the resident player and its canonical synchronization state. Runtime
 /// commands are exposed through a separate cloneable [`QueueControl`].
-pub struct Queue {
-    pub(super) control: QueueControl,
-    pub(super) player: PlayerImpl,
+pub struct Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(super) control: QueueControl<S>,
+    pub(super) player: PlayerImpl<S>,
 }
 
-impl Deref for QueueControl {
-    type Target = QueueRuntime;
+impl<S> Deref for QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    type Target = QueueRuntime<S>;
 
     fn deref(&self) -> &Self::Target {
         &self.runtime
     }
 }
 
-impl Deref for Queue {
-    type Target = QueueControl;
+impl<S> Deref for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    type Target = QueueControl<S>;
 
     fn deref(&self) -> &Self::Target {
         &self.control
     }
 }
 
-impl Queue {
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Build a queue from a [`QueueConfig`].
     ///
     /// The queue takes ownership of the supplied [`PlayerImpl`]; all access to
     /// the decorated player then goes through this facade.
     #[must_use]
-    pub fn new(config: QueueConfig) -> Self {
+    pub fn new(config: QueueConfig<S>) -> Self {
         let QueueConfig {
             player,
             store,
@@ -161,10 +191,9 @@ impl Queue {
         } = config;
         let cancel = CancelScope::new(config_cancel).token();
         let store = store.unwrap_or_else(|| {
-            AssetStore::builder()
+            AssetStore::builder(player.pools().clone())
                 .backend(StorageBackend::default())
                 .cancel(cancel.child())
-                .pool(player.byte_pool().clone())
                 .build()
         });
         player.set_auto_advance_enabled(false);
@@ -208,7 +237,10 @@ impl Queue {
     }
 }
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     pub(crate) fn invalidate(&self) {
         self.shutdown.cancel();
     }
@@ -303,9 +335,9 @@ impl QueueControl {
     delegate::delegate! {
         to self.tracks {
             #[call(lock)]
-            pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>>;
+            pub(super) fn lock_tracks(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
             #[call(lock)]
-            pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>>;
+            pub(super) fn lock_tracks_mut(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>>;
             pub(super) fn set_status(&self, id: TrackId, status: kithara_events::TrackStatus);
         }
         to self.crossfade_armed_for {
@@ -325,7 +357,10 @@ impl QueueControl {
     }
 }
 
-impl Drop for Queue {
+impl<S> Drop for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn drop(&mut self) {
         self.control.invalidate();
     }
@@ -340,7 +375,6 @@ pub(crate) mod tests {
     };
 
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::Region;
     use kithara_events::{Envelope, Event, EventReceiver, QueueEvent};
     use kithara_platform::{
         sync::{Arc, Mutex},
@@ -354,8 +388,9 @@ pub(crate) mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{TestPools, pools};
 
-    pub(in crate::queue) fn make_queue() -> Queue {
+    pub(in crate::queue) fn make_queue() -> Queue<TestPools> {
         Queue::new(queue_config())
     }
 
@@ -364,8 +399,8 @@ pub(crate) mod tests {
         nodes: Mutex<Vec<NodeInputs>>,
     }
 
-    impl SessionDispatcher for TestSession {
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+    impl SessionDispatcher<TestPools> for TestSession {
+        fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             let reply = match cmd {
                 Cmd::RegisterPlayer { .. } => Reply::PlayerRegistered(1),
                 Cmd::AllocateSlot { .. } => {
@@ -386,22 +421,19 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn test_session() -> Arc<dyn SessionDispatcher> {
+    pub(crate) fn test_session() -> Arc<dyn SessionDispatcher<TestPools>> {
         Arc::new(TestSession {
             next_slot: AtomicU64::new(0),
             nodes: Mutex::default(),
         })
     }
 
-    fn queue_config() -> QueueConfig {
+    fn queue_config() -> QueueConfig<TestPools> {
         QueueConfig::builder().player(player()).build()
     }
 
-    fn player() -> PlayerImpl {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+    fn player() -> PlayerImpl<TestPools> {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

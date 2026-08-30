@@ -3,7 +3,6 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
-use kithara_bufpool::{BytePool, SamplePool};
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, spawn_webcodecs_probe,
@@ -17,6 +16,11 @@ use num_traits::ToPrimitive;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioDecoder, AudioDecoderConfig, AudioDecoderSupport};
+
+#[path = "../src/test_pools.rs"]
+mod test_pools;
+
+use test_pools::{TestPools, default_pools};
 
 const MP3: &[u8] = include_bytes!("../../../assets/test.mp3");
 const FLAC: &[u8] = include_bytes!("../../../assets/sawtooth.flac");
@@ -306,7 +310,7 @@ async fn he_aac_v2_decode() {
 }
 
 async fn prepare_webcodecs(codec: &str) {
-    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(SamplePool::default()));
+    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(default_pools()));
     assert_browser_support(codec).await;
     for _ in 0..100 {
         if webcodecs_runtime_ready(codec) {
@@ -394,11 +398,10 @@ async fn assert_browser_support(codec: &str) {
     assert!(support, "WebCodecs unsupported in test browser: {codec}");
 }
 
-fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend> {
-    DecoderConfig::<NoResamplerBackend>::builder()
+fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend, TestPools> {
+    DecoderConfig::<NoResamplerBackend, TestPools>::builder()
         .backend(backend)
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
+        .pools(default_pools())
         .build()
 }
 

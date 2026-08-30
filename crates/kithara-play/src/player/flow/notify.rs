@@ -1,5 +1,6 @@
 use std::{ops::Deref, sync::atomic::Ordering};
 
+use kithara_bufpool::HasPool;
 use kithara_events::Event;
 use kithara_platform::sync::Arc;
 
@@ -9,25 +10,28 @@ use crate::{
     bridge::{PlayerNotification, TrackPlaybackStopReason},
 };
 
-struct Notifier<'a> {
-    player: &'a PlayerRuntime,
+struct Notifier<'a, S> {
+    player: &'a PlayerRuntime<S>,
 }
 
-impl<'a> Notifier<'a> {
-    const fn new(player: &'a PlayerRuntime) -> Self {
+impl<'a, S> Notifier<'a, S> {
+    const fn new(player: &'a PlayerRuntime<S>) -> Self {
         Self { player }
     }
 }
 
-impl Deref for Notifier<'_> {
-    type Target = PlayerRuntime;
+impl<S> Deref for Notifier<'_, S> {
+    type Target = PlayerRuntime<S>;
 
     fn deref(&self) -> &Self::Target {
         self.player
     }
 }
 
-impl Notifier<'_> {
+impl<S> Notifier<'_, S>
+where
+    S: HasPool<f32>,
+{
     fn dispatch_notification(&self, slot_id: SlotId, notification: &PlayerNotification) {
         if self.natural_end_outranked_by_seek(slot_id, notification) {
             tracing::debug!(
@@ -234,7 +238,10 @@ impl Notifier<'_> {
     }
 }
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<f32>,
+{
     pub fn process_notifications(&self) {
         Notifier::new(self).process_notifications();
     }
@@ -261,8 +268,8 @@ pub(crate) fn player_event_from_notification(
     }
 }
 
-fn player_events_from_notification(
-    player: &PlayerRuntime,
+fn player_events_from_notification<S>(
+    player: &PlayerRuntime<S>,
     notification: &PlayerNotification,
     item: &ItemRole,
 ) -> Vec<Event> {
@@ -297,7 +304,6 @@ fn player_events_from_notification(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_events::{Envelope, Event, EventReceiver, TrackId};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
@@ -310,6 +316,7 @@ mod tests {
             state::{PendingNext, PendingNextState},
         },
         session::testing,
+        test_pools::{TestPools, default_pools},
     };
 
     struct Items;
@@ -321,10 +328,8 @@ mod tests {
     }
 
     /// A started player holding one slot — the slot the phase calls current.
-    fn player_with_slot() -> (PlayerImpl, SlotId) {
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        );
+    fn player_with_slot() -> (PlayerImpl<TestPools>, SlotId) {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)
@@ -341,7 +346,7 @@ mod tests {
     /// Put the slot mid-crossfade: the successor is loaded into this same
     /// slot's arena and already promoted over the outgoing track, exactly
     /// as `commit_next` leaves it.
-    fn activate_pending(player: &PlayerImpl, item_id: TrackId, src: &str) {
+    fn activate_pending(player: &PlayerImpl<TestPools>, item_id: TrackId, src: &str) {
         let mut phase = player.phase.lock();
         let Some(pending) = phase.pending_mut() else {
             panic!("BUG: an active phase must carry a pending slot");

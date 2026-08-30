@@ -11,7 +11,6 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -25,7 +24,11 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+};
 use kithara_integration_tests::{
     TestTempDir, kithara,
     offline::OfflineSession,
@@ -45,11 +48,11 @@ const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807
 /// Build a prod-DRM track via the same `kithara-app` source resolver
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
-fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource {
+fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
     crate::kithara_queue::app_track_source(
         url,
         &ctx.config,
-        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        crate::kithara_queue::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,
@@ -62,25 +65,22 @@ struct ProdCtx {
 }
 
 fn build_prod_ctx() -> ProdCtx {
-    let byte_pool = BytePool::default();
-    let net = NetOptions::builder()
-        .byte_pool(byte_pool.clone())
-        .is_insecure(true)
-        .build();
+    let pools = app_pools().expect("build app pool region");
+    let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+        PlayWorkerConfig::builder(pools)
             .cancel(shutdown.child())
             .build(),
     );
@@ -146,7 +146,7 @@ async fn run_prod_drm_scenario(url: &str, actions: Vec<Action>) {
     let _ = tick.await;
 }
 
-async fn apply_action_to_queue(queue: &Arc<Queue>, action: &Action) {
+async fn apply_action_to_queue(queue: &Arc<Queue<AppPools>>, action: &Action) {
     use kithara::play::SeekOutcome;
     let label = action.label();
     let duration = queue.duration_seconds().unwrap_or(0.0);
@@ -594,7 +594,7 @@ const RENDER_POLL: Duration = Duration::from_millis(20);
 /// stall this scenario hunts.
 async fn render_audio_frames(
     session: &OfflineSession,
-    queue: &Queue,
+    queue: &Queue<AppPools>,
     target_frames: usize,
     label: &str,
 ) -> Vec<f32> {
@@ -626,7 +626,7 @@ async fn render_audio_frames(
 /// (see [`render_audio_frames`]), so counting blocks bounds nothing.
 async fn wait_for_handover(
     session: &OfflineSession,
-    queue: &Queue,
+    queue: &Queue<AppPools>,
     track_id: kithara::events::TrackId,
     label: &str,
 ) {

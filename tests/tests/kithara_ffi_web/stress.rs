@@ -14,6 +14,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, SAW_PERIOD, TestServerHelper, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::{DataMode, InitMode},
     phase_distance, phase_from_f32,
 };
@@ -117,24 +118,23 @@ async fn init() {
 }
 
 /// Create a registered HLS audio pipeline in ephemeral mode.
-async fn create_pipeline() -> RegisteredAudio<Stream<Hls>> {
+async fn create_pipeline() -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     create_pipeline_with_url(fixture_url()).await
 }
 
-async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
+async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
-    let byte_pool = kithara::bufpool::BytePool::default();
-    let sample_pool = kithara::bufpool::SamplePool::default();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(byte_pool.clone())
                 .build(),
         )
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
@@ -142,10 +142,10 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, sample_pool).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker.open(config).await.unwrap();
     audio
         .preload()
@@ -153,7 +153,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
     audio
 }
 
-async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
+async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -264,7 +264,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
 async fn read_with_yield(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
@@ -273,7 +273,7 @@ async fn read_with_yield(
 /// Read with configurable retry limit. `None` is the end of the stream;
 /// `Some(0)` is a reader that stayed pending for the whole budget.
 async fn read_with_yield_limit(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     max_yields: usize,
 ) -> Option<usize> {

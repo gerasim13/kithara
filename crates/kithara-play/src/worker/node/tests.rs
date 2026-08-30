@@ -7,7 +7,6 @@ use kithara_audio::{
     AudioSource, Fetch, PreloadGate, ProducerPort, SourceEnd, TrackStep, WaitingReason,
     mock::AudioSourceMock,
 };
-use kithara_bufpool::{BytePool, SamplePool};
 use kithara_events::{AudioEvent, DeferredBus, Event, EventBus};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -23,6 +22,7 @@ use unimock::{MockFn, Unimock, matching};
 use super::*;
 use crate::{
     effects::EffectDrain,
+    test_pools::{default_pools, sample_buffer},
     worker::{
         EngineLoad, WarpSource,
         scheduler::{AtomicServiceClass, Node, ServiceClass, TickResult},
@@ -30,10 +30,7 @@ use crate::{
 };
 
 fn empty_chunk() -> AudioChunk {
-    AudioChunk::new(
-        AudioChunkInfo::default(),
-        SamplePool::default().attach(Vec::new()),
-    )
+    AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]))
 }
 
 fn test_node<S>(
@@ -180,11 +177,13 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
         seek: Arc::clone(&seek),
     };
     let effects = Vec::new();
-    let drain = EffectDrain::new(effects.len(), &BytePool::default());
+    let pools = default_pools();
+    let drain = EffectDrain::new(effects.len(), &pools)
+        .unwrap_or_else(|error| panic!("test effect drain: {error}"));
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
     let config = kithara_warp::WarpConfig::builder().build();
     let warp = kithara_warp::Warp::new((), &config);
-    let renderer = warp.renderer(spec, SamplePool::default());
+    let renderer = warp.renderer(spec, pools);
     let source = WarpSource::new(source, renderer, effects, drain, spec);
     let (port, mut pop) = ProducerPort::probe(1);
     let bus = EventBus::new(8);
@@ -229,7 +228,7 @@ fn decoder_node_records_engine_load_on_produced() {
             frames: 4_410,
             ..Default::default()
         },
-        SamplePool::default().attach(vec![0.0f32; 4_410 * 2]),
+        sample_buffer(&vec![0.0f32; 4_410 * 2]),
     );
     let source = Unimock::new(
         AudioSourceMock::step_track

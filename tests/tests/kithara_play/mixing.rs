@@ -7,7 +7,6 @@ use std::{
 
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, SamplePool},
     events::TrackId,
     platform::{
         sync::Arc,
@@ -23,6 +22,8 @@ use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflineSession, resource_from_reader},
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -60,8 +61,8 @@ impl CountingSession {
     }
 }
 
-impl SessionDispatcher for CountingSession {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl SessionDispatcher<TestPools> for CountingSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         if let Cmd::SetPlayerMasterVolumes { levels } = &cmd {
             self.batches.fetch_add(1, Ordering::SeqCst);
             self.last_batch_len.store(levels.len(), Ordering::SeqCst);
@@ -86,7 +87,7 @@ fn counting_session_preserves_inner_consumer_wake_mode() {
 
 struct MixHarness {
     session: Arc<CountingSession>,
-    players: Vec<Arc<PlayerImpl>>,
+    players: Vec<Arc<PlayerImpl<TestPools>>>,
 }
 
 impl MixHarness {
@@ -97,15 +98,12 @@ impl MixHarness {
         let players = (0..count)
             .map(|_| {
                 let config = PlayerConfig::builder()
-                    .worker(PlayWorker::new(
-                        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default())
-                            .build(),
-                    ))
+                    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
                     .sample_rate(
                         NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero"),
                     )
                     .crossfade_duration(0.0)
-                    .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+                    .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
                     .build();
                 Arc::new(PlayerImpl::new(config))
             })
@@ -134,7 +132,7 @@ impl MixHarness {
     }
 
     fn apply(&self, levels: &[f32]) -> Result<(), PlayError> {
-        let inputs: Vec<(&PlayerImpl, f32)> = self
+        let inputs: Vec<(&PlayerImpl<TestPools>, f32)> = self
             .players
             .iter()
             .zip(levels)

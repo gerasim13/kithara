@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::mpsc::{Receiver, TryRecvError};
 use kithara_resampler::ResamplerBackend;
 
@@ -5,21 +6,22 @@ pub(crate) use super::task::Job;
 use super::{AnalysisStep, AnalysisTask};
 use crate::analyzer::{AnalysisFingerprint, AnalyzerBuilder, Detector};
 
-pub(crate) struct AnalysisNode<B>
+pub(crate) struct AnalysisNode<B, S>
 where
     B: ResamplerBackend,
 {
-    builder: AnalyzerBuilder<B>,
-    current: Option<AnalysisTask<B>>,
+    builder: AnalyzerBuilder<B, S>,
+    current: Option<AnalysisTask<B, S>>,
     detector: Option<Detector>,
     jobs: Receiver<Job>,
 }
 
-impl<B> AnalysisNode<B>
+impl<B, S> AnalysisNode<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub(crate) fn new(mut builder: AnalyzerBuilder<B>, jobs: Receiver<Job>) -> Self {
+    pub(crate) fn new(mut builder: AnalyzerBuilder<B, S>, jobs: Receiver<Job>) -> Self {
         let detector = builder.take_detector();
         Self {
             builder,
@@ -45,9 +47,10 @@ where
     }
 }
 
-impl<B> AnalysisNode<B>
+impl<B, S> AnalysisNode<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn cancel(&mut self) {
         self.current = None;

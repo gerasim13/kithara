@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::AudioChunk;
 
 use super::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
@@ -13,21 +14,23 @@ pub struct EqEffect {
 
 impl EqEffect {
     /// Create a new EQ effect with the given bands and audio format.
-    #[must_use]
-    pub fn new(
-        config: &EqConfig,
+    pub fn new<S>(
+        config: &EqConfig<S>,
         bands: Vec<EqBandConfig>,
         sample_rate: u32,
         channels: u16,
-    ) -> Self {
-        let eq_l = IsolatorEq::new(config, &bands, sample_rate);
-        let eq_r = IsolatorEq::new(config, &bands, sample_rate);
-        Self {
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        let eq_l = IsolatorEq::new(config, &bands, sample_rate)?;
+        let eq_r = IsolatorEq::new(config, &bands, sample_rate)?;
+        Ok(Self {
             eq_l,
             eq_r,
             bands,
             channels,
-        }
+        })
     }
 
     /// Get the band layout. Gains reflect target values.
@@ -99,11 +102,11 @@ impl AudioEffect for EqEffect {
 mod tests {
     use std::{f32::consts::PI, num::NonZeroU32};
 
-    use kithara_bufpool::SamplePool;
     use kithara_signal::{AudioChunkInfo, AudioSpec};
     use kithara_test_utils::kithara;
 
     use super::{super::*, *};
+    use crate::test_pools::{default_pools, sample_buffer};
 
     struct EqFixture;
 
@@ -119,18 +122,20 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            SamplePool::default().attach(samples),
+            sample_buffer(&samples),
         )
     }
 
     fn make_eq(bands: Vec<EqBandConfig>, sample_rate: u32, channels: u16) -> EqEffect {
-        let config = EqConfig::for_pool(SamplePool::default()).build();
+        let config = EqConfig::builder(default_pools()).build();
         EqEffect::new(&config, bands, sample_rate, channels)
+            .unwrap_or_else(|error| panic!("test EQ: {error}"))
     }
 
     fn make_isolator(bands: &[EqBandConfig], sample_rate: u32) -> IsolatorEq {
-        let config = EqConfig::for_pool(SamplePool::default()).build();
+        let config = EqConfig::builder(default_pools()).build();
         IsolatorEq::new(&config, bands, sample_rate)
+            .unwrap_or_else(|error| panic!("test isolator: {error}"))
     }
 
     #[kithara::test]

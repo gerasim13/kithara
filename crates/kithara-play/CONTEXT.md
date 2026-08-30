@@ -24,6 +24,28 @@ Contracts and invariants for the kithara-play crate; the README is the overview.
 entry files bind API state, RT controls, and session commands), so `.config/arch/thresholds.toml` raises
 `module_fan_out` to 9 for this crate; do not add re-export hops solely to lower that count.
 
+## Buffer Pool Ownership
+
+The application composition root declares one closed schema with
+`kithara_bufpool::pool_schema!` and builds one `PoolRegion<S>`. `PlayWorker<S>`
+owns a clone of that facade; player, resource, worker, Warp, and session
+registration paths propagate the same schema instead of exposing separate byte
+and sample pools. A requested key must implement `HasPool<K>` for `S`, so an
+unregistered pool is rejected while compiling the composition root.
+
+All registered pools reserve from the region's one hard `OverallBudget`.
+Per-pool `max_share` values are additional ceilings, not partitions: giving the
+byte and sample pools `Percent::FULL` lets peak demand compete for the full
+regional cap without allowing their combined allocations to exceed it.
+`PoolConfig::initial_buffers` and `initial_capacity` own eager allocation;
+zero initial buffers leave allocation lazy without a separate warm-up API.
+
+Checked buffer growth and playback scratch construction propagate `PoolError`
+through `PlayError`. The master EQ is the deliberate degraded-mode exception:
+if its control-thread scratch allocation fails, `MasterEqProcessor` logs the
+error and remains a transparent bypass. This keeps the audio graph usable and
+does not create a second allocation path or an unpooled fallback.
+
 ## Domain Policies
 
 `policy` is the orchestration-level owner of domain matching - not `kithara-assets`,

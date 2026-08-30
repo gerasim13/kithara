@@ -3,6 +3,7 @@ use std::{io::ErrorKind, ops::Range};
 use kithara_assets::{
     AssetScope, AssetsError, AssetsResult, ReadSide, ResourceAcquisition, ResourceKey,
 };
+use kithara_bufpool::HasPool;
 use kithara_stream::{StreamError, StreamResult};
 use url::Url;
 
@@ -10,22 +11,28 @@ use crate::{HlsError, decrypt_processor::as_process_ctx, segment::SegmentContent
 
 #[derive(Clone, Copy, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct ResourceHandle<'a> {
-    scope: &'a AssetScope,
+pub(crate) struct ResourceHandle<'a, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    scope: &'a AssetScope<S>,
     key: &'a ResourceKey,
     #[field(get, vis = "pub(crate)")]
     url: &'a Url,
 }
 
-impl<'a> ResourceHandle<'a> {
-    pub(crate) const fn new(scope: &'a AssetScope, key: &'a ResourceKey, url: &'a Url) -> Self {
+impl<'a, S> ResourceHandle<'a, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) const fn new(scope: &'a AssetScope<S>, key: &'a ResourceKey, url: &'a Url) -> Self {
         Self { scope, key, url }
     }
 
     /// Acquire the resource for the write path, branching on the segment's
     /// decryption disposition: `Plain` acquires cleartext; `Encrypted` carries
     /// the AES-128 [`DecryptContext`] forward as the processing context.
-    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<ResourceAcquisition> {
+    pub(crate) fn acquire(&self, content: &SegmentContent) -> AssetsResult<ResourceAcquisition<S>> {
         match content {
             SegmentContent::Plain => self.scope.store().acquire_resource(self.key, None),
             SegmentContent::Encrypted(c) => self.scope.store().acquire_resource_with_ctx(
@@ -79,13 +86,15 @@ mod tests {
 
     use super::*;
 
-    fn segment_fixture(dir: &std::path::Path) -> (AssetScope, ResourceKey, Url) {
-        let store = AssetStore::builder()
+    fn segment_fixture(
+        dir: &std::path::Path,
+    ) -> (AssetScope<crate::test_pools::TestPools>, ResourceKey, Url) {
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk { root: dir.into() })
             .build();
         let url = Url::parse("https://example.com/media/seg0.m4s").expect("segment url");
         let scope = store
-            .scope::<crate::Hls>(&AssetSource::Remote {
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
                 discriminator: None,
             })

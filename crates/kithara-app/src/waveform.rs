@@ -7,8 +7,7 @@ use kithara::{
         AnalyzerBuilder, BeatAnalysisConfig,
     },
     audio::AudioReader,
-    bufpool::SamplePool,
-    prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
+    prelude::{PlaybackResamplerBackend, Resource},
 };
 use kithara_platform::{
     CancelToken,
@@ -21,7 +20,7 @@ use kithara_platform::{
 use tracing::warn;
 
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
-type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
+use crate::pools::{AppResourceConfig, Pools};
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
 /// off the player runtime, hands the opened reader to the worker thread,
@@ -57,9 +56,9 @@ impl TrackAnalysisRunner {
         master: &CancelToken,
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
-        sample_pool: SamplePool,
+        pools: Pools,
     ) -> Self {
-        let builder = AnalyzerBuilder::new(sample_pool).with_beat_config(beat_config);
+        let builder = AnalyzerBuilder::new(pools).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();

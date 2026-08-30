@@ -4,7 +4,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use kithara::{
     audio::{AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome},
-    bufpool::SamplePool,
     decode::{
         DecodeError, GaplessInfo, GaplessMode, GaplessTailCompensation, GaplessTrimmer,
         SilenceTrimParams, TrackMetadata,
@@ -14,7 +13,7 @@ use kithara::{
         sync::Arc,
         time::{self, Duration, Instant},
     },
-    play::{PlayerEvent, Resource, ResourceConfig, apply_mix},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, apply_mix},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     stream::AudioCodec,
 };
@@ -37,10 +36,13 @@ use kithara_integration_tests::{
     temp_dir,
 };
 
-use crate::gapless_common::{
-    AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
-    AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS,
-    GAPLESS_SAMPLE_RATE,
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    gapless_common::{
+        AAC_FRAME_SAMPLES, AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_FRAMES,
+        AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS, AAC_GAPLESS_TRAILING_DELAY,
+        GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+    },
 };
 
 const BLOCK_FRAMES: usize = 512;
@@ -712,7 +714,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
 }
 
 async fn create_resource(
-    player: &kithara::play::player::PlayerControl,
+    player: &kithara::play::player::PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -736,7 +738,7 @@ async fn create_resource(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_resource_with_encoding(
-    player: &kithara::play::player::PlayerControl,
+    player: &kithara::play::player::PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -770,8 +772,8 @@ async fn create_resource_with_encoding(
         .expect("create gapless e2e HLS fixture");
 
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
@@ -794,7 +796,7 @@ async fn create_resource_with_encoding(
     reason = "fixture builder: each parameter pins one HLS-fixture knob"
 )]
 async fn create_apple_fused_resource(
-    player: &kithara::play::player::PlayerControl,
+    player: &kithara::play::player::PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     encoder_delay: Option<u32>,
@@ -835,7 +837,7 @@ async fn create_apple_fused_resource(
         )
         .build();
     let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .decoder(
@@ -946,9 +948,8 @@ fn synthetic_interleaved_chunk(frames: Vec<f32>) -> AudioChunk {
     );
     let frame_count = frames.len();
     let sample_count = frame_count * usize::from(GAPLESS_CHANNELS);
-    let mut samples = SamplePool::default().get();
-    samples
-        .ensure_len(sample_count)
+    let mut samples = pools()
+        .get_with_len::<f32>(sample_count)
         .expect("synthetic chunk exceeds PCM pool budget");
     for (frame, sample) in frames.into_iter().enumerate() {
         let offset = frame * usize::from(GAPLESS_CHANNELS);

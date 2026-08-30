@@ -10,11 +10,24 @@ use std::path::{Path, PathBuf};
 
 use common::{Score, f_measure, load_golden};
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 use kithara_test_utils::kithara;
 
 const WINDOW: f64 = 0.070;
 const SMALL_MIN_F: f64 = 0.99;
+
+pool_schema! {
+    pub TestPools {
+        samples: f32,
+    }
+}
+
+fn pools() -> PoolRegion<TestPools> {
+    TestPools::builder(OverallBudget(256 * 1024 * 1024))
+        .samples(PoolConfig::builder().max_buffers(128).build())
+        .build()
+        .unwrap_or_else(|error| panic!("test pool region: {error}"))
+}
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -55,7 +68,7 @@ fn python_parity_small_model() {
     let mut bt = BeatThis::builder()
         .mel_model(MEL_MODEL_BYTES)
         .beat_model(BEAT_MODEL_BYTES)
-        .sample_pool(SamplePool::default())
+        .pools(pools())
         .build()
         .unwrap_or_else(|e| panic!("BeatThis::builder failed: {e}"));
     let raw = bt

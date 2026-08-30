@@ -121,13 +121,9 @@ impl AssetDeleter for DiskAssetDeleter {
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` with its own unshared
     /// [`AvailabilityIndex`]. Convenient for tests; production
-    /// construction (via `AssetStore::builder().build()`) uses
+    /// construction (via `AssetStore::builder(pools).build()`) uses
     /// [`DiskAssetStore::with_availability_and_deleter`].
-    pub fn new<P: Into<PathBuf>>(
-        root_dir: P,
-        cancel: CancelToken,
-        _pool: &kithara_bufpool::BytePool,
-    ) -> Self {
+    pub fn new<P: Into<PathBuf>>(root_dir: P, cancel: CancelToken) -> Self {
         let root_dir = root_dir.into();
         let availability = AvailabilityIndex::new();
         let pins = crate::index::PinsIndex::ephemeral();
@@ -490,11 +486,7 @@ mod tests {
         let file_path = dir.path().join("local_audio.mp3");
         fs::write(&file_path, b"fake audio data").unwrap();
 
-        let store = DiskAssetStore::new(
-            dir.path().join("cache"),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        );
+        let store = DiskAssetStore::new(dir.path().join("cache"), CancelToken::never());
 
         let key = ResourceKey::absolute(&file_path).expect("absolute test path");
         let res = store.open_resource(&key, None).unwrap();
@@ -513,11 +505,7 @@ mod tests {
     #[kithara::test]
     fn an_unconfirmed_file_is_not_served_as_ready() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DiskAssetStore::new(
-            dir.path().to_path_buf(),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        );
+        let store = DiskAssetStore::new(dir.path().to_path_buf(), CancelToken::never());
         let key = ResourceKey::relative("asset", "segments/0001.bin");
         let path = dir.path().join("asset").join("segments").join("0001.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -592,11 +580,7 @@ mod tests {
     #[kithara::test]
     fn writing_a_segment_does_not_resize_its_backing_file() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DiskAssetStore::new(
-            dir.path().to_path_buf(),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        );
+        let store = DiskAssetStore::new(dir.path().to_path_buf(), CancelToken::never());
         let key = ResourceKey::relative("asset", "segments/0001.bin");
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("a fresh segment key must acquire a writer");
@@ -623,11 +607,7 @@ mod tests {
     #[kithara::test]
     fn a_committed_segment_keeps_only_its_own_bytes() {
         let dir = tempfile::tempdir().unwrap();
-        let store = DiskAssetStore::new(
-            dir.path().to_path_buf(),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        );
+        let store = DiskAssetStore::new(dir.path().to_path_buf(), CancelToken::never());
         let key = ResourceKey::relative("asset", "segments/0001.bin");
         let AcquisitionResult::Pending(writer) = store.acquire_resource(&key, None).unwrap() else {
             panic!("a fresh segment key must acquire a writer");
@@ -650,11 +630,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("local_audio.mp3");
         fs::write(&file_path, b"fake audio data").unwrap();
-        let store = DiskAssetStore::new(
-            dir.path().join("cache"),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        );
+        let store = DiskAssetStore::new(dir.path().join("cache"), CancelToken::never());
         let key = ResourceKey::absolute(&file_path).expect("absolute test path");
 
         assert!(matches!(

@@ -3,7 +3,6 @@ use std::{collections::VecDeque, num::NonZeroU32};
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, PendingReason, ReadOutcome, SeekOutcome,
 };
-use kithara_bufpool::SamplePool;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -14,6 +13,7 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use unimock::{MockFn, Unimock, matching};
 
+use crate::test_pools::sample_buffer;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     analyzer::TrackAnalysis,
@@ -109,7 +109,7 @@ pub(super) fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().collect(samples.iter().copied()),
+        sample_buffer(samples),
     )
 }
 

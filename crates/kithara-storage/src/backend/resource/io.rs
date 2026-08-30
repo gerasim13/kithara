@@ -170,12 +170,16 @@ mod tests {
             resource::state::ResourceCore,
             traits::DriverIo,
         },
+        test_pools::byte_buffer,
     };
 
     /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
     fn open_mem() -> ResourceCore<MemDriver> {
-        ResourceCore::open(CancelToken::never(), MemOptions::builder().build())
-            .expect("open mem must succeed")
+        ResourceCore::open(
+            CancelToken::never(),
+            MemOptions::builder().buffer(byte_buffer()).build(),
+        )
+        .expect("open mem must succeed")
     }
 
     /// Open a fresh, uncommitted mmap-backed resource at `path` (mode/len at
@@ -205,6 +209,7 @@ mod tests {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
             MemOptions::builder()
+                .buffer(byte_buffer())
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )
@@ -243,6 +248,7 @@ mod tests {
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
             MemOptions::builder()
+                .buffer(byte_buffer())
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )

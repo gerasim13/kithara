@@ -1,12 +1,12 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SamplePool;
 use kithara_decode::BlenderProfile;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::kithara;
 
 use super::GaplessBlender;
+use crate::test_pools::{pools, sample_buffer};
 
 fn spec(channels: u16, sample_rate: u32) -> AudioSpec {
     AudioSpec::new(
@@ -30,12 +30,12 @@ fn chunk(spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
             frame_offset: 9_876,
             source_bytes: 512,
         },
-        SamplePool::default().attach(samples),
+        sample_buffer(&samples),
     )
 }
 
 fn blender(profile: BlenderProfile) -> GaplessBlender {
-    GaplessBlender::new(profile, &SamplePool::default())
+    GaplessBlender::new(profile, &pools()).expect("blender scratch fits test pools")
 }
 
 #[kithara::test]
@@ -72,7 +72,9 @@ fn replacing_active_profile_accepts_the_new_spec() {
     let replacement = spec(6, 48_000);
     let mut blender = blender(BlenderProfile::new(initial));
 
-    blender.prepare_active(BlenderProfile::new(replacement));
+    blender
+        .prepare_active(BlenderProfile::new(replacement))
+        .expect("replacement scratch fits test pools");
     let capacities_before = blender.buffer_capacities();
     let prepared_capacity = blender.buffer_capacities().1;
     blender.replace_active(BlenderProfile::new(replacement));
@@ -115,7 +117,9 @@ fn real_outgoing_pcm_is_blended_for_the_full_linear_join() {
         .map(|sample| deterministic_sample(sample + 19, 53, 251))
         .collect::<Vec<_>>();
     let mut blender = blender(BlenderProfile::new(spec));
-    blender.prepare_active(BlenderProfile::new(spec));
+    blender
+        .prepare_active(BlenderProfile::new(spec))
+        .expect("join scratch fits test pools");
     assert!(blender.prepare_join(|tail| {
         tail.copy_from_slice(&outgoing);
         true
@@ -166,7 +170,9 @@ fn reset_cancels_an_active_join() {
     let channels = usize::from(spec.channels);
     let outgoing = vec![-0.75; JOIN_FRAMES * channels];
     let mut blender = blender(BlenderProfile::new(spec));
-    blender.prepare_active(BlenderProfile::new(spec));
+    blender
+        .prepare_active(BlenderProfile::new(spec))
+        .expect("join scratch fits test pools");
     assert!(blender.prepare_join(|tail| {
         tail.copy_from_slice(&outgoing);
         true

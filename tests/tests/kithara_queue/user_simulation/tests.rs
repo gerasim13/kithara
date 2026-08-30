@@ -4,7 +4,6 @@
 use std::fmt::Write;
 
 use kithara::{
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::AbrMode,
     net::{HttpClient, NetOptions},
@@ -27,6 +26,7 @@ use super::{
     harness::{SimHarness, TrackSpec},
     scenarios,
 };
+use crate::bufpool_ext::pools;
 
 /// AES-128 key+IV pair shared across the integration suite. Mirrors
 /// `track_replay_after_switch.rs::Consts::AES_KEY` and the
@@ -398,15 +398,17 @@ async fn user_sim_seek_immediately_after_loaded(#[case] kind: TrackKind, #[case]
     .await;
     let temp = temp_dir();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-    );
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let cfg = kithara::play::ResourceConfig::for_src(
-        kithara::play::ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+        kithara::play::ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
     )
     .worker(worker.clone())
     .downloader(downloader.clone())

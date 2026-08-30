@@ -31,6 +31,7 @@
 //! `stress_chunk_integrity` asserts).
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     decode::{DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -44,6 +45,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     SAW_PERIOD, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     phase_from_f32,
     signal_pcm::{Finite, SignalPcm, signal},
@@ -113,15 +115,23 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().into(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel)
         // Manual variant 0 — no ABR, no recreate; isolate the read-ahead strand.
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let stream = Stream::<Hls>::new(hls_config)
+    let stream = Stream::<Hls<TestPools>>::new(hls_config)
         .await
         .expect("build Stream<Hls> over WAV fixture");
 
@@ -171,14 +181,14 @@ async fn wav_hls_read_ahead_strand_at_not_ready_boundary_keeps_saw_continuous() 
     let decode = spawn_blocking(move || -> (Vec<(u64, Vec<f32>)>, usize) {
         let byte_len = stream.len().unwrap_or(0);
         let byte_map = stream.byte_map();
-        let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
-            .backend(DecoderBackend::Symphonia)
-            .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
-            .maybe_byte_map(byte_map)
-            .hint("wav")
-            .build();
+        let decoder_config =
+            DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+                .pools(pools)
+                .backend(DecoderBackend::Symphonia)
+                .byte_len_handle(Arc::new(std::sync::atomic::AtomicU64::new(byte_len)))
+                .maybe_byte_map(byte_map)
+                .hint("wav")
+                .build();
         let mut decoder = DecoderFactory::create_from_media_info(stream, &wav_info, decoder_config)
             .expect("build Symphonia WAV decoder over Stream<Hls>");
 

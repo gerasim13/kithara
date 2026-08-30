@@ -26,10 +26,10 @@ fn allocate_grid_id() -> BeatGridId {
 }
 
 /// Configuration for the player.
-#[derive(Clone, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct PlayerConfig {
+pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
     #[builder(default = allocate_grid_id())]
     pub(crate) grid_id: BeatGridId,
@@ -39,7 +39,7 @@ pub struct PlayerConfig {
     pub(crate) timestretch: Arc<StretchControls>,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
-    pub(crate) worker: PlayWorker,
+    pub(crate) worker: PlayWorker<S>,
     /// How resources created for this player trim leading/trailing audio.
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
@@ -51,7 +51,7 @@ pub struct PlayerConfig {
     pub(crate) cancel: Option<CancelToken>,
     /// Optional pre-bound session for isolated harnesses. Production players
     /// are constructed unbound and attached exactly once by their Host.
-    pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
+    pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
     /// EQ band layout. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
@@ -77,7 +77,29 @@ pub struct PlayerConfig {
     pub(crate) max_slots: usize,
 }
 
-impl fmt::Debug for PlayerConfig {
+impl<S> Clone for PlayerConfig<S> {
+    fn clone(&self) -> Self {
+        Self {
+            grid_id: self.grid_id,
+            timestretch: Arc::clone(&self.timestretch),
+            worker: self.worker.clone(),
+            gapless_mode: self.gapless_mode,
+            abr: self.abr.clone(),
+            bus: self.bus.clone(),
+            cancel: self.cancel.clone(),
+            session: self.session.clone(),
+            eq_layout: self.eq_layout.clone(),
+            auto_advance_enabled: self.auto_advance_enabled,
+            crossfade_duration: self.crossfade_duration,
+            default_rate: self.default_rate,
+            prefetch_duration: self.prefetch_duration,
+            sample_rate: self.sample_rate,
+            max_slots: self.max_slots,
+        }
+    }
+}
+
+impl<S> fmt::Debug for PlayerConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PlayerConfig")
             .field("gapless_mode", &self.gapless_mode)

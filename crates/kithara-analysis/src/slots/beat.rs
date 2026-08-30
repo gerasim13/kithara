@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
@@ -35,13 +35,16 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(&self, rate: NonZeroU32, sample_pool: &SamplePool) -> Slot<B> {
+    pub(crate) fn build<S>(&self, rate: NonZeroU32, pools: &PoolRegion<S>) -> Slot<B>
+    where
+        S: HasPool<f32>,
+    {
         Slot(self.0.as_ref().map(|config| {
             let pass = BeatPassConfig::builder()
                 .source_rate(rate.get())
                 .params(config.params.clone())
                 .resampler(config.resampler.clone())
-                .sample_pool(sample_pool.clone())
+                .pools(pools.clone())
                 .build();
             BeatPass::new(pass)
         }))
@@ -51,10 +54,13 @@ where
         self.0.is_none()
     }
 
-    pub(crate) fn take_detector(&mut self, sample_pool: &SamplePool) -> Option<Detector> {
+    pub(crate) fn take_detector<S>(&mut self, pools: &PoolRegion<S>) -> Option<Detector>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         let source = self.0.as_mut()?.detector.take()?;
         let detector = match source {
-            DetectorConfig::Default => default_beat_detector(sample_pool),
+            DetectorConfig::Default => default_beat_detector(pools),
             #[cfg(test)]
             DetectorConfig::Custom(detector) => Some(detector),
         };
@@ -129,15 +135,18 @@ where
         analyzer.snapshot(detector.as_mut(), ending, extent)
     }
 
-    pub(crate) fn push(
+    pub(crate) fn push<S>(
         &mut self,
+        pools: &PoolRegion<S>,
         pcm: &[f32],
         channels: usize,
         at: u64,
         detector: Option<&mut Detector>,
-    ) {
+    ) where
+        S: HasPool<f32>,
+    {
         if let (Some(analyzer), Some(detector)) = (&mut self.0, detector) {
-            analyzer.push(pcm, channels, at, detector.as_mut());
+            analyzer.push(pools, pcm, channels, at, detector.as_mut());
         }
     }
 }

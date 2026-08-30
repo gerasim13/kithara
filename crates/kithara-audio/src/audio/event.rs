@@ -396,7 +396,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::sync::Arc;
     use kithara_signal::{AudioChunk, AudioChunkInfo};
@@ -404,13 +403,13 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ring::create_channels};
+    use crate::{
+        audio::{Fetch, ring::create_channels},
+        test_pools::sample_buffer,
+    };
 
     fn empty_chunk() -> AudioChunk {
-        AudioChunk::new(
-            AudioChunkInfo::default(),
-            SamplePool::default().attach(Vec::new()),
-        )
+        AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]))
     }
 
     #[kithara::test]

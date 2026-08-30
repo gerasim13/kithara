@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView};
 use kithara_stream::PlayheadWrite;
@@ -28,22 +28,20 @@ pub(super) struct ChunkCursor {
 }
 
 impl ChunkCursor {
-    pub(super) fn new(pool: &SamplePool, spec: AudioSpec) -> Self {
+    pub(super) fn new<S>(pools: &PoolRegion<S>, spec: AudioSpec) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let channels = usize::from(spec.channels).max(2);
         let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
-        let interleaved = pool.get_with(|buffer| {
-            buffer.clear();
-            let current = buffer.capacity();
-            if current < capacity {
-                buffer.reserve(capacity - current);
-            }
-        });
-        Self {
+        let mut interleaved = pools.get_with_len::<f32>(capacity)?;
+        interleaved.clear();
+        Ok(Self {
             spec,
             current_chunk_consumed_frames: 0,
             interleaved: Some(interleaved),
-        }
+        })
     }
 
     pub(super) const fn begin_chunk(&mut self, chunk: &AudioChunk) {
@@ -286,6 +284,7 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        test_pools::{pools, sample_buffer},
     };
 
     #[kithara::test]
@@ -315,8 +314,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let pool = SamplePool::default();
-        let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut cursor = ChunkCursor::new(&pools(), spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
@@ -360,8 +358,7 @@ mod tests {
                 0,
             ))
             .expect("chunk reaches test ring");
-        let pool = SamplePool::default();
-        let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut cursor = ChunkCursor::new(&pools(), spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut output = [0.0];
 
@@ -396,7 +393,7 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            SamplePool::default().attach(samples),
+            sample_buffer(&samples),
         )
     }
 }

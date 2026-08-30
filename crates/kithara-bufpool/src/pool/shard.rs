@@ -1,51 +1,44 @@
 use crossbeam_queue::ArrayQueue;
 
-use super::reuse::Reuse;
-
-/// A single shard in the pool.
-///
-/// Backed by a lock-free bounded [`ArrayQueue`] so both `get` and `put`
-/// are wait-free on the hot path. Capacity is fixed at construction; a full
-/// queue on return drops the buffer (see [`Pool::put`](super::core::Pool::put)).
+/// One bounded lock-free free list.
 pub(super) struct PoolShard<T> {
-    free: ArrayQueue<T>,
+    free: ArrayQueue<Vec<T>>,
     trim_capacity: usize,
 }
 
-impl<T> PoolShard<T>
-where
-    T: Reuse,
-{
-    /// Largest per-shard free-list the pool will eagerly allocate.
-    ///
-    /// Pools that pass `max_buffers = usize::MAX` (count-unbounded, capped only
-    /// by the byte budget) are clamped to this so the backing array stays a
-    /// recycle free-list sized for the live working set, not an exabyte alloc.
-    const MAX_SLOTS: usize = 1024;
+impl<T> PoolShard<T> {
+    pub(super) const MAX_SLOTS: usize = 1024;
 
     pub(super) fn new(max_buffers: usize, trim_capacity: usize) -> Self {
-        let cap = max_buffers.clamp(1, Self::MAX_SLOTS);
         Self {
+            free: ArrayQueue::new(max_buffers.min(Self::MAX_SLOTS)),
             trim_capacity,
-            free: ArrayQueue::new(cap),
         }
     }
 
-    /// Try to get a buffer from this shard.
-    pub(super) fn try_get(&self) -> Option<T> {
+    pub(super) fn try_get(&self) -> Option<Vec<T>> {
         self.free.pop()
     }
 
-    /// Try to return a buffer to this shard.
-    ///
-    /// Trims via [`Reuse::reuse`] before storing. `Ok` carries the bytes the
-    /// shard kept, which the trim may have cut below what the caller charged;
-    /// `Err` hands the value back for the caller to drop.
-    pub(super) fn try_put(&self, mut value: T) -> Result<usize, T> {
-        if !value.reuse(self.trim_capacity) {
+    pub(super) fn try_put(&self, mut value: Vec<T>) -> Result<usize, Vec<T>> {
+        const TRIM_HYSTERESIS: usize = 2;
+
+        value.clear();
+        if self.trim_capacity > 0
+            && value.capacity() > self.trim_capacity.saturating_mul(TRIM_HYSTERESIS)
+        {
+            value.shrink_to(self.trim_capacity);
+        }
+        if value.capacity() == 0 {
             return Err(value);
         }
-        let kept = value.byte_size();
+        let kept = value.capacity().saturating_mul(size_of::<T>());
         self.free.push(value).map(|()| kept)
+    }
+
+    pub(super) fn drain(&self, mut release: impl FnMut(Vec<T>)) {
+        while let Some(value) = self.free.pop() {
+            release(value);
+        }
     }
 }

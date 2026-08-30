@@ -18,6 +18,8 @@
 //!
 //! `just test run --lane=network-manual`, from a machine that has both.
 
+pub use kithara_integration_tests::bufpool_ext;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     mod live_remote_network;

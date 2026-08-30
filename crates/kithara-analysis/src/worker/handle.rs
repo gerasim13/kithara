@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara_audio::AudioReader;
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, ThreadGate, WaitGate, mpsc},
@@ -59,9 +60,10 @@ impl AnalysisRunner {
     const SLOW_TICK_THRESHOLD: Duration = Duration::from_millis(10);
     const YIELD_EVERY: u32 = 16;
 
-    fn start<B>(mut node: AnalysisNode<B>, cancel: CancelToken) -> Self
+    fn start<B, S>(mut node: AnalysisNode<B, S>, cancel: CancelToken) -> Self
     where
         B: ResamplerBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
     {
         let wake = Arc::new(ThreadGate::default());
         let thread_wake = Arc::clone(&wake);
@@ -119,9 +121,10 @@ impl AnalysisRunner {
 
 impl AnalysisWorker {
     #[must_use]
-    pub fn new<B>(parent: &CancelToken, builder: AnalyzerBuilder<B>) -> Self
+    pub fn new<B, S>(parent: &CancelToken, builder: AnalyzerBuilder<B, S>) -> Self
     where
         B: ResamplerBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
     {
         let cancel = parent.child();
         let job_scope = cancel.child();
@@ -226,20 +229,19 @@ impl Drop for AnalysisWorker {
 
 #[cfg(all(test, feature = "analysis-beat", not(feature = "beat-nn")))]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_platform::CancelToken;
     use kithara_resampler::NoResamplerBackend;
     use kithara_test_utils::kithara;
 
     use super::AnalysisWorker;
-    use crate::AnalyzerBuilder;
+    use crate::{AnalyzerBuilder, test_pools::pools};
 
     #[kithara::test(native, flash(false))]
     fn beat_without_a_detector_is_not_an_effective_analyzer() {
         let cancel = CancelToken::never();
         let worker = AnalysisWorker::new(
             &cancel,
-            AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_beat(),
+            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_beat(),
         );
 
         assert!(!worker.is_active());

@@ -21,7 +21,7 @@ extension IntegrationRegressionsIOS {
         )
 
         let player = KitharaPlayer(
-            config: .init(store: AssetStore(root: cacheURL.path))
+            config: .init(store: try AssetStore(root: cacheURL.path))
         )
         let item = KitharaPlayerItem(url: fixtureURL.absoluteString)
         let ranges = LoadedRangesProbe()

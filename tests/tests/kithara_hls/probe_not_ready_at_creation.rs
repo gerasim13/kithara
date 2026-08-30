@@ -43,7 +43,6 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     net::{NetOptions, RetryPolicy},
     platform::{
@@ -64,6 +63,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     auto,
+    bufpool_ext::{Pools, TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
@@ -102,12 +102,11 @@ fn fixture_config() -> HlsTestServerConfig {
 
 fn audio_config(
     server: &HlsTestServer,
-    worker: &PlayWorker,
+    pools: &Pools,
     cancel: &CancelToken,
-) -> AudioConfig<Hls> {
-    let store = AssetStore::builder()
+) -> AudioConfig<Hls<TestPools>> {
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
     // Short stall + bounded retries so a withheld body settles the segment
@@ -116,7 +115,6 @@ fn audio_config(
     // happy-path sibling releases the body before the first stall, so this
     // does not perturb it. Real timers, real HTTP — no fake transport.
     let net = NetOptions::builder()
-        .byte_pool(worker.byte_pool().clone())
         .inactivity_timeout(Duration::from_millis(400))
         .retry_policy(
             RetryPolicy::builder()
@@ -128,7 +126,7 @@ fn audio_config(
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel.clone())
         // auto(0) mirrors the F2 members (live_real_stream / hot_refetch).
         .initial_abr_mode(auto(0))
@@ -138,7 +136,7 @@ fn audio_config(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    AudioConfig::<Hls>::for_stream(hls_config)
+    AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build()
 }
@@ -173,14 +171,14 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
     // body, which the blocking read waits the full budget for and then fails.
     let (server, _gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
     let started = RealInstant::now();
-    let result = worker.open(audio_config(&server, &worker, &cancel)).await;
+    let result = worker.open(audio_config(&server, &pools, &cancel)).await;
     let elapsed = started.elapsed();
 
     let err = result
@@ -231,9 +229,9 @@ async fn audio_new_bounded_failure_when_first_segment_withheld() {
 async fn audio_new_succeeds_when_first_segment_released_during_probe() {
     let (server, gate) = HlsTestServer::with_segment_gate(fixture_config(), 0, 0).await;
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -255,7 +253,7 @@ async fn audio_new_succeeds_when_first_segment_released_during_probe() {
         }
     });
 
-    let result = worker.open(audio_config(&server, &worker, &cancel)).await;
+    let result = worker.open(audio_config(&server, &pools, &cancel)).await;
     releaser.await.expect("releaser joins");
 
     assert!(

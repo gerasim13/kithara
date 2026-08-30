@@ -1,3 +1,5 @@
+use kithara_bufpool::HasPool;
+
 use crate::{
     Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings,
 };
@@ -13,10 +15,12 @@ pub trait AudioConverterFactory: Send + Sync + 'static {
     ///
     /// Returns [`ResamplerBuildError`] when the platform converter cannot be
     /// constructed for the requested shape.
-    fn build_resampler(
+    fn build_resampler<S>(
         &self,
-        settings: &ResamplerSettings,
-    ) -> Result<Self::Resampler, ResamplerBuildError>;
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>;
 }
 
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -45,7 +49,13 @@ where
 {
     type Resampler = F::Resampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         settings.validate(self)?;
         self.config.factory.build_resampler(settings)
     }

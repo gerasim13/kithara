@@ -2,7 +2,6 @@
 
 use kithara::{
     audio::{AudioConfig, AudioControl, AudioSession, NoResamplerBackend},
-    bufpool::Region,
     platform::{
         CancelToken,
         sync::{
@@ -19,6 +18,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_artifact::write_audio_artifact,
+    bufpool_ext::{TestPools, pools},
     cochlea::{
         CochleaReport, assert_oracle_load_bearing, continuity_failures, percentile_f32,
         time_stretch_failures,
@@ -307,7 +307,7 @@ fn audio_config(
         .build()
 }
 
-async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>>) {
+async fn wait_for_preload(audio: &RegisteredAudio<Stream<MemStream>, TestPools>) {
     let gate = audio
         .preload_gate()
         .expect("worker-backed audio exposes a preload gate");
@@ -325,9 +325,8 @@ async fn render_passthrough(
     with_load: bool,
 ) -> RealtimeCapture {
     let load_probe = Arc::new(LoadProbe::new());
-    let region = Region::default();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools())
             .cancel(CancelToken::never())
             .build(),
     );

@@ -4,7 +4,7 @@ use std::fmt;
 
 use arc_swap::ArcSwapOption;
 use bon::Builder;
-use kithara_bufpool::{BytePool, PooledOwned};
+use kithara_bufpool::ByteBuffer;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -20,12 +20,11 @@ use crate::{
 };
 
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Clone, Default, Builder)]
+#[derive(Debug, Builder)]
 #[non_exhaustive]
 pub struct MemOptions {
-    /// Shared byte pool that owns this resource's working buffers.
-    #[builder(default)]
-    pub pool: BytePool,
+    /// Pool-owned working buffer for this resource.
+    pub buffer: ByteBuffer,
     /// Pre-fill the resource with this data (committed on creation).
     pub initial_data: Option<Vec<u8>>,
     /// Initial capacity hint in bytes.
@@ -37,18 +36,16 @@ pub struct MemOptions {
 
 /// Internal state of the growable memory driver.
 pub(super) struct MemState {
-    /// Canonical owner used for every working-buffer checkout.
-    pub(super) pool: BytePool,
     /// Pool-managed byte buffer. Grows via `ensure_len()`.
-    pub(super) buf: PooledOwned<32, Vec<u8>>,
+    pub(super) buf: ByteBuffer,
     /// Logical length: highest write extent across all writes.
     pub(super) len: u64,
 }
 
 /// In-memory storage driver backed by a growable byte pool buffer.
 ///
-/// Uses the pool injected through [`MemOptions`] for memory management with byte
-/// budget enforcement. Data is never evicted —
+/// Uses the pooled buffer injected through [`MemOptions`] for memory management
+/// with byte-budget enforcement. Data is never evicted -
 /// [`valid_window()`](crate::DriverIo::valid_window) returns `None`.
 ///
 /// `path()` returns `None`.
@@ -76,16 +73,16 @@ impl Driver for MemDriver {
         let MemOptions {
             initial_data,
             capacity,
-            pool,
+            mut buffer,
         } = opts;
-        let mut buf = pool.get();
 
         let (len, init_state, committed) = if let Some(data) = initial_data {
             let data_len = data.len();
             if data_len > 0 {
-                buf.ensure_len(data_len)
+                buffer
+                    .ensure_len(data_len)
                     .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
-                buf[..data_len].copy_from_slice(&data);
+                buffer[..data_len].copy_from_slice(&data);
             }
             let len = u64::try_from(data_len).map_err(|err| {
                 StorageError::Failed(format!(
@@ -114,7 +111,8 @@ impl Driver for MemDriver {
             )
         } else {
             if capacity > 0 {
-                buf.ensure_len(capacity)
+                buffer
+                    .ensure_len(capacity)
                     .map_err(|_| StorageError::Failed("byte budget exhausted".to_string()))?;
             }
             (0, DriverState::default(), ArcSwapOption::empty())
@@ -122,7 +120,7 @@ impl Driver for MemDriver {
 
         let driver = Self {
             committed,
-            state: Mutex::new(MemState { pool, buf, len }),
+            state: Mutex::new(MemState { buf: buffer, len }),
         };
 
         Ok((driver, init_state))
@@ -140,10 +138,10 @@ impl MemResource {
     ///
     /// # Panics
     ///
-    /// Panics if `MemDriver::open` fails (should never happen with default options).
+    /// Panics if `MemDriver::open` rejects the empty pooled buffer.
     #[must_use]
-    pub fn new(cancel: CancelToken, pool: BytePool) -> Self {
-        Self::open(cancel, MemOptions::builder().pool(pool).build())
+    pub fn new(cancel: CancelToken, buffer: ByteBuffer) -> Self {
+        Self::open(cancel, MemOptions::builder().buffer(buffer).build())
             .expect("BUG: MemDriver::open with default options is infallible")
     }
 }

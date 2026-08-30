@@ -22,6 +22,8 @@ use kithara_integration_tests::{
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
 
+use crate::bufpool_ext::TestPools;
+
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
@@ -31,7 +33,7 @@ const TRACK_SECS: f64 = 30.0;
 const LOUD: f32 = 0.80;
 const QUIET: f32 = 0.10;
 
-fn make_fixture() -> (OfflinePlayerHarness, Queue) {
+fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -47,7 +49,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
 
 /// Load a track whose player-side `src` is its queue URI, the way a real
 /// source arrives.
-fn loaded_track(queue: &Queue, value: f32) -> (TrackId, Arc<str>) {
+fn loaded_track(queue: &Queue<TestPools>, value: f32) -> (TrackId, Arc<str>) {
     let id = queue.register_for_test();
     let src: Arc<str> = Arc::from(format!("test://memory/{}", id.as_u64()));
     let spec = AudioSpec {
@@ -71,7 +73,11 @@ fn mean_abs(pcm: &[f32]) -> f32 {
     pcm.iter().map(|s| s.abs()).sum::<f32>() / pcm.len() as f32
 }
 
-fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usize) -> Vec<f32> {
+fn render_loop(
+    queue: &Queue<TestPools>,
+    harness: &OfflinePlayerHarness,
+    block_budget: usize,
+) -> Vec<f32> {
     let mut pcm = Vec::new();
     for _ in 0..block_budget {
         let _ = queue.tick();
@@ -82,7 +88,7 @@ fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usiz
 
 /// Three loaded tracks, the middle one playing. The first track — never
 /// selected, standing in for the background slot — reports natural EOF.
-fn fixture_with_background_eof() -> (OfflinePlayerHarness, Queue, TrackRef, TrackId) {
+fn fixture_with_background_eof() -> (OfflinePlayerHarness, Queue<TestPools>, TrackRef, TrackId) {
     let (harness, queue) = make_fixture();
     let (stale, stale_src) = loaded_track(&queue, QUIET);
     let (current, _) = loaded_track(&queue, LOUD);

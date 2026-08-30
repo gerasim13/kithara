@@ -20,7 +20,7 @@ extension IntegrationRegressionsIOS {
             withIntermediateDirectories: true
         )
 
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let player = KitharaPlayer(config: .init(store: try AssetStore(root: cacheURL.path)))
         let target = KitharaPlayerItem(
             url: try await TestServerFixture.pacedHlsMasterURL().absoluteString
         )

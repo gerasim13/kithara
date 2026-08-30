@@ -257,7 +257,6 @@ impl PinsInner {
 mod tests {
     use std::fs;
 
-    use kithara_bufpool::BytePool;
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
@@ -268,8 +267,11 @@ mod tests {
     fn empty_index_has_no_pins() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx =
-            PinsIndex::with_persist_at(path.clone(), CancelToken::never(), &BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path.clone(),
+            CancelToken::never(),
+            crate::test_pools::buffer(),
+        );
         assert!(idx.snapshot().is_empty());
         assert!(
             !path.exists(),
@@ -281,7 +283,7 @@ mod tests {
         PinsIndex::with_persist_at(
             path.to_path_buf(),
             CancelToken::never(),
-            &BytePool::default(),
+            crate::test_pools::buffer(),
         )
     }
 
@@ -441,7 +443,8 @@ mod tests {
         let path = temp_dir.path().join("invalid.bin");
         fs::write(&path, b"not valid rkyv data").unwrap();
 
-        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
+        let idx =
+            PinsIndex::with_persist_at(path, CancelToken::never(), crate::test_pools::buffer());
         assert!(idx.snapshot().is_empty());
     }
 
@@ -456,7 +459,8 @@ mod tests {
     fn clone_shares_state() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path().join("pins.bin");
-        let idx = PinsIndex::with_persist_at(path, CancelToken::never(), &BytePool::default());
+        let idx =
+            PinsIndex::with_persist_at(path, CancelToken::never(), crate::test_pools::buffer());
         let idx2 = idx.clone();
 
         idx.add("from_first", PinDurability::Durable).unwrap();

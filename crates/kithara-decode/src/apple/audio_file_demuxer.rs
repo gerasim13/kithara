@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
-use kithara_bufpool::{BytePool, PooledOwned};
+use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
@@ -45,7 +45,7 @@ pub(crate) struct AppleAudioFileDemuxer {
     cbr_batch_packets: Option<u32>,
     total_packets: Option<u64>,
     track_info: TrackInfo,
-    read_buf: PooledOwned<32, Vec<u8>>,
+    read_buf: ByteBuffer,
     last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
     frames_per_packet: u32,
     next_packet: u64,
@@ -96,14 +96,17 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    fn open(
+    fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
-        byte_pool: &BytePool,
-    ) -> DecodeResult<Self> {
+        pools: &PoolRegion<S>,
+    ) -> DecodeResult<Self>
+    where
+        S: HasPool<u8>,
+    {
         // MP3 and FLAC are VBR with no on-disk packet index, so a complete
         // open would query `packet_count()` — forcing `AudioFileServices` to
         // scan the WHOLE file to build a packet table before the first frame
@@ -207,7 +210,7 @@ impl AppleAudioFileDemuxer {
             total_packets,
             frames_per_packet,
             cbr_batch_packets,
-            read_buf: byte_pool.get_with(|buffer| buffer.resize(buf_cap, 0)),
+            read_buf: pools.get_with_len::<u8>(buf_cap)?,
             last_read_len: 0,
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
@@ -227,35 +230,32 @@ impl AppleAudioFileDemuxer {
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
+        let pools = crate::test_pools::default_pools();
         Self::open_for_with_mode_and_pool(
             source,
             codec,
             container,
             open_mode,
             duration_hint,
-            &BytePool::default(),
+            &pools,
         )
     }
 
-    pub(crate) fn open_for_with_mode_and_pool(
+    pub(crate) fn open_for_with_mode_and_pool<S>(
         source: BoxedSource,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
-        byte_pool: &BytePool,
-    ) -> DecodeResult<Self> {
+        pools: &PoolRegion<S>,
+    ) -> DecodeResult<Self>
+    where
+        S: HasPool<u8>,
+    {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
             .ok_or(DecodeError::UnsupportedCodec { codec })?;
-        Self::open(
-            source,
-            Some(hint),
-            codec,
-            open_mode,
-            duration_hint,
-            byte_pool,
-        )
+        Self::open(source, Some(hint), codec, open_mode, duration_hint, pools)
     }
 
     /// Inject encoder priming/padding metadata probed by the factory

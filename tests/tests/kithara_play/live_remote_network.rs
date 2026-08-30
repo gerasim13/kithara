@@ -13,7 +13,6 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::ReadOutcome,
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::TrackId,
     host::{Host, HostConfig},
@@ -24,27 +23,27 @@ use kithara::{
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        SelectTransition,
+        ResourceSrc, SelectTransition,
     },
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{TestTempDir, temp_dir};
 use tracing::debug;
 
-fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, byte_pool: BytePool) -> AssetStore {
+use crate::bufpool_ext::{Pools, TestPools, pools};
+
+fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: Pools) -> AssetStore<TestPools> {
     if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools)
             .backend(StorageBackend::Memory)
-            .pool(byte_pool)
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .max_assets(8)
             .build()
     } else {
-        AssetStore::builder()
+        AssetStore::builder(pools)
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().to_path_buf(),
             })
-            .pool(byte_pool)
             .build()
     }
 }
@@ -161,21 +160,18 @@ async fn live_remote_resource_decodes_with_duration(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let byte_pool = BytePool::default();
-    let sample_pool = SamplePool::default();
-    let store = asset_store(&temp_dir, true, byte_pool.clone());
+    let pools = pools();
+    let store = asset_store(&temp_dir, true, pools.clone());
     let net = NetOptions::builder()
-        .byte_pool(byte_pool.clone())
         .inactivity_timeout(Duration::from_secs(25))
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
-    let config: ResourceConfig =
-        ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(byte_pool, sample_pool).build(),
-            ))
+    let config: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
             .store(store)
             .downloader(downloader)
             .decoder(
@@ -290,16 +286,13 @@ async fn player_mp3_duration_matches_app_flow(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let byte_pool = BytePool::default();
-    let sample_pool = SamplePool::default();
-    let store = asset_store(&temp_dir, true, byte_pool.clone());
+    let pools = pools();
+    let store = asset_store(&temp_dir, true, pools.clone());
 
     let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(byte_pool, sample_pool).build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
             .build(),
     );
     let player = host
@@ -307,7 +300,7 @@ async fn player_mp3_duration_matches_app_flow(
         .expect("insert player into playback host");
     player.reserve_slots(1);
 
-    let mut config = ResourceConfig::for_src(ResourceConfig::parse_src(url).unwrap())
+    let mut config = ResourceConfig::for_src(ResourceSrc::parse(url).unwrap())
         .store(store)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()

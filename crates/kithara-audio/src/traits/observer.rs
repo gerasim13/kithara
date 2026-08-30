@@ -108,12 +108,12 @@ impl AudioObserver for AudioObserverRelay {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_bufpool::SamplePool;
     use kithara_platform::sync::Arc;
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_test_utils::kithara;
 
     use super::{AudioObserveError, AudioObserver, AudioObserverSlot};
+    use crate::test_pools::sample_buffer;
 
     struct CountingObserver(Arc<AtomicUsize>);
 
@@ -133,10 +133,7 @@ mod tests {
         slot.attach(Box::new(CountingObserver(Arc::clone(&replaced))));
         slot.attach(Box::new(CountingObserver(Arc::clone(&current))));
 
-        let chunk = AudioChunk::new(
-            AudioChunkInfo::default(),
-            SamplePool::default().get_with(Vec::clear),
-        );
+        let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]));
         relay
             .try_observe(&chunk)
             .expect("the current observer accepts the chunk");

@@ -1,11 +1,13 @@
 use std::num::NonZero;
 
-use kithara_bufpool::SamplePool;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use realfft::RealFftPlanner;
 
-use super::{StretchControls, WarpRenderer};
+use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
+use crate::test_pools::{TestPools, default_pools, sample_buffer};
+
+type WarpRenderer = GenericWarpRenderer<TestPools>;
 
 mod playback;
 mod target;
@@ -55,7 +57,7 @@ fn chunk(samples: &[f32]) -> AudioChunk {
             timestamp: Duration::ZERO,
             ..Default::default()
         },
-        SamplePool::default().attach(samples.to_vec()),
+        sample_buffer(samples),
     )
 }
 
@@ -90,7 +92,7 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(controls, spec(), SamplePool::default())
+    WarpRenderer::new(controls, spec(), default_pools())
 }
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {

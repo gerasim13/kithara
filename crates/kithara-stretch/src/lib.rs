@@ -14,6 +14,8 @@ pub use factory::build_engine;
 mod backends;
 
 mod elastic;
+#[cfg(test)]
+mod test_pools;
 pub use elastic::{
     ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticDrain, ElasticEngine, ElasticError,
     ElasticLatency, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,

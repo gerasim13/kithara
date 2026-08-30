@@ -1,11 +1,15 @@
 use std::sync::atomic::Ordering;
 
+use kithara_bufpool::HasPool;
 use tracing::debug;
 
 use super::HlsVariant;
 use crate::segment::{FetchClaim, Loaded, PlannedFetch};
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Settle hook: shrinks the appropriate size atom to `actual` and
     /// rebuilds the offset map. Called from
     /// [`FetchSlot::settle`] via `Weak<HlsVariant>::upgrade()` once the
@@ -17,7 +21,7 @@ impl HlsVariant {
     /// stale offsets and fall into a non-existent gap, hanging on
     /// `range_ready`. The closure performs the caller-owned size store and
     /// reports the post-store `init_size` to seed the recompute.
-    pub(crate) fn apply_commit(&self, loaded: &FetchClaim<Loaded>) {
+    pub(crate) fn apply_commit(&self, loaded: &FetchClaim<Loaded, S>) {
         self.layout.apply_commit(&self.segments, || {
             if !self.defer_prefix_settle(loaded.planned(), loaded.final_len()) {
                 self.apply_loaded_size(loaded.planned(), loaded.final_len());

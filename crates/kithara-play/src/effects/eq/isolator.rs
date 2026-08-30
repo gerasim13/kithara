@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolError};
 use kithara_signal::sanitize_sample;
 use num_traits::cast::AsPrimitive;
 
@@ -12,19 +13,25 @@ pub struct IsolatorEq {
 }
 
 impl IsolatorEq {
-    #[must_use]
-    pub fn new(config: &EqConfig, bands: &[EqBandConfig], sample_rate: u32) -> Self {
+    pub fn new<S>(
+        config: &EqConfig<S>,
+        bands: &[EqBandConfig],
+        sample_rate: u32,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let sample_rate: f32 = sample_rate.as_();
-        let crossover_freqs = config.sample_pool().collect(
-            bands
-                .windows(2)
-                .map(|pair| (pair[0].frequency() * pair[1].frequency()).sqrt()),
-        );
-        Self {
-            filters: CrossoverFilters::new(config.sample_pool(), crossover_freqs, sample_rate),
+        let crossover_count = bands.len().saturating_sub(1);
+        let mut crossover_freqs = config.pools().get_with_len::<f32>(crossover_count)?;
+        for (frequency, pair) in crossover_freqs.iter_mut().zip(bands.windows(2)) {
+            *frequency = (pair[0].frequency() * pair[1].frequency()).sqrt();
+        }
+        Ok(Self {
+            filters: CrossoverFilters::new(config.pools(), crossover_freqs, sample_rate)?,
             gains: GainBank::new(bands.iter().map(EqBandConfig::gain_db), sample_rate),
             was_in_fastpath: false,
-        }
+        })
     }
 
     delegate::delegate! {
@@ -90,10 +97,10 @@ impl IsolatorEq {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{default_pools, pools};
 
     #[kithara::test]
     fn a_decaying_tail_never_leaks_denormals() {
@@ -101,8 +108,9 @@ mod tests {
         const TAIL_SECONDS: u32 = 4;
 
         let bands = super::super::band::generate_log_spaced_bands(3);
-        let config = EqConfig::for_pool(SamplePool::default()).build();
-        let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE);
+        let config = EqConfig::builder(default_pools()).build();
+        let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE)
+            .unwrap_or_else(|error| panic!("test isolator: {error}"));
         for band in 0..bands.len() {
             eq.set_gain(band, GainDb::MAX);
         }
@@ -118,19 +126,18 @@ mod tests {
 
     #[kithara::test]
     fn reusable_storage_returns_to_the_injected_pool() {
-        let pool = SamplePool::new(32, 200_000);
+        let pools = pools(1024 * 1024);
         let bands = super::super::band::generate_log_spaced_bands(3);
-        let config = EqConfig::for_pool(pool.clone()).build();
+        let config = EqConfig::builder(pools.clone()).build();
 
-        let first = IsolatorEq::new(&config, &bands, 48_000);
-        let misses_after_first = pool.stats().alloc_misses;
+        let first = IsolatorEq::new(&config, &bands, 48_000)
+            .unwrap_or_else(|error| panic!("first isolator: {error}"));
         drop(first);
+        let allocated = pools.stats().allocated_bytes;
 
-        let hits_before_second = pool.stats().home_hits + pool.stats().steal_hits;
-        let _second = IsolatorEq::new(&config, &bands, 48_000);
-        let stats = pool.stats();
+        let _second = IsolatorEq::new(&config, &bands, 48_000)
+            .unwrap_or_else(|error| panic!("second isolator: {error}"));
 
-        assert_eq!(stats.alloc_misses, misses_after_first);
-        assert!(stats.home_hits + stats.steal_hits > hits_before_second);
+        assert_eq!(pools.stats().allocated_bytes, allocated);
     }
 }

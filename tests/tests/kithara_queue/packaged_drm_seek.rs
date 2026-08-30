@@ -2,7 +2,6 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -16,7 +15,11 @@ use kithara::{
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+};
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
     fixture_protocol::{DelayRule, EncryptionRequest},
@@ -40,7 +43,7 @@ fn install_tracing() {
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<AppPools>,
     id: TrackId,
     target: TrackStatus,
     deadline: Duration,
@@ -80,7 +83,7 @@ async fn wait_for_status(
 ///
 /// Track construction goes through `app_track_source`, the suite's mirror
 /// of the `kithara-app` `build_source` path used by the e2e (same shared
-/// downloader / flush hub / byte pool / asset store from `AppConfig`), so
+/// downloader / flush hub / pool region / asset store from `AppConfig`), so
 /// the only axis left between this test and the e2e is the network. Data
 /// and uniform latency alone do NOT
 /// reproduce the production stall — that needs a mid-body network stall,
@@ -132,7 +135,7 @@ async fn run_delayed_drm_seek(
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<AppPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -142,25 +145,22 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
-    let byte_pool = BytePool::default();
-    let net = NetOptions::builder()
-        .byte_pool(byte_pool.clone())
-        .is_insecure(true)
-        .build();
+    let pools = app_pools().expect("build app pool region");
+    let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+        PlayWorkerConfig::builder(pools)
             .cancel(shutdown.child())
             .build(),
     );
@@ -174,7 +174,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
-            .session(OfflineSession::arc_auto())
+            .session(OfflineSession::<AppPools>::arc_auto())
             .build(),
     );
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
@@ -183,7 +183,7 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
     let source = super::app_track_source(
         url.as_str(),
         &config,
-        kithara_integration_tests::disk_asset_store(temp.path()),
+        super::app_disk_asset_store(&config, temp.path()),
         backend,
         abr,
         None,

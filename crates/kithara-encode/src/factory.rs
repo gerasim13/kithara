@@ -1,9 +1,12 @@
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 
+#[cfg(target_arch = "wasm32")]
+use crate::error::EncodeError;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::offline::OfflineEncoder;
 use crate::{
-    error::{EncodeError, EncodeResult},
+    error::EncodeResult,
     traits::InnerEncoder,
     types::{BytesEncodeRequest, EncodedBytes, EncodedTrack, PackagedEncodeRequest},
 };
@@ -31,27 +34,6 @@ impl EncoderFactory {
         }
     }
 
-    /// Create an encoder backend for packaged access units of `codec`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the codec is unsupported or encoding is unavailable
-    /// on the current target.
-    pub fn create_packaged(codec: AudioCodec) -> EncodeResult<Box<dyn InnerEncoder>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let encoder = OfflineEncoder;
-            encoder.packaged_frame_samples(codec)?;
-            Ok(Box::new(encoder))
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = codec;
-            Self::wasm_unsupported()
-        }
-    }
-
     /// Encode a finite PCM source into complete encoded bytes.
     ///
     /// # Errors
@@ -67,12 +49,25 @@ impl EncoderFactory {
     ///
     /// Returns an error when `request.media_info.codec` is missing or the codec/backend
     /// rejects the request.
-    pub fn encode_packaged(request: PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
-        let codec = request
-            .media_info
-            .codec
-            .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
-        Self::create_packaged(codec)?.encode_packaged(request)
+    pub fn encode_packaged<S>(
+        pools: &PoolRegion<S>,
+        request: &PackagedEncodeRequest<'_>,
+    ) -> EncodeResult<EncodedTrack>
+    where
+        S: HasPool<u8> + HasPool<f32>,
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            OfflineEncoder::encode_packaged(pools, request)
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (pools, request);
+            Err(EncodeError::InvalidInput(
+                "encoding is not supported on wasm32".to_owned(),
+            ))
+        }
     }
 
     /// Return the natural frame size for packaged encoding of `codec`.
@@ -81,7 +76,18 @@ impl EncoderFactory {
     ///
     /// Returns an error when the codec does not support packaged encoding.
     pub fn frame_samples(codec: AudioCodec) -> EncodeResult<usize> {
-        Self::create_packaged(codec)?.packaged_frame_samples(codec)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            OfflineEncoder::frame_samples(codec)
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = codec;
+            Err(EncodeError::InvalidInput(
+                "encoding is not supported on wasm32".to_owned(),
+            ))
+        }
     }
 
     #[cfg(target_arch = "wasm32")]

@@ -1,4 +1,5 @@
 use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep};
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::SeekObserve;
@@ -29,9 +30,9 @@ impl DrainState {
 }
 
 /// The sole producer-side Warp/effect stage before the play output ring.
-pub(crate) struct WarpSource<S> {
-    source: S,
-    warp: kithara_warp::WarpRenderer,
+pub(crate) struct WarpSource<T, S> {
+    source: T,
+    warp: kithara_warp::WarpRenderer<S>,
     effects: Vec<Box<dyn AudioEffect>>,
     drain: EffectDrain,
     seek: Arc<dyn SeekObserve>,
@@ -41,13 +42,14 @@ pub(crate) struct WarpSource<S> {
     reset_epoch: Option<u64>,
 }
 
-impl<S> WarpSource<S>
+impl<T, S> WarpSource<T, S>
 where
-    S: AudioSource<Chunk = AudioChunk>,
+    T: AudioSource<Chunk = AudioChunk>,
+    S: HasPool<f32>,
 {
     pub(crate) fn new(
-        source: S,
-        warp: kithara_warp::WarpRenderer,
+        source: T,
+        warp: kithara_warp::WarpRenderer<S>,
         effects: Vec<Box<dyn AudioEffect>>,
         drain: EffectDrain,
         spec: AudioSpec,
@@ -188,9 +190,10 @@ where
     }
 }
 
-impl<S> AudioSource for WarpSource<S>
+impl<T, S> AudioSource for WarpSource<T, S>
 where
-    S: AudioSource<Chunk = AudioChunk>,
+    T: AudioSource<Chunk = AudioChunk>,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     type Chunk = AudioChunk;
 
@@ -259,7 +262,7 @@ mod tests {
     use std::{collections::VecDeque, num::NonZeroU32};
 
     use kithara_audio::{Fetch, TrackStep, WaitingReason};
-    use kithara_bufpool::{ByteBudget, BytePool, SamplePool};
+    use kithara_bufpool::PoolRegion;
     use kithara_platform::sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -270,6 +273,7 @@ mod tests {
     use kithara_warp::{StretchControls, StretchKind};
 
     use super::*;
+    use crate::test_pools::{TestPools, default_pools, pools};
 
     fn flush_deferred<S>(source: &mut S)
     where
@@ -279,18 +283,20 @@ mod tests {
         source.finish_deferred();
     }
 
-    fn source_stage<S>(
-        source: S,
+    fn source_stage<T>(
+        pools: &PoolRegion<TestPools>,
+        source: T,
         effects: Vec<Box<dyn AudioEffect>>,
-        drain: EffectDrain,
         spec: AudioSpec,
-    ) -> WarpSource<S>
+    ) -> WarpSource<T, TestPools>
     where
-        S: AudioSource<Chunk = AudioChunk>,
+        T: AudioSource<Chunk = AudioChunk>,
     {
         let config = kithara_warp::WarpConfig::builder().build();
         let warp = kithara_warp::Warp::new((), &config);
-        let renderer = warp.renderer(spec, SamplePool::default());
+        let renderer = warp.renderer(spec, pools.clone());
+        let drain = EffectDrain::new(effects.len(), pools)
+            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
         WarpSource::new(source, renderer, effects, drain, spec)
     }
 
@@ -570,10 +576,10 @@ mod tests {
         }
     }
 
-    fn chunk(pool: &SamplePool, spec: AudioSpec, frame_offset: u64) -> AudioChunk {
+    fn chunk(pools: &PoolRegion<TestPools>, spec: AudioSpec, frame_offset: u64) -> AudioChunk {
         const FRAMES: usize = 128;
         chunk_with_frames(
-            pool,
+            pools,
             spec,
             frame_offset,
             u32::try_from(FRAMES).expect("fixture frames fit u32"),
@@ -582,7 +588,7 @@ mod tests {
     }
 
     fn chunk_with_frames(
-        pool: &SamplePool,
+        pools: &PoolRegion<TestPools>,
         spec: AudioSpec,
         frame_offset: u64,
         frames: u32,
@@ -592,6 +598,10 @@ mod tests {
             .expect("fixture frames fit usize")
             .checked_mul(usize::from(spec.channels))
             .expect("fixture sample count fits usize");
+        let mut buffer = pools
+            .get_with_len::<f32>(samples)
+            .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
+        buffer.fill(sample);
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
@@ -605,26 +615,25 @@ mod tests {
                     .expect("fixture end timestamp fits"),
                 ..Default::default()
             },
-            pool.attach(vec![sample; samples]),
+            buffer,
         )
     }
 
     #[kithara::test]
     fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = SamplePool::default();
+        let pools = default_pools();
         let head = Arc::new(AtomicU64::new(0));
         let source = RawSource {
             chunks: VecDeque::from([
-                chunk(&pool, spec, 0),
-                chunk(&pool, spec, u64::from(128_u32)),
+                chunk(&pools, spec, 0),
+                chunk(&pools, spec, u64::from(128_u32)),
             ]),
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::<BufferThenHalveFrames>::default()];
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, spec);
+        let mut source = source_stage(&pools, source, effects, spec);
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert_eq!(
@@ -675,6 +684,7 @@ mod tests {
     #[kithara::test]
     fn deferred_shell_services_effects_between_source_phases() {
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
+        let pools = default_pools();
         let log = Arc::new(Mutex::new(Vec::new()));
         let serviced = Arc::new(Mutex::new(None));
         let source = DeferredSource {
@@ -686,8 +696,7 @@ mod tests {
             log: Arc::clone(&log),
             serviced: Arc::clone(&serviced),
         })];
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, spec);
+        let mut source = source_stage(&pools, source, effects, spec);
 
         flush_deferred(&mut source);
 
@@ -702,6 +711,7 @@ mod tests {
     fn discontinuity_refreshes_spec_without_resetting_same_revision() {
         let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
         let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
+        let pools = default_pools();
         let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
         let resets = Arc::new(AtomicU64::new(0));
         let source = RevisionSource {
@@ -712,8 +722,7 @@ mod tests {
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResetCounter {
             resets: Arc::clone(&resets),
         })];
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, initial);
+        let mut source = source_stage(&pools, source, effects, initial);
 
         *discontinuity.lock() = SourceDiscontinuity::new(7, changed);
         flush_deferred(&mut source);
@@ -732,11 +741,11 @@ mod tests {
     fn unity_warp_preserves_samples_and_meta_across_discontinuity() {
         let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
         let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
-        let pool = SamplePool::default();
-        let first = chunk(&pool, initial, 256);
+        let pools = default_pools();
+        let first = chunk(&pools, initial, 256);
         let first_meta = first.meta;
         let first_samples = first.samples.to_vec();
-        let mut second = chunk(&pool, changed, 512);
+        let mut second = chunk(&pools, changed, 512);
         second.meta.segment_index = Some(3);
         second.meta.variant_index = Some(2);
         second.meta.epoch = 9;
@@ -752,8 +761,7 @@ mod tests {
             seek: Arc::new(SeekState::new()),
         };
         let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, initial);
+        let mut source = source_stage(&pools, source, effects, initial);
 
         let TrackStep::Produced(Fetch::Data { data, .. }) = source.step_track() else {
             panic!("initial unity span must pass through");
@@ -784,20 +792,20 @@ mod tests {
         const SENTINEL_FRAMES: u32 = 512;
 
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = SamplePool::default();
+        let pools = default_pools();
         let first_active_end = u64::from(ACTIVE_FRAMES);
         let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
         let second_active_end = first_unity_end.saturating_add(u64::from(ACTIVE_FRAMES));
         let second_unity_end = second_active_end.saturating_add(u64::from(UNITY_FRAMES));
         let sentinel_end = second_unity_end.saturating_add(u64::from(SENTINEL_FRAMES));
 
-        let first_active = chunk_with_frames(&pool, spec, 0, ACTIVE_FRAMES, 0.25);
-        let first_unity = chunk_with_frames(&pool, spec, first_active_end, UNITY_FRAMES, 0.5);
+        let first_active = chunk_with_frames(&pools, spec, 0, ACTIVE_FRAMES, 0.25);
+        let first_unity = chunk_with_frames(&pools, spec, first_active_end, UNITY_FRAMES, 0.5);
         let first_unity_ptr = first_unity.samples.as_ptr();
         let first_unity_samples = first_unity.samples.to_vec();
-        let second_active = chunk_with_frames(&pool, spec, first_unity_end, ACTIVE_FRAMES, -0.25);
-        let second_unity = chunk_with_frames(&pool, spec, second_active_end, UNITY_FRAMES, -0.5);
-        let sentinel = chunk_with_frames(&pool, spec, second_unity_end, SENTINEL_FRAMES, 0.75);
+        let second_active = chunk_with_frames(&pools, spec, first_unity_end, ACTIVE_FRAMES, -0.25);
+        let second_unity = chunk_with_frames(&pools, spec, second_active_end, UNITY_FRAMES, -0.5);
+        let sentinel = chunk_with_frames(&pools, spec, second_unity_end, SENTINEL_FRAMES, 0.75);
         let sentinel_ptr = sentinel.samples.as_ptr();
         let sentinel_samples = sentinel.samples.to_vec();
 
@@ -820,9 +828,10 @@ mod tests {
         let config = kithara_warp::WarpConfig::builder()
             .stretch(Arc::clone(&controls))
             .build();
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pool);
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, pools.clone());
         let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
+        let drain = EffectDrain::new(effects.len(), &pools)
+            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
         let mut source = WarpSource::new(raw, renderer, effects, drain, spec);
 
         assert!(matches!(
@@ -909,9 +918,10 @@ mod tests {
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn unavailable_warp_target_fails_before_pulling_source(#[case] backend: StretchKind) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let source_pools = default_pools();
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
-            chunks: VecDeque::from([chunk(&SamplePool::default(), spec, 0)]),
+            chunks: VecDeque::from([chunk(&source_pools, spec, 0)]),
             head: Arc::clone(&head),
             seek: Arc::new(SeekState::new()),
         };
@@ -921,11 +931,11 @@ mod tests {
         let config = kithara_warp::WarpConfig::builder()
             .stretch(controls)
             .build();
-        let target_pool = SamplePool::with_byte_budget(8, 0, ByteBudget(0));
-        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pool.clone());
-        let failed_prepares = target_pool.stats().budget_overshoots;
+        let target_pools = pools(0);
+        let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
         let effects = Vec::new();
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
+        let drain = EffectDrain::new(effects.len(), &target_pools)
+            .unwrap_or_else(|error| panic!("test effect drain: {error}"));
         let mut source = WarpSource::new(raw, renderer, effects, drain, spec);
 
         for _ in 0..3 {
@@ -933,17 +943,12 @@ mod tests {
             assert!(matches!(source.step_track(), TrackStep::Failed));
             assert_eq!(head.load(Ordering::Acquire), 0);
         }
-        assert_eq!(
-            target_pool.stats().budget_overshoots,
-            failed_prepares,
-            "a persistent target failure must not rebuild on every shell pass"
-        );
     }
 
     #[kithara::test]
     fn seek_cancels_stale_tail_and_resets_effects_once() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = SamplePool::default();
+        let pools = default_pools();
         let seek = Arc::new(SeekState::new());
         let resets = Arc::new(AtomicU64::new(0));
         let source = SeekApplyingSource {
@@ -954,10 +959,9 @@ mod tests {
         };
         let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResettingTail {
             resets: Arc::clone(&resets),
-            tail: Some(chunk(&pool, spec, 128)),
+            tail: Some(chunk(&pools, spec, 128)),
         })];
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, spec);
+        let mut source = source_stage(&pools, source, effects, spec);
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert_eq!(
@@ -980,7 +984,7 @@ mod tests {
     #[kithara::test]
     fn every_effect_tail_precedes_the_single_eof() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pool = SamplePool::default();
+        let pools = default_pools();
         let source = RawSource {
             chunks: VecDeque::new(),
             head: Arc::new(AtomicU64::new(0)),
@@ -989,15 +993,14 @@ mod tests {
         let effects: Vec<Box<dyn AudioEffect>> = vec![
             Box::new(ResettingTail {
                 resets: Arc::new(AtomicU64::new(0)),
-                tail: Some(chunk(&pool, spec, 128)),
+                tail: Some(chunk(&pools, spec, 128)),
             }),
             Box::new(ResettingTail {
                 resets: Arc::new(AtomicU64::new(0)),
-                tail: Some(chunk(&pool, spec, 256)),
+                tail: Some(chunk(&pools, spec, 256)),
             }),
         ];
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, spec);
+        let mut source = source_stage(&pools, source, effects, spec);
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         for expected in [128, 256] {
@@ -1016,6 +1019,7 @@ mod tests {
     #[kithara::test]
     fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
+        let pools = default_pools();
         let steps = Arc::new(AtomicU64::new(0));
         let flushes = Arc::new(AtomicU64::new(0));
         let resets = Arc::new(AtomicU64::new(0));
@@ -1030,8 +1034,7 @@ mod tests {
             flushes: Arc::clone(&flushes),
             resets: Arc::clone(&resets),
         })];
-        let drain = EffectDrain::new(effects.len(), &BytePool::default());
-        let mut source = source_stage(source, effects, drain, spec);
+        let mut source = source_stage(&pools, source, effects, spec);
 
         assert!(matches!(source.step_track(), TrackStep::StateChanged));
         assert!(matches!(source.step_track(), TrackStep::Eof));

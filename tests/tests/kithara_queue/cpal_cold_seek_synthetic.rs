@@ -5,7 +5,7 @@ use kithara::{
     events::{AudioEvent, Event},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -17,6 +17,8 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
+
+use crate::bufpool_ext::pools;
 
 /// Cold-cache seek into a far segment over the offline backend.
 #[kithara::test(tokio, multi_thread, timeout(Duration::from_secs(120)))]
@@ -50,19 +52,17 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -78,17 +78,16 @@ async fn cold_seek_far_segment_hls_offline(#[case] backend: DecoderBackend) {
         }
     });
 
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .downloader(downloader.clone())
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .build();
+    let cfg =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader.clone())
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let id = queue.append(source).expect("append synthetic HLS track");

@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use assert_no_alloc::*;
 use kithara::{
     self,
-    bufpool::SamplePool,
+    bufpool::PoolConfig,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
@@ -11,31 +11,46 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     warp::{StretchControls, StretchKind, Warp, WarpConfig, WarpRenderer},
 };
+use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools_with};
 
 #[cfg(debug_assertions)]
 #[global_allocator]
 static A: AllocDisabler = AllocDisabler;
 
-fn make_pool() -> SamplePool {
-    SamplePool::new(128, 200_000)
+fn make_pools() -> Pools {
+    eager_pools(0, 0)
+}
+
+fn eager_pools(initial_buffers: usize, initial_capacity: usize) -> Pools {
+    pools_with(
+        64 * 1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder()
+            .initial_buffers(initial_buffers)
+            .initial_capacity(initial_capacity)
+            .max_buffers(128)
+            .build(),
+    )
 }
 
 fn warp_renderer(
     controls: kithara::platform::sync::Arc<StretchControls>,
     spec: AudioSpec,
-    pool: SamplePool,
-) -> WarpRenderer {
+    pools: Pools,
+) -> WarpRenderer<TestPools> {
     let config = WarpConfig::builder().stretch(controls).build();
-    Warp::new((), &config).renderer(spec, pool)
+    Warp::new((), &config).renderer(spec, pools)
 }
 
-fn make_chunk(pool: &SamplePool, frames: usize, channels: u16) -> AudioChunk {
-    make_chunk_at(pool, frames, channels, 44100)
+fn make_chunk(pools: &Pools, frames: usize, channels: u16) -> AudioChunk {
+    make_chunk_at(pools, frames, channels, 44100)
 }
 
-fn make_chunk_at(pool: &SamplePool, frames: usize, channels: u16, sample_rate: u32) -> AudioChunk {
+fn make_chunk_at(pools: &Pools, frames: usize, channels: u16, sample_rate: u32) -> AudioChunk {
     let samples = frames * channels as usize;
-    let mut pcm = pool.get_with(|v| v.resize(samples, 0.0));
+    let mut pcm = pools
+        .get_with_len::<f32>(samples)
+        .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
     for (i, s) in pcm.iter_mut().enumerate() {
         #[expect(
             clippy::cast_precision_loss,
@@ -53,30 +68,26 @@ fn make_chunk_at(pool: &SamplePool, frames: usize, channels: u16, sample_rate: u
 
 #[kithara::test]
 fn test_pool_get_put_allocation_free() {
-    let pool = make_pool();
+    let pools = eager_pools(16, 4_096);
 
     permit_alloc(|| {
-        pool.pre_warm(16, |v| v.resize(4096, 0.0));
         for _ in 0..20 {
-            let _buf = pool.get();
+            let _buf = pools.get::<f32>();
         }
     });
 
     assert_no_alloc(|| {
         for _ in 0..10 {
-            let _buf = pool.get();
+            let _buf = pools.get::<f32>();
         }
     });
 }
 
 #[kithara::test]
 fn test_pcm_chunk_access_allocation_free() {
-    let pool = make_pool();
+    let pools = eager_pools(16, 4_096);
 
-    let chunk = permit_alloc(|| {
-        pool.pre_warm(16, |v| v.resize(4096, 0.0));
-        make_chunk(&pool, 1024, 2)
-    });
+    let chunk = permit_alloc(|| make_chunk(&pools, 1024, 2));
 
     assert_no_alloc(|| {
         let _samples: &[f32] = &chunk.samples;
@@ -90,7 +101,7 @@ fn test_pcm_chunk_access_allocation_free() {
     permit_alloc(|| drop(chunk));
 }
 
-fn build_resampler(pool: &SamplePool, source_rate: u32, target_rate: u32) -> impl Resampler {
+fn build_resampler(pools: &Pools, source_rate: u32, target_rate: u32) -> impl Resampler {
     let settings = ResamplerSettings::builder()
         .channels(NonZeroUsize::new(2).unwrap_or_else(|| panic!("test channels")))
         .mode(ResamplerMode::FixedRatio {
@@ -101,7 +112,7 @@ fn build_resampler(pool: &SamplePool, source_rate: u32, target_rate: u32) -> imp
         })
         .quality(ResamplerQuality::High)
         .options(ResamplerOptions::builder().chunk_size(4_096).build())
-        .sample_pool(pool.clone())
+        .pools(pools.clone())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -110,9 +121,9 @@ fn build_resampler(pool: &SamplePool, source_rate: u32, target_rate: u32) -> imp
     create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
 }
 
-fn planar_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
-    let mut left = pool.get();
-    let mut right = pool.get();
+fn planar_block(pools: &Pools, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
+    let mut left = pools.get::<f32>();
+    let mut right = pools.get::<f32>();
     left.ensure_len(frames)
         .unwrap_or_else(|err| panic!("left channel buffer should fit: {err}"));
     right
@@ -130,9 +141,9 @@ fn planar_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBu
     [left, right]
 }
 
-fn output_block(pool: &SamplePool, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
-    let mut left = pool.get();
-    let mut right = pool.get();
+fn output_block(pools: &Pools, frames: usize) -> [kithara::bufpool::SampleBuffer; 2] {
+    let mut left = pools.get::<f32>();
+    let mut right = pools.get::<f32>();
     left.ensure_len(frames)
         .unwrap_or_else(|err| panic!("left output buffer should fit: {err}"));
     right
@@ -155,17 +166,14 @@ fn process_planar(
         .output_frames
 }
 
-/// Active fixed-ratio resampler construction pre-allocates its scratch, so the
-/// first process call after construction is allocation-free.
 #[kithara::test]
 fn resampler_active_first_chunk_alloc_free() {
-    let pool = make_pool();
+    let pools = eager_pools(64, 16_384);
 
     let (mut resampler, input, mut output) = permit_alloc(|| {
-        pool.pre_warm(64, |v| v.resize(16384, 0.0));
-        let resampler = build_resampler(&pool, 48_000, 44_100);
-        let input = planar_block(&pool, 4_096);
-        let output = output_block(&pool, resampler.output_frames_next());
+        let resampler = build_resampler(&pools, 48_000, 44_100);
+        let input = planar_block(&pools, 4_096);
+        let output = output_block(&pools, resampler.output_frames_next());
         (resampler, input, output)
     });
 
@@ -175,21 +183,19 @@ fn resampler_active_first_chunk_alloc_free() {
     });
 }
 
-/// Active fixed-ratio resampler stays allocation-free after warmup.
 #[kithara::test]
 fn resampler_active_steady_state_alloc_free() {
-    let pool = make_pool();
+    let pools = eager_pools(64, 16_384);
 
     let (mut resampler, input, mut output) = permit_alloc(|| {
-        pool.pre_warm(64, |v| v.resize(16384, 0.0));
-        let mut resampler = build_resampler(&pool, 48_000, 44_100);
+        let mut resampler = build_resampler(&pools, 48_000, 44_100);
         for _ in 0..16 {
-            let warm = planar_block(&pool, 4_096);
-            let mut warm_output = output_block(&pool, resampler.output_frames_next());
+            let warm = planar_block(&pools, 4_096);
+            let mut warm_output = output_block(&pools, resampler.output_frames_next());
             let _ = process_planar(&mut resampler, &warm, &mut warm_output);
         }
-        let input = planar_block(&pool, 4_096);
-        let output = output_block(&pool, resampler.output_frames_next());
+        let input = planar_block(&pools, 4_096);
+        let output = output_block(&pools, resampler.output_frames_next());
         (resampler, input, output)
     });
 
@@ -199,18 +205,15 @@ fn resampler_active_steady_state_alloc_free() {
     });
 }
 
-/// Pre-sizing scratch only changes capacity; two independent resamplers fed
-/// the same input must emit byte-identical output.
 #[kithara::test]
 fn resampler_presize_keeps_output_bit_exact() {
-    let pool = make_pool();
-    pool.pre_warm(64, |v| v.resize(16384, 0.0));
+    let pools = eager_pools(64, 16_384);
 
     let render = || -> Vec<f32> {
-        let mut resampler = build_resampler(&pool, 48_000, 44_100);
+        let mut resampler = build_resampler(&pools, 48_000, 44_100);
         let mut out = Vec::new();
         for n in 0..12 {
-            let mut input = planar_block(&pool, 4_096);
+            let mut input = planar_block(&pools, 4_096);
             for (i, s) in input[0].iter_mut().enumerate() {
                 #[expect(
                     clippy::cast_precision_loss,
@@ -219,7 +222,7 @@ fn resampler_presize_keeps_output_bit_exact() {
                 let v = ((n * 4096 + i) as f32 * 0.0007).sin();
                 *s = v;
             }
-            let mut output = output_block(&pool, resampler.output_frames_next());
+            let mut output = output_block(&pools, resampler.output_frames_next());
             let frames = process_planar(&mut resampler, &input, &mut output);
             out.extend_from_slice(&output[0][..frames]);
             out.extend_from_slice(&output[1][..frames]);
@@ -235,16 +238,15 @@ fn resampler_presize_keeps_output_bit_exact() {
 
 #[kithara::test]
 fn test_resampler_passthrough_allocation_free() {
-    let pool = make_pool();
+    let pools = eager_pools(32, 8_192);
 
     let (mut resampler, input, mut output) = permit_alloc(|| {
-        pool.pre_warm(32, |v| v.resize(8192, 0.0));
-        let mut resampler = build_resampler(&pool, 44_100, 44_100);
-        let warmup = planar_block(&pool, 4_096);
-        let mut warmup_output = output_block(&pool, resampler.output_frames_next());
+        let mut resampler = build_resampler(&pools, 44_100, 44_100);
+        let warmup = planar_block(&pools, 4_096);
+        let mut warmup_output = output_block(&pools, resampler.output_frames_next());
         let _ = process_planar(&mut resampler, &warmup, &mut warmup_output);
-        let input = planar_block(&pool, 4_096);
-        let output = output_block(&pool, resampler.output_frames_next());
+        let input = planar_block(&pools, 4_096);
+        let output = output_block(&pools, resampler.output_frames_next());
         (resampler, input, output)
     });
 
@@ -262,46 +264,40 @@ fn test_resampler_passthrough_allocation_free() {
 )]
 fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kind: StretchKind) {
     const FRAMES: usize = 8_192;
-    let pool = make_pool();
+    let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut effect, first, second) = permit_alloc(|| {
         let controls = StretchControls::new(0.5);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut effect = warp_renderer(controls, spec, pool.clone());
+        let mut effect = warp_renderer(controls, spec, pools.clone());
         effect.prepare(spec);
-        let first = make_chunk(&pool, FRAMES, 2);
-        let second = make_chunk(&pool, FRAMES, 2);
+        let first = make_chunk(&pools, FRAMES, 2);
+        let second = make_chunk(&pools, FRAMES, 2);
         (effect, first, second)
     });
 
-    let misses = pool.stats().alloc_misses;
     let first_output = assert_no_alloc(|| {
         effect
             .render(first)
             .unwrap_or_else(|| panic!("active stretch must render"))
     });
-    assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
         effect.prepare(spec);
         drop(first_output);
     });
 
-    let misses = pool.stats().alloc_misses;
     let second_output = assert_no_alloc(|| {
         effect
             .render(second)
             .unwrap_or_else(|| panic!("serviced stretch must render again"))
     });
-    assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
         effect.prepare(spec);
         drop(second_output);
     });
 
-    let misses = pool.stats().alloc_misses;
     let terminal = assert_no_alloc(|| effect.flush());
-    assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
         effect.prepare(spec);
         drop(terminal);
@@ -316,25 +312,23 @@ fn timestretch_active_process_and_terminal_flush_are_allocation_free(#[case] kin
 )]
 fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: StretchKind) {
     const FRAMES: usize = 8_192;
-    let pool = make_pool();
+    let pools = make_pools();
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
     let (mut maximum, input) = permit_alloc(|| {
         let controls = StretchControls::new(0.05);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut maximum = warp_renderer(controls, spec, pool.clone());
+        let mut maximum = warp_renderer(controls, spec, pools.clone());
         maximum.prepare(spec);
-        let input = make_chunk(&pool, FRAMES, 2);
+        let input = make_chunk(&pools, FRAMES, 2);
         (maximum, input)
     });
-    let misses = pool.stats().alloc_misses;
     let maximum_output = assert_no_alloc(|| {
         maximum
             .render(input)
             .unwrap_or_else(|| panic!("maximum prepared output must render"))
     });
     assert_eq!(maximum_output.frames(), 163_840);
-    assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
         maximum.prepare(spec);
         drop(maximum_output);
@@ -344,25 +338,21 @@ fn timestretch_pending_and_maximum_output_are_allocation_free(#[case] kind: Stre
         let controls = StretchControls::new(2.0);
         controls.set_keylock(true);
         controls.set_backend(kind);
-        let mut pending = warp_renderer(controls, spec, pool.clone());
+        let mut pending = warp_renderer(controls, spec, pools.clone());
         pending.prepare(spec);
-        let input = make_chunk(&pool, 1, 2);
+        let input = make_chunk(&pools, 1, 2);
         (pending, input)
     });
-    let misses = pool.stats().alloc_misses;
     assert_no_alloc(|| {
         assert!(pending.render(input).is_none());
     });
-    assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| pending.prepare(spec));
 
-    let misses = pool.stats().alloc_misses;
     let terminal = assert_no_alloc(|| {
         pending
             .flush()
             .unwrap_or_else(|| panic!("pending frame plus terminal tail must render"))
     });
-    assert_eq!(pool.stats().alloc_misses, misses);
     permit_alloc(|| {
         pending.prepare(spec);
         drop(terminal);

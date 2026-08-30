@@ -98,7 +98,12 @@ public final class AssetStore: @unchecked Sendable {
 
     /// Creates an asset store rooted at `root` with a snapshot of `layouts`.
     /// `nil` uses Kithara's platform-default cache directory.
-    public init(root: String? = nil, layouts: AssetLayoutRegistry = .init()) {
-        self.inner = FfiAssetStore(root: root, layouts: layouts.inner)
+    /// - Throws: ``KitharaError`` when the native store cannot be initialized.
+    public init(root: String? = nil, layouts: AssetLayoutRegistry = .init()) throws {
+        do {
+            self.inner = try FfiAssetStore(root: root, layouts: layouts.inner)
+        } catch let error as FfiError {
+            throw KitharaError(ffi: error)
+        }
     }
 }

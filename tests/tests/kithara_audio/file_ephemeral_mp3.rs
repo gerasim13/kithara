@@ -4,13 +4,15 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, AudioSession, ReadOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{Content, Delivery, FixtureBehavior, TestServerHelper};
+use kithara_integration_tests::{
+    Content, Delivery, FixtureBehavior, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
+};
 
 use crate::common::test_defaults::Consts;
 
@@ -47,20 +49,17 @@ async fn audio_file_mp3_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -142,20 +141,17 @@ async fn mp3_duration_correct_before_decode(#[case] hint: Option<&str>) {
         },
     });
     let url = handle.url();
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.clone().into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .maybe_hint(hint.map(String::from))
         .build();
     let audio = worker
@@ -186,20 +182,17 @@ async fn audio_file_extensionless_mp3_without_hint_uses_native_probe() {
         },
         delivery: Delivery::Range,
     });
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(handle.url().into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config).build();
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config).build();
     let mut audio = worker.open(config).await.unwrap();
 
     let (samples_read, position, eof) = spawn_blocking(move || {

@@ -7,6 +7,7 @@ import com.kithara.ffi.FfiAssetResource
 import com.kithara.ffi.FfiAssetSource
 import com.kithara.ffi.FfiAssetStore
 import com.kithara.ffi.FfiCacheIdentityRule
+import com.kithara.ffi.FfiException
 import com.kithara.ffi.queryIdentityLayout
 
 /** Asset identity passed to [AssetLayout.root]. */
@@ -130,11 +131,20 @@ class AssetStore internal constructor(
     /**
      * Creates an asset store rooted at [root] with a snapshot of [layouts].
      * A `null` root selects Kithara's platform default.
+     *
+     * @throws KitharaError if the native store cannot be initialized.
      */
+    @Throws(KitharaError::class)
     constructor(
         root: String? = null,
         layouts: AssetLayoutRegistry = AssetLayoutRegistry(),
-    ) : this(FfiAssetStore(root, layouts.inner))
+    ) : this(
+        try {
+            FfiAssetStore(root, layouts.inner)
+        } catch (error: FfiException) {
+            throw KitharaError.fromFfi(error)
+        },
+    )
 }
 
 private class RustAssetLayout(

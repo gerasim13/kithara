@@ -1,16 +1,20 @@
 #[cfg(feature = "gui")]
 use kithara::play::effects::eq::{EqBandConfig, GainDb};
 use kithara::{
-    host::{Host, HostOwned},
+    host::HostOwned,
     play::{
         PlayError, PlayerConfig, PlayerImpl, StretchControls,
         effects::eq::generate_log_spaced_bands,
     },
 };
 use kithara_platform::sync::Arc;
-use kithara_queue::{Queue, QueueConfig};
+use kithara_queue::QueueConfig;
 
-use crate::{config::AppConfig, mix::MixState};
+use crate::{
+    config::AppConfig,
+    mix::MixState,
+    pools::{AppHost, AppQueue},
+};
 
 /// EQ topology shared by every deck and its player graph.
 #[cfg(feature = "gui")]
@@ -78,7 +82,7 @@ pub struct DeckId(pub usize);
 
 /// One app deck: its own player, queue and tempo controls.
 pub struct Deck {
-    pub queue: HostOwned<Queue>,
+    pub queue: HostOwned<AppQueue>,
     pub timestretch: Arc<StretchControls>,
     pub id: DeckId,
 }
@@ -90,7 +94,7 @@ impl Deck {
     ///
     /// # Errors
     /// Returns [`PlayError`] when the Host rejects the new deck.
-    pub fn build(id: DeckId, config: &AppConfig, host: &mut Host) -> Result<Self, PlayError> {
+    pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let timestretch = StretchControls::new(1.0);
         let player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -101,7 +105,7 @@ impl Deck {
                 .worker(config.worker.clone())
                 .build(),
         );
-        let queue = Queue::new(
+        let queue = AppQueue::new(
             QueueConfig::builder()
                 .player(player)
                 .store(config.store.clone())
@@ -128,7 +132,7 @@ impl Deck {
 #[fieldwork(opt_in, get)]
 pub struct DeckSet {
     #[field(get)]
-    host: Host,
+    host: AppHost,
     #[field(get)]
     mix: MixState,
     #[field(get)]
@@ -138,7 +142,7 @@ pub struct DeckSet {
 
 impl DeckSet {
     #[must_use]
-    pub fn new(host: Host, decks: Vec<Deck>) -> Self {
+    pub fn new(host: AppHost, decks: Vec<Deck>) -> Self {
         let next_id = decks.iter().map(|deck| deck.id.0 + 1).max().unwrap_or(0);
         let mix = MixState::new(decks.len());
         Self {
@@ -278,16 +282,13 @@ impl Drop for DeckSet {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{
-        bufpool::Region,
-        host::HostConfig,
-        play::{PlayWorker, PlayWorkerConfig},
-    };
+    use kithara::{host::HostConfig, play::PlayWorkerConfig};
     use kithara_queue::QueueConfig;
 
     use super::*;
+    use crate::pools::{self, AppWorker};
 
-    fn one_deck(id: DeckId, host: &mut Host, worker: &PlayWorker) -> Deck {
+    fn one_deck(id: DeckId, host: &mut AppHost, worker: &AppWorker) -> Deck {
         let timestretch = StretchControls::new(1.0);
         let player = PlayerImpl::new(
             PlayerConfig::builder()
@@ -295,7 +296,7 @@ mod tests {
                 .worker(worker.clone())
                 .build(),
         );
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = AppQueue::new(QueueConfig::builder().player(player).build());
         let queue = host.insert(queue).expect("host accepts the test deck");
         Deck {
             queue,
@@ -304,15 +305,14 @@ mod tests {
         }
     }
 
-    fn worker() -> PlayWorker {
-        let region = Region::default();
-        PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    fn worker() -> AppWorker {
+        AppWorker::new(
+            PlayWorkerConfig::builder(pools::build().expect("valid app pool policy")).build(),
         )
     }
 
     fn deck_set(count: usize) -> DeckSet {
-        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let worker = worker();
         let decks = (0..count)
             .map(|index| one_deck(DeckId(index), &mut host, &worker))

@@ -371,7 +371,6 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_decode::{DecoderSeekOutcome, DropChunks, GaplessInfo};
     use kithara_platform::time::Duration;
     use kithara_signal::AudioChunkInfo;
@@ -379,6 +378,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::sample_buffer;
 
     struct EofDecoder {
         gapless: Option<GaplessInfo>,
@@ -477,7 +477,7 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            SamplePool::default().attach(vec![0.25; sample_frames * usize::from(spec.channels)]),
+            sample_buffer(&vec![0.25; sample_frames * usize::from(spec.channels)]),
         )
     }
 

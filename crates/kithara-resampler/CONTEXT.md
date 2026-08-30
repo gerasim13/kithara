@@ -26,20 +26,24 @@ backend-specific resampler policy.
 
 ## Allocation Contract
 
-Hot paths must not allocate through ordinary `Vec` growth. Backends use one of
-these storage owners:
+Backends advertising `REALTIME_SAFE` must not allocate through ordinary `Vec`
+growth. Backends use one of these storage owners:
 
 - caller-owned input and output slices passed to `Resampler::process_into_buffer`;
-- scratch buffers taken from the `SamplePool` inside `ResamplerSettings`;
-- backend-owned pooled scratch acquired during construction or reset.
+- scratch buffers taken from the `PoolRegion<S>` inside `ResamplerSettings<S>`;
+- backend-owned scratch acquired during construction.
 
-Library code must not call `SamplePool::default()` as a hidden fallback. The pool is
-injected by the surface that owns memory sizing, matching the `kithara-bufpool`
-contract. Construction may pre-warm scratch for the configured channels and chunk
-size; steady-state processing reuses already-owned buffers.
+Library code must not create a hidden pool region. The facade is injected by the
+surface that owns memory sizing, matching the `kithara-bufpool` contract.
+Steady-state processing reuses already-owned buffers.
+
+Rubato rebuilds only mutable channel metadata on each call. That metadata is
+stack-backed through eight channels; wider layouts allocate one call-scoped
+`Vec` sized to the configured channel count. Rubato therefore does not advertise
+`REALTIME_SAFE`.
 
 Any backend adapter bridging a third-party API shape (Rubato's planar adapter
-surface, the Apple converter's pull callback) must hide that bridge behind pooled
+surface, the Apple converter's pull callback) must hide that bridge behind owned
 scratch and keep the public trait on borrowed planar slices.
 
 ## Backend Contract
@@ -47,6 +51,8 @@ scratch and keep the public trait on borrowed planar slices.
 `Resampler` handles standalone decoded audio only: it accepts borrowed planar `f32`
 slices and writes into caller-owned planar output slices. The returned
 `ResamplerProcess` reports accepted input frames and produced output frames.
+The mutable channel view is call-scoped and must be rebuilt before each process
+call; the underlying output buffers remain caller-owned and reusable.
 Callers size output using the backend's frame-capacity methods
 (`output_frames_max`, `output_frames_next`, `output_frames_for_input`).
 `flush_into_buffer` processes the final caller-supplied block (default: plain
@@ -75,16 +81,16 @@ External backends may ignore quality or map it into their own config.
 
 ## Configuration Shapes
 
-Everything is constructed through bon builders. `ResamplerSettings` (channels,
-`sample_pool`, mode, options, quality) is what a backend builds from;
-`ResamplerConfig<B>` pairs it with a backend value and is what `create_resampler`
+Everything is constructed through bon builders. `ResamplerSettings<S>` (channels,
+`pools`, mode, options, quality) is what a backend builds from;
+`ResamplerConfig<B, S>` pairs it with a backend value and is what `create_resampler`
 consumes. `ResamplerOptions` holds the numeric tunables — `max_ratio_adjustment`
 8.0, `passthrough_tolerance` 0.0001, `chunk_size` 4096 — and its `Default` goes
 through the builder, so overriding one keeps the other defaults.
 
 `Resample<S>` carries `target_sample_rate`, quality and options with a placement
 scope `S` (`Unit<B>` or `Decode<B>`), keeping the backend in the type at the call
-site. `MonoStream<B>` / `MonoStreamConfig<B>` are the pooled single-channel
+site. `MonoStream<B>` / `MonoStreamConfig<B, S>` are the pooled single-channel
 streaming adapter used by beat analysis in `kithara-analysis`.
 
 ## Built-In Backend Families

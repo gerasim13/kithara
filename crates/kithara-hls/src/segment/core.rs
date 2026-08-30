@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_assets::{AssetScope, ResourceKey};
+use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::StreamResult;
@@ -59,7 +60,10 @@ impl Segment {
     }
 
     /// Whether every byte in `range` is already present on disk for this slot.
-    pub(crate) fn contains(&self, scope: &AssetScope, range: Range<u64>) -> bool {
+    pub(crate) fn contains<S>(&self, scope: &AssetScope<S>, range: Range<u64>) -> bool
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         self.resource(scope).contains(range)
     }
 
@@ -74,16 +78,22 @@ impl Segment {
     /// Open the slot's resource and copy `range` into `dst`. Routes through the
     /// slot's [`ResourceHandle`] — `Ok(None)` means the bytes are not on disk
     /// yet.
-    pub(crate) fn read_at(
+    pub(crate) fn read_at<S>(
         &self,
-        scope: &AssetScope,
+        scope: &AssetScope<S>,
         range: Range<u64>,
         dst: &mut [u8],
-    ) -> StreamResult<Option<usize>> {
+    ) -> StreamResult<Option<usize>>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         self.resource(scope).read_at(range, dst)
     }
 
-    pub(crate) const fn resource<'a>(&'a self, scope: &'a AssetScope) -> ResourceHandle<'a> {
+    pub(crate) const fn resource<'a, S>(&'a self, scope: &'a AssetScope<S>) -> ResourceHandle<'a, S>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         ResourceHandle::new(scope, self.resource_id(), self.url())
     }
 

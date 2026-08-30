@@ -1,12 +1,14 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    bufpool::SamplePool,
     decode::{GaplessInfo, GaplessTrimmer},
     platform::time::Duration,
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
-use kithara_integration_tests::signal_pcm::signal::{SignalFn, SineWave};
+use kithara_integration_tests::{
+    bufpool_ext::{Pools, pools},
+    signal_pcm::signal::{SignalFn, SineWave},
+};
 
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
@@ -17,6 +19,7 @@ const SINE_FREQ_HZ: f64 = 1_000.0;
 
 #[kithara::test(timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
+    let pools = pools();
     let spec = AudioSpec::new(
         GAPLESS_CHANNELS,
         NonZeroU32::new(GAPLESS_SAMPLE_RATE).expect("test rate"),
@@ -26,12 +29,14 @@ fn synthetic_gapless_tracks_have_no_boundary_energy_dip() {
         usize::try_from(AAC_GAPLESS_TRAILING_DELAY).expect("AAC padding fits usize");
 
     let first = trim_track(
+        &pools,
         padded_sine_track(0, TRACK_FRAMES, leading_frames, trailing_frames, spec),
         spec,
         leading_frames,
         trailing_frames,
     );
     let second = trim_track(
+        &pools,
         padded_sine_track(
             TRACK_FRAMES,
             TRACK_FRAMES,
@@ -90,6 +95,7 @@ fn padded_sine_track(
 }
 
 fn trim_track(
+    pools: &Pools,
     samples: Vec<f32>,
     spec: AudioSpec,
     leading_frames: usize,
@@ -99,12 +105,16 @@ fn trim_track(
     gapless.leading_frames = u64::try_from(leading_frames).expect("leading frames fit u64");
     gapless.trailing_frames = u64::try_from(trailing_frames).expect("trailing frames fit u64");
     let mut trimmer = GaplessTrimmer::from(gapless);
+    let mut pooled = pools
+        .get_with_len::<f32>(samples.len())
+        .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
+    pooled.copy_from_slice(&samples);
     let chunk = AudioChunk::new(
         AudioChunkInfo {
             spec,
             ..Default::default()
         },
-        SamplePool::default().attach(samples),
+        pooled,
     );
 
     let mut output = Vec::new();

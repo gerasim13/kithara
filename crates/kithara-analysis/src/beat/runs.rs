@@ -1,10 +1,11 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_resampler::{MonoStream, MonoStreamConfig, ResamplerBackend, ResamplerOptions};
 use num_traits::cast::ToPrimitive;
-use tracing::{debug, warn};
+use tracing::debug;
 
+use super::detector::BeatDetectError;
 use crate::analyzer::BeatAnalysisConfig;
 
 struct Run<B>
@@ -25,7 +26,6 @@ where
 {
     runs: Vec<Run<B>>,
     config: BeatAnalysisConfig<B>,
-    sample_pool: SamplePool,
     budget: usize,
     #[field(get, vis = "pub(super)")]
     dropped: Vec<(u64, u64)>,
@@ -39,12 +39,7 @@ impl<B> Runs<B>
 where
     B: ResamplerBackend,
 {
-    pub(super) fn new(
-        config: BeatAnalysisConfig<B>,
-        sample_pool: SamplePool,
-        source_rate: u32,
-        budget: usize,
-    ) -> Self {
+    pub(super) fn new(config: BeatAnalysisConfig<B>, source_rate: u32, budget: usize) -> Self {
         let target_rate = config.target_rate().max(1);
         let source = f64::from(source_rate.max(1));
         Self {
@@ -53,7 +48,6 @@ where
             budget,
             dropped: Vec::new(),
             config,
-            sample_pool,
             source_rate: source_rate.max(1),
             target_rate,
         }
@@ -115,7 +109,7 @@ where
             .unwrap_or(usize::MAX)
     }
 
-    pub(super) fn flush(&mut self) {
+    pub(super) fn flush(&mut self) -> Result<(), BeatDetectError> {
         for index in 0..self.runs.len() {
             let Some((span, stream)) = self
                 .runs
@@ -129,39 +123,46 @@ where
                 continue;
             };
             let mono = &mut run.mono;
-            if let Some(stream) = stream
-                && let Err(e) = stream.finish(|samples| append(mono, samples))
-            {
-                warn!(?e, "beat analysis: resampler flush failed");
+            if let Some(stream) = stream {
+                finish_stream(stream, mono)?;
             }
-            pad(mono, expected);
+            pad(mono, expected)?;
         }
+        Ok(())
     }
 
-    pub(super) fn push(&mut self, mono: &[f32], at: u64) {
+    pub(super) fn push<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        mono: &[f32],
+        at: u64,
+    ) -> Result<(), BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
         let Ok(span) = u64::try_from(mono.len()) else {
-            return;
+            return Ok(());
         };
         if span == 0 {
-            return;
+            return Ok(());
         }
         let end = at.saturating_add(span);
 
         let first = self.runs.partition_point(|run| run.end < at);
         let last = self.runs.partition_point(|run| run.start <= end);
         if first == last {
-            if let Some(run) = self.open(mono, at, end) {
-                self.runs.insert(first, run);
-            }
+            let run = self.open(pools, mono, at, end)?;
+            self.runs.insert(first, run);
             self.enforce_budget();
-            return;
+            return Ok(());
         }
 
         let absorbed: Vec<Run<B>> = self.runs.splice(first..last, []).collect();
-        if let Some(merged) = self.merge(absorbed, mono, at, end) {
+        if let Some(merged) = self.merge(pools, absorbed, mono, at, end)? {
             self.runs.insert(first, merged);
         }
         self.enforce_budget();
+        Ok(())
     }
 
     pub(super) fn spans(&self) -> impl Iterator<Item = (u64, &[f32])> {
@@ -172,20 +173,32 @@ where
         self.detector_frames(frame.saturating_sub(start))
     }
 
-    fn merge(&mut self, absorbed: Vec<Run<B>>, mono: &[f32], at: u64, end: u64) -> Option<Run<B>> {
+    fn merge<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        absorbed: Vec<Run<B>>,
+        mono: &[f32],
+        at: u64,
+        end: u64,
+    ) -> Result<Option<Run<B>>, BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
         let base = absorbed.first().map_or(at, |run| run.start.min(at));
-        let mut out = self.sample_pool.get_with(Vec::clear);
+        let mut out = pools.get::<f32>();
         let mut cursor = base;
         let mut stream = None;
 
         for run in absorbed {
             if cursor < run.start {
-                let piece = slice(mono, at, cursor, run.start)?;
-                self.segment(&mut out, piece)?;
+                let Some(piece) = slice(mono, at, cursor, run.start) else {
+                    return Ok(None);
+                };
+                self.segment(pools, &mut out, piece)?;
                 pad(
                     &mut out,
                     self.detector_frames(run.start.saturating_sub(base)),
-                );
+                )?;
             }
             if run.end <= cursor {
                 continue;
@@ -193,51 +206,52 @@ where
             let mut run = run;
             if let Some(inner) = run.stream.take() {
                 let tail = &mut run.mono;
-                if let Err(e) = inner.finish(|samples| append(tail, samples)) {
-                    warn!(?e, "beat analysis: resampler flush failed");
-                }
+                finish_stream(inner, tail)?;
             }
             let skip = self.detector_frames(cursor.saturating_sub(run.start));
-            append(&mut out, run.mono.get(skip..).unwrap_or_default());
+            append(&mut out, run.mono.get(skip..).unwrap_or_default())?;
             cursor = run.end;
-            pad(&mut out, self.detector_frames(cursor.saturating_sub(base)));
+            pad(&mut out, self.detector_frames(cursor.saturating_sub(base)))?;
         }
 
         if cursor < end {
-            let piece = slice(mono, at, cursor, end)?;
-            let opened = self.open(piece, cursor, end)?;
-            append(&mut out, &opened.mono);
+            let Some(piece) = slice(mono, at, cursor, end) else {
+                return Ok(None);
+            };
+            let opened = self.open(pools, piece, cursor, end)?;
+            append(&mut out, &opened.mono)?;
             stream = opened.stream;
             cursor = end;
         }
 
-        Some(Run {
+        Ok(Some(Run {
             start: base,
             end: cursor,
             mono: out,
             stream,
-        })
+        }))
     }
 
-    fn open(&mut self, mono: &[f32], at: u64, end: u64) -> Option<Run<B>> {
-        let mut out = self.sample_pool.get_with(Vec::clear);
+    fn open<S>(
+        &self,
+        pools: &PoolRegion<S>,
+        mono: &[f32],
+        at: u64,
+        end: u64,
+    ) -> Result<Run<B>, BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
+        let mut out = pools.get::<f32>();
         let stream = if self.source_rate == self.target_rate {
-            append(&mut out, mono);
+            append(&mut out, mono)?;
             None
         } else {
-            let mut stream = self.stream()?;
-            if let Err(e) = stream.push(mono.iter().copied(), |samples| {
-                append(&mut out, samples);
-            }) {
-                warn!(
-                    ?e,
-                    "beat analysis: resample block failed; range left unanalysed"
-                );
-                return None;
-            }
+            let mut stream = self.stream(pools)?;
+            push_stream(&mut stream, mono, &mut out)?;
             Some(stream)
         };
-        Some(Run {
+        Ok(Run {
             start: at,
             end,
             mono: out,
@@ -245,29 +259,30 @@ where
         })
     }
 
-    fn segment(&mut self, out: &mut SampleBuffer, mono: &[f32]) -> Option<()> {
+    fn segment<S>(
+        &self,
+        pools: &PoolRegion<S>,
+        out: &mut SampleBuffer,
+        mono: &[f32],
+    ) -> Result<(), BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
         if self.source_rate == self.target_rate {
-            append(out, mono);
-            return Some(());
+            append(out, mono)?;
+            return Ok(());
         }
-        let mut stream = self.stream()?;
-        if let Err(e) = stream.push(mono.iter().copied(), |samples| append(out, samples)) {
-            warn!(
-                ?e,
-                "beat analysis: resample block failed; range left unanalysed"
-            );
-            return None;
-        }
-        if let Err(e) = stream.finish(|samples| append(out, samples)) {
-            warn!(?e, "beat analysis: resampler flush failed");
-            return None;
-        }
-        Some(())
+        let mut stream = self.stream(pools)?;
+        push_stream(&mut stream, mono, out)?;
+        finish_stream(stream, out)
     }
 
-    fn stream(&self) -> Option<MonoStream<B>> {
-        let source_sample_rate = NonZeroU32::new(self.source_rate)?;
-        let target_sample_rate = NonZeroU32::new(self.target_rate)?;
+    fn stream<S>(&self, pools: &PoolRegion<S>) -> Result<MonoStream<B>, BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
+        let source_sample_rate = NonZeroU32::new(self.source_rate).unwrap_or(NonZeroU32::MIN);
+        let target_sample_rate = NonZeroU32::new(self.target_rate).unwrap_or(NonZeroU32::MIN);
         let config = MonoStreamConfig::builder()
             .backend(self.config.resampler_backend().clone())
             .source_sample_rate(source_sample_rate)
@@ -278,42 +293,64 @@ where
                     .chunk_size(self.config.block_frames())
                     .build(),
             )
-            .sample_pool(self.sample_pool.clone())
+            .pools(pools.clone())
             .build();
-        MonoStream::new(config)
-            .map_err(|e| {
-                warn!(
-                    ?e,
-                    source_rate = self.source_rate,
-                    "beat analysis: resampler construction failed"
-                );
-            })
-            .ok()
+        MonoStream::new(config).map_err(resample_error)
     }
 }
 
-fn pad(out: &mut SampleBuffer, expected: usize) {
+fn pad(out: &mut SampleBuffer, expected: usize) -> Result<(), PoolError> {
     if out.len() > expected {
         out.truncate(expected);
-    } else if let Err(e) = out.ensure_len(expected) {
-        warn!(
-            ?e,
-            expected, "beat analysis: pooled mono could not be padded"
-        );
+    } else {
+        out.ensure_len(expected)?;
     }
+    Ok(())
 }
 
-fn append(out: &mut SampleBuffer, src: &[f32]) {
-    let at = out.len();
-    if let Err(e) = out.ensure_len(at.saturating_add(src.len())) {
-        warn!(
-            ?e,
-            "beat analysis: pooled mono could not grow; samples dropped"
-        );
-        return;
+fn append(out: &mut SampleBuffer, src: &[f32]) -> Result<(), PoolError> {
+    out.try_extend_from_slice(src)
+}
+
+fn push_stream<B>(
+    stream: &mut MonoStream<B>,
+    mono: &[f32],
+    out: &mut SampleBuffer,
+) -> Result<(), BeatDetectError>
+where
+    B: ResamplerBackend,
+{
+    let mut buffer_error = None;
+    let result = stream.push(mono.iter().copied(), |samples| {
+        if buffer_error.is_none() {
+            buffer_error = append(out, samples).err();
+        }
+    });
+    if let Some(error) = buffer_error {
+        return Err(error.into());
     }
-    if let Some(dst) = out.get_mut(at..at + src.len()) {
-        dst.copy_from_slice(src);
+    result.map_err(resample_error)
+}
+
+fn finish_stream<B>(stream: MonoStream<B>, out: &mut SampleBuffer) -> Result<(), BeatDetectError>
+where
+    B: ResamplerBackend,
+{
+    let mut buffer_error = None;
+    let result = stream.finish(|samples| {
+        if buffer_error.is_none() {
+            buffer_error = append(out, samples).err();
+        }
+    });
+    if let Some(error) = buffer_error {
+        return Err(error.into());
+    }
+    result.map_err(resample_error)
+}
+
+fn resample_error(error: impl std::fmt::Display) -> BeatDetectError {
+    BeatDetectError::Resample {
+        reason: error.to_string(),
     }
 }
 
@@ -325,26 +362,55 @@ fn slice(mono: &[f32], at: u64, from: u64, to: u64) -> Option<&[f32]> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
     use super::Runs;
-    use crate::BeatAnalysisConfig;
+    use crate::{
+        BeatAnalysisConfig,
+        test_pools::{TestPools, pools},
+    };
 
     const SRC: u32 = 44_100;
 
-    fn runs(source_rate: u32) -> Runs<RubatoBackend> {
+    struct TestRuns {
+        inner: Runs<RubatoBackend>,
+        pools: kithara_bufpool::PoolRegion<TestPools>,
+    }
+
+    impl TestRuns {
+        fn push(&mut self, mono: &[f32], at: u64) {
+            self.inner
+                .push(&self.pools, mono, at)
+                .expect("run buffers fit the test region");
+        }
+
+        fn flush(&mut self) {
+            self.inner.flush().expect("run buffers fit the test region");
+        }
+    }
+
+    impl std::ops::Deref for TestRuns {
+        type Target = Runs<RubatoBackend>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    fn runs(source_rate: u32) -> TestRuns {
         budgeted(source_rate, usize::MAX)
     }
 
-    fn budgeted(source_rate: u32, budget: usize) -> Runs<RubatoBackend> {
-        Runs::new(
-            BeatAnalysisConfig::<RubatoBackend>::default(),
-            SamplePool::default(),
-            source_rate,
-            budget,
-        )
+    fn budgeted(source_rate: u32, budget: usize) -> TestRuns {
+        TestRuns {
+            inner: Runs::new(
+                BeatAnalysisConfig::<RubatoBackend>::default(),
+                source_rate,
+                budget,
+            ),
+            pools: pools(),
+        }
     }
 
     fn ramp(frames: usize, from: u64) -> Vec<f32> {

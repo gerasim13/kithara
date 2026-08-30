@@ -6,7 +6,6 @@ use std::{
 };
 
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_bufpool::SamplePool;
 use kithara_decode::{
     DecodeError, DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, GaplessInfo,
     GaplessMode, GaplessProfile,
@@ -54,6 +53,7 @@ use crate::{
             self, CurrentFsm, RebuildingDecoder, Track, TrackFailure, TrackStep, WaitingReason,
         },
     },
+    test_pools::{pools, sample_buffer},
     traits::{AudioSource, AudioSourceExt},
 };
 
@@ -246,10 +246,7 @@ impl Decoder for RouteSignalDecoder {
         let spec = self.audio_spec();
         let channels = usize::from(Consts::CHANNELS);
         let frames = Consts::ROUTE_CHUNK_FRAMES;
-        let mut samples = SamplePool::default().get();
-        samples
-            .ensure_len(frames.saturating_mul(channels))
-            .expect("route signal fixture fits PCM pool budget");
+        let mut samples = vec![0.0; frames.saturating_mul(channels)];
         for frame in 0..frames {
             let absolute = self
                 .next_frame
@@ -279,7 +276,7 @@ impl Decoder for RouteSignalDecoder {
                 frames: frame_count,
                 ..Default::default()
             },
-            samples,
+            sample_buffer(&samples),
         )))
     }
 
@@ -946,10 +943,11 @@ async fn test_source_with_mode(variant: u32, gapless_mode: GaplessMode) -> Rebui
         host_sample_rate: Arc::new(AtomicU32::new(Consts::SAMPLE_RATE)),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
-        sample_pool: SamplePool::default(),
+        pools: pools(),
         recreate_on_host_rate_change: true,
     }
-    .into_parts(None, shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch())
+    .expect("decode scratch fits test pools");
     let parts = SourceParts::new(
         &shared_stream,
         decode,
@@ -1134,10 +1132,11 @@ async fn route_source(params: RouteParams) -> RouteFixture {
         host_sample_rate: host_sample_rate.clone(),
         media_info: Some(media_info(0)),
         playback_resampler_backend: "none",
-        sample_pool: SamplePool::default(),
+        pools: pools(),
         recreate_on_host_rate_change: true,
     }
-    .into_parts(None, shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch())
+    .expect("decode scratch fits test pools");
     let parts = SourceParts::new(
         &shared_stream,
         decode,

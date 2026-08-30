@@ -25,6 +25,10 @@ use super::*;
 
 const VALID_MASTER: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=128000\naudio.m3u8\n";
 
+type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
+type TestAssetStore = AssetStore<crate::test_pools::TestPools>;
+type TestPlaylistCache = PlaylistCache<crate::test_pools::TestPools>;
+
 struct MockPeer {
     cancel: CancelToken,
 }
@@ -91,27 +95,31 @@ async fn gated_playlist_server(body: Bytes) -> (Url, Arc<AtomicUsize>, Arc<Notif
     (url, requests, first_seen, release)
 }
 
-fn test_cache(scope: AssetScope) -> PlaylistCache {
+fn test_cache(scope: TestAssetScope) -> TestPlaylistCache {
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     let handle = downloader.register(Arc::new(MockPeer {
         cancel: CancelToken::never(),
     }));
-    PlaylistCache::new(scope, handle, kithara_bufpool::BytePool::default())
+    PlaylistCache::new(scope, handle, crate::test_pools::pools())
 }
 
-fn test_scope(store: &AssetStore, url: &Url, discriminator: &str) -> AssetScope {
+fn test_scope(store: &TestAssetStore, url: &Url, discriminator: &str) -> TestAssetScope {
     store
-        .scope::<kithara_hls::Hls>(&AssetSource::Remote {
+        .scope::<kithara_hls::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
             url: url.clone(),
             discriminator: Some(discriminator.to_owned()),
         })
         .expect("test asset scope")
 }
 
-fn commit(scope: &AssetScope, key: &ResourceKey, bytes: &[u8]) {
+fn commit(scope: &TestAssetScope, key: &ResourceKey, bytes: &[u8]) {
     let AcquisitionResult::Pending(writer) =
         scope.store().acquire_resource(key, None).expect("acquire")
     else {
@@ -125,7 +133,7 @@ fn commit(scope: &AssetScope, key: &ResourceKey, bytes: &[u8]) {
 async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
     let (url, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
     let dir = tempdir().expect("tempdir");
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -142,7 +150,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -162,7 +170,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let reopened = AssetStore::builder()
+    let reopened = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -180,7 +188,7 @@ async fn corrupt_persisted_playlist_is_invalidated_and_refetched_once() {
 async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     let (url, requests) = playlist_server(Bytes::from_static(VALID_MASTER)).await;
     let dir = tempdir().expect("tempdir");
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -195,7 +203,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -213,7 +221,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
     drop(scope);
     drop(store);
 
-    let reopened = AssetStore::builder()
+    let reopened = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -230,7 +238,7 @@ async fn empty_persisted_playlist_is_invalidated_and_refetched_once() {
 async fn concurrent_caches_share_one_playlist_repair() {
     let (url, requests, first_seen, release) =
         gated_playlist_server(Bytes::from_static(VALID_MASTER)).await;
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -270,7 +278,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
     let invalid = Bytes::from_static(b"\x1b\xbf\x01\x00network brotli bytes");
     let (url, requests) = playlist_server(invalid).await;
     let dir = tempdir().expect("tempdir");
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -286,7 +294,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
     drop(scope);
     drop(store);
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -308,7 +316,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
     drop(scope);
     drop(store);
 
-    let reopened = AssetStore::builder()
+    let reopened = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -325,7 +333,7 @@ async fn failed_refetch_does_not_resurrect_poisoned_index() {
 async fn invalid_network_playlist_is_not_cached() {
     let invalid = Bytes::from_static(b"\x1b\xbf\x01\x00brotli bytes");
     let (url, requests) = playlist_server(invalid).await;
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();

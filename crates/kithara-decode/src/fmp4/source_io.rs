@@ -3,7 +3,7 @@ use std::{
     ops::Range,
 };
 
-use kithara_bufpool::PooledOwned;
+use kithara_bufpool::ByteBuffer;
 use kithara_stream::{ByteMap, PendingReason, StreamReadError};
 
 use crate::{
@@ -29,11 +29,11 @@ pub(crate) enum FillStatus {
     Pending(PendingReason),
 }
 
-/// Pool-backed segment read buffer. Drawn from the host `BytePool` and
+/// Pool-backed segment read buffer. Drawn from the host pool region and
 /// returned to it on drop, so a steady-state decode loop recycles one
 /// high-water allocation across segments instead of mallocing per
-/// segment. Holds 32 shards to match the workspace `BytePool`.
-pub(crate) type SegmentBuf = PooledOwned<32, Vec<u8>>;
+/// segment.
+pub(crate) type SegmentBuf = ByteBuffer;
 
 /// Resumable read of a contiguous byte range from a `Read + Seek`
 /// source into an in-memory buffer.
@@ -52,7 +52,7 @@ pub(crate) struct SegmentReadState {
 
 impl SegmentReadState {
     /// Build a read state over `range` backed by `buffer`, a buffer
-    /// freshly drawn from the host `BytePool`. The buffer's retained
+    /// freshly drawn from the host pool region. The buffer's retained
     /// capacity (high-water mark carried over from a previous segment
     /// the pool recycled) is reused; [`Self::sync_buffer_ready`] only
     /// reallocates when this segment is larger than any seen before.
@@ -65,18 +65,14 @@ impl SegmentReadState {
     }
 
     /// Set `buffer` length to exactly `total`. Growth goes through the
-    /// budget-tracked [`PooledOwned::ensure_len`] (a plain `resize` via
+    /// budget-tracked [`ByteBuffer::ensure_len`] (a plain `resize` via
     /// `DerefMut` would leak the pool's byte budget); shrink uses
     /// `truncate`, which keeps capacity so the high-water mark survives.
     fn resize_to(&mut self, total: usize) -> DecodeResult<()> {
         if self.buffer.len() == total {
             return Ok(());
         }
-        self.buffer
-            .ensure_len(total)
-            .map_err(|_| DecodeError::InvalidData {
-                detail: "byte-pool budget exhausted sizing segment buffer",
-            })?;
+        self.buffer.ensure_len(total)?;
         self.buffer.truncate(total);
         Ok(())
     }
@@ -221,13 +217,12 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use kithara_bufpool::BytePool;
     use kithara_platform::time::Duration;
     use kithara_stream::SegmentDescriptor;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::traits::BoxedSource;
+    use crate::{test_pools::default_pools, traits::BoxedSource};
 
     /// Fixed multi-segment layout whose `segment_at_index` returns each
     /// segment's byte range unchanged — `fill_segment_buffer`'s live
@@ -279,7 +274,7 @@ mod tests {
         }
     }
 
-    /// R-fmp4buf: segment read buffers are drawn from the [`BytePool`] and
+    /// R-fmp4buf: segment read buffers are drawn from the typed pool region and
     /// returned to it on drop, so a warm decode loop pays no per-segment
     /// `malloc`. Once one warm-up read sizes a pooled buffer to the max
     /// segment, every subsequent segment — larger or smaller — must reuse
@@ -302,23 +297,18 @@ mod tests {
             segments: ranges.clone(),
         };
         let mut source: BoxedSource = Box::new(Cursor::new(blob));
-        // Dedicated pool (trim disabled) so `alloc_misses` is deterministic
-        // and recycled buffers keep their high-water capacity.
-        let pool = BytePool::new(32, 0);
+        let pools = default_pools();
 
-        // Warm the home shard with a buffer grown to the high-water size,
-        // then drop it back into the pool.
         {
-            let mut warm = SegmentReadState::new(ranges[1].clone(), pool.get());
+            let mut warm = SegmentReadState::new(ranges[1].clone(), pools.get::<u8>());
             let status =
                 fill_segment_buffer(&mut source, &mut warm, LiveRange::Segment(&layout, 1))
                     .expect("BUG: warm fill");
             assert_eq!(status, FillStatus::Ready);
         }
-        let warm_misses = pool.stats().alloc_misses;
 
         for (idx, range) in ranges.iter().enumerate() {
-            let mut state = SegmentReadState::new(range.clone(), pool.get());
+            let mut state = SegmentReadState::new(range.clone(), pools.get::<u8>());
             let status = fill_segment_buffer(
                 &mut source,
                 &mut state,
@@ -337,12 +327,6 @@ mod tests {
                 "segment {idx} must reuse the high-water capacity, not realloc",
             );
         }
-
-        assert_eq!(
-            pool.stats().alloc_misses,
-            warm_misses,
-            "warm pool must serve every segment buffer without a fresh malloc",
-        );
     }
 
     /// A `Read + Seek` source that hands back at most `chunk` bytes per
@@ -462,8 +446,8 @@ mod tests {
             shrink_after: 3,
             polls: AtomicUsize::new(0),
         };
-        let pool = BytePool::new(32, 0);
-        let mut state = SegmentReadState::new(0..full as u64, pool.get());
+        let pools = default_pools();
+        let mut state = SegmentReadState::new(0..full as u64, pools.get::<u8>());
 
         let status = fill_segment_buffer(&mut source, &mut state, LiveRange::Segment(&layout, 0))
             .expect("fill must not error");

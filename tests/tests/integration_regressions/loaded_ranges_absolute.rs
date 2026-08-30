@@ -10,13 +10,14 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     audio_fixture::EmbeddedAudio,
+    bufpool_ext::{TestPools, pools},
     kithara,
     offline::OfflineSession,
     temp_dir,
@@ -50,7 +51,7 @@ const MIN_BUFFERED_FRACTION_PERCENT: u64 = 80;
 /// duration alone can hand back a live duration next to an unwritten window.
 /// The gate is independent of what the trap asserts.
 async fn wait_for_playing_settled_duration(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     deadline: Duration,
 ) -> Result<kithara::queue::PlaybackView, String> {
     time::timeout(deadline, async {
@@ -75,7 +76,7 @@ async fn wait_for_playing_settled_duration(
     })
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -99,25 +100,24 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let url = handle.child_url("progressive.mp3");
     let body_len = EmbeddedAudio::TEST_MP3_BYTES.len() as u64;
 
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            NetOptions::default(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -128,13 +128,11 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
             .store(store.clone())
             .build(),
     ));
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .downloader(downloader)
-    .look_ahead_bytes(LOOK_AHEAD_BYTES)
-    .store(store)
-    .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader)
+        .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .store(store)
+        .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();

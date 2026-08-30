@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 
 use bon::Builder;
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::PoolRegion;
 use kithara_platform::CancelToken;
 
 const DEFAULT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
@@ -11,18 +11,13 @@ const DEFAULT_CAPACITY: NonZeroUsize = match NonZeroUsize::new(16) {
 
 /// Configuration for one shared playback worker.
 #[derive(Builder, fieldwork::Fieldwork)]
-#[builder(start_fn = for_pools)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
-pub struct PlayWorkerConfig {
-    /// Byte pool shared by every Player and resource registered with the worker.
+pub struct PlayWorkerConfig<S> {
+    /// Typed pool facade shared by every Player and resource registered with the worker.
     #[builder(start_fn)]
     #[field(get)]
-    pub(crate) byte_pool: BytePool,
-    /// Sample pool shared by every Player and resource registered with the worker.
-    #[builder(start_fn)]
-    #[field(get)]
-    pub(crate) sample_pool: SamplePool,
+    pub(crate) pools: PoolRegion<S>,
     /// Parent cancellation token for the worker lifetime.
     pub(crate) cancel: Option<CancelToken>,
     /// Maximum number of simultaneously registered track render chains.

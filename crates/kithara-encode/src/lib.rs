@@ -22,6 +22,8 @@ mod offline;
 mod stream;
 #[cfg(test)]
 mod test_pcm;
+#[cfg(test)]
+mod test_pools;
 mod traits;
 mod types;
 

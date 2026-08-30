@@ -6,14 +6,14 @@ use std::{
 use kithara::{
     analysis::{AnalysisFingerprint, AnalysisToken, TrackAnalysis},
     assets::{
-        AcquisitionResult, AssetResource, AssetResourceState, AssetStore, AssetsError, ReadSide,
-        ResourceKey, WriteSide,
+        AcquisitionResult, AssetResource, AssetResourceState, AssetsError, ReadSide, ResourceKey,
+        WriteSide,
     },
-    bufpool::BytePool,
     decode::DecodeError,
-    prelude::ResourceConfig,
 };
 use tracing::{debug, warn};
+
+use crate::pools::{AppResourceConfig, AppStore, Pools};
 
 /// Tunables for the analysis cache, grouped to keep the module surface small.
 struct Consts;
@@ -27,13 +27,13 @@ impl Consts {
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct AnalysisTarget {
-    store: AssetStore,
+    store: AppStore,
     #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
 }
 
 impl AnalysisTarget {
-    pub(crate) fn for_config(config: &ResourceConfig) -> Result<Self, DecodeError> {
+    pub(crate) fn for_config(config: &AppResourceConfig) -> Result<Self, DecodeError> {
         let key = config.asset_key(&AssetResource::Named {
             namespace: "analysis".to_string(),
             name: "track.analysis".to_string(),
@@ -59,7 +59,7 @@ struct MemoryEntry {
 /// track's storage lifecycle). Owned by the single listener task, so it needs
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
-    byte_pool: BytePool,
+    pools: Pools,
     mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration, per artifact: a stored artifact whose
     /// tag differs is dropped on its own, so a waveform resolution change no
@@ -71,9 +71,9 @@ pub(crate) struct TrackAnalysisCache {
 }
 
 impl TrackAnalysisCache {
-    pub(crate) fn new(fingerprint: AnalysisFingerprint, byte_pool: BytePool) -> Self {
+    pub(crate) fn new(fingerprint: AnalysisFingerprint, pools: Pools) -> Self {
         Self {
-            byte_pool,
+            pools,
             fingerprint,
             mem: HashMap::new(),
             order: VecDeque::new(),
@@ -113,7 +113,7 @@ impl TrackAnalysisCache {
             _ => return None,
         }
         let reader = target.store.open_resource(resource, None).ok()?;
-        let mut bytes = self.byte_pool.get();
+        let mut bytes = self.pools.get::<u8>();
         reader.read_into(&mut bytes).ok()?;
         match TrackAnalysis::try_from((&bytes[..], &self.fingerprint)) {
             Ok(analysis) => {
@@ -183,8 +183,8 @@ impl TrackAnalysisCache {
 
     fn store_disk(&self, target: &AnalysisTarget, analysis: &TrackAnalysis) {
         let resource = &target.key;
-        let mut bytes = self.byte_pool.get();
-        if let Err(e) = analysis.write_to(&mut bytes) {
+        let mut bytes = self.pools.get::<u8>();
+        if let Err(e) = analysis.write_to_buffer(&mut bytes) {
             warn!(%e, ?resource, "track analysis cache: encode failed");
             return;
         }
@@ -195,7 +195,7 @@ impl TrackAnalysisCache {
 }
 
 fn write_resource(
-    store: &AssetStore,
+    store: &AppStore,
     resource: &ResourceKey,
     bytes: &[u8],
 ) -> Result<(), AssetsError> {
@@ -240,17 +240,17 @@ mod tests {
         },
         assets::{
             AssetLayout, AssetLayoutRegistry, AssetResource, AssetResourceState, AssetSource,
-            AssetStore, StorageBackend,
+            StorageBackend,
         },
-        bufpool::BytePool,
         file::File,
-        prelude::ResourceConfig,
+        prelude::ResourceSrc,
     };
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
     use url::Url;
 
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};
+    use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
 
     /// The beat tag two tests must agree on: one of them keeps it while the
     /// waveform tag moves.
@@ -266,6 +266,10 @@ mod tests {
 
     fn rate() -> NonZeroU32 {
         NonZeroU32::new(44_100).expect("fixture rate is non-zero")
+    }
+
+    fn test_pools() -> Pools {
+        pools::build().expect("valid app pool policy")
     }
 
     fn wave() -> Waveform {
@@ -308,21 +312,21 @@ mod tests {
         analysis(Some(grid()), Some(wave()), 1_234_567)
     }
 
-    fn store_in(dir: &Path) -> AssetStore {
-        AssetStore::builder()
+    fn store_in(dir: &Path) -> AppStore {
+        AppStore::builder(test_pools())
             .backend(StorageBackend::Disk { root: dir.into() })
             .build()
     }
 
-    fn memory_store() -> AssetStore {
-        AssetStore::builder()
+    fn memory_store() -> AppStore {
+        AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .build()
     }
 
-    fn config(store: &AssetStore, src: &str, discriminator: Option<&str>) -> ResourceConfig {
+    fn config(store: &AppStore, src: &str, discriminator: Option<&str>) -> AppResourceConfig {
         let builder =
-            ResourceConfig::for_src(ResourceConfig::parse_src(src).expect("valid test source"))
+            AppResourceConfig::for_src(ResourceSrc::parse(src).expect("valid test source"))
                 .store(store.clone());
         match discriminator {
             Some(discriminator) => builder.discriminator(discriminator).build(),
@@ -330,12 +334,12 @@ mod tests {
         }
     }
 
-    fn target_for(store: &AssetStore, src: &str, discriminator: Option<&str>) -> AnalysisTarget {
+    fn target_for(store: &AppStore, src: &str, discriminator: Option<&str>) -> AnalysisTarget {
         AnalysisTarget::for_config(&config(store, src, discriminator))
             .expect("test source has a layout-owned analysis target")
     }
 
-    fn target(store: &AssetStore, discriminator: &str) -> AnalysisTarget {
+    fn target(store: &AppStore, discriminator: &str) -> AnalysisTarget {
         target_for(
             store,
             "https://analysis.test.invalid/track.mp3",
@@ -344,7 +348,7 @@ mod tests {
     }
 
     fn analysis_cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fp(), BytePool::default())
+        TrackAnalysisCache::new(fp(), test_pools())
     }
 
     #[kithara::test]
@@ -405,8 +409,9 @@ mod tests {
 
     #[kithara::test]
     fn invalid_layout_is_not_treated_as_an_uncacheable_source() {
-        let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStore::builder()
+        let layouts =
+            AssetLayoutRegistry::default().with::<File<AppPools>>(Arc::new(InvalidLayout));
+        let store = AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();
@@ -538,7 +543,9 @@ mod tests {
             url,
             discriminator: Some(discriminator.to_string()),
         };
-        let scope = store.scope::<File>(&source).expect("valid analysis scope");
+        let scope = store
+            .scope::<File<AppPools>>(&source)
+            .expect("valid analysis scope");
         scope.delete_asset().expect("asset deletes");
         let mut fresh = analysis_cache();
         assert!(
@@ -653,7 +660,7 @@ mod tests {
         // backend's does not.
         let mut current = TrackAnalysisCache::new(
             fingerprint("wave:native:max3000:v1", BEAT_TAG),
-            BytePool::default(),
+            test_pools(),
         );
         let hit = current
             .get(&target)

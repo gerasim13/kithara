@@ -1,118 +1,212 @@
-use bon::Builder;
+use std::{fmt, marker::PhantomData};
+
 use kithara_platform::sync::Arc;
 
 use crate::{
-    BytePool, SamplePool,
-    budget::RegionBudget,
-    global::{
-        BYTE_MAX_BUFFERS, BYTE_TRIM_CAPACITY, DEFAULT_MAX_BYTES, SAMPLE_MAX_BUFFERS,
-        SAMPLE_TRIM_CAPACITY,
-    },
+    HasPool, OverallBudget, Percent, PoolConfig, PoolError, PoolKey, budget::RegionBudget,
+    key::PoolAccess,
 };
 
-/// Configuration for a shared buffer-pool region.
-///
-/// Pool sizing policies follow the workspace defaults in `global`; the one
-/// product knob is the total byte budget shared by both pools.
-#[derive(Builder, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RegionConfig {
-    #[builder(default = DEFAULT_MAX_BYTES)]
-    max_bytes: usize,
-}
-
-impl Default for RegionConfig {
-    fn default() -> Self {
-        Self::builder().build()
-    }
-}
-
-/// Statistics for both pools sharing a region budget.
+/// Region-wide byte statistics.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RegionStats {
-    /// Post-initialization growth events that exceeded the shared budget.
-    pub budget_overshoots: u64,
-    /// Total home and steal hits for the byte pool.
-    pub byte_pool_hits: u64,
-    /// Fresh allocations by the byte pool.
-    pub byte_pool_misses: u64,
-    /// Total home and steal hits for the sample pool.
-    pub sample_pool_hits: u64,
-    /// Fresh allocations by the sample pool.
-    pub sample_pool_misses: u64,
-    /// Current bytes tracked across both pools.
+    /// Bytes currently tracked by every pool in the region.
     pub allocated_bytes: usize,
-    /// Maximum bytes available to both pools.
+    /// Region-wide hard byte limit.
     pub max_bytes: usize,
+    /// Highest region byte count admitted, including in-flight reservations.
+    pub peak_allocated_bytes: usize,
 }
 
-/// Canonical owner of byte and sample pools sharing one byte budget.
-#[derive(Clone)]
-pub struct Region {
-    inner: Arc<RegionInner>,
+/// One cloneable facade over a closed typed schema and its shared hard budget.
+pub struct PoolRegion<S> {
+    inner: Arc<RegionInner<S>>,
 }
 
-struct RegionInner {
-    byte_pool: BytePool,
-    sample_pool: SamplePool,
+struct RegionInner<S> {
+    budget: RegionBudget,
+    schema: S,
+}
+
+impl<S> PoolRegion<S> {
+    /// Acquire an empty buffer from the pool registered for `K`.
+    #[must_use]
+    pub fn get<K>(&self) -> K::Buffer
+    where
+        K: PoolKey,
+        S: HasPool<K>,
+    {
+        let slot = self.slot::<K>();
+        K::__get(&slot.core, PoolAccess::new())
+    }
+
+    /// Acquire a buffer whose length is at least `len` elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the requested capacity overflows, exceeds either
+    /// hard budget, or cannot be allocated.
+    pub fn get_with_len<K>(&self, len: usize) -> Result<K::Buffer, PoolError>
+    where
+        K: PoolKey,
+        S: HasPool<K>,
+    {
+        let slot = self.slot::<K>();
+        K::__get_with_len(&slot.core, len, PoolAccess::new())
+    }
+
+    /// Snapshot the shared region budget.
+    #[must_use]
+    pub fn stats(&self) -> RegionStats {
+        RegionStats {
+            allocated_bytes: self.inner.budget.current(),
+            max_bytes: self.inner.budget.limit(),
+            peak_allocated_bytes: self.inner.budget.peak(),
+        }
+    }
+
+    /// Build one region after a generated schema builder has collected every slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a slot configuration is invalid or its eager
+    /// payload cannot be admitted and allocated.
+    #[doc(hidden)]
+    pub fn __build<F>(overall_budget: OverallBudget, build_schema: F) -> Result<Self, PoolError>
+    where
+        F: FnOnce(&BuildContext) -> Result<S, PoolError>,
+    {
+        let context = BuildContext {
+            budget: RegionBudget::new(overall_budget.0),
+        };
+        let schema = build_schema(&context)?;
+        Ok(Self {
+            inner: Arc::new(RegionInner {
+                budget: context.budget,
+                schema,
+            }),
+        })
+    }
+
+    fn slot<K>(&self) -> &PoolSlot<K>
+    where
+        K: PoolKey,
+        S: HasPool<K>,
+    {
+        let slot = <S as HasPool<K>>::__slot(&self.inner.schema);
+        assert!(
+            self.inner.budget.same_region(&slot.budget),
+            "pool slot belongs to a different region"
+        );
+        slot
+    }
+}
+
+impl<S> Clone for PoolRegion<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<S> fmt::Debug for PoolRegion<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PoolRegion")
+            .field("stats", &self.stats())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Safe construction context used by `pool_schema!` expansions.
+#[doc(hidden)]
+pub struct BuildContext {
     budget: RegionBudget,
 }
 
-impl Region {
-    /// Create a region with the supplied shared-budget configuration.
-    #[must_use]
-    pub fn new(config: RegionConfig) -> Self {
-        let budget = RegionBudget::new(config.max_bytes);
-        let byte_pool =
-            BytePool::with_region_budget(BYTE_MAX_BUFFERS, BYTE_TRIM_CAPACITY, budget.clone());
-        let sample_pool = SamplePool::with_region_budget(
-            SAMPLE_MAX_BUFFERS,
-            SAMPLE_TRIM_CAPACITY,
-            budget.clone(),
-        );
-        Self {
-            inner: Arc::new(RegionInner {
-                byte_pool,
-                sample_pool,
-                budget,
-            }),
+impl BuildContext {
+    /// Build one opaque physical slot under this context's shared budget.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `config` is invalid or its eager payload cannot
+    /// be admitted and allocated.
+    #[doc(hidden)]
+    pub fn slot<K>(&self, config: PoolConfig) -> Result<PoolSlot<K>, PoolError>
+    where
+        K: PoolKey,
+    {
+        Ok(PoolSlot {
+            core: K::__build(self, config, PoolAccess::new())?,
+            budget: self.budget.clone(),
+            key: PhantomData,
+        })
+    }
+
+    pub(crate) fn pool_limit(&self, share: Percent) -> Result<usize, PoolError> {
+        if !share.is_valid() {
+            return Err(PoolError::InvalidConfig {
+                field: "max_share",
+                reason: "must be between 0 and 100 percent",
+            });
         }
+        let percent = usize::from(share.0);
+        let quotient = self.budget.limit() / 100;
+        let remainder = self.budget.limit() % 100;
+        Ok(quotient * percent + remainder * percent / 100)
     }
 
-    /// Get the region's byte-buffer pool.
-    #[must_use]
-    pub fn byte_pool(&self) -> BytePool {
-        self.inner.byte_pool.clone()
-    }
-
-    /// Get the region's sample-buffer pool.
-    #[must_use]
-    pub fn sample_pool(&self) -> SamplePool {
-        self.inner.sample_pool.clone()
-    }
-
-    /// Get combined budget and per-pool hit/miss statistics.
-    #[must_use]
-    pub fn stats(&self) -> RegionStats {
-        let byte = self.inner.byte_pool.stats();
-        let samples = self.inner.sample_pool.stats();
-        RegionStats {
-            allocated_bytes: self.inner.budget.allocated_bytes(),
-            budget_overshoots: byte.budget_overshoots + samples.budget_overshoots,
-            byte_pool_hits: byte.home_hits + byte.steal_hits,
-            byte_pool_misses: byte.alloc_misses,
-            max_bytes: self.inner.budget.max_bytes(),
-            sample_pool_hits: samples.home_hits + samples.steal_hits,
-            sample_pool_misses: samples.alloc_misses,
-        }
+    pub(crate) fn region_budget(&self) -> RegionBudget {
+        self.budget.clone()
     }
 }
 
-impl Default for Region {
-    /// Create a top-level convenience region.
-    ///
-    /// Library code should receive an injected region-derived pool instead.
-    fn default() -> Self {
-        Self::new(RegionConfig::default())
+/// Opaque typed slot stored inside a generated schema.
+#[doc(hidden)]
+pub struct PoolSlot<K>
+where
+    K: PoolKey,
+{
+    core: K::Core,
+    budget: RegionBudget,
+    key: PhantomData<fn() -> K>,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn later_slot_failure_releases_earlier_eager_payloads() {
+        let mut observed = None;
+        let result: Result<PoolRegion<()>, PoolError> =
+            PoolRegion::__build(OverallBudget(64), |context| {
+                observed = Some(context.region_budget());
+                let _bytes = context.slot::<u8>(
+                    PoolConfig::builder()
+                        .initial_buffers(1)
+                        .initial_capacity(8)
+                        .max_buffers(32)
+                        .build(),
+                )?;
+                let _samples = context.slot::<f32>(
+                    PoolConfig::builder()
+                        .max_buffers(32)
+                        .max_share(Percent(101))
+                        .build(),
+                )?;
+                Ok(())
+            });
+
+        assert!(matches!(result, Err(PoolError::InvalidConfig { .. })));
+        assert_eq!(
+            observed
+                .unwrap_or_else(|| panic!("build context was not observed"))
+                .current(),
+            0
+        );
     }
 }

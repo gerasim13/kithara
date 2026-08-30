@@ -2,7 +2,6 @@
 use std::sync::Barrier;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use kithara_bufpool::BytePool;
 use kithara_platform::{CancelToken, sync::Arc, thread, time::Duration};
 use kithara_storage::{
     MemOptions, MemResource, MmapOptions, MmapResource, Resource, StorageError, StorageResource,
@@ -18,13 +17,6 @@ use crate::{
     resource::{AcquisitionResult, BaseReader, BaseWriter, ReadSide, WriteSide},
 };
 
-/// Four regions wide enough for any pass size these tests use. The pass size
-/// itself comes from the `ProcessedWriter` builder's default unless a test
-/// states its own.
-fn test_pool() -> BytePool {
-    BytePool::new(4, 64 * 1024)
-}
-
 fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
     let dir = tempdir().expect("create processing test directory");
     let path = dir.path().join("test.bin");
@@ -39,8 +31,13 @@ fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
 
 fn mock_writer_mem(content: &[u8]) -> BaseWriter {
     let cancel = CancelToken::never();
-    let res: MemResource = Resource::open(cancel, MemOptions::builder().pool(test_pool()).build())
-        .expect("open in-memory processing test resource");
+    let res: MemResource = Resource::open(
+        cancel,
+        MemOptions::builder()
+            .buffer(crate::test_pools::buffer())
+            .build(),
+    )
+    .expect("open in-memory processing test resource");
     res.write_at(0, content)
         .expect("seed in-memory processing test resource");
     BaseWriter::new(StorageResource::from(res))
@@ -103,7 +100,7 @@ fn writer_commit_returns_readable_reader() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader = writer.commit(Some(b"test content".len() as u64)).unwrap();
     assert!(call_count.load(Ordering::SeqCst) > 0);
@@ -125,7 +122,7 @@ fn read_at_after_processing_honours_offset() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader = writer.commit(Some(100)).unwrap();
 
@@ -143,10 +140,11 @@ fn ctx_none_writer_commits_straight_through_to_readable() {
     let (writer, _dir) = mock_writer(b"plain bytes!");
 
     let _ = process_fn;
-    let writer: ProcessedWriter<BaseWriter> = ProcessedWriter::builder()
-        .inner(writer)
-        .pool(test_pool())
-        .build();
+    let writer: ProcessedWriter<BaseWriter, crate::test_pools::TestPools> =
+        ProcessedWriter::builder()
+            .inner(writer)
+            .pools(crate::test_pools::pools())
+            .build();
     let reader = writer.commit(Some(12)).unwrap();
 
     let mut buf = vec![0u8; 12];
@@ -169,7 +167,7 @@ fn encrypted_writer_reader_is_not_readable_before_commit() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader = writer.reader();
 
@@ -194,7 +192,7 @@ fn reader_view_blocks_until_writer_commits() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader = writer.reader();
     let raw_len = raw.len() as u64;
@@ -235,7 +233,7 @@ fn wait_range_aborts_on_cancellation() {
     let writer = ProcessedWriter::builder()
         .inner(BaseWriter::new(StorageResource::from(resource)))
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader = writer.reader();
 
@@ -269,14 +267,16 @@ fn external_cancel_interrupts_processing_wait_without_cancelling_resource() {
     let resource_cancel = CancelToken::never();
     let resource: MemResource = Resource::open(
         resource_cancel.clone(),
-        MemOptions::builder().pool(test_pool()).build(),
+        MemOptions::builder()
+            .buffer(crate::test_pools::buffer())
+            .build(),
     )
     .expect("open processing test resource");
     resource.write_at(0, &[1u8; 16]).unwrap();
     let writer = ProcessedWriter::builder()
         .inner(BaseWriter::new(StorageResource::from(resource)))
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader = writer.reader();
     let wait_cancel = CancelToken::never();
@@ -316,7 +316,7 @@ fn reactivate_forks_fresh_gate_without_poisoning_reader() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let reader_a = writer.commit(Some(ciphertext.len() as u64)).unwrap();
 
@@ -353,7 +353,7 @@ fn reactivate_then_commit_reruns_processor() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let len = first.len() as u64;
     let reader = writer.commit(Some(len)).expect("first commit");
@@ -387,7 +387,7 @@ fn reactivate_then_commit_reruns_processor_mem() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     let len = first.len() as u64;
     let reader = writer.commit(Some(len)).expect("first commit");
@@ -418,7 +418,7 @@ fn writer_drop_without_commit_fails_gate() {
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .build();
     writer.write_at(0, &[7u8; 16]).unwrap();
     let reader = writer.reader();
@@ -468,7 +468,7 @@ fn reopened_committed_processed_reader_is_readable_immediately() {
     let reader = ProcessedReader::wrap_ready()
         .inner(BaseReader::new(storage))
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .call();
 
     let mut buf = vec![0u8; already_processed.len()];
@@ -480,7 +480,7 @@ fn reopened_committed_processed_reader_is_readable_immediately() {
 
 #[kithara::test]
 fn open_resource_none_ctx_does_not_leak_precommit_guard() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .build();
     let key = ResourceKey::relative("drm-fallthrough", "segment.m4s");
@@ -519,7 +519,7 @@ fn a_small_chunk_size_splits_the_commit_into_passes() {
     let writer = ProcessedWriter::builder()
         .inner(mock_writer_mem(&[7u8; CONTENT_LEN]))
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .chunk_size(CONTENT_LEN / 4)
         .build();
 
@@ -536,7 +536,7 @@ fn a_chunk_size_that_spans_the_resource_commits_in_one_pass() {
     let writer = ProcessedWriter::builder()
         .inner(mock_writer_mem(&[7u8; CONTENT_LEN]))
         .processor(process_fn)
-        .pool(test_pool())
+        .pools(crate::test_pools::pools())
         .chunk_size(CONTENT_LEN)
         .build();
 

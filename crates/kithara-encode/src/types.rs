@@ -1,5 +1,4 @@
 use bon::Builder;
-use kithara_bufpool::{BytePool, SamplePool};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
 use crate::{EncodeError, EncodeResult};
@@ -88,13 +87,8 @@ impl BytesEncodeRequest<'_> {
 
 /// Packaged encode request producing compressed access units for muxing.
 #[derive(Builder)]
-#[builder(start_fn = for_pools, state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct PackagedEncodeRequest<'a> {
-    #[builder(start_fn)]
-    pub byte_pool: BytePool,
-    #[builder(start_fn)]
-    pub sample_pool: SamplePool,
     pub pcm: &'a dyn PcmSource,
     pub media_info: MediaInfo,
     pub encoder_delay: u32,

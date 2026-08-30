@@ -7,6 +7,11 @@ use kithara::assets::{
 use libfuzzer_sys::fuzz_target;
 use url::Url;
 
+#[path = "../../src/bufpool_ext.rs"]
+mod bufpool_ext;
+
+use bufpool_ext::pools;
+
 #[derive(Arbitrary, Debug)]
 struct Input {
     name: Option<Vec<u8>>,
@@ -42,7 +47,7 @@ fuzz_target!(|input: Input| {
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store

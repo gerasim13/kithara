@@ -33,7 +33,7 @@ struct AssetStoreTests {
     }
 
     @Test("an asset store owns an immutable registry snapshot")
-    func storeOwnsRegistrySnapshot() {
+    func storeOwnsRegistrySnapshot() throws {
         let registry = AssetLayoutRegistry()
         weak var captured: TestAssetLayout?
         var store: AssetStore?
@@ -42,7 +42,7 @@ struct AssetStoreTests {
             let layout = TestAssetLayout(id: "captured")
             captured = layout
             registry.register(layout, for: .file)
-            store = AssetStore(layouts: registry)
+            store = try AssetStore(layouts: registry)
         }
         registry.register(TestAssetLayout(id: "replacement"), for: .file)
 
@@ -53,7 +53,7 @@ struct AssetStoreTests {
     }
 
     @Test("a query identity layout uses ordinary protocol registration")
-    func registersQueryIdentityLayout() {
+    func registersQueryIdentityLayout() throws {
         let registry = AssetLayoutRegistry()
         let layout = AssetLayouts.queryIdentity(rules: [
             CacheIdentityRule(
@@ -65,7 +65,7 @@ struct AssetStoreTests {
         registry.register(layout, for: .file)
         registry.register(layout, for: .hls)
 
-        _ = AssetStore(layouts: registry)
+        _ = try AssetStore(layouts: registry)
     }
 }
 

@@ -5,12 +5,16 @@ use kithara::{
     events::{AudioEvent, Event, PlayerEvent},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome, SessionDispatcher},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, SeekOutcome, SessionDispatcher},
     queue::{PlaybackView, Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, kithara, offline::OfflineSession, temp_dir,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
     waits::wait_for_loader_done_event,
 };
 
@@ -39,7 +43,7 @@ struct SeekEvents {
     seek_rejected: bool,
 }
 
-fn render_and_tick(session: &OfflineSession, queue: &Queue) {
+fn render_and_tick(session: &OfflineSession, queue: &Queue<TestPools>) {
     let _ = session.render(BLOCK_FRAMES);
     queue.tick().expect("tick queue");
 }
@@ -81,20 +85,19 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
         .await
         .expect("create HLS fixture");
     let gate = helper.register_segment_gate(fixture.token(), 0, FINAL_SEGMENT);
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            NetOptions::default(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let session = Arc::new(OfflineSession::new_manual());
     let player = PlayerImpl::new(
@@ -104,7 +107,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
                     .expect("fixture sample rate must be non-zero"),
             )
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
             .build(),
@@ -116,7 +119,7 @@ async fn run_case(helper: &TestServerHelper, temp_dir: &TestTempDir, target_kind
             .build(),
     );
     let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(fixture.master_url().as_str()).expect("valid HLS URL"),
+        ResourceSrc::parse(fixture.master_url().as_str()).expect("valid HLS URL"),
     )
     .downloader(downloader)
     .store(store)

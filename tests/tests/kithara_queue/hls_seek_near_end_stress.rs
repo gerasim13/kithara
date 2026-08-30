@@ -13,7 +13,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -24,6 +24,8 @@ use kithara_integration_tests::{
     waits::{wait_for_loader_done_event, wait_for_position_event},
 };
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -110,7 +112,7 @@ async fn build_hls(helper: &TestServerHelper, include_sidx: bool) -> Url {
 /// `tokio::spawn` + bare real sleep ran invisible to the engine: the test's
 /// virtual `ITER_DEADLINE` elapsed after a handful of real ticks under load.
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
     loop {
         time::sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -122,21 +124,15 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    Arc<Queue<TestPools>>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -148,8 +144,12 @@ fn build_queue_with_tick(
     ));
     let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
@@ -168,14 +168,14 @@ async fn run_one_attempt(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let src = match ResourceConfig::parse_src(url.as_str()) {
+    let src = match ResourceSrc::parse(url.as_str()) {
         Ok(src) => src,
         Err(e) => {
             tick_handle.abort();
             return IterOutcome::Errored {
                 iter,
                 target: f64::NAN,
-                error: format!("ResourceConfig::parse_src failed: {e}"),
+                error: format!("ResourceSrc::parse failed: {e}"),
             };
         }
     };
@@ -344,7 +344,7 @@ enum SeekLanded {
 /// tolerance. `Failed` is surfaced; the budget caps the wait.
 async fn wait_for_seek_landed(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     track_id: TrackId,
     target: f64,
     budget: Duration,
@@ -410,7 +410,7 @@ enum PostSeekAdvance {
 /// the wait and the timeout carries the last observed position.
 async fn wait_for_post_seek_advance(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     track_id: TrackId,
     target: f64,
     min_advance: f64,

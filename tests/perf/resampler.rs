@@ -4,25 +4,24 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::SamplePool,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
+use kithara_integration_tests::bufpool_ext::pools;
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: AudioSpec) -> AudioChunk {
     let samples = frames * spec.channels as usize;
-    let pool = SamplePool::default();
-    let pcm = pool.get_with(|b| {
-        b.clear();
-        b.resize(samples, 0.0);
-        for i in 0..samples {
-            b[i] = (i as f32 * 0.01).sin() * 0.5;
-        }
-    });
+    let pools = pools();
+    let mut pcm = pools
+        .get_with_len::<f32>(samples)
+        .expect("perf sample buffer");
+    for (index, sample) in pcm.iter_mut().enumerate() {
+        *sample = (index as f32 * 0.01).sin() * 0.5;
+    }
 
     AudioChunk::new(
         AudioChunkInfo {
@@ -65,7 +64,7 @@ fn build_resampler(
         })
         .quality(quality)
         .options(ResamplerOptions::builder().chunk_size(chunk_size).build())
-        .sample_pool(SamplePool::new(64, chunk_size.saturating_mul(16)))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())

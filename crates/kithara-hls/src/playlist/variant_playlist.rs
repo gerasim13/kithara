@@ -2,6 +2,7 @@
 
 use futures::future::try_join_all;
 use kithara_assets::{AssetResource, AssetScope, ResourceKey};
+use kithara_bufpool::HasPool;
 use url::Url;
 
 use super::{
@@ -10,17 +11,23 @@ use super::{
 };
 use crate::HlsResult;
 
-pub(crate) struct VariantPlaylist {
-    cache: PlaylistCache,
+pub(crate) struct VariantPlaylist<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    cache: PlaylistCache<S>,
     key: ResourceKey,
     url: Url,
     variant_id: VariantId,
 }
 
-impl VariantPlaylist {
+impl<S> VariantPlaylist<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn for_variant(
-        cache: &PlaylistCache,
-        scope: &AssetScope,
+        cache: &PlaylistCache<S>,
+        scope: &AssetScope<S>,
         master_url: &Url,
         master_key: &ResourceKey,
         variant: &VariantStream,
@@ -61,13 +68,16 @@ impl VariantPlaylist {
 /// # Errors
 /// Returns an error when any variant URL fails to resolve or any media playlist
 /// fails to fetch or parse.
-pub(crate) async fn load_variant_playlists(
-    cache: &PlaylistCache,
-    scope: &AssetScope,
+pub(crate) async fn load_variant_playlists<S>(
+    cache: &PlaylistCache<S>,
+    scope: &AssetScope<S>,
     master_url: &Url,
     master_key: &ResourceKey,
     variants: &[VariantStream],
-) -> HlsResult<Vec<MediaPlaylist>> {
+) -> HlsResult<Vec<MediaPlaylist>>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let loadables = variants
         .iter()
         .map(|variant| VariantPlaylist::for_variant(cache, scope, master_url, master_key, variant))

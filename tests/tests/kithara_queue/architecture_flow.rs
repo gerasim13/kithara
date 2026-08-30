@@ -6,7 +6,7 @@ use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
     platform::time::Duration,
-    play::ResourceConfig,
+    play::{ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::Downloader,
 };
@@ -21,6 +21,8 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use serial_test::serial;
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -117,8 +119,12 @@ async fn queue_playback_architecture() {
         .expect("write queue architecture trace");
 }
 
-fn resource_config(url: &str, downloader: Downloader, store: AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid local fixture URL"))
+fn resource_config(
+    url: &str,
+    downloader: Downloader,
+    store: AssetStore<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid local fixture URL"))
         .downloader(downloader)
         .store(store)
         .decoder(

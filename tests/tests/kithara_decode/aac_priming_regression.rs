@@ -5,7 +5,10 @@ use kithara::{
     platform::time::Duration,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
+use kithara_integration_tests::{
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
+};
 use reqwest::Client;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
@@ -31,9 +34,8 @@ async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some("aac"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .expect("probe AAC decoder");

@@ -7,6 +7,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
+use kithara_bufpool::HasPool;
 use kithara_events::{
     AudioCodecKind, ContainerKind, EventBus, FileError, FileEvent, TotalBytesSource,
 };
@@ -58,16 +59,19 @@ pub(crate) struct FileSourceCtx {
 ///
 /// The session-owned writer never leaves `kithara-assets`; File keeps only the
 /// synchronous reader and protocol metadata needed to drive HTTP callbacks.
-pub(crate) struct FileAssetCtx {
-    pub(crate) reader: AssetReader,
+pub(crate) struct FileAssetCtx<S> {
+    pub(crate) reader: AssetReader<S>,
     pub(crate) headers: Option<Headers>,
     pub(crate) url: Url,
 }
 
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing - there is no `Mutex`.
-pub(crate) struct FileInner {
-    pub(crate) asset: FileAssetCtx,
+pub(crate) struct FileInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) asset: FileAssetCtx<S>,
     pub(crate) source: FileSourceCtx,
     /// `MediaInfo` discovered from the HTTP `Content-Type` header on
     /// first connect (or sniffed from the cached bytes for local
@@ -86,7 +90,7 @@ pub(crate) struct FileInner {
     /// [`FilePeer`](super::FilePeer) take over the single-writer
     /// election if the original writer drops. `None` for local /
     /// already-cached sources that never download.
-    pub(crate) resource_lease: Option<ResourceLease>,
+    pub(crate) resource_lease: Option<ResourceLease<S>>,
     completion_started: AtomicBool,
     complete: AtomicBool,
     terminal_state: AtomicU8,
@@ -100,12 +104,15 @@ pub(crate) struct FileInner {
     reader_waker: OnceLock<Waker>,
 }
 
-impl FileInner {
+impl<S> FileInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn new(
         source: FileSourceCtx,
-        asset: FileAssetCtx,
+        asset: FileAssetCtx<S>,
         complete: bool,
-        resource_lease: Option<ResourceLease>,
+        resource_lease: Option<ResourceLease<S>>,
     ) -> Self {
         let terminal_state = FileTerminalState::from(&asset.reader.status());
         let complete = complete && terminal_state == FileTerminalState::Committed;
@@ -261,7 +268,7 @@ impl FileInner {
 
     /// Commit the epoch once every byte up to `final_len` has landed.
     /// Returns whether the resource committed through this epoch.
-    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch, final_len: u64) -> bool {
+    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch<S>, final_len: u64) -> bool {
         if self.asset.reader.next_gap(0, final_len).is_some() {
             return false;
         }
@@ -301,11 +308,17 @@ impl FileInner {
     }
 }
 
-struct FileReaderWake {
-    inner: Weak<FileInner>,
+struct FileReaderWake<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    inner: Weak<FileInner<S>>,
 }
 
-impl Wake for FileReaderWake {
+impl<S> Wake for FileReaderWake<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
@@ -329,7 +342,10 @@ impl Wake for FileReaderWake {
     }
 }
 
-pub(crate) fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
+pub(crate) fn sniff_codec<S>(reader: &AssetReader<S>) -> Option<AudioCodec>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let mut buf = [0u8; CODEC_SNIFF_BYTES];
     let read = reader.read_at(0, &mut buf).ok()?;
     AudioCodec::try_from(&buf[..read]).ok()

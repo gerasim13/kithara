@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, btree_map::Entry},
 };
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
@@ -44,9 +44,9 @@ pub struct WaveformAnalyzer {
     fft_output: Vec<Complex<f32>>,
     fft_scratch: Vec<Complex<f32>>,
     hann: SampleBuffer,
+    downmix: SampleBuffer,
     bands: BTreeMap<u64, [f32; Band::COUNT]>,
     partial: BTreeMap<u64, Partial>,
-    sample_pool: SamplePool,
     band_bin_inv: [f32; Band::COUNT],
     low_mid_bin: usize,
     mid_high_bin: usize,
@@ -55,16 +55,28 @@ pub struct WaveformAnalyzer {
 }
 
 impl WaveformAnalyzer {
-    #[must_use]
-    pub fn new(sample_rate: u32, params: AnalysisParams, sample_pool: &SamplePool) -> Self {
+    /// Create a waveform analyzer using the registered sample pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when the FFT or window buffers do not fit the
+    /// shared region budget.
+    pub fn new<S>(
+        sample_rate: u32,
+        params: AnalysisParams,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let fft_size = params.fft_size().max(Consts::MIN_FFT_SIZE);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
-        let fft_input = sample_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
+        let fft_input = pools.get_with_len::<f32>(fft_size)?;
         let fft_output = fft.make_output_vec();
         let fft_scratch = fft.make_scratch_vec();
 
-        let hann = hann_window(fft_size, sample_pool);
+        let hann = hann_window(fft_size, pools)?;
         let bins = fft_output.len();
         let rate = sample_rate.to_f32().unwrap_or(0.0);
         let size_f = fft_size.to_f32().unwrap_or(1.0);
@@ -81,10 +93,11 @@ impl WaveformAnalyzer {
             inv(bins.saturating_sub(mid_high_bin)),
         ];
 
-        Self {
+        Ok(Self {
             params,
             fft,
             hann,
+            downmix: pools.get::<f32>(),
             low_mid_bin,
             mid_high_bin,
             band_bin_inv,
@@ -94,35 +107,62 @@ impl WaveformAnalyzer {
             window_hop: (fft_size / Consts::HOP_DIVISOR).max(1),
             bands: BTreeMap::new(),
             partial: BTreeMap::new(),
-            sample_pool: sample_pool.clone(),
             opened: 0,
-        }
+        })
     }
 
     /// Fold one interleaved block starting at source frame `at`: downmix to
     /// mono (channel mean), scatter it into every window it touches and reduce
     /// every window the block completes. Blocks may arrive in any order, twice,
     /// or overlapping.
-    pub fn push(&mut self, pcm: &[f32], channels: usize, at: u64) {
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when downmix or partial-window storage cannot
+    /// grow under the shared region budget.
+    pub fn push<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+    ) -> Result<(), PoolError>
+    where
+        S: HasPool<f32>,
+    {
         if channels == 0 {
-            return;
+            return Ok(());
         }
         let frames = pcm.len() / channels;
         let Ok(span) = u64::try_from(frames) else {
-            return;
+            return Ok(());
         };
         if span == 0 {
-            return;
+            return Ok(());
         }
 
         let inv_channels = 1.0 / channels.to_f32().unwrap_or(1.0);
-        let mut mono = self
-            .sample_pool
-            .get_with(|buffer| buffer.resize(frames, 0.0));
-        for (dst, frame) in mono.iter_mut().zip(pcm.chunks_exact(channels)) {
+        self.downmix.ensure_len(frames)?;
+        self.downmix.truncate(frames);
+        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
             *dst = frame.iter().sum::<f32>() * inv_channels;
         }
 
+        let mono = std::mem::replace(&mut self.downmix, pools.get::<f32>());
+        let result = self.push_mono(pools, &mono, at, span);
+        self.downmix = mono;
+        result
+    }
+
+    fn push_mono<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        mono: &[f32],
+        at: u64,
+        span: u64,
+    ) -> Result<(), PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let hop = self.hop();
         let size = self.size();
         let end = at.saturating_add(span);
@@ -131,14 +171,14 @@ impl WaveformAnalyzer {
         let last = (end - 1) / hop;
 
         for index in first..=last {
-            self.scatter(index, &mono, at, end);
+            self.scatter(pools, index, mono, at, end)?;
         }
-        drop(mono);
 
         for index in first..=last {
             self.reduce_if_complete(index);
         }
         self.evict_overflow();
+        Ok(())
     }
 
     /// Fold the band-energy series into per-bucket band heights, leaving the
@@ -261,9 +301,19 @@ impl WaveformAnalyzer {
         self.reduce(0);
     }
 
-    fn scatter(&mut self, index: u64, mono: &[f32], at: u64, end: u64) {
+    fn scatter<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        index: u64,
+        mono: &[f32],
+        at: u64,
+        end: u64,
+    ) -> Result<(), PoolError>
+    where
+        S: HasPool<f32>,
+    {
         if self.bands.contains_key(&index) {
-            return;
+            return Ok(());
         }
         let size = self.size();
         let start = index.saturating_mul(self.hop());
@@ -274,10 +324,10 @@ impl WaveformAnalyzer {
             usize::try_from(from - at),
             usize::try_from(to.saturating_sub(from)),
         ) else {
-            return;
+            return Ok(());
         };
         if len == 0 {
-            return;
+            return Ok(());
         }
         let window_size = self.window_size();
 
@@ -287,9 +337,7 @@ impl WaveformAnalyzer {
                 let opened = self.opened;
                 self.opened = opened.saturating_add(1);
                 entry.insert(Partial {
-                    samples: self
-                        .sample_pool
-                        .get_with(|buffer| buffer.resize(window_size, 0.0)),
+                    samples: pools.get_with_len::<f32>(window_size)?,
                     written: Coverage::default(),
                     seq: opened,
                 })
@@ -299,10 +347,11 @@ impl WaveformAnalyzer {
             partial.samples.get_mut(offset..offset + len),
             mono.get(source..source + len),
         ) else {
-            return;
+            return Ok(());
         };
         dst.copy_from_slice(src);
         partial.written.insert(FrameRange::new(from, to - from));
+        Ok(())
     }
 
     #[cfg(test)]
@@ -356,11 +405,14 @@ impl WaveformAnalyzer {
     }
 }
 
-fn hann_window(size: usize, sample_pool: &SamplePool) -> SampleBuffer {
-    let mut hann = sample_pool.get_with(|buffer| buffer.resize(size, 0.0));
+fn hann_window<S>(size: usize, pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
+where
+    S: HasPool<f32>,
+{
+    let mut hann = pools.get_with_len::<f32>(size)?;
     if size <= 1 {
         hann.fill(1.0);
-        return hann;
+        return Ok(hann);
     }
     let denom = (size - 1).to_f32().unwrap_or(1.0);
     let scale = std::f32::consts::TAU / denom;
@@ -368,7 +420,7 @@ fn hann_window(size: usize, sample_pool: &SamplePool) -> SampleBuffer {
         let phase = scale * n.to_f32().unwrap_or(0.0);
         *sample = Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0);
     }
-    hann
+    Ok(hann)
 }
 
 fn crossover_bin(hz: f32, bin_hz: f32, bins: usize) -> usize {
@@ -405,12 +457,14 @@ fn normalize_bands(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
     use super::WaveformAnalyzer;
-    use crate::waveform::{AnalysisParams, bucket::Bucket};
+    use crate::{
+        test_pools::{TestPools, pools},
+        waveform::{AnalysisParams, bucket::Bucket},
+    };
 
     struct Consts;
 
@@ -421,17 +475,23 @@ mod tests {
 
     struct Pass {
         analyzer: WaveformAnalyzer,
+        pools: kithara_bufpool::PoolRegion<TestPools>,
     }
 
     impl Pass {
         fn new(params: AnalysisParams) -> Self {
+            let pools = pools();
             Self {
-                analyzer: WaveformAnalyzer::new(Consts::SR, params, &SamplePool::default()),
+                analyzer: WaveformAnalyzer::new(Consts::SR, params, &pools)
+                    .expect("waveform buffers fit the test region"),
+                pools,
             }
         }
 
         fn push(&mut self, pcm: &[f32], channels: usize, at: u64) {
-            self.analyzer.push(pcm, channels, at);
+            self.analyzer
+                .push(&self.pools, pcm, channels, at)
+                .expect("waveform buffers fit the test region");
         }
 
         fn whole(&mut self, pcm: &[f32], channels: usize, buckets: usize) -> Vec<Bucket> {

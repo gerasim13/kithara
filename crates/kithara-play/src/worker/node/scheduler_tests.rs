@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::{AudioSource, Fetch, PreloadGate, ProducerPort, TrackStep, WaitingReason};
-use kithara_bufpool::SamplePool;
 use kithara_events::{DeferredBus, Event, EventBus};
 use kithara_platform::{
     CancelToken,
@@ -14,13 +13,13 @@ use kithara_stream::{PlayheadState, PlayheadWrite, SeekControl, SeekObserve, See
 use kithara_test_utils::kithara;
 
 use super::*;
-use crate::worker::scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, TaskId};
+use crate::{
+    test_pools::sample_buffer,
+    worker::scheduler::{AtomicServiceClass, PlaybackScheduler, ServiceClass, TaskId},
+};
 
 fn empty_chunk() -> AudioChunk {
-    AudioChunk::new(
-        AudioChunkInfo::default(),
-        SamplePool::default().attach(Vec::new()),
-    )
+    AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]))
 }
 
 struct MockSource {

@@ -1,28 +1,38 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+use std::path::PathBuf;
+
 use kithara::{
-    assets::AssetStore,
+    assets::{AssetStore, StorageBackend},
     audio::{AudioDecoderConfig, DecoderResamplerSettings},
     decode::DecoderBackend,
     hls::{AbrMode, KeyOptions},
-    play::{PlaybackResamplerBackend, ResourceConfig},
-    queue::TrackSource,
+    play::{PlaybackResamplerBackend, ResourceSrc},
 };
-use kithara_app::config::AppConfig;
+use kithara_app::{
+    config::AppConfig,
+    pools::{AppResourceConfig, AppStore, AppTrackSource},
+};
 use url::Url;
+
+pub(crate) fn app_disk_asset_store(config: &AppConfig, root: impl Into<PathBuf>) -> AppStore {
+    AssetStore::builder(config.worker.pools().clone())
+        .backend(StorageBackend::Disk { root: root.into() })
+        .build()
+}
 
 pub(crate) fn app_track_source(
     url: &str,
     config: &AppConfig,
-    store: AssetStore,
+    store: AppStore,
     backend: DecoderBackend,
     abr: AbrMode,
     discriminator: Option<&str>,
-) -> TrackSource {
-    let Ok(src) = ResourceConfig::parse_src(url) else {
-        return TrackSource::Uri(url.to_string());
+) -> AppTrackSource {
+    let Ok(src) = ResourceSrc::parse(url) else {
+        return AppTrackSource::Uri(url.to_string());
     };
-    let builder = ResourceConfig::for_src(src);
+    let builder = AppResourceConfig::for_src(src);
     let registry = config.drm.registry();
     let keys = if registry.is_empty() {
         KeyOptions::default()
@@ -57,5 +67,5 @@ pub(crate) fn app_track_source(
         Some(discriminator) => builder.discriminator(discriminator).build(),
         None => builder.build(),
     };
-    TrackSource::Config(Box::new(config))
+    AppTrackSource::Config(Box::new(config))
 }

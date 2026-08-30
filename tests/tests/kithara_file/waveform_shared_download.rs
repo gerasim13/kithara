@@ -16,16 +16,17 @@ use axum::{Router, body::Body, extract::State, http::header, response::Response,
 use bytes::Bytes;
 use kithara::{
     analysis::BeatAnalysisConfig,
-    assets::{AssetStore, StorageBackend},
+    assets::StorageBackend,
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
-    bufpool::Region,
     file::{File, FileConfig, FileSrc},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
-    play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
-    prelude::ResourceConfig,
+    play::{PlayWorkerConfig, RegisteredAudio, ResourceSrc},
     stream::Stream,
 };
-use kithara_app::waveform::TrackAnalysisRunner;
+use kithara_app::{
+    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, build},
+    waveform::TrackAnalysisRunner,
+};
 use kithara_integration_tests::{TestHttpServer, create_test_wav};
 
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
@@ -57,7 +58,7 @@ async fn serve_wav(State(state): State<CountState>) -> Response {
 /// it never returns `Pending`. The park drives the virtual clock forward under
 /// flash (no real-clock re-poll sleep), so the worker advances and the shared
 /// WAV is decoded deterministically.
-fn drain_to_eof(mut audio: RegisteredAudio<Stream<File>>) -> bool {
+fn drain_to_eof(mut audio: RegisteredAudio<Stream<File<AppPools>>, AppPools>) -> bool {
     loop {
         match audio.next_chunk() {
             Ok(ChunkOutcome::Chunk(_)) => {}
@@ -82,19 +83,15 @@ async fn waveform_and_player_share_one_get() {
     let server = TestHttpServer::new(app).await;
     let url = server.url("/audio.wav");
 
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
-    let store = AssetStore::builder()
+    let pools = build().expect("valid app pool policy");
+    let store = AppStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(byte_pool.clone())
         .build();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool()).build(),
-    );
+    let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
 
     // Waveform analysis consumer (whole-file) of the shared store.
     let waveform_cfg =
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("waveform url"))
+        AppResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("waveform url"))
             .store(store.clone())
             .worker(worker.clone())
             .build();
@@ -102,10 +99,10 @@ async fn waveform_and_player_share_one_get() {
     // Player consumer of the same URL through the same shared store. Built
     // with `block_on_underrun(true)` so the drain parks on the virtual clock
     // until the worker delivers, instead of sleep-polling on `Pending`.
-    let player_cfg = AudioConfig::<File>::for_stream(
+    let player_cfg = AudioConfig::<File<AppPools>>::for_stream(
         FileConfig::for_src(FileSrc::Remote(url.clone()))
             .store(store)
-            .pool(byte_pool.clone())
+            .pools(pools.clone())
             .build(),
     )
     .block_on_underrun(true)
@@ -117,7 +114,7 @@ async fn waveform_and_player_share_one_get() {
         &master,
         WAVEFORM_BUCKETS,
         BeatAnalysisConfig::default(),
-        region.sample_pool(),
+        pools,
     );
     let mut analysis_rx = runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, drop);
 

@@ -4,7 +4,6 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use kithara_bufpool::SamplePool;
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -69,8 +68,7 @@ impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedAudioLane<P>) {
 pub(super) struct AudioParts<S> {
     pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
     pub(super) controls: Controls,
-    pub(super) sample_pool: SamplePool,
-    pub(super) spec: AudioSpec,
+    pub(super) cursor: ChunkCursor,
     pub(super) marker: PhantomData<S>,
     pub(super) ring: RingConsumer,
     pub(super) runtime: AudioRuntime,
@@ -108,7 +106,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
         Self {
             runtime: parts.runtime,
             ring: parts.ring,
-            cursor: ChunkCursor::new(&parts.sample_pool, parts.spec),
+            cursor: parts.cursor,
             events: AudioEvents::new(parts.emit.bus().clone()),
             session: parts.session,
             controls: parts.controls,
@@ -410,7 +408,6 @@ fn chunk_outcome(
 mod tests {
     use std::sync::atomic::{AtomicU32, AtomicU64};
 
-    use kithara_bufpool::SamplePool;
     use kithara_platform::{CancelScope, sync::Arc};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::{PlayheadState, SeekState, WorkerWake};
@@ -420,6 +417,7 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        test_pools::pools,
     };
 
     struct TestWorkerWake;
@@ -451,13 +449,14 @@ mod tests {
             let seek: Arc<dyn SeekControl> = seek_state.clone();
             let seek_obs: Arc<dyn SeekObserve> = seek_state;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
-            let sample_pool = SamplePool::default();
+            let cursor = ChunkCursor::new(&pools(), AudioChunkInfo::default().spec)
+                .expect("cursor scratch fits test pools");
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
-                    sample_pool,
+                    cursor,
                     emit,
                     runtime: AudioRuntime {
                         cancel: CancelScope::new(None).token(),
@@ -476,7 +475,6 @@ mod tests {
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
                     },
-                    spec: AudioChunkInfo::default().spec,
                     marker: PhantomData,
                 }),
             }

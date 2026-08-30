@@ -307,8 +307,8 @@ fn emit_asset_layouts(code: &mut String, rules: &[CacheIdentityRule]) {
     code.push_str(
         "    ])) as Arc<dyn AssetLayout>;\n\
          AssetLayoutRegistry::default()\n\
-             .with::<::kithara::file::File>(Arc::clone(&layout))\n\
-             .with::<::kithara::hls::Hls>(layout)\n\
+             .with::<::kithara::file::File<crate::pools::AppPools>>(Arc::clone(&layout))\n\
+             .with::<::kithara::hls::Hls<crate::pools::AppPools>>(layout)\n\
          }\n",
     );
 }

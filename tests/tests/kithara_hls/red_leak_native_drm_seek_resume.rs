@@ -5,7 +5,6 @@ use std::{error::Error as StdError, num::NonZeroUsize};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{
@@ -18,7 +17,11 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{TestServerHelper, auto, waits::wait_thread_count_quiesced};
+use kithara_integration_tests::{
+    TestServerHelper, auto,
+    bufpool_ext::{Pools, TestPools, pools},
+    waits::wait_thread_count_quiesced,
+};
 use tracing::info;
 
 struct Consts;
@@ -27,7 +30,10 @@ impl Consts {
     const SEEK_TARGETS_SECS: &'static [f64] = &[30.0, 60.0, 10.0];
 }
 
-async fn next_chunk_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &str) {
+async fn next_chunk_or_timeout(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    label: &str,
+) {
     let deadline = time::Instant::now() + Duration::from_secs(3);
     loop {
         match AudioRead::next_chunk(audio) {
@@ -43,7 +49,10 @@ async fn next_chunk_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: 
     }
 }
 
-async fn preload_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &str) {
+async fn preload_or_timeout(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    label: &str,
+) {
     if let Some(gate) = AudioSession::preload_gate(audio) {
         time::timeout(Duration::from_secs(3), gate.wait())
             .await
@@ -56,25 +65,25 @@ async fn preload_or_timeout(audio: &mut RegisteredAudio<Stream<Hls>>, label: &st
 async fn run_drm_seek_resume_cycle(
     server: &TestServerHelper,
     downloader: &Downloader,
-    shared_worker: &PlayWorker,
+    shared_worker: &PlayWorker<TestPools>,
+    pools: &Pools,
     iter_idx: usize,
 ) {
     let url = server.asset("drm/master.m3u8");
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(shared_worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(shared_worker.byte_pool().clone())
+        .pools(pools.clone())
         .downloader(downloader.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = shared_worker
-        .open(AudioConfig::<Hls>::for_stream(hls_config).build())
+        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
     preload_or_timeout(&mut audio, &format!("iter_{iter_idx}_preload")).await;
@@ -120,31 +129,30 @@ async fn red_leak_native_drm_seek_resume_thread_budget()
 -> Result<(), Box<dyn StdError + Send + Sync>> {
     let server = TestServerHelper::new().await;
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let shared_worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
 
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder()
-                .byte_pool(shared_worker.byte_pool().clone())
-                .build(),
+            NetOptions::default(),
+            pools.clone(),
             cancel.clone(),
         ))
         .cancel(cancel)
         .build(),
     );
 
-    run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, 0).await;
+    run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, &pools, 0).await;
     let threads_baseline = wait_thread_count_quiesced(Duration::from_secs(30)).await;
 
     info!(threads_baseline, "baseline after warmup DRM seek cycle");
 
     for i in 1..=Consts::ITERATIONS {
-        run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, i).await;
+        run_drm_seek_resume_cycle(&server, &downloader, &shared_worker, &pools, i).await;
         let now = wait_thread_count_quiesced(Duration::from_secs(30)).await;
         info!(
             iter = i,

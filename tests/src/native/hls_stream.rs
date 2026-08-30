@@ -5,15 +5,12 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::{
-    bufpool::{BytePool, SamplePool},
-    platform::sync::Arc,
-    stream::MediaInfo,
-};
+use kithara::{platform::sync::Arc, stream::MediaInfo};
 use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
 use num_traits::AsPrimitive;
 
 use crate::{
+    bufpool_ext::pools,
     fixture_protocol::{
         HlsRouteKind, HttpErrorRule, create_wav_init_header, eval_http_error, generate_segment,
     },
@@ -516,8 +513,7 @@ fn encode_packaged_variant(
     variant: &ResolvedPackagedVariant,
     segment_frames: usize,
 ) -> Result<EncodedTrack, EncodeError> {
-    let encoder = EncoderFactory::create_packaged(variant.codec)?;
-    let frame_samples = encoder.packaged_frame_samples(variant.codec)?;
+    let frame_samples = EncoderFactory::frame_samples(variant.codec)?;
     let (nominal_content_frames, packets_per_segment, content_frames, aligned_trailing_delay) =
         packaged_frame_layout(packaged, frame_samples, segment_frames);
 
@@ -528,10 +524,12 @@ fn encode_packaged_variant(
         .channels(packaged.channels)
         .build();
     let content_length = Finite::new(content_frames);
+    let pools = pools();
 
     let encode = |pcm: &dyn PcmSource| {
-        encoder.encode_packaged(
-            PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        EncoderFactory::encode_packaged(
+            &pools,
+            &PackagedEncodeRequest::builder()
                 .pcm(pcm)
                 .packets_per_segment(packets_per_segment)
                 .media_info(media_info.clone())

@@ -43,7 +43,6 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
-    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -56,6 +55,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     signal_pcm::{Finite, SignalPcm, signal},
     wav::create_wav_header,
@@ -127,20 +127,19 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
     // up-front layout is complete and the worker reaches the boundary.
     let (server, gate) = HlsTestServer::with_segment_gate(config, 0, GATED_SEGMENT).await;
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -148,7 +147,7 @@ async fn forward_into_withheld_segment_parks_without_busy_spin() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
+    let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
 

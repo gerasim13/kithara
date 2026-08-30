@@ -109,13 +109,14 @@ mod tests {
     };
 
     use kithara_assets::{
-        AcquisitionResult, AssetLayoutRegistry, AssetStore, AssetsError, ReadSide,
-        ResourceAcquisition, StorageBackend, WriteSide,
+        AcquisitionResult, AssetLayoutRegistry, AssetsError, ReadSide, ResourceAcquisition,
+        StorageBackend, WriteSide,
     };
     use tempfile::tempdir;
     use url::Url;
 
     use super::*;
+    use crate::pools::{self, FfiPools, FfiStore};
 
     fn url(s: &str) -> Url {
         Url::parse(s).expect("valid test URL")
@@ -194,7 +195,7 @@ mod tests {
         );
     }
 
-    fn write_commit(acquisition: ResourceAcquisition, data: &[u8]) {
+    fn write_commit(acquisition: ResourceAcquisition<FfiPools>, data: &[u8]) {
         let AcquisitionResult::Pending(writer) = acquisition else {
             panic!("expected a pending writer");
         };
@@ -227,7 +228,7 @@ mod tests {
 
         let root_calls = Arc::new(AtomicUsize::new(0));
         let path_calls = Arc::new(AtomicUsize::new(0));
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(CountingLayout {
                 root_calls: Arc::clone(&root_calls),
@@ -316,7 +317,7 @@ mod tests {
         }
 
         let dir = tempdir().expect("tempdir");
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -359,7 +360,7 @@ mod tests {
         }
 
         let layout = layout(HostileForeign(hostile));
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout))
             .build();
@@ -394,7 +395,7 @@ mod tests {
             }
         }
 
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(HostileRoot(hostile))))
             .build();
@@ -425,7 +426,7 @@ mod tests {
 
         let path = PathBuf::from(OsString::from_vec(vec![b'/', 0xff]));
         let source = AssetSource::Local { path };
-        let store = AssetStore::builder()
+        let store = FfiStore::builder(pools::build().expect("valid FFI pool policy"))
             .backend(StorageBackend::Memory)
             .layouts(AssetLayoutRegistry::new(layout(RejectNonUtf8)))
             .build();

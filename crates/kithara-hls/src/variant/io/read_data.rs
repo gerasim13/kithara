@@ -1,5 +1,6 @@
 use std::{num::NonZeroUsize, ops::Range};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{PendingReason, ReadOutcome, StreamError, StreamResult};
@@ -12,7 +13,10 @@ use crate::{
     segment::{PlannedFetch, Segment},
 };
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let uses_seek_alias = self.seek_alias_at(offset).is_some();

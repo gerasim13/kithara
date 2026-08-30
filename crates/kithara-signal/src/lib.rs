@@ -8,6 +8,8 @@ mod interleaved;
 mod planar;
 mod sample;
 mod spec;
+#[cfg(test)]
+mod test_pools;
 mod time;
 mod units;
 

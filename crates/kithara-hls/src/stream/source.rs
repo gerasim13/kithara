@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use delegate::delegate;
 use kithara_assets::EvictionSubscription;
+use kithara_bufpool::HasPool;
 use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::{CancelScope, sync::Arc, time::Duration};
 use kithara_storage::WaitOutcome;
@@ -24,15 +25,18 @@ use crate::{peer::HlsPeer, reader::HlsReaderEventSink};
 /// store. `HlsSource` keeps only what coord legitimately should not know about: the
 /// [`EventBus`](kithara_events::EventBus) (for [`HlsReaderEventSink`]) and the [`HlsPeer`] handle
 /// (for teardown on drop and for the ABR handle the audio FSM consumes).
-pub struct HlsSource {
-    coord: Arc<HlsCoord>,
+pub struct HlsSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    coord: Arc<HlsCoord<S>>,
     /// Deferred HLS event sink shared with the reader hooks and fence-ack path.
     /// [`HlsReaderEventSink`] in [`Source::take_reader_event_sink`] so
     /// the decoder's per-seek / per-chunk signals reach test subscribers
     /// as `HlsEvent::ReaderSeek` / `HlsEvent::ReadProgress`.
     emit: Arc<DeferredBus<HlsEvent>>,
     stream_scope: CancelScope,
-    hls_peer: Option<Arc<HlsPeer>>,
+    hls_peer: Option<Arc<HlsPeer<S>>>,
     /// Eviction-subscription guard. Dropping it deregisters this stream's
     /// eviction routing entry from the store (shared or private).
     invalidation_guard: Option<EvictionSubscription>,
@@ -44,9 +48,12 @@ pub struct HlsSource {
     peer_wake: Option<Arc<DeferredWake>>,
 }
 
-impl HlsSource {
+impl<S> HlsSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) const fn new(
-        coord: Arc<HlsCoord>,
+        coord: Arc<HlsCoord<S>>,
         emit: Arc<DeferredBus<HlsEvent>>,
         stream_scope: CancelScope,
     ) -> Self {
@@ -61,7 +68,7 @@ impl HlsSource {
         }
     }
 
-    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer>) {
+    pub(crate) fn set_hls_peer(&mut self, peer: Arc<HlsPeer<S>>) {
         self.peer_wake = Some(peer.reader_wake());
         self.hls_peer = Some(peer);
     }
@@ -77,7 +84,10 @@ impl HlsSource {
     }
 }
 
-impl Drop for HlsSource {
+impl<S> Drop for HlsSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn drop(&mut self) {
         self.stream_scope.cancel();
         if let Some(ref peer) = self.hls_peer {
@@ -86,7 +96,10 @@ impl Drop for HlsSource {
     }
 }
 
-impl Source for HlsSource {
+impl<S> Source for HlsSource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn abr_handle(&self) -> Option<kithara_abr::AbrHandle> {
         self.peer_handle.as_ref().map(|h| h.abr().clone())
     }
@@ -186,6 +199,11 @@ mod tests {
         variant::{DispatchTokens, HlsVariant, PlanConfig, PlanCtx, VariantParts},
     };
 
+    type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
+    type TestHlsSource = HlsSource<crate::test_pools::TestPools>;
+    type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
+    type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
+
     struct TestAbrPeer {
         cancel: CancelToken,
         state: Arc<AbrState>,
@@ -204,18 +222,18 @@ mod tests {
     /// One HLS track of equal-sized segments behind a real `HlsSource`, with the
     /// peer wake the source arms exposed so a test can observe it.
     struct Fixture {
-        variant: Arc<HlsVariant>,
+        variant: Arc<TestHlsVariant>,
         wake: Arc<DeferredWake>,
         cancel: CancelToken,
-        source: HlsSource,
-        ctx: PlanCtx,
+        source: TestHlsSource,
+        ctx: TestPlanCtx,
     }
 
     impl Fixture {
         const SEGMENT_BYTES: u64 = 100;
         const SEGMENT_COUNT: u32 = 4;
 
-        fn coord(bus: &EventBus, ctx: &PlanCtx, cancel: CancelToken) -> Arc<HlsCoord> {
+        fn coord(bus: &EventBus, ctx: &TestPlanCtx, cancel: CancelToken) -> Arc<TestHlsCoord> {
             let playlist = Self::playlist_state();
             let segments: Vec<Segment> = (0..Self::SEGMENT_COUNT)
                 .map(|idx| {
@@ -266,9 +284,9 @@ mod tests {
             ))
         }
 
-        fn plan_ctx(bus: &EventBus, look_ahead_bytes: u64, cancel: &CancelToken) -> PlanCtx {
+        fn plan_ctx(bus: &EventBus, look_ahead_bytes: u64, cancel: &CancelToken) -> TestPlanCtx {
             let store = Arc::new(
-                AssetStore::builder()
+                AssetStore::builder(crate::test_pools::pools())
                     .backend(StorageBackend::Memory)
                     .cancel(cancel.clone())
                     .build(),
@@ -276,7 +294,7 @@ mod tests {
             PlanCtx {
                 bus: bus.clone(),
                 scope: store
-                    .scope::<crate::Hls>(&AssetSource::Remote {
+                    .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                         url: "https://example.com/master.m3u8"
                             .parse()
                             .expect("master url"),

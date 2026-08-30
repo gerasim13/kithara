@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::kithara;
@@ -8,7 +8,16 @@ use kithara_test_utils::kithara;
 use super::{Consts, GaplessTrimmer};
 use crate::{
     DropChunks, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
+    test_pools::default_pools,
 };
+
+fn sample_buffer(values: &[f32]) -> SampleBuffer {
+    let mut buffer = default_pools()
+        .get_with_len::<f32>(values.len())
+        .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
+    buffer.copy_from_slice(values);
+    buffer
+}
 
 fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
     let samples = frames.saturating_mul(usize::from(spec.channels));
@@ -21,7 +30,7 @@ fn chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk {
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().attach(pcm),
+        sample_buffer(&pcm),
     )
 }
 
@@ -33,7 +42,7 @@ fn silent_chunk(spec: AudioSpec, frame_offset: u64, frames: usize) -> AudioChunk
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().attach(vec![0.0; samples]),
+        sample_buffer(&vec![0.0; samples]),
     )
 }
 
@@ -44,7 +53,7 @@ fn custom_chunk(spec: AudioSpec, frame_offset: u64, pcm: Vec<f32>) -> AudioChunk
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().attach(pcm),
+        sample_buffer(&pcm),
     )
 }
 

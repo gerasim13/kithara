@@ -19,7 +19,7 @@ extension IntegrationRegressionsIOS {
                 url: fixture.childURL("storm-\(index).mp3").absoluteString
             )
         }
-        let player = KitharaPlayer(config: .init(store: AssetStore(root: cacheURL.path)))
+        let player = KitharaPlayer(config: .init(store: try AssetStore(root: cacheURL.path)))
         let current = SwitchStormCurrentItem()
         let currentCancellable = player.currentItem.sink { item in
             current.record(item)

@@ -76,6 +76,9 @@ lifecycleScope.launch {
 }
 ```
 
+`Kithara.initialize` and the explicit `AssetStore` constructor throw
+`KitharaError` if the native store cannot be initialized.
+
 ## Usage
 
 ### Playback Control

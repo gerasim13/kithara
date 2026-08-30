@@ -2,6 +2,7 @@ use std::ops::Deref;
 
 use delegate::delegate;
 use kithara_abr::{AbrController, AbrSettings};
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelScope,
     sync::{Arc, Mutex},
@@ -21,28 +22,31 @@ use crate::{
 };
 
 /// Concrete Player implementation managing items queue.
-pub struct PlayerImpl {
-    pub(crate) runtime: Arc<PlayerRuntime>,
+pub struct PlayerImpl<S> {
+    pub(crate) runtime: Arc<PlayerRuntime<S>>,
     pub(crate) sync: GroupState<PlayerMember>,
 }
 
-impl Deref for PlayerImpl {
-    type Target = PlayerRuntime;
+impl<S> Deref for PlayerImpl<S> {
+    type Target = PlayerRuntime<S>;
 
     fn deref(&self) -> &Self::Target {
         &self.runtime
     }
 }
 
-impl PlayerImpl {
-    pub(in crate::player) fn make_control(&self) -> PlayerControl {
+impl<S> PlayerImpl<S> {
+    pub(in crate::player) fn make_control(&self) -> PlayerControl<S>
+    where
+        S: HasPool<f32>,
+    {
         PlayerControl::new(Arc::clone(&self.runtime))
     }
 
     /// Create a new player with the given configuration.
     #[must_use]
-    pub fn new(mut config: PlayerConfig) -> Self {
-        let resolved_pool = config.worker.sample_pool().clone();
+    pub fn new(mut config: PlayerConfig<S>) -> Self {
+        let pools = config.worker.pools().clone();
         let sync = GroupState::unavailable(
             config.grid_id,
             config.sample_rate,
@@ -63,7 +67,7 @@ impl PlayerImpl {
             .grid_id(config.grid_id)
             .max_slots(config.max_slots)
             .sample_rate(config.sample_rate.get())
-            .sample_pool(resolved_pool)
+            .pools(pools)
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())
             .build();
@@ -98,13 +102,16 @@ impl PlayerImpl {
     }
 }
 
-impl Drop for PlayerImpl {
+impl<S> Drop for PlayerImpl<S> {
     fn drop(&mut self) {
         self.runtime.invalidate();
     }
 }
 
-impl crate::api::Equalizer for PlayerImpl {
+impl<S> crate::api::Equalizer for PlayerImpl<S>
+where
+    S: Send + Sync + 'static,
+{
     delegate! {
         to self {
             #[call(eq_band_count)]

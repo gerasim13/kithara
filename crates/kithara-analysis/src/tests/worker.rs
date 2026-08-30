@@ -1,6 +1,5 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SamplePool;
 use kithara_platform::CancelToken;
 use kithara_resampler::NoResamplerBackend;
 use kithara_test_utils::kithara;
@@ -9,9 +8,10 @@ use super::{
     super::{analyzer::AnalyzerBuilder, worker::AnalysisWorker},
     fixtures::{FakeReader, sine},
 };
+use crate::test_pools::{TestPools, pools};
 
-fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
-    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_waveform(16)
+fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(16)
 }
 
 #[kithara::test(tokio)]

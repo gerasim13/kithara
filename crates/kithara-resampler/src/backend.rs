@@ -1,3 +1,5 @@
+use kithara_bufpool::HasPool;
+
 use crate::{Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
 pub trait ResamplerBackend: Clone + Send + Sync + 'static {
@@ -9,7 +11,12 @@ pub trait ResamplerBackend: Clone + Send + Sync + 'static {
     ///
     /// Returns [`ResamplerBuildError`] when the settings are invalid for this
     /// backend or backend construction fails.
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError>;
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>;
 
     fn capabilities(&self) -> ResamplerCapabilities;
 
@@ -24,7 +31,13 @@ pub struct NoResampler;
 impl ResamplerBackend for NoResamplerBackend {
     type Resampler = NoResampler;
 
-    fn build(&self, _settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        _settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         Err(ResamplerBuildError::BackendBuild {
             backend: self.name(),
             detail: "no resampler backend compiled".to_owned(),

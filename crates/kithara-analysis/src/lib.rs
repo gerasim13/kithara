@@ -17,6 +17,8 @@ mod native;
 pub(crate) mod producer;
 #[cfg(not(target_arch = "wasm32"))]
 mod slots;
+#[cfg(test)]
+mod test_pools;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 mod waveform;

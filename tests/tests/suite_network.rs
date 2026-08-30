@@ -21,6 +21,8 @@
 //! just test run --lane=network
 //! ```
 
+pub use kithara_integration_tests::bufpool_ext;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     mod silvercomet_seek_hang;

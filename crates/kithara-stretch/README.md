@@ -21,7 +21,7 @@ the backend selector and factory, and the native C++ adapters that implement it.
 Backend features depend downward on `kithara-bufpool` for scratch storage, and
 native builds include `kithara-workspace-hack`. `kithara-warp` owns the
 synchronous renderer and temporal controls, `kithara-play` supplies the shared
-pool and composes post-Warp effects, decoded-audio values and audio-chunk
+pool region and composes post-Warp effects, decoded-audio values and audio-chunk
 metadata belong to `kithara-signal`, and decoder sample-rate conversion remains
 in the decode/audio seam.
 

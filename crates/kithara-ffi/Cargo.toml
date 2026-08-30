@@ -111,6 +111,7 @@ test = ["kithara/probe", "kithara-play/probe", "dep:cpal"]
 
 [dependencies]
 kithara-assets = { workspace = true, default-features = false }
+kithara-bufpool = { workspace = true }
 kithara-events = { workspace = true }
 # Cross-platform deps (used by both the native UniFFI modules and `src/web`).
 # `kithara-play` is the canonical owner of the shared play types
@@ -153,7 +154,6 @@ uuid = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-abr = { workspace = true, default-features = false }
-kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true }
 # The wasm worker reaches the shared DRM key-options, ABR-mode, and
 # key-processor types directly (native reaches the same types through the

@@ -1,13 +1,17 @@
 use std::num::NonZero;
 
-use kithara_bufpool::SamplePool;
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::WarpRenderer;
-use crate::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
+use super::WarpRenderer as GenericWarpRenderer;
+use crate::{
+    GridSegment, RegionPlan, RegionPlanError, StretchControls,
+    test_pools::{TestPools, default_pools, sample_buffer},
+};
+
+type WarpRenderer = GenericWarpRenderer<TestPools>;
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -57,7 +61,7 @@ fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().attach(samples.to_vec()),
+        sample_buffer(samples),
     )
 }
 
@@ -99,7 +103,7 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = WarpRenderer::new(controls, spec(), SamplePool::default());
+    let mut fx = WarpRenderer::new(controls, spec(), default_pools());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {

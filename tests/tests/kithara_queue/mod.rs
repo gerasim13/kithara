@@ -1,7 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod source_helper;
 #[cfg(not(target_arch = "wasm32"))]
-use source_helper::app_track_source;
+use source_helper::{app_disk_asset_store, app_track_source};
 
 mod advance_boundary_provenance;
 mod architecture_flow;

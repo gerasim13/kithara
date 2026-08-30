@@ -88,10 +88,10 @@ impl AsRef<[f32]> for AudioChunk {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::sample_buffer;
 
     fn audio_spec(channels: u16, sample_rate: u32) -> AudioSpec {
         AudioSpec::new(
@@ -106,7 +106,7 @@ mod tests {
                 spec,
                 ..Default::default()
             },
-            SamplePool::new(4, 64).attach(samples),
+            sample_buffer(&samples),
         )
     }
 

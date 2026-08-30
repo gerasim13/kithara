@@ -2,8 +2,7 @@
 use std::num::NonZeroU32;
 
 use kithara_audio::{AudioObserveError, AudioReader};
-#[cfg(feature = "analysis-waveform")]
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::HasPool;
 #[cfg(feature = "analysis-beat")]
 use kithara_platform::sync::Arc;
 use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
@@ -35,14 +34,17 @@ use crate::coverage::FrameRange;
 use crate::producer::{AnalysisProducer, ring};
 #[cfg(feature = "analysis-waveform")]
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
-use crate::{BeatState, TrackAnalysis};
+use crate::{
+    BeatState, TrackAnalysis,
+    test_pools::{TestPools, pools},
+};
 
 #[cfg(feature = "analysis-waveform")]
 const BUCKETS: usize = 64;
 
 #[cfg(feature = "analysis-waveform")]
-fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
-    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_waveform(BUCKETS)
+fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(BUCKETS)
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -550,13 +552,14 @@ fn offers_out_of_order_cover_their_union() {
     );
 }
 
-fn stages<B>(
+fn stages<B, S>(
     reader: Box<dyn AudioReader>,
-    builder: AnalyzerBuilder<B>,
+    builder: AnalyzerBuilder<B, S>,
     cancel: &CancelToken,
 ) -> Vec<TrackAnalysis>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
@@ -596,8 +599,12 @@ where
 fn matches_direct_waveform_analyzer_over_chunked_stream() {
     let samples = sine(usize::try_from(SR).unwrap());
     let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
-    let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &SamplePool::default());
-    direct.push(&samples, usize::from(CH), 0);
+    let pools = pools();
+    let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &pools)
+        .expect("waveform buffers fit the test region");
+    direct
+        .push(&pools, &samples, usize::from(CH), 0)
+        .expect("waveform buffers fit the test region");
     let want = direct.snapshot(BUCKETS, Some(frames));
 
     let reader = Box::new(FakeReader::chunked(&samples, 4));
@@ -652,7 +659,7 @@ fn beat_slot_fills_the_beat_grid() {
             .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
     );
     let detector = Box::new(mock) as Box<dyn BeatDetector>;
-    let builder = AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+    let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat_detector(detector, GridParams::default());
 
     let reader = Box::new(FakeReader::chunked(

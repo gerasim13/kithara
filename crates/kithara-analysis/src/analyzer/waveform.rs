@@ -1,4 +1,4 @@
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 
 use crate::waveform::{AnalysisParams, WaveformAnalyzer, bucket::Waveform};
 
@@ -8,15 +8,31 @@ pub(crate) struct WaveformPass {
 }
 
 impl WaveformPass {
-    pub(crate) fn new(sample_rate: u32, buckets: usize, sample_pool: &SamplePool) -> Self {
-        Self {
+    pub(crate) fn new<S>(
+        sample_rate: u32,
+        buckets: usize,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        Ok(Self {
             buckets,
-            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default(), sample_pool),
-        }
+            inner: WaveformAnalyzer::new(sample_rate, AnalysisParams::default(), pools)?,
+        })
     }
 
-    pub(crate) fn push(&mut self, pcm: &[f32], channels: usize, at: u64) {
-        self.inner.push(pcm, channels, at);
+    pub(crate) fn push<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+    ) -> Result<(), PoolError>
+    where
+        S: HasPool<f32>,
+    {
+        self.inner.push(pools, pcm, channels, at)
     }
 
     pub(crate) fn snapshot(&mut self, extent: Option<u64>) -> Waveform {

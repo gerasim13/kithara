@@ -73,10 +73,7 @@ type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>
 /// See crate `CONTEXT.md` for the lease/pin contract. Absolute keys bypass
 /// pinning (no asset to pin under). The capability gate also bypasses.
 #[derive(Clone)]
-pub struct LeaseAssets<A>
-where
-    A: Assets,
-{
+pub struct LeaseAssets<A> {
     inner: Arc<A>,
     live: Arc<LiveRegistry>,
     cancel: CancelToken,
@@ -314,13 +311,6 @@ where
     }
 }
 
-impl<A> Drop for LeaseAssets<A>
-where
-    A: Assets,
-{
-    fn drop(&mut self) {}
-}
-
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
@@ -337,15 +327,11 @@ mod tests {
     fn make_pins_disk(dir: &Path) -> PinsIndex {
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default())
+        PinsIndex::with_persist_at(path, CancelToken::never(), crate::test_pools::buffer())
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        ));
+        let disk = Arc::new(DiskAssetStore::new(dir, CancelToken::never()));
         let pins = make_pins_disk(dir);
         LeaseAssets::with_byte_recorder(
             disk,
@@ -362,7 +348,7 @@ mod tests {
             return HashSet::new();
         }
         let idx =
-            PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default());
+            PinsIndex::with_persist_at(path, CancelToken::never(), crate::test_pools::buffer());
         idx.snapshot()
     }
 

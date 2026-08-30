@@ -1,5 +1,7 @@
 use std::num::NonZeroU32;
 
+use kithara_bufpool::ByteBuffer;
+
 use crate::{
     AnalysisFingerprint, BeatArtifact, BeatSnapshot, BeatState, Coverage, FrameRange,
     TrackAnalysis, Waveform,
@@ -16,30 +18,47 @@ impl TrackAnalysis {
     /// Returns [`BlobError::TooLarge`] when a length does not fit the format.
     pub fn write_to(&self, out: &mut Vec<u8>) -> Result<(), BlobError> {
         let mut writer = Writer::new(out);
+        self.write(&mut writer)
+    }
+
+    /// Append this snapshot to a checked pooled byte buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlobError::TooLarge`] when a length does not fit the format,
+    /// or [`BlobError::Pool`] when the buffer cannot grow under its pool budget.
+    pub fn write_to_buffer(&self, out: &mut ByteBuffer) -> Result<(), BlobError> {
+        let mut writer = Writer::pooled(out);
+        self.write(&mut writer)
+    }
+
+    fn write(&self, writer: &mut Writer<'_>) -> Result<(), BlobError> {
         writer.write_u32(TRACK_ANALYSIS_BYTES_VERSION);
         writer.write_str(self.token().as_str())?;
         writer.write_u32(self.source_sample_rate().get());
         writer.write_optional_u64(self.extent());
         writer.write_u64(self.revision());
-        write_ranges(&mut writer, self.coverage().runs())?;
+        write_ranges(writer, self.coverage().runs())?;
 
         writer.write_str(self.fingerprint().waveform().unwrap_or_default())?;
-        writer.write_section(|out| {
+        writer.write_section(|writer| {
             if let Some(waveform) = self.waveform() {
-                waveform.write_to(out);
+                writer.write_blob(waveform)?;
             }
+            Ok(())
         })?;
 
         writer.write_str(self.fingerprint().beat().unwrap_or_default())?;
         let beat = self.beat();
-        writer.write_section(|out| {
+        writer.write_section(|writer| {
             if let Some(beat) = beat {
-                beat.artifact().write_to(out);
+                writer.write_blob(beat.artifact())?;
             }
+            Ok(())
         })?;
         writer.write_bool(beat.is_some_and(|beat| beat.state() == BeatState::Final));
-        write_ranges(&mut writer, beat.map_or(&[], BeatSnapshot::unanalysed))?;
-        Ok(())
+        write_ranges(writer, beat.map_or(&[], BeatSnapshot::unanalysed))?;
+        writer.result()
     }
 }
 
@@ -140,13 +159,19 @@ fn read_ranges(reader: &mut Reader<'_>) -> Result<Vec<FrameRange>, BlobError> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::{ByteBuffer, BytePool};
+    use kithara_bufpool::{OverallBudget, PoolConfig, PoolError, pool_schema};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::artifact::FitRegion;
+    use crate::{artifact::FitRegion, test_pools::pools};
 
     struct Consts;
+
+    pool_schema! {
+        BudgetPools {
+            bytes: u8,
+        }
+    }
 
     impl Consts {
         const BEAT_TAG: &'static str = "beat:test:v1";
@@ -213,8 +238,8 @@ mod tests {
     }
 
     fn encode(analysis: &TrackAnalysis) -> ByteBuffer {
-        let mut bytes = BytePool::default().get();
-        analysis.write_to(&mut bytes).expect("encodes");
+        let mut bytes = pools().get::<u8>();
+        analysis.write_to_buffer(&mut bytes).expect("encodes");
         bytes
     }
 
@@ -235,9 +260,35 @@ mod tests {
         assert!(decoded.waveform().is_none());
         assert!(decoded.beat().is_none());
 
-        let mut encoded = BytePool::default().get();
-        decoded.write_to(&mut encoded).expect("v5 re-encodes");
-        assert_eq!(encoded.as_slice(), Consts::V5_FIXTURE);
+        let mut encoded = pools().get::<u8>();
+        decoded
+            .write_to_buffer(&mut encoded)
+            .expect("v5 re-encodes");
+        assert_eq!(&encoded[..], Consts::V5_FIXTURE);
+    }
+
+    #[kithara::test]
+    fn vec_and_pooled_entrypoints_are_identical() {
+        let analysis = analysis(Some(grid()), Some(wave()), 1_234_567);
+        let mut vec = Vec::new();
+        analysis.write_to(&mut vec).expect("vec encodes");
+        let pooled = encode(&analysis);
+
+        assert_eq!(&*pooled, vec.as_slice());
+    }
+
+    #[kithara::test]
+    fn pooled_entrypoint_reports_budget_failure() {
+        let pools = BudgetPools::builder(OverallBudget(0))
+            .bytes(PoolConfig::builder().max_buffers(32).build())
+            .build()
+            .expect("zero-budget pool builds without eager buffers");
+        let mut bytes = pools.get::<u8>();
+
+        assert!(matches!(
+            analysis(None, None, 0).write_to_buffer(&mut bytes),
+            Err(BlobError::Pool(PoolError::OverallBudgetExceeded { .. }))
+        ));
     }
 
     #[kithara::test]

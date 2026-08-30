@@ -1,5 +1,5 @@
 mod wire {
-    use kithara_bufpool::SamplePool;
+    use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_warp::{BeatGridId, BeatGridIdAllocationError, SyncError};
 
@@ -58,12 +58,12 @@ mod wire {
         RestartFailed { reason: String, r#source: String },
     }
 
-    pub enum Cmd {
+    pub enum Cmd<S> {
         RegisterPlayer {
             grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            sample_pool: SamplePool,
+            pools: PoolRegion<S>,
             sample_rate: u32,
         },
         UnregisterPlayer {
@@ -199,7 +199,7 @@ mod wire {
 
 mod handle {
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::SamplePool;
+    use kithara_bufpool::PoolRegion;
     use kithara_events::EventBus;
     use kithara_platform::sync::{Arc, Mutex};
     use kithara_warp::BeatGridId;
@@ -209,13 +209,13 @@ mod handle {
     use super::wire::{AllocatedSlot, Cmd, PlayerId, Reply, SessionSampleRate};
     use crate::{api::SlotId, effects::eq::EqBandConfig, error::PlayError};
 
-    pub trait SessionDispatcher: Send + Sync + 'static {
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError>;
+    pub trait SessionDispatcher<S>: Send + Sync {
+        fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError>;
 
         /// Describe how audio consumers hosted by this session may wake workers.
         fn consumer_wake_mode(&self) -> ConsumerWakeMode;
 
-        fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
                 Reply::Err(err) => Err(PlayError::Session(err)),
                 reply => Ok(reply),
@@ -227,27 +227,32 @@ mod handle {
     ///
     /// The dispatcher is deliberately inaccessible: decorators may only pass
     /// this capability down to their resident Player.
-    pub struct SessionBinding(Arc<dyn SessionDispatcher>);
+    pub struct SessionBinding<S>(Arc<dyn SessionDispatcher<S>>);
 
-    impl SessionBinding {
+    impl<S> SessionBinding<S> {
         /// Wraps the canonical session for one Host insertion.
         #[doc(hidden)]
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher>) -> Self {
+        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
             Self(dispatcher)
         }
     }
 
-    struct SessionSlot {
-        dispatcher: Mutex<Option<Arc<dyn SessionDispatcher>>>,
+    struct SessionSlot<S> {
+        dispatcher: Mutex<Option<Arc<dyn SessionDispatcher<S>>>>,
     }
 
-    #[derive(Clone)]
-    pub struct SessionHandle(Arc<SessionSlot>);
+    pub struct SessionHandle<S>(Arc<SessionSlot<S>>);
 
-    impl SessionHandle {
+    impl<S> Clone for SessionHandle<S> {
+        fn clone(&self) -> Self {
+            Self(Arc::clone(&self.0))
+        }
+    }
+
+    impl<S> SessionHandle<S> {
         #[must_use]
-        pub fn new(dispatcher: Arc<dyn SessionDispatcher>) -> Self {
+        pub fn new(dispatcher: Arc<dyn SessionDispatcher<S>>) -> Self {
             Self(Arc::new(SessionSlot {
                 dispatcher: Mutex::new(Some(dispatcher)),
             }))
@@ -260,7 +265,7 @@ mod handle {
             }))
         }
 
-        pub(crate) fn bind(&self, binding: SessionBinding) -> Result<(), PlayError> {
+        pub(crate) fn bind(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
             let mut dispatcher = self.0.dispatcher.lock();
             if dispatcher.is_some() {
                 return Err(PlayError::SessionAlreadyBound);
@@ -279,7 +284,7 @@ mod handle {
             }
         }
 
-        pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher>, PlayError> {
+        pub fn dispatcher(&self) -> Result<Arc<dyn SessionDispatcher<S>>, PlayError> {
             self.0
                 .dispatcher
                 .lock()
@@ -298,11 +303,11 @@ mod handle {
                 })
         }
 
-        pub fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        pub fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             self.dispatcher()?.exec(cmd)
         }
 
-        pub fn exec_ok(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        pub fn exec_ok(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
             match self.exec(cmd)? {
                 Reply::Err(err) => Err(PlayError::Session(err)),
                 reply => Ok(reply),
@@ -330,14 +335,14 @@ mod handle {
             grid_id: BeatGridId,
             bus: EventBus,
             eq_layout: Vec<EqBandConfig>,
-            sample_pool: SamplePool,
+            pools: PoolRegion<S>,
             sample_rate: u32,
         ) -> Result<PlayerId, PlayError> {
             match self.exec_ok(Cmd::RegisterPlayer {
                 grid_id,
                 bus,
                 eq_layout,
-                sample_pool,
+                pools,
                 sample_rate,
             })? {
                 Reply::PlayerRegistered(id) => Ok(id),
@@ -440,12 +445,12 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{Cmd, Reply, SessionBinding, SessionDispatcher, SessionHandle};
-    use crate::PlayError;
+    use crate::{PlayError, test_pools::TestPools};
 
     struct DefaultSession;
 
-    impl SessionDispatcher for DefaultSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+    impl SessionDispatcher<TestPools> for DefaultSession {
+        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
         }
 
@@ -456,7 +461,7 @@ mod tests {
 
     #[kithara::test]
     fn session_handle_delegates_explicit_consumer_wake_mode() {
-        let handle = SessionHandle::new(Arc::new(DefaultSession));
+        let handle: SessionHandle<TestPools> = SessionHandle::new(Arc::new(DefaultSession));
 
         assert_eq!(
             handle.consumer_wake_mode(),
@@ -466,7 +471,7 @@ mod tests {
 
     #[kithara::test]
     fn pending_session_binds_once() {
-        let handle = SessionHandle::pending();
+        let handle: SessionHandle<TestPools> = SessionHandle::pending();
         assert_eq!(
             handle.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred

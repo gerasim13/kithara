@@ -832,14 +832,15 @@ mod priming_table_tests {
 mod output_rate_tests {
     use std::{fs, path::Path};
 
-    use kithara_bufpool::BytePool;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
     use super::{
         AppleCodec, build_pcm_output_format, output_frame_capacity, resolve_output_sample_rate,
     };
-    use crate::{codec::FrameCodec, demuxer::TrackInfo, fmp4::parsing::parse_init};
+    use crate::{
+        codec::FrameCodec, demuxer::TrackInfo, fmp4::parsing::parse_init, test_pools::default_pools,
+    };
 
     struct Consts;
     impl Consts {
@@ -860,7 +861,7 @@ mod output_rate_tests {
 
     fn aac_lc_track() -> TrackInfo {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &default_pools()).expect("BUG: parse AAC init");
         let extra_data = init.config.as_ref().to_vec();
         TrackInfo {
             extra_data,
@@ -951,7 +952,7 @@ mod output_rate_tests {
 
 #[cfg(test)]
 mod aac_lc_decode_tests {
-    use kithara_bufpool::{BytePool, SamplePool};
+    use kithara_bufpool::PoolRegion;
     use kithara_platform::time::Duration;
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
@@ -961,6 +962,7 @@ mod aac_lc_decode_tests {
         codec::FrameCodec,
         demuxer::TrackInfo,
         fmp4::parsing::{Fmp4Frame, Fmp4InitInfo, parse_init, parse_segment_frames},
+        test_pools::{TestPools, default_pools},
     };
 
     fn read_fixture(name: &str) -> Vec<u8> {
@@ -1002,13 +1004,13 @@ mod aac_lc_decode_tests {
 
     fn decode_frames(
         codec: &mut AppleCodec,
-        pool: &SamplePool,
+        pools: &PoolRegion<TestPools>,
         seg: &[u8],
         frames: &[Fmp4Frame],
     ) -> u64 {
         let mut total = 0_u64;
         for frame in frames {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             let decoded = codec
                 .decode_frame(
                     &seg[frame.offset..frame.offset + frame.size],
@@ -1022,10 +1024,10 @@ mod aac_lc_decode_tests {
         total
     }
 
-    fn drain_eof(codec: &mut AppleCodec, pool: &SamplePool) -> u64 {
+    fn drain_eof(codec: &mut AppleCodec, pools: &PoolRegion<TestPools>) -> u64 {
         let mut total = 0_u64;
         for _ in 0..Consts::MAX_EOF_DRAIN_CALLS {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             let frames = codec
                 .decode_frame(&[], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: drain Apple AAC-LC EOF");
@@ -1045,7 +1047,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_decode_produces_finite_pcm() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &default_pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
 
@@ -1057,12 +1059,12 @@ mod aac_lc_decode_tests {
             .collect();
         assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
-        let pool = SamplePool::default();
+        let pools = default_pools();
         let mut codec = AppleCodec::open_with_config(&track, false, None)
             .expect("BUG: open Apple AAC-LC codec");
         let mut pcm = Vec::new();
         for &(offset, size) in &ranges {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             codec
                 .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: decode Apple AAC-LC frame");
@@ -1079,7 +1081,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_resampled_decode_produces_ratio_sized_frames() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &default_pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
         let target_rate = target_rate_for_source(init.sample_rate);
@@ -1100,14 +1102,14 @@ mod aac_lc_decode_tests {
             "segment yielded too few AAC frames for resampled decode"
         );
 
-        let pool = SamplePool::new(2, 8192);
+        let pools = default_pools();
         let mut codec = AppleCodec::open_with_config(&track, false, Some(target_rate))
             .expect("BUG: open Apple AAC-LC codec with target rate");
         let mut total_output_frames = 0_u64;
         let mut total_capacity_frames = 0_u64;
         let mut produced_more_than_source_packet = false;
         for &(offset, size) in &ranges {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             let frames = codec
                 .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: decode resampled Apple AAC-LC frame");
@@ -1149,7 +1151,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_src_eof_flush_total_output_within_one_frame() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &default_pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
         let target_rate = target_rate_for_source(init.sample_rate);
@@ -1162,11 +1164,11 @@ mod aac_lc_decode_tests {
         let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
         assert!(!frames.is_empty(), "segment yielded no AAC frames");
 
-        let pool = SamplePool::new(2, 8192);
+        let pools = default_pools();
         let mut source_codec =
             AppleCodec::open_with_config(&track, false, None).expect("BUG: open source-rate codec");
-        let source_frames = decode_frames(&mut source_codec, &pool, &seg, &frames);
-        let source_drain = drain_eof(&mut source_codec, &pool);
+        let source_frames = decode_frames(&mut source_codec, &pools, &seg, &frames);
+        let source_drain = drain_eof(&mut source_codec, &pools);
         assert_eq!(
             source_drain, 0,
             "equal-rate EOF drain must not change passthrough length"
@@ -1174,8 +1176,8 @@ mod aac_lc_decode_tests {
 
         let mut src_codec = AppleCodec::open_with_config(&track, false, Some(target_rate))
             .expect("BUG: open SRC codec");
-        let before_drain = decode_frames(&mut src_codec, &pool, &seg, &frames);
-        let drained = drain_eof(&mut src_codec, &pool);
+        let before_drain = decode_frames(&mut src_codec, &pools, &seg, &frames);
+        let drained = drain_eof(&mut src_codec, &pools);
         let total_output = before_drain + drained;
         let source_frames_u32 =
             u32::try_from(source_frames).expect("BUG: test source frame count fits in u32");
@@ -1198,7 +1200,7 @@ mod aac_lc_decode_tests {
     #[kithara::test]
     fn apple_aac_lc_passthrough_eof_drain_preserves_length() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+        let init = parse_init(&init_bytes, &default_pools()).expect("BUG: parse AAC init");
         assert_eq!(init.codec, AudioCodec::AacLc, "slq fixture must be AAC-LC");
         let track = track_from_init(&init);
 
@@ -1206,11 +1208,11 @@ mod aac_lc_decode_tests {
         let frames = parse_segment_frames(&init, &seg).expect("BUG: parse segment frames");
         assert!(!frames.is_empty(), "segment yielded no AAC frames");
 
-        let pool = SamplePool::new(2, 8192);
+        let pools = default_pools();
         let mut codec = AppleCodec::open_with_config(&track, false, None)
             .expect("BUG: open Apple AAC-LC codec");
-        let before_drain = decode_frames(&mut codec, &pool, &seg, &frames);
-        let drained = drain_eof(&mut codec, &pool);
+        let before_drain = decode_frames(&mut codec, &pools, &seg, &frames);
+        let drained = drain_eof(&mut codec, &pools);
 
         assert!(before_drain > 0, "passthrough decode produced no frames");
         assert_eq!(drained, 0, "passthrough EOF drain produced extra frames");

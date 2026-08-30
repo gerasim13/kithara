@@ -5,7 +5,10 @@ use kithara::{
     platform::time::Duration,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
+use kithara_integration_tests::{
+    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
+};
 use reqwest::Client;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -61,9 +64,8 @@ fn measure_leading_silence(
     backend: DecoderBackend,
     gapless: bool,
 ) -> (usize, f32, usize) {
-    let mut config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-        .byte_pool(kithara::bufpool::BytePool::default())
-        .sample_pool(kithara::bufpool::SamplePool::default())
+    let mut config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+        .pools(pools())
         .build();
     config.backend = backend;
     config.gapless = gapless;

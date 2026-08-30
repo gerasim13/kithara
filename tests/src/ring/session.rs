@@ -3,7 +3,6 @@ use std::{any::Any, num::NonZeroU32};
 use firewheel::FirewheelCtx;
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::SamplePool,
     events::EventBus,
     host::testing::GraphSession,
     platform::{
@@ -18,6 +17,7 @@ use super::{
     MasterRing, RingBackend, RingBackendConfig, RingBackendProbe, RingLayout, RingReader,
     RingRenderError,
 };
+use crate::bufpool_ext::{TestPools, pools};
 
 type RingSetup = Box<
     dyn FnOnce(&mut FirewheelCtx<RingBackend>) -> Result<(), RingSessionError> + Send + 'static,
@@ -84,7 +84,7 @@ pub enum RingSessionError {
 
 enum RingMsg {
     Cmd {
-        cmd: Cmd,
+        cmd: Cmd<TestPools>,
         reply_tx: mpsc::Sender<Reply>,
     },
     Credit {
@@ -170,7 +170,7 @@ impl ManualRingSession {
 
     /// `no_block`: sync command-reply bridge to the dedicated ring-session worker.
     #[kithara::allow_block]
-    pub fn exec(&self, cmd: Cmd) -> Result<Reply, RingSessionError> {
+    pub fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, RingSessionError> {
         self.ensure_available()?;
         let (reply_tx, reply_rx) = mpsc::channel();
         let Some(cmd_tx) = self.cmd_tx.lock().clone() else {
@@ -307,8 +307,8 @@ impl ManualRingSession {
     }
 }
 
-impl SessionDispatcher for ManualRingSession {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl SessionDispatcher<TestPools> for ManualRingSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         Self::exec(self, cmd).map_err(|error| PlayError::Internal(error.to_string()))
     }
 
@@ -332,7 +332,7 @@ fn ring_session_thread(
     setup: RingSetup,
 ) {
     let mut backend_config = Some(backend_config);
-    let mut state = GraphSession::<RingBackend>::new(move |ctx, _sample_rate| {
+    let mut state = GraphSession::<RingBackend, TestPools>::new(move |ctx, _sample_rate| {
         let config = backend_config
             .take()
             .ok_or_else(|| String::from("ring backend cannot be restarted"))?;
@@ -370,7 +370,7 @@ fn ring_session_thread(
 }
 
 fn bootstrap(
-    state: &mut GraphSession<RingBackend>,
+    state: &mut GraphSession<RingBackend, TestPools>,
     session_rate: NonZeroU32,
     setup: RingSetup,
 ) -> Result<(), RingSessionError> {
@@ -378,7 +378,7 @@ fn bootstrap(
         grid_id: BeatGridId::allocate().map_err(RingSessionError::GridId)?,
         bus: EventBus::default(),
         eq_layout: Vec::new(),
-        sample_pool: SamplePool::default(),
+        pools: pools(),
         sample_rate: session_rate.get(),
     }) {
         Reply::PlayerRegistered(player_id) => player_id,
@@ -398,7 +398,7 @@ fn bootstrap(
     setup(ctx)
 }
 
-fn credit_blocks(state: &mut GraphSession<RingBackend>, blocks: usize) -> CreditReply {
+fn credit_blocks(state: &mut GraphSession<RingBackend, TestPools>, blocks: usize) -> CreditReply {
     let mut latest = match snapshot(state) {
         Ok(snapshot) => snapshot,
         Err(error) => {
@@ -432,7 +432,7 @@ fn credit_blocks(state: &mut GraphSession<RingBackend>, blocks: usize) -> Credit
 }
 
 fn render_transaction(
-    state: &mut GraphSession<RingBackend>,
+    state: &mut GraphSession<RingBackend, TestPools>,
 ) -> Result<RingSnapshot, RingSessionError> {
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     ctx.update()
@@ -446,7 +446,9 @@ fn render_transaction(
     snapshot_from_ctx(ctx)
 }
 
-fn snapshot(state: &mut GraphSession<RingBackend>) -> Result<RingSnapshot, RingSessionError> {
+fn snapshot(
+    state: &mut GraphSession<RingBackend, TestPools>,
+) -> Result<RingSnapshot, RingSessionError> {
     let ctx = state.ctx_mut().ok_or(RingSessionError::NotStarted)?;
     snapshot_from_ctx(ctx)
 }

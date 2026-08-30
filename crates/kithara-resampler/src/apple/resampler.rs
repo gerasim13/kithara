@@ -5,7 +5,7 @@ use kithara_apple::audio_toolbox::{
     AudioStreamBasicDescription, AudioToolboxError, BITS_PER_F32_SAMPLE, BYTES_PER_F32_SAMPLE,
     FLOAT32_PLANAR_FLAGS, NO_ERR, OSStatus, OwnedAudioBufferList, os_status_to_string,
 };
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
@@ -34,10 +34,13 @@ impl AudioToolboxConverterFactory {
 impl AudioConverterFactory for AudioToolboxConverterFactory {
     type Resampler = AppleResampler;
 
-    fn build_resampler(
+    fn build_resampler<S>(
         &self,
-        settings: &ResamplerSettings,
-    ) -> Result<Self::Resampler, ResamplerBuildError> {
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         let ResamplerMode::FixedRatio {
             source_sample_rate,
             target_sample_rate,
@@ -54,7 +57,7 @@ impl AudioConverterFactory for AudioToolboxConverterFactory {
             target_sample_rate.get(),
             settings.channels.get(),
             settings.options.chunk_size,
-            &settings.sample_pool,
+            &settings.pools,
         )?;
         Ok(resampler)
     }
@@ -76,13 +79,16 @@ impl AppleResampler {
     ///
     /// Returns [`ResamplerBuildError`] if the fixed shape is invalid or
     /// `audio_converter_new` rejects the planar PCM ASBD pair.
-    pub(crate) fn new(
+    pub(crate) fn new<S>(
         source_rate: u32,
         target_rate: u32,
         channels: usize,
         chunk_size: usize,
-        sample_pool: &SamplePool,
-    ) -> Result<Self, ResamplerBuildError> {
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         let channels = NonZeroUsize::new(channels)
             .ok_or_else(|| apple_build_config("channel count must be non-zero"))?;
         if chunk_size == 0 {
@@ -105,12 +111,12 @@ impl AppleResampler {
             .map_err(|err| apple_build_status("AudioConverterNew", err_status(&err)))?;
 
         let input_state = Box::new(
-            AppleResamplerInputState::new(channels.get(), chunk_size, sample_pool).map_err(
-                |err| ResamplerBuildError::BackendBuild {
+            AppleResamplerInputState::new(channels.get(), chunk_size, pools).map_err(|err| {
+                ResamplerBuildError::BackendBuild {
                     backend: BACKEND_APPLE,
                     detail: err.to_string(),
-                },
-            )?,
+                }
+            })?,
         );
         let output_list = OwnedAudioBufferList::new(channels.get())
             .map_err(|err| apple_build_config_owned(err.to_string()))?;
@@ -340,7 +346,6 @@ const fn err_status(err: &AudioToolboxError) -> OSStatus {
 mod tests {
     use std::f32::consts::TAU;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
@@ -351,6 +356,7 @@ mod tests {
         apple::AppleAudioConverterBackend,
         create_resampler,
         rubato::{RubatoBackend, RubatoResampler},
+        test_pools::{TestPools, pools},
     };
 
     mod test_consts {
@@ -543,7 +549,7 @@ mod tests {
         target_rate: u32,
         channels: usize,
         frames: usize,
-    ) -> ResamplerSettings {
+    ) -> ResamplerSettings<TestPools> {
         ResamplerSettings::builder()
             .channels(std::num::NonZeroUsize::new(channels).expect("test channels"))
             .mode(ResamplerMode::FixedRatio {
@@ -554,10 +560,7 @@ mod tests {
             })
             .quality(ResamplerQuality::High)
             .options(ResamplerOptions::builder().chunk_size(frames).build())
-            .sample_pool(SamplePool::new(
-                4,
-                frames.saturating_mul(channels).saturating_mul(4),
-            ))
+            .pools(pools())
             .build()
     }
 
