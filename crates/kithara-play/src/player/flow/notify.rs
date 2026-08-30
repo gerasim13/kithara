@@ -236,6 +236,7 @@ impl Notifier<'_> {
 
 impl PlayerRuntime {
     pub fn process_notifications(&self) {
+        self.core.worker.flush_deferred();
         Notifier::new(self).process_notifications();
     }
 

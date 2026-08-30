@@ -120,11 +120,11 @@ impl PlayWorker {
         ))
     }
 
-    pub(super) fn unregister(&self, task_id: TaskId) {
-        self.0.scheduler.unregister(task_id);
-    }
-
     delegate::delegate! {
+        to self.0.scheduler {
+            pub(super) fn unregister(&self, task_id: TaskId);
+            pub(crate) fn flush_deferred(&self);
+        }
         to self.0 {
             /// Shared byte pool used by every registered Player/resource.
             #[field(&byte_pool)]

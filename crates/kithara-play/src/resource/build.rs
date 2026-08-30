@@ -1,4 +1,4 @@
-use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
+use kithara_audio::{AudioConfig, AudioObserver, ConsumerWakeMode, ResamplerBackend};
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
 use kithara_hls::HlsConfig;
@@ -77,7 +77,10 @@ where
             .maybe_observer(observer)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
-            .consumer_wake_mode(self.consumer_wake_mode)
+            .consumer_wake_mode(
+                self.consumer_wake_mode
+                    .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
+            )
             .build()
     }
 
@@ -119,7 +122,10 @@ where
             .maybe_observer(observer)
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
-            .consumer_wake_mode(self.consumer_wake_mode)
+            .consumer_wake_mode(
+                self.consumer_wake_mode
+                    .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
+            )
             .build())
     }
 }

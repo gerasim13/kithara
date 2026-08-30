@@ -90,14 +90,13 @@ pub(super) fn drain_all_events(
                                 deck.observation.label, deck.seek_request_epoch,
                             ));
                             deck.seek_terminal = true;
-                        } else if deck.player.position_seconds().is_none_or(|served| {
-                            (served - deck.capture_target_secs).abs()
-                                > SEEK_POSITION_TOLERANCE_SECS
-                        }) {
+                        } else if (position.as_secs_f64() - deck.capture_target_secs).abs()
+                            > SEEK_POSITION_TOLERANCE_SECS
+                        {
                             failures.push(format!(
-                                "deck {deck_index} ({}) seek epoch {seek_epoch} committed with served position {:?} during {phase}, expected {:.9}s",
+                                "deck {deck_index} ({}) seek epoch {seek_epoch} committed at {:.9}s during {phase}, expected {:.9}s",
                                 deck.observation.label,
-                                deck.player.position_seconds(),
+                                position.as_secs_f64(),
                                 deck.capture_target_secs,
                             ));
                             deck.seek_terminal = true;

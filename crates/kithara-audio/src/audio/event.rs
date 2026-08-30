@@ -28,6 +28,7 @@ impl Consts {
 /// Reader-side event sink, deferred because reads run on the audio callback.
 pub(super) struct AudioEvents {
     emit: Arc<DeferredBus<Event>>,
+    wake_pending: bool,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
 }
@@ -36,6 +37,7 @@ impl AudioEvents {
     pub(super) const fn new(emit: Arc<DeferredBus<Event>>) -> Self {
         Self {
             emit,
+            wake_pending: false,
             last_progress_emit: None,
             underrun_active: false,
         }
@@ -44,9 +46,18 @@ impl AudioEvents {
     delegate::delegate! {
         to self.emit {
             pub(super) fn bus(&self) -> &EventBus;
-            #[call(enqueue)]
-            pub(super) fn publish(&self, #[into] event: AudioEvent);
         }
+    }
+
+    fn publish(&mut self, event: AudioEvent) {
+        self.emit.enqueue(event.into());
+        self.wake_pending = true;
+    }
+
+    pub(super) const fn take_wake_pending(&mut self) -> bool {
+        let pending = self.wake_pending;
+        self.wake_pending = false;
+        pending
     }
 
     pub(super) fn commit_read(
@@ -57,11 +68,16 @@ impl AudioEvents {
     ) -> ReadOutcome {
         let super::cursor::CursorRead {
             outcome,
-            last_output_meta,
+            first_output_meta,
         } = read;
         if matches!(outcome, ReadOutcome::Frames { .. }) {
             let position = session.playhead.position();
-            self.post_seek_output(session.seek_obs.as_ref(), epoch, last_output_meta, position);
+            self.post_seek_output(
+                session.seek_obs.as_ref(),
+                epoch,
+                first_output_meta,
+                position,
+            );
             self.progress(session.playhead.as_ref(), epoch);
         }
         outcome
@@ -102,7 +118,7 @@ impl AudioEvents {
 
     #[kithara::probe(epoch, pending = seek.pending_epoch().unwrap_or(0))]
     pub(super) fn post_seek_output(
-        &self,
+        &mut self,
         seek: &dyn SeekObserve,
         epoch: u64,
         meta: Option<AudioChunkInfo>,
@@ -124,7 +140,7 @@ impl AudioEvents {
         });
         self.publish(AudioEvent::SeekComplete {
             seek_epoch,
-            position,
+            position: meta.map_or(position, |chunk| chunk.timestamp),
         });
         let _ = seek.clear_pending_epoch(seek_epoch);
     }
@@ -420,13 +436,24 @@ mod tests {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
         let emit = AudioEvents::deferred(&bus);
-        let events = AudioEvents::new(Arc::clone(&emit));
+        let mut events = AudioEvents::new(Arc::clone(&emit));
         let seek = SeekState::new();
-        let position = Duration::from_millis(500);
-        let epoch = seek.begin(position);
+        let target = Duration::from_millis(500);
+        let epoch = seek.begin(target);
         seek.mark_pending(epoch);
 
-        events.post_seek_output(&seek, epoch, None, position);
+        events.post_seek_output(
+            &seek,
+            epoch,
+            Some(AudioChunkInfo {
+                timestamp: target,
+                end_timestamp: Duration::from_millis(521),
+                ..Default::default()
+            }),
+            Duration::from_millis(521),
+        );
+        assert!(events.take_wake_pending());
+        assert!(!events.take_wake_pending());
 
         assert!(
             receiver.try_recv().is_err(),
@@ -444,8 +471,10 @@ mod tests {
         ));
         assert!(matches!(
             receiver.try_recv().map(|envelope| envelope.event),
-            Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }))
-                if seek_epoch == epoch
+            Ok(Event::Audio(AudioEvent::SeekComplete {
+                seek_epoch,
+                position,
+            })) if seek_epoch == epoch && position == target
         ));
         assert_eq!(seek.pending_epoch(), None);
     }

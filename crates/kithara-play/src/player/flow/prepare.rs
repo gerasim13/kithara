@@ -33,7 +33,7 @@ impl ConfigPrep<'_> {
             bus,
             cancel,
             worker: Some(self.player.core.worker.clone()),
-            consumer_wake_mode: self.player.core.engine.consumer_wake_mode(),
+            consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
             host_sample_rate,
             decoder,
             stretch,
@@ -112,7 +112,7 @@ mod tests {
         let prepared = player.prepare_config(resource_config("https://example.com/song.mp3"));
         assert_eq!(
             prepared.consumer_wake_mode,
-            ConsumerWakeMode::ImmediateOffRt
+            Some(ConsumerWakeMode::ImmediateOffRt)
         );
         let audio = prepared.build_file_config(player.worker(), None);
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);

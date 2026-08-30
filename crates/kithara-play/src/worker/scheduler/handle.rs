@@ -104,6 +104,7 @@ impl<N: Node> SchedulerHandle<N> {
             /// Publish a coalesced worker pass without unparking from the caller.
             #[call(defer)]
             pub(crate) fn defer_wake(&self);
+            pub(crate) fn flush_deferred(&self);
         }
     }
 }

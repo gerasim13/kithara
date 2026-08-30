@@ -150,8 +150,11 @@ impl PlaybackScheduler {
         }
     }
 
-    fn shutdown(&self) {
-        self.inner.shutdown();
+    delegate::delegate! {
+        to self.inner {
+            pub(crate) fn flush_deferred(&self);
+            fn shutdown(&self);
+        }
     }
 }
 

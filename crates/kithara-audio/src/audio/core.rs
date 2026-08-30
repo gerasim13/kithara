@@ -152,7 +152,14 @@ impl<S> Audio<S> {
             self.session.playhead.position(),
             self.ring.validator.epoch,
         );
+        self.wake_for_events();
         filled
+    }
+
+    fn wake_for_events(&mut self) {
+        if self.events.take_wake_pending() {
+            self.ring.wake_worker(Some(self.runtime.wake.as_ref()));
+        }
     }
 
     #[must_use]
@@ -201,9 +208,11 @@ impl<S> Audio<S> {
             recv,
             buf,
         )?;
-        Ok(self
+        let outcome = self
             .events
-            .commit_read(&self.session, self.ring.validator.epoch, read))
+            .commit_read(&self.session, self.ring.validator.epoch, read);
+        self.wake_for_events();
+        Ok(outcome)
     }
 
     /// Starts a non-blocking seek to `position`.
@@ -285,6 +294,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
                 self.session.playhead.position(),
                 self.ring.validator.epoch,
             );
+            self.wake_for_events();
             chunk
         };
         let Some(chunk) = chunk else {
@@ -317,9 +327,11 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
             recv_ctx(&self.session, &self.runtime),
             output,
         )?;
-        Ok(self
+        let outcome = self
             .events
-            .commit_read(&self.session, self.ring.validator.epoch, read))
+            .commit_read(&self.session, self.ring.validator.epoch, read);
+        self.wake_for_events();
+        Ok(outcome)
     }
 
     fn spec(&self) -> AudioSpec {

@@ -33,6 +33,12 @@ impl SchedulerWake {
         self.deferred.store(true, Ordering::Relaxed);
     }
 
+    pub(super) fn flush_deferred(&self) {
+        if self.take_deferred() {
+            self.wake();
+        }
+    }
+
     fn take_deferred(&self) -> bool {
         self.deferred.swap(false, Ordering::Relaxed)
     }
@@ -53,6 +59,20 @@ mod tests {
         wake.defer();
 
         assert_eq!(wake.gate.current(), gate_epoch);
+        assert!(wake.wait_timeout(Duration::ZERO));
+        assert!(!wake.wait_timeout(Duration::ZERO));
+    }
+
+    #[kithara::test]
+    fn off_rt_flush_signals_a_deferred_wake() {
+        let wake = SchedulerWake::default();
+        let since = wake.gate.current();
+
+        wake.defer();
+        assert_eq!(wake.gate.current(), since);
+        wake.flush_deferred();
+
+        assert_ne!(wake.gate.current(), since);
         assert!(wake.wait_timeout(Duration::ZERO));
         assert!(!wake.wait_timeout(Duration::ZERO));
     }

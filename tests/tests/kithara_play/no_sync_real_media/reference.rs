@@ -134,7 +134,8 @@ async fn read_reference_pcm(
             ReadOutcome::Frames { count, .. } => {
                 drain_reference_seek_events(events, &mut request_epoch, &mut completion)?;
                 if pcm.is_empty() {
-                    validate_reference_seek_barrier(request_epoch, completion)?;
+                    await_reference_seek_barrier(events, &mut request_epoch, &mut completion)
+                        .await?;
                 }
                 let count = count.get();
                 for frame in 0..count {
@@ -153,6 +154,20 @@ async fn read_reference_pcm(
         drain_reference_seek_events(events, &mut request_epoch, &mut completion)?;
     }
     Ok(pcm)
+}
+
+async fn await_reference_seek_barrier(
+    events: &mut EventReceiver,
+    request_epoch: &mut Option<u64>,
+    completion: &mut Option<u64>,
+) -> Result<(), String> {
+    while request_epoch.is_none() || completion.is_none() {
+        drain_reference_seek_events(events, request_epoch, completion)?;
+        if request_epoch.is_none() || completion.is_none() {
+            time::sleep(Duration::from_millis(1)).await;
+        }
+    }
+    validate_reference_seek_barrier(*request_epoch, *completion)
 }
 
 fn validate_reference_seek_barrier(

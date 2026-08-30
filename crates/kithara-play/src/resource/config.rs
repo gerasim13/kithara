@@ -86,9 +86,10 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) worker: Option<PlayWorker>,
     /// Session-owned audio-consumer wake capability. This is populated by
     /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
-    /// does not become a second public source of session policy.
+    /// does not become a second public source of session policy. `None` means
+    /// the resource is consumed directly off RT.
     #[builder(skip)]
-    pub(crate) consumer_wake_mode: ConsumerWakeMode,
+    pub(crate) consumer_wake_mode: Option<ConsumerWakeMode>,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
@@ -210,6 +211,28 @@ mod tests {
                 .build();
         let audio_config = config.build_hls_config(&worker, None).unwrap();
         assert!(audio_config.stream().bus.is_some());
+    }
+
+    #[kithara::test]
+    fn direct_resources_wake_the_worker_off_rt() {
+        let worker = worker();
+        let file: ResourceConfig = ResourceConfig::for_src(valid_src("https://example.com/a.mp3"))
+            .store(store())
+            .build();
+        assert_eq!(
+            file.build_file_config(&worker, None).consumer_wake_mode(),
+            ConsumerWakeMode::ImmediateOffRt
+        );
+
+        let hls: ResourceConfig = ResourceConfig::for_src(valid_src("https://example.com/a.m3u8"))
+            .store(store())
+            .build();
+        assert_eq!(
+            hls.build_hls_config(&worker, None)
+                .expect("valid HLS config")
+                .consumer_wake_mode(),
+            ConsumerWakeMode::ImmediateOffRt
+        );
     }
 
     #[kithara::test]
