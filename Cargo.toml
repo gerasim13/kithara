@@ -30,6 +30,7 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-stream",
     "crates/kithara-stretch",
+    "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
     "crates/kithara-ui",
@@ -65,6 +66,7 @@ default-members = [
     "crates/kithara-signal",
     "crates/kithara-storage",
     "crates/kithara-stream",
+    "crates/kithara-test-fixtures",
     "crates/kithara-test-macros",
     "crates/kithara-test-utils",
     "crates/kithara-ui",
@@ -223,6 +225,7 @@ kithara-signal = { path = "crates/kithara-signal", version = "0.0.1-alpha4" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.0.1-alpha4", default-features = false }
 kithara-stream = { path = "crates/kithara-stream", version = "0.0.1-alpha4", default-features = false }
 kithara-stretch = { path = "crates/kithara-stretch", version = "0.0.1-alpha4", default-features = false }
+kithara-test-fixtures = { path = "crates/kithara-test-fixtures", version = "0.0.1-alpha4" }
 kithara-test-macros = { path = "crates/kithara-test-macros", version = "0.0.1-alpha4" }
 kithara-test-utils = { path = "crates/kithara-test-utils", version = "0.0.1-alpha4", default-features = false }
 kithara-ui = { path = "crates/kithara-ui", version = "0.0.1-alpha4" }
@@ -318,6 +321,10 @@ iced_renderer = "0.14.0"
 iced_runtime = "0.14.0"
 iced_tiny_skia = "0.14.0"
 iced_wgpu = "0.14.0"
+
+# Link-time registry. The kithara-test-fixtures build script enumerates what its
+# `#[kithara::asset]` definitions submit; nothing links it into a product build.
+inventory = "0.3"
 
 # FFI
 jni = "0.22"

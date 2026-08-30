@@ -20,18 +20,17 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    SignalDirection as Direction, TestTempDir, Xorshift64, auto,
+    TestTempDir, Xorshift64, auto,
     bufpool_ext::{TestPools, pools},
-    detect_direction,
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
+};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
 };
 use tracing::{info, warn};
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -69,10 +68,10 @@ fn intra_chunk_breaks(chunk: &AudioChunk) -> usize {
 
     let mut breaks = 0;
     for f in 1..frames {
-        let prev_phase = phase_from_f32(chunk.samples[(f - 1) * channels]);
-        let curr_phase = phase_from_f32(chunk.samples[f * channels]);
-        let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-        let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+        let prev_phase = signal::phase::units(chunk.samples[(f - 1) * channels]);
+        let curr_phase = signal::phase::units(chunk.samples[f * channels]);
+        let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
+        let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
         if curr_phase != expected_asc && curr_phase != expected_desc {
             breaks += 1;
         }
@@ -111,37 +110,31 @@ async fn next_chunk_with_timeout<R: AudioRead>(
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
-    let init_segment = Arc::new(create_wav_header(
+    let init_segment = Arc::new(signal::header(
         Consts::D.sample_rate,
         Consts::D.channels,
         None,
     ));
-    let v0_pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            Consts::D.sample_rate,
+    let v0_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
-    let v1_pcm = Arc::new(
-        SignalPcm::new(
-            signal::SawtoothDescending,
-            Consts::D.sample_rate,
+        ),
+        Wave::Sawtooth,
+    )));
+    let v1_pcm = Arc::new(Vec::from(Pcm::new(
+        Consts::D.sample_rate,
+        Consts::D.channels,
+        frames_in_segments(
+            Consts::SEGMENT_COUNT,
+            Consts::D.segment_size,
             Consts::D.channels,
-            Finite::from_segments(
-                Consts::SEGMENT_COUNT,
-                Consts::D.segment_size,
-                Consts::D.channels,
-            ),
-        )
-        .into_vec(),
-    );
+        ),
+        Wave::SawtoothDescending,
+    )));
 
     info!(
         init_size = init_segment.len(),
@@ -477,10 +470,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 && !chunk.samples.is_empty()
             {
                 let curr_first = chunk.samples[0];
-                let prev_phase = phase_from_f32(prev_last);
-                let curr_phase = phase_from_f32(curr_first);
-                let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-                let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                let prev_phase = signal::phase::units(prev_last);
+                let curr_phase = signal::phase::units(curr_first);
+                let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
+                let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                 if curr_phase != expected_asc && curr_phase != expected_desc {
                     inter_sample_breaks += 1;
                     if inter_sample_breaks <= 10 {

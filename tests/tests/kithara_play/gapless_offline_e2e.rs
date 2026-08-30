@@ -31,10 +31,10 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::signal::goertzel_magnitude;
 
 use crate::{
     bufpool_ext::{TestPools, pools},

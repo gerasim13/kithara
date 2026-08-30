@@ -10,6 +10,7 @@ use axum::{
 };
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use kithara::platform::sync::Arc;
+use kithara_test_fixtures::assets::by_name;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -40,6 +41,14 @@ pub(crate) enum ContentSpec {
     /// [`ContentSpec::Bytes`] for a multi-megabyte fixture without uploading
     /// it, which the request-body limit rejects.
     Asset {
+        name: String,
+    },
+    /// Serve one generated body, named the way `/signal/*` names it.
+    ///
+    /// Same reason as [`ContentSpec::Asset`]: an out-of-process client cannot
+    /// upload a multi-megabyte body. Generated bodies have no path under
+    /// `assets/`, so they need their own spelling.
+    Signal {
         name: String,
     },
 }
@@ -112,6 +121,17 @@ fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
             Ok(Content::StaticBytes {
                 bytes: Arc::new(bytes),
                 content_type: asset_content_type(&name),
+            })
+        }
+        ContentSpec::Signal { name } => {
+            let accessor = name
+                .rsplit_once('.')
+                .map_or(name.as_str(), |(stem, _)| stem);
+            let asset =
+                by_name(accessor).ok_or_else(|| format!("no generated asset is named `{name}`"))?;
+            Ok(Content::StaticBytes {
+                bytes: Arc::new(asset.bytes().to_vec()),
+                content_type: Some(asset.entry().content_type),
             })
         }
     }
@@ -205,9 +225,9 @@ mod tests {
     #[kithara::test]
     fn asset_spec_serves_the_fixture_without_uploading_it() {
         let content = content_from_spec(ContentSpec::Asset {
-            name: "test.mp3".to_owned(),
+            name: "hls/master.m3u8".to_owned(),
         })
-        .expect("the MP3 fixture must resolve");
+        .expect("the HLS fixture must resolve");
         let Content::StaticBytes {
             bytes,
             content_type,
@@ -215,8 +235,44 @@ mod tests {
         else {
             panic!("asset spec must resolve to static bytes");
         };
-        assert_eq!(bytes.len(), 2_994_349, "fixture bytes come from disk");
+        assert!(
+            bytes.starts_with(b"#EXTM3U"),
+            "fixture bytes come from disk"
+        );
+        assert_eq!(content_type, Some("application/vnd.apple.mpegurl"));
+    }
+
+    #[kithara::test]
+    fn signal_spec_serves_a_generated_body() {
+        let content = content_from_spec(ContentSpec::Signal {
+            name: "signal_mp3_track_sine440_187s.mp3".to_owned(),
+        })
+        .expect("the generated MP3 must resolve");
+        let Content::StaticBytes {
+            bytes,
+            content_type,
+        } = content
+        else {
+            panic!("signal spec must resolve to static bytes");
+        };
+        assert_eq!(
+            bytes.as_slice(),
+            kithara_test_fixtures::assets::signal_mp3_track_sine440_187s().bytes(),
+        );
         assert_eq!(content_type, Some("audio/mpeg"));
+    }
+
+    #[kithara::test]
+    fn signal_spec_rejects_an_unregistered_name() {
+        let Err(error) = content_from_spec(ContentSpec::Signal {
+            name: "signal_mp3_not_a_generator.mp3".to_owned(),
+        }) else {
+            panic!("an unregistered name must be rejected");
+        };
+        assert!(
+            error.contains("no generated asset is named"),
+            "unexpected rejection reason: {error}"
+        );
     }
 
     #[kithara::test]

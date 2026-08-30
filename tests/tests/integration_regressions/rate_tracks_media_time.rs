@@ -9,12 +9,11 @@ use kithara::{
     play::{Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
-    TestTempDir,
-    audio_fixture::EmbeddedAudio,
-    create_test_wav, kithara,
+    TestTempDir, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::{assets::signal_mp3_track_sine440_187s, signal};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -76,7 +75,8 @@ async fn blocks_until_end(temp_dir: &TestTempDir, rate: f32) -> usize {
     let tag = format!("rate-{rate}");
     let path = temp_dir.path().join(format!("{tag}.wav"));
     let frames = DRAIN_FIXTURE_SECS * SAMPLE_RATE as usize;
-    std::fs::write(&path, create_test_wav(frames, SAMPLE_RATE, 2)).expect("write wav fixture");
+    std::fs::write(&path, signal::wav(SAMPLE_RATE, 2, frames, signal::TONE))
+        .expect("write wav fixture");
     let resource = file_resource(
         &harness,
         &path,
@@ -116,7 +116,7 @@ async fn media_time_advances_with_the_playing_rate(temp_dir: TestTempDir) {
         SAMPLE_RATE,
     );
     let path = temp_dir.path().join("rate.mp3");
-    std::fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("write mp3 fixture");
+    std::fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("write mp3 fixture");
     let resource = file_resource(&harness, &path, &temp_dir.path().join("store")).await;
     harness.with_player(|player| {
         player.insert(resource, TrackId::allocate(), None);

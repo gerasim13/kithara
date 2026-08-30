@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 
 #[kithara::fixture]
 async fn server() -> TestServerHelper {
@@ -27,7 +28,7 @@ async fn open_test_mp3(
     backend: DecoderBackend,
     events: Option<EventBus>,
 ) -> RegisteredAudio<Stream<File<TestPools>>, TestPools> {
-    let url = server.asset("test.mp3");
+    let url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
     let pools = pools();
     let file_config = FileConfig::for_src(url.into())
         .store(

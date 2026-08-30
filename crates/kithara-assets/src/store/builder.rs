@@ -854,7 +854,7 @@ mod tests {
         let target = ResourceKey::relative(seg_root, "v0_15.m4s");
         let path = dir.path().join(seg_root).join("v0_15.m4s");
         let open_store = || {
-            AssetStore::builder()
+            AssetStore::builder(crate::test_pools::pools())
                 .backend(StorageBackend::Disk {
                     root: dir.path().into(),
                 })

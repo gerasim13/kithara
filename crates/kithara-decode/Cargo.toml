@@ -97,6 +97,7 @@ ndk-context = { workspace = true }
 
 [dev-dependencies]
 kithara-storage = { workspace = true }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

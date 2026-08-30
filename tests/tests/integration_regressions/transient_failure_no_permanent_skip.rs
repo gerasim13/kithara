@@ -17,13 +17,13 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
-    audio_fixture::EmbeddedAudio,
     bufpool_ext::{TestPools, pools},
     kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 /// Bounded look-ahead over the 222 s packaged fixture: the downloader must
 /// still need further segments when the blip lands, otherwise the track is
@@ -64,7 +64,7 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     let target_url = helper.asset("hls/master.m3u8");
     let fallback_fixture = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,

@@ -15,18 +15,15 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir,
+    TestServerHelper, TestTempDir,
     bufpool_ext::{Pools, TestPools, pools},
     kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_fixtures::SignalAsset;
 
-const SAMPLE_RATE: u32 = 44_100;
-const CHANNELS: u16 = 2;
-const FREQ_HZ: f64 = 880.0;
-const STREAM_FRAMES: usize = 44_100 * 30;
 const SAVE_AFTER_SECS: f64 = 4.0;
 
 fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
@@ -83,14 +80,7 @@ fn append_track(
 #[kithara::test(tokio, timeout(Duration::from_secs(90)))]
 async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Frames(STREAM_FRAMES),
-        format: SignalFormat::Mp3,
-        bit_rate: None,
-    };
-    let url = helper.sine(&spec, FREQ_HZ).await;
+    let url = helper.signal(SignalAsset::MP3_SINE880_30S);
 
     let first_pools = pools();
     let first_store = AssetStore::builder(first_pools.clone())

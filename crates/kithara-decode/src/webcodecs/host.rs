@@ -545,6 +545,7 @@ fn send_error(out_tx: &mpsc::Sender<HostOut>, err: &DecodeError, generation: u64
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::{Duration, Instant};
+    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -582,11 +583,7 @@ mod tests {
         let pools = default_pools();
         crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
-        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/test.mp3"
-        ));
-        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -645,11 +642,7 @@ mod tests {
         let pools = default_pools();
         crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
-        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/test.mp3"
-        ));
-        let cursor = std::io::Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");

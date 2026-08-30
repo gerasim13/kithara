@@ -20,6 +20,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 struct Consts;
@@ -243,7 +244,7 @@ fn phase5_revisit_seeks(audio: &mut TestAudio, seek_positions: &[f64], random_op
 #[case::ephemeral(true)]
 async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("track.mp3");
+    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
     let pools = pools();
     let store = if ephemeral {
         AssetStore::builder(pools.clone())

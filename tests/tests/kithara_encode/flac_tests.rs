@@ -3,7 +3,8 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest, normalize_flac_codec_config};
-use kithara_integration_tests::{bufpool_ext::pools, encode_test_pcm::SawtoothPcmFixture};
+use kithara_integration_tests::bufpool_ext::pools;
+use kithara_test_fixtures::signal::{Pcm, Wave};
 
 const CHANNELS: u16 = 2;
 const SAMPLE_RATE: u32 = 48_000;
@@ -26,7 +27,7 @@ fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::Flac)
         .expect("BUG: Flac must be supported by the packaged encoder");
     let total_frames = 4 * frame_samples;
-    let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, total_frames, Wave::Sawtooth);
     let media_info = MediaInfo::builder()
         .codec(AudioCodec::Flac)
         .container(ContainerFormat::Fmp4)

@@ -10,6 +10,7 @@ use kithara::{
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 struct Consts;
 impl Consts {
@@ -27,7 +28,7 @@ impl Consts {
 }
 
 fn track_mp3() -> &'static [u8] {
-    include_bytes!("../../../assets/test.mp3")
+    signal_mp3_track_sine440_187s().bytes()
 }
 
 fn partial_slice(full: &'static [u8]) -> &'static [u8] {

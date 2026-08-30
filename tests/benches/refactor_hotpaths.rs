@@ -42,17 +42,22 @@ use kithara_integration_tests::{
     TestHttpServer, auto,
     bufpool_ext::{TestPools, pools},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use tempfile::TempDir;
 use url::Url;
 
 struct Consts;
 impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
     const HLS_SEGMENT_COUNT: usize = 6;
     const HLS_SEGMENT_SIZE: usize = 96_000;
     const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;
     const HLS_READ_TARGET_BYTES: usize = 196_608;
     const HLS_SEEK_POSITIONS: [u64; 5] = [0, 32_000, 128_000, 256_000, 384_000];
+}
+
+/// The generated full-length MPEG clip the benchmark server and decoders read.
+fn test_mp3_bytes() -> &'static [u8] {
+    signal_mp3_track_sine440_187s().bytes()
 }
 
 fn make_runtime() -> Runtime {
@@ -138,10 +143,7 @@ fn serve_mp3_with_range(req: Request) -> Response {
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "audio/mpeg")
-            .header(
-                header::CONTENT_LENGTH,
-                Consts::TEST_MP3_BYTES.len().to_string(),
-            )
+            .header(header::CONTENT_LENGTH, test_mp3_bytes().len().to_string())
             .body(Body::empty())
             .unwrap_or_else(|e| panic!("failed to build head response: {e}"));
     }
@@ -166,18 +168,18 @@ fn serve_mp3_with_range(req: Request) -> Response {
                     s.parse::<usize>().ok()
                 }
             })
-            .unwrap_or(Consts::TEST_MP3_BYTES.len().saturating_sub(1))
-            .min(Consts::TEST_MP3_BYTES.len().saturating_sub(1));
+            .unwrap_or(test_mp3_bytes().len().saturating_sub(1))
+            .min(test_mp3_bytes().len().saturating_sub(1));
 
-        if start <= end && start < Consts::TEST_MP3_BYTES.len() {
-            let chunk = &Consts::TEST_MP3_BYTES[start..=end];
+        if start <= end && start < test_mp3_bytes().len() {
+            let chunk = &test_mp3_bytes()[start..=end];
             return Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(header::CONTENT_TYPE, "audio/mpeg")
                 .header(header::CONTENT_LENGTH, chunk.len().to_string())
                 .header(
                     header::CONTENT_RANGE,
-                    format!("bytes {start}-{end}/{}", Consts::TEST_MP3_BYTES.len()),
+                    format!("bytes {start}-{end}/{}", test_mp3_bytes().len()),
                 )
                 .body(Body::from(Bytes::from_static(chunk)))
                 .unwrap_or_else(|e| panic!("failed to build partial response: {e}"));
@@ -187,11 +189,8 @@ fn serve_mp3_with_range(req: Request) -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(
-            header::CONTENT_LENGTH,
-            Consts::TEST_MP3_BYTES.len().to_string(),
-        )
-        .body(Body::from(Bytes::from_static(Consts::TEST_MP3_BYTES)))
+        .header(header::CONTENT_LENGTH, test_mp3_bytes().len().to_string())
+        .body(Body::from(Bytes::from_static(test_mp3_bytes())))
         .unwrap_or_else(|e| panic!("failed to build full response: {e}"))
 }
 
@@ -314,7 +313,7 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             || {
                 let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
                 let file_path = temp_dir.path().join("bench.mp3");
-                fs::write(&file_path, Consts::TEST_MP3_BYTES)
+                fs::write(&file_path, test_mp3_bytes())
                     .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
                 (temp_dir, file_path)
             },

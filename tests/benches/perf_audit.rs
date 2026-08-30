@@ -29,13 +29,13 @@ use kithara::{
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools};
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
 struct Consts;
 
 impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
     const CHANNELS: usize = 2;
     const SAMPLE_RATE: u32 = 44_100;
     const ANALYSIS_BUCKETS: usize = 2_000;
@@ -52,6 +52,11 @@ struct PrimeFixture {
     source: Vec<f32>,
     source_history: Vec<f32>,
     source_lookahead: Vec<f32>,
+}
+
+/// The generated full-length MPEG clip the decode benchmarks read.
+fn test_mp3_bytes() -> &'static [u8] {
+    signal_mp3_track_sine440_187s().bytes()
 }
 
 fn make_runtime() -> Runtime {
@@ -160,7 +165,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
     let rt = make_runtime();
     let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
     let file_path = temp_dir.path().join("audit-gapless.mp3");
-    fs::write(&file_path, Consts::TEST_MP3_BYTES)
+    fs::write(&file_path, test_mp3_bytes())
         .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
 
     let mut group = c.benchmark_group("audit_gapless_trim");

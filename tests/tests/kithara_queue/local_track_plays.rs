@@ -25,6 +25,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_loader_done_event, wait_for_position_event, wait_for_position_near_event},
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 use crate::bufpool_ext::{TestPools, pools};
@@ -47,7 +48,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 async fn build_fixture_url(kind: LocalSource, helper: &TestServerHelper) -> Url {
     match kind {
-        LocalSource::Mp3 => helper.asset("track.mp3"),
+        LocalSource::Mp3 => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
         LocalSource::HlsAac => {
             let builder = HlsFixtureBuilder::new()
                 .variant_count(1)

@@ -15,7 +15,8 @@ import org.junit.runner.RunWith
 /**
  * Diagnostic test for Android-only audio distortion.
  *
- * Copies `test.mp3` out of the instrumentation APK assets into the app's
+ * Copies the generated MPEG fixture out of the instrumentation APK assets
+ * (packaged there by the `exportTestFixtures` Gradle task) into the app's
  * private `filesDir`, then asks the native library to render a fixed
  * number of seconds through the offline firewheel backend and write an
  * IEEE-float WAV to the app's external files directory (so it can be

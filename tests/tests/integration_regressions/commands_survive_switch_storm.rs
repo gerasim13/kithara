@@ -18,13 +18,13 @@ use kithara::{
 };
 use kithara_integration_tests::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio,
     bufpool_ext::{TestPools, pools},
     kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 const TRACK_COUNT: usize = 3;
 const STORM_ROUNDS: usize = 12;
@@ -103,7 +103,7 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
         .map(|_| {
             helper.register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
-                    bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+                    bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
                     content_type: Some("audio/mpeg"),
                 },
                 // Throttled so the storm lands while transfers are still in

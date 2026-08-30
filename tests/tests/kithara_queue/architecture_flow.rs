@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::wait_for_loader_done_event,
 };
+use kithara_test_fixtures::SignalAsset;
 use kithara_test_utils::probe::capture as probe_capture;
 use serial_test::serial;
 
@@ -35,7 +36,7 @@ async fn queue_playback_architecture() {
     let trace_path = env::var_os("ARCHITECTURE_TRACE_PATH").expect("architecture trace path");
     let probes = probe_capture::install();
     let helper = TestServerHelper::new().await;
-    let url = helper.asset("track.mp3");
+    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
     let temp = temp_dir();
     let store = disk_asset_store(temp.path());
     let harness = OfflinePlayerHarness::with_sample_rate(

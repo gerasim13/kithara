@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, fixture_protocol::EncryptionRequest, kithara,
     offline::OfflineSession, temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 use super::{
@@ -80,8 +81,8 @@ async fn build_spec(
     backend: DecoderBackend,
 ) -> TrackSpec {
     let url = match kind {
-        TrackKind::Mp3File => helper.asset("track.mp3"),
-        TrackKind::Mp3StreamHq => helper.streamhq("track.mp3"),
+        TrackKind::Mp3File => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
+        TrackKind::Mp3StreamHq => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
         TrackKind::HlsAacLcAbr4 => build_hls_aac_abr(helper, false).await,
         TrackKind::HlsMixedCodecAbr4 => build_hls_mixed_codec_abr(helper).await,
         TrackKind::HlsAacLcDrmAbr4 => build_hls_aac_abr(helper, true).await,

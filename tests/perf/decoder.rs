@@ -9,17 +9,15 @@ use kithara::{
     resampler::NoResamplerBackend,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{
-    bufpool_ext::{TestPools, pools},
-    create_test_wav,
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_fixtures::signal;
 
 fn decoder_config() -> DecoderConfig<NoResamplerBackend, TestPools> {
     DecoderConfig::builder().pools(pools()).build()
 }
 
 fn create_wav_decoder(frames: usize) -> Box<dyn Decoder> {
-    let wav_data = create_test_wav(frames, 44100, 2);
+    let wav_data = signal::wav(44100, 2, frames, signal::TONE);
     let cursor = Cursor::new(wav_data);
     DecoderFactory::create_with_probe(cursor, Some("wav"), decoder_config()).unwrap()
 }
@@ -78,7 +76,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
             println!("{:=<60}\n", "");
         }
         PerfScenario::ProbeLatency => {
-            let wav_data = create_test_wav(44100, 44100, 2);
+            let wav_data = signal::wav(44100, 2, 44100, signal::TONE);
             for _ in 0..10 {
                 decoder_probe_single(&wav_data);
             }

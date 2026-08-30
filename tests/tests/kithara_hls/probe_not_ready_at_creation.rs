@@ -65,10 +65,11 @@ use kithara_integration_tests::{
     auto,
     bufpool_ext::{Pools, TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
+
+use crate::common::test_defaults::frames_in_segments;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -76,16 +77,13 @@ const SEGMENT_SIZE: usize = 32_768;
 const SEGMENT_COUNT: usize = 8;
 
 fn fixture_config() -> HlsTestServerConfig {
-    let init_segment = Arc::new(create_wav_header(SAMPLE_RATE, CHANNELS, None));
-    let pcm = Arc::new(
-        SignalPcm::new(
-            signal::Sawtooth,
-            SAMPLE_RATE,
-            CHANNELS,
-            Finite::from_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
-        )
-        .into_vec(),
-    );
+    let init_segment = Arc::new(signal::header(SAMPLE_RATE, CHANNELS, None));
+    let pcm = Arc::new(Vec::from(Pcm::new(
+        SAMPLE_RATE,
+        CHANNELS,
+        frames_in_segments(SEGMENT_COUNT, SEGMENT_SIZE, CHANNELS),
+        Wave::Sawtooth,
+    )));
     let segment_duration = SEGMENT_SIZE as f64
         / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * size_of::<i16>() as f64);
     HlsTestServerConfig {

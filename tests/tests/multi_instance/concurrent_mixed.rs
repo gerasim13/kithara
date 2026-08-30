@@ -18,6 +18,7 @@ use kithara_integration_tests::{
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 use crate::common::test_defaults::SawWav;
@@ -140,7 +141,12 @@ async fn run_mixed(file_count: usize, hls_count: usize) {
 
     for i in 0..file_count {
         let temp = TestTempDir::new();
-        let h = spawn_file_instance(i, file_server.asset("test.mp3"), temp.path()).await;
+        let h = spawn_file_instance(
+            i,
+            file_server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
+            temp.path(),
+        )
+        .await;
         temps.push(temp);
         handles.push(h);
     }
