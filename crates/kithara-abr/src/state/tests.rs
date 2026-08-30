@@ -1,5 +1,6 @@
 use std::{
-    future::poll_fn,
+    future::{Future, poll_fn},
+    pin::pin,
     sync::atomic::{AtomicUsize, Ordering},
     task::Poll,
 };
@@ -11,7 +12,7 @@ use kithara_events::{
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Notify},
-    time::{self, Duration, Duration as StdDuration, Instant},
+    time::{Duration, Duration as StdDuration, Instant},
 };
 use kithara_test_utils::kithara;
 use proptest::prelude::*;
@@ -850,15 +851,28 @@ impl Abr for TickPeer {
 }
 
 async fn poll_controller(controller: &Arc<AbrController>, deadline_elapsed: bool) -> bool {
-    poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, Instant::now(), deadline_elapsed))).await
+    poll_controller_at(controller, Instant::now(), deadline_elapsed).await
 }
 
-async fn wait_for_controller_deadline(controller: &Arc<AbrController>) -> bool {
-    let deadline = controller
-        .next_tick_deadline()
-        .expect("interval-gated tick deadline");
-    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
-    poll_controller(controller, true).await
+/// Drive one poll pass at an instant the caller names. A test that states what
+/// a wall-clock interval holds owns the clock the controller reads, so the
+/// assertion is the property and not a race against the test's own setup.
+async fn poll_controller_at(
+    controller: &Arc<AbrController>,
+    now: Instant,
+    deadline_elapsed: bool,
+) -> bool {
+    poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, now, deadline_elapsed))).await
+}
+
+/// Whether a wake reached this peer. `notify_one` stores a permit when no
+/// waiter is parked, so the first poll is ready exactly when a wake was issued
+/// - which states the property without spending a timeout on its absence.
+async fn was_woken(wake: &Notify) -> bool {
+    let mut notified = pin!(wake.notified());
+    poll_fn(|cx| Poll::Ready(Future::poll(notified.as_mut(), cx)))
+        .await
+        .is_ready()
 }
 
 #[kithara::test(tokio)]
@@ -1014,31 +1028,27 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     drop(handle);
 }
 
-// The window these six tests state is measured from the state's own
-// construction: `switch_interval_remaining` subtracts `now -
-// reference_instant` from `min_switch_interval`, and `reference_instant` is
-// stamped by `AbrState::new`. So the opening assertion - that the interval
-// still holds the first switch - stands only while everything from that
-// constructor to the first tick costs less than the window. Natively that is
-// microseconds, and all six pass flashless in 0.26s. Under Miri the
-// interpreter spends more than the window on the setup alone, the interval has
-// already expired when the first tick runs, and the assertion inverts.
-// `flash` is not the lever here: the lane is flashless by design, because
-// under `flash` the platform's `Mutex`, `RwLock` and `Condvar` are flash's own
-// and the lane is there to interpret the production primitives' ordering, not
-// the harness's.
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(
-    miri,
-    ignore = "the opening assertion needs the interval still open, and the interpreter outruns it during setup"
-)]
+// The six below state the anti-oscillation interval, and none of them sleeps.
+// `switch_interval_remaining` measures from the session's start, so each names
+// that instant through `new_at` and drives the controller at instants derived
+// from it: the interval either holds or has expired by arithmetic, never by
+// how long the test's own setup took. That is what lets them run under an
+// interpreter hundreds of times slower than the machine, and it is stricter
+// besides - the retry deadline is asserted exactly rather than slept through.
+#[kithara::test(tokio)]
 async fn min_interval_ticks_without_another_bandwidth_sample() {
+    const INTERVAL: Duration = Duration::from_millis(20);
+
     let settings = AbrSettings::builder()
-        .min_switch_interval(Duration::from_millis(20))
+        .min_switch_interval(INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let controller = AbrController::new(settings);
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let session = Instant::now();
+    let state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
         cancel: CancelToken::never(),
@@ -1048,30 +1058,44 @@ async fn min_interval_ticks_without_another_bandwidth_sample() {
     let handle = controller.register(&peer);
 
     handle.reevaluate();
-    assert!(poll_controller(&controller, false).await);
+    assert!(poll_controller_at(&controller, session, false).await);
     assert_eq!(
         state.pending_target(),
         None,
         "the anti-oscillation interval must hold the first switch"
     );
+    assert!(
+        !was_woken(&wake).await,
+        "a held switch must not wake its peer"
+    );
+    assert_eq!(
+        controller.next_tick_deadline(),
+        Some(session + INTERVAL),
+        "the held switch must schedule its own retry at the interval"
+    );
 
-    assert!(wait_for_controller_deadline(&controller).await);
-    wake.notified().await;
+    assert!(poll_controller_at(&controller, session + INTERVAL, true).await);
+    assert!(
+        was_woken(&wake).await,
+        "the interval-gated tick must wake its peer"
+    );
     assert_eq!(state.pending_target(), Some(VariantIndex::new(3)));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(
-    miri,
-    ignore = "the opening assertion needs the interval still open, and the interpreter outruns it during setup"
-)]
+#[kithara::test(tokio)]
 async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
     let settings = AbrSettings::builder()
-        .min_switch_interval(Duration::from_millis(100))
+        .min_switch_interval(INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let controller = AbrController::new(settings);
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let session = Instant::now();
+    let state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
     let wake = Arc::new(Notify::default());
     let peer_cancel = CancelToken::never();
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
@@ -1082,37 +1106,39 @@ async fn peer_cancel_stops_the_scheduled_min_interval_tick() {
     let handle = controller.register(&peer);
 
     handle.reevaluate();
-    assert!(poll_controller(&controller, false).await);
-    let deadline = controller.next_tick_deadline().expect("peer tick deadline");
+    assert!(poll_controller_at(&controller, session, false).await);
+    assert_eq!(
+        controller.next_tick_deadline(),
+        Some(session + INTERVAL),
+        "the held switch must schedule its own retry at the interval"
+    );
     peer_cancel.cancel();
     assert!(controller.peer_entry(handle.peer_id()).is_none());
 
-    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
-    assert!(!poll_controller(&controller, true).await);
-
+    assert!(!poll_controller_at(&controller, session + INTERVAL, true).await);
     assert!(
-        time::timeout(Duration::from_millis(150), wake.notified())
-            .await
-            .is_err(),
-        "cancelling the peer scope must suppress its delayed wake",
+        !was_woken(&wake).await,
+        "cancelling the peer scope must suppress its delayed wake"
     );
     assert_eq!(state.pending_target(), None);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(
-    miri,
-    ignore = "the opening assertion needs the interval still open, and the interpreter outruns it during setup"
-)]
+#[kithara::test(tokio)]
 async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
     let controller_cancel = CancelToken::never();
     let settings = AbrSettings::builder()
         .cancel(controller_cancel.clone())
-        .min_switch_interval(Duration::from_millis(100))
+        .min_switch_interval(INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let controller = AbrController::new(settings);
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let session = Instant::now();
+    let state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
         cancel: CancelToken::never(),
@@ -1122,38 +1148,41 @@ async fn controller_cancel_stops_the_scheduled_min_interval_tick() {
     let handle = controller.register(&peer);
 
     handle.reevaluate();
-    assert!(poll_controller(&controller, false).await);
-    let deadline = controller
-        .next_tick_deadline()
-        .expect("controller tick deadline");
+    assert!(poll_controller_at(&controller, session, false).await);
+    assert_eq!(
+        controller.next_tick_deadline(),
+        Some(session + INTERVAL),
+        "the held switch must schedule its own retry at the interval"
+    );
     controller_cancel.cancel();
     assert!(controller.peer_entry(handle.peer_id()).is_none());
 
-    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
-    assert!(!poll_controller(&controller, true).await);
-
+    assert!(!poll_controller_at(&controller, session + INTERVAL, true).await);
     assert!(
-        time::timeout(Duration::from_millis(150), wake.notified())
-            .await
-            .is_err(),
-        "cancelling the controller parent must suppress delayed peer wakes",
+        !was_woken(&wake).await,
+        "cancelling the controller parent must suppress delayed peer wakes"
     );
     assert_eq!(state.pending_target(), None);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(
-    miri,
-    ignore = "the opening assertion needs the interval still open, and the interpreter outruns it during setup"
-)]
+#[kithara::test(tokio)]
 async fn peer_cancel_does_not_stop_a_sibling_tick() {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
     let settings = AbrSettings::builder()
-        .min_switch_interval(Duration::from_millis(100))
+        .min_switch_interval(INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let controller = AbrController::new(settings);
-    let first_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-    let second_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let session = Instant::now();
+    let first_state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
+    let second_state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
     let first_wake = Arc::new(Notify::default());
     let second_wake = Arc::new(Notify::default());
     let first_cancel = CancelToken::never();
@@ -1172,35 +1201,43 @@ async fn peer_cancel_does_not_stop_a_sibling_tick() {
 
     first_handle.reevaluate();
     second_handle.reevaluate();
-    assert!(poll_controller(&controller, false).await);
+    assert!(poll_controller_at(&controller, session, false).await);
+    assert_eq!(
+        controller.next_tick_deadline(),
+        Some(session + INTERVAL),
+        "both held switches must schedule their retry at the interval"
+    );
     first_cancel.cancel();
     assert!(controller.peer_entry(first_handle.peer_id()).is_none());
     assert!(controller.peer_entry(second_handle.peer_id()).is_some());
 
-    assert!(wait_for_controller_deadline(&controller).await);
-    second_wake.notified().await;
+    assert!(poll_controller_at(&controller, session + INTERVAL, true).await);
     assert!(
-        time::timeout(Duration::from_millis(50), first_wake.notified())
-            .await
-            .is_err(),
-        "cancelling one peer must not wake it or cancel a sibling tick",
+        was_woken(&second_wake).await,
+        "the surviving peer's interval-gated tick must still wake it"
+    );
+    assert!(
+        !was_woken(&first_wake).await,
+        "cancelling one peer must not wake it or cancel a sibling tick"
     );
     assert_eq!(first_state.pending_target(), None);
     assert_eq!(second_state.pending_target(), Some(VariantIndex::new(3)));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(
-    miri,
-    ignore = "the opening assertion needs the interval still open, and the interpreter outruns it during setup"
-)]
+#[kithara::test(tokio)]
 async fn dropping_handle_stops_only_its_scheduled_tick() {
+    const INTERVAL: Duration = Duration::from_millis(100);
+
     let settings = AbrSettings::builder()
-        .min_switch_interval(Duration::from_millis(100))
+        .min_switch_interval(INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let controller = AbrController::new(settings);
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let session = Instant::now();
+    let state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
     let wake = Arc::new(Notify::default());
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
         cancel: CancelToken::never(),
@@ -1210,36 +1247,36 @@ async fn dropping_handle_stops_only_its_scheduled_tick() {
     let handle = controller.register(&peer);
 
     handle.reevaluate();
-    assert!(poll_controller(&controller, false).await);
-    let deadline = controller
-        .next_tick_deadline()
-        .expect("handle tick deadline");
+    assert!(poll_controller_at(&controller, session, false).await);
+    assert_eq!(
+        controller.next_tick_deadline(),
+        Some(session + INTERVAL),
+        "the held switch must schedule its own retry at the interval"
+    );
     drop(handle);
 
-    time::sleep(deadline.saturating_duration_since(Instant::now())).await;
-    assert!(!poll_controller(&controller, true).await);
-
+    assert!(!poll_controller_at(&controller, session + INTERVAL, true).await);
     assert!(
-        time::timeout(Duration::from_millis(150), wake.notified())
-            .await
-            .is_err(),
-        "dropping the ABR handle must suppress its scheduled tick",
+        !was_woken(&wake).await,
+        "dropping the ABR handle must suppress its scheduled tick"
     );
     assert_eq!(state.pending_target(), None);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(1)))]
-#[cfg_attr(
-    miri,
-    ignore = "the opening assertion needs the interval still open, and the interpreter outruns it during setup"
-)]
+#[kithara::test(tokio)]
 async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
+    const INTERVAL: Duration = Duration::from_millis(20);
+
     let settings = AbrSettings::builder()
-        .min_switch_interval(Duration::from_millis(20))
+        .min_switch_interval(INTERVAL)
         .min_buffer_for_up_switch(Duration::ZERO)
         .build();
     let controller = AbrController::new(settings);
-    let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
+    let session = Instant::now();
+    let state = Arc::new(AbrState::new_at(
+        AbrMode::Auto(Some(VariantIndex::new(0))),
+        session,
+    ));
     let peer: Arc<dyn Abr> = Arc::new(TickPeer {
         cancel: CancelToken::never(),
         state,
@@ -1248,15 +1285,14 @@ async fn dropped_peer_does_not_leave_a_due_tick_deadline_spinning() {
     let handle = controller.register(&peer);
 
     handle.reevaluate();
-    assert!(poll_controller(&controller, false).await);
-    let deadline = controller.next_tick_deadline().expect("peer tick deadline");
+    assert!(poll_controller_at(&controller, session, false).await);
+    let deadline = session + INTERVAL;
+    assert_eq!(controller.next_tick_deadline(), Some(deadline));
     drop(peer);
 
-    let ticked = poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, deadline, true))).await;
-    assert!(ticked);
+    assert!(poll_controller_at(&controller, deadline, true).await);
     assert_eq!(controller.next_tick_deadline(), None);
-    let ticked_again = poll_fn(|cx| Poll::Ready(controller.poll_ticks(cx, deadline, true))).await;
-    assert!(!ticked_again);
+    assert!(!poll_controller_at(&controller, deadline, true).await);
 }
 
 /// Prod trace (`runtime_manual_switch_works_when_all_segments_cached`): an
