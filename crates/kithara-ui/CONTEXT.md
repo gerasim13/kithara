@@ -676,13 +676,18 @@ inherent to the iced path being pinned until those text sites are ported.
 
 The layout fixtures above pin geometry, which is what the two hosts agree about by construction. What
 they can still disagree about is the picture, and that is measured rather than reasoned about. The
-gallery example photographs every page three ways: through an iced window (`KITHARA_GALLERY_CAPTURE`),
-through iced with no window at all (`KITHARA_GALLERY_CAPTURE_OFFSCREEN`), and through the retained
-host into a Vello scene (`KITHARA_GALLERY_CAPTURE_MASONRY`). All three rasterise on a graphics device.
-Each set writes the geometry it was taken at beside its pages, and `KITHARA_GALLERY_COMPARE=<a>:<b>:<out>`
+gallery example photographs every page three ways: through an iced window (`--shoot <dir> --windowed`),
+through iced with no window at all (`--shoot <dir>`), and through the retained host into a Vello scene
+(`--host retained --shoot <dir>`). All three rasterise on a graphics device.
+Each set writes the geometry it was taken at beside its pages, and `--compare <a> <b> <out>`
 refuses to compare two sets taken at different geometry, because two hosts scaled differently can be
 made to agree or disagree at will. A set inherits the geometry of a set already in its directory, so a
 window set taken at the screen's scale can be answered on its own terms.
+
+Every one of those capabilities is a flag rather than an environment variable, and every number one of
+them used to hard-code is a flag too: `--size`, `--scale`, `--tick`, `--page`, `--photos`, `--steps`.
+The constants they default to are the gallery's own, so `--help` is the list of what the gallery can be
+asked to do and a run states on its own command line what it did.
 
 The harness itself is this crate's, behind the `capture` feature: `capture::Photographer` takes the
 iced set, `capture::Offscreen` takes the masonry set, `capture::Stage` is what a host answers to and

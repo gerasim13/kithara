@@ -4,51 +4,12 @@
 //! toolkit. Which host shows it is decided by the feature the crate was built
 //! with.
 
-use std::env;
-
 use kithara_ui::{
-    app::{App, Config},
-    builtin,
+    app::App,
     render::{Reads, Skin, UiEvent},
 };
 
-use crate::{
-    capture::Shot,
-    custom,
-    fixture::{Consts, resolver},
-    mock,
-    sections::Tab,
-};
-
-/// Runs the gallery in a window when asked. Returns `false` when the
-/// environment variable is absent, so the caller falls through.
-pub(super) fn run() -> bool {
-    if env::var_os("KITHARA_GALLERY_MASONRY").is_none() {
-        return false;
-    }
-    let endpoints = mock::registry();
-    let resolver = resolver();
-    let size = (
-        num_traits::cast::AsPrimitive::<u32>::as_(Consts::WIDTH),
-        num_traits::cast::AsPrimitive::<u32>::as_(Consts::HEIGHT),
-    );
-    // The document carries its own title bar and window buttons, so the system
-    // frame stays off, exactly as it does under the other host.
-    let kinds = custom::kinds();
-    let config = Config::builder()
-        .endpoints(&endpoints)
-        .resolver(&resolver)
-        .text(builtin::text_doc())
-        .kinds(&kinds)
-        .decorations(false)
-        .min_size(size)
-        .title("Kithara UI Gallery")
-        .build();
-    if let Err(error) = kithara_ui::app::run(Gallery::default(), config, size) {
-        eprintln!("gallery did not run: {error}");
-    }
-    true
-}
+use crate::{capture::Shot, mock, sections::Tab};
 
 #[derive(Default)]
 pub(super) struct Gallery {
@@ -111,13 +72,15 @@ mod tests {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use kithara_ui::{
-        app::Ui,
+        app::{Config, Ui},
+        builtin,
         draw::Pt,
         interact::{Input, MOUSE, PointerInput, PointerPhase},
         render::ControlAction,
     };
 
-    use super::{App, Config, Gallery, Tab, UiEvent, builtin, custom, mock, resolver};
+    use super::{App, Gallery, Tab, UiEvent, mock};
+    use crate::{custom, fixture::resolver};
 
     /// Pressing a row on the skins page dresses the gallery in that skin.
     #[kithara::test]
@@ -208,10 +171,15 @@ mod tests {
 mod fills {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
-    use kithara_ui::{app::Ui, capture::Offscreen};
+    use kithara_ui::{
+        app::{Config, Ui},
+        builtin,
+        capture::Offscreen,
+    };
     use masonry::vello::peniko::Color;
 
-    use super::{Config, Gallery, builtin, custom, mock, resolver};
+    use super::{Gallery, mock};
+    use crate::{custom, fixture::resolver};
 
     /// The document must fill the surface it was handed, at any display scale.
     ///

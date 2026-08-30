@@ -18,6 +18,17 @@ uses the built-in defaults.
 cargo run -p kithara-ui --example gallery --features capture
 ```
 
+The retained host, and everything the gallery can be asked to do instead of
+opening — photographing its pages, comparing two sets — are flags:
+
+```bash
+cargo run -p kithara-ui --features capture,masonry --example gallery -- --host retained
+```
+
+```bash
+cargo run -p kithara-ui --example gallery --features capture -- --help
+```
+
 ## iOS — only if explicitly requested
 
 ```bash

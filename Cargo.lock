@@ -5355,6 +5355,7 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
+ "clap",
  "criterion",
  "delegate",
  "derive_more",

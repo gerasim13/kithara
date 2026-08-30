@@ -1,42 +1,59 @@
-//! Headless Masonry capture: the same gallery documents, drawn by the Masonry
-//! host into a Vello scene, rasterised off-screen and written as PNG.
+//! The gallery through the retained host: shown in a window, or drawn into a
+//! Vello scene, rasterised off-screen and written as PNG.
 //!
-//! Enabled by `KITHARA_GALLERY_CAPTURE_MASONRY=<dir>`; it runs instead of the
-//! iced window so the two hosts can be compared page by page.
+//! `--host retained` shows it; adding `--shoot <dir>` photographs it instead,
+//! which is how the two hosts are compared page by page.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use kithara_platform::time::Duration;
 use kithara_ui::{
     app::{Config, Ui},
     builtin,
-    capture::{Geometry, Offscreen, Stage, read_geometry, shoot_set},
+    capture::{Geometry, Offscreen, Stage, shoot_set},
 };
 use num_traits::cast::AsPrimitive;
 
 use crate::{
-    capture::{self, Shot},
+    capture::Shot,
+    cli::{Args, Extent},
     custom,
-    fixture::{Consts, resolver},
+    fixture::resolver,
     host::Gallery,
     mock,
 };
 
-/// Walks every gallery page through the Masonry host. Returns `false` when the
-/// environment variable is absent, so the caller falls through to the window.
-pub(super) fn run() -> bool {
-    let Some(dir) = std::env::var_os("KITHARA_GALLERY_CAPTURE_MASONRY").map(PathBuf::from) else {
-        return false;
-    };
-    match capture_set(&dir) {
-        Ok(count) => println!("{count} page(s) written to {}", dir.display()),
-        Err(error) => eprintln!("masonry capture failed: {error}"),
-    }
-    true
+/// A size in whole pixels, which is what this host opens a window at.
+fn pixels(extent: Extent) -> (u32, u32) {
+    (
+        AsPrimitive::<u32>::as_(extent.width),
+        AsPrimitive::<u32>::as_(extent.height),
+    )
 }
 
-fn capture_set(dir: &Path) -> Result<usize, String> {
-    let film = capture::requested()?.unwrap_or_else(capture::stills);
+/// Shows the gallery in a window of this host's.
+pub(super) fn show(args: &Args) -> Result<(), String> {
+    let endpoints = mock::registry();
+    let resolver = resolver();
+    let kinds = custom::kinds();
+    // The document carries its own title bar and window buttons, so the system
+    // frame stays off, exactly as it does under the other host.
+    let config = Config::builder()
+        .endpoints(&endpoints)
+        .resolver(&resolver)
+        .text(builtin::text_doc())
+        .kinds(&kinds)
+        .decorations(false)
+        .min_size(pixels(args.min_size))
+        .title("Kithara UI Gallery")
+        .build();
+    kithara_ui::app::run(Gallery::default(), config, pixels(args.size))
+        .map_err(|error| format!("gallery did not run: {error}"))
+}
+
+/// Photographs the film this run asked for, and says how many pictures landed.
+pub(super) fn shoot(args: &Args, dir: &Path) -> Result<usize, String> {
+    let film = args.film()?;
     // The registries outlive the stage that borrows them through the config.
     let resolver = resolver();
     let endpoints = mock::registry();
@@ -47,13 +64,13 @@ fn capture_set(dir: &Path) -> Result<usize, String> {
         .text(builtin::text_doc())
         .kinds(&kinds)
         .build();
-    let mut stage = Retained::new(config, frame(dir))?;
+    let mut stage = Masonry::new(config, args.frame(dir), args.step())?;
     shoot_set(&mut stage, &film, dir).map(|written| written.len())
 }
 
 /// The gallery drawn by the Masonry host into a Vello scene, one mounted
 /// document at a time.
-struct Retained<'config> {
+struct Masonry<'config> {
     config: Config<'config>,
     frame: Geometry,
     off: Offscreen,
@@ -64,21 +81,24 @@ struct Retained<'config> {
     /// The pixels read back from the last page photographed. Held here because
     /// the walk borrows them rather than owning storage it cannot size.
     pixels: Vec<u8>,
+    /// How far this host's clock moves in one frame.
+    step: Duration,
 }
 
-impl<'config> Retained<'config> {
-    fn new(config: Config<'config>, frame: Geometry) -> Result<Self, String> {
+impl<'config> Masonry<'config> {
+    fn new(config: Config<'config>, frame: Geometry, step: Duration) -> Result<Self, String> {
         Ok(Self {
             config,
             frame,
             off: Offscreen::new(frame.width, frame.height)?,
             page: None,
             pixels: Vec::new(),
+            step,
         })
     }
 }
 
-impl Stage for Retained<'_> {
+impl Stage for Masonry<'_> {
     type Page = Shot;
 
     fn geometry(&self) -> Geometry {
@@ -100,7 +120,7 @@ impl Stage for Retained<'_> {
 
     fn tick(&mut self) {
         if let Some(page) = self.page.as_mut() {
-            page.frame(Duration::from_millis(Consts::STRESS_TICK_MS));
+            page.frame(self.step);
         }
     }
 
@@ -115,15 +135,4 @@ impl Stage for Retained<'_> {
             .rasterise(&drawn, self.frame.scale, background, &mut self.pixels)?;
         Ok(&self.pixels)
     }
-}
-
-/// The geometry to photograph at: whatever an iced capture already sitting in
-/// this directory used, so the two sets can be compared pixel for pixel.
-/// Falls back to the gallery's own logical size at 1x.
-fn frame(dir: &Path) -> Geometry {
-    read_geometry(dir).unwrap_or_else(|| Geometry {
-        height: AsPrimitive::<u32>::as_(Consts::HEIGHT),
-        scale: 1.0,
-        width: AsPrimitive::<u32>::as_(Consts::WIDTH),
-    })
 }

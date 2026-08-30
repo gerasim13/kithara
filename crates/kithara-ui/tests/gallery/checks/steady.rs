@@ -215,7 +215,7 @@ mod immediate {
         gallery.select(page);
         let theme = crate::app::theme(gallery.skin());
         let base = theme.base();
-        let logical = crate::app::window_size();
+        let logical = Size::from(crate::cli::WINDOW);
         let mut renderer = renderer();
         let mut cache = Cache::default();
         let (width, height) = physical();

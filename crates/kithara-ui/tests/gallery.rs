@@ -13,6 +13,8 @@ mod app;
 mod capture;
 #[path = "gallery/checks/mod.rs"]
 mod checks;
+#[path = "../examples/gallery/cli.rs"]
+mod cli;
 #[path = "../examples/gallery/custom.rs"]
 mod custom;
 #[path = "../examples/gallery/fixture.rs"]
@@ -40,7 +42,7 @@ use self::{
 };
 
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, path::PathBuf};
 
     use kithara_test_utils::kithara;
     use kithara_ui::{
@@ -1948,39 +1950,13 @@ mod tests {
         }
     }
 
-    /// A capture takes itself only when a folder was named for it.
-    ///
-    /// The variable is what tells the gallery to photograph its pages instead
-    /// of showing them, so reading an absent one as a request would turn every
-    /// plain run into a still set written somewhere nobody asked for.
+    /// A capture through a window walks every page the gallery has, so the set
+    /// it writes is the one the off-screen captures write.
     #[kithara::test]
-    fn no_capture_is_taken_when_no_folder_was_named() {
-        assert!(
-            Capture::requested().is_none(),
-            "a gallery nobody pointed at a folder must not photograph itself",
-        );
-    }
-
-    /// A film is asked for by its own variable, and an absent one is no film
-    /// rather than an unreadable spec: the two answers part here, so a typo in
-    /// the spec stops the capture instead of quietly becoming the still set.
-    #[kithara::test]
-    fn no_film_is_asked_for_when_no_spec_was_given() {
+    fn a_window_capture_walks_every_page() {
         assert_eq!(
-            capture::requested(),
-            Ok(None),
-            "an absent film spec is no film, not an error and not a still set",
-        );
-    }
-
-    /// The retained host steps aside when nobody asked for it, which is what
-    /// leaves a plain run showing the gallery's own window.
-    #[cfg(feature = "masonry")]
-    #[kithara::test]
-    fn the_retained_host_declines_when_nobody_asked_for_it() {
-        assert!(
-            !host::run(),
-            "the retained host must not take a run that did not name it",
+            Capture::new(PathBuf::from("nowhere")).remaining(),
+            Shot::all().len(),
         );
     }
 

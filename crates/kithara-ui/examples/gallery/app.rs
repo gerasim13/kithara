@@ -1,4 +1,4 @@
-use iced::{Element, Size, Task, Theme, theme, window};
+use iced::{Element, Task, Theme, theme, window};
 use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
@@ -31,6 +31,8 @@ pub(crate) struct Gallery {
     /// This host's own reading of time, advanced by the same step the tick
     /// subscription fires at, so a document bound to it moves with the page.
     pub(crate) clock: Clock,
+    /// How far that clock moves in one frame.
+    pub(crate) step: Duration,
     pub(crate) reads: MockReads,
     /// The extensions this application registers, offered to whichever host
     /// draws the page that names one.
@@ -59,6 +61,7 @@ impl Gallery {
                 .map(|module| compiled(module.entry(), &resolver, &endpoints, skin)),
             window_id: window::Id::unique(),
             clock: Clock::default(),
+            step: Duration::from_millis(Consts::STRESS_TICK_MS),
             reads: MockReads::default(),
             kinds: crate::custom::kinds(),
             capture: None,
@@ -81,9 +84,7 @@ impl Gallery {
     /// One frame of the gallery's own time: the clock a document binds to,
     /// and the application's own reading of how far along it is.
     pub(crate) fn tick(&mut self) {
-        self.clock = self
-            .clock
-            .advance(Duration::from_millis(Consts::STRESS_TICK_MS));
+        self.clock = self.clock.advance(self.step);
         self.reads.tick();
     }
 
@@ -200,12 +201,6 @@ pub(crate) fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message>
         Some(&state.kinds),
     )
     .map(Message::Ui)
-}
-
-/// The window every capture is taken at, so the three sets line up without
-/// anyone stating the geometry twice.
-pub(crate) fn window_size() -> Size {
-    Size::new(Consts::WIDTH, Consts::HEIGHT)
 }
 
 fn compiled(

@@ -166,19 +166,17 @@ ui:
     KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
     just test run --lane=ui-doc
     just test run --lane=ui-perf
-    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/capture,kithara-ui/masonry)
-    KITHARA_GALLERY_CAPTURE_OFFSCREEN="$dir/iced" "${gallery[@]}"
-    KITHARA_GALLERY_CAPTURE_MASONRY="$dir/masonry" "${gallery[@]}"
-    KITHARA_GALLERY_COMPARE="$dir/iced:$dir/masonry:$dir/masks" \
-      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-ui/examples/gallery/parity-budget.txt \
-      "${gallery[@]}"
+    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/capture,kithara-ui/masonry --)
+    "${gallery[@]}" --shoot "$dir/iced"
+    "${gallery[@]}" --host retained --shoot "$dir/masonry"
+    "${gallery[@]}" --compare "$dir/iced" "$dir/masonry" "$dir/masks" \
+      --budget crates/kithara-ui/examples/gallery/parity-budget.txt
     KITHARA_STUDIO_CAPTURE="$dir/studio" \
       cargo test -p kithara-app --lib --no-default-features \
         --features masonry,stretch-signalsmith \
         studio_capture_writes_both_hosts -- --nocapture
-    KITHARA_GALLERY_COMPARE="$dir/studio/iced:$dir/studio/masonry:$dir/studio/masks" \
-      KITHARA_GALLERY_COMPARE_BUDGET=crates/kithara-app/assets/ui/parity-budget.txt \
-      "${gallery[@]}"
+    "${gallery[@]}" --compare "$dir/studio/iced" "$dir/studio/masonry" "$dir/studio/masks" \
+      --budget crates/kithara-app/assets/ui/parity-budget.txt
     cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
 
 # The same pages through a real window, which is the only one of the three
@@ -186,7 +184,7 @@ ui:
 # set draws what a window draws, so compare it against a set photographed at
 # the geometry this one recorded in `frame.txt`.
 ui-window DIR="target/parity/window":
-    KITHARA_GALLERY_CAPTURE={{ DIR }} cargo run -p kithara-ui --example gallery --features kithara-ui/capture
+    cargo run -p kithara-ui --example gallery --features kithara-ui/capture -- --shoot {{ DIR }} --windowed
 
 # Cobertura and LCOV reports from one instrumented test run.
 coverage:

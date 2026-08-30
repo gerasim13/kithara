@@ -23,6 +23,8 @@ impl Consts {
     /// down to the room its adaptive and revealed cells answer.
     pub(crate) const MIN_HEIGHT: f32 = 320.0;
     pub(crate) const MIN_WIDTH: f32 = 400.0;
+    /// The scale a photograph is taken at unless a run asks for another.
+    pub(crate) const SCALE: f32 = 1.0;
     pub(crate) const STRESS_TICK_MS: u64 = 16;
     pub(crate) const WIDTH: f32 = 1300.0;
 }

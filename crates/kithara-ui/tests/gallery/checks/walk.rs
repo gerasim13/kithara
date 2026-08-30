@@ -40,7 +40,7 @@
 use std::{borrow::Cow, mem};
 
 use iced::{
-    Pixels,
+    Pixels, Size,
     advanced::{clipboard, graphics::text::font_system, mouse::Cursor, renderer::Style},
     window,
     window::RedrawRequest,
@@ -54,7 +54,7 @@ use iced_tiny_skia::Renderer as TinySkiaRenderer;
 use kithara_test_utils::kithara;
 use kithara_ui::render::fonts::{FONT_BYTES, SANS};
 
-use crate::{app::Message, capture::Shot, sections::Tab};
+use crate::{app::Message, capture::Shot, cli::Host, sections::Tab};
 
 /// How many frames a page is given to stop asking.
 ///
@@ -63,26 +63,14 @@ use crate::{app::Message, capture::Shot, sections::Tab};
 /// here is asking forever rather than finishing late.
 const FRAMES: usize = 32;
 
-/// Which loop the page was stepped in. The retained one is a variant only where
-/// the feature that brings that host is on, so a build without it has no arm
-/// that could be reached and none that sits unused.
-#[derive(Clone, Copy, Debug)]
-enum Host {
-    /// The gallery's own window: every frame rebuilds the element tree from the
-    /// compiled document, lays it out and draws it.
-    Immediate,
-    /// The mounted tree, refreshed and repainted in place.
-    #[cfg(feature = "masonry")]
-    Retained,
-}
-
-impl Host {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Immediate => "iced",
-            #[cfg(feature = "masonry")]
-            Self::Retained => "masonry",
-        }
+/// The toolkit a host draws through, which is what a page that never settles
+/// has to be reported under: the flag names the host, the failure names the
+/// drawing.
+fn toolkit(host: Host) -> &'static str {
+    match host {
+        Host::Immediate => "iced",
+        #[cfg(feature = "masonry")]
+        Host::Retained => "masonry",
     }
 }
 
@@ -109,7 +97,7 @@ mod immediate {
 
     use super::{
         Cache, Cow, Cursor, FONT_BYTES, FRAMES, FallbackRenderer, Message, Pixels, SANS, Shot,
-        Style, TinySkiaRenderer, UserInterface, Walked, clipboard, font_system, mem, window,
+        Size, Style, TinySkiaRenderer, UserInterface, Walked, clipboard, font_system, mem, window,
     };
 
     /// Steps the page through the runtime's own interface, which is what the
@@ -125,7 +113,7 @@ mod immediate {
         let animates = gallery.compiled().animates;
         let theme = crate::app::theme(gallery.skin());
         let text_color = theme.base().text_color;
-        let logical = crate::app::window_size();
+        let logical = Size::from(crate::cli::WINDOW);
         let mut renderer = renderer();
         let mut cache = Cache::default();
         let mut asking = true;
@@ -342,7 +330,7 @@ fn no_page_asks_for_frames_its_document_never_declared() {
         .flat_map(|host| {
             Shot::all().into_iter().filter_map(move |page| {
                 let walked = walk(*host, page);
-                (walked.asking && !walked.animates).then(|| format!("{}: {}", host.name(), page))
+                (walked.asking && !walked.animates).then(|| format!("{}: {}", toolkit(*host), page))
             })
         })
         .collect();
