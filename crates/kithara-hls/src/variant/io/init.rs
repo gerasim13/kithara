@@ -134,7 +134,7 @@ where
             || Ok(None),
             |seg| {
                 if seg.size().is_exact() {
-                    seg.read_at(&self.segments.scope, range, dst)
+                    self.segments.read_at(seg, range, dst)
                 } else {
                     Ok(None)
                 }

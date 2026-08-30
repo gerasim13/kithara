@@ -1,6 +1,6 @@
 use std::{
     num::NonZeroU64,
-    sync::{Barrier, OnceLock},
+    sync::{Barrier, OnceLock, atomic::Ordering},
     thread,
 };
 
@@ -2829,5 +2829,153 @@ fn a_settle_after_the_space_re_mint_applies_immediately() {
         v.segment_byte_offset(2),
         Some(700),
         "a settle after the re-mint keys the fresh frame immediately"
+    );
+}
+
+fn write_seg_bytes(v: &Arc<HlsVariant>, ctx: &PlanCtx, idx: u32, len: u64) {
+    let key = v.segments()[idx as usize].resource_id().clone();
+    let AcquisitionResult::Pending(writer) = ctx
+        .scope
+        .store()
+        .acquire_resource(&key, None)
+        .expect("acquire segment")
+    else {
+        panic!("segment resource must be pending");
+    };
+    let bytes: Vec<u8> = (0..len).map(|b| b.to_le_bytes()[0]).collect();
+    writer.write_at(0, &bytes).expect("write segment");
+    writer.commit(Some(len)).expect("commit segment");
+}
+
+/// A chunked run over one slot opens its resource once.
+#[kithara::test]
+fn reading_a_segment_in_chunks_opens_its_resource_once() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    for offset in (0..64_u64).step_by(8) {
+        let outcome = v.read_at(offset, &mut buf).expect("chunked segment read");
+        assert!(
+            matches!(outcome, ReadOutcome::Bytes(n) if n.get() == 8),
+            "chunk at {offset} must serve 8 bytes, got {outcome:?}"
+        );
+        assert_eq!(
+            u64::from(buf[0]),
+            offset,
+            "chunk at {offset} must serve that offset's bytes"
+        );
+    }
+
+    assert_eq!(
+        v.segments.opens.load(Ordering::Relaxed),
+        1,
+        "eight chunks over one segment must open its resource once"
+    );
+}
+
+/// A `NotFound` while the fetch is in flight must not be held.
+#[kithara::test]
+fn a_read_before_the_bytes_land_does_not_stick() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let outcome = v.read_at(0, &mut buf).expect("read before the bytes land");
+    assert!(
+        matches!(outcome, ReadOutcome::Pending(_)),
+        "a slot with no bytes yet is pending, got {outcome:?}"
+    );
+
+    write_seg_bytes(&v, &ctx, 0, 64);
+
+    let outcome = v.read_at(0, &mut buf).expect("read after the bytes land");
+    assert!(
+        matches!(outcome, ReadOutcome::Bytes(n) if n.get() == 8),
+        "the same slot must serve once its bytes land, got {outcome:?}"
+    );
+}
+
+/// Eviction takes the bytes away under the reader.
+#[kithara::test]
+fn an_evicted_slot_is_opened_again() {
+    let ctx = test_ctx(1);
+    let v = make_var(0, 0, &[64], &ctx);
+    write_seg_bytes(&v, &ctx, 0, 64);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let outcome = v.read_at(0, &mut buf).expect("first read");
+    assert!(
+        matches!(outcome, ReadOutcome::Bytes(_)),
+        "the slot serves before eviction, got {outcome:?}"
+    );
+    let before = v.segments.opens.load(Ordering::Relaxed);
+
+    let key = v.segments()[0].resource_id().clone();
+    assert_eq!(v.on_evict(&key), Some(0), "seg 0 belongs to this variant");
+    let _outcome = v.read_at(0, &mut buf).expect("read after eviction");
+
+    assert!(
+        v.segments.opens.load(Ordering::Relaxed) > before,
+        "a read after eviction must open the resource again"
+    );
+}
+
+fn disk_ctx(root: &std::path::Path) -> PlanCtx {
+    let cancel = CancelToken::never();
+    let backend = Arc::new(
+        AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Disk { root: root.into() })
+            .cancel(cancel)
+            .build(),
+    );
+    PlanCtx {
+        bus: EventBus::new(8),
+        scope: backend
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
+                url: Url::parse("https://example.com/master.m3u8").expect("master url"),
+                discriminator: Some("disk".to_owned()),
+            })
+            .expect("test asset scope"),
+        seek_epoch: 0,
+        headers: None,
+        signal: SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new())),
+        config: PlanConfig::builder().prefetch_budget(1).build(),
+    }
+}
+
+/// A ready gate over a pending read is a loop with no exit.
+#[kithara::test]
+fn a_ready_gate_never_outruns_the_bytes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let path = {
+        let ctx = disk_ctx(dir.path());
+        let v = make_var(0, 0, &[64], &ctx);
+        write_seg_bytes(&v, &ctx, 0, 64);
+        let key = v.segments()[0].resource_id().clone();
+        ctx.scope.store().checkpoint().expect("persist the index");
+        dir.path()
+            .join(ctx.scope.asset_root())
+            .join(key.rel_path().expect("relative key"))
+    };
+    std::fs::remove_file(&path).expect("prune the cached bytes");
+
+    let ctx = disk_ctx(dir.path());
+    let v = make_var(0, 0, &[64], &ctx);
+    settle_seg(&v, &ctx, 0, 64);
+
+    let mut buf = [0_u8; 8];
+    let read = v.read_at(0, &mut buf).expect("read");
+    let gate = v.wait_range(0..8, Some(Duration::ZERO));
+
+    assert!(
+        !(matches!(gate, Ok(WaitOutcome::Ready)) && matches!(read, ReadOutcome::Pending(_))),
+        "gate and read disagree, so the reader spins with no exit: \
+         gate={gate:?} read={read:?}"
     );
 }
