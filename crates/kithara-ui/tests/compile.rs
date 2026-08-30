@@ -2720,8 +2720,10 @@ fn tabbed(tabs: &str) -> MemResolver {
     resolver
 }
 
-const TABS: &str = r#"Tabs(instance: "page", state: "shown", initial: "one",
-    pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"})"#;
+const TABS: &str = r#"Tabs(state: "shown", initial: "one", pages: {
+    "one": Module(instance: "one", source: "one.kmodule.ron"),
+    "two": Module(instance: "two", source: "two.kmodule.ron"),
+})"#;
 
 fn tabbed_error(tabs: &str) -> UiDocError {
     compile(
@@ -2769,8 +2771,11 @@ fn a_tabs_compiles_the_page_it_stands_at() {
 #[kithara::test]
 fn a_tabs_refuses_an_initial_page_it_does_not_offer() {
     let error = tabbed_error(
-        r#"Tabs(instance: "page", state: "shown", initial: "three",
-            pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"})"#,
+        r#"Tabs(state: "shown", initial: "three",
+            pages: {
+                "one": Module(instance: "one", source: "one.kmodule.ron"),
+                "two": Module(instance: "two", source: "two.kmodule.ron"),
+            })"#,
     );
 
     assert!(
@@ -2786,8 +2791,8 @@ fn a_tabs_refuses_an_initial_page_it_does_not_offer() {
 #[kithara::test]
 fn a_press_refuses_a_page_no_tabs_offers() {
     let error = tabbed_error(
-        r#"Tabs(instance: "page", state: "shown", initial: "one",
-            pages: {"one": "one.kmodule.ron"})"#,
+        r#"Tabs(state: "shown", initial: "one",
+            pages: {"one": Module(instance: "one", source: "one.kmodule.ron")})"#,
     );
 
     assert!(
@@ -2802,8 +2807,11 @@ fn a_press_refuses_a_page_no_tabs_offers() {
 #[kithara::test]
 fn a_press_refuses_a_state_no_tabs_follows() {
     let error = tabbed_error(
-        r#"Tabs(instance: "page", state: "elsewhere", initial: "one",
-            pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"})"#,
+        r#"Tabs(state: "elsewhere", initial: "one",
+            pages: {
+                "one": Module(instance: "one", source: "one.kmodule.ron"),
+                "two": Module(instance: "two", source: "two.kmodule.ron"),
+            })"#,
     );
 
     assert!(
@@ -2867,4 +2875,65 @@ impl Reads for Silent {
     fn get(&self, _endpoint: &str) -> Option<ReadValue<'_>> {
         None
     }
+}
+
+/// A page is a layout of its own rather than one module: a page that is a split
+/// of several modules stands exactly where a page that is one module stands.
+/// A screen is rarely one module, so a `Tabs` that could only offer one would
+/// send every richer page back to code that swaps whole documents.
+#[kithara::test]
+fn a_page_may_be_a_split_of_modules() {
+    let ui = compile(
+        "tabbed.klayout.ron",
+        &tabbed(
+            r#"Tabs(state: "shown", initial: "one", pages: {
+                "one": Split(axis: Horizontal, children: [
+                    (weight: 1.0, node: Module(instance: "left", source: "one.kmodule.ron")),
+                    (weight: 1.0, node: Module(instance: "right", source: "two.kmodule.ron")),
+                ]),
+                "two": Module(instance: "two", source: "two.kmodule.ron"),
+            })"#,
+        ),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
+
+    let CompiledNode::Split { children, .. } = &ui.root else {
+        panic!("expected split root");
+    };
+    let CompiledNode::Split { children, .. } = &children[1].node else {
+        panic!("expected the page to be the split it was written as");
+    };
+
+    assert_eq!(
+        children.len(),
+        2,
+        "every module the page splits into must stand, not the first alone"
+    );
+}
+
+/// Two pages never stand at once, so both may name the same instance. Refusing
+/// that would make a document rename what a page calls its body for no reason
+/// a reader could see.
+#[kithara::test]
+fn two_pages_may_name_the_same_instance() {
+    compile(
+        "tabbed.klayout.ron",
+        &tabbed(
+            r#"Tabs(state: "shown", initial: "one", pages: {
+                "one": Module(instance: "body", source: "one.kmodule.ron"),
+                "two": Module(instance: "body", source: "two.kmodule.ron"),
+            })"#,
+        ),
+        &common::player_registry(),
+        builtin::skin_doc(),
+        builtin::text_doc(),
+        &UiConfig::default(),
+        &view::EMPTY,
+    )
+    .unwrap();
 }

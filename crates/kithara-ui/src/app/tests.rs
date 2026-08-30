@@ -2854,9 +2854,12 @@ fn tabbed() -> MemResolver {
             root: Split(axis: Vertical, children: [
                 (weight: 1.0, node: Module(instance: "nav", source: "nav.kmodule.ron",
                     size: (w: Fill, h: Fixed(20.0)))),
-                (weight: 1.0, node: Tabs(instance: "page", state: "shown", initial: "one",
-                    pages: {"one": "one.kmodule.ron", "two": "two.kmodule.ron"},
-                    size: (w: Fill, h: Fill))),
+                (weight: 1.0, node: Tabs(state: "shown", initial: "one", pages: {
+                    "one": Module(instance: "one", source: "one.kmodule.ron",
+                        size: (w: Fill, h: Fill)),
+                    "two": Module(instance: "two", source: "two.kmodule.ron",
+                        size: (w: Fill, h: Fill)),
+                })),
             ]))"#,
     );
     resolver.insert(
@@ -2940,7 +2943,7 @@ fn a_press_turns_the_page_a_tabs_shows() {
     let mut scenario = tabbed_scenario(&resolver);
 
     assert_eq!(
-        scenario.rect_of("page/body").map(|rect| rect.w),
+        scenario.rect_of("one/body").map(|rect| rect.w),
         Some(30.0),
         "a screen pressed nowhere must stand at the page the document calls initial"
     );
@@ -2953,12 +2956,12 @@ fn a_press_turns_the_page_a_tabs_shows() {
         "the press must stand the screen's own state at the page it names"
     );
     assert_eq!(
-        scenario.rect_of("page/body").map(|rect| rect.w),
+        scenario.rect_of("two/body").map(|rect| rect.w),
         Some(60.0),
         "the page standing must be the one on screen"
     );
     assert_eq!(
-        scenario.rect_of("page/one"),
+        scenario.rect_of("one/body"),
         None,
         "the page left must be gone rather than mounted behind the one shown"
     );
@@ -2990,7 +2993,7 @@ fn only_the_standing_page_is_compiled() {
         "a page already compiled must be shown again without being loaded again"
     );
     assert_eq!(
-        scenario.rect_of("page/body").map(|rect| rect.w),
+        scenario.rect_of("two/body").map(|rect| rect.w),
         Some(60.0),
         "the screen kept must be the page it was compiled for"
     );

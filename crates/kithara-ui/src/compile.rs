@@ -483,25 +483,18 @@ impl Compiler<'_> {
                 layout_uri,
             ),
             LayoutNode::Tabs {
-                instance,
                 state,
                 initial,
                 pages,
-                with,
-                size,
-                frame,
-                corners,
             } => {
-                let path = NodePath::default()
-                    .push(format!("Tabs({instance})"))
-                    .render();
+                let path = NodePath::default().push(format!("Tabs({state})")).render();
                 // The layout holds every instance, so a state named here is the
                 // screen's however the document wrote it.
                 let state = scoped_state("", &state.0);
                 // The page the screen stands at is the only one compiled: the
-                // rest are documents this screen never reads.
+                // rest are pages this screen never reads.
                 let standing = self.view.page(&state).unwrap_or(initial);
-                let source = pages.get(standing).ok_or_else(|| UiDocError::UnknownPage {
+                let node = pages.get(standing).ok_or_else(|| UiDocError::UnknownPage {
                     origin: layout_uri.clone(),
                     id: state.clone(),
                     page: standing.to_owned(),
@@ -510,22 +503,12 @@ impl Compiler<'_> {
                 self.states.note_pages(ViewTabs {
                     initial,
                     origin: layout_uri,
-                    pages,
+                    pages: pages.keys().cloned().collect(),
                     path: &path,
                     shown: standing,
                     state: &state,
                 });
-                self.build_module(
-                    ModuleAt {
-                        instance,
-                        source,
-                        with,
-                        size: *size,
-                        frame: *frame,
-                        corners: *corners,
-                    },
-                    layout_uri,
-                )
+                self.build(node, layout_uri)
             }
         }
     }

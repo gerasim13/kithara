@@ -108,14 +108,12 @@ pub(super) fn walk_layout(
             )
         }
         LayoutNode::Tabs {
-            instance,
             state,
             initial,
             pages,
-            ..
         } => {
-            check_id(&instance.0, origin)?;
-            let here = path.push(format!("Tabs({instance})"));
+            check_id(&state.0, origin)?;
+            let here = path.push(format!("Tabs({state})"));
             if !pages.contains_key(initial) {
                 return Err(UiDocError::UnknownPage {
                     origin: origin.clone(),
@@ -124,7 +122,22 @@ pub(super) fn walk_layout(
                     path: here.render(),
                 });
             }
-            claim(&instance.0, &here, origin, seen)
+            // Two pages never stand at once, so each claims its instances
+            // against what stood before the tabs rather than against its
+            // neighbours.
+            let taken = seen.clone();
+            for (page, node) in pages {
+                let mut claimed = taken.clone();
+                walk_layout(
+                    node,
+                    &here.push(format!("[{page}]")),
+                    origin,
+                    &mut claimed,
+                    Sibling::Only,
+                )?;
+                seen.extend(claimed);
+            }
+            Ok(())
         }
     }
 }

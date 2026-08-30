@@ -79,21 +79,15 @@ pub enum LayoutNode {
     /// The body alone: what turns the state is an ordinary control writing a
     /// [`crate::doc::module::BindingRef::Page`], so a document keeps every say
     /// over the chrome that offers the pages.
+    ///
+    /// A page is a layout of its own, so a page that is one module and a page
+    /// that is a split of nine each say so where they stand.
     Tabs {
-        instance: InstanceId,
         state: StateId,
         /// The page a screen that has turned nothing stands at.
         initial: String,
-        /// The document each page shows, by the name a control writes.
-        pages: BTreeMap<String, String>,
-        #[serde(default)]
-        with: BTreeMap<String, String>,
-        #[serde(default)]
-        size: Option<SizeSpec>,
-        #[serde(default)]
-        frame: FrameSides,
-        #[serde(default)]
-        corners: bool,
+        /// What each page shows, by the name a control writes.
+        pages: BTreeMap<String, Self>,
     },
 }
 

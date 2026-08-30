@@ -92,11 +92,10 @@ impl ViewWrites {
 }
 
 /// One `Tabs` as it compiled: the pages it offers and the one it showed.
-#[derive(Clone, Copy)]
 pub(crate) struct Tabs<'a> {
     pub(crate) initial: &'a str,
     pub(crate) origin: &'a SourceUri,
-    pub(crate) pages: &'a BTreeMap<String, String>,
+    pub(crate) pages: BTreeSet<String>,
     pub(crate) path: &'a str,
     pub(crate) shown: &'a str,
     pub(crate) state: &'a str,
@@ -180,7 +179,7 @@ impl Census {
         self.declared
             .entry(tabs.state.to_owned())
             .or_default()
-            .extend(tabs.pages.keys().cloned());
+            .extend(tabs.pages);
         self.origin
             .entry(tabs.state.to_owned())
             .or_insert_with(|| (tabs.origin.clone(), tabs.path.to_owned()));
