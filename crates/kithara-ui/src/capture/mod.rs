@@ -14,6 +14,7 @@
 pub mod diff;
 mod film;
 mod geometry;
+mod part;
 mod photo;
 #[cfg(feature = "masonry")]
 mod scene;
@@ -22,6 +23,7 @@ mod stage;
 
 pub use film::{Film, page_file};
 pub use geometry::{Geometry, read_geometry, write_geometry, write_png};
+pub use part::{Locate, Region, part_file, shoot_part};
 pub use photo::Photographer;
 #[cfg(feature = "masonry")]
 pub use scene::Offscreen;

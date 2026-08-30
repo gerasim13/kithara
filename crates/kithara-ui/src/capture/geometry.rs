@@ -1,6 +1,7 @@
 use std::{
+    fmt::Display,
     fs::{File, read_to_string, write},
-    io::BufWriter,
+    io::{BufWriter, Write},
     path::Path,
 };
 
@@ -47,17 +48,36 @@ pub fn read_geometry(dir: &Path) -> Option<Geometry> {
     })
 }
 
-/// Encodes tightly packed RGBA8 as a PNG.
+/// Encodes tightly packed RGBA8 rows as a PNG.
+///
+/// The rows are handed to the encoder as they come rather than gathered into a
+/// buffer first, so a picture cut out of a photograph costs no storage beyond
+/// the photograph it was cut from.
 ///
 /// # Errors
-/// Fails when the file cannot be written or the pixels do not fill the frame.
-pub fn write_png(path: &Path, rgba: &[u8], width: u32, height: u32) -> Result<(), String> {
+/// Fails when the file cannot be written or the rows do not fill the frame.
+pub fn write_png<'row>(
+    path: &Path,
+    width: u32,
+    height: u32,
+    rows: impl Iterator<Item = &'row [u8]>,
+) -> Result<(), String> {
     let file = File::create(path).map_err(|error| format!("create {}: {error}", path.display()))?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    encoder
+    let mut writer = encoder
         .write_header()
-        .and_then(|mut writer| writer.write_image_data(rgba))
-        .map_err(|error| format!("encode {}: {error}", path.display()))
+        .and_then(png::Writer::into_stream_writer)
+        .map_err(|error| failed(path, error))?;
+    for row in rows {
+        writer.write_all(row).map_err(|error| failed(path, error))?;
+    }
+    writer.finish().map_err(|error| failed(path, error))
+}
+
+/// What a picture that could not be encoded says, so every step of one write
+/// names the same file the same way.
+fn failed<Error: Display>(path: &Path, error: Error) -> String {
+    format!("encode {}: {error}", path.display())
 }

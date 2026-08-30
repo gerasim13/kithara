@@ -112,6 +112,16 @@ pub(crate) struct Args {
     #[arg(long = "page", value_name = "NAME", requires = "shoot")]
     pub(crate) pages: Vec<Shot>,
 
+    /// Photograph the one control at this document path instead of whole
+    /// pages. Takes one `--page`, and the host that keeps what it draws.
+    #[arg(
+        long,
+        value_name = "PATH",
+        requires = "shoot",
+        conflicts_with = "windowed"
+    )]
+    pub(crate) element: Option<String>,
+
     /// How many photographs to take of each page. More than one shows a page
     /// that moves at more than the moment it opens at.
     #[arg(long, value_name = "N", default_value_t = 1, requires = "shoot")]
@@ -310,11 +320,30 @@ mod tests {
         assert!("0x600".parse::<Extent>().is_err());
     }
 
+    #[kithara::test]
+    fn a_run_with_no_flags_photographs_no_control() {
+        assert_eq!(args(&[]).element, None);
+    }
+
+    /// A control is cut out of a photograph taken off-screen; a run that asks
+    /// for a window is asking for the whole window.
+    #[kithara::test]
+    fn a_control_photographed_through_a_window_is_refused() {
+        assert!(refused(&[
+            "--shoot",
+            "out",
+            "--element",
+            "deck/play",
+            "--windowed"
+        ]));
+    }
+
     /// A page named without a folder to write it to photographs nothing, so
     /// the command line says so instead of running the gallery as if the flag
     /// had not been typed.
     #[kithara::test]
     fn a_capture_parameter_without_a_folder_is_refused() {
         assert!(refused(&["--page", "motion"]));
+        assert!(refused(&["--element", "deck/play"]));
     }
 }

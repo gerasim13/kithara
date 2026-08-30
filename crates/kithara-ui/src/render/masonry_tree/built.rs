@@ -507,7 +507,7 @@ impl<Action> MasonryNode<Action> {
         &self.document_ids
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "capture"))]
     pub(crate) fn widget_id(&self) -> WidgetId {
         self.widget.id()
     }

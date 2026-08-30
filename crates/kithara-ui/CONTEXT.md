@@ -685,7 +685,8 @@ made to agree or disagree at will. A set inherits the geometry of a set already 
 window set taken at the screen's scale can be answered on its own terms.
 
 Every one of those capabilities is a flag rather than an environment variable, and every number one of
-them used to hard-code is a flag too: `--size`, `--scale`, `--tick`, `--page`, `--photos`, `--steps`.
+them used to hard-code is a flag too: `--size`, `--scale`, `--tick`, `--page`, `--photos`, `--steps`,
+`--element`.
 The constants they default to are the gallery's own, so `--help` is the list of what the gallery can be
 asked to do and a run states on its own command line what it did.
 
@@ -698,6 +699,20 @@ item and its document already answer to rather than its position in the walk. Th
 pages to walk and what to do with the verdict, and nothing else. The feature is off by default so a shipped build
 carries none of it, and the gallery names it in `required-features` so a build without it does not
 silently produce an example that cannot photograph anything.
+
+One control is photographed the same way, minus the set: `capture::Locate` is what a host that keeps
+its tree answers when asked where a control ended up, `capture::Region::of` turns the points it answers
+in into the pixels of a photograph, `capture::crop` cuts them out, and `capture::shoot_part` does the
+three in order and writes one picture. It is a trait of its own rather than a method on `Stage` because
+the immediate host cannot answer it at all: it builds and forgets its tree inside one draw, so the
+gallery refuses `--element <path>` under `--host immediate` instead of taking an empty answer for one.
+One picture rather than a set, because a control is laid out to a different rectangle on every page
+that draws it while a set is photographed on one geometry throughout - which is also why `--element`
+takes exactly one `--page` and refuses a film. Nothing is clipped to fit: a region that leaves the
+frame is refused, because a photograph smaller than the control that was asked for is not a photograph
+of it. The path map the retained host tags its widgets with is what answers `Ui::rect_of`, and it is
+behind `any(test, feature = "capture")`: a scenario clicks a control by name, a capture photographs it,
+and a shipped build carries neither.
 
 Two things the offscreen set gets from the runtime rather than from a hand-rolled layout-then-draw
 pass, because a capture that skips either draws a page of container backgrounds and nothing else: the

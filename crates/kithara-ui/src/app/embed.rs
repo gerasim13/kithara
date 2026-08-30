@@ -23,14 +23,14 @@ use masonry::{
     },
     vello::Scene,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "capture"))]
 use num_traits::cast::AsPrimitive;
 
 use super::{
     frame::Frame,
     neutral::{App, Config, RunError},
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "capture"))]
 use crate::draw::Rect;
 use crate::{
     compile::{CompiledUi, compile},
@@ -130,10 +130,11 @@ where
     /// Resolves one control's document path to the rect its layout gave it, in
     /// the same logical units [`Self::input`] takes a point in.
     ///
-    /// Test-only: a scenario harness names a control by its path and acts at
-    /// the rect this returns, instead of computing a pixel by hand.
-    #[cfg(test)]
-    pub(crate) fn rect_of(&self, path: &str) -> Option<Rect> {
+    /// A harness names a control by its path and acts at the rect this
+    /// returns instead of computing a pixel by hand: a scenario clicks it,
+    /// and a capture photographs it.
+    #[cfg(any(test, feature = "capture"))]
+    pub fn rect_of(&self, path: &str) -> Option<Rect> {
         let id = self.state.widget_id(path)?;
         let bounds = self.root.root().get_widget(id)?.ctx().bounding_rect();
         Some(Rect {
@@ -446,7 +447,7 @@ fn mount<Application>(
 where
     Application: App,
 {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "capture"))]
     state.clear_paths();
     let skin = app.skin();
     let node = app.reads(|reads| {

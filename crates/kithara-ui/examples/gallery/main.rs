@@ -86,11 +86,16 @@ fn harness(args: &Args) -> Result<Asked, String> {
         };
     }
     let written = match args.host {
+        Host::Immediate if args.element.is_some() => {
+            return Err(
+                "the immediate host forgets the controls it draws; use --host retained".to_owned(),
+            );
+        }
         Host::Immediate => offscreen::run(args, dir)?,
         #[cfg(feature = "masonry")]
         Host::Retained => retained::shoot(args, dir)?,
     };
-    println!("{written} page(s) written to {}", dir.display());
+    println!("{written} picture(s) written to {}", dir.display());
     Ok(Asked::Done)
 }
 

@@ -10,7 +10,8 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     app::{Config, Ui},
     builtin,
-    capture::{Geometry, Offscreen, Stage, shoot_set},
+    capture::{Film, Geometry, Locate, Offscreen, Stage, shoot_part, shoot_set},
+    draw::Rect,
 };
 use num_traits::cast::AsPrimitive;
 
@@ -51,9 +52,37 @@ pub(super) fn show(args: &Args) -> Result<(), String> {
         .map_err(|error| format!("gallery did not run: {error}"))
 }
 
-/// Photographs the film this run asked for, and says how many pictures landed.
+/// The one page and one control a run photographs when it asks for an element.
+///
+/// # Errors
+/// Refuses a run that names no page or more than one: a control is laid out to
+/// a different rectangle on every page that draws it, so which page is asked
+/// for is part of the question. Refuses a film of one too, for the same reason
+/// a set of controls has no geometry to record.
+fn element<'run>(
+    film: &'run Film<Shot>,
+    path: &'run str,
+) -> Result<(&'run Shot, &'run str), String> {
+    let [page] = film.pages.as_slice() else {
+        return Err(format!(
+            "photographing one control takes one --page, got {}",
+            film.pages.len()
+        ));
+    };
+    if film.photos > 1 {
+        return Err("one control is photographed once, so a film of it is refused".to_owned());
+    }
+    Ok((page, path))
+}
+
+/// Photographs what this run asked for, and says how many pictures landed.
 pub(super) fn shoot(args: &Args, dir: &Path) -> Result<usize, String> {
     let film = args.film()?;
+    let part = args
+        .element
+        .as_deref()
+        .map(|path| element(&film, path))
+        .transpose()?;
     // The registries outlive the stage that borrows them through the config.
     let resolver = resolver();
     let endpoints = mock::registry();
@@ -65,7 +94,10 @@ pub(super) fn shoot(args: &Args, dir: &Path) -> Result<usize, String> {
         .kinds(&kinds)
         .build();
     let mut stage = Masonry::new(config, args.frame(dir), args.step())?;
-    shoot_set(&mut stage, &film, dir).map(|written| written.len())
+    match part {
+        Some((page, path)) => shoot_part(&mut stage, page, path, dir).map(|_| 1),
+        None => shoot_set(&mut stage, &film, dir).map(|written| written.len()),
+    }
 }
 
 /// The gallery drawn by the Masonry host into a Vello scene, one mounted
@@ -95,6 +127,12 @@ impl<'config> Masonry<'config> {
             pixels: Vec::new(),
             step,
         })
+    }
+}
+
+impl Locate for Masonry<'_> {
+    fn locate(&self, path: &str) -> Option<Rect> {
+        self.page.as_ref()?.rect_of(path)
     }
 }
 

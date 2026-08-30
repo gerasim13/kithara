@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     fmt,
     fs::{File, create_dir_all, read_dir, read_to_string},
+    iter::once,
     path::{Path, PathBuf},
 };
 
@@ -184,7 +185,7 @@ pub fn compare(
         }
         let (differing, mask) = difference(&a, &b);
         let ink = ink_disagreement(&a, &b);
-        write_png(&masks.join(&page), &mask, a.width, a.height)?;
+        write_png(&masks.join(&page), a.width, a.height, once(mask.as_slice()))?;
         rows.push(Row {
             page,
             shares: Some(Shares { differing, ink }),
@@ -255,13 +256,13 @@ fn read_budget(path: &Path) -> Result<Vec<(String, f64)>, String> {
         .collect()
 }
 
-struct Image {
-    height: u32,
-    rgba: Vec<u8>,
-    width: u32,
+pub(super) struct Image {
+    pub(super) height: u32,
+    pub(super) rgba: Vec<u8>,
+    pub(super) width: u32,
 }
 
-fn read_png(path: &Path) -> Result<Image, String> {
+pub(super) fn read_png(path: &Path) -> Result<Image, String> {
     let file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let decoder = png::Decoder::new(file);
     let mut reader = decoder
@@ -377,7 +378,9 @@ fn ink_disagreement(left: &Image, right: &Image) -> f64 {
 #[cfg(test)]
 mod tests {
     use std::{
-        env, fs, process,
+        env, fs,
+        iter::once,
+        process,
         sync::atomic::{AtomicU64, Ordering},
     };
 
@@ -455,8 +458,20 @@ mod tests {
         let mut left = solid(10, 1, [200, 200, 200, 255]);
         left.rgba[0..4].copy_from_slice(&[226, 226, 226, 255]);
         let right = solid(10, 1, [205, 205, 205, 255]);
-        write_png(&left_dir.join("page.png"), &left.rgba, 10, 1).unwrap();
-        write_png(&right_dir.join("page.png"), &right.rgba, 10, 1).unwrap();
+        write_png(
+            &left_dir.join("page.png"),
+            10,
+            1,
+            once(left.rgba.as_slice()),
+        )
+        .unwrap();
+        write_png(
+            &right_dir.join("page.png"),
+            10,
+            1,
+            once(right.rgba.as_slice()),
+        )
+        .unwrap();
 
         let budget_path = root.join("budget.txt");
         fs::write(&budget_path, "page.png 5\n").unwrap();

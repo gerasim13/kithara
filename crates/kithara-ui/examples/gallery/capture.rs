@@ -1,6 +1,7 @@
 use std::{
     fmt::{self, Display},
     fs::create_dir_all,
+    iter::once,
     path::PathBuf,
     str::FromStr,
 };
@@ -107,9 +108,9 @@ impl Capture {
         let path = self.dir.join(page_file(&shot, None));
         write_png(
             &path,
-            &screenshot.rgba,
             screenshot.size.width,
             screenshot.size.height,
+            once(screenshot.rgba.as_ref()),
         )?;
         self.written.push(path.clone());
         Ok(path)

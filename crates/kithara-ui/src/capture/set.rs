@@ -1,6 +1,7 @@
 use std::{
     fmt::Display,
     fs::create_dir_all,
+    iter::once,
     path::{Path, PathBuf},
 };
 
@@ -37,7 +38,7 @@ where
                 }
             }
             let path = dir.join(film.file(page, photo));
-            write_png(&path, stage.shoot()?, frame.width, frame.height)?;
+            write_png(&path, frame.width, frame.height, once(stage.shoot()?))?;
             written.push(path);
         }
     }
