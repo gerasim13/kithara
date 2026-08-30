@@ -17,6 +17,7 @@ use kithara_test_utils::kithara;
 use num_traits::cast::ToPrimitive;
 
 use super::{ReadOutcome, ThreadWake, WakeSignal};
+use crate::ConsumerWakeMode;
 
 struct Consts;
 
@@ -25,19 +26,28 @@ impl Consts {
     const PROGRESS_EMIT_MIN_DELTA_MS: u64 = 100;
 }
 
-/// Reader-side event sink, deferred because reads run on the audio callback.
+/// Reader-side event sink.
+///
+/// A `RealtimeDeferred` consumer reads on the audio callback, so its events
+/// go through the lock-free [`DeferredBus`] ring and reach the bus when the
+/// scheduler shell flushes. An `ImmediateOffRt` consumer runs off the
+/// real-time thread and may take the `broadcast::send` lock, so its events
+/// publish inline: everything a read births is on the bus when that read
+/// returns, and the deferred ring keeps the shell as its only flusher.
 pub(super) struct AudioEvents {
     emit: Arc<DeferredBus<Event>>,
     wake_pending: bool,
+    wake_mode: ConsumerWakeMode,
     last_progress_emit: Option<(u64, u64)>,
     underrun_active: bool,
 }
 
 impl AudioEvents {
-    pub(super) const fn new(emit: Arc<DeferredBus<Event>>) -> Self {
+    pub(super) const fn new(emit: Arc<DeferredBus<Event>>, wake_mode: ConsumerWakeMode) -> Self {
         Self {
             emit,
             wake_pending: false,
+            wake_mode,
             last_progress_emit: None,
             underrun_active: false,
         }
@@ -50,8 +60,13 @@ impl AudioEvents {
     }
 
     fn publish(&mut self, event: AudioEvent) {
-        self.emit.enqueue(event.into());
-        self.wake_pending = true;
+        match self.wake_mode {
+            ConsumerWakeMode::RealtimeDeferred => {
+                self.emit.enqueue(event.into());
+                self.wake_pending = true;
+            }
+            ConsumerWakeMode::ImmediateOffRt => self.emit.bus().publish(event),
+        }
     }
 
     pub(super) const fn take_wake_pending(&mut self) -> bool {
@@ -172,7 +187,10 @@ impl AudioEvents {
 
     #[cfg(test)]
     pub(super) fn test() -> Self {
-        Self::new(Self::deferred(&EventBus::new(16)))
+        Self::new(
+            Self::deferred(&EventBus::new(16)),
+            ConsumerWakeMode::RealtimeDeferred,
+        )
     }
 }
 
@@ -436,7 +454,7 @@ mod tests {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
         let emit = AudioEvents::deferred(&bus);
-        let mut events = AudioEvents::new(Arc::clone(&emit));
+        let mut events = AudioEvents::new(Arc::clone(&emit), ConsumerWakeMode::RealtimeDeferred);
         let seek = SeekState::new();
         let target = Duration::from_millis(500);
         let epoch = seek.begin(target);
@@ -564,7 +582,7 @@ mod tests {
         let bus = EventBus::new(8);
         let mut receiver = bus.subscribe();
         let emit = AudioEvents::deferred(&bus);
-        let mut events = AudioEvents::new(Arc::clone(&emit));
+        let mut events = AudioEvents::new(Arc::clone(&emit), ConsumerWakeMode::RealtimeDeferred);
         let position = Duration::from_millis(321);
 
         events.fill_result(false, true, false, position, 0);

@@ -21,14 +21,17 @@ impl Consts {
     const PRELOAD_CHUNKS: usize = 3;
 }
 
-/// How a PCM consumer wakes the decode worker after draining its ring.
+/// The consumer's thread capability: how it wakes the decode worker after
+/// draining its ring, and how its reader-born events reach the bus.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum ConsumerWakeMode {
     /// Arm a coalesced scheduler pass without signaling a thread gate.
     #[default]
     RealtimeDeferred,
-    /// Unpark the worker's thread, for a consumer outside the render graph.
+    /// Unpark the worker's thread, for a consumer off the real-time thread.
+    /// Marks the consumer's read path as free to block, so reader-born events
+    /// publish inline instead of waiting for a scheduler-shell flush.
     ImmediateOffRt,
 }
 
@@ -78,10 +81,11 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) block_on_underrun: bool,
-    /// Worker wake policy for successful consumer ring pops. The default is
-    /// safe for real-time callbacks; known off-RT consumers may request an
-    /// immediate worker signal. `block_on_underrun` remains independent and
-    /// always resolves the effective mode to [`ConsumerWakeMode::ImmediateOffRt`].
+    /// Consumer wake capability for ring pops and reader-event delivery. The
+    /// default is safe for real-time callbacks; known off-RT consumers may
+    /// request an immediate worker signal and inline reader-event publishes.
+    /// `block_on_underrun` remains independent and always resolves the
+    /// effective mode to [`ConsumerWakeMode::ImmediateOffRt`].
     #[builder(default)]
     #[field(get, copy)]
     pub(crate) consumer_wake_mode: ConsumerWakeMode,

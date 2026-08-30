@@ -17,6 +17,7 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, Xorshift64, temp_dir};
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 struct Consts;
@@ -246,7 +247,7 @@ fn phase5_revisit_seeks(
 #[case::ephemeral(true)]
 async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("track.mp3");
+    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
     let region = Region::default();
     let byte_pool = region.byte_pool();
     let store = if ephemeral {

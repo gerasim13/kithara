@@ -5,7 +5,8 @@ use kithara::{
     platform::time::Duration,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
+use kithara_integration_tests::TestServerHelper;
+use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
 const SAMPLE_RATE: u32 = 44_100;
@@ -105,29 +106,22 @@ fn measure_leading_silence(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(1)
 )]
-#[case::symphonia_default(DecoderBackend::Symphonia, None)]
-#[case::symphonia_320k(DecoderBackend::Symphonia, Some(320_000))]
-#[case::symphonia_64k(DecoderBackend::Symphonia, Some(64_000))]
+#[case::symphonia_default(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S)]
+#[case::symphonia_320k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_320K)]
+#[case::symphonia_64k(DecoderBackend::Symphonia, SignalAsset::MP3_SAW_2S_64K)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::apple_default(DecoderBackend::Apple, None),
-    case::apple_320k(DecoderBackend::Apple, Some(320_000)),
-    case::apple_64k(DecoderBackend::Apple, Some(64_000))
+    case::apple_default(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S),
+    case::apple_320k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_320K),
+    case::apple_64k(DecoderBackend::Apple, SignalAsset::MP3_SAW_2S_64K)
 )]
 async fn mp3_raw_decoder_shift_vs_reference(
     #[case] backend: DecoderBackend,
-    #[case] bit_rate: Option<u64>,
+    #[case] asset: SignalAsset,
 ) {
     let server = TestServerHelper::new().await;
     let client = Client::new();
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Seconds(2.0),
-        format: SignalFormat::Mp3,
-        bit_rate,
-    };
-    let url = server.sawtooth(&spec).await;
+    let url = server.signal(asset);
     let response = client.get(url).send().await.expect("fetch sawtooth mp3");
     assert_eq!(response.status(), 200);
     let bytes = response.bytes().await.expect("mp3 body").to_vec();
@@ -140,11 +134,12 @@ async fn mp3_raw_decoder_shift_vs_reference(
         measure_leading_silence(bytes.clone(), backend, true);
 
     println!(
-        "\n===== {backend:?}, bit_rate={bit_rate:?} =====\n\
+        "\n===== {backend:?}, {} =====\n\
         LAME tag at offset = {lame_off:?}, (enc_delay, enc_padding) = {lame_tag:?}\n\
         gapless=false → leading silence = {leading_silence:5} samples (decoded[{leading_silence}] = {first_value:.6})\n\
         gapless=true  → leading silence = {leading_silence_gapless_on:5} samples (decoded[{leading_silence_gapless_on}] = {first_value_on:.6})\n\
         total decoded frames in window = {total}",
+        asset.name(),
     );
 }
 
@@ -166,14 +161,7 @@ async fn mp3_raw_decoder_shift_vs_reference(
 async fn mp3_decoder_reads_lame_enc_delay_or_not(#[case] backend: DecoderBackend) {
     let server = TestServerHelper::new().await;
     let client = Client::new();
-    let spec = SignalSpec {
-        sample_rate: SAMPLE_RATE,
-        channels: CHANNELS,
-        length: SignalSpecLength::Seconds(2.0),
-        format: SignalFormat::Mp3,
-        bit_rate: None,
-    };
-    let url = server.sawtooth(&spec).await;
+    let url = server.signal(SignalAsset::MP3_SAW_2S);
     let response = client.get(url).send().await.expect("fetch sawtooth mp3");
     let original = response.bytes().await.expect("mp3 body").to_vec();
     let lame_off = find_lame_tag_offset(&original).expect("LAME tag must exist");

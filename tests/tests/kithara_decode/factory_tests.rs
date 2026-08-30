@@ -24,9 +24,7 @@ use kithara::{
     decode::{DecodeResult, Decoder, DecoderResamplerConfig},
     resampler::{ResamplerOptions, ResamplerQuality},
 };
-
-const TEST_MP3_BYTES: &[u8] =
-    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../assets/test.mp3"));
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 #[kithara::test]
 fn decoder_config_default_uses_symphonia_backend() {
@@ -57,7 +55,7 @@ fn decoder_config_custom_apple_backend_preserves_fields() {
 #[kithara::test]
 fn create_with_probe_without_hint_fails_with_probe_failed() {
     let result = DecoderFactory::create_with_probe(
-        Cursor::new(TEST_MP3_BYTES.to_vec()),
+        Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
         None,
         DecoderConfig::<NoResamplerBackend>::builder()
             .byte_pool(BytePool::default())
@@ -70,7 +68,7 @@ fn create_with_probe_without_hint_fails_with_probe_failed() {
 #[kithara::test]
 fn create_with_probe_with_mp3_hint_succeeds() {
     let decoder = DecoderFactory::create_with_probe(
-        Cursor::new(TEST_MP3_BYTES.to_vec()),
+        Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
         Some("mp3"),
         DecoderConfig::<NoResamplerBackend>::builder()
             .byte_pool(BytePool::default())
@@ -90,7 +88,7 @@ fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
         .maybe_codec(Some(AudioCodec::AacLc))
         .maybe_container(Some(ContainerFormat::Fmp4))
         .build();
-    let source = Cursor::new(TEST_MP3_BYTES.to_vec());
+    let source = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
     let result = DecoderFactory::create_from_media_info(
         source,
         &media_info,
@@ -120,7 +118,11 @@ fn apple_mp3_decoder(
         .backend(DecoderBackend::Apple)
         .maybe_resampler(resampler)
         .build();
-    DecoderFactory::create_from_media_info(Cursor::new(TEST_MP3_BYTES.to_vec()), media_info, config)
+    DecoderFactory::create_from_media_info(
+        Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
+        media_info,
+        config,
+    )
 }
 
 /// With the SRC fused into the Apple codec there is no external resampler

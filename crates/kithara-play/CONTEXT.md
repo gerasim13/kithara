@@ -427,10 +427,11 @@ their inner capability. Requiring the method keeps wrappers from silently
 erasing an off-RT capability through a trait default. `ConfigPrep` copies the
 capability through an internal, builder-skipped `ResourceConfig` field into
 `AudioConfig`; an unbound direct `Resource` resolves the absent session
-capability to `ImmediateOffRt`. There is no public resource setter and therefore
-no second source of session wake policy. A real-time read only arms the
-scheduler's coalesced flag; the existing off-RT notification pump flushes that
-flag, while the scheduler timeout remains the liveness fallback.
+capability to `ImmediateOffRt`, giving it immediate worker wakes and inline
+reader-event delivery. There is no public resource setter and therefore no
+second source of session wake policy. A real-time read only arms the scheduler's
+coalesced flag; the existing off-RT notification pump flushes that flag, while
+the scheduler timeout remains the liveness fallback.
 
 ### Host transport anchor
 

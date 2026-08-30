@@ -128,6 +128,12 @@ mod tests {
             .build())
     }
 
+    #[kithara::test]
+    fn direct_config_has_no_session_wake_policy() {
+        let config = test_config("https://example.com/track.mp3").expect("valid config");
+        assert_eq!(config.consumer_wake_mode, None);
+    }
+
     fn worker() -> PlayWorker {
         PlayWorker::new(
             PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),

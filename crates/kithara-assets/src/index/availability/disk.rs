@@ -30,7 +30,7 @@ impl AvailabilityIndex {
     /// Enable disk persistence rooted at `path`. Hydrates the
     /// in-memory aggregate from the existing on-disk snapshot (if
     /// any), then caches the `Atomic<MmapDriver>` for subsequent
-    /// flushes. Idempotent: subsequent calls are no-ops.
+    /// flushes. Idempotent.
     ///
     /// Failures (open, load) collapse silently — the aggregate
     /// stays empty and the persist resource is materialised lazily
