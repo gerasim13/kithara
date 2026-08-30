@@ -345,6 +345,77 @@ mod tests {
         rule_hits("perf.prefer-primitive-pool.yml", source)
     }
 
+    fn magic_number_hits(source: &str) -> usize {
+        rule_hits("style.no-magic-numbers.yml", source)
+    }
+
+    #[test]
+    fn magic_number_rule_accepts_self_explanatory_math() {
+        let source = r#"
+fn math(value: usize, width: f32, values: &[f32]) {
+    let _ = value / 2;
+    let _ = value * 2;
+    let _ = 2 * value;
+    let _ = value % 2;
+    let _ = width / 2.0;
+    let _ = width * 2.0;
+    let _ = 2.0 * width;
+    let _ = width.rem_euclid(2.0);
+    let _ = width.powi(2);
+    let _ = values.windows(2);
+    let _ = value / 3;
+    let _ = value * 3;
+    let _ = 3 * value;
+    let _ = value / 4;
+    let _ = value * 4;
+    let _ = 4 * value;
+    let _ = width / 3.0;
+    let _ = width * 3.0;
+    let _ = 3.0 * width;
+    let _ = width / 4.0;
+    let _ = width * 4.0;
+    let _ = 4.0 * width;
+    let _ = width + 0.5;
+    let _ = 0.5 + width;
+    let _ = width - 0.5;
+    let _ = width * 0.5;
+    let _ = 0.5 * width;
+    let _: [u8; 4] = u32::to_be_bytes(0);
+    let _ = u32::from_be_bytes([0, 1, 2, 3]);
+    let _ = u32::from_le_bytes([0, 1, 2, 3]);
+}
+"#;
+
+        assert_eq!(magic_number_hits(source), 0);
+    }
+
+    #[test]
+    fn magic_number_rule_keeps_domain_values_visible() {
+        let source = r#"
+fn domain(value: usize, bytes: &[u8]) {
+    let _ = value + 2;
+    let _ = bytes[2];
+    let _ = Duration::from_secs(2);
+    let _ = match value { 2 => true, _ => false };
+    let _ = Status { code: 2.0 };
+}
+"#;
+
+        assert_eq!(magic_number_hits(source), 5);
+    }
+
+    #[test]
+    fn prefer_expect_rule_preserves_formatted_panics() {
+        let source = r#"
+fn values(plain: Option<u8>, captured: Option<u8>, key: &str) {
+    let _ = plain.unwrap_or_else(|| panic!("missing value"));
+    let _ = captured.unwrap_or_else(|| panic!("missing {key}"));
+}
+"#;
+
+        assert_eq!(rule_hits("style.prefer-expect.yml", source), 1);
+    }
+
     #[test]
     fn a_reported_hit_names_the_line_an_editor_calls_it() {
         let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
