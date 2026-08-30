@@ -1,6 +1,6 @@
-use kithara::stream::AudioCodec;
+use kithara_stream::AudioCodec;
 
-use crate::fmp4::bytes::{Mp4Bytes, descriptor, full_box, mp4_box};
+use crate::fmp4::bytes::{Mp4Bytes, descriptor, full_box, mp4_box, mp4_len};
 
 pub(crate) struct CodecDescriptor {
     codec: AudioCodec,
@@ -73,14 +73,17 @@ fn aac_esds(sample_rate: u32, channels: u16, bit_rate: u64) -> Vec<u8> {
 
     let dec_specific = descriptor(0x05, &audio_specific_config);
 
+    // The descriptor carries max and average bit rate as 32-bit fields.
+    let bit_rate = u32::try_from(bit_rate).unwrap_or(u32::MAX);
+
     let mut decoder_config = Mp4Bytes::new();
     decoder_config.push_u8(0x40);
     decoder_config.push_u8(0x15);
     decoder_config.push_u24(0);
-    decoder_config.push_u32(bit_rate.min(u64::from(u32::MAX)) as u32);
-    decoder_config.push_u32(bit_rate.min(u64::from(u32::MAX)) as u32);
+    decoder_config.push_u32(bit_rate);
+    decoder_config.push_u32(bit_rate);
     decoder_config.push_bytes(&dec_specific);
-    let decoder_config = descriptor(0x04, &decoder_config.into_vec());
+    let decoder_config = descriptor(0x04, &decoder_config.into_inner());
 
     let sl_config = descriptor(0x06, &[0x02]);
 
@@ -89,7 +92,7 @@ fn aac_esds(sample_rate: u32, channels: u16, bit_rate: u64) -> Vec<u8> {
     es.push_u8(0);
     es.push_bytes(&decoder_config);
     es.push_bytes(&sl_config);
-    let es_descriptor = descriptor(0x03, &es.into_vec());
+    let es_descriptor = descriptor(0x03, &es.into_inner());
 
     full_box(*b"esds", 0, 0, |buf| {
         buf.push_bytes(&es_descriptor);
@@ -114,7 +117,9 @@ fn aac_audio_specific_config(sample_rate: u32, channels: u16) -> [u8; 2] {
         _ => panic!("unsupported AAC sample rate {sample_rate}"),
     };
     let audio_object_type = 2u8;
-    let channel_config = channels as u8;
+    let Ok(channel_config @ 1..=7) = u8::try_from(channels) else {
+        panic!("unsupported AAC channel count {channels}")
+    };
     [
         (audio_object_type << 3) | (sample_rate_index >> 1),
         ((sample_rate_index & 0x01) << 7) | (channel_config << 3),
@@ -135,14 +140,17 @@ fn aac_he_sample_entry(
 fn aac_esds_with_asc(bit_rate: u64, audio_specific_config: &[u8]) -> Vec<u8> {
     let dec_specific = descriptor(0x05, audio_specific_config);
 
+    // The descriptor carries max and average bit rate as 32-bit fields.
+    let bit_rate = u32::try_from(bit_rate).unwrap_or(u32::MAX);
+
     let mut decoder_config = Mp4Bytes::new();
     decoder_config.push_u8(0x40);
     decoder_config.push_u8(0x15);
     decoder_config.push_u24(0);
-    decoder_config.push_u32(bit_rate.min(u64::from(u32::MAX)) as u32);
-    decoder_config.push_u32(bit_rate.min(u64::from(u32::MAX)) as u32);
+    decoder_config.push_u32(bit_rate);
+    decoder_config.push_u32(bit_rate);
     decoder_config.push_bytes(&dec_specific);
-    let decoder_config = descriptor(0x04, &decoder_config.into_vec());
+    let decoder_config = descriptor(0x04, &decoder_config.into_inner());
 
     let sl_config = descriptor(0x06, &[0x02]);
 
@@ -151,7 +159,7 @@ fn aac_esds_with_asc(bit_rate: u64, audio_specific_config: &[u8]) -> Vec<u8> {
     es.push_u8(0);
     es.push_bytes(&decoder_config);
     es.push_bytes(&sl_config);
-    let es_descriptor = descriptor(0x03, &es.into_vec());
+    let es_descriptor = descriptor(0x03, &es.into_inner());
 
     full_box(*b"esds", 0, 0, |buf| {
         buf.push_bytes(&es_descriptor);
@@ -167,18 +175,19 @@ fn flac_sample_entry(sample_rate: u32, channels: u16, codec_config: &[u8]) -> Ve
 fn flac_dfla(codec_config: &[u8]) -> Vec<u8> {
     full_box(*b"dfLa", 0, 0, |buf| {
         buf.push_u8(0x80);
-        buf.push_u24(codec_config.len() as u32);
+        buf.push_u24(mp4_len(codec_config.len()));
         buf.push_bytes(codec_config);
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara::{self, stream::AudioCodec};
+    use kithara_stream::AudioCodec;
+    use kithara_test_utils::kithara;
 
     use super::CodecDescriptor;
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn flac_descriptor_emits_flac_sample_entry_and_dfla() {
         let codec_config = vec![0x12; 34];
         let descriptor = CodecDescriptor::for_codec(AudioCodec::Flac).expect("flac descriptor");

@@ -84,14 +84,18 @@ fn main() {
     // re-encodes blowing test budgets) on every test-server edit.
     for dir in [
         "../crates/kithara-encode/src",
+        "../crates/kithara-test-fixtures/src/fmp4",
         "../crates/kithara-test-fixtures/src/signal",
-        "src/native/fmp4",
     ] {
         println!("cargo:rerun-if-changed={dir}");
         hash_rs_tree(Path::new(dir), &mut hasher);
     }
     // The encode glue also determines the bytes.
-    for file in ["src/native/hls_stream.rs", "src/native/routes/signal.rs"] {
+    for file in [
+        "src/native/fmp4.rs",
+        "src/native/hls_stream.rs",
+        "src/native/routes/signal.rs",
+    ] {
         if let Ok(bytes) = fs::read(file) {
             bytes.hash(&mut hasher);
         }

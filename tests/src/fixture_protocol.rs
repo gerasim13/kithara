@@ -1,6 +1,9 @@
 use std::num::NonZeroU32;
 
 use kithara::stream::AudioCodec;
+/// Part of the packaged-audio request shape below, owned by the mux that reads
+/// it.
+pub use kithara_test_fixtures::fmp4::GaplessEncoding;
 use kithara_test_fixtures::signal::Wave;
 use serde::{Deserialize, Serialize};
 
@@ -50,6 +53,46 @@ mod serde_audio_codec {
             "pcm" => Ok(AudioCodec::Pcm),
             "adpcm" => Ok(AudioCodec::Adpcm),
             _ => Err(DeError::custom(format!("unknown audio codec string: {s}"))),
+        }
+    }
+}
+
+/// Serde for [`GaplessEncoding`] as `snake_case` strings. The mux owns the
+/// enum and has no reason to depend on serde; the wire shape belongs here.
+mod serde_gapless_encoding {
+    use kithara_test_fixtures::fmp4::GaplessEncoding;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error as DeError};
+
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "serde with = module requires fn(&T, serializer)"
+    )]
+    pub(super) fn serialize<S>(encoding: &GaplessEncoding, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let s: &'static str = match encoding {
+            GaplessEncoding::None => "none",
+            GaplessEncoding::Edts => "edts",
+            GaplessEncoding::ItunSmpb => "itun_smpb",
+            GaplessEncoding::Both => "both",
+        };
+        serializer.serialize_str(s)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<GaplessEncoding, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        match s.as_str() {
+            "none" => Ok(GaplessEncoding::None),
+            "edts" => Ok(GaplessEncoding::Edts),
+            "itun_smpb" => Ok(GaplessEncoding::ItunSmpb),
+            "both" => Ok(GaplessEncoding::Both),
+            _ => Err(DeError::custom(format!(
+                "unknown gapless encoding string: {s}"
+            ))),
         }
     }
 }
@@ -140,39 +183,6 @@ pub enum PackagedSignal {
     Sweep { start_hz: f64, end_hz: f64 },
 }
 
-/// How the fmp4 mux should encode `encoder_delay` / `trailing_delay` into
-/// the init segment. Decoders can read either path; real-world players rely
-/// on different sources (`AVPlayer` reads `iTunSMPB`, our decoder prefers
-/// `elst`), so fixtures must be able to pin which path is exercised.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum GaplessEncoding {
-    /// Don't write any gapless metadata. Decoders fall back to heuristics or
-    /// pass through the full PCM (priming + trailing included).
-    None,
-    /// Write only an edit list (`edts`/`elst`) inside `trak`.
-    #[default]
-    Edts,
-    /// Write only an iTunes freeform tag (`udta`/`meta`/`ilst`/`----` with
-    /// `iTunSMPB`) inside `moov`.
-    ItunSmpb,
-    /// Write both `edts` and `iTunSMPB`. The decoder contract is that `elst`
-    /// wins over `iTunSMPB` here.
-    Both,
-}
-
-impl GaplessEncoding {
-    #[must_use]
-    pub const fn writes_edts(self) -> bool {
-        matches!(self, Self::Edts | Self::Both)
-    }
-
-    #[must_use]
-    pub const fn writes_itunsmpb(self) -> bool {
-        matches!(self, Self::ItunSmpb | Self::Both)
-    }
-}
-
 /// Per-variant override for packaged audio fixtures.
 ///
 /// `codec = Some(_)` swaps the encoder for THIS variant only — used by
@@ -233,7 +243,7 @@ mod serde_audio_codec_opt {
 pub struct PackagedAudioRequest {
     #[serde(with = "serde_audio_codec")]
     pub codec: AudioCodec,
-    #[serde(default)]
+    #[serde(default, with = "serde_gapless_encoding")]
     pub gapless_encoding: GaplessEncoding,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bit_rate: Option<u64>,

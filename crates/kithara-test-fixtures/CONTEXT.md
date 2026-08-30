@@ -140,6 +140,44 @@ for, and a second RIFF writer. They are gone, and nothing may grow back beside
 `signal`: a suite that asserts on decoded samples has to know which sine it is
 asserting against.
 
+## One Way To Package fMP4
+
+`src/fmp4/` is shared exactly as `src/signal/` is, and for the same reason: the
+build script packages the HE-AAC bodies it embeds, and the integration suite's
+HLS server packages its variants while the tests run. `mux_audio_track` turns an
+`EncodedTrack` into an `Fmp4Package`: one init segment plus one media segment
+per `packets_per_segment` access units, each with its duration in seconds
+derived from the track's `timescale`. `Vec::<u8>::from(package)` concatenates
+them into the single body a decoder reads.
+
+It lives here rather than in `kithara-encode` because nothing ships it: the
+workspace *reads* fMP4 in `kithara-decode` and broadcasts ADTS in
+`kithara-broadcast`. A muxer exported from a product crate with no production
+caller is what the `dead_exports` ratchet is for.
+
+- Supported codecs are exactly `AacLc`, `AacHe`, `AacHeV2`, and `Flac`; anything
+  else is `Fmp4MuxError::UnsupportedCodec`. AAC-LC gets a synthesized
+  AudioSpecificConfig because its `codec_config` is empty; HE-AAC and FLAC carry
+  theirs through.
+- `GaplessEncoding` picks which gapless metadata the init segment carries.
+  `AVPlayer` reads `iTunSMPB` and this workspace's decoder prefers `elst`, so a
+  caller that pins one path must be able to say so; `Both` writes both, and the
+  decoder contract is that `elst` wins. It carries no serde derives — the one
+  wire format that ships it owns its own mapping, in
+  `tests/src/fixture_protocol.rs`, beside the identical one for `AudioCodec`.
+- The mux folds the codec's own native priming (1024 frames for AAC-LC, none for
+  the rest) into the `encoder_delay` it writes, so a downstream gapless probe
+  reports the same trim total FFmpeg would have written.
+- RFC 6381 codec strings are *not* produced here. Production only parses
+  `CODECS="..."` from incoming playlists, so generating one stays in the harness
+  that writes manifests.
+- Box writers panic instead of returning an error when a length does not fit its
+  field: a 32-bit box size, a 32-bit `trun` sample size, a signed 32-bit `trun`
+  data offset, or an AAC channel configuration outside 1..=7. Every one measures
+  a buffer already held in memory, so the value cannot arise from input the mux
+  is meant to accept, and threading a `Result` through every box builder would
+  trade a loud impossible failure for noise on every call site.
+
 ## What A Build Costs
 
 Measured with `cargo build -p kithara-test-fixtures` on an already-compiled tree,

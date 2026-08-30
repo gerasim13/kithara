@@ -16,7 +16,7 @@ use num_traits::AsPrimitive;
 
 use crate::{
     fixture_protocol::{HlsRouteKind, HttpErrorRule, eval_http_error, generate_segment},
-    fmp4::{PackagedVariantData, mux_audio_track},
+    fmp4::{PackagedVariantData, mux_packaged_variant},
     hls_spec::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
         ResolvedPackagedAudioSpec, ResolvedPackagedSignal, ResolvedPackagedVariant,
@@ -324,7 +324,7 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                         tracing::info!(key, "cold hls-variant fixture encode");
                         let track = encode_packaged_variant(packaged, variant, segment_frames)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-                        let data = mux_audio_track(&track, packaged.gapless_encoding)
+                        let data = mux_packaged_variant(&track, packaged.gapless_encoding)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
                         cache.store("hls-variant", key.as_bytes(), &encode_variant_blob(&data));
                         Ok(data)

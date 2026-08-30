@@ -1,16 +1,12 @@
-use std::borrow::Cow;
-
-use kithara::{platform::sync::Arc, stream::AudioCodec};
 use kithara_encode::{EncodedAccessUnit, EncodedTrack};
+use kithara_stream::AudioCodec;
+use num_traits::cast;
 use thiserror::Error;
 
-use crate::{
-    fixture_protocol::GaplessEncoding,
-    fmp4::{
-        bytes::{Mp4Bytes, full_box, mp4_box},
-        codec::CodecDescriptor,
-    },
-    rfc6381::Rfc6381Ext,
+use crate::fmp4::{
+    bytes::{Mp4Bytes, full_box, mp4_box, mp4_len},
+    codec::CodecDescriptor,
+    gapless::GaplessEncoding,
 };
 
 /// Native priming the codec's encoder emits at the start of every track,
@@ -25,7 +21,8 @@ const fn codec_native_priming_frames(codec: AudioCodec) -> u64 {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum PackagedMuxError {
+#[non_exhaustive]
+pub enum Fmp4MuxError {
     #[error("codec `{0:?}` does not have an fMP4 descriptor")]
     UnsupportedCodec(AudioCodec),
     #[error("encoded track does not contain access units")]
@@ -34,52 +31,63 @@ pub(crate) enum PackagedMuxError {
     InvalidMediaInfo,
 }
 
+/// One track packaged as fMP4: the init segment plus every media segment.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct PackagedVariantData {
-    pub(crate) init_segment: Arc<Vec<u8>>,
-    pub(crate) rfc6381_codec: Cow<'static, str>,
-    pub(crate) media_segments: Vec<Arc<Vec<u8>>>,
-    pub(crate) segment_durations_secs: Vec<f64>,
+#[non_exhaustive]
+pub struct Fmp4Package {
+    pub init_segment: Vec<u8>,
+    pub media_segments: Vec<Vec<u8>>,
+    pub segment_durations_secs: Vec<f64>,
 }
 
-pub(crate) fn mux_audio_track(
+/// The init segment followed by every media segment, which is the shape a
+/// decoder reads when it is handed one contiguous fMP4 body. Segment
+/// boundaries and durations are dropped: a contiguous body no longer has any.
+impl From<Fmp4Package> for Vec<u8> {
+    fn from(package: Fmp4Package) -> Self {
+        let mut bytes = package.init_segment;
+        for segment in package.media_segments {
+            bytes.extend_from_slice(&segment);
+        }
+        bytes
+    }
+}
+
+/// Packages an encoded track into fMP4 init and media segments.
+///
+/// # Errors
+///
+/// Returns an error when the track carries no access units, is missing the
+/// audio metadata the boxes need, or uses a codec without an fMP4 descriptor.
+pub fn mux_audio_track(
     track: &EncodedTrack,
     gapless_encoding: GaplessEncoding,
-) -> Result<PackagedVariantData, PackagedMuxError> {
+) -> Result<Fmp4Package, Fmp4MuxError> {
     if track.access_units.is_empty() {
-        return Err(PackagedMuxError::EmptyTrack);
+        return Err(Fmp4MuxError::EmptyTrack);
     }
 
     let codec = track
         .media_info
         .codec
-        .ok_or(PackagedMuxError::InvalidMediaInfo)?;
+        .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
     let descriptor =
-        CodecDescriptor::for_codec(codec).ok_or(PackagedMuxError::UnsupportedCodec(codec))?;
-    let rfc6381_codec = track
-        .media_info
-        .rfc6381_codec()
-        .ok_or(PackagedMuxError::UnsupportedCodec(codec))?;
+        CodecDescriptor::for_codec(codec).ok_or(Fmp4MuxError::UnsupportedCodec(codec))?;
     let _ = track
         .media_info
         .sample_rate
-        .ok_or(PackagedMuxError::InvalidMediaInfo)?;
+        .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
     let _ = track
         .media_info
         .channels
-        .ok_or(PackagedMuxError::InvalidMediaInfo)?;
+        .ok_or(Fmp4MuxError::InvalidMediaInfo)?;
 
     let total_duration: u64 = track
         .access_units
         .iter()
         .map(|au| u64::from(au.duration))
         .sum();
-    let init_segment = Arc::new(build_init_segment(
-        track,
-        &descriptor,
-        total_duration,
-        gapless_encoding,
-    ));
+    let init_segment = build_init_segment(track, &descriptor, total_duration, gapless_encoding);
 
     let mut media_segments = Vec::new();
     let mut segment_durations_secs = Vec::new();
@@ -92,15 +100,15 @@ pub(crate) fn mux_audio_track(
             .iter()
             .map(|sample| u64::from(sample.duration))
             .sum::<u64>();
-        media_segments.push(Arc::new(bytes));
-        segment_durations_secs.push(duration as f64 / f64::from(track.timescale));
+        media_segments.push(bytes);
+        let duration_secs = cast::<u64, f64>(duration).unwrap_or(f64::MAX);
+        segment_durations_secs.push(duration_secs / f64::from(track.timescale));
         decode_time = decode_time.saturating_add(duration);
         sequence_number = sequence_number.saturating_add(1);
     }
 
-    Ok(PackagedVariantData {
+    Ok(Fmp4Package {
         init_segment,
-        rfc6381_codec,
         media_segments,
         segment_durations_secs,
     })
@@ -112,8 +120,7 @@ fn build_init_segment(
     total_duration: u64,
     gapless_encoding: GaplessEncoding,
 ) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(ftyp_box());
+    let mut bytes = ftyp_box();
     bytes.extend(moov_box(
         track,
         descriptor,
@@ -129,7 +136,8 @@ fn build_media_segment(
     decode_time: u64,
 ) -> Vec<u8> {
     let moof = moof_box(samples, sequence_number, decode_time, 0);
-    let data_offset = (moof.len() + 8) as i32;
+    let data_offset =
+        i32::try_from(moof.len() + 8).expect("`moof` fits the signed 32-bit `trun` data offset");
     let moof = moof_box(samples, sequence_number, decode_time, data_offset);
     let mut bytes = moof;
     bytes.extend(mdat_box(samples));
@@ -466,11 +474,11 @@ fn tfdt_box(decode_time: u64) -> Vec<u8> {
 
 fn trun_box(samples: &[EncodedAccessUnit], data_offset: i32) -> Vec<u8> {
     full_box(*b"trun", 0, 0x000301, |buf| {
-        buf.push_u32(samples.len() as u32);
+        buf.push_u32(mp4_len(samples.len()));
         buf.push_i32(data_offset);
         for sample in samples {
             buf.push_u32(sample.duration);
-            buf.push_u32(sample.bytes.len() as u32);
+            buf.push_u32(mp4_len(sample.bytes.len()));
         }
     })
 }
@@ -491,11 +499,8 @@ fn push_identity_matrix(buf: &mut Mp4Bytes) {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{
-        self,
-        stream::{ContainerFormat, MediaInfo},
-    };
-    use kithara_encode::{EncodedAccessUnit, EncodedTrack};
+    use kithara_stream::{ContainerFormat, MediaInfo};
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -603,7 +608,7 @@ mod tests {
         init.windows(marker.len()).any(|window| window == marker)
     }
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn init_segment_contains_ftyp_and_moov() {
         let track = test_track();
         let packaged = mux_audio_track(&track, GaplessEncoding::default()).unwrap();
@@ -612,10 +617,9 @@ mod tests {
         assert!(has_marker(init, b"ftyp"));
         assert!(has_marker(init, b"moov"));
         assert!(has_marker(init, b"mp4a"));
-        assert_eq!(packaged.rfc6381_codec.as_ref(), "mp4a.40.2");
     }
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn media_segments_keep_tfdt_monotonic() {
         let track = test_track();
         let packaged = mux_audio_track(&track, GaplessEncoding::default()).unwrap();
@@ -635,7 +639,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(native, flash(false))]
     fn init_segment_contains_flac_sample_entry_and_dfla() {
         let track = flac_track();
         let packaged = mux_audio_track(&track, GaplessEncoding::default()).unwrap();
@@ -643,7 +647,6 @@ mod tests {
 
         assert!(has_marker(init, b"fLaC"));
         assert!(has_marker(init, b"dfLa"));
-        assert_eq!(packaged.rfc6381_codec.as_ref(), "flac");
         assert_eq!(packaged.media_segments.len(), 1);
         assert_eq!(packaged.segment_durations_secs, vec![9216.0 / 48_000.0]);
     }

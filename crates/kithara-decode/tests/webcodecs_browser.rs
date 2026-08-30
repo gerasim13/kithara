@@ -13,7 +13,7 @@ use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_fixtures::{
-    assets::{flac_unknown_length_saw_6s, signal_mp3_track_sine440_187s},
+    assets::{flac_unknown_length_saw_6s, he_aac_v1, he_aac_v2, signal_mp3_track_sine440_187s},
     signal::{SignalDirection, detect_direction},
 };
 use kithara_test_utils::kithara;
@@ -37,20 +37,6 @@ const FLAC_PROBE_STREAMINFO: [u8; 34] = [
 ];
 
 static PROBE_STARTED: Once = Once::new();
-
-struct HeAacV1Fixture;
-
-impl HeAacV1Fixture {
-    const INIT: &'static [u8] = include_bytes!("../../../assets/he_aac_v1_init.mp4");
-    const SEGMENT: &'static [u8] = include_bytes!("../../../assets/he_aac_v1_segment.m4s");
-}
-
-struct HeAacV2Fixture;
-
-impl HeAacV2Fixture {
-    const INIT: &'static [u8] = include_bytes!("../../../assets/he_aac_v2_init.mp4");
-    const SEGMENT: &'static [u8] = include_bytes!("../../../assets/he_aac_v2_segment.m4s");
-}
 
 #[derive(Debug)]
 struct DecodeSummary {
@@ -290,10 +276,7 @@ async fn aac_parity() {
 async fn he_aac_v1_decode() {
     prepare_webcodecs("mp4a.40.5").await;
 
-    let mut bytes = Vec::with_capacity(HeAacV1Fixture::INIT.len() + HeAacV1Fixture::SEGMENT.len());
-    bytes.extend_from_slice(HeAacV1Fixture::INIT);
-    bytes.extend_from_slice(HeAacV1Fixture::SEGMENT);
-    let decoded = decode_he_aac_v1(&bytes).await;
+    let decoded = decode_he_aac_v1(he_aac_v1().bytes()).await;
 
     assert!(decoded.eof, "WebCodecs HE-AAC v1 must reach explicit EOF");
     assert!(
@@ -319,10 +302,7 @@ async fn he_aac_v1_decode() {
 async fn he_aac_v2_decode() {
     prepare_webcodecs("mp4a.40.29").await;
 
-    let mut bytes = Vec::with_capacity(HeAacV2Fixture::INIT.len() + HeAacV2Fixture::SEGMENT.len());
-    bytes.extend_from_slice(HeAacV2Fixture::INIT);
-    bytes.extend_from_slice(HeAacV2Fixture::SEGMENT);
-    let decoded = decode_he_aac_v2(&bytes).await;
+    let decoded = decode_he_aac_v2(he_aac_v2().bytes()).await;
 
     assert!(decoded.eof, "WebCodecs HE-AAC v2 must reach explicit EOF");
     assert!(
@@ -386,30 +366,18 @@ fn webcodecs_runtime_ready(codec: &str) -> bool {
             )
             .is_ok()
         }
-        "mp4a.40.5" => {
-            let mut bytes =
-                Vec::with_capacity(HeAacV1Fixture::INIT.len() + HeAacV1Fixture::SEGMENT.len());
-            bytes.extend_from_slice(HeAacV1Fixture::INIT);
-            bytes.extend_from_slice(HeAacV1Fixture::SEGMENT);
-            DecoderFactory::create_from_media_info(
-                Cursor::new(bytes),
-                &aac_media_info(AudioCodec::AacHe),
-                decoder_config(DecoderBackend::WebCodecs),
-            )
-            .is_ok()
-        }
-        "mp4a.40.29" => {
-            let mut bytes =
-                Vec::with_capacity(HeAacV2Fixture::INIT.len() + HeAacV2Fixture::SEGMENT.len());
-            bytes.extend_from_slice(HeAacV2Fixture::INIT);
-            bytes.extend_from_slice(HeAacV2Fixture::SEGMENT);
-            DecoderFactory::create_from_media_info(
-                Cursor::new(bytes),
-                &aac_media_info(AudioCodec::AacHeV2),
-                decoder_config(DecoderBackend::WebCodecs),
-            )
-            .is_ok()
-        }
+        "mp4a.40.5" => DecoderFactory::create_from_media_info(
+            Cursor::new(he_aac_v1().bytes()),
+            &aac_media_info(AudioCodec::AacHe),
+            decoder_config(DecoderBackend::WebCodecs),
+        )
+        .is_ok(),
+        "mp4a.40.29" => DecoderFactory::create_from_media_info(
+            Cursor::new(he_aac_v2().bytes()),
+            &aac_media_info(AudioCodec::AacHeV2),
+            decoder_config(DecoderBackend::WebCodecs),
+        )
+        .is_ok(),
         _ => false,
     }
 }

@@ -22,6 +22,9 @@ encoded inside a test's wall-clock deadline.
   cases. These compile into the build script only, never into the library.
 - `src/signal/` — waveforms, PCM buffers, and the RIFF writer. The workspace's
   one way to make a signal, at build time or at run time.
+- `src/fmp4/` — the fMP4 mux: an `EncodedTrack` in, init and media segments out.
+  Shared the same way, because the build script packages the bodies it embeds
+  and the integration suite packages its HLS variants while it runs.
 - `build.rs` — resolves every declared case against the store, produces what is
   missing, and writes the accessor module.
 - `src/store.rs` — the store itself: identity, namespace, atomic writes, and the

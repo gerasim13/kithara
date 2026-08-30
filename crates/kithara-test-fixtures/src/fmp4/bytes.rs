@@ -7,16 +7,18 @@ impl Mp4Bytes {
         Self { buf: Vec::new() }
     }
 
-    pub(crate) fn into_vec(self) -> Vec<u8> {
+    pub(crate) fn into_inner(self) -> Vec<u8> {
         self.buf
     }
 
-    pub(crate) const fn len(&self) -> usize {
-        self.buf.len()
-    }
-
-    pub(crate) fn push_bytes(&mut self, value: &[u8]) {
-        self.buf.extend_from_slice(value);
+    delegate::delegate! {
+        to self.buf {
+            pub(crate) const fn len(&self) -> usize;
+            #[call(extend_from_slice)]
+            pub(crate) fn push_bytes(&mut self, value: &[u8]);
+            #[call(push)]
+            pub(crate) fn push_u8(&mut self, value: u8);
+        }
     }
 
     pub(crate) fn push_fourcc(&mut self, value: [u8; 4]) {
@@ -47,13 +49,20 @@ impl Mp4Bytes {
         self.buf.extend_from_slice(&value.to_be_bytes());
     }
 
-    pub(crate) fn push_u8(&mut self, value: u8) {
-        self.buf.push(value);
-    }
-
     pub(crate) fn push_zeroes(&mut self, count: usize) {
         self.buf.resize(self.buf.len() + count, 0);
     }
+}
+
+/// A byte count as the fixed-width integer an MP4 length field carries.
+///
+/// # Panics
+///
+/// Panics above `u32::MAX`. Every caller measures a buffer the muxer already
+/// holds in memory, and a single box that large has no representation in the
+/// 32-bit size field anyway.
+pub(crate) fn mp4_len(bytes: usize) -> u32 {
+    u32::try_from(bytes).expect("MP4 length fits a 32-bit field")
 }
 
 pub(crate) fn mp4_box(name: [u8; 4], contents: impl FnOnce(&mut Mp4Bytes)) -> Vec<u8> {
@@ -61,10 +70,10 @@ pub(crate) fn mp4_box(name: [u8; 4], contents: impl FnOnce(&mut Mp4Bytes)) -> Ve
     contents(&mut payload);
 
     let mut buf = Mp4Bytes::new();
-    buf.push_u32((payload.len() + 8) as u32);
+    buf.push_u32(mp4_len(payload.len() + 8));
     buf.push_fourcc(name);
-    buf.push_bytes(&payload.into_vec());
-    buf.into_vec()
+    buf.push_bytes(&payload.into_inner());
+    buf.into_inner()
 }
 
 pub(crate) fn full_box(
@@ -81,23 +90,25 @@ pub(crate) fn full_box(
 }
 
 pub(crate) fn descriptor(tag: u8, payload: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(payload.len() + 6);
-    buf.push(tag);
+    let mut buf = Mp4Bytes::new();
+    buf.push_u8(tag);
 
     let mut value = payload.len();
     let mut stack = [0u8; 4];
     let mut len = 0;
-    stack[len] = (value & 0x7F) as u8;
+    // The low byte masked to seven bits is the next group; taking it from the
+    // little-endian bytes keeps the narrowing lossless.
+    stack[len] = value.to_le_bytes()[0] & 0x7F;
     len += 1;
     value >>= 7;
     while value > 0 {
-        stack[len] = ((value & 0x7F) as u8) | 0x80;
+        stack[len] = (value.to_le_bytes()[0] & 0x7F) | 0x80;
         len += 1;
         value >>= 7;
     }
     for byte in stack[..len].iter().rev() {
-        buf.push(*byte);
+        buf.push_u8(*byte);
     }
-    buf.extend_from_slice(payload);
-    buf
+    buf.push_bytes(payload);
+    buf.into_inner()
 }

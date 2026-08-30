@@ -6,8 +6,10 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncodedTrack, StreamBackend, StreamEncoder};
-use kithara_integration_tests::{encode_ext::mux_fmp4_bytes, fixture_protocol::GaplessEncoding};
-use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
+use kithara_test_fixtures::{
+    fmp4::{GaplessEncoding, mux_audio_track},
+    signal::{Wave, goertzel_magnitude},
+};
 
 const SAMPLE_RATE: u32 = 48_000;
 const CHANNELS: u16 = 2;
@@ -93,7 +95,9 @@ fn pushed_f32_sine_survives_encode_mux_and_decode() {
         track.access_units.len()
     );
 
-    let decoded = decode_left_channel(mux_fmp4_bytes(&track, GaplessEncoding::None));
+    let decoded = decode_left_channel(Vec::from(
+        mux_audio_track(&track, GaplessEncoding::None).expect("mux packaged track into fMP4"),
+    ));
 
     let priming_slack = 2 * StreamEncoder::FRAME_SAMPLES;
     assert!(
