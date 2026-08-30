@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::{
     ops::Range,
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
@@ -196,7 +198,7 @@ impl VariantSegments {
             scope,
             held: HeldReaders::default(),
             #[cfg(test)]
-            opens: std::sync::atomic::AtomicUsize::new(0),
+            opens: AtomicUsize::new(0),
             init,
             entries,
         }
