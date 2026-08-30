@@ -19,6 +19,7 @@ use kithara_stream::{
 use tracing::warn;
 
 use crate::pipeline::{
+    blend::join_frame_count,
     decode::{
         core::DecoderFactory, generation::DecoderGeneration, transition::INCOMING_PRIME_STEPS,
     },
@@ -298,6 +299,9 @@ fn run<T: StreamType>(job: PendingJob<T>) {
         if landing.is_some_and(|landing| !landing.is_zero()) {
             generation.notify_seek(&DropChunks);
         }
+        if let Some(gate) = &construction_gate {
+            gate.disarm();
+        }
         if matches!(purpose, DecoderBuildPurpose::Incoming(_)) {
             prime_incoming(&mut generation, seek_epoch)?;
         }
@@ -340,6 +344,7 @@ fn run<T: StreamType>(job: PendingJob<T>) {
 }
 
 fn prime_incoming(generation: &mut DecoderGeneration, seek_epoch: u64) -> Result<(), DecodeError> {
+    let target_frames = join_frame_count(generation.blender_profile().spec());
     for _ in 0..INCOMING_PRIME_STEPS {
         match generation.next_chunk()? {
             DecoderChunkOutcome::Chunk(chunk) => {
@@ -349,6 +354,12 @@ fn prime_incoming(generation: &mut DecoderGeneration, seek_epoch: u64) -> Result
                 };
                 if !chunk.samples.is_empty() {
                     generation.stage(chunk);
+                }
+                if generation
+                    .staged_span()
+                    .is_some_and(|(start, end, _)| end.saturating_sub(start) >= target_frames)
+                {
+                    break;
                 }
             }
             DecoderChunkOutcome::Pending(_) => break,

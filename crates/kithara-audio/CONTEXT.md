@@ -401,10 +401,12 @@ Ramp counters are `u16`, so the per-frame gain is an exact `f32::from`.
 readiness gate. The construction read goes through the **blocking** off-RT
 `Stream::read` adapter: every `OpenedReader` carries its own `ConstructionGate`,
 shared only with that reader's `SharedStream` clone. The initial builder and
-`RebuildPort` arm their reader-local gate around each off-RT factory call;
-incoming rebuilds keep it armed for their bounded initial PCM prime. They disarm
-it after a normal return, join error, or caught panic. A rebuild therefore cannot
-switch an active decoder reader into blocking mode. Steady-state reads
+`RebuildPort` arm their reader-local gate around each off-RT factory call and
+exact seek, then disarm it before the bounded initial incoming PCM prime. The
+prime uses steady-state non-blocking reads and stops at the existing join-frame
+budget. They disarm the gate after a normal return, join error, or caught panic.
+A rebuild therefore cannot switch an active decoder reader into blocking mode.
+Steady-state reads
 use non-blocking `Stream::probe_read`; on-core seeks use `probe_seek` (position
 math only, no `prime_seek_range` spin on the forbid path). The gate selects the
 read mode and nothing else: `SharedStream`'s `Seek` is the blocking adapter in
