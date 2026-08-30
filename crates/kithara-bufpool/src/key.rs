@@ -152,6 +152,7 @@ impl PoolKey for f32 {
         SampleBuffer::new(core.0.acquire())
     }
 
+    #[inline]
     fn __get_with_len(
         core: &Self::Core,
         len: usize,

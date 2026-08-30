@@ -32,6 +32,7 @@ where
         self.value.drain(range)
     }
 
+    #[inline]
     pub(super) fn ensure_len(&mut self, min_len: usize) -> Result<(), PoolError> {
         if min_len <= self.value.len() {
             return Ok(());

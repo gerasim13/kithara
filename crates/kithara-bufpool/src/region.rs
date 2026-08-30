@@ -47,6 +47,7 @@ impl<S> PoolRegion<S> {
     ///
     /// Returns an error when the requested capacity overflows, exceeds either
     /// hard budget, or cannot be allocated.
+    #[inline]
     pub fn get_with_len<K>(&self, len: usize) -> Result<K::Buffer, PoolError>
     where
         K: PoolKey,
