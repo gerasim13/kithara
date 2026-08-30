@@ -1,7 +1,7 @@
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_test_macros as kithara;
 
-use crate::signal::{Pcm, Wave, wav};
+use crate::signal::{Pcm, SweepMode, Wave, wav};
 
 struct Consts;
 
@@ -185,6 +185,24 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::RATE_48K,
     Consts::STEREO,
     Consts::FRAMES_162S_48K,
+    None
+)]
+// A chirp reads differently at every position, which a steady tone does not.
+// The multi-deck mixing tests place several decks in one body at different
+// offsets and need their stems to stay independent; the two directions give
+// them a second such body that never matches the first.
+#[case::sweep_up_60s(
+    Wave::sweep(200.0, 2_000.0, Consts::FRAMES_60S_44K1, SweepMode::Linear),
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
+    None
+)]
+#[case::sweep_down_60s(
+    Wave::sweep(2_000.0, 200.0, Consts::FRAMES_60S_44K1, SweepMode::Linear),
+    Consts::RATE_44K1,
+    Consts::STEREO,
+    Consts::FRAMES_60S_44K1,
     None
 )]
 fn signal_mp3(

@@ -80,11 +80,15 @@ const MP3_TWO: &[Media] = &[
     Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
     Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
 ];
+// Alternating media put two decks in the same body, `CAPTURE_START_STEP_SECS`
+// apart. The mix oracle solves for one gain per deck, which needs their stems
+// independent, so a body read twice has to read differently at the two
+// offsets: chirps, not steady tones.
 const MP3_FOUR: &[Media] = &[
-    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
-    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
-    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
-    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_UP_60S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_DOWN_60S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_UP_60S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_DOWN_60S),
 ];
 const HLS_ONE: &[Media] = &[Media::Hls];
 const HLS_MP3_TWO: &[Media] = &[Media::Hls, Media::Mp3(SignalAsset::MP3_SINE880_48K_162S)];
