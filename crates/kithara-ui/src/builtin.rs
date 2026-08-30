@@ -4,97 +4,42 @@ use std::sync::LazyLock;
 use crate::render::Skin;
 use crate::{
     ids::SourceUri,
-    skin::{SkinDoc, parse_skin},
-    source::MemResolver,
+    skin::{SkinDoc, load_skin},
+    source::{Limits, MemResolver},
     text::{TextDoc, parse_text},
 };
 
+// `ASSETS` and `PICTURES`: every document and picture the shipped folder holds,
+// read from the folder at build time. See `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/builtin_assets.rs"));
+
 pub const MICRO_PRESET: &str = "micro.klayout.ron";
 pub const PLAYER_PRESET: &str = "player.klayout.ron";
-pub const DARK_SKIN: &str = include_str!("../assets/kithara-dark.kskin.ron");
+pub const DARK_SKIN_PATH: &str = "kithara-dark.kskin.ron";
+/// Every skin this crate ships, in the order a picker offers them. The first is
+/// the one a host wears when it names none.
+///
+/// Paper, neon and soft are written over the dark one. Paper restates its
+/// palette and nothing else; neon and soft restate measurements and frames as
+/// well, which is where a skin stops being a colour scheme.
+pub const SKIN_PATHS: [&str; 4] = [
+    DARK_SKIN_PATH,
+    "kithara-light.kskin.ron",
+    "kithara-neon.kskin.ron",
+    "kithara-soft.kskin.ron",
+];
 pub const TEXT_EN: &str = include_str!("../assets/kithara-en.ktext.ron");
 
+/// The shipped folder, resolved from memory, for a host with no checkout to
+/// read it from.
 #[must_use]
 pub fn resolver() -> MemResolver {
-    const ASSETS: &[(&str, &str)] = &[
-        (MICRO_PRESET, include_str!("../assets/micro.klayout.ron")),
-        (PLAYER_PRESET, include_str!("../assets/player.klayout.ron")),
-        (
-            "modules/deck-micro.kmodule.ron",
-            include_str!("../assets/modules/deck-micro.kmodule.ron"),
-        ),
-        (
-            "modules/deck-micro/bar.kmodule.ron",
-            include_str!("../assets/modules/deck-micro/bar.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu.kmodule.ron",
-            include_str!("../assets/modules/app-menu.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/hint-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/hint-row.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/layout-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/layout-row.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/module-cell.kmodule.ron",
-            include_str!("../assets/modules/app-menu/module-cell.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/toggle-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/toggle-row.kmodule.ron"),
-        ),
-        (
-            "modules/app-menu/window-row.kmodule.ron",
-            include_str!("../assets/modules/app-menu/window-row.kmodule.ron"),
-        ),
-        (
-            "modules/master-clock.kmodule.ron",
-            include_str!("../assets/modules/master-clock.kmodule.ron"),
-        ),
-        (
-            "modules/master-clock/surface.kmodule.ron",
-            include_str!("../assets/modules/master-clock/surface.kmodule.ron"),
-        ),
-        (
-            "modules/master-clock/source-row.kmodule.ron",
-            include_str!("../assets/modules/master-clock/source-row.kmodule.ron"),
-        ),
-        (
-            "modules/global-bar.kmodule.ron",
-            include_str!("../assets/modules/global-bar.kmodule.ron"),
-        ),
-        (
-            "modules/deck.kmodule.ron",
-            include_str!("../assets/modules/deck.kmodule.ron"),
-        ),
-        (
-            "modules/deck/transport.kmodule.ron",
-            include_str!("../assets/modules/deck/transport.kmodule.ron"),
-        ),
-        (
-            "modules/deck/quality.kmodule.ron",
-            include_str!("../assets/modules/deck/quality.kmodule.ron"),
-        ),
-        (
-            "modules/deck/quality/auto.kmodule.ron",
-            include_str!("../assets/modules/deck/quality/auto.kmodule.ron"),
-        ),
-        (
-            "modules/deck/quality/row.kmodule.ron",
-            include_str!("../assets/modules/deck/quality/row.kmodule.ron"),
-        ),
-        (
-            "modules/library.kmodule.ron",
-            include_str!("../assets/modules/library.kmodule.ron"),
-        ),
-    ];
     let mut resolver = MemResolver::default();
     for (path, text) in ASSETS {
         resolver.insert(path, text);
+    }
+    for (path, bytes) in PICTURES {
+        resolver.insert_bytes(path, bytes);
     }
     resolver
 }
@@ -102,7 +47,7 @@ pub fn resolver() -> MemResolver {
 #[must_use]
 pub fn skin_doc() -> &'static SkinDoc {
     static SKIN_DOC: LazyLock<SkinDoc> = LazyLock::new(|| {
-        parse_skin(DARK_SKIN, &skin_origin())
+        load_skin(&resolver(), DARK_SKIN_PATH, &Limits::default())
             .unwrap_or_else(|error| panic!("embedded kithara dark skin must be valid: {error}"))
     });
     &SKIN_DOC
@@ -117,18 +62,31 @@ pub fn text_doc() -> &'static TextDoc {
     &TEXT_DOC
 }
 
+/// The skin a host wears when it names none.
 #[cfg(feature = "render")]
 #[must_use]
 pub fn skin() -> &'static Skin {
-    static SKIN: LazyLock<Skin> = LazyLock::new(|| {
-        Skin::resolve(skin_doc().clone(), text_doc(), &skin_origin())
-            .unwrap_or_else(|error| panic!("embedded kithara dark skin must resolve: {error}"))
-    });
-    &SKIN
+    &skins()[0]
 }
 
-fn skin_origin() -> SourceUri {
-    SourceUri("builtin:kithara-dark.kskin.ron".to_owned())
+/// Every shipped skin, resolved, in the order [`SKIN_PATHS`] declares.
+#[cfg(feature = "render")]
+#[must_use]
+pub fn skins() -> &'static [Skin] {
+    static SKINS: LazyLock<Vec<Skin>> = LazyLock::new(|| {
+        let resolver = resolver();
+        SKIN_PATHS
+            .iter()
+            .map(|path| {
+                let origin = SourceUri((*path).to_owned());
+                let document = load_skin(&resolver, path, &Limits::default())
+                    .unwrap_or_else(|error| panic!("embedded skin {path} must be valid: {error}"));
+                Skin::resolve(document, text_doc(), &origin, &resolver)
+                    .unwrap_or_else(|error| panic!("embedded skin {path} must resolve: {error}"))
+            })
+            .collect()
+    });
+    &SKINS
 }
 
 fn text_origin() -> SourceUri {

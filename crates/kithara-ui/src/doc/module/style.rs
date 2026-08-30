@@ -1,42 +1,80 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum IconName {
+macro_rules! icon_names {
+    ($($name:ident),* $(,)?) => {
+        /// The face an icon is drawn with, named once for the document that
+        /// asks for it and the host that hands it over.
+        #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+        #[non_exhaustive]
+        pub enum IconName {
+            $($name,)*
+        }
+
+        impl IconName {
+            /// Every icon a document may name, in the order they are
+            /// declared. One list stands behind the enum and this, so a face
+            /// is added by writing its name once.
+            pub const ALL: &'static [Self] = &[$(Self::$name,)*];
+        }
+    };
+}
+
+icon_names! {
     Activity,
     Bell,
+    Charts,
     ChevronDown,
     ChevronRight,
     ChevronUp,
+    ChevronsLeft,
+    ChevronsRight,
     Circle,
     Clock,
+    Collection,
     Crown,
     Disc,
     Faders,
     FastForward,
+    Folder,
     FolderPlus,
     Gear,
     Headphones,
+    Home,
+    Instrument,
+    Kithara,
     Lock,
     LockOpen,
     Maximize,
     Menu,
     Monitor,
+    MusicNote,
     Orbit,
+    Pause,
     Play,
     PlayReverse,
     Playlist,
+    PlaylistAdd,
     Plus,
     Radio,
     RefreshCw,
+    Repeat,
+    RepeatOnce,
     Rewind,
     Save,
+    Search,
+    Shuffle,
+    SkipBack,
+    SkipForward,
     SlidersHorizontal,
     SpeakerHigh,
+    SpeakerLow,
+    SpeakerX,
+    Usb,
     Waveform,
     X,
     ZoomIn,
     ZoomOut,
+    Zvuk,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,33 +135,68 @@ pub enum WindowControlsStyle {
     CloseFramed,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum TextStyle {
-    #[default]
-    Body,
-    Brand,
-    BrandSmall,
-    DeckLetter,
-    TrackTitle,
-    Telemetry,
-    MicroLabel,
-    Section,
-    Mono,
-    PivotArrow,
-    PivotDuration,
-    PivotFooter,
-    PivotLabel,
-    PivotRatio,
-    PivotSmall,
-    PivotTrackArtist,
-    PivotTrackTitle,
-    PivotTitle,
-    PivotValue,
-    Caption,
-    VisFooter,
-    VisMeta,
-    VisTitle,
+/// The typographic roles a document may name, written once and expanded
+/// wherever the set has to appear again: the word a document writes, the entry
+/// a skin gives it, and the lookup that joins the two.
+macro_rules! text_roles {
+    ($expand:ident) => {
+        $expand! {
+            #[default]
+            body => Body,
+            brand => Brand,
+            brand_small => BrandSmall,
+            caption => Caption,
+            deck_letter => DeckLetter,
+            micro_label => MicroLabel,
+            mono => Mono,
+            pivot_arrow => PivotArrow,
+            pivot_duration => PivotDuration,
+            pivot_footer => PivotFooter,
+            pivot_label => PivotLabel,
+            pivot_ratio => PivotRatio,
+            pivot_small => PivotSmall,
+            pivot_track_artist => PivotTrackArtist,
+            pivot_track_title => PivotTrackTitle,
+            pivot_title => PivotTitle,
+            pivot_value => PivotValue,
+            section => Section,
+            telemetry => Telemetry,
+            track_title => TrackTitle,
+            vis_footer => VisFooter,
+            vis_meta => VisMeta,
+            vis_title => VisTitle,
+        }
+    };
+}
+
+pub(crate) use text_roles;
+
+macro_rules! define_text_styles {
+    ($($(#[$attr:meta])* $field:ident => $role:ident),* $(,)?) => {
+        #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+        #[non_exhaustive]
+        pub enum TextStyle {
+            $($(#[$attr])* $role,)*
+        }
+    };
+}
+
+text_roles!(define_text_styles);
+
+impl TextStyle {
+    /// The words this style sets, which are not always the words the document
+    /// wrote: a micro label is small capitals, so it is set in capitals whatever
+    /// case it was given.
+    ///
+    /// Every host asks here rather than deciding for itself, because the case a
+    /// run is set in changes how wide it is, and two hosts that answered
+    /// separately would lay the same document out differently.
+    pub(crate) fn cased(self, content: String) -> String {
+        match self {
+            Self::MicroLabel => content.to_uppercase(),
+            _ => content,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -172,35 +245,72 @@ pub enum WaveStyle {
     Micro,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 #[non_exhaustive]
-pub enum TrackColumn {
-    Index,
-    Deck,
-    Title,
-    Artist,
-    Bpm,
-    Key,
-    Time,
-    Energy,
-    Transition,
+pub struct TableColumn {
+    id: String,
+    label: String,
+    style: TableColumnStyle,
+    width: f32,
+    #[serde(default)]
+    flexible: bool,
 }
 
-impl TrackColumn {
-    #[must_use]
-    pub const fn endpoint_name(self) -> &'static str {
-        match self {
-            Self::Index => "index",
-            Self::Deck => "deck",
-            Self::Title => "title",
-            Self::Artist => "artist",
-            Self::Bpm => "bpm",
-            Self::Key => "key",
-            Self::Time => "time",
-            Self::Energy => "energy",
-            Self::Transition => "transition",
+impl TableColumn {
+    pub fn new<I, L>(id: I, label: L, style: TableColumnStyle, width: f32, flexible: bool) -> Self
+    where
+        I: Into<String>,
+        L: Into<String>,
+    {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            style,
+            width,
+            flexible,
         }
     }
+
+    #[must_use]
+    pub fn flexible(&self) -> bool {
+        self.flexible
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    #[must_use]
+    pub fn style(&self) -> TableColumnStyle {
+        self.style
+    }
+
+    #[must_use]
+    pub fn width(&self) -> f32 {
+        self.width
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum TableColumnStyle {
+    Index,
+    Badge,
+    Primary,
+    #[default]
+    Secondary,
+    Metric,
+    Mono,
+    Time,
+    Meter,
+    Transition,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -211,4 +321,27 @@ pub enum Tone {
     Accent,
     Success,
     Danger,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::TextStyle;
+
+    #[kithara::test]
+    fn a_micro_label_is_set_in_capitals() {
+        assert_eq!(
+            TextStyle::MicroLabel.cased("0.0.1-alpha4".to_owned()),
+            "0.0.1-ALPHA4"
+        );
+    }
+
+    #[kithara::test]
+    fn every_other_style_keeps_the_case_the_document_wrote() {
+        assert_eq!(
+            TextStyle::Body.cased("0.0.1-alpha4".to_owned()),
+            "0.0.1-alpha4"
+        );
+    }
 }

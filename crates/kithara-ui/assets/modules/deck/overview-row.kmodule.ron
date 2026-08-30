@@ -6,11 +6,11 @@
     parameters: ["deck", "letter"],
     root: Row(
         gap: 0.0,
-        size: (w: Fill, h: Fixed(46.0)),
+        size: (w: Fill, h: Fixed(40.0)),
         children: [
             Row(
                 id: "letter-cell",
-                size: (w: Fixed(30.0), h: Fill),
+                size: (w: Fixed(28.0), h: Fill),
                 background: BgPanel,
                 frame: (top: false, right: true, bottom: false, left: false),
                 children: [
@@ -31,7 +31,7 @@
             ),
             Row(
                 id: "remain-cell",
-                size: (w: Fixed(66.0), h: Fill),
+                size: (w: Fixed(62.0), h: Fill),
                 background: BgPanel,
                 frame: (top: false, right: false, bottom: false, left: true),
                 children: [

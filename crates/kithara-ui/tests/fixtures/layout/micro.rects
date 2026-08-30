@@ -1,0 +1,153 @@
+# micro.klayout.ron @ 1280x720
+deck-a 0.000 0.000 1280.000 720.000
+  deck-a/column[0] 0.000 0.000 1280.000 720.000
+    deck-a/column[0]/row[0] 0.000 0.000 1280.000 44.000
+      deck-a/column[0]/row[0]/menu 0.000 0.000 40.000 44.000
+        deck-a/bar/menu/pop 0.000 0.000 40.000 44.000
+      deck-a/column[0]/row[0]/play-cell 40.000 0.000 38.000 44.000
+        deck-a/bar/play 40.000 0.000 38.000 44.000
+      deck-a/column[0]/row[0]/now-cell 78.000 0.000 109.041 44.000
+        deck-a/bar/summary 78.000 0.000 109.041 44.000
+      deck-a/column[0]/row[0]/drag-cell -
+        deck-a/bar/drag -
+      deck-a/column[0]/row[0]/wave-cell 187.041 0.000 529.959 44.000
+        deck-a/bar/wave 187.041 0.000 529.959 44.000
+      deck-a/column[0]/row[0]/volume-cell 717.000 0.000 99.000 44.000
+        deck-a/bar/speaker 726.000 0.000 11.000 44.000
+        deck-a/bar/vu 743.000 11.000 64.000 22.000
+      deck-a/bar/stream/pop 816.000 0.000 42.000 44.000
+      deck-a/column[0]/row[0]/telemetry-cell 858.000 0.000 80.000 44.000
+        deck-a/column[0]/row[0]/telemetry-cell/cpu 870.000 0.000 22.000 44.000
+          deck-a/bar/cpu-label 870.000 0.000 18.000 44.000
+          deck-a/bar/cpu-value 892.000 0.000 0.000 44.000
+        deck-a/column[0]/row[0]/telemetry-cell/latency 904.000 0.000 22.000 44.000
+          deck-a/bar/latency-label 904.000 0.000 18.000 44.000
+          deck-a/bar/latency-value 926.000 0.000 0.000 44.000
+      deck-a/bar/clock/pop 938.000 0.000 163.000 44.000
+      deck-a/bar/rec 1101.000 0.000 61.000 44.000
+      deck-a/column[0]/row[0]/settings-cell 1162.000 0.000 38.000 44.000
+        deck-a/bar/settings 1162.000 0.000 38.000 44.000
+      deck-a/column[0]/row[0]/window-cell 1200.000 0.000 80.000 44.000
+        deck-a/bar/window 1200.000 0.000 80.000 44.000
+    deck-a/column[0]/column[1] 0.000 45.000 1280.000 337.000
+      deck-a/deck/wave 0.000 45.000 1280.000 305.000
+      deck-a/column[0]/column[1]/row[1] 0.000 351.000 1280.000 30.000
+        deck-a/deck/transport/cue 0.000 351.000 58.000 30.000
+        deck-a/deck/transport/play 58.000 351.000 72.000 30.000
+        deck-a/deck/transport/sync 130.000 351.000 58.000 30.000
+        deck-a/deck/transport/reverse 188.000 351.000 48.000 30.000
+        deck-a/deck/transport/loop 236.000 351.000 74.000 30.000
+        deck-a/deck/transport/jump-back 310.000 351.000 52.000 30.000
+        deck-a/deck/transport/jump-forward 362.000 351.000 52.000 30.000
+        deck-a/column[0]/column[1]/row[1]/spacer 414.000 351.000 661.200 30.000
+        deck-a/deck/transport/zoom-out 1075.200 351.000 36.000 30.000
+        deck-a/deck/transport/zoom-in 1111.200 351.000 36.000 30.000
+        deck-a/deck/transport/stream/pop 1147.200 351.000 42.000 30.000
+        deck-a/column[0]/column[1]/row[1]/tempo 1189.200 351.000 90.800 30.000
+          deck-a/deck/transport/tempo-label 1200.200 357.000 28.800 18.000
+          deck-a/deck/transport/tempo-value 1236.000 357.000 33.000 18.000
+      deck-a/column[0]/column[1]/extra-controls 0.000 382.000 1280.000 0.000
+    deck-a/column[0]/column[2] 0.000 383.000 1280.000 337.000
+      deck-a/library/tracks 0.000 383.000 1280.000 337.000
+# micro.klayout.ron @ 960x600
+deck-a 0.000 0.000 960.000 600.000
+  deck-a/column[0] 0.000 0.000 960.000 600.000
+    deck-a/column[0]/row[0] 0.000 0.000 960.000 44.000
+      deck-a/column[0]/row[0]/menu 0.000 0.000 40.000 44.000
+        deck-a/bar/menu/pop 0.000 0.000 40.000 44.000
+      deck-a/column[0]/row[0]/play-cell 40.000 0.000 38.000 44.000
+        deck-a/bar/play 40.000 0.000 38.000 44.000
+      deck-a/column[0]/row[0]/now-cell 78.000 0.000 109.041 44.000
+        deck-a/bar/summary 78.000 0.000 109.041 44.000
+      deck-a/column[0]/row[0]/drag-cell -
+        deck-a/bar/drag -
+      deck-a/column[0]/row[0]/wave-cell 187.041 0.000 289.959 44.000
+        deck-a/bar/wave 187.041 0.000 289.959 44.000
+      deck-a/column[0]/row[0]/volume-cell 477.000 0.000 99.000 44.000
+        deck-a/bar/speaker 486.000 0.000 11.000 44.000
+        deck-a/bar/vu 503.000 11.000 64.000 22.000
+      deck-a/bar/stream/pop 576.000 0.000 42.000 44.000
+      deck-a/column[0]/row[0]/telemetry-cell -
+        deck-a/column[0]/row[0]/telemetry-cell/cpu -
+          deck-a/bar/cpu-label -
+          deck-a/bar/cpu-value -
+        deck-a/column[0]/row[0]/telemetry-cell/latency -
+          deck-a/bar/latency-label -
+          deck-a/bar/latency-value -
+      deck-a/bar/clock/pop 618.000 0.000 163.000 44.000
+      deck-a/bar/rec 781.000 0.000 61.000 44.000
+      deck-a/column[0]/row[0]/settings-cell 842.000 0.000 38.000 44.000
+        deck-a/bar/settings 842.000 0.000 38.000 44.000
+      deck-a/column[0]/row[0]/window-cell 880.000 0.000 80.000 44.000
+        deck-a/bar/window 880.000 0.000 80.000 44.000
+    deck-a/column[0]/column[1] 0.000 45.000 960.000 277.000
+      deck-a/deck/wave 0.000 45.000 960.000 245.000
+      deck-a/column[0]/column[1]/row[1] 0.000 291.000 960.000 30.000
+        deck-a/deck/transport/cue 0.000 291.000 58.000 30.000
+        deck-a/deck/transport/play 58.000 291.000 72.000 30.000
+        deck-a/deck/transport/sync 130.000 291.000 58.000 30.000
+        deck-a/deck/transport/reverse 188.000 291.000 48.000 30.000
+        deck-a/deck/transport/loop 236.000 291.000 74.000 30.000
+        deck-a/deck/transport/jump-back 310.000 291.000 52.000 30.000
+        deck-a/deck/transport/jump-forward 362.000 291.000 52.000 30.000
+        deck-a/column[0]/column[1]/row[1]/spacer 414.000 291.000 341.200 30.000
+        deck-a/deck/transport/zoom-out 755.200 291.000 36.000 30.000
+        deck-a/deck/transport/zoom-in 791.200 291.000 36.000 30.000
+        deck-a/deck/transport/stream/pop 827.200 291.000 42.000 30.000
+        deck-a/column[0]/column[1]/row[1]/tempo 869.200 291.000 90.800 30.000
+          deck-a/deck/transport/tempo-label 880.200 297.000 28.800 18.000
+          deck-a/deck/transport/tempo-value 916.000 297.000 33.000 18.000
+      deck-a/column[0]/column[1]/extra-controls 0.000 322.000 960.000 0.000
+    deck-a/column[0]/column[2] 0.000 323.000 960.000 277.000
+      deck-a/library/tracks 0.000 323.000 960.000 277.000
+# micro.klayout.ron @ 320x240
+deck-a 0.000 0.000 320.000 240.000
+  deck-a/column[0] 0.000 0.000 320.000 240.000
+    deck-a/column[0]/row[0] 0.000 0.000 320.000 44.000
+      deck-a/column[0]/row[0]/menu 0.000 0.000 40.000 44.000
+        deck-a/bar/menu/pop 0.000 0.000 40.000 44.000
+      deck-a/column[0]/row[0]/play-cell 40.000 0.000 38.000 44.000
+        deck-a/bar/play 40.000 0.000 38.000 44.000
+      deck-a/column[0]/row[0]/now-cell -
+        deck-a/bar/summary -
+      deck-a/column[0]/row[0]/drag-cell 78.000 0.000 162.000 44.000
+        deck-a/bar/drag 78.000 0.000 162.000 44.000
+      deck-a/column[0]/row[0]/wave-cell -
+        deck-a/bar/wave -
+      deck-a/column[0]/row[0]/volume-cell -
+        deck-a/bar/speaker -
+        deck-a/bar/vu -
+      deck-a/bar/stream/pop -
+      deck-a/column[0]/row[0]/telemetry-cell -
+        deck-a/column[0]/row[0]/telemetry-cell/cpu -
+          deck-a/bar/cpu-label -
+          deck-a/bar/cpu-value -
+        deck-a/column[0]/row[0]/telemetry-cell/latency -
+          deck-a/bar/latency-label -
+          deck-a/bar/latency-value -
+      deck-a/bar/clock/pop -
+      deck-a/bar/rec -
+      deck-a/column[0]/row[0]/settings-cell -
+        deck-a/bar/settings -
+      deck-a/column[0]/row[0]/window-cell 240.000 0.000 80.000 44.000
+        deck-a/bar/window 240.000 0.000 80.000 44.000
+    deck-a/column[0]/column[1] 0.000 45.000 320.000 195.000
+      deck-a/deck/wave 0.000 45.000 320.000 163.000
+      deck-a/column[0]/column[1]/row[1] 0.000 209.000 320.000 30.000
+        deck-a/deck/transport/cue 0.000 209.000 58.000 30.000
+        deck-a/deck/transport/play 58.000 209.000 72.000 30.000
+        deck-a/deck/transport/sync 130.000 209.000 58.000 30.000
+        deck-a/deck/transport/reverse 188.000 209.000 48.000 30.000
+        deck-a/deck/transport/loop 236.000 209.000 74.000 30.000
+        deck-a/deck/transport/jump-back 310.000 209.000 10.000 30.000
+        deck-a/deck/transport/jump-forward 320.000 209.000 0.000 30.000
+        deck-a/column[0]/column[1]/row[1]/spacer 320.000 209.000 0.000 30.000
+        deck-a/deck/transport/zoom-out 320.000 209.000 0.000 30.000
+        deck-a/deck/transport/zoom-in 320.000 209.000 0.000 30.000
+        deck-a/deck/transport/stream/pop 320.000 209.000 0.000 30.000
+        deck-a/column[0]/column[1]/row[1]/tempo 320.000 209.000 0.000 30.000
+          deck-a/deck/transport/tempo-label 320.000 215.000 0.000 18.000
+          deck-a/deck/transport/tempo-value 327.000 215.000 0.000 18.000
+      deck-a/column[0]/column[1]/extra-controls 0.000 240.000 320.000 0.000
+    deck-a/column[0]/column[2] -
+      deck-a/library/tracks -
