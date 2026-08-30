@@ -140,12 +140,6 @@ e2e-resamplers *ARGS:
 # the UI pipeline's single entrypoint; the general workspace lane deliberately
 # excludes the same tests.
 #
-# One binary takes both sets, so a difference between them is a difference
-# between the hosts rather than between two builds of the same documents. Both
-# rasterise on a graphics device, neither opens a window. `parity-budget.txt`
-# prices each page, and a page over its price - or missing from a set - ends
-# this non-zero.
-#
 # The frame and page harnesses live behind their own feature, so the lane above
 # does not compile them and the censuses inside them - one row per control the
 # document can name, one per gallery page - were checked by hand or not at all.
@@ -162,22 +156,34 @@ ui:
     #!/usr/bin/env bash
     set -euo pipefail
     dir="$PWD/target/parity"
-    rm -rf "$dir/iced" "$dir/masonry" "$dir/masks" "$dir/scenario" "$dir/studio"
+    rm -rf "$dir/scenario"
     KITHARA_UI_SCENARIO_CAPTURE="$dir/scenario" just test run --lane=ui
     just test run --lane=ui-doc
     just test run --lane=ui-perf
-    gallery=(cargo run -p kithara-ui --example gallery --features kithara-ui/capture,kithara-ui/masonry --)
-    "${gallery[@]}" --shoot "$dir/iced"
-    "${gallery[@]}" --host retained --shoot "$dir/masonry"
-    "${gallery[@]}" --compare "$dir/iced" "$dir/masonry" "$dir/masks" \
-      --budget crates/kithara-ui/examples/gallery/parity-budget.txt
-    KITHARA_STUDIO_CAPTURE="$dir/studio" \
-      cargo test -p kithara-app --lib --no-default-features \
-        --features masonry,stretch-signalsmith \
-        studio_capture_writes_both_hosts -- --nocapture
-    "${gallery[@]}" --compare "$dir/studio/iced" "$dir/studio/masonry" "$dir/studio/masks" \
-      --budget crates/kithara-app/assets/ui/parity-budget.txt
+    just test parity --dir "$dir"
     cargo test -p kithara-ui --test gallery --features kithara-ui/capture --profile test-release
+
+# The picture parity programme on its own. `just test ui` runs it after the UI
+# lanes; run it alone to re-check a drawing change without paying for the
+# suites again.
+#
+# One binary takes both sets, so a difference between them is a difference
+# between the hosts rather than between two builds of the same documents. Both
+# rasterise on a graphics device, neither opens a window. `parity-budget.txt`
+# prices each page, and a page over its price - or missing from a set - ends
+# this non-zero.
+#
+# One control is then photographed on its own, because the retained host is the
+# only one that can find a control by its document path and nothing else here
+# asks it to. A page that stops drawing that control ends this non-zero rather
+# than leaving the shortest capture path untested.
+#
+# The steps are xtask's, not this file's: which sets are taken, in which order,
+# and what each is priced against is logic, and logic in a recipe body is logic
+# nothing can test.
+[positional-arguments]
+parity *ARGS:
+    just _xtask parity "$@"
 
 # The same pages through a real window, which is the only one of the three
 # captures that needs a display. Its job is to say whether the headless iced
