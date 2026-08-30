@@ -17,7 +17,7 @@ use super::AssetDeleter;
 use crate::{
     decorator::{Assets, Capabilities},
     error::{AssetsError, AssetsResult},
-    index::{AvailabilityIndex, PinDurability},
+    index::{ABSOLUTE_ROOT, AvailabilityIndex, PinDurability},
     layout::{ResourceKey, ResourceKeyKind},
     resource::{AcquisitionResult, AssetResourceState, BaseReader, BaseWriter, RequestIdentity},
 };
@@ -425,6 +425,18 @@ pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> io::Result<
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
     }
+}
+
+/// The file an availability-index entry names.
+pub(crate) fn indexed_path(root_dir: &Path, root: &str, path: &str) -> Option<PathBuf> {
+    if root == ABSOLUTE_ROOT {
+        return Some(PathBuf::from(path));
+    }
+    Some(
+        root_dir
+            .join(sanitize_rel(root).ok()?)
+            .join(sanitize_rel(path).ok()?),
+    )
 }
 
 pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
