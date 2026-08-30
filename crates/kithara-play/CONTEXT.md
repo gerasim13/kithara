@@ -401,9 +401,12 @@ consumer capability. Real-time session implementations explicitly return
 off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
 their inner capability. Requiring the method keeps wrappers from silently
 erasing an off-RT capability through a trait default. `ConfigPrep` copies the
-capability through an internal, builder-skipped `ResourceConfig` field into
-`AudioConfig`. There is no public resource setter and therefore no second
-source of session wake policy.
+capability into `ResourceConfig::consumer_wake_mode`, unconditionally
+overwriting whatever the builder carried, so a player-managed resource has no
+second source of session wake policy. The builder setter (default
+`RealtimeDeferred`) exists for direct `Resource` readers that never pass
+through a player: such a reader declares `ImmediateOffRt` itself to get
+immediate worker wakes and inline reader-event delivery.
 
 ### Host transport anchor
 
