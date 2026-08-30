@@ -34,6 +34,16 @@ Loom model permutations).
 that ownership graph. Consumers import every synchronization type from this crate, never from
 `std` directly.
 
+Third-party crates that block through `parking_lot_core` — `dashmap` shards are the workspace's
+only such consumer on wasm — are not covered by those wrappers. `parking_lot_core` picks its wasm
+thread parker at compile time, and selects the one whose every method is `panic!("Parking not
+supported on this platform")` unless its `nightly` feature is on; `+atomics` alone is not enough.
+A contended shard therefore aborts the worker that touched it. This crate turns that feature on
+for `cfg(target_arch = "wasm32")` and holds the reference in `wasm/thread.rs`, which makes every
+wasm build nightly-only — the wasm target already is, since `+atomics` forces `-Z build-std`.
+The resulting parker calls `memory.atomic.wait32`, which is legal in a Worker and traps on the
+browser main thread; wasm playback owns its work in Workers for that reason.
+
 `Mutex` and `RwLock` are **flash-blind by contract**: they guard bounded critical sections whose
 holder always runs (never parks while held), so virtual time can never advance with the lock
 held. Flash-awareness lives only in the wait primitives (`Condvar`, `Notify`, `mpsc`);
