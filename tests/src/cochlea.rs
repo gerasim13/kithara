@@ -1,6 +1,11 @@
-use cochlea_features::{Audio, ProbeOpts, SegmentOpts, probe, segment_timeline};
+use cochlea_features::{
+    Audio, ProbeOpts, SegmentOpts, TempoOpts, estimate_tempo, probe, segment_timeline,
+};
+use num_traits::cast;
 use serde::Serialize;
 
+const BEAT_MARKER_THRESHOLD: f32 = 0.6;
+const TEMPO_TOLERANCE_BPM: f64 = 0.5;
 const WINDOW_MS: f64 = 5.0;
 
 /// Select a percentile from test-oracle samples after sorting them in place.
@@ -95,6 +100,98 @@ pub fn time_stretch_failures(
     control: &CochleaReport,
 ) -> Vec<String> {
     cochlea_failures(label, candidate, control, false)
+}
+
+/// Validate tempo and exact beat phase across deterministic rhythmic stems.
+#[must_use]
+pub fn synchronization_failures(
+    label: &str,
+    tracks: &[&[f32]],
+    channels: u16,
+    sample_rate: u32,
+    target_bpm: f64,
+) -> Vec<String> {
+    assert!(channels > 0, "synchronization oracle needs a channel");
+    assert!(
+        sample_rate > 0,
+        "synchronization oracle needs a sample rate"
+    );
+    assert!(
+        target_bpm.is_finite() && target_bpm > 0.0,
+        "synchronization oracle needs a positive finite BPM"
+    );
+    assert!(!tracks.is_empty(), "synchronization oracle needs a track");
+
+    let mut failures = Vec::new();
+    let channel_count = usize::from(channels);
+    let beat_period: usize = cast((f64::from(sample_rate) * 60.0 / target_bpm).round())
+        .unwrap_or(1)
+        .max(1);
+    let mut phases = Vec::with_capacity(tracks.len());
+    for (index, &samples) in tracks.iter().enumerate() {
+        assert!(
+            samples.len().is_multiple_of(channel_count),
+            "track {index} must contain complete frames"
+        );
+
+        let tempo = estimate_tempo(
+            &Audio {
+                samples: samples.to_vec(),
+                channels,
+                sample_rate,
+            },
+            &TempoOpts::default(),
+        );
+        match tempo.bpm {
+            Some(actual) if (actual - target_bpm).abs() <= TEMPO_TOLERANCE_BPM => {}
+            Some(actual) => failures.push(format!(
+                "{label}: track {index} tempo is {actual:.3} BPM, expected {target_bpm:.3} +/- {TEMPO_TOLERANCE_BPM:.3}",
+            )),
+            None => failures.push(format!("{label}: track {index} has no detected tempo")),
+        }
+        if !tempo.clear_rhythm {
+            failures.push(format!(
+                "{label}: track {index} has no clear rhythm: confidence={:.6}",
+                tempo.confidence,
+            ));
+        }
+
+        let Some(first) = first_beat_marker(samples, channel_count) else {
+            failures.push(format!("{label}: track {index} has no exact beat markers"));
+            continue;
+        };
+        phases.push(first % beat_period);
+    }
+
+    if phases.len() == tracks.len() {
+        let spread = circular_spread(&mut phases, beat_period);
+        if spread > 0 {
+            let suffix = if spread == 1 { "" } else { "s" };
+            failures.push(format!(
+                "{label}: beat phase spread is {spread} frame{suffix}",
+            ));
+        }
+    }
+    failures
+}
+
+fn first_beat_marker(samples: &[f32], channels: usize) -> Option<usize> {
+    samples.chunks_exact(channels).position(|values| {
+        values
+            .iter()
+            .any(|sample| sample.abs() >= BEAT_MARKER_THRESHOLD)
+    })
+}
+
+fn circular_spread(phases: &mut [usize], period: usize) -> usize {
+    phases.sort_unstable();
+    let inner_gap = phases
+        .windows(2)
+        .map(|pair| pair[1] - pair[0])
+        .max()
+        .unwrap_or(0);
+    let wrap_gap = period - phases[phases.len() - 1] + phases[0];
+    period - inner_gap.max(wrap_gap)
 }
 
 fn cochlea_failures(

@@ -1,4 +1,5 @@
 use kithara_test_macros as kithara;
+use num_traits::cast;
 
 use crate::signal::{Wave, wav, wav_from_fn};
 
@@ -50,4 +51,54 @@ fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> 
             .sample(frame, Consts::SAMPLE_RATE)
         },
     )
+}
+
+/// Four-beat pulse track with an exact frame-addressable beat marker.
+#[kithara::asset(ext = "wav", content_type = "audio/wav")]
+#[case::deck_a_120bpm_48k(48_000, 2, 576_000, 120.0, 220.0, 0)]
+#[case::deck_b_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0, 0)]
+#[case::deck_c_120bpm_48k(48_000, 2, 576_000, 120.0, 1_760.0, 0)]
+#[case::deck_d_120bpm_48k(48_000, 2, 576_000, 120.0, 3_520.0, 0)]
+#[case::deck_b_one_frame_late_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0, 1)]
+fn rhythm_wav(
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bpm: f64,
+    carrier_hz: f64,
+    phase_frame: usize,
+) -> Vec<u8> {
+    let beat_frames: usize = cast((f64::from(sample_rate) * 60.0 / bpm).round())
+        .expect("invariant: a fixture beat period fits usize");
+    let first_beat = beat_frames + phase_frame;
+    let pulse_frames =
+        usize::try_from(sample_rate).expect("invariant: a sample rate fits usize") / 25;
+
+    wav_from_fn(sample_rate, channels, total_frames, |frame| {
+        let Some(since_first) = frame.checked_sub(first_beat) else {
+            return 0;
+        };
+        let beat = since_first / beat_frames;
+        let within_beat = since_first % beat_frames;
+        if within_beat == 0 {
+            return if beat.is_multiple_of(4) {
+                28_000
+            } else {
+                22_000
+            };
+        }
+        if within_beat >= pulse_frames {
+            return 0;
+        }
+
+        Wave::Sine {
+            hz: carrier_hz,
+            peak: if beat.is_multiple_of(4) {
+                14_000
+            } else {
+                10_000
+            },
+        }
+        .sample(within_beat, sample_rate)
+    })
 }
