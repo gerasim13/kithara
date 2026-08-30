@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, ffi::OsString};
+use std::{collections::BTreeMap, env, ffi::OsString};
 
 use anyhow::{Result, bail};
 use clap::Args;
@@ -38,22 +38,52 @@ fn lookup<'a>(lanes: &'a BTreeMap<String, CiLaneConfig>, name: &str) -> Result<&
     }
 }
 
+/// The one thing a lane is handed rather than works out: where this executor
+/// builds.
+///
+/// A step spells its own build directory as `{target}`, and the checkout is
+/// the wrong answer wherever the executor named another one - Cargo would
+/// write where it was told while the lane looked for the binaries somewhere
+/// nothing had written. Nothing else is copied: a child already inherits this
+/// process's environment, and [`Process`] layers what it is given on top.
+fn executor_vars(target_dir: Option<OsString>) -> BTreeMap<OsString, OsString> {
+    target_dir
+        .map(|target| BTreeMap::from([(OsString::from("CARGO_TARGET_DIR"), target)]))
+        .unwrap_or_default()
+}
+
 pub(crate) fn run(args: &LaneArgs, ctx: &Ctx) -> Result<()> {
     let ext = KitharaExt::from_ctx(ctx)?;
     ext.ci.validate()?;
     let lane = lookup(&ext.ci.lanes, &args.lane)?;
     let pins = CiPins::load(&ctx.root.join(&ext.ci.pins))?;
-    let vars: BTreeMap<OsString, OsString> = BTreeMap::new();
+    let vars = executor_vars(env::var_os("CARGO_TARGET_DIR"));
     let process = Process::new(&ctx.root, vars);
     declared::run(&process, lane, &pins, args.kind)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs};
+    use std::{env, fs, path::Path};
 
     use super::*;
     use crate::ci::config::{fixture, workspace_root};
+
+    /// A lane builds where the executor said. These runners are ephemeral and
+    /// the checkout is deleted before the lane starts, so a build directory
+    /// named from the checkout is empty on every job; the executor names one
+    /// that outlives it, and a step's `{target}` has to mean that one or the
+    /// lane looks for its binaries where nothing wrote any.
+    #[test]
+    fn a_lane_builds_where_the_executor_said() {
+        let root = Path::new("/runner/_work/kithara/kithara");
+
+        let handed = Process::new(root, executor_vars(Some(OsString::from("/cache/target"))));
+        let bare = Process::new(root, executor_vars(None));
+
+        assert_eq!(handed.target_dir(), Path::new("/cache/target"));
+        assert_eq!(bare.target_dir(), root.join("target"));
+    }
 
     // A lane name that is not in the catalog must answer with the catalog,
     // not with whatever the machine happens to be missing.

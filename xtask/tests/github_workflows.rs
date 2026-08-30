@@ -1763,6 +1763,36 @@ fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
     }
 }
 
+/// Every declared lane runs through this workflow, so where a lane builds is
+/// something this workflow says. Naming a directory inside the checkout names
+/// an empty one: the workspace is deleted before the lane starts, and the job
+/// then compiles the whole dependency tree and links every binary again. The
+/// store the fixtures are read from is already on a volume that outlives the
+/// job, and the build directory belongs on the same one.
+#[test]
+fn a_lane_builds_on_the_volume_that_outlives_it() {
+    let workflow = github_workflow("lane.yml");
+    let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+        .as_mapping()
+        .expect("env is a mapping");
+    let target = mapping_field(env, "CARGO_TARGET_DIR")
+        .as_str()
+        .expect("the executor names where the lane builds");
+    let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
+        .as_str()
+        .expect("the executor names where the fixtures are read from");
+
+    assert!(
+        Path::new(target).is_absolute(),
+        "a relative build directory is one inside the checkout: {target}"
+    );
+    assert_eq!(
+        Path::new(target).parent(),
+        Path::new(fixtures).parent(),
+        "the build directory and the fixture store share the mounted volume"
+    );
+}
+
 // The executor's whole job is to run a lane the catalog named. A workflow that
 // can be handed an arbitrary command is a second place for a command to live.
 #[test]

@@ -46,4 +46,9 @@ jobs:
           KITHARA_DRM_PROD_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_PROD_AUTH_TOKEN }}
           KITHARA_DRM_PROD_SP_ZV_TOKEN: ${{ secrets.KITHARA_DRM_PROD_SP_ZV_TOKEN }}
           KITHARA_DRM_STAGE_AUTH_TOKEN: ${{ secrets.KITHARA_DRM_STAGE_AUTH_TOKEN }}
-        run: CARGO_TARGET_DIR=target-lane-network just test run --lane=network
+        # A build of its own, because these binaries carry production keys
+        # the declared lanes' do not - but on the volume the other lanes build
+        # on, not in the checkout that is deleted before this job starts. A
+        # child of the volume root is the shape the build-cache budget reads:
+        # its own eviction unit, with its own lease while it runs.
+        run: CARGO_TARGET_DIR=/cache/target/lane-network just test run --lane=network
