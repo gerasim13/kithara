@@ -12,6 +12,7 @@ use kithara_platform::time::{self, Duration};
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_test_fixtures::signal::{SignalDirection, detect_direction};
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
 use wasm_bindgen::JsCast;
@@ -27,7 +28,6 @@ const EXPECTED_SAMPLE_RATE: u32 = 44_100;
 const MP3_FRAME_TOLERANCE: usize = 2 * 1_152;
 const AAC_FRAME_TOLERANCE: usize = 2 * 1_024;
 const MAX_DECODE_OUTCOMES: usize = 100_000;
-const SAW_PERIOD: usize = 65_536;
 // Keep in sync with webcodecs/probe.rs.
 const FLAC_PROBE_STREAMINFO: [u8; 34] = [
     0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00,
@@ -539,7 +539,8 @@ async fn decode_to_eof(
                 assert_eq!(chunk.spec(), spec);
                 frames += chunk.frames();
                 non_empty_chunks += 1;
-                saw_ascending |= detect_ascending(&chunk.samples, usize::from(spec.channels));
+                saw_ascending |= detect_direction(&chunk.samples, usize::from(spec.channels))
+                    == SignalDirection::Ascending;
             }
             DecoderChunkOutcome::Pending(_) => {}
             DecoderChunkOutcome::Eof => {
@@ -582,32 +583,4 @@ fn assert_common_parity(
         webcodecs.frames,
         symphonia.frames
     );
-}
-
-fn detect_ascending(samples: &[f32], channels: usize) -> bool {
-    if channels == 0 {
-        return false;
-    }
-    let frames = samples.len() / channels;
-    if frames < 2 {
-        return false;
-    }
-
-    let mut ascending_votes = 0u32;
-    let mut descending_votes = 0u32;
-    for frame in 0..10.min(frames - 1) {
-        let current = phase_from_f32(samples[frame * channels]);
-        let next = phase_from_f32(samples[(frame + 1) * channels]);
-        if next == (current + 1) % SAW_PERIOD {
-            ascending_votes += 1;
-        } else if next == (current + SAW_PERIOD - 1) % SAW_PERIOD {
-            descending_votes += 1;
-        }
-    }
-    ascending_votes > descending_votes && ascending_votes > 0
-}
-
-fn phase_from_f32(sample: f32) -> usize {
-    let value = (sample * 32_768.0).round().to_i32().unwrap_or_default();
-    usize::try_from((value + 32_768) & 0xffff).unwrap_or_default()
 }
