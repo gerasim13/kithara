@@ -1,6 +1,9 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
+    audio::{
+        AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
+        ReadOutcome,
+    },
     bufpool::Region,
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
@@ -78,6 +81,7 @@ async fn open_packaged_hls_audio(
     store: AssetStore,
     abr: AbrMode,
     bus: Option<EventBus>,
+    wake_mode: ConsumerWakeMode,
 ) -> RegisteredAudio<Stream<Hls>> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
@@ -103,6 +107,7 @@ async fn open_packaged_hls_audio(
 
     let config = AudioConfig::<Hls>::for_stream(hls_config)
         .maybe_events(bus)
+        .consumer_wake_mode(wake_mode)
         .build();
 
     let mut audio = worker
@@ -241,6 +246,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         store.clone(),
         packaged_switch_abr_mode(),
         Some(bus.clone()),
+        ConsumerWakeMode::ImmediateOffRt,
     )
     .await;
     let abr = progress_audio
@@ -390,8 +396,15 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
         );
     }
 
-    let decode_audio =
-        open_packaged_hls_audio(&worker, &url, store, packaged_switch_abr_mode(), None).await;
+    let decode_audio = open_packaged_hls_audio(
+        &worker,
+        &url,
+        store,
+        packaged_switch_abr_mode(),
+        None,
+        ConsumerWakeMode::RealtimeDeferred,
+    )
+    .await;
     let mut resource = resource_from_reader(decode_audio);
     let _ = time::timeout(Duration::from_secs(5), resource.preload())
         .await
