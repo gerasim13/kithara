@@ -31,6 +31,8 @@ pub(super) struct RecvCtx<'a> {
     pub(super) worker: Option<&'a dyn WorkerWake>,
 }
 
+#[derive(fieldwork::Fieldwork)]
+#[fieldwork(opt_in, get)]
 pub(super) struct RingConsumer {
     pub(super) phase: ConsumerPhase,
     pub(super) validator: EpochValidator,
@@ -38,6 +40,7 @@ pub(super) struct RingConsumer {
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
+    #[field(get, vis = "pub(super)", copy)]
     consumer_wake_mode: ConsumerWakeMode,
     audio_rx: Inlet<Fetch<AudioChunk>>,
     trash_tx: Outlet<AudioChunk>,

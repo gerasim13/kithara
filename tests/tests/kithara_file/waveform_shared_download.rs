@@ -25,7 +25,8 @@ use kithara::{
     stream::Stream,
 };
 use kithara_app::waveform::TrackAnalysisRunner;
-use kithara_integration_tests::{TestHttpServer, create_test_wav};
+use kithara_integration_tests::TestHttpServer;
+use kithara_test_fixtures::signal;
 
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
 /// nothing is resampled on the way in.
@@ -71,7 +72,7 @@ fn drain_to_eof(mut audio: RegisteredAudio<Stream<File>>) -> bool {
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]
 async fn waveform_and_player_share_one_get() {
     // 1s stereo WAV.
-    let wav = Arc::new(create_test_wav(44_100, 44_100, 2));
+    let wav = Arc::new(signal::wav(44_100, 2, 44_100, signal::TONE));
     let gets = Arc::new(AtomicUsize::new(0));
     let app = Router::new()
         .route("/audio.wav", get(serve_wav))

@@ -38,10 +38,10 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// decoder-side resampling.
     #[builder(default)]
     pub(crate) decoder: AudioDecoderConfig<B>,
-    /// Session-owned audio-consumer wake capability. This is populated by
-    /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
-    /// does not become a second public source of session policy.
-    #[builder(skip)]
+    /// Consumer wake capability for this resource's reader. Player preparation
+    /// overwrites it with session policy; direct callers may select off-RT mode
+    /// only when reads stay off the render callback.
+    #[builder(default)]
     pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Encryption key handling configuration.
     #[builder(default)]
@@ -112,6 +112,15 @@ mod tests {
         Ok(ResourceConfig::for_src(parse_src(input)?)
             .store(store())
             .build())
+    }
+
+    #[kithara::test]
+    fn a_config_that_never_passed_a_player_defaults_to_realtime_deferred() {
+        let config = test_config("https://example.com/track.mp3").expect("valid config");
+        assert_eq!(
+            config.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred
+        );
     }
 
     fn worker() -> PlayWorker {

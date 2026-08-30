@@ -29,9 +29,9 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    TestTempDir, audio_fixture::EmbeddedAudio, kithara, offline::OfflineSession, temp_dir,
-    waits::wait_for_event,
+    TestTempDir, kithara, offline::OfflineSession, temp_dir, waits::wait_for_event,
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 const TRACK_COUNT: usize = 2;
 
@@ -87,7 +87,7 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 /// the ordering — so it stays off the shared test server.
 fn fixture_path(temp_dir: &TestTempDir, index: usize) -> PathBuf {
     let path = temp_dir.path().join(format!("gated-{index}.mp3"));
-    fs::write(&path, EmbeddedAudio::TEST_MP3_BYTES).expect("fixture must be writable");
+    fs::write(&path, signal_mp3_track_sine440_187s().bytes()).expect("fixture must be writable");
     path
 }
 

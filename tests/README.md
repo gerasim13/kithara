@@ -86,7 +86,7 @@ Shared synthetic HLS types live in `tests/src/fixture_protocol.rs` (`kithara-int
 - `DelayRule` - declarative delay rules for synthetic segment serving
 - `EncryptionRequest` - AES-128 parameters for encrypted fixture scenarios
 
-Pure generation helpers such as `generate_segment`, `expected_byte_at_test_pattern`, and `create_wav_init_header` also live in `tests/src/fixture_protocol.rs` so byte-level assertions stay deterministic across test helpers.
+Pure generation helpers such as `generate_segment` and `expected_byte_at_test_pattern` also live in `tests/src/fixture_protocol.rs` so byte-level assertions stay deterministic across test helpers. Waveforms, PCM buffers and RIFF bodies come from `kithara_test_fixtures::signal` — the one route to a generated signal in the workspace.
 
 ## Agent guardrails
 

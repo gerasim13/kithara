@@ -24,6 +24,7 @@ use kithara_integration_tests::{
     offline::OfflineSession,
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 /// Reproduces the bug the user keeps hitting manually: play track A, switch
@@ -316,7 +317,7 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
     #[case] transition: Transition,
 ) {
     let helper = TestServerHelper::new().await;
-    let url_a = helper.asset("track.mp3");
+    let url_a = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
     // 16 × 4 s = 64 s: long enough that B is still mid-play when we switch
     // back, and far from the mp3's 162 s so the duration marker is unambiguous.
     let url_b = helper

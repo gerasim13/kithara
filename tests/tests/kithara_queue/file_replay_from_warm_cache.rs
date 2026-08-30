@@ -24,6 +24,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least},
 };
+use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
 struct Session {
@@ -163,8 +164,8 @@ async fn play_one_session(url: &Url, cache_path: &Path, min_play_secs: f64, labe
 async fn file_replay_from_warm_cache(#[case] kind: WarmReplayKind) {
     let helper = TestServerHelper::new().await;
     let url = match kind {
-        WarmReplayKind::Mp3WithExtension => helper.asset("track.mp3"),
-        WarmReplayKind::Mp3NoExtension => helper.streamhq("track.mp3"),
+        WarmReplayKind::Mp3WithExtension => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
+        WarmReplayKind::Mp3NoExtension => helper.streamhq(SignalAsset::MP3_SINE880_48K_162S),
         WarmReplayKind::Hls => {
             use kithara_integration_tests::HlsFixtureBuilder;
             let builder = HlsFixtureBuilder::new()

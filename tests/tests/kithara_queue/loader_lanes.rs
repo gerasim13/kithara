@@ -20,13 +20,12 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
-    audio_fixture::EmbeddedAudio,
-    kithara,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_loader_done, wait_for_position_at_least, wait_for_position_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use url::Url;
 
 struct Consts;
@@ -68,7 +67,7 @@ fn register_hung(helper: &TestServerHelper) -> BehaviorHandle {
 fn register_fast_mp3(helper: &TestServerHelper) -> BehaviorHandle {
     helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,

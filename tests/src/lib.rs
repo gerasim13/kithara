@@ -13,7 +13,6 @@
 
 pub mod abr_fixtures;
 pub use abr_fixtures::auto;
-pub mod alac_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod analysis_pass;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -24,7 +23,6 @@ pub mod asset_fixture;
 pub mod assets_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod audio_artifact;
-pub mod audio_fixture;
 pub mod audio_mock;
 pub mod bufpool_ext;
 #[cfg(not(target_arch = "wasm32"))]
@@ -37,16 +35,11 @@ pub mod e2e;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encode_ext;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod encode_test_pcm;
-#[cfg(test)]
-pub(crate) mod encoder_crates;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod fixture_cache;
 pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod flash_pace;
-pub mod goertzel;
 pub mod hls_blob_store;
 pub mod hls_fixture;
 pub mod hls_server;
@@ -63,18 +56,12 @@ pub mod net_fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod offline;
 pub mod packed_audio;
-pub mod pcm_provenance;
 pub mod reads;
 pub mod rfc6381;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ring;
 pub mod rng;
 pub mod server_url;
-pub mod signal_pcm;
-pub mod signal_source;
-pub mod signal_source_utils;
-pub mod signal_spec;
-pub mod signal_url;
 pub mod storage_ext;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod swallow_detector;
@@ -90,10 +77,8 @@ pub mod token_store;
 pub mod user_sim;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod waits;
-pub mod wav;
 
 pub use abr_fixtures::{abr_fast, abr_initial_mode, abr_switch_trigger};
-pub use alac_fixture::ensure_silence_1s_alac_m4a;
 #[cfg(not(target_arch = "wasm32"))]
 pub use assets_ext::disk_asset_store;
 pub use assets_ext::memory_asset_store;
@@ -114,14 +99,9 @@ pub use log_filter::rust_log_filter;
 pub use native::*;
 pub use rng::*;
 pub use server_url::join_server_url;
-pub use signal_source_utils::*;
-pub use signal_url::{
-    SignalFormat, SignalKind, SignalSpec, SignalSpecLength, SweepMode, signal_path,
-};
 #[cfg(not(target_arch = "wasm32"))]
 pub use test_server::{
     BehaviorHandle, Content, Delivery, FixtureBehavior, InitGateHandle, PrivateTestServer,
     SegmentGateHandle,
 };
 pub use test_server::{CreateHlsError, CreatedHls, HlsFixtureBuilder, TestServerHelper};
-pub use wav::{create_test_wav, create_wav_exact_bytes};

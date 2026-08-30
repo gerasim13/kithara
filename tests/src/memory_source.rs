@@ -22,12 +22,11 @@ use kithara::{
 #[error("memory source error")]
 pub struct MemorySourceError;
 
-/// Constant-length byte-space probe shared by the fixed-size test sources:
-/// `Eof` at or past the known total, `Ready` otherwise — mirroring each
-/// source's own `phase_at`. `None` total never reaches `Eof`. `reported`
-/// mirrors the source's `len()` answer, which may hide the actual total
-/// (`MemorySource::without_len`).
-pub struct LenPhaseProbe {
+/// Constant-length byte-space probe for [`MemorySource`]: `Eof` at or past the
+/// known total, `Ready` otherwise — mirroring the source's own `phase_at`.
+/// `None` total never reaches `Eof`. `reported` mirrors the source's `len()`
+/// answer, which may hide the actual total (`MemorySource::without_len`).
+pub(crate) struct LenPhaseProbe {
     total: Option<u64>,
     reported: Option<u64>,
     position: Arc<AtomicU64>,
@@ -35,7 +34,7 @@ pub struct LenPhaseProbe {
 
 impl LenPhaseProbe {
     #[must_use]
-    pub fn new(total: Option<u64>, reported: Option<u64>, position: Arc<AtomicU64>) -> Self {
+    pub(crate) fn new(total: Option<u64>, reported: Option<u64>, position: Arc<AtomicU64>) -> Self {
         Self {
             total,
             reported,

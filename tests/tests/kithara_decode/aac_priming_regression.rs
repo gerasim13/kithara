@@ -5,23 +5,16 @@ use kithara::{
     platform::time::Duration,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper};
+use kithara_integration_tests::TestServerHelper;
+use kithara_test_fixtures::SignalAsset;
 use reqwest::Client;
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
 async fn aac_decoder_strips_algorithmic_delay_on_first_chunk() {
     let server = TestServerHelper::new().await;
     let client = Client::new();
-    let spec = SignalSpec {
-        sample_rate: 44_100,
-        channels: 2,
-        length: SignalSpecLength::Seconds(1.0),
-        format: SignalFormat::Aac,
-        bit_rate: None,
-    };
-
     let response = client
-        .get(server.sawtooth(&spec).await)
+        .get(server.signal(SignalAsset::AAC_SAW_1S))
         .send()
         .await
         .expect("fetch /signal aac fixture");
