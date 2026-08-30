@@ -5,7 +5,6 @@ use kithara_platform::time::Duration;
 use kithara_ui::{
     builtin,
     compile::{CompiledUi, compile},
-    module::ViewSet,
     registry::EndpointRegistry,
     render::{Clock, ControlAction, Skin, UiEvent, WindowCommand, custom::CustomKinds, tree},
     skin::SkinDoc,
@@ -16,7 +15,7 @@ use crate::{
     capture::{Capture, Shot},
     demo::DemoReads,
     fixture::{Consts, Resolver, resolver},
-    sections::{self, Page},
+    sections,
 };
 
 #[derive(Clone, Debug)]
@@ -108,7 +107,6 @@ impl Gallery {
         self.clock = Clock::default();
         self.reads = DemoReads::default();
         self.view = shot.standing();
-        self.demonstrate(shot.tab);
         self.turn();
     }
 
@@ -147,20 +145,6 @@ impl Gallery {
         let page = screens.shown().views().standing(view, sections::PAGE);
         if let Some(page) = page.and_then(sections::named) {
             reads.show(page);
-            self.demonstrate(page);
-        }
-    }
-
-    /// Stands open the module a page demonstrates: a menu page whose menu is
-    /// shut demonstrates a burger.
-    fn demonstrate(&mut self, page: Page) {
-        for (demonstrated, state) in DEMONSTRATED {
-            let set = if page == demonstrated {
-                ViewSet::On
-            } else {
-                ViewSet::Off
-            };
-            self.view.set(state, set);
         }
     }
 
@@ -257,13 +241,6 @@ pub(crate) fn view(state: &Gallery, _window: window::Id) -> Element<'_, Message>
     )
     .map(Message::Ui)
 }
-
-/// The state each page stands its own module in, by the name that page's
-/// document gave it.
-const DEMONSTRATED: [(Page, &str); 2] = [
-    ("menu", "app-menu/menu"),
-    ("clock", "clock-components/clock"),
-];
 
 /// The gallery's screen as it stands for `view`.
 fn compiled(

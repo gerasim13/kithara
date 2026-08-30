@@ -9,10 +9,22 @@ use std::{
 use iced::window::Screenshot;
 use kithara_ui::{
     capture::{Geometry, page_file, write_geometry, write_png},
+    module::ViewSet,
     view::ViewState,
 };
 
 use crate::sections::{self, Page};
+
+/// The state each page stands open to show what that page is about, by the name
+/// the page's own document gave it.
+///
+/// A photographer opens a surface to photograph it, where a reader opens it by
+/// pressing the control that turns it. Both hosts are handed this the same way,
+/// so neither can photograph a page the other one left shut.
+const DEMONSTRATED: [(Page, &str); 2] = [
+    ("menu", "app-menu/menu"),
+    ("clock", "clock-components/clock"),
+];
 
 /// One page to photograph: a tab, and for the modules tab the demo shown in it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,12 +45,25 @@ impl Shot {
         .filter_map(|(state, page)| page.map(|page| (state, page)))
     }
 
+    /// Which screen states this shot stands open: the surface the page it
+    /// photographs is about, and nothing on a page that is about no surface.
+    pub(super) fn opens(&self) -> impl Iterator<Item = &'static str> {
+        let tab = self.tab;
+        DEMONSTRATED
+            .into_iter()
+            .filter(move |(page, _)| *page == tab)
+            .map(|(_, state)| state)
+    }
+
     /// The screen's own state standing at this page, which is how a harness
     /// opens one page of the screen every page lives in.
     pub(super) fn standing(&self) -> ViewState {
         let mut view = ViewState::default();
         for (state, page) in self.stands() {
             view.stand(state, page);
+        }
+        for state in self.opens() {
+            view.set(state, ViewSet::On);
         }
         view
     }

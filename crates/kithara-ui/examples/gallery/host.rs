@@ -6,16 +6,20 @@
 
 use kithara_ui::{
     app::{App, RunError, Ui},
+    module::ViewSet,
     render::{Reads, Skin, UiEvent},
     view::ViewState,
 };
 
 use crate::{capture::Shot, demo, sections};
 
-/// Stands a mounted screen at the page a shot names.
+/// Stands a mounted screen at the page a shot names, with the surface that
+/// page is about open.
 ///
 /// Every page lives in one screen, so a harness opens one by turning the
-/// screen's own state rather than by mounting another document.
+/// screen's own state rather than by mounting another document. The surface is
+/// turned after the page, because the state naming it belongs to a module the
+/// page mounts and the screen names nothing of a page it is not showing.
 ///
 /// # Errors
 /// Returns whatever standing the screen at that page fails with.
@@ -25,6 +29,9 @@ where
 {
     for (state, page) in shot.stands() {
         ui.stand(state, page)?;
+    }
+    for state in shot.opens() {
+        ui.set(state, ViewSet::On)?;
     }
     Ok(())
 }

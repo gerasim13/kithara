@@ -1696,8 +1696,12 @@ step. Turning back to a page already visited costs nothing; the depth is `UiConf
 A screen says what it offers. `ViewWrites::pages()` maps each page-turning state to `PageStanding`,
 which carries the page the document calls initial, every page the tabs offer, and the page this
 screen showed. A harness opens one page through `Ui::stand`, which refuses a page the shown screen
-does not offer before anything moves; an application is told what the document turned for itself
-through `App::turned`, and reading it is all that is for.
+does not offer before anything moves, and turns one flag through `Ui::set`, which refuses a state the
+shown screen does not name. Both mount the screen again: what a flag lights - a group's background, a
+glyph's colour - is settled where the tree is built, so a retained tree left standing would keep the
+picture it was mounted with. A press is the other way round and stays a re-read, because a hand on a
+control must not lose the gesture it is in the middle of. An application is told what the document
+turned for itself through `App::turned`, and reading it is all that is for.
 
 The census refuses two things at compile time. A control naming a page no `Tabs` offers is a typo -
 the page it meant stays unreachable and the name it became unread - so `UnknownPage` names the

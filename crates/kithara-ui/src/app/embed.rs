@@ -38,6 +38,7 @@ use crate::{
     error::UiDocError,
     ids::SourceUri,
     interact::{Input, PointerPhase, ScrollAxis, masonry::masonry_text_event},
+    module::ViewSet,
     render::{
         ControlAction, Reads, Skin, UiEvent, WindowCommand,
         custom::CustomKinds,
@@ -166,6 +167,38 @@ where
         }
         self.view.stand(state, page);
         self.turn().map(|_| ())
+    }
+
+    /// Turns one flag the screen keeps for itself, and shows what that changed.
+    ///
+    /// A flag turned here comes from the application rather than from a press,
+    /// which is how a harness opens the surface a page is about before
+    /// photographing it. The name is checked against what the shown screen
+    /// names, so a state no document wrote leaves the screen where it is.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::UnknownState`] when the shown screen names no such
+    /// state, and whatever compiling the screen it does show fails with.
+    pub fn set(&mut self, state: &str, set: ViewSet) -> Result<(), RunError> {
+        if !self.screens.shown().views().named().contains(state) {
+            return Err(UiDocError::UnknownState {
+                origin: SourceUri(self.app.document().to_owned()),
+                id: state.to_owned(),
+            }
+            .into());
+        }
+        if !self.view.set(state, set) {
+            return Ok(());
+        }
+        if self.turn()? {
+            return Ok(());
+        }
+        // The flag turned no page, so the screen standing is the one already
+        // compiled. It is mounted again all the same, because what a flag
+        // lights - a group's background, a glyph's colour - is settled where
+        // the tree is built, which is the same reason standing at a page
+        // mounts one.
+        self.mount_shown()
     }
 
     /// Current allocation-reuse counters for this mounted document.

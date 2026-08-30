@@ -231,6 +231,8 @@ pub enum UiDocError {
         id: String,
         path: String,
     },
+    #[error("{origin}: view state {id:?} is not one this screen names")]
+    UnknownState { origin: SourceUri, id: String },
     #[error("{origin}: {path} names page {page:?} of view state {id:?}, which has no such page")]
     UnknownPage {
         origin: SourceUri,
