@@ -1,170 +1,229 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
+    blanket::{FramePatch, Frames, Roles, TextRolePatch},
     controls::{
-        ButtonSkin, CellSkin, CheckboxSkin, ChipSkin, CrossfaderSkin, FaderSkin, KnobSkin,
-        MenuSkin, NavSkin, PortalMapSkin, RangeSkin, ReadoutSkin, SegmentedSkin, SelectSkin,
-        StatusDotSkin, SwatchSkin, TabLargeSkin, TextInputSkin, TextSkin, ToggleSkin, VisSkin,
-        VuStereoSkin, VuVerticalSkin,
+        ButtonPatch, ButtonSkin, CellPatch, CellSkin, CheckboxPatch, CheckboxSkin, ChipPatch,
+        ChipSkin, CrossfaderPatch, CrossfaderSkin, FaderPatch, FaderSkin, KnobPatch, KnobSkin,
+        MenuPatch, MenuSkin, NavPatch, NavSkin, PortalMapPatch, PortalMapSkin, RangePatch,
+        RangeSkin, ReadoutPatch, ReadoutSkin, SegmentedPatch, SegmentedSkin, SelectPatch,
+        SelectSkin, StatusDotPatch, StatusDotSkin, SwatchPatch, SwatchSkin, TabLargePatch,
+        TabLargeSkin, TextPatch, TextSkin, TogglePatch, ToggleSkin, VisPatch, VisSkin,
+        VuStereoPatch, VuStereoSkin, VuVerticalPatch, VuVerticalSkin,
     },
+    custom::{CustomDoc, CustomPatch},
+    palette::{PaletteDoc, PalettePatch},
     panels::{
-        DeckSkin, DividerSkin, DragSkin, GlobalBarSkin, LayoutPreviewSkin, MeterSkin, PopSkin,
-        TelemetrySkin, TrackListSkin, TreeSkin, WaveSkin,
+        DeckPatch, DeckSkin, DividerPatch, DividerSkin, DragPatch, DragSkin, GlobalBarPatch,
+        GlobalBarSkin, LayoutPreviewPatch, LayoutPreviewSkin, MeterPatch, MeterSkin, PopPatch,
+        PopSkin, TablePatch, TableSkin, TelemetryPatch, TelemetrySkin, TreePatch, TreeSkin,
+        WavePatch, WaveSkin,
     },
-    primitives::{ChromeSkin, LayoutSkin, WindowSkin},
+    pictures::{PictureDoc, PicturePatch},
+    primitives::{
+        ChromePatch, ChromeSkin, FrameSkin, LayoutPatch, LayoutSkin, ScrollPatch, ScrollSkin,
+        TextRoleSkin, WindowPatch, WindowSkin,
+    },
 };
 use crate::{
     doc::ron_io,
     envelope::{self, DocKind},
     error::UiDocError,
     ids::{DocId, SourceUri},
+    source::{Limits, SourceResolver},
 };
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct SkinDoc {
-    pub button: ButtonSkin,
-    pub cell: CellSkin,
-    pub checkbox: CheckboxSkin,
-    pub chip: ChipSkin,
-    pub chrome: ChromeSkin,
-    pub crossfader: CrossfaderSkin,
-    pub deck: DeckSkin,
-    pub divider: DividerSkin,
-    pub id: DocId,
-    pub drag: DragSkin,
-    pub fader: FaderSkin,
-    pub global_bar: GlobalBarSkin,
-    pub knob: KnobSkin,
-    pub layout_preview: LayoutPreviewSkin,
-    pub layout: LayoutSkin,
-    pub menu: MenuSkin,
-    pub meter: MeterSkin,
-    pub nav: NavSkin,
-    pub palette: PaletteDoc,
-    pub pop: PopSkin,
-    pub portal_map: PortalMapSkin,
-    pub range: RangeSkin,
-    pub readout: ReadoutSkin,
-    pub segmented: SegmentedSkin,
-    pub select: SelectSkin,
-    pub status_dot: StatusDotSkin,
-    pub schema: String,
-    pub swatch: SwatchSkin,
-    pub tab_large: TabLargeSkin,
-    pub telemetry: TelemetrySkin,
-    pub text_input: TextInputSkin,
-    pub text: TextSkin,
-    pub toggle: ToggleSkin,
-    pub track_list: TrackListSkin,
-    pub tree: TreeSkin,
-    pub vis: VisSkin,
-    pub vu_stereo: VuStereoSkin,
-    pub vu_vertical: VuVerticalSkin,
-    pub wave: WaveSkin,
-    pub window: WindowSkin,
-    pub version: u32,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-#[non_exhaustive]
-pub struct PaletteDoc {
-    pub accent: String,
-    pub accent_soft: String,
-    pub accent_strong: String,
-    pub bg: String,
-    pub bg_deep: String,
-    pub bg_footer: String,
-    pub bg_inset: String,
-    pub bg_panel: String,
-    pub bg_panel_2: String,
-    pub bg_select: String,
-    pub danger: String,
-    pub line: String,
-    pub line_dim: String,
-    pub line_hi: String,
-    pub line_inner: String,
-    pub line_pop: String,
-    pub line_soft: String,
-    pub muted: String,
-    pub shadow: String,
-    pub success: String,
-    pub text: String,
-    pub text_dim: String,
-    pub warning: String,
-    pub wave_high: String,
-    pub wave_low: String,
-    pub wave_mid: String,
-}
-
-impl PaletteDoc {
-    fn validate(&self, origin: &SourceUri) -> Result<(), UiDocError> {
-        for value in [
-            &self.bg,
-            &self.bg_deep,
-            &self.bg_inset,
-            &self.bg_panel,
-            &self.bg_footer,
-            &self.bg_panel_2,
-            &self.bg_select,
-            &self.line,
-            &self.line_dim,
-            &self.line_inner,
-            &self.line_soft,
-            &self.line_hi,
-            &self.line_pop,
-            &self.text,
-            &self.text_dim,
-            &self.muted,
-            &self.accent,
-            &self.accent_strong,
-            &self.accent_soft,
-            &self.danger,
-            &self.success,
-            &self.warning,
-            &self.wave_low,
-            &self.wave_mid,
-            &self.wave_high,
-            &self.shadow,
-        ] {
-            parse_color(value, origin)?;
+/// Every section a skin document declares, written once and expanded wherever
+/// the set has to appear again: the document itself, the patch a second skin
+/// writes over it, and the resolved skin a renderer reads.
+macro_rules! skin_sections {
+    ($expand:ident) => {
+        $expand! {
+            button: ButtonSkin => ButtonPatch,
+            cell: CellSkin => CellPatch,
+            checkbox: CheckboxSkin => CheckboxPatch,
+            chip: ChipSkin => ChipPatch,
+            chrome: ChromeSkin => ChromePatch,
+            crossfader: CrossfaderSkin => CrossfaderPatch,
+            deck: DeckSkin => DeckPatch,
+            divider: DividerSkin => DividerPatch,
+            drag: DragSkin => DragPatch,
+            fader: FaderSkin => FaderPatch,
+            global_bar: GlobalBarSkin => GlobalBarPatch,
+            knob: KnobSkin => KnobPatch,
+            layout_preview: LayoutPreviewSkin => LayoutPreviewPatch,
+            layout: LayoutSkin => LayoutPatch,
+            menu: MenuSkin => MenuPatch,
+            meter: MeterSkin => MeterPatch,
+            nav: NavSkin => NavPatch,
+            pop: PopSkin => PopPatch,
+            portal_map: PortalMapSkin => PortalMapPatch,
+            range: RangeSkin => RangePatch,
+            readout: ReadoutSkin => ReadoutPatch,
+            segmented: SegmentedSkin => SegmentedPatch,
+            select: SelectSkin => SelectPatch,
+            status_dot: StatusDotSkin => StatusDotPatch,
+            scroll: ScrollSkin => ScrollPatch,
+            swatch: SwatchSkin => SwatchPatch,
+            tab_large: TabLargeSkin => TabLargePatch,
+            telemetry: TelemetrySkin => TelemetryPatch,
+            text: TextSkin => TextPatch,
+            toggle: ToggleSkin => TogglePatch,
+            table: TableSkin => TablePatch,
+            tree: TreeSkin => TreePatch,
+            vis: VisSkin => VisPatch,
+            vu_stereo: VuStereoSkin => VuStereoPatch,
+            vu_vertical: VuVerticalSkin => VuVerticalPatch,
+            wave: WaveSkin => WavePatch,
+            window: WindowSkin => WindowPatch,
         }
-        Ok(())
-    }
+    };
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[non_exhaustive]
-pub enum ColorRole {
-    Bg,
-    BgDeep,
-    BgInset,
-    BgPanel,
-    BgFooter,
-    BgPanel2,
-    BgSelect,
-    Line,
-    LineDim,
-    LineInner,
-    LineSoft,
-    LineHi,
-    LinePop,
-    Text,
-    TextDim,
-    Muted,
-    Accent,
-    AccentStrong,
-    AccentSoft,
-    Danger,
-    Success,
-    Warning,
-    WaveLow,
-    WaveMid,
-    WaveHigh,
-    Shadow,
+macro_rules! define_skin_doc {
+    ($($field:ident: $section:ident => $patch:ident,)*) => {
+        #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+        #[serde(deny_unknown_fields)]
+        #[non_exhaustive]
+        pub struct SkinDoc {
+            /// What this skin dresses the extensions a document places in, by
+            /// kind. The toolkit owns no section for content it does not draw,
+            /// so this is the only thing a skin can say about one.
+            pub custom: CustomDoc,
+            pub id: DocId,
+            pub palette: PaletteDoc,
+            /// The pictures this skin carries, which is the whole set a
+            /// document may name.
+            pub pictures: PictureDoc,
+            pub schema: String,
+            pub version: u32,
+            /// What this skin restates for one control instance, by the path
+            /// the document gave it. A control the skin never names wears the
+            /// sections below unchanged.
+            #[serde(default)]
+            pub overrides: BTreeMap<String, SkinLayer>,
+            $(pub $field: $section,)*
+        }
+
+        /// What a skin restates without saying whose skin it is: the blankets
+        /// and the sections, each optional. A patch is this plus an identity;
+        /// an override is this aimed at one control.
+        #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+        #[serde(deny_unknown_fields)]
+        #[non_exhaustive]
+        pub struct SkinLayer {
+            /// Restated over every frame the layer reaches, before its own
+            /// sections are applied.
+            #[serde(default)]
+            pub frames: Option<FramePatch>,
+            /// Restated over every typographic role, on the same terms.
+            #[serde(default)]
+            pub text_roles: Option<TextRolePatch>,
+            $(#[serde(default)] pub $field: Option<$patch>,)*
+        }
+
+        impl SkinLayer {
+            /// Takes everything this layer restates, keeping the rest.
+            ///
+            /// A blanket comes before the sections it reaches, so a skin that
+            /// rounds every frame and then names one square control gets both.
+            pub(crate) fn apply(self, doc: &mut SkinDoc) {
+                if let Some(frames) = self.frames {
+                    doc.each_frame(&mut |frame| frames.apply(frame));
+                }
+                if let Some(roles) = self.text_roles {
+                    doc.each_role(&mut |role| roles.apply(role));
+                }
+                $(if let Some(section) = self.$field {
+                    doc.$field.patch(section);
+                })*
+            }
+        }
+
+        /// What one skin restates of another: any section, any field, and
+        /// nothing it does not name. The envelope is not optional - a patch
+        /// is a document of its own, with its own identity.
+        #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+        #[serde(deny_unknown_fields)]
+        #[non_exhaustive]
+        pub struct SkinPatch {
+            /// The skin this one is written over, relative to its own origin.
+            #[serde(default)]
+            pub base: Option<String>,
+            pub id: DocId,
+            pub schema: String,
+            pub version: u32,
+            /// Extensions this skin dresses differently from the ones it
+            /// inherits, setting by setting.
+            #[serde(default)]
+            pub custom: Option<CustomPatch>,
+            #[serde(default)]
+            pub palette: Option<PalettePatch>,
+            /// Pictures this skin draws instead of the ones it inherits, by
+            /// name.
+            #[serde(default)]
+            pub pictures: Option<PicturePatch>,
+            /// Restated over every frame the skin inherits, before its own
+            /// sections are applied.
+            #[serde(default)]
+            pub frames: Option<FramePatch>,
+            /// Restated over every typographic role, on the same terms.
+            #[serde(default)]
+            pub text_roles: Option<TextRolePatch>,
+            /// Control instances this skin dresses differently from the ones
+            /// it inherits. An entry is restated whole: it replaces whatever
+            /// the base said about that path rather than merging with it.
+            #[serde(default)]
+            pub overrides: Option<BTreeMap<String, SkinLayer>>,
+            $(#[serde(default)] pub $field: Option<$patch>,)*
+        }
+
+        impl SkinDoc {
+            /// Takes everything the patch restates, keeping the rest.
+            pub(crate) fn apply(&mut self, patch: SkinPatch) {
+                self.id = patch.id;
+                self.schema = patch.schema;
+                self.version = patch.version;
+                if let Some(palette) = patch.palette {
+                    self.palette.patch(palette);
+                }
+                if let Some(custom) = patch.custom {
+                    self.custom.patch(custom);
+                }
+                if let Some(pictures) = patch.pictures {
+                    self.pictures.patch(pictures);
+                }
+                if let Some(overrides) = patch.overrides {
+                    self.overrides.extend(overrides);
+                }
+                SkinLayer {
+                    frames: patch.frames,
+                    text_roles: patch.text_roles,
+                    $($field: patch.$field,)*
+                }
+                .apply(self);
+            }
+        }
+
+        impl Frames for SkinDoc {
+            fn each_frame(&mut self, visit: &mut dyn FnMut(&mut FrameSkin)) {
+                $(self.$field.each_frame(visit);)*
+            }
+        }
+
+        impl Roles for SkinDoc {
+            fn each_role(&mut self, visit: &mut dyn FnMut(&mut TextRoleSkin)) {
+                $(self.$field.each_role(visit);)*
+            }
+        }
+    };
 }
+
+pub(crate) use skin_sections;
+
+skin_sections!(define_skin_doc);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -196,7 +255,7 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
             found: envelope.kind.name(),
         });
     }
-    let document: SkinDoc =
+    let mut document: SkinDoc =
         ron_io::options()
             .from_str(text)
             .map_err(|source| UiDocError::Syntax {
@@ -204,39 +263,49 @@ pub fn parse_skin(text: &str, origin: &SourceUri) -> Result<SkinDoc, UiDocError>
                 source: Box::new(source),
             })?;
     document.palette.validate(origin)?;
+    document.custom.validate(origin)?;
+    document.pictures.rebase(origin)?;
     Ok(document)
 }
 
-pub(crate) fn parse_color(value: &str, origin: &SourceUri) -> Result<[u8; 4], UiDocError> {
-    let digits = value
-        .strip_prefix('#')
-        .ok_or_else(|| bad_color(origin, value))?;
-    if digits.len() != 6 && digits.len() != 8 {
-        return Err(bad_color(origin, value));
+/// Parses a skin that restates only part of `base`.
+///
+/// A skin document names every field it declares; a patch names only what it
+/// changes, and inherits the rest from the skin it is written over. That is
+/// what lets one palette or one control be re-skinned without copying the
+/// six hundred values around it.
+///
+/// # Errors
+/// Returns [`UiDocError`] when the envelope, body, or resulting palette is
+/// invalid.
+pub fn parse_skin_over(
+    base: &SkinDoc,
+    text: &str,
+    origin: &SourceUri,
+) -> Result<SkinDoc, UiDocError> {
+    let envelope = envelope::probe(text, origin)?;
+    if envelope.kind != DocKind::Skin {
+        return Err(UiDocError::WrongDocKind {
+            origin: origin.clone(),
+            expected: DocKind::Skin.name(),
+            found: envelope.kind.name(),
+        });
     }
-    let component = |start| {
-        let pair = digits
-            .get(start..start + 2)
-            .ok_or_else(|| bad_color(origin, value))?;
-        u8::from_str_radix(pair, 16).map_err(|_| bad_color(origin, value))
-    };
-    Ok([
-        component(0)?,
-        component(2)?,
-        component(4)?,
-        if digits.len() == 8 {
-            component(6)?
-        } else {
-            255
-        },
-    ])
-}
-
-fn bad_color(origin: &SourceUri, value: &str) -> UiDocError {
-    UiDocError::BadColor {
-        origin: origin.clone(),
-        value: value.to_owned(),
+    let mut patch: SkinPatch =
+        ron_io::options()
+            .from_str(text)
+            .map_err(|source| UiDocError::Syntax {
+                origin: origin.clone(),
+                source: Box::new(source),
+            })?;
+    if let Some(pictures) = patch.pictures.as_mut() {
+        pictures.rebase(origin)?;
     }
+    let mut document = base.clone();
+    document.apply(patch);
+    document.palette.validate(origin)?;
+    document.custom.validate(origin)?;
+    Ok(document)
 }
 
 #[cfg(test)]
@@ -244,40 +313,289 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::builtin;
+    use crate::{builtin, skin::ColorRole, source::MemResolver};
+
+    const GOLD: &str = r##"(
+        schema: "kithara.skin",
+        version: 1,
+        id: "kithara-gold",
+        palette: (accent: "#ff0000"),
+        button: (icon_size: 42.0),
+    )"##;
+
+    fn gold() -> SkinDoc {
+        parse_skin_over(builtin::skin_doc(), GOLD, &origin())
+            .expect("a patch over the builtin skin parses")
+    }
+
+    fn origin() -> SourceUri {
+        SourceUri("kithara-gold.kskin.ron".to_owned())
+    }
 
     #[kithara::test]
-    fn palette_holds_exactly_the_declared_roles() {
+    fn a_patch_takes_the_color_it_names() {
+        assert_eq!(gold().palette.accent, "#ff0000");
+    }
+
+    #[kithara::test]
+    fn a_patch_keeps_the_colors_it_does_not_name() {
+        assert_eq!(gold().palette.bg, builtin::skin_doc().palette.bg);
+    }
+
+    #[kithara::test]
+    fn a_patch_takes_the_section_field_it_names() {
+        assert_eq!(gold().button.icon_size, 42.0);
+    }
+
+    #[kithara::test]
+    fn a_patch_keeps_the_section_fields_it_does_not_name() {
         assert_eq!(
-            builtin::skin_doc().palette,
-            PaletteDoc {
-                bg: "#12121f".to_owned(),
-                bg_deep: "#0b0b16".to_owned(),
-                bg_inset: "#15152a".to_owned(),
-                bg_panel: "#20203a".to_owned(),
-                bg_footer: "#1b1b32".to_owned(),
-                bg_panel_2: "#26264a".to_owned(),
-                bg_select: "#26264a".to_owned(),
-                line: "#3b3b67".to_owned(),
-                line_dim: "#242442".to_owned(),
-                line_inner: "#2a2a4c".to_owned(),
-                line_soft: "#2a2a4c".to_owned(),
-                line_hi: "#4a4a7a".to_owned(),
-                line_pop: "#2f2f57".to_owned(),
-                text: "#e6e6e6".to_owned(),
-                text_dim: "#a7aac2".to_owned(),
-                muted: "#6f7189".to_owned(),
-                accent: "#bb9442".to_owned(),
-                accent_strong: "#d6ad59".to_owned(),
-                accent_soft: "#bb94422e".to_owned(),
-                danger: "#e64d4d".to_owned(),
-                success: "#66cc66".to_owned(),
-                warning: "#e6b333".to_owned(),
-                wave_low: "#eb298c".to_owned(),
-                wave_mid: "#f2d129".to_owned(),
-                wave_high: "#2ec7eb".to_owned(),
-                shadow: "#000000".to_owned(),
-            }
+            gold().button.padding_x,
+            builtin::skin_doc().button.padding_x
         );
+    }
+
+    #[kithara::test]
+    fn a_patch_keeps_the_sections_it_does_not_name() {
+        assert_eq!(gold().window, builtin::skin_doc().window);
+    }
+
+    #[kithara::test]
+    fn a_patch_carries_its_own_identity() {
+        assert_eq!(gold().id, DocId("kithara-gold".to_owned()));
+    }
+
+    fn dressing(id: &str, body: &str) -> String {
+        format!(
+            r##"(
+                schema: "kithara.skin",
+                version: 1,
+                id: "kithara-{id}",
+                overrides: {body},
+            )"##
+        )
+    }
+
+    #[kithara::test]
+    fn a_skin_carries_the_override_it_names() {
+        let text = dressing(
+            "dressed",
+            r#"{"deck.gain": (fader: (rail_filled: Danger))}"#,
+        );
+
+        let document =
+            parse_skin_over(builtin::skin_doc(), &text, &origin()).expect("the patch parses");
+
+        assert_eq!(
+            document.overrides["deck.gain"]
+                .fader
+                .expect("the override names the fader section")
+                .rail_filled,
+            Some(ColorRole::Danger)
+        );
+    }
+
+    #[kithara::test]
+    fn a_skin_declares_no_overrides_by_default() {
+        assert!(builtin::skin_doc().overrides.is_empty());
+    }
+
+    /// An override is restated whole. A skin written over another that already
+    /// dresses a control says everything it means about that control, rather
+    /// than half of it and half of what it inherited.
+    #[kithara::test]
+    fn a_patch_replaces_the_override_it_restates() {
+        let base = parse_skin_over(
+            builtin::skin_doc(),
+            &dressing("base", r#"{"deck.gain": (fader: (rail_filled: Danger))}"#),
+            &origin(),
+        )
+        .expect("the base parses");
+
+        let document = parse_skin_over(
+            &base,
+            &dressing("over", r#"{"deck.gain": (frames: (radius: 0.0))}"#),
+            &origin(),
+        )
+        .expect("the patch over it parses");
+
+        assert_eq!(document.overrides["deck.gain"].fader, None);
+    }
+
+    #[kithara::test]
+    fn a_patch_keeps_the_overrides_it_does_not_name() {
+        let base = parse_skin_over(
+            builtin::skin_doc(),
+            &dressing("base", r#"{"deck.gain": (fader: (rail_filled: Danger))}"#),
+            &origin(),
+        )
+        .expect("the base parses");
+
+        let document = parse_skin_over(
+            &base,
+            &dressing("over", r#"{"deck.pitch": (frames: (radius: 0.0))}"#),
+            &origin(),
+        )
+        .expect("the patch over it parses");
+
+        assert_eq!(
+            document.overrides["deck.gain"]
+                .fader
+                .expect("the inherited override is still there")
+                .rail_filled,
+            Some(ColorRole::Danger)
+        );
+    }
+
+    fn chain(links: &[(&str, &str)]) -> MemResolver {
+        let mut resolver = builtin::resolver();
+        for (path, text) in links {
+            resolver.insert(path, text);
+        }
+        resolver
+    }
+
+    fn over(base: &str, accent: &str) -> String {
+        format!(
+            r##"(
+                schema: "kithara.skin",
+                version: 1,
+                id: "kithara-{accent}",
+                base: "{base}",
+                palette: (accent: "{accent}"),
+            )"##
+        )
+    }
+
+    #[kithara::test]
+    fn a_skin_takes_the_color_it_writes_over_its_base() {
+        let gold = over(builtin::DARK_SKIN_PATH, "#ff0000");
+        let resolver = chain(&[("gold.kskin.ron", &gold)]);
+
+        let document = load_skin(&resolver, "gold.kskin.ron", &Limits::default())
+            .expect("a skin over the builtin skin loads");
+
+        assert_eq!(document.palette.accent, "#ff0000");
+    }
+
+    #[kithara::test]
+    fn a_skin_keeps_what_its_base_declared() {
+        let gold = over(builtin::DARK_SKIN_PATH, "#ff0000");
+        let resolver = chain(&[("gold.kskin.ron", &gold)]);
+
+        let document = load_skin(&resolver, "gold.kskin.ron", &Limits::default())
+            .expect("a skin over the builtin skin loads");
+
+        assert_eq!(document.palette.bg, builtin::skin_doc().palette.bg);
+    }
+
+    #[kithara::test]
+    fn the_last_skin_in_a_chain_wins_the_color_they_both_name() {
+        let gold = over(builtin::DARK_SKIN_PATH, "#ff0000");
+        let rose = over("gold.kskin.ron", "#00ff00");
+        let resolver = chain(&[("gold.kskin.ron", &gold), ("rose.kskin.ron", &rose)]);
+
+        let document = load_skin(&resolver, "rose.kskin.ron", &Limits::default())
+            .expect("a two-link chain loads");
+
+        assert_eq!(document.palette.accent, "#00ff00");
+    }
+
+    #[kithara::test]
+    fn a_chain_longer_than_the_limit_is_refused() {
+        let loop_skin = over("loop.kskin.ron", "#ff0000");
+        let resolver = chain(&[("loop.kskin.ron", &loop_skin)]);
+        let limits = Limits::builder().max_depth(4).build();
+
+        let error = load_skin(&resolver, "loop.kskin.ron", &limits)
+            .expect_err("a skin written over itself cannot resolve");
+
+        assert!(matches!(error, UiDocError::DepthExceeded { max: 4, .. }));
+    }
+
+    #[kithara::test]
+    fn a_patch_refuses_a_field_no_section_declares() {
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-typo",
+            button: (icon_sze: 42.0),
+        )"##;
+
+        let error = parse_skin_over(builtin::skin_doc(), text, &origin())
+            .expect_err("a misspelled field is an error, not a silent default");
+
+        assert!(matches!(error, UiDocError::Syntax { .. }));
+    }
+
+    #[kithara::test]
+    fn a_patch_refuses_a_color_it_cannot_read() {
+        let text = r##"(
+            schema: "kithara.skin",
+            version: 1,
+            id: "kithara-broken",
+            palette: (accent: "not a color"),
+        )"##;
+
+        let error = parse_skin_over(builtin::skin_doc(), text, &origin())
+            .expect_err("a broken color is an error");
+
+        assert!(matches!(error, UiDocError::BadColor { .. }));
+    }
+}
+
+/// Reads only the skin a document is written over, before its body is known.
+#[derive(Debug, Deserialize)]
+struct SkinLineage {
+    #[serde(default)]
+    base: Option<String>,
+}
+
+/// Loads a skin and every skin it is written over, newest last.
+///
+/// A skin that names no base is a whole document. A skin that names one
+/// restates only what it changes, which is what lets a theme ship as a
+/// handful of colours instead of a copy of the six hundred values it leaves
+/// alone.
+///
+/// # Errors
+/// Returns [`UiDocError`] when a document in the chain is missing, invalid, or
+/// the chain is longer than `limits.max_depth`.
+pub fn load_skin(
+    resolver: &dyn SourceResolver,
+    rel: &str,
+    limits: &Limits,
+) -> Result<SkinDoc, UiDocError> {
+    load_over(resolver, None, rel, 0, limits)
+}
+
+fn load_over(
+    resolver: &dyn SourceResolver,
+    base: Option<&SourceUri>,
+    rel: &str,
+    depth: usize,
+    limits: &Limits,
+) -> Result<SkinDoc, UiDocError> {
+    let loaded = resolver.load(base, rel)?;
+    if depth > limits.max_depth {
+        return Err(UiDocError::DepthExceeded {
+            origin: loaded.uri,
+            depth,
+            max: limits.max_depth,
+        });
+    }
+    let lineage: SkinLineage =
+        ron_io::options()
+            .from_str(&loaded.text)
+            .map_err(|source| UiDocError::Syntax {
+                origin: loaded.uri.clone(),
+                source: Box::new(source),
+            })?;
+    match lineage.base {
+        None => parse_skin(&loaded.text, &loaded.uri),
+        Some(parent) => {
+            let base = load_over(resolver, Some(&loaded.uri), &parent, depth + 1, limits)?;
+            parse_skin_over(&base, &loaded.text, &loaded.uri)
+        }
     }
 }
