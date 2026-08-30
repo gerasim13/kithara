@@ -961,11 +961,11 @@ program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
 role = "gate"
 kinds = ["weekly"]
-# Not on a branch push. This checks 374 feature combinations, and the
-# workspace is unpublished: the configurations anyone actually builds are the
-# ones the platform lanes name, roughly a dozen. Paying 6.9 to 38.3 minutes of
-# a one-host fleet on every push of every branch to cover the other 362 is the
-# wrong trade - 30.8 hours of runner time over 117 runs. On the default branch
+# Not on a branch push. This checks about 375 feature combinations - the count
+# moves as crates and features do - and the workspace is unpublished: the
+# configurations anyone actually builds are the ones the platform lanes name,
+# roughly a dozen. Paying 6.9 to 38.3 minutes of a one-host fleet on every push
+# of every branch to cover the rest is the wrong trade - 30.8 hours of runner time over 117 runs. On the default branch
 # it still gates what lands, and the nightly pass covers the days nothing
 # lands, which is where a dependency update would break a combination with no
 # push to blame. GitLab already said `weekly`; this is the same judgement.
