@@ -21,6 +21,7 @@ use kithara_test_fixtures::SignalAsset;
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
 /// nothing is resampled on the way in.
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
+const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
 fn worker() -> PlayWorker {
     PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build())
@@ -34,10 +35,13 @@ async fn run_analysis(
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(
         master,
+        None,
+        CHUNK_SECONDS,
         buckets,
         BeatAnalysisConfig::default(),
         SamplePool::default(),
-    );
+    )
+    .ok()?;
     let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).
@@ -45,7 +49,7 @@ async fn run_analysis(
     while rx.changed().await.is_ok() {
         last = rx.borrow().clone();
     }
-    last
+    last.map(Into::into)
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(2)), hang_timeout_secs(2))]

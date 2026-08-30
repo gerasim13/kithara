@@ -9,62 +9,40 @@ use kithara_events::EventBus;
 use kithara_platform::{maybe_send::MaybeSend, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_warp::Warp;
+use kithara_worker::{TaskControl, TaskHandle};
 
-use super::{
-    PlayWorker,
-    scheduler::{AtomicServiceClass, ServiceClass, TaskId, Wake},
-};
+use super::{PlayWorker, scheduler::ServiceClass};
 
 #[derive(Clone)]
 pub(crate) struct TrackPriority {
-    service_class: Arc<AtomicServiceClass>,
-    wake: Wake,
+    control: TaskControl,
 }
 
 impl TrackPriority {
-    pub(super) const fn new(service_class: Arc<AtomicServiceClass>, wake: Wake) -> Self {
-        Self {
-            service_class,
-            wake,
-        }
+    pub(super) const fn new(control: TaskControl) -> Self {
+        Self { control }
     }
 
     pub(crate) fn set(&self, class: ServiceClass) {
-        self.service_class.store(class);
-        self.wake.defer();
+        self.control.set_priority(class.into());
     }
 }
 
 pub(crate) struct TrackLease {
-    task_id: Option<TaskId>,
-    worker: PlayWorker,
-    priority: TrackPriority,
+    task: TaskHandle,
+    _worker: PlayWorker,
 }
 
 impl TrackLease {
-    pub(crate) const fn new(
-        worker: PlayWorker,
-        task_id: TaskId,
-        service_class: Arc<AtomicServiceClass>,
-        wake: Wake,
-    ) -> Self {
+    pub(crate) const fn new(worker: PlayWorker, task: TaskHandle) -> Self {
         Self {
-            task_id: Some(task_id),
-            worker,
-            priority: TrackPriority::new(service_class, wake),
+            task,
+            _worker: worker,
         }
     }
 
     pub(crate) fn priority(&self) -> TrackPriority {
-        self.priority.clone()
-    }
-}
-
-impl Drop for TrackLease {
-    fn drop(&mut self) {
-        if let Some(task_id) = self.task_id.take() {
-            self.worker.unregister(task_id);
-        }
+        TrackPriority::new(self.task.control())
     }
 }
 
