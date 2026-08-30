@@ -25,17 +25,16 @@ use num_traits::cast::AsPrimitive;
 
 use crate::{
     capture::Shot,
-    custom,
+    custom, demo,
     fixture::{Consts, resolver},
     host::Gallery,
-    mock,
 };
 
 #[kithara::test]
 fn every_page_paints_over_the_whole_window() {
     let width: u32 = AsPrimitive::<u32>::as_(Consts::WIDTH);
     let height: u32 = AsPrimitive::<u32>::as_(Consts::HEIGHT);
-    let endpoints = mock::registry();
+    let endpoints = demo::registry();
     let resolver = resolver();
     let kinds = custom::kinds();
     let config = Config::builder()

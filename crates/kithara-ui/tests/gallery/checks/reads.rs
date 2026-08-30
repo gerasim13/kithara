@@ -1,8 +1,18 @@
+//! What the gallery's readings answer, and how a press changes them.
+//!
+//! The demo model behind the pages is the application the gallery is; these
+//! are the questions asked of it, which belong with the gallery's other
+//! checks rather than beside the model itself.
+
 use kithara_test_utils::kithara;
+use kithara_ui::{
+    builtin,
+    render::{ControlAction, ReadValue, Reads as _},
+};
 
-use super::*;
+use crate::demo::{DemoReads, consts::Consts, data::CATALOG};
 
-fn visible_tree_row_selected(reads: &MockReads, label: &str) -> bool {
+fn visible_tree_row_selected(reads: &DemoReads, label: &str) -> bool {
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
         panic!("expected tree rows");
     };
@@ -12,7 +22,7 @@ fn visible_tree_row_selected(reads: &MockReads, label: &str) -> bool {
     )
 }
 
-fn visible_tree_row_index(reads: &MockReads, label: &str) -> usize {
+fn visible_tree_row_index(reads: &DemoReads, label: &str) -> usize {
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
         panic!("expected tree rows");
     };
@@ -21,7 +31,7 @@ fn visible_tree_row_index(reads: &MockReads, label: &str) -> usize {
         .unwrap_or_else(|| panic!("missing visible tree row {label}"))
 }
 
-fn selected_visible_index(reads: &MockReads) -> usize {
+fn selected_visible_index(reads: &DemoReads) -> usize {
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
         panic!("expected tree rows");
     };
@@ -30,7 +40,7 @@ fn selected_visible_index(reads: &MockReads) -> usize {
         .expect("a selected tree row")
 }
 
-fn muted_visible_index(reads: &MockReads) -> usize {
+fn muted_visible_index(reads: &DemoReads) -> usize {
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
         panic!("expected tree rows");
     };
@@ -39,7 +49,7 @@ fn muted_visible_index(reads: &MockReads) -> usize {
         .expect("a muted tree row")
 }
 
-fn visible_tree_len(reads: &MockReads) -> usize {
+fn visible_tree_len(reads: &DemoReads) -> usize {
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
         panic!("expected tree rows");
     };
@@ -48,7 +58,7 @@ fn visible_tree_len(reads: &MockReads) -> usize {
 
 #[kithara::test]
 fn wave_scalar_write_updates_normalized_playback_position() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply("modules/deck/wave", &ControlAction::SetScalar(0.25));
 
@@ -64,7 +74,7 @@ fn wave_scalar_write_updates_normalized_playback_position() {
 
 #[kithara::test]
 fn wave_zoom_is_host_owned_and_clamped() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("deck.view.zoom"),
@@ -78,7 +88,7 @@ fn wave_zoom_is_host_owned_and_clamped() {
 
 #[kithara::test]
 fn deck_sync_and_reverse_toggles_update_active_reads() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("deck.playback.synced"),
@@ -102,7 +112,7 @@ fn deck_sync_and_reverse_toggles_update_active_reads() {
 
 #[kithara::test]
 fn toggle_module_owns_the_collapsed_read_endpoint() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     let endpoint = "ui.module.gallery-module-deck.collapsed";
 
     assert_eq!(reads.get(endpoint), Some(ReadValue::Bool(false)));
@@ -114,36 +124,36 @@ fn toggle_module_owns_the_collapsed_read_endpoint() {
 
 #[kithara::test]
 fn knob_gallery_values_cover_both_sides_of_center() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
-    assert_eq!(reads.get("mock.knob.26"), Some(ReadValue::Scalar(0.35)));
-    assert_eq!(reads.get("mock.knob.28"), Some(ReadValue::Scalar(0.5)));
-    assert_eq!(reads.get("mock.knob.34"), Some(ReadValue::Scalar(0.65)));
-    assert_eq!(reads.get("mock.knob.38"), Some(ReadValue::Scalar(0.8)));
+    assert_eq!(reads.get("demo.knob.26"), Some(ReadValue::Scalar(0.35)));
+    assert_eq!(reads.get("demo.knob.28"), Some(ReadValue::Scalar(0.5)));
+    assert_eq!(reads.get("demo.knob.34"), Some(ReadValue::Scalar(0.65)));
+    assert_eq!(reads.get("demo.knob.38"), Some(ReadValue::Scalar(0.8)));
 
     reads.apply("atoms/knobs/size-26", &ControlAction::SetScalar(0.45));
-    assert_eq!(reads.get("mock.knob.26"), Some(ReadValue::Scalar(0.45)));
-    assert_eq!(reads.get("mock.knob.38"), Some(ReadValue::Scalar(0.8)));
+    assert_eq!(reads.get("demo.knob.26"), Some(ReadValue::Scalar(0.45)));
+    assert_eq!(reads.get("demo.knob.38"), Some(ReadValue::Scalar(0.8)));
 }
 
 #[kithara::test]
 fn segmented_gallery_selects_an_index() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
-        reads.get("mock.cells.segmented"),
+        reads.get("demo.cells.segmented"),
         Some(ReadValue::Scalar(2.0))
     );
     reads.apply("cells/beat", &ControlAction::SelectIndex(3));
     assert_eq!(
-        reads.get("mock.cells.segmented"),
+        reads.get("demo.cells.segmented"),
         Some(ReadValue::Scalar(3.0))
     );
 }
 
 #[kithara::test]
 fn vis_previous_and_next_cycle_the_preset() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(reads.get("vis.preset"), Some(ReadValue::Scalar(0.0)));
     assert_eq!(
@@ -166,7 +176,7 @@ fn vis_previous_and_next_cycle_the_preset() {
 
 #[kithara::test]
 fn table_presets_replace_host_owned_column_visibility() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("gallery.table.columns.energy"),
@@ -191,7 +201,7 @@ fn table_presets_replace_host_owned_column_visibility() {
 
 #[kithara::test]
 fn table_reset_restores_current_preset_defaults() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply("table/column-energy", &ControlAction::Activate);
     assert_eq!(
@@ -213,7 +223,7 @@ fn table_reset_restores_current_preset_defaults() {
 
 #[kithara::test]
 fn table_width_write_is_host_owned_and_clamped() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     let endpoint = "gallery.table.columns.width.artist";
 
     assert_eq!(reads.get(endpoint), None);
@@ -231,7 +241,7 @@ fn table_width_write_is_host_owned_and_clamped() {
 
 #[kithara::test]
 fn tree_branch_selection_toggles_visible_descendants() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     let before = visible_tree_len(&reads);
     let explorer = visible_tree_row_index(&reads, "Explorer");
 
@@ -245,7 +255,7 @@ fn tree_branch_selection_toggles_visible_descendants() {
 
 #[kithara::test]
 fn tree_leaf_selection_is_host_owned() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     let previous = selected_visible_index(&reads);
     let all_tracks = visible_tree_row_index(&reads, "All tracks");
     assert_ne!(previous, all_tracks);
@@ -258,7 +268,7 @@ fn tree_leaf_selection_is_host_owned() {
 
 #[kithara::test]
 fn muted_tree_row_does_not_change_selection() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     let muted = muted_visible_index(&reads);
     let selected = selected_visible_index(&reads);
 
@@ -268,8 +278,8 @@ fn muted_tree_row_does_not_change_selection() {
 }
 
 #[kithara::test]
-fn expanded_mock_tree_overflows_the_gallery_viewport() {
-    let reads = MockReads::default();
+fn expanded_demo_tree_overflows_the_gallery_viewport() {
+    let reads = DemoReads::default();
     let Some(ReadValue::Tree(rows)) = reads.get("library.tree") else {
         panic!("expected tree rows");
     };
@@ -279,7 +289,7 @@ fn expanded_mock_tree_overflows_the_gallery_viewport() {
 
 #[kithara::test]
 fn library_query_read_reflects_host_updates() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.set_library_query("acid bass".to_owned());
 
@@ -291,7 +301,7 @@ fn library_query_read_reflects_host_updates() {
 
 #[kithara::test]
 fn context_scope_selection_is_host_owned() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(reads.get("library.scope"), Some(ReadValue::Scalar(0.0)));
     reads.apply("library2/context", &ControlAction::SelectIndex(1));
@@ -300,7 +310,7 @@ fn context_scope_selection_is_host_owned() {
 
 #[kithara::test]
 fn default_menu_state_is_the_frozen_design_snapshot() {
-    let reads = MockReads::default();
+    let reads = DemoReads::default();
 
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
     assert_eq!(
@@ -347,7 +357,7 @@ fn default_menu_state_is_the_frozen_design_snapshot() {
 
 #[kithara::test]
 fn the_popover_path_only_closes_while_the_burger_toggles() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply("app-menu/menu/pop", &ControlAction::Activate);
     assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
@@ -366,7 +376,7 @@ fn the_popover_path_only_closes_while_the_burger_toggles() {
 
 #[kithara::test]
 fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(reads.get("ui.window.can_open"), Some(ReadValue::Bool(true)));
     assert_eq!(
@@ -422,7 +432,7 @@ fn the_window_list_refuses_a_fourth_window_and_never_closes_the_first() {
 
 #[kithara::test]
 fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply("app-menu/menu/window-2/focus", &ControlAction::Activate);
 
@@ -464,7 +474,7 @@ fn focusing_a_window_moves_the_module_grid_and_the_layout_hint() {
 
 #[kithara::test]
 fn opening_one_menu_group_closes_the_other() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("ui.menu.group_hidden@group=mod"),
@@ -499,7 +509,7 @@ fn opening_one_menu_group_closes_the_other() {
 
 #[kithara::test]
 fn applying_a_layout_renames_the_active_window() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("ui.layout.selected@layout=1"),
@@ -527,7 +537,7 @@ fn applying_a_layout_renames_the_active_window() {
 
 #[kithara::test]
 fn the_record_and_cast_hints_follow_their_own_flags() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(reads.get("ui.set.record_hint"), Some(ReadValue::Text("⌘R")));
     assert_eq!(
@@ -547,7 +557,7 @@ fn the_record_and_cast_hints_follow_their_own_flags() {
 
 #[kithara::test]
 fn a_secondary_click_opens_one_track_menu_at_a_time() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("gallery.menu.context@row=2"),
@@ -578,7 +588,7 @@ fn a_secondary_click_opens_one_track_menu_at_a_time() {
 
 #[kithara::test]
 fn a_primary_click_selects_a_track_without_opening_its_menu() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply("ctx/track-3/row", &ControlAction::Activate);
 
@@ -598,7 +608,7 @@ fn a_primary_click_selects_a_track_without_opening_its_menu() {
 
 #[kithara::test]
 fn a_track_menu_action_closes_the_menu_and_reports_itself() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply("ctx/track-2/row", &ControlAction::SecondaryActivate);
     reads.apply("ctx/track-2/deck-b", &ControlAction::Activate);
@@ -628,7 +638,7 @@ fn breadcrumb_data_excludes_the_scope_prefix() {
 
 #[kithara::test]
 fn clock_controls_update_source_tempo_grid_and_key_lock() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     reads.apply(
         "clock/master-clock/source-c/select",
@@ -666,7 +676,7 @@ fn clock_controls_update_source_tempo_grid_and_key_lock() {
 
 #[kithara::test]
 fn pivot_controls_follow_the_handoff_ratio_range_and_loop_contract() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
 
     assert_eq!(
         reads.get("pivot.selected.ratio"),
@@ -718,10 +728,10 @@ fn pivot_controls_follow_the_handoff_ratio_range_and_loop_contract() {
 
 /// The stress page's waveform length is the one weight of that page a
 /// measurement can vary, so it has to follow the count it was built with rather
-/// than a constant baked into the mock.
+/// than a constant baked into the demo model.
 #[kithara::test]
 fn the_stress_waveform_carries_the_bucket_count_it_was_built_with() {
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     for buckets in [8_192_u16, 256] {
         reads.set_wave_buckets(buckets);
         let Some(ReadValue::Waveform(view)) = reads.get("bench.wave.0") else {

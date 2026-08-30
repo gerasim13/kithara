@@ -186,10 +186,9 @@ mod retained {
 
     use super::{FRAMES, Shot, Walked};
     use crate::{
-        custom,
+        custom, demo,
         fixture::{Consts, resolver},
         host::Gallery,
-        mock,
     };
 
     /// The gallery with its own clock held unless the page says it moves.
@@ -244,7 +243,7 @@ mod retained {
     }
 
     fn walked(page: Shot, ticks: bool) -> Walked {
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let resolver = resolver();
         let kinds = custom::kinds();
         let config = Config::builder()

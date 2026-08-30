@@ -63,7 +63,7 @@ impl Feed {
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct MockReads {
+pub(crate) struct DemoReads {
     table_widths: BTreeMap<String, f64>,
     collapsed: BTreeSet<String>,
     context: ContextState,
@@ -124,7 +124,7 @@ pub(crate) struct MockReads {
     vis_preset: usize,
 }
 
-impl Default for MockReads {
+impl Default for DemoReads {
     fn default() -> Self {
         let (wave_beats, wave_downbeats) = beat_grid();
         let tree_expanded = CATALOG
@@ -199,7 +199,7 @@ impl Default for MockReads {
     }
 }
 
-impl MockReads {
+impl DemoReads {
     fn activate(&mut self, path: &str) {
         if self.clock.activate(path) {
             return;
@@ -549,7 +549,7 @@ impl MockReads {
     }
 }
 
-impl Reads for MockReads {
+impl Reads for DemoReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         // The menu axes are genuinely per-window, per-module and per-row, so
         // they answer the scoped key before it is dropped below.
@@ -652,7 +652,7 @@ impl Reads for MockReads {
             "deck.playback.duration_secs" => ReadValue::Scalar(Consts::DURATION_SECS),
             "deck.playback.looping" => ReadValue::Bool(self.transport.loop_region().is_some()),
             "deck.playback.reverse" => ReadValue::Bool(self.transport.reverse()),
-            "deck.playback.synced" | "mock.button.sync" => ReadValue::Bool(self.button_sync),
+            "deck.playback.synced" | "demo.button.sync" => ReadValue::Bool(self.button_sync),
             "deck.playback.tempo" => ReadValue::Text(Consts::TEMPO),
             "deck.playback.waveform" => ReadValue::Waveform(WaveformView {
                 buckets: &self.waveform,
@@ -664,13 +664,13 @@ impl Reads for MockReads {
                 r#loop: self.transport.loop_region(),
                 cues: self.transport.cues(),
             }),
-            "deck.track.title" | "mock.track.title" => ReadValue::Text(CATALOG.title),
+            "deck.track.title" | "demo.track.title" => ReadValue::Text(CATALOG.title),
             "deck.track.source_kind" => ReadValue::Text(Consts::ON_AIR),
-            "mock.track.artist" => ReadValue::Text(CATALOG.artist),
+            "demo.track.artist" => ReadValue::Text(CATALOG.artist),
             "engine.load" => ReadValue::Scalar(Consts::ENGINE_LOAD),
             "engine.latency" => ReadValue::Text(Consts::LATENCY),
             "ui.set.record_time" => ReadValue::Text(Consts::RECORD_TIME),
-            "deck.track.key" | "mock.key" => ReadValue::Text(Consts::KEY),
+            "deck.track.key" | "demo.key" => ReadValue::Text(Consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
                 l: if self.active_tab == "vis" {
@@ -685,7 +685,7 @@ impl Reads for MockReads {
                 },
                 volume: self.volume.as_(),
             }),
-            "player.output.volume" | "mock.volume" => ReadValue::Scalar(self.volume),
+            "player.output.volume" | "demo.volume" => ReadValue::Scalar(self.volume),
             "library.visible_tracks" => ReadValue::Table(CATALOG.rows),
             "library.long_tracks" => ReadValue::Table(CATALOG.long_rows),
             "library.tree" => ReadValue::Tree(&self.tree_rows),
@@ -693,26 +693,26 @@ impl Reads for MockReads {
             "library.query" => ReadValue::Text(&self.library_query),
             "library.scope" => ReadValue::Scalar(self.library_scope.as_()),
             "ui.preset" => ReadValue::Text("player"),
-            "mock.bpm" => ReadValue::Text(Consts::BPM),
-            "mock.remain" | "deck.playback.remain" => ReadValue::Text(Consts::REMAIN),
-            "mock.knob.26" => ReadValue::Scalar(self.knobs[0]),
-            "mock.knob.28" => ReadValue::Scalar(self.knobs[1]),
-            "mock.knob.34" => ReadValue::Scalar(self.knobs[2]),
-            "mock.knob.38" => ReadValue::Scalar(self.knobs[3]),
-            "mock.levels" => ReadValue::Stereo(StereoLevels {
+            "demo.bpm" => ReadValue::Text(Consts::BPM),
+            "demo.remain" | "deck.playback.remain" => ReadValue::Text(Consts::REMAIN),
+            "demo.knob.26" => ReadValue::Scalar(self.knobs[0]),
+            "demo.knob.28" => ReadValue::Scalar(self.knobs[1]),
+            "demo.knob.34" => ReadValue::Scalar(self.knobs[2]),
+            "demo.knob.38" => ReadValue::Scalar(self.knobs[3]),
+            "demo.levels" => ReadValue::Stereo(StereoLevels {
                 l: 0.66,
                 r: 0.52,
                 volume: self.levels_volume.as_(),
             }),
-            "mock.toggle.on" => ReadValue::Bool(self.toggle_on),
-            "mock.toggle.off" => ReadValue::Bool(self.toggle_off),
-            "mock.checkbox.on" => ReadValue::Bool(self.checkbox_on),
-            "mock.checkbox.off" => ReadValue::Bool(self.checkbox_off),
-            "mock.chip.active" => ReadValue::Bool(self.chip_active),
-            "mock.chip.inactive" => ReadValue::Bool(self.chip_inactive),
-            "mock.button.play" => ReadValue::Bool(self.button_play),
-            "mock.button.cue" => ReadValue::Bool(self.button_cue),
-            "mock.cells.segmented" => ReadValue::Scalar(self.segmented_index),
+            "demo.toggle.on" => ReadValue::Bool(self.toggle_on),
+            "demo.toggle.off" => ReadValue::Bool(self.toggle_off),
+            "demo.checkbox.on" => ReadValue::Bool(self.checkbox_on),
+            "demo.checkbox.off" => ReadValue::Bool(self.checkbox_off),
+            "demo.chip.active" => ReadValue::Bool(self.chip_active),
+            "demo.chip.inactive" => ReadValue::Bool(self.chip_inactive),
+            "demo.button.play" => ReadValue::Bool(self.button_play),
+            "demo.button.cue" => ReadValue::Bool(self.button_cue),
+            "demo.cells.segmented" => ReadValue::Scalar(self.segmented_index),
             "gallery.table.preset" => ReadValue::Scalar(self.table_preset.as_()),
             _ => return None,
         };
@@ -761,6 +761,3 @@ fn beat_grid() -> (Vec<f32>, Vec<f32>) {
     let downbeats = beats.iter().step_by(4).copied().collect();
     (beats, downbeats)
 }
-
-#[cfg(test)]
-mod tests;

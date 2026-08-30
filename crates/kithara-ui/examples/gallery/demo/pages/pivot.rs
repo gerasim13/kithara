@@ -3,7 +3,7 @@ use kithara_ui::render::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::mock::data::CATALOG;
+use crate::demo::data::CATALOG;
 
 struct PivotConsts;
 

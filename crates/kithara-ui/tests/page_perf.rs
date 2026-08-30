@@ -20,10 +20,10 @@
 //! platform crate leaves real on both lanes. `Instant` beside it is the virtual
 //! one under flash, and a virtual clock reports a frame that took no time.
 
+#[path = "../examples/gallery/demo/mod.rs"]
+mod demo;
 #[path = "../examples/gallery/fixture.rs"]
 mod fixture;
-#[path = "../examples/gallery/mock/mod.rs"]
-mod mock;
 #[path = "../examples/gallery/sections.rs"]
 mod sections;
 
@@ -88,7 +88,7 @@ use masonry::vello::{
 };
 use num_traits::cast::AsPrimitive as _;
 
-use self::{fixture::Consts, mock::MockReads};
+use self::{demo::DemoReads, fixture::Consts};
 
 /// The format each host rasterises into. The retained one matches the gallery's
 /// own capture; iced's engine is built for a surface format, which is the sRGB
@@ -210,7 +210,7 @@ struct Page {
     name: &'static str,
     group: Group,
     entry: &'static str,
-    /// Which mock state the page's tick advances. The gallery's reads move the
+    /// Which demo state the page's tick advances. The gallery's reads move the
     /// stress waveforms only on the stress tab and the visualiser only on the
     /// vis one, so a page measured under the wrong tab is a still picture.
     tab: sections::Page,
@@ -247,9 +247,9 @@ const PAGES: &[Page] = &[
     },
     Page {
         // The page reported to hang the live window. Nothing on it is driven by
-        // the mock, so what it measures is the cost of the page standing still:
+        // the demo, so what it measures is the cost of the page standing still:
         // a deck overview, an elapsed time and a master clock whose popover the
-        // mock opens by default, which is most of the page's tree.
+        // demo opens by default, which is most of the page's tree.
         name: "gallery-clock",
         group: Group::Pages,
         entry: "gallery-clock.klayout.ron",
@@ -380,7 +380,7 @@ const PAGES: &[Page] = &[
     Page {
         // The horizontal fader's rail, which the gallery lays out from x=250 to
         // x=422 at y=198. The point is a constant, so the run proves it landed:
-        // `mock.volume` is the fader's own reading, and a drag that missed the
+        // `demo.volume` is the fader's own reading, and a drag that missed the
         // rail leaves it where it was.
         name: "gallery-faders",
         group: Group::Drag,
@@ -388,14 +388,14 @@ const PAGES: &[Page] = &[
         tab: "faders",
         frames: 60,
         program: Program::Drag(&[0, 1, 4, 8]),
-        moving: Some("mock.volume"),
+        moving: Some("demo.volume"),
         pointer_at: Pt { x: 320.0, y: 198.0 },
         fenced: false,
         immediate_guard: "iced.gallery-faders",
         retained_guard: "vello.gallery-faders",
     },
     Page {
-        // Transformed nodes with nothing running them: the mock hands each
+        // Transformed nodes with nothing running them: the demo hands each
         // object its pose and the page's clock stands still. Read against
         // `gallery-motion` it separates what a pose costs from what animating
         // one costs, and against `gallery-buttons` what a transform costs at
@@ -414,7 +414,7 @@ const PAGES: &[Page] = &[
     },
     // The three pages the toolkit's own motion runs on: objects posed by a
     // clock, sheets cut into frames, and artworks emitted per frame. All three
-    // move off `gallery.motion.clock`, which the mock advances on their tabs,
+    // move off `gallery.motion.clock`, which the demo advances on their tabs,
     // so a run that measured a still page fails its own moving check.
     Page {
         name: "gallery-motion",
@@ -490,8 +490,8 @@ const PAGES: &[Page] = &[
 struct PageApp {
     entry: &'static str,
     published: usize,
-    reads: MockReads,
-    /// Whether what the document publishes is fed back into the mock.
+    reads: DemoReads,
+    /// Whether what the document publishes is fed back into the demo model.
     ///
     /// A drag is a closed loop: the pointer moves, the fader publishes a value,
     /// and the next frame draws the fader at it. Left open, the run measures a
@@ -504,7 +504,7 @@ struct PageApp {
 
 impl PageApp {
     fn new(page: &Page, run: Run) -> Self {
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
         reads.select_tab(page.tab);
         if let Run::Buckets(count) = run {
             reads.set_wave_buckets(count);
@@ -1122,7 +1122,7 @@ impl Fixture {
         let mut extra = MemResolver::default();
         extra.insert(SCROLL_VIS_LAYOUT, SCROLL_VIS_RON);
         Self {
-            registry: Box::new(mock::registry()),
+            registry: Box::new(demo::registry()),
             resolver: OverlayResolver::new(extra, fixture::resolver()),
         }
     }
@@ -1960,7 +1960,7 @@ fn prove(label: &str, outcome: &Outcome<'_>, baseline: Option<u64>) {
 #[kithara::test]
 fn the_page_table_is_pinned_to_the_gallery() {
     let fixture = Fixture::new();
-    let mut reads = MockReads::default();
+    let mut reads = DemoReads::default();
     // The modules page and the first module demo name the same document, and
     // the gallery reaches a demo through the application's own selection rather
     // than through the tab.

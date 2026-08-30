@@ -14,11 +14,11 @@ use super::{
 use crate::sections;
 
 #[derive(Default)]
-pub(crate) struct MockRegistry {
+pub(crate) struct DemoRegistry {
     endpoints: BTreeMap<(EndpointCategory, EndpointId), EndpointDesc>,
 }
 
-impl MockRegistry {
+impl DemoRegistry {
     pub(crate) fn insert(
         &mut self,
         category: EndpointCategory,
@@ -30,13 +30,13 @@ impl MockRegistry {
     }
 }
 
-impl EndpointRegistry for MockRegistry {
+impl EndpointRegistry for DemoRegistry {
     fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
         self.endpoints.get(&(category, id.clone()))
     }
 }
 
-fn insert_engine_endpoints(registry: &mut MockRegistry) {
+fn insert_engine_endpoints(registry: &mut DemoRegistry) {
     registry.insert(
         EndpointCategory::Telemetry,
         "engine.load",
@@ -49,7 +49,7 @@ fn insert_engine_endpoints(registry: &mut MockRegistry) {
     );
 }
 
-fn insert_output_levels(registry: &mut MockRegistry) {
+fn insert_output_levels(registry: &mut DemoRegistry) {
     registry.insert(
         EndpointCategory::Telemetry,
         "player.output.levels",
@@ -57,7 +57,7 @@ fn insert_output_levels(registry: &mut MockRegistry) {
     );
 }
 
-fn insert_deck_endpoints(registry: &mut MockRegistry) {
+fn insert_deck_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
         ("deck.transport.jump_back", ValueKind::Trigger),
         ("deck.transport.jump_forward", ValueKind::Trigger),
@@ -105,7 +105,7 @@ fn insert_deck_endpoints(registry: &mut MockRegistry) {
     }
 }
 
-fn insert_clock_endpoints(registry: &mut MockRegistry) {
+fn insert_clock_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
         ("clock.open", ValueKind::Bool),
         ("clock.bpm", ValueKind::Text),
@@ -182,7 +182,7 @@ fn insert_clock_endpoints(registry: &mut MockRegistry) {
     );
 }
 
-fn insert_pivot_endpoints(registry: &mut MockRegistry) {
+fn insert_pivot_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
         ("pivot.map", ValueKind::PortalMap),
         ("pivot.master.label", ValueKind::Text),
@@ -260,7 +260,7 @@ fn insert_pivot_endpoints(registry: &mut MockRegistry) {
     );
 }
 
-fn insert_quality_endpoints(registry: &mut MockRegistry) {
+fn insert_quality_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
         ("deck.stream.quality_menu", ValueKind::Bool),
         ("deck.stream.quality", ValueKind::Text),
@@ -311,7 +311,7 @@ fn insert_quality_endpoints(registry: &mut MockRegistry) {
 }
 
 pub(crate) fn registry() -> impl EndpointRegistry {
-    let mut registry = MockRegistry::default();
+    let mut registry = DemoRegistry::default();
     insert_deck_endpoints(&mut registry);
     insert_clock_endpoints(&mut registry);
     insert_pivot_endpoints(&mut registry);
@@ -321,7 +321,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_engine_endpoints(&mut registry);
     for id in [
         "player.output.volume",
-        "mock.cells.segmented",
+        "demo.cells.segmented",
         "vis.preset",
         "gallery.sprite.scrub",
         "gallery.lottie.scrub",
@@ -354,12 +354,12 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_page_endpoints(&mut registry);
     for id in [
         "deck.view.zoom",
-        "mock.knob.26",
-        "mock.knob.28",
-        "mock.knob.34",
-        "mock.knob.38",
-        "mock.volume",
-        "mock.cells.segmented",
+        "demo.knob.26",
+        "demo.knob.28",
+        "demo.knob.34",
+        "demo.knob.38",
+        "demo.volume",
+        "demo.cells.segmented",
         "vis.preset",
     ] {
         registry.insert(
@@ -371,7 +371,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
     insert_table_endpoints(&mut registry);
     registry.insert(
         EndpointCategory::Model,
-        "mock.levels",
+        "demo.levels",
         EndpointDesc::new(ValueKind::Stereo),
     );
     registry
@@ -380,7 +380,7 @@ pub(crate) fn registry() -> impl EndpointRegistry {
 /// Everything the gallery pages read for themselves: the words they label
 /// their sections with, the poses their objects hold, and the flag each tab
 /// answers with.
-fn insert_page_endpoints(registry: &mut MockRegistry) {
+fn insert_page_endpoints(registry: &mut DemoRegistry) {
     for id in [
         "gallery.label.knobs",
         "gallery.label.meters",
@@ -392,11 +392,11 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         "gallery.label.text",
         "gallery.label.faders",
         "gallery.label.scalar",
-        "mock.track.title",
-        "mock.track.artist",
-        "mock.bpm",
-        "mock.key",
-        "mock.remain",
+        "demo.track.title",
+        "demo.track.artist",
+        "demo.bpm",
+        "demo.key",
+        "demo.remain",
         "gallery.footer.deck",
         "gallery.footer.deck_micro",
         "gallery.footer.global_bar",
@@ -465,15 +465,15 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
         );
     }
     for id in [
-        "mock.toggle.on",
-        "mock.toggle.off",
-        "mock.checkbox.on",
-        "mock.checkbox.off",
-        "mock.chip.active",
-        "mock.chip.inactive",
-        "mock.button.play",
-        "mock.button.cue",
-        "mock.button.sync",
+        "demo.toggle.on",
+        "demo.toggle.off",
+        "demo.checkbox.on",
+        "demo.checkbox.off",
+        "demo.chip.active",
+        "demo.chip.inactive",
+        "demo.button.play",
+        "demo.button.cue",
+        "demo.button.sync",
         "vis.badge",
     ] {
         registry.insert(
@@ -523,7 +523,7 @@ fn insert_page_endpoints(registry: &mut MockRegistry) {
     }
 }
 
-fn insert_table_endpoints(registry: &mut MockRegistry) {
+fn insert_table_endpoints(registry: &mut DemoRegistry) {
     registry.insert(
         EndpointCategory::Model,
         "gallery.table.preset",
@@ -543,7 +543,7 @@ fn insert_table_endpoints(registry: &mut MockRegistry) {
     }
 }
 
-fn insert_menu_endpoints(registry: &mut MockRegistry) {
+fn insert_menu_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
         ("ui.menu.open", ValueKind::Bool),
         ("ui.window.can_open", ValueKind::Bool),
@@ -629,7 +629,7 @@ fn insert_menu_endpoints(registry: &mut MockRegistry) {
     );
 }
 
-fn insert_library_endpoints(registry: &mut MockRegistry) {
+fn insert_library_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
         ("library.visible_tracks", ValueKind::Table),
         ("library.long_tracks", ValueKind::Table),

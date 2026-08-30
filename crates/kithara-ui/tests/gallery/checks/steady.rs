@@ -312,10 +312,9 @@ mod retained {
 
     use super::{Between, Picture, Shot, physical};
     use crate::{
-        custom,
+        custom, demo,
         fixture::{Consts, resolver},
         host::Gallery,
-        mock,
     };
 
     /// Mounts the page once and repaints it, reading back the scene it handed
@@ -323,7 +322,7 @@ mod retained {
     /// immediate host's renderer does: a page remounted between two pictures
     /// answers a different question.
     pub(super) fn pictures(page: Shot, draws: usize, between: Between) -> Vec<Picture> {
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let resolver = resolver();
         let kinds = custom::kinds();
         let config = Config::builder()

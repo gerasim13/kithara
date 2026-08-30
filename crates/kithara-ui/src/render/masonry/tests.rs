@@ -205,7 +205,7 @@ impl Reads for FixtureReads {
             "vis.preset" => Some(ReadValue::Scalar(1.0)),
             "vis.time" => Some(ReadValue::Scalar(0.5)),
             "library.tree" => Some(ReadValue::Tree(&TREE_ROWS)),
-            "mock.wave" => Some(ReadValue::Waveform(WaveformView {
+            "demo.wave" => Some(ReadValue::Waveform(WaveformView {
                 beats: &[],
                 buckets: &CENSUS_WAVE,
                 revision: 0,
@@ -2265,7 +2265,7 @@ const CONTROL_CENSUS: &[(&str, Paints, &str)] = &[
     (
         "Wave",
         Paints::Yes,
-        r#"Wave(id: "control", read: Model(id: "mock.wave"))"#,
+        r#"Wave(id: "control", read: Model(id: "demo.wave"))"#,
     ),
     (
         "Vis",
@@ -4356,7 +4356,7 @@ fn fixture_registry() -> FixtureRegistry {
     );
     registry.insert(
         EndpointCategory::Model,
-        "mock.wave",
+        "demo.wave",
         EndpointDesc::new(ValueKind::Waveform),
     );
     registry.insert(
@@ -4538,27 +4538,27 @@ fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> 
     let mut registry = fixture_registry();
     registry.insert(
         EndpointCategory::Model,
-        "mock.wave",
+        "demo.wave",
         EndpointDesc::new(ValueKind::Waveform),
     );
     registry.insert(
         EndpointCategory::Command,
-        "mock.seek",
+        "demo.seek",
         EndpointDesc::new(ValueKind::Scalar),
     );
     registry.insert(
         EndpointCategory::Command,
-        "mock.load",
+        "demo.load",
         EndpointDesc::new(ValueKind::Trigger),
     );
     registry.insert(
         EndpointCategory::Model,
-        "mock.drag.over",
+        "demo.drag.over",
         EndpointDesc::new(ValueKind::Bool),
     );
     let reads = FixtureReads;
     let takes = if takes_drops {
-        r#"drop: Some((write: Command(id: "mock.load"), read: Model(id: "mock.drag.over"))),"#
+        r#"drop: Some((write: Command(id: "demo.load"), read: Model(id: "demo.drag.over"))),"#
     } else {
         ""
     };
@@ -4576,8 +4576,8 @@ fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> 
                 Wave(
                     id: "wave",
                     size: Some((w: Fill, h: Fixed(80.0))),
-                    read: Model(id: "mock.wave"),
-                    write: Command(id: "mock.seek"),
+                    read: Model(id: "demo.wave"),
+                    write: Command(id: "demo.seek"),
                     {extra}
                 ),
             ]))"#
@@ -4877,7 +4877,7 @@ impl Reads for DragReads {
         let id = endpoint.split_once('@').map_or(endpoint, |(id, _scope)| id);
         match id {
             "library.visible_tracks" => Some(ReadValue::Table(&LATE_TABLE_ROWS[..])),
-            "mock.drag.over" => Some(ReadValue::Bool(false)),
+            "demo.drag.over" => Some(ReadValue::Bool(false)),
             _ => FixtureReads.get(endpoint),
         }
     }
@@ -4888,12 +4888,12 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
     let mut registry = fixture_registry();
     registry.insert(
         EndpointCategory::Command,
-        "mock.load",
+        "demo.load",
         EndpointDesc::new(ValueKind::Trigger),
     );
     registry.insert(
         EndpointCategory::Model,
-        "mock.drag.over",
+        "demo.drag.over",
         EndpointDesc::new(ValueKind::Bool),
     );
     let reads = DragReads;
@@ -4924,7 +4924,7 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
     resolver.insert(
         "deck.kmodule.ron",
         r#"(schema: "kithara.module", version: 1, id: "deck", chrome: Plain,
-            drop: Some((write: Command(id: "mock.load"), read: Model(id: "mock.drag.over"))),
+            drop: Some((write: Command(id: "demo.load"), read: Model(id: "demo.drag.over"))),
             root: Column(gap: 0.0, pad: 0.0, size: (w: Fill, h: Fill), children: [
                 Text(id: "name", style: MicroLabel, label: "DECK", size: (w: Fill, h: Fill)),
             ]))"#,

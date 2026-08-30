@@ -7,7 +7,7 @@ use kithara_ui::{
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-struct MockData {
+struct DemoData {
     vis_indices: (String, String, String),
     vis_presets: (String, String, String),
     artist: String,
@@ -15,12 +15,12 @@ struct MockData {
     footer_tokens_anatomy: String,
     title: String,
     pivot: PivotCopy,
-    tracks: Vec<MockTrack>,
-    tree: Vec<MockTreeRow>,
+    tracks: Vec<DemoTrack>,
+    tree: Vec<DemoTreeRow>,
 }
 
 /// Pivot copy lives in the asset so the sources stay ASCII; `{name}` slots are
-/// filled by `mock::pivot`.
+/// filled by `demo::pivot`.
 #[derive(Deserialize)]
 pub(crate) struct PivotCopy {
     pub(crate) pulse: String,
@@ -33,7 +33,7 @@ pub(crate) struct PivotCopy {
 }
 
 #[derive(Deserialize)]
-struct MockTreeRow {
+struct DemoTreeRow {
     icon: IconName,
     #[serde(default)]
     count: Option<u32>,
@@ -49,7 +49,7 @@ struct MockTreeRow {
 }
 
 #[derive(Deserialize)]
-struct MockTrack {
+struct DemoTrack {
     artist: String,
     bpm: String,
     deck: String,
@@ -84,9 +84,9 @@ pub(crate) static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);
 const LONG_ROWS: usize = 120;
 
 fn load_catalog() -> Catalog {
-    let data: MockData = ron::from_str(include_str!("../assets/mock-data.ron"))
-        .expect("embedded gallery mock data must parse");
-    let data: &'static MockData = Box::leak(Box::new(data));
+    let data: DemoData = ron::from_str(include_str!("../assets/demo-data.ron"))
+        .expect("embedded gallery demo data must parse");
+    let data: &'static DemoData = Box::leak(Box::new(data));
     let rows: Vec<TableRow<'static>> = data
         .tracks
         .iter()
@@ -148,7 +148,7 @@ fn load_catalog() -> Catalog {
 
 /// One table row for `track`, shown under `title` so a repeated catalogue does
 /// not read as the same track over and over.
-fn track_row(track: &'static MockTrack, title: &'static str, selected: bool) -> TableRow<'static> {
+fn track_row(track: &'static DemoTrack, title: &'static str, selected: bool) -> TableRow<'static> {
     TableRow::new(
         vec![
             TableCell::text("title", title),

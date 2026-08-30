@@ -795,15 +795,15 @@ mod tests {
         fn endpoint(&self, category: EndpointCategory, id: &EndpointId) -> Option<&EndpointDesc> {
             match (category, id.0.as_str()) {
                 (EndpointCategory::Parameter, "gain")
-                | (EndpointCategory::Model | EndpointCategory::Parameter, "mock.cells.segmented")
-                | (EndpointCategory::Model, "mock.volume") => Some(&self.scalar),
+                | (EndpointCategory::Model | EndpointCategory::Parameter, "demo.cells.segmented")
+                | (EndpointCategory::Model, "demo.volume") => Some(&self.scalar),
                 (EndpointCategory::Telemetry, "levels")
-                | (EndpointCategory::Model, "mock.levels") => Some(&self.stereo),
+                | (EndpointCategory::Model, "demo.levels") => Some(&self.stereo),
                 (
                     EndpointCategory::Model,
-                    "mock.toggle.on" | "mock.toggle.off" | "mock.checkbox.on" | "mock.checkbox.off"
-                    | "mock.button.play" | "mock.button.cue" | "mock.button.sync"
-                    | "mock.chip.active" | "mock.chip.inactive",
+                    "demo.toggle.on" | "demo.toggle.off" | "demo.checkbox.on" | "demo.checkbox.off"
+                    | "demo.button.play" | "demo.button.cue" | "demo.button.sync"
+                    | "demo.chip.active" | "demo.chip.inactive",
                 ) => Some(&self.boolean),
                 (
                     EndpointCategory::Model,
@@ -815,8 +815,8 @@ mod tests {
                     | "gallery.label.text"
                     | "gallery.label.faders"
                     | "gallery.label.scalar"
-                    | "mock.track.title"
-                    | "mock.track.artist",
+                    | "demo.track.title"
+                    | "demo.track.artist",
                 ) => Some(&self.text),
                 (EndpointCategory::Model, endpoint)
                     if endpoint.starts_with("gallery.tab.")
@@ -824,7 +824,7 @@ mod tests {
                 {
                     Some(&self.boolean)
                 }
-                (EndpointCategory::Model, "mock.wave") => Some(&self.waveform),
+                (EndpointCategory::Model, "demo.wave") => Some(&self.waveform),
                 (EndpointCategory::Model, "gallery.table.preset" | "library.scope") => {
                     Some(&self.scalar)
                 }
@@ -842,7 +842,7 @@ mod tests {
                         Some(&self.boolean)
                     }
                 }
-                (EndpointCategory::Command, "mock.seek")
+                (EndpointCategory::Command, "demo.seek")
                 | (EndpointCategory::Telemetry, "deck.playback.position_normalized") => {
                     Some(&self.scoped_scalar)
                 }
@@ -877,21 +877,21 @@ mod tests {
     impl Reads for FixtureReads {
         fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
             match endpoint {
-                "gain" | "mock.volume" => Some(ReadValue::Scalar(self.gain)),
-                "levels" | "mock.levels" => Some(ReadValue::Stereo(StereoLevels {
+                "gain" | "demo.volume" => Some(ReadValue::Scalar(self.gain)),
+                "levels" | "demo.levels" => Some(ReadValue::Stereo(StereoLevels {
                     l: 0.4,
                     r: 0.6,
                     volume: 0.5,
                 })),
-                "mock.toggle.on" | "mock.checkbox.on" | "mock.button.play" | "mock.button.sync" => {
+                "demo.toggle.on" | "demo.checkbox.on" | "demo.button.play" | "demo.button.sync" => {
                     Some(ReadValue::Bool(true))
                 }
-                "mock.toggle.off" | "mock.checkbox.off" | "mock.button.cue" => {
+                "demo.toggle.off" | "demo.checkbox.off" | "demo.button.cue" => {
                     Some(ReadValue::Bool(false))
                 }
-                "mock.chip.active" => Some(ReadValue::Bool(true)),
-                "mock.chip.inactive" => Some(ReadValue::Bool(false)),
-                "mock.cells.segmented" => Some(ReadValue::Scalar(2.0)),
+                "demo.chip.active" => Some(ReadValue::Bool(true)),
+                "demo.chip.inactive" => Some(ReadValue::Bool(false)),
+                "demo.cells.segmented" => Some(ReadValue::Scalar(2.0)),
                 "gallery.table.preset" | "library.scope" => Some(ReadValue::Scalar(0.0)),
                 "library.breadcrumb" => Some(ReadValue::Text("All Tracks")),
                 "library.query" => Some(ReadValue::Text(&self.query)),
@@ -905,8 +905,8 @@ mod tests {
                 "gallery.label.text" => Some(ReadValue::Text("TEXT STYLES")),
                 "gallery.label.faders" => Some(ReadValue::Text("HORIZONTAL FADERS")),
                 "gallery.label.scalar" => Some(ReadValue::Text("SCALAR TELEMETRY")),
-                "mock.track.title" => Some(ReadValue::Text("Track")),
-                "mock.track.artist" => Some(ReadValue::Text("Artist")),
+                "demo.track.title" => Some(ReadValue::Text("Track")),
+                "demo.track.artist" => Some(ReadValue::Text("Artist")),
                 endpoint if endpoint.starts_with("gallery.tab.") => {
                     Some(ReadValue::Bool(endpoint == "gallery.tab.atoms"))
                 }
@@ -917,7 +917,7 @@ mod tests {
                 endpoint if endpoint.starts_with("gallery.table.columns.") => {
                     Some(ReadValue::Bool(true))
                 }
-                "mock.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
+                "demo.wave@deck=a" => Some(ReadValue::Waveform(WaveformView {
                     buckets: &FIXTURES.wave_buckets,
                     revision: 0,
                     beats: &[],
@@ -1212,7 +1212,7 @@ mod tests {
                     id: "item",
                     label: "BUTTONS",
                     icon: "Play",
-                    read: Model(id: "mock.toggle.off"),
+                    read: Model(id: "demo.toggle.off"),
                 ))"#,
         );
         compile(
@@ -1246,13 +1246,13 @@ mod tests {
                         size: (w: Fill, h: Fixed(30.0)),
                         child: Column(children: [
                             NavItem(id: "first", label: "FIRST", icon: "Play",
-                                read: Model(id: "mock.toggle.off")),
+                                read: Model(id: "demo.toggle.off")),
                             NavItem(id: "second", label: "SECOND", icon: "Play",
-                                read: Model(id: "mock.toggle.off")),
+                                read: Model(id: "demo.toggle.off")),
                             NavItem(id: "third", label: "THIRD", icon: "Play",
-                                read: Model(id: "mock.toggle.off")),
+                                read: Model(id: "demo.toggle.off")),
                             NavItem(id: "fourth", label: "FOURTH", icon: "Play",
-                                read: Model(id: "mock.toggle.off")),
+                                read: Model(id: "demo.toggle.off")),
                         ]),
                     ),
                 ]))"#,
@@ -1339,8 +1339,8 @@ mod tests {
                     Text(id: "letter", label: "A"),
                     Wave(
                         id: "wave",
-                        read: Model(id: "mock.wave", with: { "deck": "$deck" }),
-                        write: Command(id: "mock.seek", with: { "deck": "$deck" }),
+                        read: Model(id: "demo.wave", with: { "deck": "$deck" }),
+                        write: Command(id: "demo.seek", with: { "deck": "$deck" }),
                     ),
                     Text(id: "remain", label: "00:00"),
                 ]))"#,

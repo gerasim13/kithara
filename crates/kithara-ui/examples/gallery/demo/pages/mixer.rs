@@ -4,7 +4,7 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::mock::MockRegistry;
+use crate::demo::DemoRegistry;
 
 pub(crate) struct MixerState {
     fx: [[bool; 2]; 2],
@@ -137,7 +137,7 @@ impl MixerState {
     }
 }
 
-pub(crate) fn insert_endpoints(registry: &mut MockRegistry) {
+pub(crate) fn insert_endpoints(registry: &mut DemoRegistry) {
     for id in [
         "mixer.standard.a.hi",
         "mixer.standard.a.mid",

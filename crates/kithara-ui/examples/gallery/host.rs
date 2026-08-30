@@ -9,17 +9,17 @@ use kithara_ui::{
     render::{Reads, Skin, UiEvent},
 };
 
-use crate::{capture::Shot, mock, sections};
+use crate::{capture::Shot, demo, sections};
 
 #[derive(Default)]
 pub(super) struct Gallery {
-    reads: mock::MockReads,
+    reads: demo::DemoReads,
 }
 
 impl Gallery {
     /// The gallery already turned to one page, for photographing it.
     pub(super) fn at(shot: Shot) -> Self {
-        let mut reads = mock::MockReads::default();
+        let mut reads = demo::DemoReads::default();
         reads.select_tab(shot.tab);
         if let Some(module) = shot.module {
             reads.select_module(module);
@@ -79,7 +79,7 @@ mod tests {
         render::ControlAction,
     };
 
-    use super::{App, Gallery, UiEvent, mock, sections};
+    use super::{App, Gallery, UiEvent, demo, sections};
     use crate::{custom, fixture::resolver};
 
     /// Pressing a row on the skins page dresses the gallery in that skin.
@@ -130,7 +130,7 @@ mod tests {
     /// The window runs at whatever the display reports, so the same logical
     /// press has to land on the same control at any scale.
     fn turns_the_page_at(scale: f64) {
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let resolver = resolver();
         let kinds = custom::kinds();
         let config = Config::builder()
@@ -178,7 +178,7 @@ mod fills {
     };
     use masonry::vello::peniko::Color;
 
-    use super::{Gallery, mock};
+    use super::{Gallery, demo};
     use crate::{custom, fixture::resolver};
 
     /// The document must fill the surface it was handed, at any display scale.
@@ -193,7 +193,7 @@ mod fills {
         for scale in [1.0, 2.0] {
             let width = num_traits::cast::AsPrimitive::<u32>::as_(1100.0 * scale);
             let height = num_traits::cast::AsPrimitive::<u32>::as_(720.0 * scale);
-            let endpoints = mock::registry();
+            let endpoints = demo::registry();
             let resolver = resolver();
             let kinds = custom::kinds();
             let config = Config::builder()

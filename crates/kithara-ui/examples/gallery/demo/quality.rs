@@ -25,7 +25,7 @@ impl Consts {
     ];
 }
 
-pub(super) struct QualityState {
+pub(crate) struct QualityState {
     value: String,
     auto: bool,
     open: bool,
@@ -46,7 +46,7 @@ impl Default for QualityState {
 }
 
 impl QualityState {
-    pub(super) fn activate(&mut self, path: &str) -> bool {
+    pub(crate) fn activate(&mut self, path: &str) -> bool {
         let Some((_, id)) = path.split_once("/stream/") else {
             return false;
         };
@@ -67,7 +67,7 @@ impl QualityState {
         Some(!self.auto && index(variant)? == self.current)
     }
 
-    pub(super) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
+    pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let value = match id {
             "deck.stream.quality_menu" => ReadValue::Bool(self.open),
@@ -131,6 +131,3 @@ fn variant(scope: &str) -> Option<&str> {
 fn index(variant: &str) -> Option<usize> {
     variant.parse().ok().filter(|slot| *slot < Consts::SLOTS)
 }
-
-#[cfg(test)]
-mod tests;

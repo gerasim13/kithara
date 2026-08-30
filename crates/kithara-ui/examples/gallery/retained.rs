@@ -18,10 +18,9 @@ use num_traits::cast::AsPrimitive;
 use crate::{
     capture::Shot,
     cli::{Args, Extent},
-    custom,
+    custom, demo,
     fixture::resolver,
     host::Gallery,
-    mock,
 };
 
 /// A size in whole pixels, which is what this host opens a window at.
@@ -34,7 +33,7 @@ fn pixels(extent: Extent) -> (u32, u32) {
 
 /// Shows the gallery in a window of this host's.
 pub(super) fn show(args: &Args) -> Result<(), String> {
-    let endpoints = mock::registry();
+    let endpoints = demo::registry();
     let resolver = resolver();
     let kinds = custom::kinds();
     // The document carries its own title bar and window buttons, so the system
@@ -85,7 +84,7 @@ pub(super) fn shoot(args: &Args, dir: &Path) -> Result<usize, String> {
         .transpose()?;
     // The registries outlive the stage that borrows them through the config.
     let resolver = resolver();
-    let endpoints = mock::registry();
+    let endpoints = demo::registry();
     let kinds = custom::kinds();
     let config = Config::builder()
         .endpoints(&endpoints)

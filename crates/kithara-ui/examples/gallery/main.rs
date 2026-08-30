@@ -10,10 +10,10 @@ mod capture;
 mod cli;
 mod compare;
 mod custom;
+mod demo;
 mod fixture;
 #[cfg(feature = "masonry")]
 mod host;
-mod mock;
 mod offscreen;
 #[cfg(feature = "masonry")]
 mod retained;

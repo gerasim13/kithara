@@ -9,8 +9,8 @@ use kithara_ui::{
 
 use crate::{
     capture::{Capture, Shot},
+    demo::DemoReads,
     fixture::{Consts, Resolver, resolver},
-    mock::MockReads,
     sections,
 };
 
@@ -33,7 +33,7 @@ pub(crate) struct Gallery {
     pub(crate) clock: Clock,
     /// How far that clock moves in one frame.
     pub(crate) step: Duration,
-    pub(crate) reads: MockReads,
+    pub(crate) reads: DemoReads,
     /// The extensions this application registers, offered to whichever host
     /// draws the page that names one.
     pub(crate) kinds: CustomKinds,
@@ -53,7 +53,7 @@ impl Gallery {
     /// the same documents itself, and never opens one.
     pub(crate) fn mounted() -> Self {
         let resolver = resolver();
-        let endpoints = crate::mock::registry();
+        let endpoints = crate::demo::registry();
         let skin = builtin::skin().document();
         Self {
             layouts: pages(&resolver, &endpoints, skin),
@@ -61,7 +61,7 @@ impl Gallery {
             window_id: window::Id::unique(),
             clock: Clock::default(),
             step: Duration::from_millis(Consts::STRESS_TICK_MS),
-            reads: MockReads::default(),
+            reads: DemoReads::default(),
             kinds: crate::custom::kinds(),
             capture: None,
         }
@@ -94,7 +94,7 @@ impl Gallery {
     /// a page would open wherever the page before it left off.
     pub(crate) fn select(&mut self, shot: Shot) {
         self.clock = Clock::default();
-        self.reads = MockReads::default();
+        self.reads = DemoReads::default();
         self.reads.select_tab(shot.tab);
         if let Some(module) = shot.module {
             self.reads.select_module(module);
@@ -116,7 +116,7 @@ impl Gallery {
     /// changed at runtime is a set of pages built again.
     pub(crate) fn dress(&mut self) {
         let resolver = resolver();
-        let endpoints = crate::mock::registry();
+        let endpoints = crate::demo::registry();
         let skin = self.skin().document();
         self.layouts = pages(&resolver, &endpoints, skin);
         self.module_layouts = module_pages(&resolver, &endpoints, skin);

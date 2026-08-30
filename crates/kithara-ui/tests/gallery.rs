@@ -3,7 +3,7 @@
 //! The gallery's own suite: what checks the example rather than what runs it.
 //!
 //! The modules under test are taken by path rather than copied, so the pages,
-//! the mock host and the harnesses examined here are the ones the gallery
+//! the demo host and the harnesses examined here are the ones the gallery
 //! itself opens with. The example beside this file is therefore only the
 //! program, and every assertion about it lives in one place.
 
@@ -17,13 +17,13 @@ mod checks;
 mod cli;
 #[path = "../examples/gallery/custom.rs"]
 mod custom;
+#[path = "../examples/gallery/demo/mod.rs"]
+mod demo;
 #[path = "../examples/gallery/fixture.rs"]
 mod fixture;
 #[cfg(feature = "masonry")]
 #[path = "../examples/gallery/host.rs"]
 mod host;
-#[path = "../examples/gallery/mock/mod.rs"]
-mod mock;
 #[path = "../examples/gallery/sections.rs"]
 mod sections;
 
@@ -36,8 +36,8 @@ use kithara_ui::{
 use self::{
     app::{Gallery, Message, update},
     capture::{Capture, Shot},
+    demo::{DemoReads, reads::FONT_FAMILIES},
     fixture::{Consts, resolver},
-    mock::{MockReads, reads::FONT_FAMILIES},
     sections::Page,
 };
 
@@ -157,7 +157,7 @@ mod tests {
         gallery.tick();
         assert_ne!(
             seconds(&gallery.reads, "gallery.motion.clock"),
-            seconds(&MockReads::default(), "gallery.motion.clock")
+            seconds(&DemoReads::default(), "gallery.motion.clock")
         );
     }
 
@@ -178,14 +178,14 @@ mod tests {
         gallery.select(shot("sprites"));
         assert_eq!(
             seconds(&gallery.reads, "gallery.motion.clock"),
-            seconds(&MockReads::default(), "gallery.motion.clock")
+            seconds(&DemoReads::default(), "gallery.motion.clock")
         );
     }
 
     #[kithara::test]
     fn every_module_demo_compiles_with_full_chrome() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
 
         for module in sections::modules().iter().copied() {
             let ui = compile(
@@ -240,7 +240,7 @@ mod tests {
     #[kithara::test]
     fn every_gallery_tab_compiles() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
 
         for tab in sections::pages().iter().copied() {
             compile(
@@ -261,7 +261,7 @@ mod tests {
     #[kithara::test]
     fn every_control_appears_on_a_gallery_page() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let entries = sections::pages()
             .iter()
             .map(|tab| sections::entry(tab))
@@ -538,7 +538,7 @@ mod tests {
         let ui = compile(
             sections::entry(tab),
             &resolver(),
-            &mock::registry(),
+            &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
@@ -683,7 +683,7 @@ mod tests {
         let ui = compile(
             sections::entry("atoms"),
             &resolver(),
-            &mock::registry(),
+            &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
@@ -715,7 +715,7 @@ mod tests {
         let ui = compile(
             sections::entry("skins"),
             &resolver(),
-            &mock::registry(),
+            &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
@@ -743,7 +743,7 @@ mod tests {
         let ui = compile(
             sections::entry("assets"),
             &resolver(),
-            &mock::registry(),
+            &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
@@ -770,7 +770,7 @@ mod tests {
         let ui = compile(
             sections::entry("assets"),
             &resolver(),
-            &mock::registry(),
+            &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
@@ -824,7 +824,7 @@ mod tests {
     #[kithara::test]
     fn module_demo_tabs_activate_their_compiled_control_paths() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let ui = compile(
             sections::entry("modules"),
             &resolver,
@@ -837,7 +837,7 @@ mod tests {
         let mut paths = Vec::new();
         collect_tab_large_paths(&ui.root, &ui, &mut paths);
 
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
         let mut activated: Vec<Page> = paths
             .iter()
             .map(|path| {
@@ -859,7 +859,7 @@ mod tests {
     #[kithara::test]
     fn menu_tab_carries_the_app_menu_and_one_popover_per_track() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let ui = compile(
             sections::entry("menu"),
             &resolver,
@@ -964,7 +964,7 @@ mod tests {
         compile(
             sections::entry(tab),
             &resolver(),
-            &mock::registry(),
+            &demo::registry(),
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
@@ -1048,9 +1048,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_mock_answers_the_phase_every_track_reads() {
+    fn the_demo_answers_the_phase_every_track_reads() {
         let ui = objects_page();
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let unanswered: Vec<&str> = motion_objects(&ui)
             .iter()
@@ -1062,13 +1062,13 @@ mod tests {
     }
 
     /// A capture never ticks, so both hosts are photographed at the phase the
-    /// mock starts from. At either end of a track the object sits on one of its
+    /// demo starts from. At either end of a track the object sits on one of its
     /// two written poses, and the picture would say nothing about the travel
     /// between them.
     #[kithara::test]
     fn every_track_is_off_its_written_pose_when_captured() {
         let ui = objects_page();
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let still: Vec<&str> = motion_objects(&ui)
             .iter()
@@ -1157,7 +1157,7 @@ mod tests {
     #[kithara::test]
     fn the_sheet_row_reads_one_second_per_frame() {
         let ui = page("sprites");
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let mut seconds: Vec<f64> = sprite_sites(&ui)
             .iter()
@@ -1174,12 +1174,12 @@ mod tests {
     }
 
     /// The played sprite reads the host's own clock, which no application
-    /// declares and this mock does not answer: if the host did not answer it
+    /// declares and this demo does not answer: if the host did not answer it
     /// for itself, that sprite would hold its first frame for ever.
     #[kithara::test]
     fn the_played_sprite_reads_a_clock_the_application_does_not_own() {
         let ui = page("sprites");
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let host_clock: Vec<&str> = sprite_sites(&ui)
             .iter()
@@ -1265,12 +1265,12 @@ mod tests {
     }
 
     /// The played artwork reads the host's own clock, which no application
-    /// declares and this mock does not answer: if the host did not answer it
+    /// declares and this demo does not answer: if the host did not answer it
     /// for itself, that artwork would hold its first frame for ever.
     #[kithara::test]
     fn the_played_artwork_reads_a_clock_the_application_does_not_own() {
         let ui = page("lottie");
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let host_clock: Vec<&str> = artwork_sites(&ui)
             .iter()
@@ -1391,12 +1391,12 @@ mod tests {
         assert_eq!(unread, [""; 0]);
     }
 
-    /// The point a drag publishes is the application's, so the mock has to
+    /// The point a drag publishes is the application's, so the demo has to
     /// answer every placement that reads one.
     #[kithara::test]
-    fn the_mock_answers_the_point_every_placement_reads() {
+    fn the_demo_answers_the_point_every_placement_reads() {
         let ui = page("scene");
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let unanswered: Vec<&str> = placements(&ui)
             .iter()
@@ -1466,7 +1466,7 @@ mod tests {
     /// what turns it.
     #[kithara::test]
     fn the_press_on_the_scene_artwork_turns_the_flag_it_switches_on() {
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
 
         assert_eq!(
             reads.get("gallery.scene.sparked"),
@@ -1484,7 +1484,7 @@ mod tests {
     /// back from the same endpoint.
     #[kithara::test]
     fn a_published_point_is_where_the_scene_placement_then_stands() {
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
         let at = Pt { x: 260.0, y: 150.0 };
 
         reads.apply("scene/carry-one", &ControlAction::Place(at));
@@ -1505,7 +1505,7 @@ mod tests {
         path
     }
 
-    fn scalar(reads: &MockReads, endpoint: &str) -> f64 {
+    fn scalar(reads: &DemoReads, endpoint: &str) -> f64 {
         match reads.get(endpoint) {
             Some(ReadValue::Scalar(value)) => value,
             other => panic!("{endpoint} reads {other:?}"),
@@ -1518,7 +1518,7 @@ mod tests {
     #[kithara::test]
     fn the_scrub_fader_moves_the_artwork_beside_it() {
         let path = only_fader_path(&page("lottie"));
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
         let before = scalar(&reads, "gallery.lottie.scrub");
 
         reads.apply(&path, &ControlAction::SetScalar(0.9));
@@ -1529,7 +1529,7 @@ mod tests {
     #[kithara::test]
     fn the_scrub_fader_moves_the_sprite_beside_it() {
         let path = only_fader_path(&page("sprites"));
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
         let before = scalar(&reads, "gallery.sprite.scrub");
 
         reads.apply(&path, &ControlAction::SetScalar(0.9));
@@ -1538,9 +1538,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_mock_answers_the_clock_every_motion_reads() {
+    fn the_demo_answers_the_clock_every_motion_reads() {
         let ui = motion_page();
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let unanswered: Vec<&str> = motion_objects(&ui)
             .iter()
@@ -1553,13 +1553,13 @@ mod tests {
     }
 
     /// A capture never ticks, so every motion is photographed at the one second
-    /// the mock starts from. One still on its near pose would draw exactly what
+    /// the demo starts from. One still on its near pose would draw exactly what
     /// an object with no motion draws, and the page would prove nothing by it.
     /// Arriving is allowed and shown on purpose: that is what `Once` means.
     #[kithara::test]
     fn every_motion_has_left_its_near_pose_when_captured() {
         let ui = motion_page();
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let unmoved: Vec<&str> = motion_objects(&ui)
             .iter()
@@ -1582,7 +1582,7 @@ mod tests {
     #[kithara::test]
     fn the_three_repeats_stand_in_three_different_places_when_captured() {
         let ui = motion_page();
-        let reads = MockReads::default();
+        let reads = DemoReads::default();
 
         let mut places: Vec<f32> = motion_objects(&ui)
             .iter()
@@ -1608,9 +1608,9 @@ mod tests {
     }
 
     #[kithara::test]
-    fn the_mock_answers_every_read_the_menu_tab_names() {
+    fn the_demo_answers_every_read_the_menu_tab_names() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let ui = compile(
             sections::entry("menu"),
             &resolver,
@@ -1624,7 +1624,7 @@ mod tests {
         collect_menu_reads(&ui.root, &ui, &mut keys);
         assert!(!keys.is_empty());
 
-        let mut reads = MockReads::default();
+        let mut reads = DemoReads::default();
         reads.apply("app-menu/menu/new-window", &ControlAction::Activate);
         let unanswered: Vec<_> = keys
             .iter()
@@ -1638,7 +1638,7 @@ mod tests {
     #[kithara::test]
     fn tree_query_binding_reaches_the_compiled_control() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let ui = compile(
             sections::entry("tree"),
             &resolver,
@@ -1657,7 +1657,7 @@ mod tests {
     #[kithara::test]
     fn context_scope_binding_reaches_the_compiled_control() {
         let resolver = resolver();
-        let endpoints = mock::registry();
+        let endpoints = demo::registry();
         let ui = compile(
             sections::entry("library2"),
             &resolver,

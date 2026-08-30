@@ -210,7 +210,7 @@ const SCENARIOS: &[Scenario] = &[
     },
     Scenario {
         name: "Wave",
-        control: r#"Wave(id: "control", read: Model(id: "mock.wave"))"#,
+        control: r#"Wave(id: "control", read: Model(id: "demo.wave"))"#,
         interaction: Interaction::Press,
     },
     Scenario {
@@ -454,7 +454,7 @@ impl Reads for CensusReads {
             | "vis.preset" => Some(ReadValue::Scalar(self.scalar.get())),
             "library.tree" => Some(ReadValue::Tree(&TREE_ROWS)),
             "library.visible_tracks" => Some(ReadValue::Table(&TABLE_ROWS[..])),
-            "deck.playback.waveform" | "mock.wave" => Some(ReadValue::Waveform(WaveformView {
+            "deck.playback.waveform" | "demo.wave" => Some(ReadValue::Waveform(WaveformView {
                 beats: &[],
                 buckets: &WAVE,
                 revision: 0,
@@ -577,7 +577,7 @@ fn models(registry: &mut CensusRegistry) {
         ("library.scope", ValueKind::Scalar),
         ("library.tree", ValueKind::Tree),
         ("library.visible_tracks", ValueKind::Table),
-        ("mock.wave", ValueKind::Waveform),
+        ("demo.wave", ValueKind::Waveform),
         ("pivot.map", ValueKind::PortalMap),
         ("ui.menu.open", ValueKind::Bool),
         ("vis.preset", ValueKind::Scalar),

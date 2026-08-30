@@ -1,6 +1,9 @@
-use kithara_test_utils::kithara;
+//! What the quality cell reports and what picking a variant does to it.
 
-use super::*;
+use kithara_test_utils::kithara;
+use kithara_ui::render::ReadValue;
+
+use crate::demo::quality::QualityState;
 
 const CELL: &str = "modules/deck/transport/stream/cell";
 const POP: &str = "modules/deck/transport/stream/pop";

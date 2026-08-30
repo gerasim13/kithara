@@ -7,7 +7,7 @@ use kithara_ui::{
 };
 use num_traits::cast::AsPrimitive;
 
-use crate::mock::MockRegistry;
+use crate::demo::DemoRegistry;
 
 struct Consts;
 
@@ -150,7 +150,7 @@ impl StressState {
     }
 }
 
-pub(crate) fn insert_endpoints(registry: &mut MockRegistry) {
+pub(crate) fn insert_endpoints(registry: &mut DemoRegistry) {
     for id in ["bench.fps", "bench.frame_ms_avg", "bench.frame_ms_p99"] {
         registry.insert(
             EndpointCategory::Model,
