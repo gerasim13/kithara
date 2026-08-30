@@ -1162,31 +1162,20 @@ timeout_minutes = 120
 # that needs an attached graphics device rather than a software rasterizer.
 # Dispatched onto the ordinary fleet it would render on a software rasterizer
 # and report green on a gate that never ran, so it stays name-only here, the
-# same as `windows-x64`: `gpu.yml` already schedules it onto
+# same as `windows-x64`: `ui.yml` already schedules it onto
 # `KITHARA_GPU_RUNNER_LABELS` and skips when that variable is empty, and the
 # catalog has no field yet for naming a runner pool.
-[ext.ci.lanes.deep-gpu]
+[ext.ci.lanes.deep-ui]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
-steps = [
-  { args = [
-    "test",
-    "run",
-    "-p",
-    "kithara-ui",
-    "--features",
-    "kithara-ui/gpu",
-    "-E",
-    "test(/vis::/)",
-  ], label = "GPU visual suite" },
-]
+steps = [{ args = ["test", "ui"], label = "UI suite and host parity" }]
 role = "deep"
 kinds = []
 kinds_github = []
-timeout_minutes = 60
+timeout_minutes = 120
 
 # Miri cannot enter a C library, and every `unsafe` block that matters here is
 # an FFI call into one, so the selection is the crates that hold atomics and

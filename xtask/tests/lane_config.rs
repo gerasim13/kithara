@@ -194,7 +194,7 @@ fn the_catalog_declares_every_lane_the_github_workflows_will_ask_for() {
         "deep-rtsan-fast",
         "deep-rtsan-file",
         "deep-rtsan-hls",
-        "deep-gpu",
+        "deep-ui",
         "deep-miri",
         "quality-assess",
         "quality-similarity",

@@ -587,38 +587,6 @@
   <require os> macos
   <require tools> cargo just
   just perf bench ci
-# deep-gpu / branch
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / platforms
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / merge-request
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / quarantine
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / main
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / nightly
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / weekly
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
-# deep-gpu / release
-  <require os> linux
-  <require tools> cargo just
-  just test run -p kithara-ui --features kithara-ui/gpu -E test(/vis::/)
 # deep-miri / branch
   <require os> linux
   <require tools> cargo just
@@ -899,6 +867,38 @@
   <require tools> cargo just
   just test rtsan-hls
     KITHARA_RTSAN_BACKEND=standalone
+# deep-ui / branch
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / platforms
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / merge-request
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / quarantine
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / main
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / nightly
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / weekly
+  <require os> linux
+  <require tools> cargo just
+  just test ui
+# deep-ui / release
+  <require os> linux
+  <require tools> cargo just
+  just test ui
 # deps-deny / branch
   <require os> linux
   <require tools> cargo just

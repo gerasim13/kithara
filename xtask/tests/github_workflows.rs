@@ -439,6 +439,28 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
 }
 
+// One entry per push, and it is the gate. A workflow that also declares `push`
+// spends the fleet on every commit outside the gate's own budget and outside
+// the aggregate that decides whether the push was green - which is how a
+// two-hour UI suite came to start on every push to a runner pool one machine
+// deep. Everything else is reached by its caller, by the night, or by hand.
+#[test]
+fn the_gate_is_the_only_workflow_a_push_starts() {
+    let mut entries = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        let on = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on");
+        if on.as_mapping().is_some_and(|on| on.contains_key("push")) {
+            entries.push(name);
+        }
+    }
+    assert_eq!(
+        entries,
+        vec!["ci.yml".to_owned()],
+        "a push starts more than the gate"
+    );
+}
+
 fn concurrency_prefixes(owner: &Mapping) -> BTreeSet<String> {
     let Some(concurrency) = owner.get("concurrency") else {
         return BTreeSet::new();
@@ -1689,34 +1711,34 @@ fn a_request_for_one_lane_starts_nothing_beside_it() {
         );
     }
 
-    // The GPU suite is the one of them that is a declared lane, and this is
+    // The UI suite is the one of them that is a declared lane, and this is
     // the only caller that can start it, so it answers to its own name rather
     // than standing aside for every request.
-    let gpu = workflow_job(jobs, "gpu")
+    let ui = workflow_job(jobs, "ui")
         .get("if")
         .and_then(Value::as_str)
-        .expect("the GPU job is guarded");
+        .expect("the UI job is guarded");
     assert!(
-        gpu.contains("contains(inputs.only, 'deep-gpu')"),
-        "the GPU job answers to its lane's name: {gpu}"
+        ui.contains("contains(inputs.only, 'deep-ui')"),
+        "the UI job answers to its lane's name: {ui}"
     );
 }
 
 // A lane declared in the catalog and a workflow spelling out the same command
-// are two places for one suite to change. The GPU lane stays out of the role
+// are two places for one suite to change. The UI lane stays out of the role
 // fan-out - it wants a runner pool of its own, and the fan-out schedules onto
 // the single Linux pool - but staying out of the selection is not a licence to
 // restate what it runs.
 #[test]
-fn the_gpu_workflow_names_its_lane_instead_of_repeating_it() {
-    let text = github_workflow_text("gpu.yml");
+fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
+    let text = github_workflow_text("ui.yml");
     assert!(
-        text.contains("just ci lane deep-gpu"),
-        "the GPU workflow runs the declared lane"
+        text.contains("just ci lane deep-ui"),
+        "the UI workflow runs the declared lane"
     );
     assert!(
         !text.contains("just test"),
-        "the GPU workflow carries no suite command of its own"
+        "the UI workflow carries no suite command of its own"
     );
 
     // Nothing selects the lane it names, on either provider, so this workflow
@@ -1729,14 +1751,14 @@ fn the_gpu_workflow_names_its_lane_instead_of_repeating_it() {
         &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
     )
     .expect("xtask config is valid TOML");
-    let lane = &config["ext"]["ci"]["lanes"]["deep-gpu"];
+    let lane = &config["ext"]["ci"]["lanes"]["deep-ui"];
     for field in ["kinds", "kinds_github"] {
         let kinds = lane[field]
             .as_array()
-            .unwrap_or_else(|| panic!("deep-gpu.{field} is an array"));
+            .unwrap_or_else(|| panic!("deep-ui.{field} is an array"));
         assert!(
             kinds.is_empty(),
-            "deep-gpu.{field} schedules a GPU-less pool"
+            "deep-ui.{field} schedules a GPU-less pool"
         );
     }
 }

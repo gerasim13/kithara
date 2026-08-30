@@ -100,7 +100,7 @@ jobs:
   # own until the catalog can name a pool.
   #
   # `only` names lanes, and the fan-out is what selects lanes, so a request for
-  # one lane leaves these out - the GPU suite excepted, because it is a declared
+  # one lane leaves these out - the UI suite excepted, because it is a declared
   # lane and this is the only caller that can start it. Each of these workflows
   # also starts on its own, which is how one of them is run by hand.
   windows:
@@ -117,12 +117,12 @@ jobs:
       && (inputs.only || '') == ''
     uses: ./.github/workflows/android.yml
 
-  gpu:
+  ui:
     if: >-
       vars.KITHARA_GPU_RUNNER_LABELS != ''
       && (inputs.kind || 'nightly') == 'nightly'
-      && ((inputs.only || '') == '' || contains(inputs.only, 'deep-gpu'))
-    uses: ./.github/workflows/gpu.yml
+      && ((inputs.only || '') == '' || contains(inputs.only, 'deep-ui'))
+    uses: ./.github/workflows/ui.yml
 
   # The repeated run that turns "fails sometimes" into a rate. It has a runner
   # of its own and a group of its own, and its own admission: only the owner of
