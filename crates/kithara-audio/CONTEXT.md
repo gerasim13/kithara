@@ -97,7 +97,15 @@ preload-chunk threshold with an empty overflow slot, EOF, `Failed`, `on_cancel`
 refills.
 
 **`block_on_underrun`.** The bool remains the independent empty-read policy;
-`ConsumerWakeMode` controls only how a successful drain wakes the worker. With
+`ConsumerWakeMode` names the consumer's thread capability: how a successful
+drain wakes the worker, and how reader-born events reach the bus — a
+`RealtimeDeferred` read enqueues them on the `DeferredBus` ring for the
+scheduler shell (its only flusher), while an `ImmediateOffRt` read publishes
+them inline before returning, because its thread may take the
+`broadcast::send` lock. Both routes stamp a monotonic `seq`, but the ring's
+FIFO is not a cross-route delivery order: an inline reader event may reach
+subscribers before an earlier-`seq` deferred event still parked in the ring.
+With
 `AudioConfig::block_on_underrun(true)` a `read()` on an empty ring PARKS the
 caller until the worker produces and the effective wake mode is always
 `ImmediateOffRt`, regardless of the explicitly configured mode. The consumer
