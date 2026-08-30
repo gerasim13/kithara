@@ -7,7 +7,12 @@ use anyhow::{Result, bail};
 use clap::Args;
 use serde::Deserialize;
 
-use crate::{Ctx, common::report::print_check_block, util::ensure_clean_tree, verdict::NotClean};
+use crate::{
+    Ctx,
+    common::{exclude::cfg_test_module_globs, report::print_check_block},
+    util::ensure_clean_tree,
+    verdict::NotClean,
+};
 
 #[derive(Debug, Args)]
 pub struct AstGrepArgs {
@@ -69,12 +74,18 @@ pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
 /// `arch`/`style`/`idioms` namespaces. Each `[lint_exclude].paths` glob is
 /// passed as a negated `--globs` so ast-grep skips those files for scanning
 /// AND `--fix`, uniformly across all rules (per-rule `ignores:` blocks vary).
-/// ast-grep's `--globs` "always overrides any other ignore logic". (Inline
-/// `#[cfg(test)]` is not handled — ast-grep does no cfg evaluation; rules that
-/// care use a `not: inside cfg(test)` clause.)
+/// ast-grep's `--globs` "always overrides any other ignore logic". A file a
+/// `#[cfg(test)] mod name;` declaration brings in is excluded the same way:
+/// ast-grep does no cfg evaluation and reads one file at a time, so the
+/// attribute standing in the parent is invisible to every rule. (Inline
+/// `#[cfg(test)]` is still not handled here; rules that care use a
+/// `not: inside cfg(test)` clause.)
 fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
     let project = &ctx.config;
     for pat in &project.lint_exclude.paths {
+        cmd.arg("--globs").arg(format!("!{pat}"));
+    }
+    for pat in cfg_test_module_globs(&ctx.root) {
         cmd.arg("--globs").arg(format!("!{pat}"));
     }
 }
@@ -123,8 +134,11 @@ fn parse_into(stdout: &str, by_rule: &mut BTreeMap<String, RuleGroup>) {
             });
         entry.hits.push(Hit {
             file: m.file,
-            line: m.range.start.line,
-            column: m.range.start.column,
+            // ast-grep counts from zero and every reader of this report counts
+            // from one. Printing its own numbers sent each hit one line above
+            // the code it is about, which is a different statement.
+            line: m.range.start.line + 1,
+            column: m.range.start.column + 1,
         });
     }
 }
@@ -284,9 +298,11 @@ fn print_grouped(groups: &BTreeMap<String, RuleGroup>) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, process::Command};
+    use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
 
     use tempfile::tempdir;
+
+    use super::parse_into;
 
     fn rule_hits_at(rule_file: &str, relative_path: &str, source: &str) -> usize {
         let temp = tempdir().expect("tempdir");
@@ -327,6 +343,22 @@ mod tests {
 
     fn primitive_pool_hits(source: &str) -> usize {
         rule_hits("perf.prefer-primitive-pool.yml", source)
+    }
+
+    #[test]
+    fn a_reported_hit_names_the_line_an_editor_calls_it() {
+        let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
+        let mut by_rule = BTreeMap::new();
+        parse_into(stdout, &mut by_rule);
+        let hit = &by_rule["perf.prefer-primitive-pool"].hits[0];
+        assert_eq!(
+            hit.line, 30,
+            "ast-grep counts lines from zero, a reader from one"
+        );
+        assert_eq!(
+            hit.column, 5,
+            "ast-grep counts columns from zero, a reader from one"
+        );
     }
 
     #[test]

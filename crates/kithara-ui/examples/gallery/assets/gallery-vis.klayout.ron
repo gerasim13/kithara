@@ -25,7 +25,7 @@
                         children: [
                             (weight: 1.0, node: Module(
                                 instance: "vis-top",
-                                source: "modules/tabs/vis-spacer.kmodule.ron",
+                                source: "modules/tabs/spacer.kmodule.ron",
                                 corners: true,
                                 frame: (top: false, right: false, bottom: false, left: false),
                                 size: (w: Fill, h: Fill),
@@ -35,7 +35,7 @@
                                 children: [
                                     (weight: 1.0, node: Module(
                                         instance: "vis-left",
-                                        source: "modules/tabs/vis-spacer.kmodule.ron",
+                                        source: "modules/tabs/spacer.kmodule.ron",
                                         corners: true,
                                         frame: (top: false, right: false, bottom: false, left: false),
                                         size: (w: Fill, h: Fixed(350.0)),
@@ -48,7 +48,7 @@
                                     )),
                                     (weight: 1.0, node: Module(
                                         instance: "vis-right",
-                                        source: "modules/tabs/vis-spacer.kmodule.ron",
+                                        source: "modules/tabs/spacer.kmodule.ron",
                                         corners: true,
                                         frame: (top: false, right: false, bottom: false, left: false),
                                         size: (w: Fill, h: Fixed(350.0)),
@@ -57,7 +57,7 @@
                             )),
                             (weight: 1.0, node: Module(
                                 instance: "vis-bottom",
-                                source: "modules/tabs/vis-spacer.kmodule.ron",
+                                source: "modules/tabs/spacer.kmodule.ron",
                                 corners: true,
                                 frame: (top: false, right: false, bottom: false, left: false),
                                 size: (w: Fill, h: Fill),

@@ -1,0 +1,230 @@
+//! The gallery as a toolkit-neutral application.
+//!
+//! Everything here is stated in terms of `kithara_ui::app`; nothing names a
+//! toolkit. Which host shows it is decided by the feature the crate was built
+//! with.
+
+use kithara_ui::{
+    app::App,
+    render::{Reads, Skin, UiEvent},
+};
+
+use crate::{capture::Shot, demo, sections};
+
+#[derive(Default)]
+pub(super) struct Gallery {
+    reads: demo::DemoReads,
+}
+
+impl Gallery {
+    /// The gallery already turned to one page, for photographing it.
+    pub(super) fn at(shot: Shot) -> Self {
+        let mut reads = demo::DemoReads::default();
+        reads.select_tab(shot.tab);
+        if let Some(module) = shot.module {
+            reads.select_module(module);
+        }
+        Self { reads }
+    }
+}
+
+impl App for Gallery {
+    delegate::delegate! {
+        to self.reads {
+            fn skin(&self) -> &Skin;
+            fn tick(&mut self);
+        }
+    }
+
+    fn document(&self) -> &str {
+        let tab = self.reads.active_tab();
+        if tab == sections::MODULES {
+            sections::module_entry(self.reads.active_module())
+        } else {
+            sections::entry(tab)
+        }
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(&self.reads)
+    }
+
+    fn update(&mut self, event: UiEvent) {
+        match event {
+            UiEvent::Control { path, action } => {
+                if let Some(tab) = sections::pressed(&path) {
+                    self.reads.select_tab(tab);
+                } else {
+                    self.reads.apply(&path, &action);
+                }
+            }
+            UiEvent::LibraryQuery(query) => {
+                self.reads.set_library_query(query);
+            }
+            UiEvent::ToggleModule(module) => self.reads.toggle_module(module),
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
+    use kithara_ui::{
+        app::{Config, Ui},
+        builtin,
+        draw::Pt,
+        interact::{Input, MOUSE, PointerInput, PointerPhase},
+        render::ControlAction,
+    };
+
+    use super::{App, Gallery, UiEvent, demo, sections};
+    use crate::{custom, fixture::resolver};
+
+    /// Pressing a row on the skins page dresses the gallery in that skin.
+    #[kithara::test]
+    fn choosing_a_skin_dresses_the_gallery_in_it() {
+        let mut gallery = Gallery::default();
+        assert_eq!(gallery.skin().id(), "kithara-dark");
+
+        gallery.update(pressing("skins/kithara-neon/item"));
+
+        assert_eq!(gallery.skin().id(), "kithara-neon");
+    }
+
+    /// The skin outlives the page it was chosen on, which is the whole point of
+    /// choosing one: every widget the gallery shows is looked at in it.
+    #[kithara::test]
+    fn turning_the_page_keeps_the_skin_it_was_chosen_in() {
+        let mut gallery = Gallery::default();
+        gallery.update(pressing("skins/kithara-light/item"));
+
+        for tab in sections::pages().iter().copied() {
+            gallery.reads.select_tab(tab);
+            assert_eq!(
+                gallery.skin().id(),
+                "kithara-light",
+                "the gallery undressed itself on {tab}"
+            );
+        }
+    }
+
+    fn pressing(path: &str) -> UiEvent {
+        UiEvent::Control {
+            path: path.to_owned(),
+            action: ControlAction::Activate,
+        }
+    }
+
+    /// Presses where the nav reads BUTTONS and expects the gallery to turn to
+    /// that page. This is the whole chain the window depends on: pointer, leaf,
+    /// action, application, rebuilt document.
+    #[kithara::test]
+    fn pressing_a_nav_item_turns_the_page() {
+        for scale in [1.0, 2.0] {
+            turns_the_page_at(scale);
+        }
+    }
+
+    /// The window runs at whatever the display reports, so the same logical
+    /// press has to land on the same control at any scale.
+    fn turns_the_page_at(scale: f64) {
+        let endpoints = demo::registry();
+        let resolver = resolver();
+        let kinds = custom::kinds();
+        let config = Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .kinds(&kinds)
+            .build();
+        let size = (
+            num_traits::cast::AsPrimitive::<u32>::as_(1100.0 * scale),
+            num_traits::cast::AsPrimitive::<u32>::as_(720.0 * scale),
+        );
+        let mut ui = Ui::new(Gallery::default(), config, size, scale)
+            .unwrap_or_else(|error| panic!("the gallery must mount: {error}"));
+        ui.frame(Duration::from_millis(16));
+        ui.render()
+            .unwrap_or_else(|error| panic!("the gallery must draw: {error}"));
+        assert_eq!(ui.app().document(), "gallery-atoms.klayout.ron");
+
+        let at = Pt { x: 60.0, y: 113.0 };
+        ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            None,
+            PointerPhase::Down,
+            Some(at),
+            1,
+        )));
+
+        assert_eq!(
+            ui.app().document(),
+            "gallery-buttons.klayout.ron",
+            "a press on the BUTTONS nav item must turn the page at {scale}x"
+        );
+    }
+}
+
+#[cfg(test)]
+mod fills {
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
+    use kithara_ui::{
+        app::{Config, Ui},
+        builtin,
+        capture::Offscreen,
+    };
+    use masonry::vello::peniko::Color;
+
+    use super::{Gallery, demo};
+    use crate::{custom, fixture::resolver};
+
+    /// The document must fill the surface it was handed, at any display scale.
+    ///
+    /// This is the property a window bug hid behind twice: a headless capture
+    /// asks for the size it wants and is always satisfied, while a window that
+    /// mixes up logical and physical points quietly lays the document out in a
+    /// quarter of the glass. Rasterising and looking at the far corner is the
+    /// cheapest honest check that the two agree.
+    #[kithara::test]
+    fn the_document_reaches_the_far_corner_at_any_scale() {
+        for scale in [1.0, 2.0] {
+            let width = num_traits::cast::AsPrimitive::<u32>::as_(1100.0 * scale);
+            let height = num_traits::cast::AsPrimitive::<u32>::as_(720.0 * scale);
+            let endpoints = demo::registry();
+            let resolver = resolver();
+            let kinds = custom::kinds();
+            let config = Config::builder()
+                .endpoints(&endpoints)
+                .resolver(&resolver)
+                .text(builtin::text_doc())
+                .kinds(&kinds)
+                .build();
+            let mut ui = Ui::new(Gallery::default(), config, (width, height), scale)
+                .unwrap_or_else(|error| panic!("the gallery must mount at {scale}x: {error}"));
+            ui.frame(Duration::from_millis(16));
+            let frame = ui
+                .render()
+                .unwrap_or_else(|error| panic!("the gallery must draw at {scale}x: {error}"));
+            let mut off = Offscreen::new(width, height)
+                .unwrap_or_else(|error| panic!("offscreen at {scale}x: {error}"));
+            // Black, not the skin's page colour: a corner that only shows what
+            // the host cleared to would read as painted whatever the document
+            // did, and the question here is whether the document reached it.
+            let mut rgba = Vec::new();
+            off.rasterise(&frame, scale, Color::BLACK, &mut rgba)
+                .unwrap_or_else(|error| panic!("rasterise at {scale}x: {error}"));
+
+            let width_px = width as usize;
+            let corner = ((height as usize - 1) * width_px + width_px - 1) * 4;
+            let lit = rgba[corner..corner + 3].iter().any(|channel| *channel > 8);
+            assert!(
+                lit,
+                "at {scale}x the far corner is unpainted, so the document covered only part of \
+                 the {width}x{height} surface it was given"
+            );
+        }
+    }
+}

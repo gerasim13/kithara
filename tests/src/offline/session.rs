@@ -185,8 +185,9 @@ impl Drop for OfflineSession {
 }
 
 impl SessionDispatcher for OfflineSession {
+    /// The render thread runs the device callback's processor.
     fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::ImmediateOffRt
+        ConsumerWakeMode::RealtimeDeferred
     }
 
     /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
@@ -282,12 +283,12 @@ mod tests {
     use super::*;
 
     #[kithara::test(native, flash(false))]
-    fn offline_session_requests_immediate_off_rt_consumer_wakes() {
+    fn offline_session_requests_realtime_deferred_consumer_wakes() {
         let session = OfflineSession::new_manual();
 
         assert_eq!(
             session.consumer_wake_mode(),
-            ConsumerWakeMode::ImmediateOffRt
+            ConsumerWakeMode::RealtimeDeferred
         );
     }
 

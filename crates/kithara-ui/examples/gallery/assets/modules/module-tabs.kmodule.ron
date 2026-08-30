@@ -4,6 +4,8 @@
     id: "gallery-module-tabs",
     chrome: Plain,
     root: Row(
+        size: (w: Fill, h: Fill),
+        background: Bg,
         children: [
             TabLarge(
                 id: "deck",
@@ -13,12 +15,12 @@
             TabLarge(
                 id: "deck-micro",
                 label: "DECK MICRO",
-                read: Model(id: "gallery.module.deck_micro"),
+                read: Model(id: "gallery.module.deck-micro"),
             ),
             TabLarge(
                 id: "global-bar",
                 label: "GLOBAL BAR",
-                read: Model(id: "gallery.module.global_bar"),
+                read: Model(id: "gallery.module.global-bar"),
             ),
             TabLarge(
                 id: "telemetry",

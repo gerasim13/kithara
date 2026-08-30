@@ -1,17 +1,21 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "render")]
+use crate::draw::{DrawPools, PoolStats};
 use crate::{
     error::UiDocError,
     expand::{
-        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedNode, Expander, intern_binding,
-        substitute_binding, substitute_map,
+        Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
+        Unprompted, intern_binding, motion_of, substitute_binding, substitute_map,
     },
     ids::{InternId, Interner, SourceUri, StrArena},
-    layout::{Axis, FrameSides, LayoutNode, SplitChild, parse_layout},
+    layout::{Axis, FrameCorners, FrameSides, LayoutNode, SplitChild, parse_layout},
     module::{ChromeStyle, MeasureAxis},
-    registry::EndpointRegistry,
+    registry::{BuiltinEndpoints, EndpointRegistry},
+    require,
     resolve::load_module_graph,
     room,
+    shader::ShaderCache,
     size::{
         BlockNode, Cell, Cells, DEFAULTS, SizeSpec, Snapshot, at_least, axis_min,
         combine_horizontal, combine_vertical, compute_size, has_blocks, min_size,
@@ -34,16 +38,130 @@ pub struct CompiledUi {
     pub min: SizeSpec,
     /// The layout asked to be framed by its own resize edges.
     pub resize_edges: bool,
+    /// Somewhere in this document an object is placed by an endpoint, so
+    /// re-reading the endpoints can move something a host already mounted.
+    pub driven: bool,
+    /// This document draws a different picture at a later moment with nothing
+    /// else changing: an object is placed by an endpoint, or a binding reads the
+    /// host's own clock.
+    ///
+    /// A host that stops drawing such a document animates it only while some
+    /// unrelated event keeps waking it — a mouse crossing the window, and
+    /// nothing once the mouse stops.
+    pub animates: bool,
     arena: StrArena,
+    includes: Vec<IncludedModule>,
+    #[cfg(feature = "render")]
+    draw_pools: DrawPools,
 }
 
 impl CompiledUi {
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub(crate) const fn draw_pools(&self) -> &DrawPools {
+        &self.draw_pools
+    }
+
+    /// Current allocation-reuse counters for this compiled document.
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub fn draw_pool_stats(&self) -> PoolStats {
+        self.draw_pools.stats()
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn includes_module(
+        &self,
+        owner: InternId,
+        address: &Address<'_>,
+        module: &str,
+    ) -> bool {
+        self.includes
+            .iter()
+            .filter(|include| include.owner == owner && address.names(&include.address))
+            .any(|include| self.resolve(include.module) == module)
+    }
+
+    /// Refuses a screen that answers on none of the paths an application binds
+    /// behaviour to.
+    ///
+    /// An application reaches its own interface by path: a press arrives
+    /// named, and the application decides what it means. A package free to lay
+    /// its screens out as it likes is therefore also free to lay out one that
+    /// answers nowhere, and nothing about drawing it would say so - the window
+    /// would open with no way to start playing. Naming the few paths without
+    /// which the application is not itself turns that into a refusal.
+    ///
+    /// Popover, pressable and control paths all count: they are what a host
+    /// addresses, and an application binds to whichever of them its documents
+    /// use.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::MissingPaths`] listing every required path the
+    /// screen does not answer on.
+    pub fn require_paths(&self, required: &[&str], origin: &SourceUri) -> Result<(), UiDocError> {
+        let missing = require::missing(self, required);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(UiDocError::MissingPaths {
+            origin: origin.clone(),
+            paths: missing,
+        })
+    }
+
     delegate::delegate! {
         to self.arena {
             /// Resolves a string interned by this compiled UI.
             #[must_use]
             pub fn resolve(&self, id: InternId) -> &str;
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct IncludedModule {
+    address: Box<[usize]>,
+    module: InternId,
+    owner: InternId,
+}
+
+/// Where one node sits under the document root.
+///
+/// A walk carries its position by borrowing the parent it came from rather
+/// than owning a path of its own: the address is read at the few leaves that
+/// ask whether they host an engine, and nothing about it outlives the mount
+/// that built it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Address<'a> {
+    Root,
+    Child { parent: &'a Self, index: usize },
+}
+
+impl Address<'_> {
+    /// The address one step further down, at `index` among this node's children.
+    pub(crate) const fn child(&self, index: usize) -> Address<'_> {
+        Address::Child {
+            parent: self,
+            index,
+        }
+    }
+
+    /// Whether this address names `path`, compared from the leaf upward.
+    fn names(&self, path: &[usize]) -> bool {
+        let mut node = self;
+        let mut rest = path;
+        while let Self::Child { parent, index } = node {
+            let Some((last, head)) = rest.split_last() else {
+                return false;
+            };
+            if last != index {
+                return false;
+            }
+            node = parent;
+            rest = head;
+        }
+        rest.is_empty()
     }
 }
 
@@ -82,6 +200,9 @@ pub enum CompiledNode {
         chrome: ChromeStyle,
         frame: FrameSides,
         corners: bool,
+        /// The window corners this module stands at, filled in once the whole
+        /// layout is built.
+        round: FrameCorners,
         footer: Option<Binding>,
         drop: Option<DropSpec>,
         collapsed: InternId,
@@ -133,6 +254,9 @@ pub fn compile(
     text: &TextDoc,
     config: &UiConfig,
 ) -> Result<CompiledUi, UiDocError> {
+    // Over the application's own declarations, so a document may bind to what
+    // the host answers for itself without every application registering it.
+    let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
     if bytes > config.limits.max_bytes {
@@ -147,7 +271,9 @@ pub fn compile(
     validate::check_layout_dragged(&document, &loaded.uri, endpoints)?;
     let mut budget = Budget::new(config.limits.max_nodes);
     let mut interner = Interner::new(config.max_arena_bytes);
-    let root = Compiler {
+    let mut includes = Vec::new();
+    let mut shaders = ShaderCache::default();
+    let mut root = Compiler {
         resolver,
         endpoints,
         skin,
@@ -155,8 +281,11 @@ pub fn compile(
         config,
         budget: &mut budget,
         interner: &mut interner,
+        includes: &mut includes,
+        shaders: &mut shaders,
     }
     .build(&document.root, &loaded.uri)?;
+    round_corners(&mut root, FrameCorners::ALL);
     let size = compiled_node_size(&root);
     let min = compiled_min(&root, skin);
     let dragged = document
@@ -164,15 +293,74 @@ pub fn compile(
         .as_ref()
         .map(|binding| intern_binding(&mut interner, binding, &loaded.uri))
         .transpose()?;
+    let unprompted = motion_of_layout(&root);
+    let driven = unprompted.driven;
+    let animates = driven || unprompted.continuous || interner.reads_clock();
     let arena = interner.finish();
     Ok(CompiledUi {
         root,
         size,
         min,
         dragged,
+        animates,
+        driven,
+        includes,
         arena,
         resize_edges: document.resize_edges,
+        #[cfg(feature = "render")]
+        draw_pools: config.draw_pools.clone(),
     })
+}
+
+/// Hands every module the window corners it stands at.
+///
+/// The root of a layout is the window, so it owns all four; a split keeps the
+/// pair across its axis whole for every cell and gives the pair along it to the
+/// cells at its two ends. A branch that fills its parent's box - an optional
+/// block, an adaptive step - inherits what its parent was given. The corners a
+/// module ends up with are the ones its own frame radius may round, which is
+/// what makes the window round rather than the boxes inside it.
+///
+/// The end of a split is where the document puts it. A cell the host hides at
+/// runtime does not move the corner to its neighbour.
+fn round_corners(node: &mut CompiledNode, corners: FrameCorners) {
+    match node {
+        CompiledNode::Module { round, .. } => *round = corners,
+        CompiledNode::Optional { child, .. } => round_corners(child, corners),
+        CompiledNode::Adaptive { base, steps, .. } => {
+            round_corners(base, corners);
+            for (_, step) in steps {
+                round_corners(step, corners);
+            }
+        }
+        CompiledNode::Split { axis, children, .. } => {
+            let axis = *axis;
+            let last = children.len().saturating_sub(1);
+            for (index, cell) in children.iter_mut().enumerate() {
+                round_corners(&mut cell.node, cell_corners(axis, corners, index, last));
+            }
+        }
+    }
+}
+
+/// The corners one cell of a split inherits: the whole pair across the axis,
+/// and the pair along it only at the end the cell stands at.
+const fn cell_corners(
+    axis: Axis,
+    corners: FrameCorners,
+    index: usize,
+    last: usize,
+) -> FrameCorners {
+    let (start, end) = match axis {
+        Axis::Horizontal => (corners.left(), corners.right()),
+        Axis::Vertical => (corners.top(), corners.bottom()),
+    };
+    match (index == 0, index == last) {
+        (true, true) => corners,
+        (true, false) => start,
+        (false, true) => end,
+        (false, false) => FrameCorners::EMPTY,
+    }
 }
 
 struct Compiler<'a> {
@@ -181,6 +369,8 @@ struct Compiler<'a> {
     skin: &'a SkinDoc,
     text: &'a TextDoc,
     config: &'a UiConfig,
+    includes: &'a mut Vec<IncludedModule>,
+    shaders: &'a mut ShaderCache,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
 }
@@ -254,7 +444,12 @@ impl Compiler<'_> {
                     &self.config.limits,
                 )?;
                 let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
-                    validate::check_controls(site, origin, self.endpoints)
+                    validate::check_controls(
+                        site,
+                        origin,
+                        self.endpoints,
+                        &self.config.custom_kinds,
+                    )
                 };
                 let document = set
                     .defs
@@ -265,10 +460,12 @@ impl Compiler<'_> {
                     })?;
                 validate::check_module_footer(document, &module_uri, self.endpoints)?;
                 validate::check_module_drop(document, &module_uri, self.endpoints)?;
-                let expanded = Expander::new(
+                let mut expanded = Expander::new(
                     self.config.limits.max_depth,
                     self.budget,
                     self.interner,
+                    self.endpoints,
+                    self.shaders,
                     self.text,
                     &mut visitor,
                 )
@@ -290,6 +487,11 @@ impl Compiler<'_> {
                 });
                 let blocks = declared.is_none() && has_blocks(&expanded.root);
                 let instance = self.interner.intern(&instance.0, layout_uri)?;
+                self.includes.extend(
+                    std::mem::take(&mut expanded.includes)
+                        .into_iter()
+                        .map(|include| included_module(instance, include)),
+                );
                 Ok(CompiledNode::Module {
                     instance,
                     size,
@@ -301,6 +503,7 @@ impl Compiler<'_> {
                     chrome: expanded.chrome,
                     frame: *frame,
                     corners: *corners,
+                    round: FrameCorners::EMPTY,
                     footer: expanded.footer,
                     drop: expanded.drop,
                     collapsed: expanded.collapsed,
@@ -356,6 +559,32 @@ impl Compiler<'_> {
             composed,
             blocks,
         })
+    }
+}
+
+/// What every module of this layout does with nothing touching it.
+fn motion_of_layout(node: &CompiledNode) -> Unprompted {
+    match node {
+        CompiledNode::Split { children, .. } => children
+            .iter()
+            .map(|cell| motion_of_layout(&cell.node))
+            .fold(Unprompted::default(), Unprompted::or),
+        CompiledNode::Optional { child, .. } => motion_of_layout(child),
+        // Which branch stands is settled by the room, which this side of the
+        // walk does not know, so the layout moves if any of them does.
+        CompiledNode::Adaptive { base, steps, .. } => steps
+            .iter()
+            .map(|(_, branch)| motion_of_layout(branch))
+            .fold(motion_of_layout(base), Unprompted::or),
+        CompiledNode::Module { root, .. } => motion_of(root),
+    }
+}
+
+fn included_module(owner: InternId, include: ExpandedInclude) -> IncludedModule {
+    IncludedModule {
+        owner,
+        address: include.address,
+        module: include.module,
     }
 }
 

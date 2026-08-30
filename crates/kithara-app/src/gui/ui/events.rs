@@ -5,7 +5,7 @@ use kithara_ui::render::{
 use num_traits::cast::AsPrimitive;
 
 use super::{
-    cache::{DeckLayout, ViewCache},
+    cache::{DeckLayout, ViewCache, WindowEdge},
     scope::{MICRO_DECK, deck_index, eq_band},
 };
 use crate::{
@@ -26,6 +26,10 @@ pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> 
         UiEvent::Control { path, action } => control(state, &path, &action),
         UiEvent::ToggleModule(module) => {
             state.ui.cache.toggle_module(module);
+            None
+        }
+        UiEvent::LibraryQuery(query) => {
+            state.ui.cache.library.query = query;
             None
         }
         UiEvent::Window(command) => Some(Message::Window(command)),
@@ -222,6 +226,18 @@ fn mixer_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
         ("xfade", ControlAction::SetScalar(position)) => Some(Message::Mix(MixMsg::Crossfader(
             position.clamp(0.0, 1.0).as_(),
         ))),
+        ("master", ControlAction::SetScalar(gain)) => {
+            Some(Message::Mix(MixMsg::Master(gain.clamp(0.0, 1.0).as_())))
+        }
+        ("window/min" | "window/max", ControlAction::SetScalar(at)) => {
+            let edge = if control.ends_with("min") {
+                WindowEdge::Min
+            } else {
+                WindowEdge::Max
+            };
+            state.ui.cache.stage.set_edge(edge, at.as_());
+            None
+        }
         _ => strip_control(state, control, action),
     }
 }
@@ -249,6 +265,10 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
             state.ui.cache.close_eq_menus();
             Some(Message::SetEqMode(EqMode::FourBand))
         }
+        ("mute", ControlAction::Activate) => {
+            let muted = state.session.mix().strips.get(index)?.muted;
+            Some(Message::Mix(MixMsg::Muted(deck_id(state, index)?, !muted)))
+        }
         ("volume", _) => volume_control(state, index, action),
         (_, ControlAction::SetScalar(value)) => Some(Message::Deck(
             deck_id(state, index)?,
@@ -263,6 +283,11 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
 /// deck reports the pointer crossing it, and the host joins them here.
 fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
+        ("browser" | "context", ControlAction::SelectIndex(row)) => {
+            let picked = state.ui.cache.library.groups().nth(*row)?;
+            state.ui.cache.library.scope = picked;
+            None
+        }
         ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
         ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
             state.ui.cache.drag = Some(*row);
@@ -360,7 +385,7 @@ mod tests {
         assert!(cache.menu.are_layouts_open());
 
         assert!(matches!(
-            press_menu(&mut cache, "layout-1"),
+            press_menu(&mut cache, "layout-1/apply"),
             Some(Message::PauseHiddenDecks)
         ));
         assert_eq!(cache.layout(), DeckLayout::Single);
@@ -369,7 +394,7 @@ mod tests {
             "applying a layout leaves the menu where it was"
         );
 
-        press_menu(&mut cache, "layout-2");
+        press_menu(&mut cache, "layout-2/apply");
         assert_eq!(cache.layout(), DeckLayout::Dual);
 
         press_menu(&mut cache, "layouts-head");

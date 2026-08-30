@@ -28,7 +28,7 @@ pub enum ConsumerWakeMode {
     /// Arm a coalesced scheduler pass without signaling a thread gate.
     #[default]
     RealtimeDeferred,
-    /// Signal the worker immediately from a consumer known to run off-RT.
+    /// Unpark the worker's thread, for a consumer outside the render graph.
     ImmediateOffRt,
 }
 
