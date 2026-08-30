@@ -1,0 +1,14 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-custom",
+    chrome: Full,
+    title: "APPLICATION CONTENT",
+    root: Column(id: "custom-page", gap: 12.0, pad: 16.0, children: [
+        Text(id: "caption", style: Section, label: "A KIND THE DOCUMENT NAMES AND THE APPLICATION REGISTERS", size: (w: Fill, h: Shrink)),
+        Custom(id: "filled", kind: "level-ladder", size: (w: Fill, h: Fixed(220.0))),
+        Text(id: "measured", style: Section, label: "THE SAME KIND, SIZED BY WHAT IT ASKS FOR", size: (w: Fill, h: Shrink)),
+        Custom(id: "shrunk", kind: "level-ladder", size: (w: Fixed(240.0), h: Shrink)),
+        Spacer(id: "gap"),
+    ]),
+)

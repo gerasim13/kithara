@@ -123,7 +123,7 @@ pub(crate) fn player_registry() -> TestRegistry {
     registry.insert(
         EndpointCategory::Model,
         "library.visible_tracks",
-        EndpointDesc::new(ValueKind::TrackList),
+        EndpointDesc::new(ValueKind::Table),
     );
     insert_stream_endpoints(&mut registry);
     insert_bar_endpoints(&mut registry);

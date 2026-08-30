@@ -1,16 +1,28 @@
 use iced::{
-    Background, Color, Element, Length, Padding,
+    Background, Border, Color, Element, Length, Padding, Rectangle,
+    advanced::{layout::Layout, mouse},
     alignment::{Horizontal, Vertical},
     widget::{Container, container, container::Style as ContainerStyle},
 };
 
+use super::{
+    control::{HostedControl, append_control_descriptors, append_control_targets},
+    host::ModuleHost,
+};
+#[cfg(test)]
+use crate::render::skin::active_tone;
 use crate::{
-    expand::{ControlSpec, ExpandedNode},
-    layout::FrameSides,
-    render::{Skin, UiEvent},
-    size::{Dim, SizeSpec, Snapshot, branch, control_size},
+    engine::{Descriptor, Engine, PickerSnapshot, Target},
+    expand::ExpandedNode,
+    interact::iced as iced_interact,
+    layout::{FrameCorners, FrameSides},
+    module::ChromeStyle,
+    render::{
+        HostedControlPlan, IcedSkin, Resolving, Skin, UiEvent, corner_radius, document::Ctx,
+        frame_overlay, picker_hits,
+    },
+    size::{Dim, SizeSpec, Snapshot, branch, is_hidden},
     skin::ColorRole,
-    widgets::frame_overlay,
 };
 
 pub(super) struct Rendered<'a> {
@@ -28,24 +40,19 @@ impl<'a> Rendered<'a> {
     }
 }
 
-pub(super) fn padding(
-    pad: Option<f32>,
-    pad_x: Option<f32>,
-    pad_y: Option<f32>,
-    skin: &Skin,
-) -> Padding {
-    let base = pad.unwrap_or(skin.layout.grid_pad);
+pub(super) fn padding(horizontal: f32, vertical: f32) -> Padding {
     Padding::ZERO
-        .top(pad_y.unwrap_or(base))
-        .bottom(pad_y.unwrap_or(base))
-        .left(pad_x.unwrap_or(base))
-        .right(pad_x.unwrap_or(base))
+        .top(vertical)
+        .bottom(vertical)
+        .left(horizontal)
+        .right(horizontal)
 }
 
 pub(super) fn filled<'a>(
     element: Container<'a, UiEvent>,
     background: Option<ColorRole>,
     alpha: Option<f32>,
+    round: FrameCorners,
     skin: &Skin,
 ) -> Element<'a, UiEvent> {
     let Some(role) = background else {
@@ -55,8 +62,13 @@ pub(super) fn filled<'a>(
         a: alpha.unwrap_or(1.0),
         ..skin.color(role)
     };
+    let radius = corner_radius(round, skin);
     element
-        .style(move |_| ContainerStyle::default().background(Background::Color(color)))
+        .style(move |_| {
+            ContainerStyle::default()
+                .background(Background::Color(color))
+                .border(Border::default().rounded(radius))
+        })
         .into()
 }
 
@@ -74,14 +86,7 @@ pub(super) fn bordered<'a>(
     }
 }
 
-pub(crate) fn active_tone(
-    base: Option<ColorRole>,
-    active: Option<ColorRole>,
-    on: bool,
-) -> Option<ColorRole> {
-    on.then_some(active).flatten().or(base)
-}
-
+#[cfg(test)]
 pub(super) fn frame_tone(
     frame_color: Option<ColorRole>,
     active_frame_color: Option<ColorRole>,
@@ -94,55 +99,12 @@ pub(super) fn frame_tone(
     )
 }
 
-pub(super) fn content_size(
-    node: &ExpandedNode,
-    skin: &Skin,
-    snapshot: &dyn Snapshot,
-) -> (Length, Length) {
-    effective_size(node, skin, snapshot).map_or((Length::Fill, Length::Fill), |size| {
-        (
-            length_for(size.w, Length::Fill),
-            length_for(size.h, Length::Fill),
-        )
-    })
-}
-
 pub(super) fn effective_size(
     node: &ExpandedNode,
     skin: &Skin,
     snapshot: &dyn Snapshot,
 ) -> Option<SizeSpec> {
-    let declared = match node {
-        ExpandedNode::Adaptive {
-            measure,
-            size,
-            base,
-            steps,
-        } => {
-            return size.or_else(|| {
-                effective_size(branch(measure, base, steps, snapshot), skin, snapshot)
-            });
-        }
-        ExpandedNode::Optional { child, .. }
-        | ExpandedNode::Pressable { child, .. }
-        | ExpandedNode::Reveal { child, .. } => {
-            return effective_size(child, skin, snapshot);
-        }
-        ExpandedNode::Popover { anchor, .. } => return effective_size(anchor, skin, snapshot),
-        ExpandedNode::Scroll { size, .. }
-        | ExpandedNode::Row { size, .. }
-        | ExpandedNode::Column { size, .. }
-        | ExpandedNode::Slot { size, .. }
-        | ExpandedNode::Control { size, .. } => *size,
-    };
-    declared.or_else(|| match node {
-        ExpandedNode::Control {
-            spec: ControlSpec::TabLarge { .. },
-            ..
-        } => None,
-        ExpandedNode::Control { spec, .. } => Some(control_size(spec, skin.document())),
-        _ => None,
-    })
+    crate::size::effective_size(node, skin.document(), snapshot)
 }
 
 pub(super) fn apply_size<'a>(
@@ -174,6 +136,476 @@ pub(super) const fn length_for(dim: Dim, intrinsic: Length) -> Length {
     }
 }
 
+pub(super) enum HostedLayout {
+    Chrome {
+        /// What the module's `drop:` mounts, when it declares one.
+        drop: Option<HostedControlPlan>,
+        header: Option<(String, String)>,
+        collapsed: bool,
+    },
+    Group {
+        sized: bool,
+        surfaced: bool,
+        framed: bool,
+        children: Vec<Self>,
+    },
+    Slot {
+        sized: bool,
+        children: Vec<Self>,
+    },
+    /// A stack takes its declared box directly, with no container around it,
+    /// so its children sit exactly one level down whether it was sized or not.
+    Stage {
+        children: Vec<Self>,
+    },
+    /// Branches that all keep a layout node, of which one is drawn. The rest
+    /// keep an empty one, so a branch holds its place whether it stands or not.
+    Measured {
+        children: Vec<Self>,
+    },
+    Wrapper {
+        sized: bool,
+        child: Box<Self>,
+    },
+    /// A viewport, which like a stack takes its declared box directly: the
+    /// `scrollable` itself is the window, and it keeps a layout node of its own
+    /// for the content it offsets, so that content sits exactly one level down.
+    Scroll {
+        child: Box<Self>,
+    },
+    Control(Option<HostedControl>),
+    SelfMeasuredControl(Option<HostedControl>),
+}
+
+impl HostedLayout {
+    pub(super) fn module(spec: ModuleHost<'_>) -> Self {
+        let ModuleHost {
+            instance,
+            module,
+            chrome,
+            collapsed,
+            drop,
+        } = spec;
+        Self::Chrome {
+            drop: drop.then(|| HostedControlPlan::crossing(instance)),
+            header: (chrome == ChromeStyle::Full)
+                .then(|| (format!("{instance}/header"), module.to_owned())),
+            collapsed,
+        }
+    }
+
+    pub(super) fn new(node: &ExpandedNode, ctx: Ctx<'_, '_>, skin: &Skin) -> Self {
+        let snapshot: &dyn Snapshot = &ctx;
+        match node {
+            ExpandedNode::Row {
+                size,
+                surface,
+                frame,
+                children,
+                ..
+            }
+            | ExpandedNode::Column {
+                size,
+                surface,
+                frame,
+                children,
+                ..
+            } => Self::Group {
+                sized: size.is_some(),
+                surfaced: surface.is_some(),
+                framed: frame.is_some(),
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, snapshot))
+                    .map(|child| Self::new(child, ctx, skin))
+                    .collect(),
+            },
+            ExpandedNode::Object { child, .. }
+            | ExpandedNode::Optional { child, .. }
+            | ExpandedNode::Reveal { child, .. } => Self::new(child, ctx, skin),
+            // An axis names a room only the layout pass knows, so every branch
+            // is mounted and the plan keeps them all. A measure that is read
+            // has its answer here, and only the branch it names is mounted.
+            ExpandedNode::Adaptive {
+                measure,
+                base,
+                steps,
+                ..
+            } => match measure.axis() {
+                Some(_) => Self::Measured {
+                    children: std::iter::once(base.as_ref())
+                        .chain(steps.iter().map(|(_, node)| node))
+                        .map(|node| Self::new(node, ctx, skin))
+                        .collect(),
+                },
+                None => Self::new(branch(measure, base, steps, snapshot), ctx, skin),
+            },
+            ExpandedNode::Slot { size, children, .. } => Self::Slot {
+                sized: size.is_some(),
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, snapshot))
+                    .map(|child| Self::new(child, ctx, skin))
+                    .collect(),
+            },
+            ExpandedNode::Stage { children, .. } => Self::Stage {
+                children: children
+                    .iter()
+                    .filter(|child| !is_hidden(*child, snapshot))
+                    .map(|child| Self::new(child, ctx, skin))
+                    .collect(),
+            },
+            ExpandedNode::Control {
+                path, spec, read, ..
+            } => {
+                let control = HostedControl::new(
+                    ctx.ui.resolve(*path),
+                    spec,
+                    read.as_ref().and_then(|binding| ctx.read(binding)),
+                    read.as_ref(),
+                    ctx.scope(read.as_ref()),
+                    Resolving { ctx, skin },
+                );
+                if effective_size(node, skin, snapshot).is_none() {
+                    Self::SelfMeasuredControl(control)
+                } else {
+                    Self::Control(control)
+                }
+            }
+            ExpandedNode::Popover { anchor, .. } => Self::Wrapper {
+                sized: effective_size(node, skin, snapshot).is_some(),
+                child: Box::new(Self::new(anchor, ctx, skin)),
+            },
+            ExpandedNode::Pressable { child, .. } => Self::Wrapper {
+                sized: effective_size(node, skin, snapshot).is_some(),
+                child: Box::new(Self::new(child, ctx, skin)),
+            },
+            // A placement keeps a layout node of its own and puts the child one
+            // level down in it, the way a viewport does.
+            ExpandedNode::Placed { child, .. } | ExpandedNode::Scroll { child, .. } => {
+                Self::Scroll {
+                    child: Box::new(Self::new(child, ctx, skin)),
+                }
+            }
+        }
+    }
+
+    pub(super) fn descriptors(&self) -> Vec<Descriptor> {
+        let mut descriptors = Vec::new();
+        self.append_descriptors(&mut descriptors);
+        descriptors
+    }
+
+    fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
+        match self {
+            Self::Chrome { drop, header, .. } => {
+                if let Some(plan) = drop {
+                    descriptors.append(&mut plan.descriptors());
+                }
+                if let Some((path, _)) = header {
+                    descriptors.push(Descriptor::activation(path.clone()));
+                }
+            }
+            Self::Group { children, .. }
+            | Self::Measured { children }
+            | Self::Slot { children, .. }
+            | Self::Stage { children, .. } => {
+                for child in children {
+                    child.append_descriptors(descriptors);
+                }
+            }
+            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
+                child.append_descriptors(descriptors);
+            }
+            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
+                append_control_descriptors(control, descriptors);
+            }
+            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn targets<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) -> Vec<Target<'a>> {
+        self.targets_with_engine(layout, cursor, None)
+    }
+
+    pub(super) fn targets_with_engine<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        engine: Option<&Engine>,
+    ) -> Vec<Target<'a>> {
+        let mut targets = Vec::new();
+        self.append_targets(layout, cursor, engine, &mut targets);
+        if let Some(engine) = engine {
+            self.append_open_picker_targets(engine, cursor, &mut targets);
+        }
+        targets
+    }
+
+    fn append_open_picker_targets<'a>(
+        &'a self,
+        engine: &Engine,
+        cursor: mouse::Cursor,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        for (path, item_count, item_height) in self.pickers() {
+            if !engine
+                .picker_snapshot(path)
+                .is_some_and(|snapshot| snapshot.open)
+            {
+                continue;
+            }
+            let Some(position) = targets
+                .iter()
+                .position(|target| target.path == path && target.index.is_none())
+            else {
+                continue;
+            };
+            let anchor = targets.remove(position);
+            let area = anchor.hit.area();
+            targets.push(anchor);
+            for region in picker_hits(area, item_height, item_count) {
+                let bounds = region.area();
+                targets.push(Target::item(
+                    path,
+                    iced_interact::hit(
+                        Rectangle {
+                            x: bounds.x,
+                            y: bounds.y,
+                            width: bounds.w,
+                            height: bounds.h,
+                        },
+                        cursor,
+                    ),
+                    *region.action(),
+                ));
+            }
+        }
+    }
+
+    pub(super) fn pickers(&self) -> Vec<(&str, usize, f32)> {
+        let mut pickers = Vec::new();
+        self.append_pickers(&mut pickers);
+        pickers
+    }
+
+    fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
+        match self {
+            Self::Group { children, .. }
+            | Self::Measured { children }
+            | Self::Slot { children, .. }
+            | Self::Stage { children, .. } => {
+                for child in children {
+                    child.append_pickers(pickers);
+                }
+            }
+            Self::Scroll { child, .. } | Self::Wrapper { child, .. } => {
+                child.append_pickers(pickers);
+            }
+            Self::Control(Some(control)) | Self::SelfMeasuredControl(Some(control)) => {
+                if let Some(picker) = control.picker() {
+                    pickers.push(picker);
+                }
+            }
+            Self::Chrome { .. } | Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+        }
+    }
+
+    pub(super) fn picker_snapshots<'a>(
+        &'a self,
+        engine: &Engine,
+    ) -> Vec<(&'a str, PickerSnapshot)> {
+        self.pickers()
+            .into_iter()
+            .filter_map(|(path, _, _)| {
+                engine
+                    .picker_snapshot(path)
+                    .map(|snapshot| (path, snapshot))
+            })
+            .collect()
+    }
+
+    fn append_targets<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        engine: Option<&Engine>,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        match self {
+            Self::Chrome {
+                drop,
+                header,
+                collapsed,
+            } => {
+                let shell = if let Some(plan) = drop {
+                    targets.push(Target::new(
+                        plan.path(),
+                        iced_interact::hit(layout.bounds(), cursor),
+                    ));
+                    let Some(shell) = first_child(layout) else {
+                        return;
+                    };
+                    shell
+                } else {
+                    layout
+                };
+                let Some((path, _)) = header else {
+                    return;
+                };
+                let Some(body) = first_child(shell) else {
+                    return;
+                };
+                let Some(content) = first_child(body) else {
+                    return;
+                };
+                let header = if *collapsed {
+                    content
+                } else {
+                    let Some(header) = first_child(content) else {
+                        return;
+                    };
+                    header
+                };
+                targets.push(Target::new(
+                    path,
+                    iced_interact::hit(header.bounds(), cursor),
+                ));
+            }
+            Self::Group {
+                sized,
+                surfaced,
+                framed,
+                children,
+            } => {
+                let Some(layout) = group_children(layout, *sized, *surfaced, *framed) else {
+                    return;
+                };
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
+            Self::Slot { sized, children } => {
+                let Some(layout) = slot_children(layout, *sized) else {
+                    return;
+                };
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
+            Self::Measured { children } | Self::Stage { children } => {
+                for (child, layout) in children.iter().zip(layout.children()) {
+                    child.append_targets(layout, cursor, engine, targets);
+                }
+            }
+            Self::Wrapper { sized, child } => {
+                let layout = if *sized {
+                    let Some(layout) = first_child(layout) else {
+                        return;
+                    };
+                    layout
+                } else {
+                    layout
+                };
+                child.append_targets(layout, cursor, engine, targets);
+            }
+            Self::Scroll { child } => {
+                let cursor = if engine.is_some_and(Engine::captures_pointer) {
+                    cursor
+                } else {
+                    clipped(cursor, layout.bounds())
+                };
+                let Some(layout) = first_child(layout) else {
+                    return;
+                };
+                child.append_targets(layout, cursor, engine, targets);
+            }
+            Self::Control(Some(control)) => {
+                let Some(layout) = first_child(layout) else {
+                    return;
+                };
+                append_control_targets(control, layout, cursor, engine, targets);
+            }
+            Self::SelfMeasuredControl(Some(control)) => {
+                append_control_targets(control, layout, cursor, engine, targets);
+            }
+            Self::Control(None) | Self::SelfMeasuredControl(None) => {}
+        }
+    }
+
+    pub(super) fn header_module<'a>(&'a self, path: &str) -> Option<&'a str> {
+        match self {
+            Self::Chrome {
+                header: Some((header, module)),
+                ..
+            } if header == path => Some(module),
+            Self::Chrome { .. }
+            | Self::Group { .. }
+            | Self::Measured { .. }
+            | Self::Scroll { .. }
+            | Self::Slot { .. }
+            | Self::Stage { .. }
+            | Self::Wrapper { .. }
+            | Self::Control(_)
+            | Self::SelfMeasuredControl(_) => None,
+        }
+    }
+}
+pub(super) fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let panel = layout.children().nth(1)?;
+    first_child(panel)
+}
+
+pub(super) fn tree_search_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {
+    let search = layout.children().next()?;
+    let row = first_child(search)?;
+    row.children().nth(1)
+}
+
+pub(super) fn group_children(
+    mut layout: Layout<'_>,
+    sized: bool,
+    surfaced: bool,
+    framed: bool,
+) -> Option<Layout<'_>> {
+    if sized {
+        layout = first_child(layout)?;
+    }
+    if surfaced {
+        layout = first_child(layout)?;
+    }
+    if framed {
+        layout = first_child(first_child(layout)?)?;
+    }
+    first_child(layout)
+}
+
+pub(super) fn slot_children(mut layout: Layout<'_>, sized: bool) -> Option<Layout<'_>> {
+    if sized {
+        layout = first_child(layout)?;
+    }
+    first_child(layout)
+}
+
+pub(super) fn first_child(layout: Layout<'_>) -> Option<Layout<'_>> {
+    layout.children().next()
+}
+
+/// The pointer as the children of one box see it: itself while it is inside
+/// that box, and nothing at all while it is outside. A child laid out past the
+/// edge of a viewport is not under a pointer that never entered it, whatever
+/// the child's own layout still says its box is.
+pub(super) fn clipped(cursor: mouse::Cursor, bounds: Rectangle) -> mouse::Cursor {
+    match cursor.position() {
+        Some(point) if bounds.contains(point) => cursor,
+        Some(_) | None => mouse::Cursor::Unavailable,
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -184,7 +616,7 @@ mod tests {
     use super::*;
     use crate::{
         builtin,
-        expand::{Binding, BindingKind, BlockSpec, MeasureSpec},
+        expand::{Binding, BindingKind, BlockSpec, ControlSpec, MeasureSpec},
         ids::{InternId, Interner, SourceUri},
         module::{PopoverAlign, PopoverAt},
         size::{DEFAULTS, Snapshot},
@@ -219,14 +651,18 @@ mod tests {
         );
     }
 
-    #[kithara::test]
-    fn content_size_follows_both_declared_axes() {
+    fn timed(size: Option<SizeSpec>) -> (Skin, ExpandedNode) {
         let origin = SourceUri("tree-test.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let mut interner = Interner::new(1024);
         let id = interner.intern("cell", &origin).unwrap();
-        let node = |size| ExpandedNode::Control {
+        let node = ExpandedNode::Control {
             path: id,
             id,
             spec: ControlSpec::Time,
@@ -234,29 +670,24 @@ mod tests {
             read: None,
             write: None,
         };
+        (skin, node)
+    }
+
+    #[kithara::test]
+    fn a_declared_box_reaches_both_axes_unchanged() {
+        let declared = SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink);
+        let (skin, node) = timed(Some(declared));
+
+        assert_eq!(effective_size(&node, &skin, DEFAULTS), Some(declared));
+    }
+
+    #[kithara::test]
+    fn a_control_declaring_no_box_takes_the_one_its_skin_names() {
+        let (skin, node) = timed(None);
 
         assert_eq!(
-            content_size(
-                &node(Some(SizeSpec::new(Dim::Shrink, Dim::Shrink))),
-                &skin,
-                DEFAULTS,
-            ),
-            (Length::Shrink, Length::Shrink)
-        );
-        assert_eq!(
-            content_size(
-                &node(Some(SizeSpec::new(Dim::Fixed(40.0), Dim::Shrink))),
-                &skin,
-                DEFAULTS,
-            ),
-            (Length::Fixed(40.0), Length::Shrink)
-        );
-        assert_eq!(
-            content_size(&node(None), &skin, DEFAULTS),
-            (
-                length_for(skin.document().deck.time_size.w, Length::Fill),
-                length_for(skin.document().deck.time_size.h, Length::Fill)
-            )
+            effective_size(&node, &skin, DEFAULTS),
+            Some(skin.document().deck.time_size)
         );
     }
 
@@ -292,8 +723,13 @@ mod tests {
     #[kithara::test]
     fn a_wrapper_over_an_adaptive_node_measures_the_selected_branch() {
         let origin = SourceUri("tree-test.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let mut interner = Interner::new(1024);
         let narrow = SizeSpec::new(Dim::Fixed(34.0), Dim::Fixed(45.0));
         let wide = SizeSpec::new(Dim::Fixed(68.0), Dim::Fixed(45.0));
@@ -334,8 +770,13 @@ mod tests {
     #[kithara::test]
     fn a_popover_measures_its_anchor_and_a_pressable_its_child() {
         let origin = SourceUri("tree-test.ron".to_owned());
-        let skin =
-            Skin::resolve(builtin::skin_doc().clone(), builtin::text_doc(), &origin).unwrap();
+        let skin = Skin::resolve(
+            builtin::skin_doc().clone(),
+            builtin::text_doc(),
+            &origin,
+            &builtin::resolver(),
+        )
+        .unwrap();
         let mut interner = Interner::new(1024);
         let anchor = SizeSpec::new(Dim::Fixed(36.0), Dim::Fixed(36.0));
         let content = SizeSpec::new(Dim::Fixed(298.0), Dim::Fixed(400.0));
@@ -373,6 +814,38 @@ mod tests {
             Some(ColorRole::LineHi)
         );
         assert_eq!(active_tone(None, None, true), None);
+    }
+
+    /// A corner the layout says is the window's takes the radius the skin gives
+    /// the window.
+    #[kithara::test]
+    fn a_window_corner_takes_the_skin_radius() {
+        let skin = builtin::skin();
+
+        let radius = corner_radius(
+            FrameCorners {
+                top_left: true,
+                ..FrameCorners::EMPTY
+            },
+            skin,
+        );
+
+        assert_eq!(radius.top_left, skin.chrome.frame.radius);
+    }
+
+    /// Every other corner of the same box stays square, however far the skin
+    /// rounds the window.
+    #[kithara::test]
+    fn a_corner_the_layout_leaves_out_stays_square() {
+        let radius = corner_radius(
+            FrameCorners {
+                top_left: true,
+                ..FrameCorners::EMPTY
+            },
+            builtin::skin(),
+        );
+
+        assert_eq!(radius.top_right, 0.0);
     }
 
     #[kithara::test]

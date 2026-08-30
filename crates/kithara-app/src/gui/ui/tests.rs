@@ -1,18 +1,78 @@
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{cell::RefCell, collections::BTreeSet, path::Path};
 
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compiled_min},
+    error::UiDocError,
     expand::{ControlSpec, ExpandedNode},
-    module::{MeasureAxis, TextAlign, TextStyle},
-    render::{ReadValue, Reads, tree},
+    ids::SourceUri,
+    module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, WaveStyle},
+    render::{Clock, ReadValue, Reads, tree},
     size::{Dim, SizeSpec, control_size},
 };
 
-use super::{cache::DeckLayout, compile::compile_ui, events::route, scope::MICRO_DECK};
+use super::{
+    cache::DeckLayout,
+    compile::{AppUi, compile_ui},
+    events::route,
+    package::Package,
+    scope::MICRO_DECK,
+};
 
 const LAYOUTS: [DeckLayout; 2] = [DeckLayout::Single, DeckLayout::Dual];
+
+const SINGLE_HOSTED_CLAIMS: [(&str, &str); 15] = [
+    ("deck-a/next", "activation"),
+    ("deck-a/play", "activation"),
+    ("deck-a/prev", "activation"),
+    ("deck-a/wave", "hero-wave"),
+    ("deck-a/zoom-in", "activation"),
+    ("deck-a/zoom-out", "activation"),
+    ("mixer/a/four-band/high-4", "knob"),
+    ("mixer/a/four-band/high-mid-4", "knob"),
+    ("mixer/a/four-band/low-4", "knob"),
+    ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/three-band/high-3", "knob"),
+    ("mixer/a/three-band/low-3", "knob"),
+    ("mixer/a/three-band/mid-3", "knob"),
+    ("mixer/a/volume", "vertical-vu"),
+    ("overview/a/wave", "wave"),
+];
+
+const DUAL_HOSTED_CLAIMS: [(&str, &str); 31] = [
+    ("deck-a/next", "activation"),
+    ("deck-a/play", "activation"),
+    ("deck-a/prev", "activation"),
+    ("deck-a/wave", "hero-wave"),
+    ("deck-a/zoom-in", "activation"),
+    ("deck-a/zoom-out", "activation"),
+    ("deck-b/next", "activation"),
+    ("deck-b/play", "activation"),
+    ("deck-b/prev", "activation"),
+    ("deck-b/wave", "hero-wave"),
+    ("deck-b/zoom-in", "activation"),
+    ("deck-b/zoom-out", "activation"),
+    ("mixer/a/four-band/high-4", "knob"),
+    ("mixer/a/four-band/high-mid-4", "knob"),
+    ("mixer/a/four-band/low-4", "knob"),
+    ("mixer/a/four-band/low-mid-4", "knob"),
+    ("mixer/a/three-band/high-3", "knob"),
+    ("mixer/a/three-band/low-3", "knob"),
+    ("mixer/a/three-band/mid-3", "knob"),
+    ("mixer/a/volume", "vertical-vu"),
+    ("mixer/b/four-band/high-4", "knob"),
+    ("mixer/b/four-band/high-mid-4", "knob"),
+    ("mixer/b/four-band/low-4", "knob"),
+    ("mixer/b/four-band/low-mid-4", "knob"),
+    ("mixer/b/three-band/high-3", "knob"),
+    ("mixer/b/three-band/low-3", "knob"),
+    ("mixer/b/three-band/mid-3", "knob"),
+    ("mixer/b/volume", "vertical-vu"),
+    ("mixer/xfade", "crossfader"),
+    ("overview/a/wave", "wave"),
+    ("overview/b/wave", "wave"),
+];
 
 fn each_expanded(node: &ExpandedNode, visit: &mut impl FnMut(&ExpandedNode)) {
     visit(node);
@@ -150,6 +210,48 @@ fn drop_targets(ui: &CompiledUi) -> Vec<(&str, Vec<&str>)> {
         }
     }
     out
+}
+
+fn engine_descriptor_kind(spec: &ControlSpec) -> Option<&'static str> {
+    match spec {
+        ControlSpec::Button {
+            icon: Some(IconName::PlayReverse),
+            style,
+            ..
+        } if *style != ButtonStyle::MicroPrimary => None,
+        ControlSpec::Button { .. } | ControlSpec::Toggle | ControlSpec::Checkbox => {
+            Some("activation")
+        }
+        ControlSpec::Crossfader { .. } => Some("crossfader"),
+        ControlSpec::Knob { .. } => Some("knob"),
+        ControlSpec::VuStereo => Some("stereo-meter"),
+        ControlSpec::VuVertical { .. } => Some("vertical-vu"),
+        ControlSpec::Wave {
+            style: WaveStyle::Hero,
+            ..
+        } => Some("hero-wave"),
+        ControlSpec::Wave { .. } => Some("wave"),
+        _ => None,
+    }
+}
+
+fn hosted_engine_claims(ui: &CompiledUi) -> Vec<(&str, &'static str)> {
+    let mut claims = Vec::new();
+    each_node(ui, &mut |node| {
+        let ExpandedNode::Control { path, spec, .. } = node else {
+            return;
+        };
+        let path = ui.resolve(*path);
+        if (path.starts_with("deck-")
+            || path.starts_with("mixer/")
+            || path.starts_with("overview/"))
+            && let Some(kind) = engine_descriptor_kind(spec)
+        {
+            claims.push((path, kind));
+        }
+    });
+    claims.sort_unstable();
+    claims
 }
 
 #[kithara::test]
@@ -321,7 +423,7 @@ fn list_min(pane: &ExpandedNode) -> f32 {
     let mut found = None;
     each_expanded(pane, &mut |node| {
         if let ExpandedNode::Control { spec, size, .. } = node
-            && matches!(spec, ControlSpec::TrackList { .. })
+            && matches!(spec, ControlSpec::Table { .. })
         {
             found = Some(size.unwrap_or_else(|| control_size(spec, builtin::skin_doc())));
         }
@@ -729,7 +831,14 @@ impl BandReads {
             seen: RefCell::default(),
         };
 
-        drop(tree::render(&ui.root, &ui, &reads, builtin::skin()));
+        drop(tree::render(
+            &ui.root,
+            &ui,
+            &reads,
+            builtin::skin(),
+            Clock::default(),
+            None,
+        ));
 
         reads.seen.take()
     }
@@ -823,6 +932,23 @@ fn every_eq_bank_carries_its_pointer_menu() {
 }
 
 #[kithara::test]
+fn hosted_studio_controls_claimed_by_the_engine_keep_descriptor_shapes() {
+    for layout in LAYOUTS {
+        let ui = compile_ui(layout).unwrap();
+        let expected = match layout {
+            DeckLayout::Single => SINGLE_HOSTED_CLAIMS.as_slice(),
+            DeckLayout::Dual => DUAL_HOSTED_CLAIMS.as_slice(),
+        };
+        assert_eq!(
+            hosted_engine_claims(&ui),
+            expected,
+            "{layout:?}: the engine-claimed descriptor inventory changed; unported controls, \
+             passive controls, and containers are intentionally absent"
+        );
+    }
+}
+
+#[kithara::test]
 fn eq_banks_stack_their_knobs_from_high_to_low() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let paths = control_paths(&ui);
@@ -899,7 +1025,7 @@ fn tempo_and_volume_controls_bind_to_the_deck_they_address() {
 }
 
 #[kithara::test]
-fn the_deck_tempo_block_is_the_only_writer_of_the_deck_tempo() {
+fn the_hosted_deck_tempo_surface_remains_on_iced() {
     let ui = compile_ui(DeckLayout::Dual).unwrap();
     let mut writers: Vec<&str> = controls(&ui)
         .into_iter()
@@ -916,7 +1042,7 @@ fn the_deck_tempo_block_is_the_only_writer_of_the_deck_tempo() {
         let key = format!("deck.tempo.rate@deck={letter}");
         assert!(
             surfaces.contains(&(path.as_str(), key.as_str())),
-            "the tempo block must catch the wheel for deck {letter}, got {surfaces:?}"
+            "hosted deck {letter} must keep its still-iced tempo wheel surface, got {surfaces:?}"
         );
     }
 }
@@ -1232,8 +1358,8 @@ fn the_bar_carries_the_app_menu() {
             ("bar/menu/burger", "ui.menu.toggle"),
             ("bar/menu/header-close", "ui.menu.close"),
             ("bar/menu/layouts-head", "ui.menu.toggle_group@group=lay"),
-            ("bar/menu/layout-1", "ui.layout.apply@layout=1"),
-            ("bar/menu/layout-2", "ui.layout.apply@layout=2"),
+            ("bar/menu/layout-1/apply", "ui.layout.apply@layout=1"),
+            ("bar/menu/layout-2/apply", "ui.layout.apply@layout=2"),
             ("bar/menu/full-screen", "ui.window.toggle_full_screen"),
             ("bar/menu/cast", "broadcast.toggle"),
         ] {
@@ -1280,4 +1406,128 @@ fn each_deck_picks_its_own_stream_quality() {
             }
         }
     }
+}
+
+/// The package this application ships is read from disk the way a release
+/// reads it, so drift between the documents on disk and what the build
+/// embeds cannot hide behind the embedded copy.
+#[kithara::test]
+fn the_shipped_package_compiles_from_disk() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui");
+    let package = Package::load(Some(&root)).expect("the shipped package must load from disk");
+    drop(AppUi::new(package).expect("the shipped package must compile from disk"));
+}
+
+/// A path the screen does not answer on is named, rather than left to be
+/// found by pressing where nothing is.
+///
+/// This is the check that stands between a package and a window that draws a
+/// player which cannot play: the screen compiles either way, and only the
+/// paths it answers on say whether the application can reach it.
+#[kithara::test]
+fn a_path_the_screen_does_not_answer_on_is_named() {
+    let ui = compile_ui(DeckLayout::Dual).expect("the shipped screen must compile");
+    let origin = SourceUri("app.klayout.ron".to_owned());
+
+    let error = ui
+        .require_paths(&["deck-a/play", "deck-a/eject"], &origin)
+        .expect_err("a screen answering on no eject path must be refused");
+
+    assert!(
+        matches!(&error, UiDocError::MissingPaths { paths, .. } if paths == &["deck-a/eject"]),
+        "the refusal must name the path the screen does not answer on, not {error}"
+    );
+}
+
+/// Nothing laid out is not a defect: the documents this build carries draw,
+/// which is what a developer running from a build directory sees.
+#[kithara::test]
+fn a_package_path_that_was_never_laid_out_leaves_the_built_in_documents_drawing() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ui-that-was-never-laid-out");
+    let package = Package::load(Some(&root)).expect("a package nobody laid out must load");
+    drop(AppUi::new(package).expect("a package nobody laid out must leave the build drawing"));
+}
+
+/// A package dresses the pages it ships: the skin its manifest names is the
+/// one every page is compiled and painted against, which is what lets a
+/// package change how the application looks without a rebuild.
+#[kithara::test]
+fn the_skin_the_manifest_names_is_the_one_the_pages_wear() {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    std::fs::write(
+        root.path().join("package.kpackage.ron"),
+        r#"(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    skin: "kithara-neon.kskin.ron",
+    text: "app-en.ktext.ron",
+    screens: {
+        "deck-dual": "app.klayout.ron",
+        "deck-single": "app-single.klayout.ron",
+    },
+)"#,
+    )
+    .expect("the manifest must be written");
+    let package = Package::load(Some(root.path())).expect("a package naming a skin must load");
+    assert_eq!(
+        package.skin().document().id.0,
+        "kithara-neon",
+        "the manifest names the neon skin"
+    );
+}
+
+/// A package that names no skin wears the built-in one rather than refusing to
+/// load, so a package may carry pages and nothing else.
+#[kithara::test]
+fn a_package_naming_no_skin_wears_the_built_in_one() {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    std::fs::write(
+        root.path().join("package.kpackage.ron"),
+        r#"(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    screens: {
+        "deck-dual": "app.klayout.ron",
+        "deck-single": "app-single.klayout.ron",
+    },
+)"#,
+    )
+    .expect("the manifest must be written");
+    let package = Package::load(Some(root.path())).expect("a package naming no skin must load");
+    assert_eq!(
+        package.skin().document().id,
+        builtin::skin().document().id,
+        "a package naming no skin wears the built-in one"
+    );
+}
+
+/// What the disk says about a role wins over what the build embeds: a manifest
+/// laid out beside the executable is the one that answers.
+#[kithara::test]
+fn a_manifest_on_disk_answers_before_the_one_this_build_embeds() {
+    let root = tempfile::tempdir().expect("a temporary package root");
+    std::fs::write(
+        root.path().join("package.kpackage.ron"),
+        r#"(
+    schema: "kithara.package",
+    version: 1,
+    id: "kithara-app",
+    contract: 1,
+    screens: {
+        "deck-dual": "app.klayout.ron",
+    },
+)"#,
+    )
+    .expect("the manifest must be written");
+    let Err(error) = Package::load(Some(root.path())) else {
+        panic!("the disk manifest names one role only, so this must not compile");
+    };
+    assert!(
+        matches!(&error, UiDocError::MissingRole { role, .. } if role == "deck-single"),
+        "the disk manifest must be the one asked for the missing role, got {error}"
+    );
 }

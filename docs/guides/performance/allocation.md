@@ -72,6 +72,28 @@ let mut buf = self.sample_pool.get_with(|b| { b.clear(); b.resize(frames * chann
 
 *tier: hot | detector: `perf.prefer-primitive-pool` / `perf.no-global-pool-accessor` (ast-grep) | already-enforced*
 
+**Layout and draw scratch**
+
+A UI crate has no `PcmPool`, and its passes run for every frame that resizes a
+document, so `perf.reuse-layout-scratch` covers `kithara-ui` and `kithara-app`
+in place of `perf.prefer-primitive-pool`. It names the primitive type only
+(`Vec<usize>`, `vec![true; n]`, the turbofish forms): an untyped
+`collect::<Vec<_>>()` in these crates almost always collects widgets, brushes,
+or nodes, which no pool would own. A buffer that leaves as an `Arc<[T]>`,
+`Rc<[T]>` or `Box<[T]>` escapes and is not covered either.
+
+```rust
+// bad -- rebuilt for every layout of every flow
+let slots: Vec<usize> = standing.iter().enumerate().filter_map(..).collect();
+// good -- the retained widget, or the state its tree keeps, owns the storage
+state.slots.clear();
+state.slots.extend(standing.iter().enumerate().filter_map(..));
+// good -- a list walked once is not a list
+fn check(steps: impl IntoIterator<Item = f32>) { .. }
+```
+
+*tier: hot | detector: `perf.reuse-layout-scratch` (ast-grep) | already-enforced*
+
 **format! for concat / owned compare**
 
 ```rust
