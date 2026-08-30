@@ -28,13 +28,12 @@ use kithara_integration_tests::{
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{read_to_eof, read_until_samples},
-    signal_pcm::{Finite, SignalPcm, signal},
     waits::{wait_for_event, wait_until},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 const D: SawWav = SawWav::DEFAULT;
 
@@ -45,17 +44,16 @@ fn create_wav_init_segment(data_size: usize) -> Vec<u8> {
     // so it relies solely on the byte source EOF — and at a variant switch
     // that races into the decoder emitting one padded packet past the true
     // tail (`position > duration`). A concrete size pins the exact end.
-    create_wav_header(D.sample_rate, D.channels, Some(data_size))
+    signal::header(D.sample_rate, D.channels, Some(data_size))
 }
 
 fn create_pcm_segments(segment_count: usize) -> Vec<u8> {
-    SignalPcm::new(
-        signal::Sawtooth,
+    Vec::from(Pcm::new(
         D.sample_rate,
         D.channels,
-        Finite::from_segments(segment_count, D.segment_size, D.channels),
-    )
-    .into_vec()
+        frames_in_segments(segment_count, D.segment_size, D.channels),
+        Wave::Sawtooth,
+    ))
 }
 
 fn segment_duration_secs() -> f64 {

@@ -19,10 +19,11 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::PcmPattern,
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
-    pcm_provenance::{FrameClass, Replay, ascending_phase_replays, classify_windows},
     temp_dir,
+};
+use kithara_test_fixtures::signal::{
+    FrameClass, Replay, ascending_phase_replays, classify_windows, goertzel_magnitude,
 };
 
 const SAMPLE_RATE: u32 = 44_100;

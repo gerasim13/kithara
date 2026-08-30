@@ -1,0 +1,84 @@
+use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
+use kithara_test_macros as kithara;
+
+use crate::signal::{Pcm, Wave};
+
+struct Consts;
+
+impl Consts {
+    const CHANNELS: u16 = 2;
+    const ONE_SECOND_FRAMES: usize = 44_100;
+    const SAMPLE_RATE: u32 = 44_100;
+    const SIX_SECOND_FRAMES: usize = 264_600;
+    const TONE_HZ: f64 = 440.0;
+    const TONE_PEAK: i16 = 16_000;
+    const TWO_SECOND_FRAMES: usize = 88_200;
+}
+
+/// 440 Hz tone encoded to MPEG audio.
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
+#[case::a440_2s(Consts::TWO_SECOND_FRAMES, Consts::TONE_PEAK)]
+fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
+    let pcm = Pcm::new(
+        Consts::SAMPLE_RATE,
+        Consts::CHANNELS,
+        total_frames,
+        Wave::Sine {
+            hz: Consts::TONE_HZ,
+            peak,
+        },
+    );
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Mp3,
+        bit_rate: None,
+    })
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: MP3 encode failed: {error}"))
+    .bytes
+}
+
+/// A saw whose STREAMINFO leaves the frame count at zero, which is what the
+/// encoder writes when it cannot seek back over its own header. A decoder that
+/// reads zero there cannot know the duration, so a demuxer has to prove it
+/// opens without scanning to EOF — the contract the streaming-FLAC regressions
+/// hold. `signal_flac` backfills that field; this body is the one that must
+/// not have it.
+///
+/// Embedded because the browser suite reads it and wasm has no store.
+#[kithara::asset(ext = "flac", content_type = "audio/flac", embed)]
+#[case::saw_6s(Consts::SIX_SECOND_FRAMES)]
+fn flac_unknown_length(total_frames: usize) -> Vec<u8> {
+    let pcm = Pcm::new(
+        Consts::SAMPLE_RATE,
+        Consts::CHANNELS,
+        total_frames,
+        Wave::Sawtooth,
+    );
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Flac,
+        bit_rate: None,
+    })
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: FLAC encode failed: {error}"))
+    .bytes
+}
+
+/// Silence encoded losslessly into an MP4 container: the standalone ALAC body
+/// the Apple `AudioFileServices` path must decode.
+#[kithara::asset(ext = "m4a", content_type = "audio/mp4")]
+#[case::silence_1s(Consts::ONE_SECOND_FRAMES)]
+fn alac(total_frames: usize) -> Vec<u8> {
+    let pcm = Pcm::new(
+        Consts::SAMPLE_RATE,
+        Consts::CHANNELS,
+        total_frames,
+        Wave::Silence,
+    );
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Alac,
+        bit_rate: None,
+    })
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: ALAC encode failed: {error}"))
+    .bytes
+}

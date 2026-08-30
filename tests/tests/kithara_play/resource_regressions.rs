@@ -23,12 +23,15 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, HlsFixtureBuilder, TestServerHelper, TestTempDir,
-    create_wav_exact_bytes,
     fixture_protocol::PackagedSignal,
     hls_server::{HlsTestServer, HlsTestServerConfig},
     offline::{OfflineSession, resource_from_reader},
-    signal_pcm::signal,
     temp_dir,
+};
+use kithara_test_fixtures::{
+    SignalAsset,
+    assets::signal_mp3_track_sine440_187s,
+    signal::{self, Wave},
 };
 use tracing::info;
 
@@ -42,14 +45,13 @@ use crate::{
 
 struct Consts;
 impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = Shared::TEST_MP3_BYTES;
     const READ_TIMEOUT: Duration = Shared::READ_TIMEOUT;
     const HLS_SEGMENT_COUNT: usize = 3;
     const HLS_SEGMENT_SIZE: usize = Shared::SEGMENT_SIZE;
     const HLS_TOTAL_BYTES: usize = Self::HLS_SEGMENT_COUNT * Self::HLS_SEGMENT_SIZE;
     const HLS_SAMPLE_RATE: f64 = Shared::SAMPLE_RATE as f64;
     const HLS_CHANNELS: f64 = Shared::CHANNELS as f64;
-    /// Expected duration of test.mp3 (ffprobe: 187.102041s).
+    /// Expected duration of the generated `signal_mp3_track_sine440_187s` clip.
     const EXPECTED_DURATION_SECS: f64 = Shared::TEST_MP3_DURATION_SECS;
 }
 
@@ -88,7 +90,7 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
     let helper = TestServerHelper::new().await;
     let ok = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -315,11 +317,11 @@ async fn open_audio_hls_server() -> HlsTestServer {
     let segment_duration =
         Consts::HLS_SEGMENT_SIZE as f64 / (Consts::HLS_SAMPLE_RATE * Consts::HLS_CHANNELS * 2.0);
     HlsTestServer::new(HlsTestServerConfig {
-        custom_data: Some(Arc::new(create_wav_exact_bytes(
-            signal::Sawtooth,
+        custom_data: Some(Arc::new(signal::wav_of_size(
             44_100u32,
             2u16,
             Consts::HLS_TOTAL_BYTES,
+            Wave::Sawtooth,
         ))),
         segment_duration_secs: segment_duration,
         segment_size: Consts::HLS_SEGMENT_SIZE,
@@ -1061,7 +1063,8 @@ async fn stress_offline_crossfade_no_gaps() {
     let worker = play_worker_with_cancel(&region, master_cancel.child());
     let mut player = OfflinePlayer::new(SR);
 
-    let local_mp3 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
+    let media_dir = temp_dir();
+    let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
 
     let make_mp3 = |w: PlayWorker, s: AssetStore, cancel: CancelToken| {
         let p = local_mp3.clone();
@@ -1251,7 +1254,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(Consts::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
@@ -1321,7 +1324,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
     );
 }
 
-/// Local fixture (`assets/track.mp3` ~162s, packaged AAC HLS ~64s) through
+/// Local fixture (the generated ~187s MPEG clip, packaged AAC HLS ~64s) through
 /// `ResourceConfig` — same code path as kithara-app. Mirrors
 /// `live_remote_resource_decodes_with_duration` (now in
 /// `live_remote_network.rs`) but against `TestServerHelper`, so it stays in the
@@ -1358,7 +1361,7 @@ async fn local_resource_decodes_with_duration(
 ) {
     let helper = TestServerHelper::new().await;
     let url = match kind {
-        LocalKind::Mp3 => helper.asset("track.mp3"),
+        LocalKind::Mp3 => helper.signal(SignalAsset::MP3_SINE880_48K_162S),
         LocalKind::HlsAac => {
             let builder = HlsFixtureBuilder::new()
                 .variant_count(1)

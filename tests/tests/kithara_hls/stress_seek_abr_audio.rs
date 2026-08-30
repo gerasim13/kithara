@@ -8,17 +8,16 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, SignalDirection as Direction, TestServerHelper, TestTempDir, Xorshift64,
-    auto, detect_direction,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64, auto,
     fixture_protocol::{DelayRule, PcmPattern},
     hls_server::{HlsTestServer, HlsTestServerConfig},
-    phase_from_f32,
-    signal_pcm::{Finite, SignalPcm, signal},
-    wav::create_wav_header,
+};
+use kithara_test_fixtures::signal::{
+    self, Pcm, SignalDirection as Direction, Wave, detect_direction,
 };
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 struct Consts;
 impl Consts {
@@ -158,37 +157,31 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
     }];
     let (url, counter) = match fixture {
         AbrAudioFixture::WavFileLike => {
-            let init_segment = Arc::new(create_wav_header(
+            let init_segment = Arc::new(signal::header(
                 Consts::D.sample_rate,
                 Consts::D.channels,
                 None,
             ));
-            let v0_pcm = Arc::new(
-                SignalPcm::new(
-                    signal::Sawtooth,
-                    Consts::D.sample_rate,
+            let v0_pcm = Arc::new(Vec::from(Pcm::new(
+                Consts::D.sample_rate,
+                Consts::D.channels,
+                frames_in_segments(
+                    Consts::SEGMENT_COUNT,
+                    Consts::D.segment_size,
                     Consts::D.channels,
-                    Finite::from_segments(
-                        Consts::SEGMENT_COUNT,
-                        Consts::D.segment_size,
-                        Consts::D.channels,
-                    ),
-                )
-                .into_vec(),
-            );
-            let v1_pcm = Arc::new(
-                SignalPcm::new(
-                    signal::SawtoothDescending,
-                    Consts::D.sample_rate,
+                ),
+                Wave::Sawtooth,
+            )));
+            let v1_pcm = Arc::new(Vec::from(Pcm::new(
+                Consts::D.sample_rate,
+                Consts::D.channels,
+                frames_in_segments(
+                    Consts::SEGMENT_COUNT,
+                    Consts::D.segment_size,
                     Consts::D.channels,
-                    Finite::from_segments(
-                        Consts::SEGMENT_COUNT,
-                        Consts::D.segment_size,
-                        Consts::D.channels,
-                    ),
-                )
-                .into_vec(),
-            );
+                ),
+                Wave::SawtoothDescending,
+            )));
 
             info!(
                 init_size = init_segment.len(),
@@ -404,9 +397,9 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
             if frames >= 2 {
                 let mut break_count = 0;
                 for f in 1..frames {
-                    let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr_phase = signal::phase::units(buf[f * channels]);
+                    let expected = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                     if curr_phase != expected {
                         break_count += 1;
                     }
@@ -503,10 +496,10 @@ async fn stress_seek_abr_audio(#[case] fixture: AbrAudioFixture) {
 
             if frames >= 2 {
                 for f in 1..frames {
-                    let prev_phase = phase_from_f32(buf[(f - 1) * channels]);
-                    let curr_phase = phase_from_f32(buf[f * channels]);
-                    let expected_asc = (prev_phase + 1) % SawWav::SAW_PERIOD;
-                    let expected_desc = (prev_phase + SawWav::SAW_PERIOD - 1) % SawWav::SAW_PERIOD;
+                    let prev_phase = signal::phase::units(buf[(f - 1) * channels]);
+                    let curr_phase = signal::phase::units(buf[f * channels]);
+                    let expected_asc = (prev_phase + 1) % signal::SAW_PERIOD;
+                    let expected_desc = (prev_phase + signal::SAW_PERIOD - 1) % signal::SAW_PERIOD;
                     if curr_phase != expected_asc && curr_phase != expected_desc {
                         continuity_errors += 1;
                         if continuity_errors <= 3 {
