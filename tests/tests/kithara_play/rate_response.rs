@@ -7,18 +7,15 @@ use kithara::{
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
-    TestTempDir, disk_asset_store,
-    goertzel::goertzel_magnitude,
-    kithara,
+    TestTempDir, disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
-    wav::prepare_sine_wav,
 };
+use kithara_test_fixtures::{assets::signal_wav_sine440_60s, signal::goertzel_magnitude};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-const SOURCE_TONE_HZ: f64 = 440.0;
 const SLOW_RATE: f32 = 0.5;
 const FAST_RATE: f32 = 2.0;
 const SLOW_TONE_HZ: f64 = 220.0;
@@ -28,7 +25,6 @@ const TONE_DOMINANCE_RATIO: f64 = 4.0;
 const WARMUP_BLOCK_BUDGET: usize = 200;
 const RESPONSE_BLOCK_BUDGET: usize = 15;
 const RESPONSE_OBSERVATION_BLOCK_BUDGET: usize = 400;
-const FIXTURE_SECONDS: usize = 12;
 
 fn block_period() -> Duration {
     Duration::from_secs_f64(
@@ -101,20 +97,9 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     );
     harness.player().set_default_rate(SLOW_RATE);
 
-    let path = temp_dir.path().join(format!("live-rate-{backend}.wav"));
-    let fixture_frames =
-        FIXTURE_SECONDS * usize::try_from(SAMPLE_RATE).expect("fixture sample rate fits usize");
-    std::fs::write(
-        &path,
-        prepare_sine_wav(
-            SOURCE_TONE_HZ,
-            16_000,
-            fixture_frames,
-            SAMPLE_RATE,
-            CHANNELS,
-        ),
-    )
-    .expect("write cached sine fixture");
+    let path = signal_wav_sine440_60s()
+        .path()
+        .expect("generated sine fixture is stored on disk");
     let config = ResourceConfig::for_src(
         ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
