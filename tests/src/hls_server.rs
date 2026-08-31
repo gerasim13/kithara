@@ -887,6 +887,25 @@ pub fn mixed_codec_ladder_encrypted() -> HlsFixtureBuilder {
     })
 }
 
+/// Serves [`mixed_codec_ladder`], plain or encrypted, and hands back its
+/// master URL.
+///
+/// The two trees this ladder replaces differed only by encryption, so the
+/// suites that read both of them take the axis as a flag rather than as two
+/// separate setup paths.
+pub async fn mixed_codec_ladder_url(server: &TestServerHelper, encrypted: bool) -> Url {
+    let ladder = if encrypted {
+        mixed_codec_ladder_encrypted()
+    } else {
+        mixed_codec_ladder()
+    };
+    server
+        .create_hls(ladder)
+        .await
+        .expect("create the mixed-codec ladder")
+        .master_url()
+}
+
 fn packaged_plain_builder() -> HlsFixtureBuilder {
     HlsFixtureBuilder::new()
         .variant_count(3)

@@ -14,11 +14,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, abr_fast, auto, mixed_codec_ladder,
-    mixed_codec_ladder_encrypted, temp_dir,
+    TestServerHelper, TestTempDir, abr_fast, auto, mixed_codec_ladder_url, temp_dir,
 };
 use tracing::info;
-use url::Url;
 
 fn warmup_until_first_frame(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f32]) -> u64 {
     let mut warmup_samples = 0u64;
@@ -78,23 +76,6 @@ fn run_rapid_random_seeks(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f
     stats
 }
 
-/// The ladder both tests below open: the production-shaped 3 AAC + 1 FLAC
-/// spread, plain or AES-128. The FLAC variant is the far side of the codec
-/// boundary these tests exist to cross, and the length is what makes the
-/// deepest seek position above land inside the track.
-async fn ladder_url(server: &TestServerHelper, encrypted: bool) -> Url {
-    let ladder = if encrypted {
-        mixed_codec_ladder_encrypted()
-    } else {
-        mixed_codec_ladder()
-    };
-    server
-        .create_hls(ladder)
-        .await
-        .expect("create the ladder the seek stress runs over")
-        .master_url()
-}
-
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
 ///
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
@@ -116,7 +97,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = ladder_url(&server, encrypted).await;
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
     info!(label, %url, "Opening generated stream");
 
     let region = Region::default();
@@ -221,7 +202,7 @@ async fn seek_sequence_from_log_real_stream(
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = ladder_url(&server, encrypted).await;
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
     let region = Region::default();
     let worker = PlayWorker::new(
         PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
