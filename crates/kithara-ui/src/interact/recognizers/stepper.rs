@@ -1,7 +1,7 @@
 use kithara_platform::time::Instant;
 
 use super::{
-    super::{Hit, Input, Outcome, PointerInput, PointerPhase, Scroll},
+    super::{Hit, Input, Outcome, PointerInput, PointerOwnership, PointerPhase, Scroll},
     DoubleClick, wheel,
 };
 
@@ -51,8 +51,14 @@ impl Stepper {
                     self.drag = None;
                     return Outcome::set(StepEvent::Activate);
                 }
-                self.drag = Some(position.y);
-                Outcome::IGNORED
+                // Travel is measured against the event, never against the hit:
+                // the two are different spaces on a host that expresses the hit
+                // locally, and a drag that mixes them jumps by however far the
+                // surface stands from the window corner. The press leaves the
+                // event free for whoever else wants it, and only takes the
+                // pointer so the rest of the drag still arrives.
+                self.drag = Some(pointer.at.unwrap_or(position).y);
+                Outcome::IGNORED.with_ownership(PointerOwnership::Claim)
             }
             Input::Pointer(PointerInput {
                 phase: PointerPhase::Move,
@@ -67,9 +73,11 @@ impl Stepper {
                 }
                 Outcome::set(StepEvent::By(steps))
             }
-            Input::Pointer(pointer) if pointer.phase == PointerPhase::Up => {
+            Input::Pointer(pointer)
+                if matches!(pointer.phase, PointerPhase::Up | PointerPhase::Cancel) =>
+            {
                 if self.drag.take().is_some() {
-                    Outcome::captured()
+                    Outcome::captured().with_ownership(PointerOwnership::Release)
                 } else {
                     Outcome::IGNORED
                 }
@@ -214,8 +222,8 @@ mod tests {
 
         assert_eq!(
             stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
-            Outcome::IGNORED,
-            "a lone press arms the drag without taking the pointer"
+            Outcome::IGNORED.with_ownership(PointerOwnership::Claim),
+            "a lone press arms the drag and takes the pointer, leaving the event free"
         );
         assert_eq!(
             stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
@@ -228,7 +236,7 @@ mod tests {
         );
         assert_eq!(
             stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
-            Outcome::IGNORED,
+            Outcome::IGNORED.with_ownership(PointerOwnership::Claim),
             "the pair is spent, so the next press starts a new one"
         );
     }
@@ -240,7 +248,7 @@ mod tests {
 
         assert_eq!(
             stepper.on_input(pointer(PointerPhase::Down), &inside(), now),
-            Outcome::IGNORED
+            Outcome::IGNORED.with_ownership(PointerOwnership::Claim)
         );
         assert_eq!(
             stepper.on_input(moved(11.0), &at(11.0), now),
@@ -255,13 +263,55 @@ mod tests {
 
         assert_eq!(
             stepper.on_input(pointer(PointerPhase::Up), &at(27.0), now),
-            Outcome::captured(),
-            "release ends the drag"
+            Outcome::captured().with_ownership(PointerOwnership::Release),
+            "release ends the drag and gives the pointer back"
         );
         assert_eq!(
             stepper.on_input(moved(3.0), &at(3.0), now),
             Outcome::IGNORED,
             "travel after the release belongs to nobody"
+        );
+    }
+
+    /// A host that expresses the hit in the flow's own space still reports the
+    /// event in the window's. Travel measured across the two is the distance
+    /// between the spaces, not the distance the hand moved.
+    #[kithara::test]
+    fn the_press_measures_travel_against_the_event_and_not_the_local_hit() {
+        let mut stepper = Stepper::default();
+        let now = Instant::now();
+        let local = |y| Hit::new(Some(Pt { x: 40.0, y }), surface());
+
+        stepper.on_input(
+            Input::Pointer(mouse_input(
+                PointerPhase::Down,
+                Some(Pt { x: 40.0, y: 50.0 }),
+            )),
+            &local(10.0),
+            now,
+        );
+
+        assert_eq!(
+            stepper.on_input(moved(42.0), &local(2.0), now),
+            Outcome::set(StepEvent::By(8.0 * Stepper::DRAG_STEPS_PER_PIXEL)),
+        );
+    }
+
+    #[kithara::test]
+    fn a_cancelled_drag_gives_the_pointer_back_and_leaves_nothing_armed() {
+        let mut stepper = Stepper::default();
+        let now = Instant::now();
+
+        stepper.on_input(pointer(PointerPhase::Down), &inside(), now);
+
+        assert_eq!(
+            stepper.on_input(pointer(PointerPhase::Cancel), &inside(), now),
+            Outcome::captured().with_ownership(PointerOwnership::Release)
+        );
+        assert_eq!(
+            stepper.on_input(moved(3.0), &at(3.0), now),
+            Outcome::IGNORED,
+            "travel after the cancel belongs to nobody"
         );
     }
 
