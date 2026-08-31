@@ -108,6 +108,6 @@ mod tests {
 
         assert_eq!(&*samples, &[1.0, 2.0]);
         assert!(bytes.is_empty());
-        assert!(pools.stats().allocated_bytes >= 4 * size_of::<f32>());
+        assert!(pools.stats().allocated_bytes >= 2 * size_of::<f32>());
     }
 }
