@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod config;
 pub mod crossfade;
 pub mod deck;
+pub mod document;
 pub mod mix;
 pub mod pools;
 pub mod sources;
