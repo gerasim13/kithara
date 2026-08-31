@@ -1,3 +1,4 @@
+use kithara_bufpool::PoolError;
 use kithara_platform::time::Duration;
 
 use crate::{api::SlotId, session::SessionError};
@@ -103,6 +104,9 @@ pub enum PlayError {
 
     #[error("end of resource")]
     Eof,
+
+    #[error("playback buffer allocation failed: {0}")]
+    Pool(#[from] PoolError),
 
     #[error("audio session is gone: {reason}")]
     SessionGone { reason: &'static str },

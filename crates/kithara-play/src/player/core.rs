@@ -2,7 +2,7 @@ mod lifecycle;
 mod player;
 
 use delegate::delegate;
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_warp::WarpConfig;
@@ -21,11 +21,13 @@ use crate::{
     worker::{EngineLoad, PlayWorker},
 };
 
+type EnqueuedItem = (TrackId, Arc<str>, f64);
+
 /// Phase-neutral state shared across every player phase.
 ///
 /// Field order is drop order: `items` and `engine` release every registered
 /// track before this Player releases its [`PlayWorker`] clone.
-pub(crate) struct PlayerCore {
+pub(crate) struct PlayerCore<S> {
     /// Live shared cost meter of the audio engine (decode + effects).
     /// Constructed once and kept address-stable for the player's lifetime.
     pub(crate) engine_load: Arc<EngineLoad>,
@@ -35,9 +37,9 @@ pub(crate) struct PlayerCore {
     pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the
     /// worker owner drops.
-    pub(crate) engine: EngineImpl,
+    pub(crate) engine: EngineImpl<S>,
     /// Explicit shared playback worker. Declared after both resource owners.
-    pub(crate) worker: PlayWorker,
+    pub(crate) worker: PlayWorker<S>,
     pub(crate) gapless_mode: GaplessMode,
     /// Player-level underrun policy copied into every prepared resource.
     pub(crate) block_on_underrun: bool,
@@ -60,14 +62,14 @@ pub(crate) struct PlayerCore {
 /// `core` holds the phase-neutral fields. `phase` is declared first so it
 /// drops before `core.engine`.
 #[doc(hidden)]
-pub struct PlayerRuntime {
+pub struct PlayerRuntime<S> {
     lifecycle: PlayerLifecycle,
     operations: Mutex<()>,
     pub(crate) phase: Mutex<PlayerPhase>,
-    pub(crate) core: PlayerCore,
+    pub(crate) core: PlayerCore<S>,
 }
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S> {
     /// Minimum playback rate to prevent stalling.
     pub(crate) const MIN_PLAYBACK_RATE: f32 = PlayerParams::MIN_PLAYBACK_RATE;
 
@@ -115,16 +117,13 @@ impl PlayerRuntime {
             pub fn reserve_slots(&self, count: usize);
         }
         to self.core.worker {
-            /// Byte pool used for resources created by this player.
+            /// Typed pool facade used for resources created by this player.
             #[must_use]
-            pub fn byte_pool(&self) -> &BytePool;
-            /// Sample pool used by this player's audio engine.
-            #[must_use]
-            pub fn sample_pool(&self) -> &SamplePool;
+            pub fn pools(&self) -> &PoolRegion<S>;
         }
     }
 
-    pub(super) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
+    pub(super) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.with_open_result(|runtime| runtime.core.engine.attach_session(binding))
     }
 
@@ -163,23 +162,35 @@ impl PlayerRuntime {
         self.core.engine.cancel();
     }
 
-    pub(crate) fn enqueue_to_processor(&self, index: usize) -> Option<(TrackId, Arc<str>, f64)> {
-        let item = self.core.items.take_for_load(
+    pub(crate) fn enqueue_to_processor(
+        &self,
+        index: usize,
+    ) -> Result<Option<EnqueuedItem>, PlayError>
+    where
+        S: HasPool<f32>,
+    {
+        let Some(item) = self.core.items.take_for_load(
             index,
             self.core.engine.master_sample_rate(),
-            self.core.engine.sample_pool(),
-        )?;
+            self.core.engine.pools(),
+        )?
+        else {
+            return Ok(None);
+        };
         self.phase.lock().set_abr_handle(item.abr_handle);
         let src = Arc::clone(item.player_resource.src());
         let _ = self.send_to_slot(PlayerCmd::LoadTrack {
             item_id: item.item_id,
             resource: Box::new(item.player_resource),
         });
-        Some((item.item_id, src, item.duration_seconds))
+        Ok(Some((item.item_id, src, item.duration_seconds)))
     }
 
     /// Remove all items from the queue.
-    pub fn remove_all_items(&self) {
+    pub fn remove_all_items(&self)
+    where
+        S: HasPool<f32>,
+    {
         self.unarm_next();
         self.core.items.clear_all();
         self.set_status(PlayerStatus::Unknown);
@@ -190,7 +201,10 @@ impl PlayerRuntime {
 
     /// Remove item at index. Returns the removed resource, or `None` if out of
     /// bounds or already consumed.
-    pub fn remove_at(&self, index: usize) -> Option<Resource> {
+    pub fn remove_at(&self, index: usize) -> Option<Resource>
+    where
+        S: HasPool<f32>,
+    {
         self.unarm_next();
 
         self.core
@@ -221,7 +235,6 @@ mod tests {
     };
 
     use kithara_assets::AssetStore;
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
@@ -234,7 +247,9 @@ mod tests {
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
         player::{PlayerConfig, PlayerMember},
+        resource::{ResourceConfig, ResourceSrc},
         session::testing,
+        test_pools::{TestPools, pools},
     };
 
     #[derive(Clone, Copy)]
@@ -246,21 +261,19 @@ mod tests {
         StartsPaused,
     }
 
-    fn resource_config(input: &str) -> crate::resource::ResourceConfig {
-        let src = crate::resource::ResourceConfig::parse_src(input)
-            .expect("BUG: valid resource config source");
-        crate::resource::ResourceConfig::for_src(src)
-            .store(AssetStore::builder().build())
+    fn resource_config(input: &str) -> ResourceConfig<TestPools> {
+        let pools = pools();
+        let src = ResourceSrc::parse(input).expect("BUG: valid resource config source");
+        ResourceConfig::for_src(src)
+            .store(AssetStore::builder(pools).build())
             .build()
     }
 
-    fn worker() -> PlayWorker {
-        PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        )
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
-    fn player() -> PlayerImpl {
+    fn player() -> PlayerImpl<TestPools> {
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker())
@@ -665,14 +678,7 @@ mod tests {
                 .session(testing::test_session())
                 .build(),
         );
-        assert!(std::ptr::eq(
-            player.worker().byte_pool(),
-            worker.byte_pool()
-        ));
-        assert!(std::ptr::eq(
-            player.worker().sample_pool(),
-            worker.sample_pool()
-        ));
+        assert!(std::ptr::eq(player.worker().pools(), worker.pools()));
     }
 
     #[kithara::test]

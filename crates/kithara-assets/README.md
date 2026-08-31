@@ -14,16 +14,16 @@
 
 # kithara-assets
 
-Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *asset* is a logical source containing one or more semantic *resources*. An `AssetLayout` maps those values to `<asset_root>/<resource_path>`; callers cannot inject a preformed relative cache path. One cheap, `Arc`-backed `AssetStore` handle can be cloned into every file, HLS, playback, and analysis consumer while retaining one backend, layout registry, index set, and eviction policy.
+Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *asset* is a logical source containing one or more semantic *resources*. An `AssetLayout` maps those values to `<asset_root>/<resource_path>`; callers cannot inject a preformed relative cache path. One cheap, `Arc`-backed `AssetStore<S>` handle can be cloned into every file, HLS, playback, and analysis consumer while retaining one backend, layout registry, index set, eviction policy, and application-owned `PoolRegion<S>`.
 
 ## Role
 
-Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore` type (`Disk`/`Mem`) that internally composes decorators: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<...>>>>`.
+Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore<S>` type (`Disk`/`Mem`) that internally composes decorators: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<...>>>>`.
 
 ## Key types & entry points
 
-- `AssetStore` — the unified shared handle over `Disk` or `Memory` storage.
-- `AssetStore::builder()` — configures the store and its immutable layout registry.
+- `AssetStore<S>` - the unified shared handle over `Disk` or `Memory` storage.
+- `AssetStore::builder(pools)` - requires the application-owned `PoolRegion<S>` and configures the store and its immutable layout registry.
 - `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
 - `AssetSource` / `AssetResource` — semantic input to the selected layout.
 - `AssetScope` / `ResourceKey` — validated output used by cache operations.
@@ -36,10 +36,20 @@ Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-fil
 use kithara_assets::{
     AssetResource, AssetSource, AssetStore, StorageBackend,
 };
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+
+pool_schema! {
+    AppPools {
+        bytes: u8,
+    }
+}
 
 struct Protocol;
 
-let store = AssetStore::builder()
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(PoolConfig::builder().max_buffers(128).build())
+    .build()?;
+let store = AssetStore::builder(pools.clone())
     .backend(StorageBackend::Disk { root: cache_dir })
     .cancel(cancel.clone())
     .build();
@@ -62,6 +72,6 @@ let resource = store.acquire_resource(&key, None)?;
 
 ## Public contract
 
-The public storage contract is `AssetStore` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Construct one store with `AssetStore::builder()` and pass cheap clones of that handle to consumers.
+The public storage contract is `AssetStore<S>` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Define the closed pool schema at the application boundary, build its `PoolRegion<S>` once, construct the store with `AssetStore::builder(pools)`, and pass cheap clones of the store and region to consumers that share the same hard budget.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

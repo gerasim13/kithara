@@ -1,4 +1,4 @@
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{AudioCodec, ByteMap, ReaderInput};
 use kithara_test_utils::kithara;
@@ -14,6 +14,8 @@ use crate::{
     traits::BoxedSource,
 };
 
+pub(crate) const REQUIRED_INPUT: ReaderInput = ReaderInput::InitOnly;
+
 struct SegmentCursor {
     frames: Option<DecodedFrames>,
     read: SegmentReadState,
@@ -27,14 +29,14 @@ struct DecodedFrames {
 }
 
 /// fMP4 segment-aware demuxer.
-pub(crate) struct Fmp4SegmentDemuxer {
+pub(crate) struct Fmp4SegmentDemuxer<S> {
     segments: Arc<dyn ByteMap>,
     source: BoxedSource,
-    /// Host byte-buffer pool. Each segment cursor draws its read buffer
+    /// Host pool region. Each segment cursor draws its read buffer
     /// from here and returns it on drop, so a steady-state decode loop
     /// recycles one high-water allocation instead of mallocing per
     /// segment (and per variant-switch demuxer recreate).
-    byte_pool: BytePool,
+    pools: PoolRegion<S>,
     init: Fmp4InitInfo,
     cursor: Option<SegmentCursor>,
     track_info: TrackInfo,
@@ -48,7 +50,10 @@ pub(crate) struct Fmp4SegmentDemuxer {
     next_segment_index: u32,
 }
 
-impl Fmp4SegmentDemuxer {
+impl<S> Fmp4SegmentDemuxer<S>
+where
+    S: HasPool<u8>,
+{
     fn ensure_cursor(&mut self) -> EnsureCursor {
         if self.cursor.is_some() {
             return EnsureCursor::Ready;
@@ -58,7 +63,7 @@ impl Fmp4SegmentDemuxer {
         };
         self.next_segment_index = desc.segment_index.saturating_add(1);
         self.cursor = Some(SegmentCursor {
-            read: SegmentReadState::new(desc.byte_range, self.byte_pool.get()),
+            read: SegmentReadState::new(desc.byte_range, self.pools.get::<u8>()),
             frames: None,
             segment_index: desc.segment_index,
             variant_index: desc.variant_index,
@@ -110,7 +115,7 @@ impl Fmp4SegmentDemuxer {
     pub(crate) fn open(
         mut source: BoxedSource,
         segments: Arc<dyn ByteMap>,
-        byte_pool: BytePool,
+        pools: PoolRegion<S>,
     ) -> DecodeResult<Self> {
         let init_range = segments.init_segment_range();
         if init_range.is_empty() {
@@ -118,7 +123,7 @@ impl Fmp4SegmentDemuxer {
                 detail: "HLS init segment range not announced",
             });
         }
-        let mut init_state = SegmentReadState::new(init_range, byte_pool.get());
+        let mut init_state = SegmentReadState::new(init_range, pools.get::<u8>());
         if let FillStatus::Pending(_) = fill_segment_buffer(
             &mut source,
             &mut init_state,
@@ -126,7 +131,7 @@ impl Fmp4SegmentDemuxer {
         )? {
             return Err(DecodeError::Interrupted);
         }
-        let init = parse_init(&init_state.buffer, &byte_pool)?;
+        let init = parse_init(&init_state.buffer, &pools)?;
         let duration = compute_duration(&segments);
         let track_info = build_track_info(&init, duration);
         Ok(Self {
@@ -134,7 +139,7 @@ impl Fmp4SegmentDemuxer {
             track_info,
             source,
             segments,
-            byte_pool,
+            pools,
             next_segment_index: 0,
             cursor: None,
         })
@@ -146,7 +151,10 @@ enum EnsureCursor {
     Eof,
 }
 
-impl Demuxer for Fmp4SegmentDemuxer {
+impl<S> Demuxer for Fmp4SegmentDemuxer<S>
+where
+    S: HasPool<u8> + Send + Sync,
+{
     fn duration(&self) -> Option<Duration> {
         self.track_info.duration
     }
@@ -200,13 +208,6 @@ impl Demuxer for Fmp4SegmentDemuxer {
         }
     }
 
-    /// fMP4 construction reads only the init segment (moov/esds/STREAMINFO); the
-    /// landing media segment is read later by the first `next_frame`, so it is
-    /// not a construction prerequisite.
-    fn required_input() -> ReaderInput {
-        ReaderInput::InitOnly
-    }
-
     fn seek(&mut self, target: Duration, priming: CodecPriming) -> DecodeResult<DemuxSeekOutcome> {
         // WHY: back off to `target - warmup` for SBR/PS pre-roll (CONTEXT.md "Seek pre-roll and trim").
         let seek_target =
@@ -244,7 +245,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.cursor = Some(SegmentCursor {
             segment_index,
             variant_index,
-            read: SegmentReadState::new(desc.byte_range, self.byte_pool.get()),
+            read: SegmentReadState::new(desc.byte_range, self.pools.get::<u8>()),
             frames: None,
         });
         Ok(DemuxSeekOutcome::Landed {

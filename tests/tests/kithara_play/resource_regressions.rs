@@ -6,7 +6,6 @@ use std::{io::Read, num::NonZeroUsize};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ConsumerWakeMode, ReadOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     file::{File as FileSource, FileConfig, FileSrc},
     hls::{Hls, HlsConfig},
@@ -17,7 +16,7 @@ use kithara::{
     },
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, RegisteredAudio, Resource,
-        ResourceConfig,
+        ResourceConfig, ResourceSrc,
     },
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
@@ -36,6 +35,7 @@ use kithara_test_fixtures::{
 use tracing::info;
 
 use crate::{
+    bufpool_ext::{Pools, TestPools, pools},
     common::test_defaults::Consts as Shared,
     continuity::{
         CONTINUITY_BLOCK_FRAMES, CONTINUITY_SAMPLE_RATE, PlaybackProgressProbe,
@@ -55,13 +55,13 @@ impl Consts {
     const EXPECTED_DURATION_SECS: f64 = Shared::TEST_MP3_DURATION_SECS;
 }
 
-fn play_worker(region: &Region) -> PlayWorker {
-    PlayWorker::new(PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build())
+fn play_worker(pools: &Pools) -> PlayWorker<TestPools> {
+    PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build())
 }
 
-fn play_worker_with_cancel(region: &Region, cancel: CancelToken) -> PlayWorker {
+fn play_worker_with_cancel(pools: &Pools, cancel: CancelToken) -> PlayWorker<TestPools> {
     PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel)
             .build(),
     )
@@ -102,20 +102,18 @@ async fn mp3_endpoints() -> (url::Url, url::Url) {
     (ok.child_url("ok.mp3"), gone.url())
 }
 
-fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, region: &Region) -> AssetStore {
+fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, pools: &Pools) -> AssetStore<TestPools> {
     if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .pool(region.byte_pool())
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .max_assets(8)
             .build()
     } else {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().to_path_buf(),
             })
-            .pool(region.byte_pool())
             .build()
     }
 }
@@ -125,12 +123,12 @@ fn asset_store(temp_dir: &TestTempDir, ephemeral: bool, region: &Region) -> Asse
 /// shared audio worker handle.
 fn resource_config(
     url: &url::Url,
-    store: AssetStore,
+    store: AssetStore<TestPools>,
     backend: DecoderBackend,
     hint: Option<&str>,
-    worker: PlayWorker,
-) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).unwrap())
+    worker: PlayWorker<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).unwrap())
         .store(store)
         .maybe_hint(hint)
         .worker(worker)
@@ -145,10 +143,10 @@ fn resource_config(
 /// Open a resource with [`resource_config`] options; panics on error.
 async fn open_resource_full(
     url: &url::Url,
-    store: AssetStore,
+    store: AssetStore<TestPools>,
     backend: DecoderBackend,
     hint: Option<&str>,
-    worker: PlayWorker,
+    worker: PlayWorker<TestPools>,
 ) -> Resource {
     Resource::new(resource_config(url, store, backend, hint, worker))
         .await
@@ -157,8 +155,8 @@ async fn open_resource_full(
 
 async fn open_resource(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> Resource {
     open_resource_full(url, store, backend, Some("mp3"), worker).await
@@ -166,8 +164,8 @@ async fn open_resource(
 
 async fn open_resource_with_worker(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> Resource {
     open_resource_full(url, store, backend, Some("mp3"), worker).await
@@ -175,19 +173,19 @@ async fn open_resource_with_worker(
 
 fn resource_config_with_worker(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
-) -> ResourceConfig {
+) -> ResourceConfig<TestPools> {
     resource_config(url, store, backend, Some("mp3"), worker)
 }
 
 fn resource_config_no_hint(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
-) -> ResourceConfig {
+) -> ResourceConfig<TestPools> {
     resource_config(url, store, backend, None, worker)
 }
 
@@ -197,16 +195,19 @@ fn resource_config_no_hint(
 #[kithara::flash(true)]
 async fn warm_hls_worker(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let hls_config = HlsConfig::for_url(url.clone())
+        .store(store)
+        .pools(worker.pools().clone())
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -257,16 +258,19 @@ async fn warm_hls_worker(
 #[kithara::flash(true)]
 async fn warm_hls_worker_without_seek(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     backend: DecoderBackend,
 ) -> f64 {
     let wav_info = MediaInfo::builder()
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let hls_config = HlsConfig::for_url(url.clone()).store(store).build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let hls_config = HlsConfig::for_url(url.clone())
+        .store(store)
+        .pools(worker.pools().clone())
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
@@ -296,9 +300,16 @@ async fn warm_hls_worker_without_seek(
     }
 }
 
-async fn read_hls_stream_some(url: &url::Url, store: AssetStore) -> usize {
-    let config = HlsConfig::for_url(url.clone()).store(store).build();
-    let mut stream = Stream::<Hls>::new(config)
+async fn read_hls_stream_some(
+    url: &url::Url,
+    store: AssetStore<TestPools>,
+    pools: &Pools,
+) -> usize {
+    let config = HlsConfig::for_url(url.clone())
+        .store(store)
+        .pools(pools.clone())
+        .build();
+    let mut stream = Stream::<Hls<TestPools>>::new(config)
         .await
         .unwrap_or_else(|err| panic!("HLS stream should open for {}: {err}", url));
     let mut buf = [0_u8; 4096];
@@ -307,7 +318,11 @@ async fn read_hls_stream_some(url: &url::Url, store: AssetStore) -> usize {
 
 /// `no_block`: the synchronous HLS stream read crosses the platform gate that this regression exercises.
 #[kithara::allow_block]
-fn read_hls_stream_bytes(stream: &mut Stream<Hls>, buf: &mut [u8], url: &url::Url) -> usize {
+fn read_hls_stream_bytes(
+    stream: &mut Stream<Hls<TestPools>>,
+    buf: &mut [u8],
+    url: &url::Url,
+) -> usize {
     stream
         .read(buf)
         .unwrap_or_else(|err| panic!("HLS stream should read for {}: {err}", url))
@@ -342,21 +357,24 @@ async fn create_packaged_single_variant_fixture(codec: AudioCodec) -> (TestServe
 
 async fn open_packaged_hls_audio(
     url: &url::Url,
-    store: AssetStore,
-    worker: PlayWorker,
+    store: AssetStore<TestPools>,
+    worker: PlayWorker<TestPools>,
     _codec: AudioCodec,
     backend: DecoderBackend,
     wake_mode: ConsumerWakeMode,
-) -> RegisteredAudio<Stream<Hls>> {
-    let config =
-        AudioConfig::<Hls>::for_stream(HlsConfig::for_url(url.clone()).store(store).build())
-            .decoder(
-                kithara::audio::AudioDecoderConfig::builder()
-                    .backend(backend)
-                    .build(),
-            )
-            .consumer_wake_mode(wake_mode)
-            .build();
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
+    let hls = HlsConfig::for_url(url.clone())
+        .store(store)
+        .pools(worker.pools().clone())
+        .build();
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .consumer_wake_mode(wake_mode)
+        .build();
     let mut audio = worker
         .open(config)
         .await
@@ -365,7 +383,10 @@ async fn open_packaged_hls_audio(
     audio
 }
 
-async fn read_audio_some(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> usize {
+async fn read_audio_some(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    stage: &str,
+) -> usize {
     let deadline = Instant::now() + Consts::READ_TIMEOUT;
     let mut buf = [0.0f32; 4096];
 
@@ -446,7 +467,7 @@ async fn player_resource_repeated_unavailable_mp3_does_not_panic(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (ok_url, bad_url) = mp3_endpoints().await;
-    let region = Region::default();
+    let region = pools();
     let store = asset_store(&temp_dir, true, &region);
 
     let mut ok = open_resource(&ok_url, store.clone(), play_worker(&region), backend).await;
@@ -517,7 +538,7 @@ async fn player_resource_mp3_reopen_same_cache_keeps_backward_seek(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let (ok_url, _) = mp3_endpoints().await;
-    let region = Region::default();
+    let region = pools();
     let store = asset_store(&temp_dir, ephemeral, &region);
 
     let mut first = open_resource(&ok_url, store.clone(), play_worker(&region), backend).await;
@@ -580,7 +601,7 @@ async fn player_worker_hls_then_unavailable_mp3_then_mp3_recovery(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, bad_url) = mp3_endpoints().await;
-    let region = Region::default();
+    let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(play_worker(&region))
@@ -647,7 +668,7 @@ async fn shared_worker_hls_then_mp3_reopen_keeps_backward_seek_ephemeral(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
-    let region = Region::default();
+    let region = pools();
     let worker = play_worker(&region);
     let store = asset_store(&temp_dir, true, &region);
     let hls_url = hls_server.url("/master.m3u8");
@@ -754,8 +775,8 @@ async fn sequential_hls_warmup_does_not_poison_next_ephemeral_session(
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
-    let region_a = Region::default();
-    let region_b = Region::default();
+    let region_a = pools();
+    let region_b = pools();
     let worker_a_scope = CancelScope::new(None);
     let worker_a = play_worker_with_cancel(&region_a, worker_a_scope.token());
     let worker_b = play_worker(&region_b);
@@ -816,15 +837,17 @@ async fn sequential_hls_stream_sessions_do_not_poison_next_ephemeral_session() {
     let server_b = open_audio_hls_server().await;
     let temp_a = TestTempDir::new();
     let temp_b = TestTempDir::new();
-    let store_a = asset_store(&temp_a, false, &Region::default());
-    let store_b = asset_store(&temp_b, true, &Region::default());
+    let pools_a = pools();
+    let pools_b = pools();
+    let store_a = asset_store(&temp_a, false, &pools_a);
+    let store_b = asset_store(&temp_b, true, &pools_b);
     let hls_url_a = server_a.url("/master.m3u8");
     let hls_url_b = server_b.url("/master.m3u8");
 
-    let first_read = read_hls_stream_some(&hls_url_a, store_a).await;
+    let first_read = read_hls_stream_some(&hls_url_a, store_a, &pools_a).await;
     assert!(first_read > 0, "first HLS stream session must read bytes");
 
-    let second_read = read_hls_stream_some(&hls_url_b, store_b).await;
+    let second_read = read_hls_stream_some(&hls_url_b, store_b, &pools_b).await;
     assert!(second_read > 0, "second HLS stream session must read bytes");
 }
 
@@ -858,7 +881,7 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     use kithara_integration_tests::offline::OfflinePlayer;
 
     let (_server, url) = create_packaged_single_variant_fixture(codec).await;
-    let region = Region::default();
+    let region = pools();
     let store = asset_store(&temp_dir, false, &region);
 
     let mut progress_audio = open_packaged_hls_audio(
@@ -1006,7 +1029,7 @@ async fn player_worker_hls_then_mp3_reopen_keeps_backward_seek(
 
     let hls_server = open_audio_hls_server().await;
     let (ok_url, _) = mp3_endpoints().await;
-    let region = Region::default();
+    let region = pools();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(play_worker(&region))
@@ -1085,7 +1108,7 @@ async fn stress_offline_crossfade_no_gaps() {
     let block_budget = Duration::from_secs_f64(BLOCK as f64 / f64::from(SR));
 
     let hls_server = open_audio_hls_server().await;
-    let region = Region::default();
+    let region = pools();
     let store = asset_store(&temp_dir(), true, &region);
     let hls_url = hls_server.url("/master.m3u8");
 
@@ -1097,14 +1120,16 @@ async fn stress_offline_crossfade_no_gaps() {
     let media_dir = temp_dir();
     let local_mp3 = media_dir.write("track.mp3", signal_mp3_track_sine440_187s().bytes());
 
-    let make_mp3 = |w: PlayWorker, s: AssetStore, cancel: CancelToken| {
+    let make_mp3 = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let p = local_mp3.clone();
         async move {
+            let pools = w.pools().clone();
             let file_cfg = FileConfig::for_src(FileSrc::Local(p))
                 .store(s)
+                .pools(pools)
                 .cancel(cancel.clone())
                 .build();
-            let audio_cfg = AudioConfig::<FileSource>::for_stream(file_cfg)
+            let audio_cfg = AudioConfig::<FileSource<TestPools>>::for_stream(file_cfg)
                 .hint("mp3".to_string())
                 .cancel(cancel)
                 .build();
@@ -1113,18 +1138,20 @@ async fn stress_offline_crossfade_no_gaps() {
         }
     };
 
-    let make_hls = |w: PlayWorker, s: AssetStore, cancel: CancelToken| {
+    let make_hls = |w: PlayWorker<TestPools>, s: AssetStore<TestPools>, cancel: CancelToken| {
         let u = hls_url.clone();
         async move {
+            let pools = w.pools().clone();
             let wav_info = MediaInfo::builder()
                 .maybe_codec(Some(AudioCodec::Pcm))
                 .maybe_container(Some(ContainerFormat::Wav))
                 .build();
             let cfg = HlsConfig::for_url(u)
                 .store(s)
+                .pools(pools)
                 .cancel(cancel.clone())
                 .build();
-            let audio_config = AudioConfig::<Hls>::for_stream(cfg)
+            let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(cfg)
                 .media_info(wav_info)
                 .cancel(cancel)
                 .build();
@@ -1294,7 +1321,7 @@ async fn resource_mp3_no_hint_decodes_with_duration(
         Some(s) => handle.child_url(s),
         None => handle.url(),
     };
-    let region = Region::default();
+    let region = pools();
     let store = asset_store(&temp_dir, true, &region);
     let path = url.as_str();
 
@@ -1406,10 +1433,10 @@ async fn local_resource_decodes_with_duration(
                 .master_url()
         }
     };
-    let region = Region::default();
+    let region = pools();
     let store = asset_store(&temp_dir, true, &region);
-    let config: ResourceConfig =
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid URL"))
+    let config: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid URL"))
             .store(store)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()

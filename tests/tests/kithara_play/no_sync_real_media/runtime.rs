@@ -11,9 +11,10 @@ use kithara_integration_tests::offline::OfflineSession;
 use serde::Serialize;
 
 use super::{CHANNELS, Case, SEEK_POSITION_TOLERANCE_SECS, SOURCE_RATE};
+use crate::bufpool_ext::TestPools;
 
 pub(super) struct Deck {
-    pub(super) player: Arc<PlayerImpl>,
+    pub(super) player: Arc<PlayerImpl<TestPools>>,
     pub(super) reference: Resource,
     pub(super) reference_events: EventReceiver,
     pub(super) controls: Arc<StretchControls>,

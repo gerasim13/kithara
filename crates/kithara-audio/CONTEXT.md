@@ -28,10 +28,13 @@ rendered/presented synchronization.
 
 `kithara-signal` is the canonical owner of decoded-signal values
 (`AudioSpec`, `AudioChunkInfo`, `AudioChunk`) and pure sample/time math;
-`kithara-bufpool` owns `SamplePool` and `SampleBuffer`. This crate owns the
-runtime `AudioReader`, `AudioSource`, and observer protocols that transport
-those values. It does not mirror their fields or re-export them through a
-decoder-specific compatibility layer.
+`kithara-bufpool` owns `PoolRegion` and `SampleBuffer`. This crate consumes the
+injected `u8` and `f32` capabilities while preparing a track, then retains only
+checked sample guards in the cursor and gapless blender. Startup allocation is
+owned by the composition-root pool config, not by an audio pre-warm phase. This
+crate owns the runtime `AudioReader`, `AudioSource`, and observer protocols that
+transport those values. It does not mirror their fields or re-export them
+through a decoder-specific compatibility layer.
 
 Transport (`runtime/ports.rs`): generic SPSC `ringbuf::HeapRb` plus a one-slot
 overflow (`Outlet`/`Inlet`). The playback-facing `ProducerPort` uses the same

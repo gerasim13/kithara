@@ -22,7 +22,7 @@ use crate::{
         painter::{ControlPainter, IndexedVisual},
     },
     backends::replay_ordered_in,
-    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform, ink, union},
+    draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform, ink, union},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, iced as iced_interact,
         recognizers::{Crossing, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
@@ -50,7 +50,7 @@ where
 {
     data: Painter::Data,
     painter: Painter,
-    pools: Option<DrawPools>,
+    pools: Option<DrawBuffers>,
     text_resources: &'skin TextResources,
     transform: Transform,
 }
@@ -225,7 +225,7 @@ where
         painter: Painter,
         data: Painter::Data,
         skin: &'skin Skin,
-        pools: &DrawPools,
+        pools: &DrawBuffers,
     ) -> Self {
         Self {
             data,
@@ -313,7 +313,7 @@ where
         let mut builder = self
             .pools
             .as_ref()
-            .map_or_else(DrawListBuilder::default, DrawPools::list);
+            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
         builder.transformed(self.transform, |builder| {
             self.painter.draw(builder, text, &self.data, bounds, visual);
         });
@@ -331,7 +331,7 @@ where
         let mut builder = self
             .pools
             .as_ref()
-            .map_or_else(DrawListBuilder::default, DrawPools::list);
+            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
         builder.transformed(self.transform, |builder| {
             self.painter
                 .draw_indexed(builder, text, &self.data, bounds, visual);

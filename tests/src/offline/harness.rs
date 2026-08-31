@@ -1,7 +1,6 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    bufpool::Region,
     decode::GaplessMode,
     events::{Event, EventReceiver, PlayerEvent},
     platform::{
@@ -17,11 +16,12 @@ use kithara::{
 };
 
 use super::OfflineSession;
+use crate::bufpool_ext::{TestPools, pools};
 
 pub struct OfflinePlayerHarness {
     events: Mutex<EventReceiver>,
-    player: Mutex<Option<PlayerImpl>>,
-    player_control: PlayerControl,
+    player: Mutex<Option<PlayerImpl<TestPools>>>,
+    player_control: PlayerControl<TestPools>,
     session: Arc<OfflineSession>,
 }
 
@@ -45,11 +45,9 @@ pub struct OfflinePlayerOptions {
 impl OfflinePlayerHarness {
     pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher>;
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+        let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>;
+        let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
@@ -75,18 +73,18 @@ impl OfflinePlayerHarness {
         }
     }
 
-    pub const fn player(&self) -> &PlayerControl {
+    pub const fn player(&self) -> &PlayerControl<TestPools> {
         &self.player_control
     }
 
-    pub fn take_player(&self) -> PlayerImpl {
+    pub fn take_player(&self) -> PlayerImpl<TestPools> {
         self.player
             .lock()
             .take()
             .expect("offline harness player was already transferred")
     }
 
-    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerImpl) -> R) -> R {
+    pub fn with_player<R>(&self, use_player: impl FnOnce(&PlayerImpl<TestPools>) -> R) -> R {
         let player = self.player.lock();
         use_player(
             player

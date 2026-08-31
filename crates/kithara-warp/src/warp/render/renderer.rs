@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticCursor, ElasticEngine, ElasticError, ElasticSpanPlan, StretchKind};
@@ -29,7 +29,7 @@ pub(super) enum PreparedQuantum {
 /// Source-timeline exact-span time-stretch driven by shared live controls.
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
-pub struct WarpRenderer {
+pub struct WarpRenderer<S> {
     pub(super) controls: Arc<StretchControls>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     /// Engine displaced by a checked render failure. The scheduler shell
@@ -50,7 +50,7 @@ pub struct WarpRenderer {
     pub(super) applied_speed: SmoothedParam,
     /// Exact source coordinate committed with the applied speed after rendering.
     pub(super) exact_cursor: Option<ElasticCursor>,
-    pub(super) sample_pool: SamplePool,
+    pub(super) pools: PoolRegion<S>,
     pub(super) spec: AudioSpec,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: NonZeroUsize,
@@ -86,7 +86,10 @@ pub struct WarpRenderer {
     pub(super) rebuild_pending: bool,
 }
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
     pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
@@ -95,18 +98,18 @@ impl WarpRenderer {
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
-    pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, sample_pool: SamplePool) -> Self {
+    pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
         let speed = controls.speed();
-        let target = Self::prepare_target(current_kind, spec, &sample_pool, None, None);
+        let target = Self::prepare_target(current_kind, spec, &pools, None, None);
         Self {
             engine: target.engine,
             retired_engine: None,
             current_kind,
             controls,
-            sample_pool,
+            pools,
             spec,
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,

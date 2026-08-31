@@ -74,7 +74,8 @@ fn source_quantum_rejects_a_stationary_terminal_coordinate(#[case] backend: Stre
     let controls = StretchControls::new(0.5);
     controls.set_backend(backend);
     let mut fx = renderer(controls);
-    let mut meta = chunk(&sine(1)).meta;
+    let pools = fx.pools.clone();
+    let mut meta = chunk(&pools, &sine(1)).meta;
     meta.frame_offset = u64::MAX;
 
     assert!(fx.prepare_quantum(meta, 1).is_none());
@@ -101,16 +102,17 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
         .expect("one-frame regions are ordered and non-empty"),
     )));
     let mut fx = renderer(controls);
+    let pools = fx.pools.clone();
     let source = sine(4);
 
     for frame in 0..3_u64 {
         let start = usize::try_from(frame).unwrap_or_default() * usize::from(Consts::CH);
-        let mut input = chunk(&source[start..start + usize::from(Consts::CH)]);
+        let mut input = chunk(&pools, &source[start..start + usize::from(Consts::CH)]);
         input.meta.frame_offset = frame;
         assert!(render_serviced(&mut fx, input).is_none());
     }
 
-    let mut input = chunk(&source[3 * usize::from(Consts::CH)..]);
+    let mut input = chunk(&pools, &source[3 * usize::from(Consts::CH)..]);
     input.meta.frame_offset = 3;
     let output = render_serviced(&mut fx, input)
         .expect("the fourth source frame completes one output frame");
@@ -148,8 +150,9 @@ fn pending_span_continues_from_presented_frontier(#[case] backend: StretchKind) 
         .expect("fixture regions are contiguous"),
     )));
     let mut fx = renderer(controls);
+    let pools = fx.pools.clone();
     let source = sine(3);
-    let mut first = chunk(&source[..2 * usize::from(Consts::CH)]);
+    let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
     first.meta.end_timestamp = Duration::from_millis(20);
     first.meta.segment_index = Some(1);
     first.meta.variant_index = Some(1);
@@ -158,7 +161,7 @@ fn pending_span_continues_from_presented_frontier(#[case] backend: StretchKind) 
     first.meta.source_bytes = 20;
     let first_output = render_serviced(&mut fx, first).expect("first frame renders");
 
-    let mut second = chunk(&source[2 * usize::from(Consts::CH)..]);
+    let mut second = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     second.meta.frame_offset = 2;
     second.meta.timestamp = Duration::from_millis(20);
     second.meta.end_timestamp = Duration::from_millis(30);
@@ -199,6 +202,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let source_latency = fx
         .engine
         .as_ref()
@@ -218,9 +222,9 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
 
     let source = sine(source_latency + 2);
     let split = source_latency * usize::from(Consts::CH);
-    render_serviced(&mut fx, chunk(&source[..split])).expect("latency-sized span renders");
+    render_serviced(&mut fx, chunk(&pools, &source[..split])).expect("latency-sized span renders");
 
-    let mut input = chunk(&source[split..]);
+    let mut input = chunk(&pools, &source[split..]);
     input.meta.frame_offset = u64::try_from(source_latency).expect("source latency fits u64");
     let output = render_serviced(&mut fx, input).expect("the unity source frame renders");
 
@@ -247,13 +251,17 @@ fn pending_span_is_committed_before_resident_unity_render(#[case] backend: Stret
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let source = sine(3);
-    let mut pending = chunk(&source[..usize::from(Consts::CH)]);
+    let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
 
     controls.set_region_plan(None);
-    let mut unity = chunk(&source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)]);
+    let mut unity = chunk(
+        &pools,
+        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
+    );
     unity.meta.frame_offset = 1;
     unity.meta.timestamp = Duration::from_millis(10);
     unity.meta.end_timestamp = Duration::from_millis(20);
@@ -282,13 +290,15 @@ fn active_engine_remains_resident_at_live_unity(#[case] backend: StretchKind) {
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut live = renderer(Arc::clone(&controls));
-    render_serviced(&mut live, chunk(&source[..split])).expect("non-unity span emits samples");
+    let pools = live.pools.clone();
+    render_serviced(&mut live, chunk(&pools, &source[..split]))
+        .expect("non-unity span emits samples");
     let held_frontier = live
         .rendered_source_end()
         .expect("active render publishes its source frontier");
 
     controls.set_speed(1.0);
-    let mut unity = chunk(&source[split..]);
+    let mut unity = chunk(&pools, &source[split..]);
     unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let input_ptr = unity.samples.as_ptr();
     let output = render_serviced(&mut live, unity)
@@ -345,13 +355,14 @@ fn reset_discards_pending_span_before_new_timeline(#[case] backend: StretchKind)
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let source = sine(2);
-    assert!(render_serviced(&mut fx, chunk(&source[..usize::from(Consts::CH)])).is_none());
+    assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());
 
     fx.reset();
     controls.set_region_plan(None);
     fx.prepare(spec());
-    let mut landed = chunk(&source[usize::from(Consts::CH)..]);
+    let mut landed = chunk(&pools, &source[usize::from(Consts::CH)..]);
     landed.meta.frame_offset = 100;
     landed.meta.timestamp = Duration::from_secs(1);
     landed.meta.end_timestamp = Duration::from_millis(1_010);

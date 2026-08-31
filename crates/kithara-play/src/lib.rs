@@ -4,6 +4,8 @@
 
 mod error;
 mod guard;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 
 pub mod api;
 pub mod bridge;

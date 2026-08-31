@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_audio::{Audio, AudioSource, PreparedAudio, ResamplerBackend};
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{DecodeError, DecodeResult};
 use kithara_events::EventBus;
 use kithara_platform::{CancelGroup, CancelToken, sync::Arc};
@@ -21,11 +21,10 @@ use crate::effects::EffectDrain;
 
 static WORKER_ID: AtomicU64 = AtomicU64::new(1);
 
-struct WorkerOwner {
+struct WorkerOwner<S> {
     dispatcher: Dispatcher,
     base: Worker,
-    byte_pool: BytePool,
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
 }
 
 /// Explicit owner of the playback dispatcher.
@@ -33,20 +32,18 @@ struct WorkerOwner {
 /// Clones share one OS thread and one scheduler loop. Dropping a Player only
 /// releases that clone; the final owner shuts down its dispatcher and releases
 /// its base-worker clone.
-#[derive(Clone)]
-pub struct PlayWorker(Arc<WorkerOwner>);
+pub struct PlayWorker<S>(Arc<WorkerOwner<S>>);
 
-impl PlayWorker {
+impl<S> PlayWorker<S> {
     /// Construct the sole playback-worker implementation.
     #[must_use]
-    pub fn new(config: PlayWorkerConfig) -> Self {
+    pub fn new(config: PlayWorkerConfig<S>) -> Self {
         let PlayWorkerConfig {
-            byte_pool,
             cancel,
             capacity,
             fairness_yield_interval,
             idle_timeout,
-            sample_pool,
+            pools,
             slow_tick_threshold,
             task_burst,
             wait_timeout,
@@ -76,17 +73,37 @@ impl PlayWorker {
         Self(Arc::new(WorkerOwner {
             dispatcher,
             base,
-            byte_pool,
-            sample_pool,
+            pools,
         }))
     }
 
+    /// Shared typed pool facade used by every registered Player/resource.
+    #[must_use]
+    pub fn pools(&self) -> &PoolRegion<S> {
+        &self.0.pools
+    }
+
+    pub(crate) fn flush_deferred(&self) {
+        self.0.dispatcher.wake_handle().flush_deferred();
+    }
+}
+
+impl<S> Clone for PlayWorker<S> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<S> PlayWorker<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Prepare and register a stream-backed audio reader on this worker.
     ///
     /// # Errors
     ///
     /// Returns decode/setup errors or a typed worker registration failure.
-    pub async fn open<T, B, C>(&self, config: C) -> DecodeResult<RegisteredAudio<Stream<T>>>
+    pub async fn open<T, B, C>(&self, config: C) -> DecodeResult<RegisteredAudio<Stream<T>, S>>
     where
         T: StreamType<Events = EventBus>,
         B: Default + ResamplerBackend,
@@ -100,36 +117,31 @@ impl PlayWorker {
         } = config.into();
         let task_cancel = audio.cancel().cloned();
         let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared = Audio::<Stream<T>>::prepare(
-            audio,
-            Arc::new(wake),
-            self.byte_pool().clone(),
-            self.sample_pool().clone(),
-        )
-        .await?;
+        let prepared =
+            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
+        let drain = EffectDrain::new(effects.len(), self.pools())?;
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
-            let drain = EffectDrain::new(effects.len(), self.byte_pool());
             let source = WarpSource::new(
                 source,
-                warp.renderer(spec, self.sample_pool().clone()),
+                warp.renderer(spec, self.pools().clone()),
                 effects,
                 drain,
                 spec,
-                self.sample_pool().clone(),
+                self.pools().clone(),
             );
             (warp, source)
         });
         self.register(prepared, engine_load, task_cancel)
     }
 
-    fn register<S, P>(
+    fn register<T, P>(
         &self,
-        prepared: PreparedAudio<Warp<Audio<S>>, P>,
+        prepared: PreparedAudio<Warp<Audio<T>>, P>,
         engine_load: Option<Arc<EngineLoad>>,
         cancel: Option<CancelToken>,
-    ) -> DecodeResult<RegisteredAudio<S>>
+    ) -> DecodeResult<RegisteredAudio<T, S>>
     where
         P: AudioSource<Chunk = kithara_signal::AudioChunk>,
     {
@@ -148,51 +160,32 @@ impl PlayWorker {
             TrackLease::new(self.clone(), task),
         ))
     }
-
-    pub(crate) fn flush_deferred(&self) {
-        self.0.dispatcher.wake_handle().flush_deferred();
-    }
-
-    delegate::delegate! {
-        to self.0 {
-            /// Shared byte pool used by every registered Player/resource.
-            #[field(&byte_pool)]
-            #[must_use]
-            pub fn byte_pool(&self) -> &BytePool;
-            /// Shared sample pool used by every registered Player/resource.
-            #[field(&sample_pool)]
-            #[must_use]
-            pub fn sample_pool(&self) -> &SamplePool;
-        }
-    }
 }
 
-impl fmt::Debug for PlayWorker {
+impl<S> fmt::Debug for PlayWorker<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PlayWorker")
             .field("base_cancelled", &self.0.base.is_cancelled())
-            .field("byte_pool", self.byte_pool())
-            .field("sample_pool", self.sample_pool())
+            .field("pools", self.pools())
             .finish_non_exhaustive()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::Region;
     use kithara_platform::CancelScope;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::pools;
 
     #[kithara::test]
     fn shared_base_outlives_play_dispatcher_and_play_cancel_stays_local() {
         let base = Worker::new(WorkerConfig::new());
         let cancel = CancelScope::new(None);
-        let region = Region::default();
         let play = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+            PlayWorkerConfig::builder(pools())
                 .worker(base.clone())
                 .cancel(cancel.token())
                 .build(),

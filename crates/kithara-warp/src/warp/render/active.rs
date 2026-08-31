@@ -1,9 +1,13 @@
+use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 
 use super::renderer::WarpRenderer;
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn render_active(
         &mut self,
@@ -109,7 +113,7 @@ impl WarpRenderer {
             }
             scratch
                 .ensure_len(end)
-                .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+                .map_err(|_| ElasticError::PoolCapacity)?;
             let source = self
                 .pending_source
                 .as_deref()

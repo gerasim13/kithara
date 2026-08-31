@@ -73,9 +73,7 @@ measurement, while `kithara-warp` owns the resident Warp renderer.
 use kithara_audio::{
     AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
 };
-use kithara_bufpool::Region;
 use kithara_decode::GaplessMode;
-use kithara_hls::{Hls, HlsConfig};
 use kithara_play::{PlayWorker, PlayWorkerConfig};
 
 let decoder_config = AudioDecoderConfig::builder()
@@ -86,15 +84,12 @@ let decoder_config = AudioDecoderConfig::builder()
             .build(),
     )
     .build();
-let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
+let audio_config = AudioConfig::for_stream(hls_config)
     .host_sample_rate(sample_rate)
     .decoder(decoder_config)
     .build();
 
-let region = Region::default();
-let worker = PlayWorker::new(
-    PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-);
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 let mut audio = worker.open(audio_config).await?;
 ```
 

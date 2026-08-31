@@ -1,10 +1,14 @@
 use delegate::delegate;
+use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
 use kithara_play::{EngineLoadSnapshot, EqBandConfig, PlayError, PlayerStatus};
 
 use super::QueueControl;
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Underlying event bus used by queue and player events.
     #[must_use]
     pub fn bus(&self) -> &EventBus {

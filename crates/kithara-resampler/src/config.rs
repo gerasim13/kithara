@@ -1,7 +1,10 @@
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::PoolRegion;
 
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode};
 
@@ -39,12 +42,12 @@ impl Default for ResamplerOptions {
     }
 }
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct ResamplerSettings {
+pub struct ResamplerSettings<S> {
     pub channels: NonZeroUsize,
-    pub sample_pool: SamplePool,
+    pub pools: PoolRegion<S>,
     pub mode: ResamplerMode,
     #[builder(default)]
     pub options: ResamplerOptions,
@@ -52,7 +55,31 @@ pub struct ResamplerSettings {
     pub quality: ResamplerQuality,
 }
 
-impl ResamplerSettings {
+impl<S> Clone for ResamplerSettings<S> {
+    fn clone(&self) -> Self {
+        Self {
+            channels: self.channels,
+            pools: self.pools.clone(),
+            mode: self.mode,
+            options: self.options,
+            quality: self.quality,
+        }
+    }
+}
+
+impl<S> fmt::Debug for ResamplerSettings<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResamplerSettings")
+            .field("channels", &self.channels)
+            .field("pools", &self.pools)
+            .field("mode", &self.mode)
+            .field("options", &self.options)
+            .field("quality", &self.quality)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S> ResamplerSettings<S> {
     /// Validate the config without constructing a backend.
     ///
     /// # Errors
@@ -68,15 +95,39 @@ impl ResamplerSettings {
     }
 }
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct ResamplerConfig<B> {
+pub struct ResamplerConfig<B, S> {
     pub backend: B,
-    pub settings: ResamplerSettings,
+    pub settings: ResamplerSettings<S>,
 }
 
-impl<B> ResamplerConfig<B>
+impl<B, S> Clone for ResamplerConfig<B, S>
+where
+    B: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            settings: self.settings.clone(),
+        }
+    }
+}
+
+impl<B, S> fmt::Debug for ResamplerConfig<B, S>
+where
+    B: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResamplerConfig")
+            .field("backend", &self.backend)
+            .field("settings", &self.settings)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B, S> ResamplerConfig<B, S>
 where
     B: ResamplerBackend,
 {
@@ -91,10 +142,10 @@ where
     }
 }
 
-pub(crate) fn validate_settings(
+pub(crate) fn validate_settings<S>(
     backend: &'static str,
     capabilities: ResamplerCapabilities,
-    settings: &ResamplerSettings,
+    settings: &ResamplerSettings<S>,
 ) -> Result<(), ResamplerBuildError> {
     validate_options(settings.options)?;
     validate_mode(backend, capabilities, settings.mode)?;
@@ -174,15 +225,17 @@ fn validate_ratio(resource: &'static str, ratio: f64) -> Result<(), ResamplerBui
 mod tests {
     use std::num::{NonZeroU32, NonZeroUsize};
 
-    use kithara_bufpool::SamplePool;
+    use kithara_bufpool::HasPool;
     use kithara_test_utils::kithara;
 
     use crate::{
         ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerConfig,
-        ResamplerMode, ResamplerOptions, ResamplerSettings, backend::NoResampler,
+        ResamplerMode, ResamplerOptions, ResamplerSettings,
+        backend::NoResampler,
+        test_pools::{TestPools, pools},
     };
 
-    #[derive(Clone)]
+    #[derive(Clone, Debug)]
     struct TestBackend {
         capabilities: ResamplerCapabilities,
     }
@@ -199,10 +252,13 @@ mod tests {
     impl ResamplerBackend for TestBackend {
         type Resampler = NoResampler;
 
-        fn build(
+        fn build<S>(
             &self,
-            _settings: &ResamplerSettings,
-        ) -> Result<Self::Resampler, ResamplerBuildError> {
+            _settings: &ResamplerSettings<S>,
+        ) -> Result<Self::Resampler, ResamplerBuildError>
+        where
+            S: HasPool<f32>,
+        {
             Err(ResamplerBuildError::BackendBuild {
                 backend: self.name(),
                 detail: "test backend has no processor".into(),
@@ -256,7 +312,7 @@ mod tests {
                 chunk_size: 0,
                 ..ResamplerOptions::default()
             })
-            .sample_pool(SamplePool::new(4, 4_096))
+            .pools(pools())
             .build();
         let config = ResamplerConfig::builder()
             .backend(TestBackend::fixed())
@@ -271,21 +327,24 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn standalone_config_uses_injected_pool() {
-        let pool = SamplePool::new(4, 4_096);
+        let pools = pools();
         let settings = ResamplerSettings::builder()
             .channels(stereo())
             .mode(ResamplerMode::FixedRatio {
                 source_sample_rate: sample_rate(44_100),
                 target_sample_rate: sample_rate(48_000),
             })
-            .sample_pool(pool.clone())
+            .pools(pools.clone())
             .build();
         let config = ResamplerConfig::builder()
             .backend(TestBackend::fixed())
             .settings(settings)
             .build();
 
-        assert_eq!(config.settings.sample_pool.stats(), pool.stats());
+        let _: &ResamplerSettings<TestPools> = &config.settings;
+        assert_eq!(config.settings.pools.stats(), pools.stats());
+        assert_eq!(config.clone().settings.pools.stats(), pools.stats());
+        assert!(format!("{config:?}").contains("ResamplerConfig"));
         assert!(config.validate().is_ok());
     }
 }

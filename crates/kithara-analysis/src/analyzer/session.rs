@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioChunk;
 use num_traits::cast::ToPrimitive;
@@ -24,7 +25,7 @@ pub(crate) enum Ingest {
     OutOfExtent,
 }
 
-pub(crate) struct TrackAnalyzers<B>
+pub(crate) struct TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
 {
@@ -38,11 +39,13 @@ where
     pub(super) ended: bool,
     pub(super) source_sample_rate: NonZeroU32,
     pub(super) token: AnalysisToken,
+    pub(super) pools: PoolRegion<S>,
 }
 
-impl<B> TrackAnalyzers<B>
+impl<B, S> TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32>,
 {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn coverage(&self) -> &Coverage {
@@ -63,11 +66,12 @@ where
         self.coverage.frames()
     }
 
-    delegate::delegate! {
-        to self.beat {
-            pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectionRequest>;
-            pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput);
-        }
+    pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectionRequest> {
+        self.beat.prepare_detection(&self.pools, trailing)
+    }
+
+    pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput) {
+        self.beat.apply_detection(output);
     }
 
     pub(crate) fn push(
@@ -124,8 +128,21 @@ where
         }
         self.coverage.insert(range);
 
-        waveform::push(&mut self.waveform, pcm, channels, range.start());
-        Slot::push(&mut self.beat, pcm, channels, range.start(), detector);
+        waveform::push(
+            &mut self.waveform,
+            &self.pools,
+            pcm,
+            channels,
+            range.start(),
+        );
+        Slot::push(
+            &mut self.beat,
+            &self.pools,
+            pcm,
+            channels,
+            range.start(),
+            detector,
+        );
         Ingest::Accepted
     }
 
@@ -149,7 +166,7 @@ where
 
         let waveform = waveform::snapshot(&mut self.waveform, self.extent);
         let state = self.beat_state();
-        let beat = Slot::snapshot(&mut self.beat, detector, ending, self.extent)
+        let beat = Slot::snapshot(&mut self.beat, &self.pools, detector, ending, self.extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
         TrackAnalysis::builder()
@@ -201,8 +218,8 @@ where
         {
             return Err(BlobError::Corrupt);
         }
-        waveform::restore(&mut self.waveform, resume.waveform)?;
-        self.beat.restore(resume.beat)?;
+        waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
+        self.beat.restore(&self.pools, resume.beat)?;
         self.coverage = analysis.coverage().clone();
         self.extent = analysis.extent();
         self.revision = analysis.revision();

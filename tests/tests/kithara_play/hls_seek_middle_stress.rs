@@ -5,7 +5,7 @@ use kithara::{
     events::TrackId,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration},
-    play::{Resource, ResourceConfig},
+    play::{Resource, ResourceConfig, ResourceSrc},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -16,7 +16,10 @@ use kithara_integration_tests::{
     waits::render_until_position,
 };
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    common::test_defaults::Consts as Shared,
+};
 
 struct Consts;
 impl Consts {
@@ -76,8 +79,12 @@ async fn hls_seek_middle_repeated_seeks_stress(
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     let mut player = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
@@ -86,18 +93,17 @@ async fn hls_seek_middle_repeated_seeks_stress(
         Consts::SAMPLE_RATE,
     );
 
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .downloader(downloader.clone())
-    .discriminator("t0")
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .build();
+    let cfg: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader.clone())
+            .discriminator("t0")
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .build();
     let cfg = player
         .player()
         .prepare_config(cfg)

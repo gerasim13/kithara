@@ -432,7 +432,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_events::{AudioEvent, Event, EventBus};
     use kithara_platform::sync::Arc;
     use kithara_signal::{AudioChunk, AudioChunkInfo};
@@ -440,13 +439,13 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::audio::{Fetch, ring::create_channels};
+    use crate::{
+        audio::{Fetch, ring::create_channels},
+        test_pools::{Pools, pools, sample_buffer},
+    };
 
-    fn empty_chunk() -> AudioChunk {
-        AudioChunk::new(
-            AudioChunkInfo::default(),
-            SamplePool::default().attach(Vec::new()),
-        )
+    fn empty_chunk(pools: &Pools) -> AudioChunk {
+        AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
     }
 
     #[kithara::test]
@@ -518,13 +517,14 @@ mod tests {
 
     #[kithara::test]
     fn output_available_event_fires_on_empty_to_nonempty_ring_transition() {
+        let pools = pools();
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
         let reader_wake = Arc::new(ThreadWake::default());
         let emit = AudioEvents::deferred(&bus);
         let (mut tx, mut rx) = create_channels(2, emit, &reader_wake);
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("first push reaches ring");
         assert!(events.try_recv().is_err());
         tx.flush_wake_signals();
@@ -533,7 +533,7 @@ mod tests {
             Ok(Event::Audio(AudioEvent::OutputAvailable))
         ));
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("second push reaches ring");
         tx.flush_wake_signals();
         assert!(events.try_recv().is_err());
@@ -541,7 +541,7 @@ mod tests {
         assert!(rx.try_pop().is_some());
         assert!(rx.try_pop().is_some());
 
-        tx.try_push(Fetch::data(empty_chunk(), 0))
+        tx.try_push(Fetch::data(empty_chunk(&pools), 0))
             .expect("third push reaches empty ring");
         tx.flush_wake_signals();
         assert!(matches!(

@@ -4,7 +4,6 @@ use kithara::{
         AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
         ReadOutcome,
     },
-    bufpool::Region,
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
@@ -24,6 +23,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, abr_fast, auto,
+    bufpool_ext::{Pools, TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
     flash_pace::virtual_pace,
     mixed_codec_ladder_url,
@@ -78,19 +78,19 @@ async fn create_packaged_abr_fixture() -> (TestServerHelper, url::Url) {
 }
 
 async fn open_packaged_hls_audio(
-    worker: &PlayWorker,
+    worker: &PlayWorker<TestPools>,
+    pools: &Pools,
     url: &url::Url,
-    store: AssetStore,
+    store: AssetStore<TestPools>,
     abr: AbrMode,
     bus: Option<EventBus>,
     wake_mode: ConsumerWakeMode,
-) -> RegisteredAudio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let cancel = CancelToken::never();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder()
-                .byte_pool(worker.byte_pool().clone())
-                .build(),
+            NetOptions::default(),
+            pools.clone(),
             cancel.child(),
         ))
         .abr_settings(abr_fast())
@@ -99,7 +99,7 @@ async fn open_packaged_hls_audio(
     );
     let hls_config = HlsConfig::for_url(url.clone())
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(abr)
         .download_batch_size(1)
         .cancel(cancel)
@@ -107,7 +107,7 @@ async fn open_packaged_hls_audio(
         .maybe_events(bus.clone())
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .maybe_events(bus)
         .consumer_wake_mode(wake_mode)
         .build();
@@ -120,7 +120,10 @@ async fn open_packaged_hls_audio(
     audio
 }
 
-async fn read_audio_some(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> usize {
+async fn read_audio_some(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    stage: &str,
+) -> usize {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut buf = [0.0f32; 4096];
 
@@ -159,27 +162,26 @@ async fn abr_switch_on_production_ladder_does_not_hang(temp_dir: TestTempDir) {
     let url = mixed_codec_ladder_url(&server, false).await;
 
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
@@ -229,21 +231,19 @@ async fn abr_switch_on_production_ladder_does_not_hang(temp_dir: TestTempDir) {
 )]
 async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let (_server, url) = create_packaged_abr_fixture().await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .pool(worker.byte_pool().clone())
         .build();
 
     let bus = EventBus::new(64);
     let mut hls_rx = bus.subscribe();
     let mut progress_audio = open_packaged_hls_audio(
         &worker,
+        &pools,
         &url,
         store.clone(),
         packaged_switch_abr_mode(),
@@ -362,10 +362,10 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     // offline render's `auto(0)` ABR then takes — after this the offline render
     // is a decode-from-cache path with no network stall to fall behind on.
     for variant in [0usize, 1usize] {
-        let warm_config = AudioConfig::<Hls>::for_stream(
+        let warm_config = AudioConfig::<Hls<TestPools>>::for_stream(
             HlsConfig::for_url(url.clone())
                 .store(store.clone())
-                .pool(worker.byte_pool().clone())
+                .pools(pools.clone())
                 .initial_abr_mode(AbrMode::manual(variant))
                 .download_batch_size(1)
                 .build(),
@@ -400,6 +400,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
 
     let decode_audio = open_packaged_hls_audio(
         &worker,
+        &pools,
         &url,
         store,
         packaged_switch_abr_mode(),
@@ -486,9 +487,9 @@ async fn stream_continues_after_seek(
     let label = if encrypted { "DRM" } else { "HLS" };
 
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -499,19 +500,18 @@ async fn stream_continues_after_seek(
     };
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(abr_mode)
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -598,27 +598,26 @@ async fn fixed_variant_on_production_ladder_plays_without_hang(temp_dir: TestTem
     let url = mixed_codec_ladder_url(&server, false).await;
 
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("create audio");
@@ -673,27 +672,26 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] enc
     let label = if encrypted { "DRM" } else { "HLS" };
 
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
@@ -764,22 +762,19 @@ async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
 
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let file_config = FileConfig::for_src(url.into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint(("mp3").to_string())
         .block_on_underrun(true)
         .build();
@@ -865,26 +860,23 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, false).await;
 
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = worker
         .open(
-            AudioConfig::<Hls>::for_stream(hls_config)
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
                 .build(),
         )
@@ -892,7 +884,9 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
         .expect("audio creation");
     let _ = audio.preload();
 
-    async fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>) -> Option<AudioChunk> {
+    async fn next_chunk(
+        audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    ) -> Option<AudioChunk> {
         loop {
             let _ = audio.preload();
             match AudioRead::next_chunk(audio) {
@@ -979,7 +973,7 @@ struct CrossCodecReadStats {
 
 #[kithara::flash(true)]
 fn read_manual_cross_codec_phase(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     hls_rx: &mut EventReceiver,
     post_target: u64,
 ) -> CrossCodecReadStats {
@@ -1087,23 +1081,22 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
 
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(auto(0))
@@ -1117,7 +1110,7 @@ async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestT
     // post-switch decoder stall then parks forever, the virtual clock cannot
     // pass the hang budget, and the `KITHARA_HANG_TIMEOUT_SECS=5` watchdog fires
     // — the flash-correct enforcement of the "no >5 s stall" contract.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus.clone())
         .block_on_underrun(true)
         .build();

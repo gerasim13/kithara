@@ -6,7 +6,7 @@ use kithara::{
     decode::{GaplessMode, SilenceTrimParams},
     events::TrackId,
     platform::time::{self, Duration, Instant},
-    play::{PlayerEvent, Resource, ResourceConfig},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
@@ -16,9 +16,12 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::signal::goertzel_magnitude;
 
-use crate::gapless_common::{
-    AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS,
-    AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+use crate::{
+    bufpool_ext::TestPools,
+    gapless_common::{
+        AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_SEGMENT_SECS, AAC_GAPLESS_SEGMENTS,
+        AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
+    },
 };
 
 const BLOCK_FRAMES: u32 = 512;
@@ -224,7 +227,7 @@ async fn seamless_queue_advance_overlaps_tracks_when_crossfade_is_non_zero(temp_
 }
 
 async fn create_gapless_hls_resource(
-    player: &kithara::play::player::PlayerControl,
+    player: &kithara::play::player::PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &std::path::Path,
     signal: PackagedSignal,
@@ -257,8 +260,8 @@ async fn create_gapless_hls_resource(
         .expect("create seamless queue HLS fixture");
 
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();

@@ -4,7 +4,6 @@ use kithara_audio::{
     AudioSource, Fetch, PreloadGate, ProducerPort, SourceEnd, TrackStep, WaitingReason,
     mock::AudioSourceMock,
 };
-use kithara_bufpool::{BytePool, SamplePool};
 use kithara_events::{AudioEvent, DeferredBus, Event, EventBus};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -21,14 +20,12 @@ use unimock::{MockFn, Unimock, matching};
 use super::*;
 use crate::{
     effects::EffectDrain,
+    test_pools::{Pools, pools, sample_buffer},
     worker::{EngineLoad, WarpSource},
 };
 
-fn empty_chunk() -> AudioChunk {
-    AudioChunk::new(
-        AudioChunkInfo::default(),
-        SamplePool::default().attach(Vec::new()),
-    )
+fn empty_chunk(pools: &Pools) -> AudioChunk {
+    AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
 }
 
 fn test_node<S>(
@@ -93,10 +90,11 @@ impl AudioSource for PersistentEofSource {
 
 #[kithara::test]
 fn decoder_node_eof_under_backpressure() {
+    let pools = pools();
     let gate = Arc::new(PreloadGate::default());
     let (mut port, mut pop) = ProducerPort::probe(1);
 
-    port.push_direct(Fetch::data(empty_chunk(), 0));
+    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
 
     let source = Unimock::new((
         AudioSourceMock::step_track.stub(|each| {
@@ -136,18 +134,19 @@ fn decoder_node_eof_under_backpressure() {
 
 #[kithara::test]
 fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
+    let pools = pools();
     let seek = Arc::new(SeekState::new());
     let source = PersistentEofSource {
         seek: Arc::clone(&seek),
     };
     let effects = Vec::new();
-    let drain = EffectDrain::new(effects.len(), &BytePool::default());
+    let drain = EffectDrain::new(effects.len(), &pools)
+        .unwrap_or_else(|error| panic!("test effect drain: {error}"));
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
     let config = kithara_warp::WarpConfig::builder().build();
     let warp = kithara_warp::Warp::new((), &config);
-    let sample_pool = SamplePool::default();
-    let renderer = warp.renderer(spec, sample_pool.clone());
-    let source = WarpSource::new(source, renderer, effects, drain, spec, sample_pool);
+    let renderer = warp.renderer(spec, pools.clone());
+    let source = WarpSource::new(source, renderer, effects, drain, spec, pools);
     let (port, mut pop) = ProducerPort::probe(1);
     let bus = EventBus::new(8);
     let mut events = bus.subscribe();
@@ -174,6 +173,7 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
 
 #[kithara::test]
 fn decoder_node_records_engine_load_on_produced() {
+    let pools = pools();
     use std::num::NonZero;
 
     use kithara_signal::AudioSpec;
@@ -191,7 +191,7 @@ fn decoder_node_records_engine_load_on_produced() {
             frames: 4_410,
             ..Default::default()
         },
-        SamplePool::default().attach(vec![0.0f32; 4_410 * 2]),
+        sample_buffer(&pools, &vec![0.0f32; 4_410 * 2]),
     );
     let source = Unimock::new(
         AudioSourceMock::step_track
@@ -362,10 +362,11 @@ fn eof_marker_and_deferred_event_keep_the_decode_epoch() {
 
 #[kithara::test]
 fn decoded_frontier_advances_only_after_final_port_admission() {
+    let pools = pools();
     let (mut port, mut pop) = ProducerPort::probe(1);
-    port.push_direct(Fetch::data(empty_chunk(), 0));
+    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
     let end = Duration::from_millis(750);
-    let mut chunk = empty_chunk();
+    let mut chunk = empty_chunk(&pools);
     chunk.meta.end_timestamp = end;
     let source = Unimock::new(
         AudioSourceMock::step_track
@@ -391,15 +392,16 @@ fn decoded_frontier_advances_only_after_final_port_admission() {
 
 #[kithara::test]
 fn source_end_commits_only_after_final_port_admission() {
+    let pools = pools();
     let (mut port, mut pop) = ProducerPort::probe(1);
-    port.push_direct(Fetch::data(empty_chunk(), 0));
+    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
     let source_end = SourceEnd::new(
         12_345,
         NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
     );
     let commits = Arc::new(Mutex::new(Vec::new()));
     let source = CommitSource {
-        chunk: Some(empty_chunk()),
+        chunk: Some(empty_chunk(&pools)),
         commits: Arc::clone(&commits),
         seek: Arc::new(SeekState::new()),
         source_end,
@@ -421,15 +423,16 @@ fn source_end_commits_only_after_final_port_admission() {
 
 #[kithara::test]
 fn decoder_node_preload_gate_waits_for_ring_capacity() {
+    let pools = pools();
     let gate = Arc::new(PreloadGate::default());
     let (mut port, mut pop) = ProducerPort::probe(1);
 
-    port.push_direct(Fetch::data(empty_chunk(), 0));
+    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
 
     let source = Unimock::new(
         AudioSourceMock::step_track
             .next_call(matching!())
-            .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
     );
 
     let mut node = test_node(
@@ -475,6 +478,7 @@ fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
 
 #[kithara::test]
 fn decoder_node_seek_rearms_preload_gate() {
+    let pools = pools();
     let gate = Arc::new(PreloadGate::default());
     let (port, mut pop) = ProducerPort::probe(1);
 
@@ -482,13 +486,13 @@ fn decoder_node_seek_rearms_preload_gate() {
     let source = Unimock::new((
         AudioSourceMock::step_track
             .next_call(matching!())
-            .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
         AudioSourceMock::step_track
             .next_call(matching!())
             .returns(TrackStep::StateChanged),
         AudioSourceMock::step_track
             .next_call(matching!())
-            .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
     ));
 
     let mut node = test_node(

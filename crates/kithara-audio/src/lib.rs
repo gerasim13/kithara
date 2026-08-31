@@ -16,6 +16,8 @@ pub mod mock;
 mod pipeline;
 mod producer;
 mod runtime;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod traits;
 
 pub use audio::{Audio, PreparedAudio, SeekHandle};

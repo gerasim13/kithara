@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_macros as kithara;
@@ -12,6 +12,21 @@ use crate::{
 };
 
 struct Consts;
+
+pool_schema! {
+    FixturePools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+fn pools() -> PoolRegion<FixturePools> {
+    FixturePools::builder(OverallBudget(64 * 1024 * 1024))
+        .bytes(PoolConfig::builder().max_buffers(32).build())
+        .samples(PoolConfig::builder().max_buffers(8).build())
+        .build()
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: pool region failed: {error}"))
+}
 
 impl Consts {
     const AAC_HE_BIT_RATE: u64 = 64_000;
@@ -48,8 +63,10 @@ fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
             .sample_rate(Consts::RHYTHM_SAMPLE_RATE)
             .channels(Consts::CHANNELS)
             .build();
+        let pools = pools();
         let track = EncoderFactory::encode_packaged(
-            &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+            &pools,
+            &PackagedEncodeRequest::builder()
                 .pcm(&pcm)
                 .media_info(media_info)
                 .timescale(Consts::RHYTHM_SAMPLE_RATE)
@@ -113,7 +130,8 @@ fn he_aac(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
         .build();
 
     let track = EncoderFactory::encode_packaged(
-        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &pools(),
+        &PackagedEncodeRequest::builder()
             .pcm(&pcm)
             .media_info(media_info)
             .timescale(Consts::SAMPLE_RATE)

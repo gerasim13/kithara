@@ -29,6 +29,7 @@ smallvec = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true }
 
 serde = { workspace = true }

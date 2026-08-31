@@ -2,12 +2,16 @@
 
 use std::io;
 
+use kithara_bufpool::PoolError;
 use kithara_storage::StorageError;
 use thiserror::Error;
 
 /// Assets store errors.
 #[derive(Debug, Error)]
 pub enum AssetsError {
+    #[error("buffer pool error: {0}")]
+    Pool(#[from] PoolError),
+
     #[error("invalid resource key")]
     InvalidKey,
 

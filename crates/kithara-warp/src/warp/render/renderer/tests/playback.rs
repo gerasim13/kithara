@@ -25,12 +25,13 @@ fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
 }
 
 fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
+    let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
     let block = 4096 * usize::from(Consts::CH);
     let mut frame_offset = 0_u64;
     for data in input.chunks(block) {
-        if let Some(c) = render_serviced(fx, chunk_at(data, frame_offset)) {
+        if let Some(c) = render_serviced(fx, chunk_at(&pools, data, frame_offset)) {
             assert_eq!(
                 c.spec().sample_rate.get(),
                 Consts::SR,
@@ -66,13 +67,14 @@ fn render(fx: &mut WarpRenderer, input: &[f32]) -> Vec<f32> {
 }
 
 fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64) -> usize {
+    let pools = fx.pools.clone();
     let channels = usize::from(Consts::CH);
     let mut consumed = 0usize;
     let mut rendered = 0usize;
     while consumed < input.len() / channels {
         fx.prepare(spec());
         let remaining = input.len() / channels - consumed;
-        let mut meta = chunk(&input[consumed * channels..]).meta;
+        let mut meta = chunk(&pools, &input[consumed * channels..]).meta;
         meta.frame_offset = frame_offset
             .checked_add(u64::try_from(consumed).expect("test frame count fits u64"))
             .expect("test frame offset fits u64");
@@ -84,7 +86,7 @@ fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64
             .expect("test quantum fits")
             .get();
         let end = (consumed + frames) * channels;
-        let input_chunk = chunk_at(&input[consumed * channels..end], meta.frame_offset);
+        let input_chunk = chunk_at(&pools, &input[consumed * channels..end], meta.frame_offset);
         if let Some(output) = fx.render_quantum(input_chunk) {
             rendered += output.frames();
         }
@@ -182,8 +184,9 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
     const SOURCE_FRAMES: usize = 4096;
 
     let mut renderer = keylocked(backend, 0.5);
+    let pools = renderer.pools.clone();
     let source = sine(SOURCE_FRAMES);
-    let mut input = chunk(&source);
+    let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     input.meta.timestamp = spec()
         .duration_for(SOURCE_START)
@@ -237,8 +240,9 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
 
     let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let pools = renderer.pools.clone();
     let source = sine(SOURCE_FRAMES);
-    let mut input = chunk(&source);
+    let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     let admitted = SOURCE_START
         .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
@@ -292,11 +296,12 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
 fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
     let channels = usize::from(Consts::CH);
     let mut fx = keylocked(backend, 0.5);
+    let pools = fx.pools.clone();
     let cf = 1024usize;
     let block = sine(cf);
     let mut emitted = Vec::new();
     for i in 0..40u64 {
-        let mut c = chunk(&block);
+        let mut c = chunk(&pools, &block);
         c.meta.frame_offset = i * u64::try_from(cf).unwrap();
         c.meta.timestamp = spec()
             .duration_for(c.meta.frame_offset)
@@ -391,15 +396,16 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let block = sine(4096);
-    let unity = render_serviced(&mut fx, chunk(&block)).expect("unity bypass emits");
+    let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
     assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
     controls.set_speed(0.5);
     let mut stretched: Vec<f32> = Vec::new();
     for index in 1..=24 {
         let offset = u64::try_from(index * 4096).expect("test frame offset fits");
-        if let Some(c) = render_serviced(&mut fx, chunk_at(&block, offset)) {
+        if let Some(c) = render_serviced(&mut fx, chunk_at(&pools, &block, offset)) {
             stretched.extend_from_slice(&c.samples);
         }
     }
@@ -425,6 +431,7 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let frames = fx.render_quantum_frames.get();
     let channels = usize::from(Consts::CH);
     let source = sine(frames * 8);
@@ -435,11 +442,11 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
 
     fx.prepare(spec());
     let warm_frames = fx
-        .prepare_quantum(chunk(&source).meta, source.len() / channels)
+        .prepare_quantum(chunk(&pools, &source).meta, source.len() / channels)
         .expect("warm-up quantum fits");
     let split = warm_frames.get() * channels;
     let warm = fx
-        .render_quantum(chunk(&source[..split]))
+        .render_quantum(chunk(&pools, &source[..split]))
         .expect("warm-up emits samples");
     assert!(
         warm.frames() > 0 && warm.frames() <= frames,
@@ -449,7 +456,7 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
 
     controls.set_speed(2.0);
     let source_offset = u64::try_from(warm_frames.get()).expect("test frame count fits u64");
-    let mut remaining = chunk(&source[split..]);
+    let mut remaining = chunk(&pools, &source[split..]);
     remaining.meta.frame_offset = source_offset;
     remaining.meta.timestamp = spec()
         .duration_for(source_offset)
@@ -471,7 +478,7 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
     )
     .expect("hard-step span fits");
     let end = split + next_frames.get() * channels;
-    let mut input = chunk(&source[split..end]);
+    let mut input = chunk(&pools, &source[split..end]);
     input.meta.frame_offset = source_offset;
     input.meta.timestamp = remaining.meta.timestamp;
     let output = fx
@@ -493,7 +500,7 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
     let settled_offset = source_offset
         .checked_add(u64::try_from(next_frames.get()).expect("test frame count fits u64"))
         .expect("test source offset fits u64");
-    let mut remaining = chunk(&source[end..]);
+    let mut remaining = chunk(&pools, &source[end..]);
     remaining.meta.frame_offset = settled_offset;
     remaining.meta.timestamp = spec()
         .duration_for(settled_offset)
@@ -502,7 +509,7 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
         .prepare_quantum(remaining.meta, remaining.frames())
         .expect("settled quantum fits");
     let settled_end = end + settled_frames.get() * channels;
-    let mut input = chunk(&source[end..settled_end]);
+    let mut input = chunk(&pools, &source[end..settled_end]);
     input.meta.frame_offset = settled_offset;
     input.meta.timestamp = remaining.meta.timestamp;
     let output = fx
@@ -543,18 +550,19 @@ fn live_speed_ramp_is_independent_of_source_partitioning(#[case] backend: Stretc
     quantum_controls.set_keylock(true);
     quantum_controls.set_backend(backend);
     let mut quantum = renderer(Arc::clone(&quantum_controls));
+    let direct_pools = direct.pools.clone();
 
     let source = sine(BLOCK_FRAMES * 2);
     let channels = usize::from(Consts::CH);
     let split = BLOCK_FRAMES * channels;
-    let direct_warm = render_serviced(&mut direct, chunk(&source[..split]))
+    let direct_warm = render_serviced(&mut direct, chunk(&direct_pools, &source[..split]))
         .expect("direct warm-up emits samples");
     let quantum_warm = render_quantum_frames(&mut quantum, &source[..split], 0);
     assert_eq!(direct_warm.frames(), quantum_warm, "warm-up is exact");
 
     direct_controls.set_speed(2.0);
     quantum_controls.set_speed(2.0);
-    let mut direct_input = chunk(&source[split..]);
+    let mut direct_input = chunk(&direct_pools, &source[split..]);
     direct_input.meta.frame_offset = u64::try_from(BLOCK_FRAMES).expect("fixture fits u64");
     direct_input.meta.timestamp = spec()
         .duration_for(direct_input.meta.frame_offset)
@@ -587,12 +595,13 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind) {
     controls.set_keylock(false);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let block = sine(4096);
 
     let mut vinyl_out: Vec<f32> = Vec::new();
     for index in 0..24 {
         let offset = u64::try_from(index * 4096).expect("test frame offset fits");
-        if let Some(c) = render_serviced(&mut fx, chunk_at(&block, offset)) {
+        if let Some(c) = render_serviced(&mut fx, chunk_at(&pools, &block, offset)) {
             vinyl_out.extend_from_slice(&c.samples);
         }
     }
@@ -610,7 +619,7 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind) {
     let mut stretched: Vec<f32> = Vec::new();
     for index in 24..48 {
         let offset = u64::try_from(index * 4096).expect("test frame offset fits");
-        if let Some(c) = render_serviced(&mut fx, chunk_at(&block, offset)) {
+        if let Some(c) = render_serviced(&mut fx, chunk_at(&pools, &block, offset)) {
             stretched.extend_from_slice(&c.samples);
         }
     }

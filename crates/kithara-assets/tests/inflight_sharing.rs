@@ -26,7 +26,7 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_same_url_same_identity_shares_inner() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store.scope::<Test>(&source("asset_a")).unwrap();
@@ -50,7 +50,7 @@ fn one_store_same_url_same_identity_shares_inner() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_same_url_different_identity_yields_different_inner() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store.scope::<Test>(&source("asset_a")).unwrap();
@@ -77,7 +77,7 @@ fn one_store_same_url_different_identity_yields_different_inner() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn one_store_two_asset_roots_isolated() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope_a = store.scope::<Test>(&source("root_a")).unwrap();
@@ -103,10 +103,10 @@ fn one_store_two_asset_roots_isolated() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn two_stores_isolated_even_with_same_identity() {
-    let store_a = AssetStore::builder()
+    let store_a = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
-    let store_b = AssetStore::builder()
+    let store_b = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope_a = store_a.scope::<Test>(&source("root")).unwrap();
@@ -133,7 +133,7 @@ fn two_stores_isolated_even_with_same_identity() {
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn drop_first_leaves_second_alive() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -166,7 +166,7 @@ fn drop_first_leaves_second_alive() {
 /// same data.
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn shared_inner_propagates_commit_and_final_len() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store.scope::<Test>(&source("asset_a")).unwrap();

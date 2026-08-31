@@ -1,4 +1,4 @@
-use kithara_bufpool::{BudgetExhausted, SampleBuffer};
+use kithara_bufpool::{PoolError, SampleBuffer};
 use num_traits::cast::AsPrimitive;
 
 use super::{
@@ -6,12 +6,12 @@ use super::{
     scratch::{fill, retain},
 };
 
-pub(super) fn bar_gaps(db: &[f32], gaps: &mut SampleBuffer) -> Result<(), BudgetExhausted> {
+pub(super) fn bar_gaps(db: &[f32], gaps: &mut SampleBuffer) -> Result<(), PoolError> {
     fill(gaps, db.windows(2).map(|window| window[1] - window[0]))
 }
 
 /// np-style median: mean of the two middle values for even lengths.
-pub(super) fn median(values: &[f32], sorted: &mut SampleBuffer) -> Result<f64, BudgetExhausted> {
+pub(super) fn median(values: &[f32], sorted: &mut SampleBuffer) -> Result<f64, PoolError> {
     if values.is_empty() {
         return Ok(0.0);
     }
@@ -85,7 +85,7 @@ pub(super) fn find_stable_window(
     params: &GridParams,
     gaps: &mut SampleBuffer,
     sorted: &mut SampleBuffer,
-) -> Result<Option<(usize, f64)>, BudgetExhausted> {
+) -> Result<Option<(usize, f64)>, PoolError> {
     let w = params.stable_window_bars;
     if w == 0 || db.len() < w + 1 {
         return Ok(None);
@@ -118,7 +118,7 @@ pub(super) fn classify_outliers(
     outliers: &mut SampleBuffer,
     neighbors: &mut SampleBuffer,
     sorted: &mut SampleBuffer,
-) -> Result<(), BudgetExhausted> {
+) -> Result<(), PoolError> {
     let n = db.len();
     fill(outliers, (0..n).map(|_| 0.0))?;
     if n < 2 {

@@ -1,11 +1,15 @@
 use firewheel_core::param::smoother::SmoothedParam;
+use kithara_bufpool::HasPool;
 use kithara_signal::AudioChunkInfo;
 use kithara_stretch::{ElasticCursor, ElasticError};
 use num_traits::ToPrimitive;
 
 use super::renderer::{PreparedExact, WarpRenderer};
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     fn render_exact_plan(
         &mut self,
         meta: AudioChunkInfo,
@@ -84,7 +88,7 @@ impl WarpRenderer {
             }
             scratch
                 .ensure_len(end)
-                .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+                .map_err(|_| ElasticError::PoolCapacity)?;
             let engine = self
                 .engine
                 .as_mut()

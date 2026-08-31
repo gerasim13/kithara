@@ -6,7 +6,7 @@ use std::{f64::consts::TAU, num::NonZeroUsize};
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     platform::time::{self, Duration},
-    play::{Resource, ResourceConfig},
+    play::{Resource, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     warp::{StretchControls, StretchKind, WarpConfig},
 };
@@ -17,6 +17,8 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
 use num_traits::AsPrimitive;
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -137,7 +139,7 @@ async fn playing_sine_queue(
     temp_dir: &TestTempDir,
     backend: StretchKind,
     initial_rate: f32,
-) -> (OfflinePlayerHarness, Queue) {
+) -> (OfflinePlayerHarness, Queue<TestPools>) {
     let stretch = StretchControls::new(1.0);
     stretch.set_backend(backend);
     let harness = OfflinePlayerHarness::with_sample_rate(
@@ -155,8 +157,8 @@ async fn playing_sine_queue(
     let path = signal_mp3_sine880_30s()
         .path()
         .expect("generated sine fixture is stored on disk");
-    let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
+    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(path.to_str().expect("utf-8 fixture path"))
             .expect("local media path is a valid resource src"),
     )
     .store(disk_asset_store(temp_dir.path().join("live-rate-store")))

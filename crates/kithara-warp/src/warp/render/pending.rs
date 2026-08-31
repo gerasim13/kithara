@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
@@ -5,7 +6,10 @@ use tracing::warn;
 
 use super::renderer::WarpRenderer;
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     pub(super) fn append_pending_source(
         &mut self,
         source: &[f32],
@@ -33,7 +37,7 @@ impl WarpRenderer {
         let pending = self
             .pending_source
             .as_mut()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
+            .ok_or(ElasticError::PoolCapacity)?;
         let start = pending.len();
         let end = start
             .checked_add(source.len())
@@ -46,7 +50,7 @@ impl WarpRenderer {
         }
         pending
             .ensure_len(end)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::PoolCapacity)?;
         pending[start..end].copy_from_slice(source);
         self.pending_meta
             .get_or_insert_with(|| Self::meta_at_frame(meta, frame_offset));
@@ -124,11 +128,11 @@ impl WarpRenderer {
         }
         scratch
             .ensure_len(end)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::PoolCapacity)?;
         let source = self
             .pending_source
             .as_deref()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
+            .ok_or(ElasticError::PoolCapacity)?;
         let engine = self
             .engine
             .as_mut()
@@ -140,7 +144,7 @@ impl WarpRenderer {
         self.output_start_meta = self.pending_meta;
         self.pending_source
             .as_mut()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?
+            .ok_or(ElasticError::PoolCapacity)?
             .clear();
         self.pending_meta = None;
         self.output_remainder = 0.0;

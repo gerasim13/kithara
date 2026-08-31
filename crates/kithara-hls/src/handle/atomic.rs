@@ -6,7 +6,7 @@ use bytes::Bytes;
 use kithara_assets::{
     AcquisitionResult, AssetScope, AssetWriter, AssetsError, ReadSide, ResourceKey, WriteSide,
 };
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_net::{Headers, NetError};
 use kithara_stream::dl::{FetchCmd, FetchResponse, PeerHandle, reject_html_response};
 use tracing::{debug, warn};
@@ -37,37 +37,47 @@ impl AtomicResource for Key {
 
 /// Typed handle for fetching a small atomic body (playlist or DRM key)
 /// through the disk cache + unified downloader pipeline.
-pub(crate) struct AtomicFetch<R> {
-    scope: AssetScope,
-    byte_pool: BytePool,
+pub(crate) struct AtomicFetch<R, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    scope: AssetScope<S>,
+    pools: PoolRegion<S>,
     downloader: PeerHandle,
     _marker: PhantomData<R>,
 }
 
-impl<R> Clone for AtomicFetch<R> {
+impl<R, S> Clone for AtomicFetch<R, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn clone(&self) -> Self {
         Self {
             downloader: self.downloader.clone(),
             scope: self.scope.clone(),
-            byte_pool: self.byte_pool.clone(),
+            pools: self.pools.clone(),
             _marker: PhantomData,
         }
     }
 }
 
-pub(crate) type PlaylistPeer = AtomicFetch<Playlist>;
-pub(crate) type KeyPeer = AtomicFetch<Key>;
+pub(crate) type PlaylistPeer<S> = AtomicFetch<Playlist, S>;
+pub(crate) type KeyPeer<S> = AtomicFetch<Key, S>;
 
-impl<R: AtomicResource> AtomicFetch<R> {
+impl<R, S> AtomicFetch<R, S>
+where
+    R: AtomicResource,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) const fn new(
         downloader: PeerHandle,
-        scope: AssetScope,
-        byte_pool: BytePool,
+        scope: AssetScope<S>,
+        pools: PoolRegion<S>,
     ) -> Self {
         Self {
             downloader,
             scope,
-            byte_pool,
+            pools,
             _marker: PhantomData,
         }
     }
@@ -108,7 +118,7 @@ impl<R: AtomicResource> AtomicFetch<R> {
     /// Returns an error when the cache read fails.
     pub(crate) fn try_cached(&self, key: &ResourceKey, url: &Url) -> HlsResult<Option<Bytes>> {
         let rel_path = rel_path_for_log(key);
-        try_read_cached(&self.scope, &self.byte_pool, key, url, rel_path, R::KIND)
+        try_read_cached(&self.scope, &self.pools, key, url, rel_path, R::KIND)
     }
 
     /// Cache `bytes` under the URL's resource key.
@@ -128,7 +138,11 @@ impl<R: AtomicResource> AtomicFetch<R> {
     }
 }
 
-impl<R: AtomicResource> AtomicFetch<R> {
+impl<R, S> AtomicFetch<R, S>
+where
+    R: AtomicResource,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Fetch and validate an atomic resource within one store transaction.
     /// # Errors
     /// Returns an error when cache invalidation, network fetch, validation, or
@@ -191,14 +205,17 @@ impl<R: AtomicResource> AtomicFetch<R> {
     }
 }
 
-fn write_back_cache(
-    writer: AssetWriter,
+fn write_back_cache<S>(
+    writer: AssetWriter<S>,
     bytes: &Bytes,
-    scope: &AssetScope,
+    scope: &AssetScope<S>,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
-) -> bool {
+) -> bool
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let Ok(final_len) = u64::try_from(bytes.len()) else {
         warn!(
             url = %RedactedUrl::new(url),
@@ -234,20 +251,23 @@ fn rel_path_for_log(key: &ResourceKey) -> &str {
     key.rel_path().unwrap_or("<absolute>")
 }
 
-fn try_read_cached(
-    scope: &AssetScope,
-    byte_pool: &BytePool,
+fn try_read_cached<S>(
+    scope: &AssetScope<S>,
+    pools: &PoolRegion<S>,
     key: &ResourceKey,
     url: &Url,
     rel_path: &str,
     resource_kind: &str,
-) -> HlsResult<Option<Bytes>> {
+) -> HlsResult<Option<Bytes>>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let res = match scope.store().open_resource(key, None) {
         Ok(resource) => resource,
         Err(AssetsError::Io(error)) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let mut buf = byte_pool.get();
+    let mut buf = pools.get::<u8>();
     let n = res.read_into(&mut buf)?;
     if n == 0 {
         warn!(
@@ -297,13 +317,13 @@ mod tests {
     #[kithara::test]
     fn cache_write_failure_is_nonfatal() {
         let cancel = CancelToken::never();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(cancel.clone())
             .build();
         let url = Url::parse("https://example.com/master.m3u8").unwrap();
         let scope = store
-            .scope::<crate::Hls>(&AssetSource::Remote {
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: url.clone(),
                 discriminator: Some("failed-cache-write".to_owned()),
             })

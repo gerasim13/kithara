@@ -17,7 +17,10 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::hls_server::TestServer;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    hls_server::TestServer,
+};
 
 use crate::common::test_defaults::Consts as Shared;
 
@@ -61,23 +64,28 @@ impl Consts {
     const WARMUP_STABLE_SAMPLES: usize = 2;
 }
 
-async fn build_small_cache_stream(server: &TestServer, cancel: CancelToken) -> Stream<Hls> {
+async fn build_small_cache_stream(
+    server: &TestServer,
+    cancel: CancelToken,
+) -> Stream<Hls<TestPools>> {
     let url = server.url("/master.m3u8");
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
     let config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    Stream::<Hls>::new(config)
+    Stream::<Hls<TestPools>>::new(config)
         .await
         .expect("HLS stream creation")
 }
 
-fn exercise_stream_blocking(mut stream: Stream<Hls>) {
+fn exercise_stream_blocking(mut stream: Stream<Hls<TestPools>>) {
     let mut buf = vec![0u8; 4096];
     let _ = stream.read(&mut buf[..64]);
 

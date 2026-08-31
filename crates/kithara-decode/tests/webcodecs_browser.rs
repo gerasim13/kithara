@@ -3,7 +3,7 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::testing::{TestPools, pools as default_pools};
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, spawn_webcodecs_probe,
@@ -325,7 +325,7 @@ async fn he_aac_v2_decode() {
 }
 
 async fn prepare_webcodecs(codec: &str) {
-    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(SamplePool::default()));
+    PROBE_STARTED.call_once(|| spawn_webcodecs_probe(default_pools()));
     assert_browser_support(codec).await;
     for _ in 0..100 {
         if webcodecs_runtime_ready(codec) {
@@ -401,11 +401,10 @@ async fn assert_browser_support(codec: &str) {
     assert!(support, "WebCodecs unsupported in test browser: {codec}");
 }
 
-fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend> {
-    DecoderConfig::<NoResamplerBackend>::builder()
+fn decoder_config(backend: DecoderBackend) -> DecoderConfig<NoResamplerBackend, TestPools> {
+    DecoderConfig::<NoResamplerBackend, TestPools>::builder()
         .backend(backend)
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
+        .pools(default_pools())
         .build()
 }
 

@@ -132,6 +132,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock", "probe"] }
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-play = { path = ".", default-features = false, features = ["probe"] }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 

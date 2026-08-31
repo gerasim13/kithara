@@ -2519,4 +2519,5 @@ scan_all_rules = [
   "arch.no-direct-thread-wait",
   "arch.no-flash-time-hacks",
   "arch.no-raw-test",
+  "perf.no-local-test-pools",
 ]

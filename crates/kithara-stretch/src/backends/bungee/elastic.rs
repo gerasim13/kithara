@@ -1,5 +1,6 @@
 use std::fmt;
 
+use kithara_bufpool::HasPool;
 use num_traits::ToPrimitive;
 
 use super::stream::StreamCore;
@@ -19,10 +20,13 @@ pub(crate) struct BungeeElastic {
 impl BungeeElastic {
     const LATENCY_PROBE_BLOCKS: usize = 4;
 
-    fn latency(
+    fn latency<S>(
         core: &mut StreamCore,
-        config: &ElasticConfig,
-    ) -> Result<ElasticLatency, ElasticError> {
+        config: &ElasticConfig<S>,
+    ) -> Result<ElasticLatency, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let probe_frames = config.max_source_frames().min(config.max_output_frames());
         let request = ElasticRequest::new(probe_frames, probe_frames)?;
         for _ in 0..Self::LATENCY_PROBE_BLOCKS {
@@ -61,7 +65,10 @@ impl fmt::Debug for BungeeElastic {
 }
 
 impl ElasticEngine for BungeeElastic {
-    fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
+    fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let mut core = StreamCore::new(&config, config.max_source_frames())?;
         let latency = Self::latency(&mut core, &config)?;
         let maximum_warm_source = config.rate_envelope().max_source_frames_per_output()

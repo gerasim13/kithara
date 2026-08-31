@@ -1,11 +1,14 @@
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
 use tracing::warn;
 
 use super::renderer::{PreparedQuantum, WarpRenderer};
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Assemble an output chunk from `scratch` over the source interval that
     /// became presentable since the previous emission. `replacement` is
     /// retained for shell-side preparation before the next checked tick.
@@ -120,7 +123,7 @@ impl WarpRenderer {
         }
         scratch
             .ensure_len(end)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::PoolCapacity)?;
         let drain = self
             .engine
             .as_mut()

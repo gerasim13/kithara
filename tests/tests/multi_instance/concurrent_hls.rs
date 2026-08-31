@@ -3,7 +3,6 @@ use std::path::Path;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::AudioConfig,
-    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
@@ -11,6 +10,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
     reads::{ReadLimit, read_for_concurrency_check},
 };
@@ -45,22 +45,20 @@ async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &Path,
     abr: AbrMode,
-) -> RegisteredAudio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.url("/master.m3u8");
     let cancel = CancelToken::never();
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: cache_dir.into(),
                 })
-                .pool(byte_pool.clone())
                 .build(),
         )
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(abr)
         .build();
@@ -71,13 +69,12 @@ async fn create_hls_audio(
         .build();
     // Park on ring underrun instead of surfacing Pending, so the blocking
     // readers never spin against the virtual clock.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();
 
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     worker
         .open(config)
         .await

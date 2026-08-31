@@ -11,7 +11,7 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        Resource, ResourceConfig, StretchControls, apply_mix,
+        Resource, ResourceConfig, ResourceSrc, StretchControls, apply_mix,
         effects::eq::generate_log_spaced_bands, player::PlayerControl,
     },
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
@@ -27,6 +27,8 @@ use kithara_test_fixtures::signal::{
     FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, goertzel_magnitude,
     phase,
 };
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const RESAMPLED_RENDER_RATE: u32 = 48_000;
@@ -921,7 +923,7 @@ async fn natural_eof_advance_emits_only_b_aac(temp_dir: TestTempDir) {
 
 struct QueueSetup {
     harness: OfflinePlayerHarness,
-    queue: Queue,
+    queue: Queue<TestPools>,
 }
 
 struct RenderProgress {
@@ -932,7 +934,10 @@ struct RenderProgress {
     descending_seen_at: Option<usize>,
 }
 
-fn with_autoplay(mut config: QueueConfig, should_autoplay: bool) -> QueueConfig {
+fn with_autoplay(
+    mut config: QueueConfig<TestPools>,
+    should_autoplay: bool,
+) -> QueueConfig<TestPools> {
     config.should_autoplay = should_autoplay;
     config
 }
@@ -1221,7 +1226,7 @@ async fn setup_sine_aac_queue(server: &TestServerHelper, temp_dir: &TestTempDir)
 }
 
 async fn hls_resource(
-    player: &PlayerControl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1231,7 +1236,7 @@ async fn hls_resource(
 }
 
 async fn hls_resource_with_segments(
-    player: &PlayerControl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1251,7 +1256,7 @@ async fn hls_resource_with_segments(
 }
 
 async fn hls_resource_with_segments_and_duration(
-    player: &PlayerControl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1273,8 +1278,8 @@ async fn hls_resource_with_segments_and_duration(
         .await
         .expect("create advance-boundary HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
@@ -1289,7 +1294,7 @@ async fn hls_resource_with_segments_and_duration(
 }
 
 async fn hls_multivariant_flac_resource(
-    player: &PlayerControl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     pattern: PcmPattern,
@@ -1309,8 +1314,8 @@ async fn hls_multivariant_flac_resource(
         .await
         .expect("create advance-boundary multivariant FLAC HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
@@ -1325,7 +1330,7 @@ async fn hls_multivariant_flac_resource(
 }
 
 async fn hls_sine_aac_resource(
-    player: &PlayerControl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     freq_hz: f64,
@@ -1341,8 +1346,8 @@ async fn hls_sine_aac_resource(
         .await
         .expect("create advance-boundary sine AAC HLS fixture");
     let store = kithara_integration_tests::disk_asset_store(cache_dir);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid HLS master URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid HLS master URL"),
     )
     .store(store)
     .build();
@@ -1358,7 +1363,7 @@ async fn hls_sine_aac_resource(
 
 #[kithara::flash(true)]
 async fn render_until_b_with_postroll(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     class_tolerance: f32,
     render_sample_rate: u32,
@@ -1394,7 +1399,7 @@ async fn render_until_b_with_postroll(
 
 #[kithara::flash(true)]
 async fn render_until_b_with_late_variant_switch(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
 ) -> (Vec<f32>, usize, usize, Option<usize>) {
     let block_duration = render_block_duration(SAMPLE_RATE);
@@ -1467,7 +1472,7 @@ async fn render_until_b_with_late_variant_switch(
 
 #[kithara::flash(true)]
 async fn render_crossfade_until_b_with_postroll(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
@@ -1501,7 +1506,7 @@ async fn render_crossfade_until_b_with_postroll(
 }
 
 async fn render_app_layer_crossfade_until_b_with_postroll(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize) {
@@ -1517,7 +1522,7 @@ async fn render_app_layer_crossfade_until_b_with_postroll(
 
 #[kithara::flash(true)]
 async fn render_app_layer_crossfade_until_b_with_postroll_config(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
     block_budget: usize,
@@ -1555,7 +1560,10 @@ async fn render_app_layer_crossfade_until_b_with_postroll_config(
     )
 }
 
-fn drive_app_layer_crossfade_advance(queue: &Queue, auto_advanced_index: &mut Option<usize>) {
+fn drive_app_layer_crossfade_advance(
+    queue: &Queue<TestPools>,
+    auto_advanced_index: &mut Option<usize>,
+) {
     let crossfade_secs = f64::from(queue.crossfade_duration());
     if let (Some(pos), Some(dur)) = (queue.position_seconds(), queue.duration_seconds())
         && dur > crossfade_secs
@@ -1593,7 +1601,7 @@ fn drain_variant_applied_events(
 
 #[kithara::flash(true)]
 async fn render_seek_near_end_until_b_with_postroll(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, usize, usize, f64) {
@@ -1649,7 +1657,7 @@ async fn render_seek_near_end_until_b_with_postroll(
 
 #[kithara::flash(true)]
 async fn render_until_tone_b_with_postroll(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
 ) -> (Vec<f32>, f64) {
@@ -2194,7 +2202,7 @@ fn assert_no_ascending_after_b_with_switch(
 
 fn assert_crossfade_contract(
     rendered: &[f32],
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     expected_a_end_frame: usize,
     render_sample_rate: u32,
     collapse_runs: fn(&[ClassRun]) -> Vec<ClassRun>,

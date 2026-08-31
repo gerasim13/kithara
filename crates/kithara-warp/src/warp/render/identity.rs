@@ -3,9 +3,9 @@
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 )))]
 
-use std::num::NonZeroU32;
+use std::{marker::PhantomData, num::NonZeroU32};
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_signal::{AudioChunk, AudioSpec};
 
 use crate::WarpConfig;
@@ -13,14 +13,19 @@ use crate::WarpConfig;
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
 #[non_exhaustive]
-pub struct WarpRenderer {
+pub struct WarpRenderer<S> {
     rendered_source_end: Option<(u64, NonZeroU32)>,
+    schema: PhantomData<fn() -> S>,
 }
 
-impl WarpRenderer {
-    pub(crate) fn new(_config: &WarpConfig, _spec: AudioSpec, _sample_pool: SamplePool) -> Self {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    pub(crate) fn new(_config: &WarpConfig, _spec: AudioSpec, _pools: PoolRegion<S>) -> Self {
         Self {
             rendered_source_end: None,
+            schema: PhantomData,
         }
     }
 
@@ -82,19 +87,20 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test]
     fn renderer_preserves_samples_exactly() {
-        let sample_pool = SamplePool::default();
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let mut meta = AudioChunkInfo::default();
         meta.spec = spec;
         meta.frames = 1;
         meta.frame_offset = 41;
-        let input = AudioChunk::new(meta, sample_pool.attach(vec![0.25, -0.5]));
+        let input = AudioChunk::new(meta, sample_buffer(&pools, &[0.25, -0.5]));
         let input_ptr = input.samples.as_ptr();
         let renderer_config = WarpConfig::builder().build();
-        let mut renderer = WarpRenderer::new(&renderer_config, spec, sample_pool);
+        let mut renderer = WarpRenderer::new(&renderer_config, spec, pools);
 
         assert_eq!(renderer.rendered_source_end(), None);
         let output = renderer.render(input).expect("identity output");

@@ -13,7 +13,7 @@ use kithara::{
     play::RegisteredAudio,
     stream::{Stream, StreamType},
 };
-use kithara_integration_tests::Xorshift64;
+use kithara_integration_tests::{Xorshift64, bufpool_ext::TestPools};
 use num_traits::ToPrimitive;
 use tracing::{info, warn};
 
@@ -131,7 +131,7 @@ pub(crate) fn measure_phase_rad_window(mono: &[f64], delta_rad: f64) -> (f64, f6
 }
 
 fn read_block<T>(
-    audio: &mut RegisteredAudio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<usize>
@@ -154,7 +154,7 @@ where
 /// carries the same guard.
 #[kithara::flash(true)]
 fn read_block_with_position<T>(
-    audio: &mut RegisteredAudio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<(usize, Duration)>
@@ -190,7 +190,7 @@ fn start_frame_from_read_position(position: Duration, frames_read: u64) -> u64 {
 /// Async twin of [`read_block_with_position`]; same reason for the guard.
 #[kithara::flash(true)]
 async fn read_block_async<T>(
-    audio: &mut RegisteredAudio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     buf: &mut [f32],
     label: &str,
 ) -> Option<usize>
@@ -286,7 +286,7 @@ fn check_against_previous(
 }
 
 pub(crate) fn e2e_phase_scan<T>(
-    audio: &mut RegisteredAudio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
 ) -> Vec<PhaseDrift>
@@ -325,7 +325,7 @@ where
 }
 
 pub(crate) fn seek_phase_scan<T, F>(
-    audio: &mut RegisteredAudio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_secs: f64,
     seek_count: usize,
@@ -380,7 +380,7 @@ where
 /// (catches the "periodically swallowed fragment" glitch); a backward gap
 /// degenerates to a single post-seek window (catches the seek glitch).
 pub(crate) async fn scripted_phase_scan<T, S, F>(
-    audio: &mut RegisteredAudio<Stream<T>>,
+    audio: &mut RegisteredAudio<Stream<T>, TestPools>,
     sine: SinePhaseSpec,
     total_frames_truth: u64,
     scenario: &[(S, f64)],
@@ -450,7 +450,7 @@ where
     drifts
 }
 
-async fn wait_for_preload<T>(audio: &RegisteredAudio<Stream<T>>)
+async fn wait_for_preload<T>(audio: &RegisteredAudio<Stream<T>, TestPools>)
 where
     T: StreamType<Events = EventBus>,
 {

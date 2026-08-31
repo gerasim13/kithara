@@ -5,13 +5,14 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ChunkOutcome},
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, auto, flash_pace::virtual_pace,
+    HlsFixtureBuilder, TestServerHelper, auto,
+    bufpool_ext::{TestPools, pools},
+    flash_pace::virtual_pace,
 };
 use tracing::info;
 
@@ -55,26 +56,23 @@ async fn red_flaky_small_cache_hot_refetch_behind_reader() {
         .expect("create the ladder the drain runs over");
     let url = created.master_url();
 
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(1).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
 
     // Offline pull: park on ring underrun instead of spinning on Pending,
     // so the loops need no wall-clock deadlines — a hot-refetch livelock
     // becomes a permanent park caught by the hang watchdog / timeout.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .block_on_underrun(true)
         .build();
     let mut audio = worker.open(config).await.expect("audio creation");

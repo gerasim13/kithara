@@ -1,4 +1,4 @@
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::testing::pools as default_pools;
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticSpan,
     ElasticSpanConfig, ElasticSpanPlan, build_engine,
@@ -13,7 +13,7 @@ const MAX_OUTPUT_FRAMES: usize = 480;
 /// the conformance suite covers.
 fn capabilities() -> ElasticCapabilities {
     let config = ElasticConfig::builder()
-        .pool(SamplePool::default())
+        .pools(default_pools())
         .sample_rate(44_100)
         .channels(2)
         .max_source_frames(960)

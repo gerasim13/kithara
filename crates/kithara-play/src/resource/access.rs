@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_assets::{AssetResource, AssetSource, AssetStore, ResourceKey};
+use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_file::File;
@@ -9,7 +10,10 @@ use kithara_platform::CancelToken;
 
 use super::{ResourceConfig, ResourceSrc, SourceType};
 
-impl<B: Default> ResourceConfig<B> {
+impl<S, B: Default> ResourceConfig<S, B>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Mint a layout-owned key for a playback or derived resource.
     ///
     /// # Errors
@@ -27,9 +31,9 @@ impl<B: Default> ResourceConfig<B> {
         };
         let scope = match source_type {
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                self.store.scope::<File>(&source)
+                self.store.scope::<File<S>>(&source)
             }
-            SourceType::HlsStream(_) => self.store.scope::<Hls>(&source),
+            SourceType::HlsStream(_) => self.store.scope::<Hls<S>>(&source),
         }
         .map_err(DecodeError::backend)?;
         scope.key(resource).map_err(DecodeError::backend)
@@ -82,7 +86,7 @@ impl<B: Default> ResourceConfig<B> {
 
     /// Shared asset store for this resource.
     #[must_use]
-    pub const fn store(&self) -> &AssetStore {
+    pub const fn store(&self) -> &AssetStore<S> {
         &self.store
     }
 }

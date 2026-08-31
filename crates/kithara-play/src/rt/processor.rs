@@ -7,7 +7,7 @@ use firewheel::{
     event::ProcEvents,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::TrackId;
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
@@ -93,7 +93,10 @@ impl PlayerNodeProcessor {
 
     /// Create a new processor with the given command receiver and shared state.
     #[must_use]
-    pub fn new(inputs: NodeInputs, shape: StreamShape, pool: &SamplePool) -> Self {
+    pub fn new<S>(inputs: NodeInputs, shape: StreamShape, pools: &PoolRegion<S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
         let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
         Self {
             cmd_rx: inputs.cmd_rx,
@@ -101,7 +104,7 @@ impl PlayerNodeProcessor {
             trash_tx: inputs.trash_tx,
             playback: inputs.playback,
             sample_rate: shape.sample_rate,
-            render: RenderPass::new(pool, shape),
+            render: RenderPass::new(pools, shape),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
             last_notified_rate,
@@ -365,7 +368,10 @@ mod tests {
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
-    use crate::bridge::{SharedEq, slot_channels};
+    use crate::{
+        bridge::{SharedEq, slot_channels},
+        test_pools::pools,
+    };
 
     fn processor() -> (PlayerNodeProcessor, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
@@ -373,10 +379,7 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        (
-            PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
-            control,
-        )
+        (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
     }
 
     #[kithara::test]

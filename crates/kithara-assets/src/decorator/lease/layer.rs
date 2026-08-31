@@ -73,10 +73,7 @@ type LeaseBindings = (LeaseGuard, Option<RemoveFn>, Option<Arc<dyn ByteRecorder>
 /// See crate `CONTEXT.md` for the lease/pin contract. Absolute keys bypass
 /// pinning (no asset to pin under). The capability gate also bypasses.
 #[derive(Clone)]
-pub struct LeaseAssets<A>
-where
-    A: Assets,
-{
+pub struct LeaseAssets<A> {
     inner: Arc<A>,
     live: Arc<LiveRegistry>,
     cancel: CancelToken,
@@ -314,13 +311,6 @@ where
     }
 }
 
-impl<A> Drop for LeaseAssets<A>
-where
-    A: Assets,
-{
-    fn drop(&mut self) {}
-}
-
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
@@ -335,17 +325,18 @@ mod tests {
     const ROOT: &str = "test_asset";
 
     fn make_pins_disk(dir: &Path) -> PinsIndex {
+        let pools = crate::test_pools::pools();
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default())
+        PinsIndex::with_persist_at(
+            path,
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        )
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        ));
+        let disk = Arc::new(DiskAssetStore::new(dir, CancelToken::never()));
         let pins = make_pins_disk(dir);
         LeaseAssets::with_byte_recorder(
             disk,
@@ -357,12 +348,16 @@ mod tests {
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
+        let pools = crate::test_pools::pools();
         let path = dir.join("_index").join("pins.bin");
         if !path.exists() {
             return HashSet::new();
         }
-        let idx =
-            PinsIndex::with_persist_at(path, CancelToken::never(), &crate::BytePool::default());
+        let idx = PinsIndex::with_persist_at(
+            path,
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        );
         idx.snapshot()
     }
 

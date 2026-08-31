@@ -1,12 +1,12 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
+use rubato::SincInterpolationParameters;
 
 use super::{RubatoAlgorithm, RubatoBackend, RubatoConfig};
 use crate::{
     Resampler, ResamplerBackend, ResamplerCapabilities, ResamplerConfig, ResamplerMode,
-    ResamplerOptions, ResamplerSettings, create_resampler,
+    ResamplerOptions, ResamplerQuality, ResamplerSettings, create_resampler, test_pools::pools,
 };
 
 #[kithara::test(native, flash(false))]
@@ -14,7 +14,15 @@ fn rubato_backend_reports_fixed_ratio_standalone_support() {
     let capabilities = RubatoBackend::new().capabilities();
 
     assert!(capabilities.contains(ResamplerCapabilities::FIXED_RATIO));
+    assert!(!capabilities.contains(ResamplerCapabilities::REALTIME_SAFE));
     assert!(capabilities.contains(ResamplerCapabilities::STANDALONE));
+}
+
+#[kithara::test(native, flash(false))]
+fn rubato_sinc_keeps_the_explicit_cutoff() {
+    let parameters = SincInterpolationParameters::from(ResamplerQuality::High);
+
+    assert_eq!(parameters.f_cutoff, Some(0.95));
 }
 
 #[kithara::test(native, flash(false))]
@@ -29,7 +37,7 @@ fn rubato_resamples_borrowed_planar_slices() {
                 .unwrap_or_else(|| panic!("test target rate")),
         })
         .options(ResamplerOptions::builder().chunk_size(256).build())
-        .sample_pool(SamplePool::new(4, 4_096))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -52,6 +60,45 @@ fn rubato_resamples_borrowed_planar_slices() {
 }
 
 #[kithara::test(native, flash(false))]
+fn rubato_resamples_nine_channels_without_touching_extra_output() {
+    let channels = NonZeroUsize::new(9).unwrap_or_else(|| panic!("test channels"));
+    let settings = ResamplerSettings::builder()
+        .channels(channels)
+        .mode(ResamplerMode::FixedRatio {
+            source_sample_rate: NonZeroU32::new(48_000)
+                .unwrap_or_else(|| panic!("test source rate")),
+            target_sample_rate: NonZeroU32::new(44_100)
+                .unwrap_or_else(|| panic!("test target rate")),
+        })
+        .options(ResamplerOptions::builder().chunk_size(256).build())
+        .pools(pools())
+        .build();
+    let config = ResamplerConfig::builder()
+        .backend(RubatoBackend::new())
+        .settings(settings)
+        .build();
+    let mut resampler =
+        create_resampler(&config).unwrap_or_else(|err| panic!("rubato build failed: {err}"));
+    let input = (0..channels.get())
+        .map(|channel| vec![channel as f32 / 10.0; 256])
+        .collect::<Vec<_>>();
+    let output_frames = resampler.output_frames_next();
+    let mut output = (0..=channels.get())
+        .map(|_| vec![0.0; output_frames])
+        .collect::<Vec<_>>();
+    output[channels.get()].fill(1.0);
+    let input_refs = input.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let mut output_refs = output.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>();
+
+    let process = resampler
+        .process_into_buffer(&input_refs, &mut output_refs)
+        .unwrap_or_else(|err| panic!("rubato process failed: {err}"));
+
+    assert!(process.output_frames > 0);
+    assert!(output[channels.get()].iter().all(|sample| *sample == 1.0));
+}
+
+#[kithara::test(native, flash(false))]
 fn rubato_factory_output_has_no_ratio_control_surface() {
     let channels = NonZeroUsize::new(1).unwrap_or_else(|| panic!("test channels"));
     let settings = ResamplerSettings::builder()
@@ -63,7 +110,7 @@ fn rubato_factory_output_has_no_ratio_control_surface() {
                 .unwrap_or_else(|| panic!("test target rate")),
         })
         .options(ResamplerOptions::builder().chunk_size(256).build())
-        .sample_pool(SamplePool::new(4, 4_096))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -87,7 +134,7 @@ fn rubato_fft_is_selected_by_backend_config() {
                 .unwrap_or_else(|| panic!("test target rate")),
         })
         .options(ResamplerOptions::builder().chunk_size(256).build())
-        .sample_pool(SamplePool::new(4, 4_096))
+        .pools(pools())
         .build();
     let backend = RubatoBackend::with_config(RubatoConfig {
         algorithm: RubatoAlgorithm::Fft,
@@ -101,5 +148,6 @@ fn rubato_fft_is_selected_by_backend_config() {
         create_resampler(&config).unwrap_or_else(|err| panic!("rubato FFT build failed: {err}"));
 
     assert_eq!(resampler.input_frames_next(), 256);
+    assert_eq!(resampler.output_delay(), 73);
     assert!(resampler.output_frames_next() > 0);
 }

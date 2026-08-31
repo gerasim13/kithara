@@ -6,7 +6,7 @@ This crate owns the pure protocol used to align one beat map with another and
 to compose maps through nested synchronization groups. It owns immutable
 snapshots, coordinates, `WarpMap`, `SyncGroup`, topology operations, alignment
 plans, cursors, and typed results. It also owns the resident identity `Warp<S>`
-decorator, `WarpConfig`, and synchronous `WarpRenderer`, which applies temporal
+decorator, `WarpConfig`, and synchronous `WarpRenderer<S>`, which applies temporal
 plans through the backend-neutral `kithara-stretch::ElasticEngine` contract on
 native targets. Without an elastic backend, including on wasm, the same
 renderer contract stays resident as an exact identity stage.
@@ -28,7 +28,7 @@ crate the owner of the live Host, playback session, audio graph, or worker.
 - `kithara-assets` is the only production persistence path.
 
 The crate must not depend on audio, play, host, assets, or analyzer runtime
-types. `Warp<S>` is generic over its source, and `WarpRenderer` is a synchronous
+types. `Warp<S>` is generic over its source, and `WarpRenderer<S>` is a synchronous
 stage; neither makes this crate the owner of source lifecycle, playback
 scheduling, or worker threads.
 
@@ -45,9 +45,9 @@ the shared `StretchControls` plus the non-zero render quantum in frames. The
 resident `Warp<S>` passes that one config to its renderer; milliseconds are
 derived diagnostics, not configuration. The identity renderer deliberately
 ignores temporal intent while preserving the same stage contract. Every
-renderer receives the caller's configured `SamplePool`; it never creates a
-pool. Source ownership, cancellation, and worker resources remain in their
-canonical configs and are not duplicated here.
+receives the caller's configured `PoolRegion<S>`; it never creates a pool region. Source
+ownership, cancellation, and worker resources remain in their canonical
+configs and are not duplicated here.
 
 Fixed-ratio sample-rate conversion remains owned by `kithara-decode`; it is not
 a substitute Warp backend because resampling changes pitch. Targets without an

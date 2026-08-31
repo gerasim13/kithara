@@ -3,6 +3,7 @@ use std::ops::Range;
 use kithara_assets::AssetResource;
 #[cfg(test)]
 use kithara_assets::ResourceKey;
+use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::{StreamResult, dl::FetchCmd, needs_exact_byte_sizes};
@@ -18,11 +19,14 @@ use crate::{
     },
 };
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) fn build_init_cmd(
         self: &Arc<Self>,
-        ctx: &PlanCtx,
-        handle: FetchClaim<Downloading>,
+        ctx: &PlanCtx<S>,
+        handle: FetchClaim<Downloading, S>,
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let init = self.init()?;
@@ -63,7 +67,7 @@ impl HlsVariant {
         playlist_state: &PlaylistState,
         variant_idx: usize,
         decrypt_ctx: Option<DecryptContext>,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
     ) -> HlsResult<Option<Segment>> {
         let Some(url) = playlist_state.init_url(variant_idx) else {
             return Ok(None);
@@ -171,7 +175,7 @@ impl HlsVariant {
             /// or `None` for a variant with no `#EXT-X-MAP` init.
             #[expr(Some($?.resource(&self.segments.scope)))]
             #[call(as_ref)]
-            fn init_handle(&self) -> Option<ResourceHandle<'_>>;
+            fn init_handle(&self) -> Option<ResourceHandle<'_, S>>;
             #[expr($.map_or(0, Segment::len))]
             #[call(as_ref)]
             pub(super) fn init_route_size(&self) -> u64;

@@ -6,14 +6,18 @@
 
 use std::num::NonZero;
 
-use kithara_bufpool::SamplePool;
 use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::WarpRenderer;
-use crate::{GridSegment, RegionPlan, RegionPlanError, StretchControls, WarpConfig};
+use super::WarpRenderer as GenericWarpRenderer;
+use crate::{
+    GridSegment, RegionPlan, RegionPlanError, StretchControls, WarpConfig,
+    test_pools::{Pools, TestPools, pools, sample_buffer},
+};
+
+type WarpRenderer = GenericWarpRenderer<TestPools>;
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -54,7 +58,7 @@ fn spec() -> AudioSpec {
     }
 }
 
-fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
+fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
     let frames = samples.len() / CH;
     AudioChunk::new(
         AudioChunkInfo {
@@ -63,7 +67,7 @@ fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().attach(samples.to_vec()),
+        sample_buffer(pools, samples),
     )
 }
 
@@ -101,17 +105,18 @@ fn add_click(buf: &mut [f32], frame: usize) {
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+    let pools = pools();
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
     let config = WarpConfig::builder().stretch(controls).build();
-    let mut fx = WarpRenderer::new(&config, spec(), SamplePool::default());
+    let mut fx = WarpRenderer::new(&config, spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
-        let output = fx.render(chunk(data, offset));
+        let output = fx.render(chunk(&pools, data, offset));
         fx.prepare(spec());
         if let Some(o) = output {
             out.extend_from_slice(&o.samples);

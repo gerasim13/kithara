@@ -14,7 +14,9 @@ use kithara::{
     stream::{SourcePhase, Stream},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, auto, mixed_codec_ladder_url, temp_dir,
+    TestServerHelper, TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
+    mixed_codec_ladder_url, temp_dir,
 };
 use tracing::{debug, error, info, warn};
 
@@ -47,7 +49,11 @@ fn hex_dump(bytes: &[u8]) -> String {
         .join(" ")
 }
 
-fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration) -> usize {
+fn read_exact_retry(
+    stream: &mut Stream<Hls<TestPools>>,
+    buf: &mut [u8],
+    timeout: Duration,
+) -> usize {
     let deadline = Instant::now() + timeout;
     let mut filled = 0;
     while filled < buf.len() && Instant::now() < deadline {
@@ -62,7 +68,7 @@ fn read_exact_retry(stream: &mut Stream<Hls>, buf: &mut [u8], timeout: Duration)
 }
 
 fn next_box(
-    stream: &mut Stream<Hls>,
+    stream: &mut Stream<Hls<TestPools>>,
     pos: u64,
     label: &str,
     box_index: usize,
@@ -94,7 +100,7 @@ fn next_box(
 
 /// Scan fMP4 boxes from `start_pos`. Returns `(boxes, last_end)`.
 fn scan_boxes(
-    stream: &mut Stream<Hls>,
+    stream: &mut Stream<Hls<TestPools>>,
     start_pos: u64,
     max_end: u64,
     label: &str,
@@ -132,7 +138,11 @@ struct Phase1Result {
     hit_deadline: bool,
 }
 
-fn read_to_eof_or_deadline(stream: &mut Stream<Hls>, buf: &mut [u8], label: &str) -> Phase1Result {
+fn read_to_eof_or_deadline(
+    stream: &mut Stream<Hls<TestPools>>,
+    buf: &mut [u8],
+    label: &str,
+) -> Phase1Result {
     let mut total_read = 0u64;
     let deadline = Instant::now() + Duration::from_secs(25);
     let mut hit_deadline = false;
@@ -219,14 +229,19 @@ async fn drm_stream_byte_integrity(
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, encrypted).await;
     let cancel = CancelToken::never();
+    let pools = pools();
 
     let store = if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
             .cache_capacity(NonZeroUsize::new(40).expect("nonzero"))
             .build()
     } else {
-        kithara_integration_tests::disk_asset_store(temp_dir.path())
+        AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().into(),
+            })
+            .build()
     };
 
     let abr_mode = if abr_variant == 99 {
@@ -237,11 +252,12 @@ async fn drm_stream_byte_integrity(
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
+        .pools(pools)
         .cancel(cancel.clone())
         .initial_abr_mode(abr_mode)
         .build();
 
-    let mut stream = Stream::<Hls>::new(hls_config)
+    let mut stream = Stream::<Hls<TestPools>>::new(hls_config)
         .await
         .expect("create HLS stream");
 

@@ -1,4 +1,5 @@
 use kithara_audio::AudioObserver;
+use kithara_bufpool::HasPool;
 use kithara_events::{EventReceiver, QueueEvent, QueueRepeatMode, TrackId};
 
 use super::QueueControl;
@@ -7,7 +8,10 @@ use crate::{
     track::{TrackEntry, TrackRecord, TrackSource},
 };
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// The currently playing track entry, if any.
     ///
     /// Sourced from the navigation cursor (not the player) so the queue
@@ -66,7 +70,7 @@ impl QueueControl {
     /// The original [`TrackSource`] for `id`, if still queued. Lets callers
     /// rebuild a resource by track identity rather than by queue position.
     #[must_use]
-    pub fn track_source(&self, id: TrackId) -> Option<TrackSource> {
+    pub fn track_source(&self, id: TrackId) -> Option<TrackSource<S>> {
         self.tracks.source(id)
     }
 

@@ -3,8 +3,6 @@ use std::{fmt, path::PathBuf};
 use kithara_decode::DecodeError;
 use url::Url;
 
-use super::config::ResourceConfig;
-
 /// Source of an audio resource: either a URL or a local file path.
 #[derive(Clone, Debug, derive_more::From, PartialEq, Eq)]
 pub enum ResourceSrc {
@@ -20,6 +18,17 @@ impl fmt::Display for ResourceSrc {
             Self::Url(url) => write!(f, "{url}"),
             Self::Path(path) => write!(f, "{}", path.display()),
         }
+    }
+}
+
+impl ResourceSrc {
+    /// Parse a URL or absolute local path, normalizing `file://` URLs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::InvalidData`] when the input is not a valid source.
+    pub fn parse<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
+        parse_src(input)
     }
 }
 
@@ -48,21 +57,6 @@ pub(crate) fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeEr
             }
             Ok(ResourceSrc::Path(path))
         }
-    }
-}
-
-impl ResourceConfig {
-    /// Parse a URL string or local file path into a [`ResourceSrc`].
-    ///
-    /// Tries URL parsing first. On failure, falls back to absolute file path.
-    /// A `file://` URL is normalized to a `Path`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://`
-    /// URL or a non-absolute file path.
-    pub fn parse_src<S: AsRef<str>>(input: S) -> Result<ResourceSrc, DecodeError> {
-        parse_src(input)
     }
 }
 

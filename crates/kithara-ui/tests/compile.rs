@@ -2489,7 +2489,7 @@ fn a_layout_of_one_module_gives_it_every_window_corner() {
 #[kithara::test]
 fn a_document_draws_from_the_pools_its_configuration_carries() {
     let config = UiConfig::default();
-    drop(config.draw_pools.text("held"));
+    drop(config.draw_buffers.text("held"));
 
     let ui = compile(
         "micro.klayout.ron",
@@ -2502,7 +2502,7 @@ fn a_document_draws_from_the_pools_its_configuration_carries() {
     )
     .unwrap();
 
-    assert_eq!(ui.draw_pool_stats(), config.draw_pools.stats());
+    assert_eq!(ui.draw_pool_stats(), config.draw_buffers.stats());
 }
 
 /// A host compiles a second screen, and compiles the first one again whenever
@@ -2526,9 +2526,9 @@ fn a_document_compiled_after_the_first_joins_the_same_family() {
     let _first = screen(());
     let second = screen(());
 
-    drop(config.draw_pools.text("held"));
+    drop(config.draw_buffers.text("held"));
 
-    assert_eq!(second.draw_pool_stats(), config.draw_pools.stats());
+    assert_eq!(second.draw_pool_stats(), config.draw_buffers.stats());
 }
 
 /// A stage whose children the caller writes, so a test says only what it is

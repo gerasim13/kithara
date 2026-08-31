@@ -1,11 +1,15 @@
 use firewheel_core::param::smoother::SmoothedParam;
+use kithara_bufpool::HasPool;
 use kithara_signal::AudioChunkInfo;
 use kithara_stretch::{ElasticCursor, ElasticError, ElasticSpan, ElasticSpanConfig};
 use num_traits::ToPrimitive;
 
 use super::renderer::{PreparedExact, PreparedQuantum, WarpRenderer};
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     pub(super) fn preview_speed_from(
         mut applied_speed: SmoothedParam,
         target: f32,

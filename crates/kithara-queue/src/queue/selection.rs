@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
 use kithara_play::SelectTransition;
 
@@ -13,7 +14,10 @@ mod apply;
 mod navigation;
 mod pending;
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Select a track by id, applying the given [`Transition`]. If the
     /// track is still loading or pending, both the id and the
     /// transition are stashed and applied when loading finishes.
@@ -108,7 +112,7 @@ mod tests {
     use super::*;
     use crate::queue::state::tests::{make_queue, wait_for_queue_event};
 
-    fn append(queue: &crate::Queue, source: &str) -> TrackId {
+    fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue
             .append(source)
             .expect("BUG: open queue must accept a track")

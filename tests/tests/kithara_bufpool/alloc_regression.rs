@@ -1,114 +1,68 @@
-use kithara::{self, bufpool::SharedPool};
+use kithara::{self, bufpool::PoolConfig};
+use kithara_integration_tests::bufpool_ext::pools_with;
 
 #[kithara::test(serial)]
-fn test_steady_state_get_put_zero_allocs() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-    pool.pre_warm(4, |v| v.resize(4096, 0));
-
-    for _ in 0..10 {
-        let _buf = pool.get();
-    }
-
-    let misses_before = pool.stats().alloc_misses;
-    for _ in 0..100 {
-        let _buf = pool.get();
-    }
-    let misses_after = pool.stats().alloc_misses;
-
-    assert_eq!(
-        misses_after, misses_before,
-        "steady-state get/put should reuse pooled buffers without new misses",
+fn returned_growth_is_accounted_once() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
     );
+    drop(
+        pools
+            .get_with_len::<u8>(8_192)
+            .expect("test bytes fit the region budget"),
+    );
+    let before = pools.stats().allocated_bytes;
+
+    drop(pools.get::<u8>());
+
+    assert_eq!(pools.stats().allocated_bytes, before);
 }
 
 #[kithara::test(serial)]
-fn test_get_with_resize_tracks_growth() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
+fn repeated_reuse_keeps_allocated_bytes_stable() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder()
+            .initial_buffers(4)
+            .initial_capacity(4_096)
+            .max_buffers(32)
+            .build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    let before = pools.stats().allocated_bytes;
 
-    {
-        let mut buf = pool.get();
-        buf.extend_from_slice(&[0u8; 8192]);
-        assert!(
-            buf.capacity() >= 8192,
-            "first resize must grow buffer capacity",
-        );
+    for _ in 0..1_000 {
+        let mut buffer = pools.get::<u8>();
+        buffer
+            .try_extend_from_slice(&[0; 256])
+            .expect("eager capacity is sufficient");
     }
 
-    let bytes_before = pool.allocated_bytes();
-    let misses_before = pool.stats().alloc_misses;
-    let buf = pool.get();
-    drop(buf);
-    let misses_after = pool.stats().alloc_misses;
-    let bytes_after = pool.allocated_bytes();
-
-    assert_eq!(
-        misses_after, misses_before,
-        "re-get of previously grown buffer should not miss the pool",
-    );
-    assert_eq!(
-        bytes_after, bytes_before,
-        "re-get of previously grown buffer should not allocate new bytes",
-    );
+    assert_eq!(pools.stats().allocated_bytes, before);
 }
 
 #[kithara::test(serial)]
-fn test_no_leak_after_many_cycles() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-    pool.pre_warm(4, |v| v.resize(4096, 0));
-
-    for _ in 0..10 {
-        let _buf = pool.get();
-    }
-
-    let misses_before = pool.stats().alloc_misses;
-    let bytes_before = pool.allocated_bytes();
-
-    for _ in 0..1000 {
-        let mut buf = pool.get();
-        buf.extend_from_slice(&[0u8; 256]);
-    }
-
-    let misses_after = pool.stats().alloc_misses;
-    let bytes_after = pool.allocated_bytes();
-
-    assert_eq!(
-        misses_after, misses_before,
-        "reused buffers should not trigger new allocation misses",
+fn eager_sample_capacity_makes_shorter_ensure_len_a_noop() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder()
+            .initial_buffers(4)
+            .initial_capacity(4_096)
+            .max_buffers(8)
+            .build(),
     );
-    assert_eq!(
-        bytes_after, bytes_before,
-        "allocated bytes should stay stable across repeated reuse cycles",
-    );
-}
+    let mut buffer = pools.get::<f32>();
+    let capacity = buffer.capacity();
+    let bytes = pools.stats().allocated_bytes;
 
-#[kithara::test(serial)]
-fn test_ensure_len_reuse_avoids_alloc() {
-    let pool = SharedPool::<4, Vec<f32>>::new(16, 200_000);
-    pool.pre_warm(4, |v| v.resize(4096, 0.0));
+    buffer
+        .ensure_len(2_048)
+        .expect("eager sample capacity is sufficient");
 
-    for _ in 0..10 {
-        let _buf = pool.get();
-    }
-
-    let misses_before = pool.stats().alloc_misses;
-    let mut buf = pool.get();
-    let capacity_before = buf.capacity();
-    let result = buf.ensure_len(2048);
-    let capacity_after = buf.capacity();
-    drop(buf);
-    let misses_after = pool.stats().alloc_misses;
-
-    assert!(result.is_ok(), "ensure_len within capacity should succeed");
-    assert!(
-        capacity_before >= 4096,
-        "pre-warmed buffer should keep configured capacity",
-    );
-    assert_eq!(
-        capacity_after, capacity_before,
-        "ensure_len within capacity should not grow buffer capacity",
-    );
-    assert_eq!(
-        misses_after, misses_before,
-        "ensure_len within capacity should not cause a new pool miss",
-    );
+    assert!(capacity >= 4_096);
+    assert_eq!(buffer.capacity(), capacity);
+    assert_eq!(pools.stats().allocated_bytes, bytes);
 }

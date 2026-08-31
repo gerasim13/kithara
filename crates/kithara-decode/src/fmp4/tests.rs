@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::PoolRegion;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::AudioChunk;
 use kithara_stream::{AudioCodec, ByteMap};
@@ -23,6 +23,7 @@ use crate::{
         parsing::{parse_init, parse_segment_frames},
     },
     symphonia::{SymphoniaCodec, SymphoniaConfig},
+    test_pools::{TestPools, pools},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
 
@@ -56,7 +57,7 @@ impl Seek for InstrumentedSource {
 }
 
 type DecoderHarness = (
-    ComposedDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
+    ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, SymphoniaCodec, TestPools>,
     Arc<Mutex<Vec<Range<u64>>>>,
     Arc<AtomicBool>,
 );
@@ -70,11 +71,19 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         record: Arc::clone(&record),
     });
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
+    let pools = pools();
     let demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, BytePool::default()).expect("BUG: build demuxer");
+        Fmp4SegmentDemuxer::open(source, layout, pools.clone()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
         .expect("BUG: open codec");
-    let decoder = ComposedDecoder::new(demuxer, codec, DecoderRuntime::for_test());
+    let decoder = ComposedDecoder::new(
+        demuxer,
+        codec,
+        DecoderRuntime {
+            pools,
+            ..DecoderRuntime::for_test()
+        },
+    );
     (decoder, reads, record)
 }
 
@@ -103,7 +112,7 @@ fn next_chunk_yields_pcm_from_init_plus_segment_zero() {
 /// Helper used by the RED scaffolds below: pull one PCM chunk from the
 /// decoder, returning `None` on EOF or after exhausting the retry budget.
 fn pull_one_chunk(
-    decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer, SymphoniaCodec>,
+    decoder: &mut ComposedDecoder<Fmp4SegmentDemuxer<TestPools>, SymphoniaCodec, TestPools>,
 ) -> Option<AudioChunk> {
     for _ in 0..16 {
         match decoder.next_chunk().ok()? {
@@ -253,8 +262,8 @@ fn seek_emits_notneeded_for_first_segment_flac() {
     let (blob, segmented) = build_test_layout(TestLayoutCodec::Flac, 3);
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
-    let mut demuxer = Fmp4SegmentDemuxer::open(source, layout, BytePool::default())
-        .expect("BUG: build FLAC demuxer");
+    let mut demuxer =
+        Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build FLAC demuxer");
 
     let outcome = demuxer
         .seek(Duration::ZERO, CodecPriming::default())
@@ -277,7 +286,7 @@ type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 /// produce, then returns the per-frame `(offset, size)` access-unit ranges.
 fn aac_codec_and_frames() -> AacFrameHarness {
     let init_bytes = read_fixture("init-slq-a1.mp4");
-    let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse AAC init");
+    let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
     let extra_data = init.config.as_ref().to_vec();
     let track = TrackInfo {
         extra_data,
@@ -300,12 +309,12 @@ fn decode_all_aac(
     codec: &mut SymphoniaCodec,
     seg: &[u8],
     ranges: &[(usize, usize)],
-    pool: &SamplePool,
+    pools: &PoolRegion<TestPools>,
 ) -> Vec<f32> {
     let mut out_pcm = Vec::new();
     for &(offset, size) in ranges {
         let frame_data = &seg[offset..offset + size];
-        let mut buf = pool.get();
+        let mut buf = pools.get::<f32>();
         codec
             .decode_frame(frame_data, Duration::ZERO, &[], &mut buf)
             .expect("BUG: decode AAC frame");
@@ -321,12 +330,12 @@ fn decode_all_aac(
 /// pro-DJ zero tolerance for sample drift.
 #[kithara::test]
 fn symphonia_aac_decode_is_bit_identical_across_passes() {
-    let pool = SamplePool::default();
+    let pools = pools();
     let (mut codec_a, seg, ranges) = aac_codec_and_frames();
-    let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pool);
+    let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pools);
 
     let (mut codec_b, _, _) = aac_codec_and_frames();
-    let pcm_b = decode_all_aac(&mut codec_b, &seg, &ranges, &pool);
+    let pcm_b = decode_all_aac(&mut codec_b, &seg, &ranges, &pools);
 
     assert!(!pcm_a.is_empty(), "decode produced no PCM");
     assert_eq!(
@@ -335,39 +344,30 @@ fn symphonia_aac_decode_is_bit_identical_across_passes() {
     );
 }
 
-/// R-tovec: a warm per-packet AAC decode loop must not grow the pool's
-/// `alloc_misses` after warm-up. The zero-copy `PacketRef` entry borrows
-/// the frame slice instead of cloning it into an owning `Packet`, so the
-/// per-packet heap allocation is gone; the `RTSan` lane is the malloc
-/// oracle, this guards against any accidental per-call pool growth.
 #[kithara::test]
-fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
-    let pool = SamplePool::new(32, 8192);
+fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
+    let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
     for &(offset, size) in ranges.iter().take(8) {
-        let mut buf = pool.get();
+        let mut buf = pools.get::<f32>();
         codec
             .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
             .expect("BUG: warm-up decode");
     }
-    let warm_misses = pool.stats().alloc_misses;
+    let warm_bytes = pools.stats().allocated_bytes;
 
     for _ in 0..50 {
         for &(offset, size) in &ranges {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             codec
                 .decode_frame(&seg[offset..offset + size], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: warm decode");
         }
     }
 
-    assert_eq!(
-        pool.stats().alloc_misses,
-        warm_misses,
-        "warm AAC decode must not allocate fresh pool buffers per packet"
-    );
+    assert_eq!(pools.stats().allocated_bytes, warm_bytes);
 }
 
 /// A decoder instance strips its own algorithmic delay from the head of the
@@ -385,10 +385,10 @@ fn symphonia_aac_warm_decode_does_not_grow_pool_alloc_misses() {
 /// same figure.
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
-    let pool = SamplePool::default();
+    let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
-    let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pool);
+    let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pools);
 
     let channels = u64::from(codec.spec().channels.max(1));
     let emitted = pcm.len() as u64 / channels;

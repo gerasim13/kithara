@@ -1,11 +1,16 @@
 use std::num::NonZero;
 
-use kithara_bufpool::SamplePool;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use realfft::RealFftPlanner;
 
-use super::{StretchControls, WarpConfig, WarpRenderer};
+use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
+use crate::{
+    WarpConfig,
+    test_pools::{Pools, TestPools, pools, sample_buffer},
+};
+
+type WarpRenderer = GenericWarpRenderer<TestPools>;
 
 mod playback;
 mod target;
@@ -43,7 +48,7 @@ fn sine(frames: usize) -> Vec<f32> {
     out
 }
 
-fn chunk(samples: &[f32]) -> AudioChunk {
+fn chunk(pools: &Pools, samples: &[f32]) -> AudioChunk {
     let frames = samples.len() / usize::from(Consts::CH);
     AudioChunk::new(
         AudioChunkInfo {
@@ -55,12 +60,12 @@ fn chunk(samples: &[f32]) -> AudioChunk {
             timestamp: Duration::ZERO,
             ..Default::default()
         },
-        SamplePool::default().attach(samples.to_vec()),
+        sample_buffer(pools, samples),
     )
 }
 
-fn chunk_at(samples: &[f32], frame_offset: u64) -> AudioChunk {
-    let mut chunk = chunk(samples);
+fn chunk_at(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
+    let mut chunk = chunk(pools, samples);
     chunk.meta.frame_offset = frame_offset;
     chunk.meta.timestamp = spec()
         .duration_for(frame_offset)
@@ -111,7 +116,7 @@ fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
     WarpRenderer::new(
         &WarpConfig::builder().stretch(controls).build(),
         spec(),
-        SamplePool::default(),
+        pools(),
     )
 }
 

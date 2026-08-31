@@ -1,6 +1,6 @@
 use super::{
     ir::{Pt, Rect},
-    pool::{Buffer, VecPool},
+    pool::{Buffer, VecGuard},
 };
 
 /// One move a vector outline is made of, in logical pixels.
@@ -58,10 +58,10 @@ impl PoolPath {
         }
     }
 
-    pub(super) fn pooled(rule: FillRule, pool: &VecPool<Verb>) -> Self {
+    pub(super) fn pooled(rule: FillRule, guard: VecGuard<Verb>) -> Self {
         Self {
             rule,
-            verbs: Buffer::pooled(pool),
+            verbs: Buffer::pooled(guard),
         }
     }
 
@@ -71,8 +71,8 @@ impl PoolPath {
         }
     }
 
-    pub(super) fn into_pooled(mut self, pool: &VecPool<Verb>) -> Self {
-        self.verbs = self.verbs.into_pooled(pool);
+    pub(super) fn into_pooled(mut self, acquire: impl FnOnce() -> VecGuard<Verb>) -> Self {
+        self.verbs = self.verbs.into_pooled(acquire);
         self
     }
 

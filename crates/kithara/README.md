@@ -38,16 +38,27 @@ available when `hls` is enabled.
 ```rust
 use kithara::audio::ReadOutcome;
 use kithara::assets::AssetStore;
-use kithara::bufpool::{BytePool, SamplePool};
+use kithara::bufpool::{OverallBudget, PoolConfig, pool_schema};
 use kithara::prelude::*;
 
-let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
-    "https://example.com/song.mp3",
-)?)
-    .store(AssetStore::builder().build())
-    .byte_pool(BytePool::default())
-    .sample_pool(SamplePool::default())
-    .build();
+pool_schema! {
+    AppPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+let pool_config = || PoolConfig::builder().max_buffers(128).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(pool_config())
+    .samples(pool_config())
+    .build()?;
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+let config: ResourceConfig<AppPools> =
+    ResourceConfig::for_src(ResourceSrc::parse("https://example.com/song.mp3")?)
+        .store(AssetStore::builder(pools).build())
+        .worker(worker)
+        .build();
 let mut resource = Resource::new(config).await?;
 resource.preload().await?;
 

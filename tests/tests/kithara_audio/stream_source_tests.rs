@@ -7,7 +7,6 @@ use kithara::{
         AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ConsumerWakeMode,
         ReadOutcome, RubatoBackend,
     },
-    bufpool::Region,
     events::{AudioEvent, DecoderChangeCause, DecoderEvent, Event, SeekEpoch, SeekLifecycleStage},
     platform::time::{self, Duration, Instant},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio, TrackConfig},
@@ -16,6 +15,7 @@ use kithara::{
     warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
     kithara,
     memory_source::{MemStream, MemStreamConfig, MemorySource},
     reads::blocking_audio,
@@ -35,9 +35,9 @@ fn wav_stream(samples: usize) -> AudioConfig<MemStream> {
 }
 
 async fn wait_for_frames(
-    mut audio: RegisteredAudio<Stream<MemStream>>,
+    mut audio: RegisteredAudio<Stream<MemStream>, TestPools>,
     budget: Duration,
-) -> (RegisteredAudio<Stream<MemStream>>, usize) {
+) -> (RegisteredAudio<Stream<MemStream>, TestPools>, usize) {
     let mut buf = [0.0f32; 256];
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
@@ -61,9 +61,9 @@ async fn wait_for_frames(
 }
 
 async fn wait_for_chunk(
-    mut audio: RegisteredAudio<Stream<MemStream>>,
+    mut audio: RegisteredAudio<Stream<MemStream>, TestPools>,
     budget: Duration,
-) -> (RegisteredAudio<Stream<MemStream>>, AudioChunk) {
+) -> (RegisteredAudio<Stream<MemStream>, TestPools>, AudioChunk) {
     let deadline = Instant::now() + budget;
     while Instant::now() < deadline {
         let (next_audio, outcome) = blocking_audio(audio, |audio| audio.next_chunk()).await;
@@ -81,8 +81,8 @@ async fn wait_for_chunk(
 /// Unlike [`wait_for_frames`], a pass that yields no frames is a result, not a
 /// panic, so a caller can keep the output moving while it watches the bus.
 async fn pump_once(
-    audio: RegisteredAudio<Stream<MemStream>>,
-) -> (RegisteredAudio<Stream<MemStream>>, ReadOutcome) {
+    audio: RegisteredAudio<Stream<MemStream>, TestPools>,
+) -> (RegisteredAudio<Stream<MemStream>, TestPools>, ReadOutcome) {
     let mut buf = [0.0f32; 256];
     let (audio, (_buf, outcome)) = blocking_audio(audio, move |audio| {
         let outcome = audio.read(&mut buf);
@@ -93,9 +93,9 @@ async fn pump_once(
 }
 
 async fn drain_to_eof(
-    mut audio: RegisteredAudio<Stream<MemStream>>,
+    mut audio: RegisteredAudio<Stream<MemStream>, TestPools>,
     budget: Duration,
-) -> (RegisteredAudio<Stream<MemStream>>, usize) {
+) -> (RegisteredAudio<Stream<MemStream>, TestPools>, usize) {
     let mut buf = [0.0f32; 4096];
     let mut total = 0usize;
     let deadline = Instant::now() + budget;
@@ -121,10 +121,8 @@ async fn drain_to_eof(
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn basic_decode_to_eof() {
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(8_000);
     let audio = worker.open(config).await.expect("audio construction");
 
@@ -181,10 +179,8 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
     let config = TrackConfig::for_audio(audio)
         .warp(WarpConfig::builder().stretch(controls).build())
         .build();
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
     let gate = audio
@@ -261,10 +257,8 @@ async fn non_unity_route_change_resumes_ahead_of_the_consumer(#[case] backend: S
     tracing("kithara_audio=debug,kithara_decode=debug,kithara_stream=debug")
 )]
 async fn seek_during_active_decode_completes_without_hang() {
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(44_100 * 3);
     let audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
@@ -329,10 +323,8 @@ async fn seek_during_active_decode_completes_without_hang() {
 async fn rapid_seeks_via_timeline_all_complete() {
     const SEEK_COUNT: usize = 6;
 
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let config = wav_stream(44_100 * 4);
     let mut audio = worker.open(config).await.expect("audio construction");
     let mut events = audio.event_bus().subscribe();
@@ -470,10 +462,8 @@ async fn rapid_seeks_via_timeline_all_complete() {
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn truncated_wav_surfaces_decode_error_or_eof() {
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let region = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(region).build());
     let mut wav = signal::wav(44_100, 2, 44_100, signal::TONE);
     wav.truncate(wav.len() / 4);
     let source = MemorySource::new(wav);

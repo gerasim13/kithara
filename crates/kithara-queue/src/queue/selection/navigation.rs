@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
 use tracing::debug;
 
@@ -8,7 +9,10 @@ use crate::{
     track::TrackEntry,
 };
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Advance to the next track per navigation rules. Returns the newly
     /// selected id, or `None` when the queue has ended (and
     /// [`RepeatMode::Off`](crate::navigation::RepeatMode::Off) is active).

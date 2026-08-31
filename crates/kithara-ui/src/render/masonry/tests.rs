@@ -1539,6 +1539,73 @@ fn hosted_module_retains_its_engine_owned_knob_outside_the_control() {
     assert!(root.take_actions().is_empty());
 }
 
+fn stepping_surface(registry: &dyn EndpointRegistry) -> CompiledUi {
+    fixture_ui(
+        "gallery-tempo",
+        r#"Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+            Row(
+                id: "tempo",
+                size: (w: Fixed(40.0), h: Fixed(40.0)),
+                gap: 0.0,
+                pad: 0.0,
+                write: Parameter(id: "player.output.volume"),
+                children: [],
+            ),
+        ])"#,
+        registry,
+    )
+}
+
+fn stepping_root(ui: &CompiledUi, reads: &FixtureReads) -> MasonryRoot<TestAction> {
+    let host = MasonryHost::map_actions(ctx(ui, reads), builtin::skin(), TestAction::Document);
+    let output = document::render(&ui.root, ctx(ui, reads), host);
+    let mut root = masonry_root(output, 200, 120);
+    root.take_platform_signals();
+    root
+}
+
+#[kithara::test]
+fn a_stepping_surface_keeps_its_drag_after_the_pointer_leaves_the_flow() {
+    let registry = fixture_registry();
+    let ui = stepping_surface(&registry);
+    let reads = FixtureReads;
+    let mut root = stepping_root(&ui, &reads);
+
+    root.handle_pointer_event(pointer_down(10.0, 50.0))
+        .unwrap_or_else(|error| panic!("arming the surface must remain typed: {error}"));
+    root.take_actions();
+
+    assert_eq!(
+        root.handle_pointer_event(pointer_move(150.0, 34.0))
+            .unwrap_or_else(|error| panic!("a drag past the edge must remain typed: {error}")),
+        Handled::Yes,
+    );
+    assert_step(&root.take_actions(), "demo/tempo", 4.0);
+}
+
+#[kithara::test]
+fn a_stepping_surface_released_off_the_flow_is_not_still_armed() {
+    let registry = fixture_registry();
+    let ui = stepping_surface(&registry);
+    let reads = FixtureReads;
+    let mut root = stepping_root(&ui, &reads);
+
+    root.handle_pointer_event(pointer_down(10.0, 50.0))
+        .unwrap_or_else(|error| panic!("arming the surface must remain typed: {error}"));
+    root.handle_pointer_event(pointer_move(150.0, 34.0))
+        .unwrap_or_else(|error| panic!("a drag past the edge must remain typed: {error}"));
+    root.handle_pointer_event(pointer_up(150.0, 34.0))
+        .unwrap_or_else(|error| panic!("releasing past the edge must remain typed: {error}"));
+    root.take_actions();
+
+    root.handle_pointer_event(pointer_move(10.0, 60.0))
+        .unwrap_or_else(|error| panic!("a hover after the release must remain typed: {error}"));
+    assert!(
+        root.take_actions().is_empty(),
+        "a released surface must not step under a bare hover"
+    );
+}
+
 #[kithara::test]
 fn a_knob_nested_in_a_pressable_popover_keeps_the_engine_gesture() {
     let mut registry = fixture_registry();
@@ -2181,6 +2248,20 @@ fn wheel_actions() -> Vec<WheelAction> {
             },
         },
     ]
+}
+
+fn assert_step(actions: &[TestAction], path: &str, expected: f32) {
+    let [
+        TestAction::Document(UiEvent::Control {
+            path: actual,
+            action: ControlAction::StepScalar(steps),
+        }),
+    ] = actions
+    else {
+        panic!("a stepping surface must emit exactly one typed step action: {actions:?}");
+    };
+    assert_eq!(actual, path);
+    assert_eq!(*steps, expected);
 }
 
 fn assert_scalar_value(actions: &[TestAction], path: &str, expected: f32) {

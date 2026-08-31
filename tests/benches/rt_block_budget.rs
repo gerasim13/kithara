@@ -4,7 +4,6 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::SamplePool,
     events::TrackId,
     platform::{
         sync::Arc,
@@ -17,7 +16,10 @@ use kithara::{
     },
     signal::AudioSpec,
 };
-use kithara_integration_tests::audio_mock::TestPcmReader;
+use kithara_integration_tests::{
+    audio_mock::TestPcmReader,
+    bufpool_ext::{Pools, pools},
+};
 use ringbuf::traits::Producer;
 
 struct Consts;
@@ -58,15 +60,17 @@ fn spec() -> AudioSpec {
     )
 }
 
-fn processor() -> (PlayerNodeProcessor, SlotControl) {
+fn processor() -> (PlayerNodeProcessor, SlotControl, Pools) {
     let (inputs, control) = slot_channels(SharedEq::new(0));
+    let pools = pools();
     let shape = StreamShape {
         sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(Consts::BLOCK_FRAMES, "block frames"),
     };
     (
-        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
+        PlayerNodeProcessor::new(inputs, shape, &pools),
         control,
+        pools,
     )
 }
 
@@ -76,8 +80,12 @@ fn send(control: &mut SlotControl, cmd: PlayerCmd) {
     }
 }
 
-fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, count: usize) {
-    let pool = SamplePool::default();
+fn load_tracks(
+    processor: &mut PlayerNodeProcessor,
+    control: &mut SlotControl,
+    pools: &Pools,
+    count: usize,
+) {
     let tracks: Vec<(TrackId, Arc<str>)> = (0..count)
         .map(|idx| {
             (
@@ -95,7 +103,10 @@ fn load_tracks(processor: &mut PlayerNodeProcessor, control: &mut SlotControl, c
         send(
             control,
             PlayerCmd::LoadTrack {
-                resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
+                resource: Box::new(
+                    PlayerResource::new(resource, Arc::clone(src), pools)
+                        .expect("bench player resource fits the pool budget"),
+                ),
                 item_id: *item_id,
             },
         );
@@ -141,8 +152,8 @@ fn peak_of(samples: &[f32]) -> f32 {
 }
 
 fn measure(tracks: usize) -> Measurement {
-    let (mut processor, mut control) = processor();
-    load_tracks(&mut processor, &mut control, tracks);
+    let (mut processor, mut control, pools) = processor();
+    load_tracks(&mut processor, &mut control, &pools, tracks);
 
     let frames = block_frames();
     let mut out_l = vec![0.0_f32; frames];

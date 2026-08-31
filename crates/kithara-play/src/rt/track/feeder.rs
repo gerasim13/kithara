@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
 use num_traits::cast::AsPrimitive;
@@ -91,23 +91,22 @@ impl PlayerResource {
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates channel scratch from the given sample pool.
-    #[must_use]
-    pub fn new(resource: Resource, src: Arc<str>, pool: &SamplePool) -> Self {
+    /// Allocates two per-channel scratch buffers through the given pool facade,
+    /// each holding [`Self::scratch_frames`] frames.
+    pub fn new<S>(
+        resource: Resource,
+        src: Arc<str>,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
+        let left = pools.get_with_len::<f32>(buffer_frames)?;
+        let right = pools.get_with_len::<f32>(buffer_frames)?;
 
-        let scratch = || {
-            pool.get_with(|b: &mut Vec<f32>| {
-                let cap = b.capacity();
-                if cap < buffer_frames {
-                    b.reserve(buffer_frames - cap);
-                }
-                b.resize(buffer_frames, 0.0);
-            })
-        };
-        let channel_buffers = std::array::from_fn(|_| scratch());
-        Self {
-            channel_buffers,
+        Ok(Self {
+            channel_buffers: [left, right],
             media_spans: VecDeque::with_capacity(buffer_frames),
             src,
             resource: WasmSend::new(resource),
@@ -116,7 +115,7 @@ impl PlayerResource {
             consumed_media_seconds: 0.0,
             eof_seen: false,
             failed: false,
-        }
+        })
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no

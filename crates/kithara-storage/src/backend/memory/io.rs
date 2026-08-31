@@ -38,14 +38,7 @@ impl DriverIo for MemDriver {
             let snapshot = state.buf[..end_usize].to_vec();
             self.committed.store(Some(Arc::new(snapshot)));
         }
-        // Release the working buffer THROUGH THE POOL: replacing it drops the
-        // old `PooledOwned`, whose `Drop` returns the buffer to the pool and
-        // credits its bytes back to the byte budget (and trims it). A manual
-        // `clear`/`shrink_to_fit` via `DerefMut` would free the memory but leak
-        // the budget — `ensure_len` charges the pool on growth and only `put`
-        // (on drop) releases it — eventually exhausting the budget and stalling
-        // later allocations. Shrink `state.len` to the committed length.
-        state.buf = state.pool.get();
+        state.buf.renew();
         state.len = end;
         drop(state);
         Ok(())
@@ -218,15 +211,20 @@ mod tests {
 
     use kithara_platform::{sync::Arc, time::Duration};
 
-    use crate::backend::{
-        memory::driver::{MemDriver, MemOptions},
-        traits::{Driver, DriverIo},
+    use crate::{
+        backend::{
+            memory::driver::{MemDriver, MemOptions},
+            traits::{Driver, DriverIo},
+        },
+        test_pools::{byte_buffer, pools},
     };
 
     #[kithara::test]
     fn committed_snapshot_from_initial_data() {
+        let pools = pools();
         let (driver, _state) = MemDriver::open(
             MemOptions::builder()
+                .buffer(byte_buffer(&pools))
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )
@@ -258,8 +256,10 @@ mod tests {
     /// (index out of range) on a reader thread.
     #[kithara::test(timeout(Duration::from_secs(30)))]
     fn concurrent_commit_reactivate_and_reads_never_panic() {
+        let pools = pools();
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open must succeed");
         driver
             .write_at(0, b"hello world", false)
             .expect("active write must succeed");
@@ -300,8 +300,10 @@ mod tests {
 
     #[kithara::test]
     fn read_committed_without_snapshot_returns_none() {
+        let pools = pools();
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open empty must succeed");
 
         assert_eq!(driver.committed_len(), None);
 
@@ -317,8 +319,10 @@ mod tests {
 
     #[kithara::test]
     fn commit_frees_working_buffer_and_reactivate_restores_it() {
+        let pools = pools();
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open empty must succeed");
 
         driver
             .write_at(0, b"hello world", false)
@@ -330,7 +334,7 @@ mod tests {
         // The committed bytes live in the snapshot, not the working buffer: the
         // working buffer is released back to the pool (replaced by an empty one),
         // so it no longer holds a second copy. (Asserting `len`, not `capacity`,
-        // since the pool retains/recycles capacity for reuse — see `Reuse`.)
+        // since the pool can retain the released capacity for reuse.)
         assert_eq!(
             driver.state.lock().buf.len(),
             0,
@@ -376,15 +380,21 @@ mod tests {
 
     #[kithara::test]
     fn zero_length_committed_publishes_no_snapshot() {
+        let pools = pools();
         // Empty initial data: committed but length 0 → no snapshot (matches mmap `Empty`).
-        let (driver, _state) =
-            MemDriver::open(MemOptions::builder().initial_data(Vec::new()).build())
-                .expect("open with empty initial data must succeed");
+        let (driver, _state) = MemDriver::open(
+            MemOptions::builder()
+                .buffer(byte_buffer(&pools))
+                .initial_data(Vec::new())
+                .build(),
+        )
+        .expect("open with empty initial data must succeed");
         assert_eq!(driver.committed_len(), None);
 
         // commit(Some(0)) on an empty buffer likewise publishes no snapshot.
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open empty must succeed");
         driver.commit(Some(0)).expect("commit(0) must succeed");
         assert_eq!(driver.committed_len(), None);
     }

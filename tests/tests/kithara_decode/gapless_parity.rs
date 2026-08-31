@@ -5,10 +5,12 @@ use kithara::{
         DecodeResult, Decoder, DecoderBackend, DecoderConfig, DecoderFactory, GaplessTrimmer,
     },
     platform::time::Duration,
+    resampler::NoResamplerBackend,
     stream::{AudioCodec as StreamAudioCodec, AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::{PackagedAudioRequest, PackagedAudioSource, PackagedSignal},
 };
 use kithara_test_fixtures::SignalAsset;
@@ -19,6 +21,8 @@ use crate::gapless_common::{
     GAPLESS_SAMPLE_RATE,
 };
 
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+
 #[kithara::test(native, tokio, timeout(Duration::from_secs(20)), hang_timeout_secs(1))]
 async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory_paths() {
     let server = TestServerHelper::new().await;
@@ -27,10 +31,7 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let direct = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("create direct AAC fMP4 decoder");
     let direct_gapless = direct
@@ -49,9 +50,8 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
     let probe = create_decoder_with_probe(
         fixture.bytes.clone(),
         "m4a",
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        TestDecoderConfig::builder()
+            .pools(pools())
             .hint("m4a")
             .build(),
     )
@@ -62,9 +62,8 @@ async fn generated_aac_elst_visible_frames_match_generated_timing_across_factory
 
     let preferred = create_decoder_from_media_info(
         &fixture,
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        TestDecoderConfig::builder()
+            .pools(pools())
             .backend(DecoderBackend::default())
             .build(),
     )
@@ -173,7 +172,7 @@ async fn generated_aac_elst_fixture(
 
 fn create_decoder_from_media_info(
     fixture: &GaplessFixture,
-    config: DecoderConfig,
+    config: TestDecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     DecoderFactory::create_from_media_info(
         Cursor::new(fixture.bytes.clone()),
@@ -185,7 +184,7 @@ fn create_decoder_from_media_info(
 fn create_decoder_with_probe(
     bytes: Vec<u8>,
     hint: &'static str,
-    config: DecoderConfig,
+    config: TestDecoderConfig,
 ) -> DecodeResult<Box<dyn Decoder>> {
     DecoderFactory::create_with_probe(Cursor::new(bytes), Some(hint), config)
 }
@@ -265,10 +264,7 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         create_decoder_with_probe(
             bytes.clone(),
             hint,
-            DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .sample_pool(kithara::bufpool::SamplePool::default())
-                .build(),
+            TestDecoderConfig::builder().pools(pools()).build(),
         )
         .expect("create default decoder"),
     )
@@ -277,9 +273,8 @@ async fn generated_encoded_signal_visible_frames_match_requested_signal_frames(
         create_decoder_with_probe(
             bytes,
             hint,
-            DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-                .byte_pool(kithara::bufpool::BytePool::default())
-                .sample_pool(kithara::bufpool::SamplePool::default())
+            TestDecoderConfig::builder()
+                .pools(pools())
                 .backend(DecoderBackend::default())
                 .build(),
         )

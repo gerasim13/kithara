@@ -1,6 +1,6 @@
-use kithara_bufpool::{BudgetExhausted, SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 
-pub(super) struct GridBuffers {
+pub(crate) struct GridBuffers {
     pub(super) gaps: SampleBuffer,
     pub(super) marks: SampleBuffer,
     pub(super) neighbors: SampleBuffer,
@@ -10,14 +10,17 @@ pub(super) struct GridBuffers {
 }
 
 impl GridBuffers {
-    pub(super) fn new(pool: &SamplePool) -> Self {
+    pub(crate) fn new<S>(pools: &PoolRegion<S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
         Self {
-            gaps: pool.get(),
-            marks: pool.get(),
-            neighbors: pool.get(),
-            outliers: pool.get(),
-            positions: pool.get(),
-            sorted: pool.get(),
+            gaps: pools.get::<f32>(),
+            marks: pools.get::<f32>(),
+            neighbors: pools.get::<f32>(),
+            outliers: pools.get::<f32>(),
+            positions: pools.get::<f32>(),
+            sorted: pools.get::<f32>(),
         }
     }
 }
@@ -25,7 +28,7 @@ impl GridBuffers {
 pub(super) fn fill(
     buffer: &mut SampleBuffer,
     values: impl ExactSizeIterator<Item = f32>,
-) -> Result<(), BudgetExhausted> {
+) -> Result<(), PoolError> {
     buffer.clear();
     buffer.ensure_len(values.len())?;
     for (slot, value) in buffer.iter_mut().zip(values) {

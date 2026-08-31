@@ -98,7 +98,7 @@ never in production code.
 ## Layering and retry budgets
 
 `HttpClient` (or `AppleNet`) is `RetryNet<Raw*, DefaultRetryPolicy>` over the raw one-shot client; `Raw*` is never
-constructed by callers. `HttpClient::new(options, cancel)` panics if the backend builder fails, and `cancel` MUST come
+constructed by callers. `HttpClient::new(options, pools, cancel)` panics if the backend builder fails, and `cancel` MUST come
 from the consumer crate's cancel tree (`master_cancel.child()` at `App` / `Queue` / FFI player) — orphan tokens are
 forbidden in production code. `with_observer` rebuilds the retry layer around the *same* inner client and
 `ConnectionMetrics`, so swapping observers never reopens the pool.
@@ -139,8 +139,8 @@ speed", and a 10s cap raced real fixtures.
 
 `NetOptions` is a `bon` builder with defaults: `compression` all four codings, `inactivity_timeout` 30s, `impersonate`
 `Safari`, `retry_policy` (3 retries / 100ms base / 5s max, exponential ×2), `is_insecure` false, `body_queue_capacity` 32,
-`body_queue_resume_at` 16, `pool_max_idle_per_host` 8, `pool_idle_timeout` 5s, default `byte_pool`.
-`FromWithParams<Self, BytePool>` injects a shared pool without rebuilding the rest. `pool_idle_timeout` reaches the two
+`body_queue_resume_at` 16, `pool_max_idle_per_host` 8, and `pool_idle_timeout` 5s. The application-owned
+`PoolRegion<S>` is an explicit `HttpClient` constructor dependency and stays out of network policy. `pool_idle_timeout` reaches the two
 native client builders only; the Apple backend has no Foundation equivalent for it. Native clients additionally enable
 the cookie store.
 
