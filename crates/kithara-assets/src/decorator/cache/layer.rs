@@ -905,7 +905,7 @@ mod tests {
 
         let reader = reader.release();
         assert!(cached.cache.lock().is_empty());
-        assert_eq!(drained(&mut invalidations), [key.clone()]);
+        assert_eq!(drained(&mut invalidations), [key]);
         drop(reader);
     }
 

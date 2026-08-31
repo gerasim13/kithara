@@ -10,6 +10,7 @@ use std::num::NonZeroUsize;
 use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, ResourceKey, StorageBackend, WriteSide,
 };
+use kithara_bufpool::testing::TestPools;
 use kithara_platform::{sync::Arc, time::Duration, tokio::sync::mpsc};
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
@@ -17,8 +18,8 @@ use support::{Test, resource, source};
 const ROOT_A: &str = "asset_root_a";
 const ROOT_B: &str = "asset_root_b";
 
-type TestAssetStore = AssetStore<support::pools::TestPools>;
-type TestAssetScope = AssetScope<support::pools::TestPools>;
+type TestAssetStore = AssetStore<TestPools>;
+type TestAssetScope = AssetScope<TestPools>;
 
 fn ephemeral_store(cap: usize) -> TestAssetStore {
     AssetStore::builder(support::pools())
