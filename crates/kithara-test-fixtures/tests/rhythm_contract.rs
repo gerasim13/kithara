@@ -3,6 +3,7 @@
 use kithara_analysis::BeatArtifact;
 use kithara_test_fixtures::assets::by_name;
 use kithara_test_utils::kithara;
+use num_traits::cast;
 
 const STYLES: [(&str, f64); 6] = [
     ("ambient_dub_62", 62.0),
@@ -19,8 +20,22 @@ const CONTROLS: [&str; 4] = [
     "missing_beat",
 ];
 
+struct Consts;
+
+impl Consts {
+    const MARKER_MATCH_RATIO: f64 = 0.75;
+    const MARKER_TOLERANCE_BEATS: f64 = 0.12;
+    const SAMPLE_RATE: f64 = 48_000.0;
+    const SECONDS_PER_MINUTE: f64 = 60.0;
+    const TEMPO_TOLERANCE_RATIO: f64 = 0.04;
+}
+
 fn artifact(style: &str, control: &str) -> BeatArtifact {
-    let name = format!("rhythm_expected_beat_{style}_{control}");
+    artifact_named("rhythm_expected_beat", style, control)
+}
+
+fn artifact_named(prefix: &str, style: &str, control: &str) -> BeatArtifact {
+    let name = format!("{prefix}_{style}_{control}");
     let asset = by_name(&name).unwrap_or_else(|| panic!("missing `{name}`"));
     BeatArtifact::try_from(asset.bytes()).unwrap_or_else(|error| panic!("decode `{name}`: {error}"))
 }
@@ -38,6 +53,10 @@ fn six_styles_expose_every_rhythm_control() {
             assert_eq!(artifact.bpm(), bpm);
             assert!(!artifact.beats().is_empty());
             assert!(!artifact.downbeats().is_empty());
+
+            let analyzed = artifact_named("rhythm_analyzed_beat", style, control);
+            assert!(analyzed.bpm().is_finite() && analyzed.bpm() > 0.0);
+            assert!(!analyzed.beats().is_empty());
         }
     }
 }
@@ -71,4 +90,87 @@ fn score_truth_distinguishes_all_three_negative_controls() {
             "{style}: missing-beat control must leave a real hole"
         );
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn production_analysis_agrees_with_independent_score_truth() {
+    for (style, bpm) in STYLES {
+        for control in CONTROLS {
+            let expected = artifact(style, control);
+            let analyzed = artifact_named("rhythm_analyzed_beat", style, control);
+            let tempo_error = (analyzed.bpm() - bpm).abs();
+            assert!(
+                tempo_error <= bpm * Consts::TEMPO_TOLERANCE_RATIO,
+                "{style}/{control}: analyzed BPM {} differs from score {bpm}",
+                analyzed.bpm()
+            );
+
+            let tolerance = cast(
+                (Consts::SAMPLE_RATE * Consts::SECONDS_PER_MINUTE / bpm
+                    * Consts::MARKER_TOLERANCE_BEATS)
+                    .round(),
+            )
+            .expect("invariant: fixture marker tolerance fits u64");
+            assert_markers_agree(
+                style,
+                control,
+                "beat",
+                expected.beats(),
+                analyzed.beats(),
+                tolerance,
+            );
+        }
+    }
+}
+
+#[kithara::test(native, flash(false))]
+#[ignore = "production beat analysis does not yet classify shifted bar phase"]
+fn production_analysis_tracks_score_downbeat_phase() {
+    for (style, bpm) in STYLES {
+        for control in CONTROLS {
+            let expected = artifact(style, control);
+            let analyzed = artifact_named("rhythm_analyzed_beat", style, control);
+            let tolerance = cast(
+                (Consts::SAMPLE_RATE * Consts::SECONDS_PER_MINUTE / bpm
+                    * Consts::MARKER_TOLERANCE_BEATS)
+                    .round(),
+            )
+            .expect("invariant: fixture marker tolerance fits u64");
+            assert_markers_agree(
+                style,
+                control,
+                "downbeat",
+                expected.downbeats(),
+                analyzed.downbeats(),
+                tolerance,
+            );
+        }
+    }
+}
+
+fn assert_markers_agree(
+    style: &str,
+    control: &str,
+    kind: &str,
+    expected: &[u64],
+    analyzed: &[u64],
+    tolerance: u64,
+) {
+    assert!(!analyzed.is_empty(), "{style}/{control}: no {kind}s");
+    let matched = analyzed
+        .iter()
+        .filter(|marker| {
+            expected
+                .iter()
+                .any(|candidate| marker.abs_diff(*candidate) <= tolerance)
+        })
+        .count();
+    let matched: f64 = cast(matched).expect("invariant: fixture marker count fits f64");
+    let total: f64 = cast(analyzed.len()).expect("invariant: fixture marker count fits f64");
+    let ratio = matched / total;
+    assert!(
+        ratio >= Consts::MARKER_MATCH_RATIO,
+        "{style}/{control}: only {matched}/{} analyzed {kind}s match score within {tolerance} frames: expected={expected:?}, analyzed={analyzed:?}",
+        analyzed.len()
+    );
 }

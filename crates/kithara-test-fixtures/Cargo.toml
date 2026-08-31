@@ -35,10 +35,15 @@ delegate = { workspace = true }
 
 [build-dependencies]
 kithara-analysis = { workspace = true, default-features = false, features = ["analysis-beat", "analysis-waveform", "beat-nn", "client-reqwest", "symphonia", "tls-rustls"] }
-kithara-bufpool = { workspace = true }
+kithara-audio = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
+kithara-decode = { workspace = true, default-features = false, features = ["client-reqwest", "symphonia", "tls-rustls"] }
 kithara-drm = { workspace = true }
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
+kithara-events = { workspace = true }
 kithara-platform = { workspace = true }
+kithara-resampler = { workspace = true, features = ["resample-rubato"] }
+kithara-signal = { workspace = true }
 kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-macros = { workspace = true }
 
@@ -47,6 +52,7 @@ aes = { workspace = true }
 bytes = { workspace = true }
 cbc = { workspace = true }
 delegate = { workspace = true }
+futures-lite = { workspace = true }
 hex = { workspace = true }
 hls_m3u8 = { workspace = true }
 inventory = { workspace = true }

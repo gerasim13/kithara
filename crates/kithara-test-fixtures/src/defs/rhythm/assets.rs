@@ -66,3 +66,40 @@ fn rhythm_expected_beat(_inputs: &[&[u8]], style: Style, control: Control) -> Ve
     BeatArtifact::from(score::truth(style, control)).write_to(&mut bytes);
     bytes
 }
+
+#[kithara::asset(
+    ext = "beat",
+    content_type = "application/x-kithara-beat",
+    depends_on = ["rhythm_wav_{case}"]
+)]
+#[case::ambient_dub_62_aligned()]
+#[case::ambient_dub_62_one_frame_late()]
+#[case::ambient_dub_62_one_beat_bar_late()]
+#[case::ambient_dub_62_missing_beat()]
+#[case::trip_hop_74_aligned()]
+#[case::trip_hop_74_one_frame_late()]
+#[case::trip_hop_74_one_beat_bar_late()]
+#[case::trip_hop_74_missing_beat()]
+#[case::downtempo_96_aligned()]
+#[case::downtempo_96_one_frame_late()]
+#[case::downtempo_96_one_beat_bar_late()]
+#[case::downtempo_96_missing_beat()]
+#[case::house_124_aligned()]
+#[case::house_124_one_frame_late()]
+#[case::house_124_one_beat_bar_late()]
+#[case::house_124_missing_beat()]
+#[case::techno_132_aligned()]
+#[case::techno_132_one_frame_late()]
+#[case::techno_132_one_beat_bar_late()]
+#[case::techno_132_missing_beat()]
+#[case::breakbeat_140_aligned()]
+#[case::breakbeat_140_one_frame_late()]
+#[case::breakbeat_140_one_beat_bar_late()]
+#[case::breakbeat_140_missing_beat()]
+fn rhythm_analyzed_beat(inputs: &[&[u8]]) -> Vec<u8> {
+    super::analyze::beat(
+        inputs
+            .first()
+            .expect("invariant: the declared rhythm WAV dependency is present"),
+    )
+}

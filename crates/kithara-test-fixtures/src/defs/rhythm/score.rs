@@ -10,9 +10,9 @@ struct Consts;
 impl Consts {
     const BEATS_PER_BAR: usize = 4;
     const CHANNELS: u16 = 2;
-    const MISSING_BEAT: usize = 9;
+    const MISSING_BEAT: usize = 5;
     const SAMPLE_RATE: u32 = 48_000;
-    const SECONDS: usize = 36;
+    const SECONDS: usize = 12;
     const SECONDS_PER_MINUTE: f64 = 60.0;
     const TOTAL_FRAMES: usize = 48_000 * Self::SECONDS;
 }
@@ -159,20 +159,24 @@ fn sample(style: Style, control: Control, frame: usize, first: usize, beat_frame
     if missing {
         return pad(style, frame);
     }
+    let bar_phase = usize::from(matches!(control, Control::OneBeatBarLate));
+    let pattern_beat = beat + Consts::BEATS_PER_BAR - bar_phase;
     if within == 0 {
-        return if beat.is_multiple_of(Consts::BEATS_PER_BAR) {
+        return if pattern_beat.is_multiple_of(Consts::BEATS_PER_BAR) {
             28_000
         } else {
             22_000
         };
     }
 
-    let kick = if style.kick(beat) {
+    let kick = if style.kick(pattern_beat) {
         decaying_sine(within, 0.12, 52.0, 11_000.0)
     } else {
         0.0
     };
-    let snare = if beat % Consts::BEATS_PER_BAR == 1 || beat % Consts::BEATS_PER_BAR == 3 {
+    let snare = if pattern_beat % Consts::BEATS_PER_BAR == 1
+        || pattern_beat % Consts::BEATS_PER_BAR == 3
+    {
         decaying_sine(within, 0.08, 190.0, 4_000.0) + decaying_sine(within, 0.05, 2_900.0, 2_000.0)
     } else {
         0.0
