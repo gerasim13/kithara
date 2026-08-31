@@ -40,7 +40,9 @@ pub use sync::{
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use temporal::StretchKind;
-pub use temporal::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError, StretchControls};
+pub use temporal::{
+    ActiveRegion, GridSegment, RegionPlan, RegionPlanError, RenderContext, StretchControls,
+};
 #[cfg(feature = "render")]
 pub use warp::WarpRenderer;
 pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap};

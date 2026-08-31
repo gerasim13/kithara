@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+use kithara_warp::RenderContext;
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
 
@@ -49,6 +50,21 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
+    pub(crate) fn render(
+        &mut self,
+        context: Option<&RenderContext>,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
+        if context.is_some_and(|context| context.for_output_range(range.clone()).is_none()) {
+            self.handle_failed_end(sink.notifications);
+            return TrackReadOutcome::Failed;
+        }
+        self.read(scratch_bufs, mix_bufs, range, sink)
+    }
+
     /// Advance the media clock by source time represented by consumed scratch.
     fn advance_media_clock(&mut self, media_seconds: f64, output_frames: usize) {
         self.served_media_frames =

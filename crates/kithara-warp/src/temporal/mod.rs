@@ -1,6 +1,8 @@
+mod context;
 mod controls;
 mod region;
 
+pub use context::RenderContext;
 pub use controls::StretchControls;
 #[cfg(all(
     not(target_arch = "wasm32"),
