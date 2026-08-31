@@ -85,7 +85,7 @@ mod tests {
         player::PlayerConfig,
         resource::ResourceSrc,
         session::{Cmd, Reply, SessionDispatcher, testing},
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     struct ImmediateSession(Arc<dyn SessionDispatcher<TestPools>>);
@@ -101,7 +101,7 @@ mod tests {
     }
 
     fn resource_config(source: &str) -> ResourceConfig<TestPools> {
-        let pools = default_pools();
+        let pools = pools();
         let src = ResourceSrc::parse(source).expect("valid test source");
         ResourceConfig::for_src(src)
             .store(AssetStore::builder(pools).build())
@@ -109,7 +109,7 @@ mod tests {
     }
 
     fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build())
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]
@@ -149,7 +149,7 @@ mod tests {
 
         let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
         let config = ResourceConfig::<TestPools>::for_src(src)
-            .store(AssetStore::builder(default_pools()).build())
+            .store(AssetStore::builder(pools()).build())
             .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
             .build();
 

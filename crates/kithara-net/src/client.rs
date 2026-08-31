@@ -749,7 +749,7 @@ mod tests {
         let url = server_stalling_body().await;
         let client = HttpClient::new(
             stall_options(),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let err = client
@@ -764,7 +764,7 @@ mod tests {
         let url = server_stalling_body().await;
         let client = HttpClient::new(
             stall_options(),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let err = client
@@ -835,11 +835,7 @@ mod tests {
         let options = NetOptions::builder()
             .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
             .build();
-        let client = HttpClient::new(
-            options,
-            crate::test_pools::default_pools(),
-            CancelToken::never(),
-        );
+        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
 
         let mut caller_headers = Headers::default();
         caller_headers.insert("AcCePt-EnCoDiNg", "br");
@@ -902,11 +898,7 @@ mod tests {
         let options = NetOptions::builder()
             .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
             .build();
-        let client = HttpClient::new(
-            options,
-            crate::test_pools::default_pools(),
-            CancelToken::never(),
-        );
+        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
 
         let Err(error) = client.stream(url, None).await else {
             panic!("encoded bytes must not reach a byte-addressed stream");
@@ -935,7 +927,7 @@ mod tests {
         let url = Url::parse(&format!("http://{addr}/range")).expect("url");
         let client = HttpClient::new(
             NetOptions::default(),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
 
@@ -971,7 +963,7 @@ mod tests {
         let url = Url::parse(&format!("http://{addr}/range")).expect("url");
         let client = HttpClient::new(
             NetOptions::default(),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
 
@@ -1022,7 +1014,7 @@ mod tests {
         let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
         let client = HttpClient::new(
             stall_options(),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let mut body = client.stream(url, None).await.expect("initial stream");
@@ -1077,7 +1069,7 @@ mod tests {
         let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
         let client = HttpClient::new(
             stall_options(),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let mut body = client.stream(url, None).await.expect("initial stream");
@@ -1136,7 +1128,7 @@ mod tests {
         let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
         let client = HttpClient::new(
             stall_options_with_retries(2),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let mut body = client
@@ -1157,7 +1149,7 @@ mod tests {
         let (url, counter) = server_failing_first_n(2).await;
         let client = HttpClient::new(
             fast_options(3),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let bytes = client
@@ -1177,7 +1169,7 @@ mod tests {
         let (url, counter) = server_failing_first_n(2).await;
         let client = HttpClient::new(
             fast_options(0),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let err = client
@@ -1200,7 +1192,7 @@ mod tests {
         let (url, counter) = server_failing_first_n(1).await;
         let client = HttpClient::new(
             fast_options(2),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         client.head(url, None).await.expect("HEAD must retry");
@@ -1212,7 +1204,7 @@ mod tests {
         let (url, counter) = server_post_echo_failing_first_n(1).await;
         let client = HttpClient::new(
             fast_options(2),
-            crate::test_pools::default_pools(),
+            crate::test_pools::pools(),
             CancelToken::never(),
         );
         let echoed = client
@@ -1235,11 +1227,7 @@ mod tests {
         let options = NetOptions::builder()
             .pool_idle_timeout(Duration::from_secs(77))
             .build();
-        let client = HttpClient::new(
-            options,
-            crate::test_pools::default_pools(),
-            CancelToken::never(),
-        );
+        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
 
         assert_eq!(
             client.with_observer(None).options().pool_idle_timeout,

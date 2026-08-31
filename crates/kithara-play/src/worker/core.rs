@@ -173,14 +173,14 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::default_pools;
+    use crate::test_pools::pools;
 
     #[kithara::test]
     fn shared_base_outlives_play_dispatcher_and_play_cancel_stays_local() {
         let base = Worker::new(WorkerConfig::new());
         let cancel = CancelScope::new(None);
         let play = PlayWorker::new(
-            PlayWorkerConfig::builder(default_pools())
+            PlayWorkerConfig::builder(pools())
                 .worker(base.clone())
                 .cancel(cancel.token())
                 .build(),

@@ -7,7 +7,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use kithara_bufpool::HasPool;
+use kithara_bufpool::{
+    HasPool,
+    testing::{TestPools, pools as default_pools},
+};
 use kithara_decode::{
     DecoderChunkOutcome, DecoderConfig, DecoderFactory, DecoderResamplerConfig, DecoderSeekOutcome,
 };
@@ -19,11 +22,6 @@ use kithara_resampler::{
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_utils::kithara;
-
-#[path = "../src/test_pools.rs"]
-mod test_pools;
-
-use test_pools::{TestPools, default_pools};
 
 const CHANNELS: u16 = 2;
 const FRAMES: usize = 4;

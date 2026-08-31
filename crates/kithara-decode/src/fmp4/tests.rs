@@ -23,7 +23,7 @@ use crate::{
         parsing::{parse_init, parse_segment_frames},
     },
     symphonia::{SymphoniaCodec, SymphoniaConfig},
-    test_pools::{TestPools, default_pools},
+    test_pools::{TestPools, pools},
     traits::{BoxedSource, Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
 };
 
@@ -71,7 +71,7 @@ fn make_decoder(blob: Vec<u8>, segmented: FakeSegmented) -> DecoderHarness {
         record: Arc::clone(&record),
     });
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
-    let pools = default_pools();
+    let pools = pools();
     let demuxer =
         Fmp4SegmentDemuxer::open(source, layout, pools.clone()).expect("BUG: build demuxer");
     let codec = SymphoniaCodec::open_with_config(demuxer.track_info(), &SymphoniaConfig::default())
@@ -263,7 +263,7 @@ fn seek_emits_notneeded_for_first_segment_flac() {
     let source: BoxedSource = Box::new(Cursor::new(blob));
     let layout: Arc<dyn ByteMap> = Arc::new(segmented);
     let mut demuxer =
-        Fmp4SegmentDemuxer::open(source, layout, default_pools()).expect("BUG: build FLAC demuxer");
+        Fmp4SegmentDemuxer::open(source, layout, pools()).expect("BUG: build FLAC demuxer");
 
     let outcome = demuxer
         .seek(Duration::ZERO, CodecPriming::default())
@@ -286,7 +286,7 @@ type AacFrameHarness = (SymphoniaCodec, Vec<u8>, Vec<(usize, usize)>);
 /// produce, then returns the per-frame `(offset, size)` access-unit ranges.
 fn aac_codec_and_frames() -> AacFrameHarness {
     let init_bytes = read_fixture("init-slq-a1.mp4");
-    let init = parse_init(&init_bytes, &default_pools()).expect("BUG: parse AAC init");
+    let init = parse_init(&init_bytes, &pools()).expect("BUG: parse AAC init");
     let extra_data = init.config.as_ref().to_vec();
     let track = TrackInfo {
         extra_data,
@@ -330,7 +330,7 @@ fn decode_all_aac(
 /// pro-DJ zero tolerance for sample drift.
 #[kithara::test]
 fn symphonia_aac_decode_is_bit_identical_across_passes() {
-    let pools = default_pools();
+    let pools = pools();
     let (mut codec_a, seg, ranges) = aac_codec_and_frames();
     let pcm_a = decode_all_aac(&mut codec_a, &seg, &ranges, &pools);
 
@@ -346,7 +346,7 @@ fn symphonia_aac_decode_is_bit_identical_across_passes() {
 
 #[kithara::test]
 fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
-    let pools = default_pools();
+    let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     assert!(!ranges.is_empty(), "segment yielded no AAC frames");
 
@@ -385,7 +385,7 @@ fn symphonia_aac_warm_decode_keeps_pool_bytes_stable() {
 /// same figure.
 #[kithara::test]
 fn aac_head_strip_exceeds_the_bias_the_timeline_models() {
-    let pools = default_pools();
+    let pools = pools();
     let (mut codec, seg, ranges) = aac_codec_and_frames();
     let supplied = ranges.len() as u64 * u64::from(access_unit_frames(AudioCodec::AacLc));
     let pcm = decode_all_aac(&mut codec, &seg, &ranges, &pools);

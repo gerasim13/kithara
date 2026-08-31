@@ -226,6 +226,7 @@ where
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn pending_reader_yields_one_scheduler_tick() {
+    let builder = waveform_only();
     let (jobs, receiver) = mpsc::channel();
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
@@ -233,12 +234,16 @@ fn pending_reader_yields_one_scheduler_tick() {
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
-        reader: Box::new(FakeReader::chunked_with_pending(&sine(1024), 1)),
+        reader: Box::new(FakeReader::chunked_with_pending(
+            builder.pools(),
+            &sine(1024),
+            1,
+        )),
         cancel: CancelToken::root(),
         resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = NodeHarness::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(builder, receiver);
 
     assert_eq!(node.tick(), TickResult::UpstreamPending);
     assert_eq!(node.tick(), TickResult::Progress);
@@ -247,6 +252,7 @@ fn pending_reader_yields_one_scheduler_tick() {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
+    let builder = waveform_only();
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
     let cancel = CancelToken::root();
@@ -255,12 +261,12 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
-        reader: Box::new(FakeReader::chunked(&sine(1024), 1)),
+        reader: Box::new(FakeReader::chunked(builder.pools(), &sine(1024), 1)),
         cancel: cancel.clone(),
         resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = NodeHarness::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(builder, receiver);
 
     assert_eq!(node.tick(), TickResult::Progress, "decode one chunk");
     cancel.cancel();
@@ -782,7 +788,8 @@ where
 fn matches_direct_waveform_analyzer_over_chunked_stream() {
     let samples = sine(usize::try_from(SR).unwrap());
     let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
-    let pools = pools();
+    let builder = waveform_only();
+    let pools = builder.pools().clone();
     let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &pools)
         .expect("waveform buffers fit the test region");
     direct
@@ -790,8 +797,8 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
         .expect("waveform buffers fit the test region");
     let want = direct.snapshot(BUCKETS, Some(frames));
 
-    let reader = Box::new(FakeReader::chunked(&samples, 4));
-    let out = stages(reader, waveform_only(), &CancelToken::root());
+    let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
+    let out = stages(reader, builder, &CancelToken::root());
     assert_eq!(out.len(), 1, "waveform-only emits once");
     let got = out[0]
         .waveform()
@@ -807,10 +814,11 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn cancelled_token_yields_none() {
+    let builder = waveform_only();
     let cancel = CancelToken::root();
     cancel.cancel();
-    let reader = Box::new(FakeReader::chunked(&sine(4096), 2));
-    assert!(stages(reader, waveform_only(), &cancel).is_empty());
+    let reader = Box::new(FakeReader::chunked(builder.pools(), &sine(4096), 2));
+    assert!(stages(reader, builder, &cancel).is_empty());
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -858,7 +866,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
     let mut results = enqueue(
         &jobs,
         "same-track",
-        Box::new(FakeReader::chunked(&sine(3 * frames), 3)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(3 * frames), 3)),
         CancelToken::root(),
         ingest,
     );
@@ -935,7 +943,7 @@ fn saturation_retries_the_exact_detection_payload_once() {
     let results = enqueue(
         &jobs,
         "saturated-track",
-        Box::new(FakeReader::chunked(&pcm, 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &pcm, 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1020,14 +1028,14 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
     let mut results_a = enqueue(
         &jobs,
         "same-token",
-        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
         cancel_a.clone(),
         super::fixtures::idle_ingest(),
     );
     let mut results_b = enqueue(
         &jobs,
         "same-token",
-        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1106,7 +1114,7 @@ fn final_publication_waits_for_trailing_detection() {
     let mut results = enqueue(
         &jobs,
         "trailing-track",
-        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1199,6 +1207,7 @@ fn beat_slot_fills_the_beat_grid() {
         .with_beat_detector(detector, GridParams::default());
 
     let reader = Box::new(FakeReader::chunked(
+        builder.pools(),
         &sine(17 * usize::try_from(SR).unwrap()),
         3,
     ));
@@ -1287,8 +1296,13 @@ fn beat_slot_fills_the_beat_grid() {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn pending_is_tolerated_mid_stream() {
+    let builder = waveform_only();
     let samples = sine(8192);
-    let reader = Box::new(FakeReader::chunked_with_pending(&samples, 2));
-    let out = stages(reader, waveform_only(), &CancelToken::root());
+    let reader = Box::new(FakeReader::chunked_with_pending(
+        builder.pools(),
+        &samples,
+        2,
+    ));
+    let out = stages(reader, builder, &CancelToken::root());
     assert!(out.len() == 1 && out[0].waveform().is_some());
 }

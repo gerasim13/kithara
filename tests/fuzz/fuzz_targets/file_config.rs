@@ -5,15 +5,11 @@ use std::{path::PathBuf, sync::LazyLock};
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
     assets::{AssetStore, StorageBackend},
+    bufpool::testing::{Pools, TestPools, pools},
     file::{FileConfig, FileSrc},
 };
 use libfuzzer_sys::fuzz_target;
 use url::Url;
-
-#[path = "../../src/bufpool_ext.rs"]
-mod bufpool_ext;
-
-use bufpool_ext::{Pools, TestPools, pools};
 
 static POOLS: LazyLock<Pools> = LazyLock::new(pools);
 static STORE: LazyLock<AssetStore<TestPools>> = LazyLock::new(|| {

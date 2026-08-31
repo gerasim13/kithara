@@ -222,7 +222,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{test_pools::default_pools, traits::BoxedSource};
+    use crate::{test_pools::pools, traits::BoxedSource};
 
     /// Fixed multi-segment layout whose `segment_at_index` returns each
     /// segment's byte range unchanged — `fill_segment_buffer`'s live
@@ -297,7 +297,7 @@ mod tests {
             segments: ranges.clone(),
         };
         let mut source: BoxedSource = Box::new(Cursor::new(blob));
-        let pools = default_pools();
+        let pools = pools();
 
         {
             let mut warm = SegmentReadState::new(ranges[1].clone(), pools.get::<u8>());
@@ -446,7 +446,7 @@ mod tests {
             shrink_after: 3,
             polls: AtomicUsize::new(0),
         };
-        let pools = default_pools();
+        let pools = pools();
         let mut state = SegmentReadState::new(0..full as u64, pools.get::<u8>());
 
         let status = fill_segment_buffer(&mut source, &mut state, LiveRange::Segment(&layout, 0))

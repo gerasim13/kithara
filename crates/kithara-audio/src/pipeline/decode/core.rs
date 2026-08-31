@@ -456,20 +456,25 @@ mod tests {
     use super::*;
     use crate::{
         pipeline::decode::transition::IncomingPrime,
-        test_pools::{pools, sample_buffer},
+        test_pools::{Pools, pools, sample_buffer},
         traits::{AudioObserveError, AudioObserverMock},
     };
 
-    fn active_decode(active: DecoderGeneration, gapless_mode: GaplessMode) -> ActiveDecode {
-        active_decode_with_observer(active, gapless_mode, None)
+    fn active_decode(
+        pools: &Pools,
+        active: DecoderGeneration,
+        gapless_mode: GaplessMode,
+    ) -> ActiveDecode {
+        active_decode_with_observer(pools, active, gapless_mode, None)
     }
 
     fn active_decode_with_observer(
+        pools: &Pools,
         active: DecoderGeneration,
         gapless_mode: GaplessMode,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> ActiveDecode {
-        ActiveDecode::new(active, gapless_mode, observer, &pools())
+        ActiveDecode::new(active, gapless_mode, observer, pools)
             .expect("blender scratch fits test pools")
     }
 
@@ -498,8 +503,9 @@ mod tests {
 
     #[kithara::test]
     fn steady_output_bypasses_transition_staging() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
-        let mut decode = active_decode(generation(spec), GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         let initial_capacity = decode.active().staged_capacity();
         let mut cursor = ResumeCursor::new(
             Arc::new(AtomicU32::new(spec.sample_rate.get())),
@@ -513,7 +519,7 @@ mod tests {
                     frames: 64,
                     ..Default::default()
                 },
-                sample_buffer(&vec![0.25; 64 * usize::from(spec.channels)]),
+                sample_buffer(&pools, &vec![0.25; 64 * usize::from(spec.channels)]),
             ))
             .expect("steady fixture PCM is valid");
 
@@ -534,6 +540,7 @@ mod tests {
     fn rejected_pcm_observation_sees_decoder_output_without_rejecting_playback(
         #[case] rejection: AudioObserveError,
     ) {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let observer = Unimock::new(
             AudioObserverMock::try_observe
@@ -548,6 +555,7 @@ mod tests {
                 .returns(Err(rejection)),
         );
         let mut decode = active_decode_with_observer(
+            &pools,
             generation(spec),
             GaplessMode::Disabled,
             Some(Box::new(observer)),
@@ -559,7 +567,7 @@ mod tests {
                     frames: 64,
                     ..Default::default()
                 },
-                sample_buffer(&vec![0.25; 64 * usize::from(spec.channels)]),
+                sample_buffer(&pools, &vec![0.25; 64 * usize::from(spec.channels)]),
             ))
             .expect("fixture PCM is valid");
         let mut cursor = ResumeCursor::new(
@@ -579,6 +587,7 @@ mod tests {
 
     #[kithara::test]
     fn invalid_holdback_pcm_is_retained_for_shell_retirement() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let active = generation(spec);
         let incoming = generation(spec);
@@ -592,7 +601,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = active_decode(active, GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -607,7 +616,7 @@ mod tests {
                     frames: 4,
                     ..Default::default()
                 },
-                sample_buffer(&vec![0.25; 4 * usize::from(spec.channels)]),
+                sample_buffer(&pools, &vec![0.25; 4 * usize::from(spec.channels)]),
             )
         };
         decode
@@ -627,6 +636,7 @@ mod tests {
 
     #[kithara::test]
     fn reset_clears_prepare_error_but_retains_rejected_pcm_for_shell_retirement() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let mut active = generation(spec);
         active.stage(AudioChunk::new(
@@ -635,7 +645,7 @@ mod tests {
                 frames: 4,
                 ..Default::default()
             },
-            sample_buffer(&vec![0.25; 4 * usize::from(spec.channels)]),
+            sample_buffer(&pools, &vec![0.25; 4 * usize::from(spec.channels)]),
         ));
         let rejected = AudioChunk::new(
             AudioChunkInfo {
@@ -644,7 +654,7 @@ mod tests {
                 frames: 4,
                 ..Default::default()
             },
-            sample_buffer(&vec![0.5; 4 * usize::from(spec.channels)]),
+            sample_buffer(&pools, &vec![0.5; 4 * usize::from(spec.channels)]),
         );
         let rejected_samples = rejected.samples.as_ptr();
         active.stage(rejected);
@@ -660,7 +670,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = active_decode(active, GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -689,6 +699,7 @@ mod tests {
 
     #[kithara::test]
     fn unheld_output_drains_pcm_parked_for_a_priming_join() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let active = generation(spec);
         let incoming = generation(spec);
@@ -702,7 +713,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = active_decode(active, GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -717,7 +728,7 @@ mod tests {
                     frames: 128,
                     ..Default::default()
                 },
-                sample_buffer(&samples),
+                sample_buffer(&pools, &samples),
             ))
             .expect("valid fixture PCM enters prepared holdback");
         let mut cursor = ResumeCursor::new(
@@ -751,6 +762,7 @@ mod tests {
         const OUTGOING_FRAMES: u32 = 1_000;
         const INCOMING_FRAMES: u32 = 1_500;
 
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
@@ -769,14 +781,17 @@ mod tests {
                 frames: INCOMING_FRAMES,
                 ..Default::default()
             },
-            sample_buffer(&vec![
-                0.5;
-                usize::try_from(INCOMING_FRAMES)
-                    .expect("test frames fit usize")
-                    .saturating_mul(usize::from(spec.channels))
-            ]),
+            sample_buffer(
+                &pools,
+                &vec![
+                    0.5;
+                    usize::try_from(INCOMING_FRAMES)
+                        .expect("test frames fit usize")
+                        .saturating_mul(usize::from(spec.channels))
+                ],
+            ),
         ));
-        let mut decode = active_decode(generation(spec), GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -793,12 +808,15 @@ mod tests {
                     frames: OUTGOING_FRAMES,
                     ..Default::default()
                 },
-                sample_buffer(&vec![
-                    0.25;
-                    usize::try_from(OUTGOING_FRAMES)
-                        .expect("test frames fit usize")
-                        .saturating_mul(usize::from(spec.channels))
-                ]),
+                sample_buffer(
+                    &pools,
+                    &vec![
+                        0.25;
+                        usize::try_from(OUTGOING_FRAMES)
+                            .expect("test frames fit usize")
+                            .saturating_mul(usize::from(spec.channels))
+                    ],
+                ),
             ))
             .expect("valid outgoing PCM enters holdback");
 
@@ -815,6 +833,7 @@ mod tests {
         const LANDED: u64 = 512;
         const FRAMES: u32 = 1_500;
 
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
@@ -834,19 +853,22 @@ mod tests {
                     frames: FRAMES,
                     ..Default::default()
                 },
-                sample_buffer(&vec![
-                    0.25;
-                    usize::try_from(FRAMES)
-                        .expect("test frames fit usize")
-                        .saturating_mul(usize::from(spec.channels))
-                ]),
+                sample_buffer(
+                    &pools,
+                    &vec![
+                        0.25;
+                        usize::try_from(FRAMES)
+                            .expect("test frames fit usize")
+                            .saturating_mul(usize::from(spec.channels))
+                    ],
+                ),
             )
         };
         let mut active = generation(spec);
         active.stage(make_chunk(0));
         let mut incoming = generation(spec);
         incoming.stage(make_chunk(LANDED));
-        let mut decode = active_decode(active, GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, active, GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -873,6 +895,7 @@ mod tests {
 
     #[kithara::test]
     fn incoming_variant_change_invalidates_the_stale_generation() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
@@ -892,7 +915,7 @@ mod tests {
             None,
             GaplessMode::Disabled,
         );
-        let mut decode = active_decode(generation(spec), GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         decode.incoming = Some(IncomingDecode::Priming {
             transition,
             generation: incoming,
@@ -914,6 +937,7 @@ mod tests {
 
     #[kithara::test]
     fn active_join_drains_before_a_latched_follow_up_transition_holds_output() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let incoming = generation(spec);
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -926,7 +950,7 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = active_decode(generation(spec), GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         let frames = u32::try_from(decode.blender.join_frame_count()).expect("test join fits u32");
         let samples = usize::try_from(frames)
             .expect("test join fits usize")
@@ -937,7 +961,7 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            sample_buffer(&vec![0.25; samples]),
+            sample_buffer(&pools, &vec![0.25; samples]),
         ));
         decode
             .blender
@@ -976,6 +1000,7 @@ mod tests {
 
     #[kithara::test]
     fn latched_incoming_preparation_keeps_outgoing_pcm_running() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate"));
         let abr = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
         abr.request_target(VariantIndex::new(1), AbrReason::ManualOverride);
@@ -987,14 +1012,14 @@ mod tests {
             VariantIndex::new(0),
             VariantIndex::new(1),
         );
-        let mut decode = active_decode(generation(spec), GaplessMode::Disabled);
+        let mut decode = active_decode(&pools, generation(spec), GaplessMode::Disabled);
         decode.active.stage(AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 frames: 64,
                 ..Default::default()
             },
-            sample_buffer(&vec![0.25; 64 * usize::from(spec.channels)]),
+            sample_buffer(&pools, &vec![0.25; 64 * usize::from(spec.channels)]),
         ));
         decode.incoming = Some(IncomingDecode::Preparing {
             transition,

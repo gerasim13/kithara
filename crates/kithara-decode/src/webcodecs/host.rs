@@ -550,12 +550,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        test_pools::default_pools,
+        test_pools::pools,
         webcodecs::protocol::{HostCmd, HostOut},
     };
 
     fn open_host() -> (mpsc::Sender<HostCmd>, mpsc::Receiver<HostOut>) {
-        let cmd = spawn_host(default_pools());
+        let cmd = spawn_host(pools());
         let (reply_tx, out) = mpsc::channel();
         cmd.send(HostCmd::Open { id: 1, reply_tx })
             .expect("BUG: host cmd channel closed at spawn");
@@ -580,7 +580,7 @@ mod tests {
             webcodecs::codec::WebCodecsCodec,
         };
 
-        let pools = default_pools();
+        let pools = pools();
         crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
         let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
@@ -639,7 +639,7 @@ mod tests {
             webcodecs::codec::WebCodecsCodec,
         };
 
-        let pools = default_pools();
+        let pools = pools();
         crate::webcodecs::probe::spawn_webcodecs_probe(pools.clone());
 
         let cursor = std::io::Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());

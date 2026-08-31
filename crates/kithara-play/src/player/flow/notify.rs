@@ -316,7 +316,7 @@ mod tests {
             state::{PendingNext, PendingNextState},
         },
         session::testing,
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     struct Items;
@@ -329,7 +329,7 @@ mod tests {
 
     /// A started player holding one slot — the slot the phase calls current.
     fn player_with_slot() -> (PlayerImpl<TestPools>, SlotId) {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build());
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

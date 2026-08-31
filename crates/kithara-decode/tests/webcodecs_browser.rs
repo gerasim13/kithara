@@ -3,6 +3,7 @@
 use std::{io::Cursor, sync::Once};
 
 use js_sys::Uint8Array;
+use kithara_bufpool::testing::{TestPools, pools as default_pools};
 use kithara_decode::{
     Decoder, DecoderBackend, DecoderChunkOutcome, DecoderConfig, DecoderFactory,
     DecoderSeekOutcome, spawn_webcodecs_probe,
@@ -20,11 +21,6 @@ use num_traits::ToPrimitive;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioDecoder, AudioDecoderConfig, AudioDecoderSupport};
-
-#[path = "../src/test_pools.rs"]
-mod test_pools;
-
-use test_pools::{TestPools, default_pools};
 
 const AAC_INIT: &[u8] = include_bytes!("../../../assets/hls/init-slq-a1.mp4");
 const AAC_SEGMENT: &[u8] = include_bytes!("../../../assets/hls/segment-1-slq-a1.m4s");

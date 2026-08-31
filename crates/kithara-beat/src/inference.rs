@@ -188,7 +188,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{filled, pools};
+    use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test(native, flash(false))]
     fn generate_starts_short() {
@@ -262,12 +262,13 @@ mod tests {
         // Short audio (100 frames < STRIDE): pad_left 6 + 100 + pad_right 6 = 112.
         let n_mels = 128;
         let full_time = 100;
+        let pools = pools();
         let mel = Tensor {
             shape: smallvec![1, full_time, n_mels],
-            data: filled(full_time * n_mels, 1.0),
+            data: sample_buffer(&pools, &vec![1.0; full_time * n_mels]),
         };
 
-        let chunk = extract_chunk(&mel, -6, &pools())
+        let chunk = extract_chunk(&mel, -6, &pools)
             .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(chunk.shape.as_slice(), [1, 112, n_mels]);
 
@@ -293,12 +294,13 @@ mod tests {
     fn extract_chunk_long_audio_first() {
         let n_mels = 128;
         let full_time = 5000;
+        let pools = pools();
         let mel = Tensor {
             shape: smallvec![1, full_time, n_mels],
-            data: filled(full_time * n_mels, 1.0),
+            data: sample_buffer(&pools, &vec![1.0; full_time * n_mels]),
         };
 
-        let chunk = extract_chunk(&mel, -6, &pools())
+        let chunk = extract_chunk(&mel, -6, &pools)
             .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(
             chunk.shape.as_slice(),
@@ -315,12 +317,13 @@ mod tests {
     fn extract_chunk_long_audio_middle() {
         let n_mels = 128;
         let full_time = 5000;
+        let pools = pools();
         let mel = Tensor {
             shape: smallvec![1, full_time, n_mels],
-            data: filled(full_time * n_mels, 1.0),
+            data: sample_buffer(&pools, &vec![1.0; full_time * n_mels]),
         };
 
-        let chunk = extract_chunk(&mel, 100, &pools())
+        let chunk = extract_chunk(&mel, 100, &pools)
             .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(
             chunk.shape.as_slice(),

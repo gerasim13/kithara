@@ -9,7 +9,7 @@ mod planar;
 mod sample;
 mod spec;
 #[cfg(test)]
-mod test_pools;
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod time;
 mod units;
 

@@ -8,11 +8,11 @@ use kithara_test_utils::kithara;
 use super::{Consts, GaplessTrimmer};
 use crate::{
     DropChunks, GaplessInfo, GaplessTailCompensation, gapless::heuristic::SilenceTrimParams,
-    test_pools::default_pools,
+    test_pools::pools,
 };
 
 fn sample_buffer(values: &[f32]) -> SampleBuffer {
-    let mut buffer = default_pools()
+    let mut buffer = pools()
         .get_with_len::<f32>(values.len())
         .unwrap_or_else(|error| panic!("test sample buffer: {error}"));
     buffer.copy_from_slice(values);

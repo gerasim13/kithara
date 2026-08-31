@@ -29,12 +29,12 @@ fn mock_writer(content: &[u8]) -> (BaseWriter, tempfile::TempDir) {
     (BaseWriter::new(StorageResource::from(res)), dir)
 }
 
-fn mock_writer_mem(content: &[u8]) -> BaseWriter {
+fn mock_writer_mem(pools: &crate::test_pools::Pools, content: &[u8]) -> BaseWriter {
     let cancel = CancelToken::never();
     let res: MemResource = Resource::open(
         cancel,
         MemOptions::builder()
-            .buffer(crate::test_pools::buffer())
+            .buffer(crate::test_pools::byte_buffer(pools))
             .build(),
     )
     .expect("open in-memory processing test resource");
@@ -262,13 +262,14 @@ fn wait_range_aborts_on_cancellation() {
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn external_cancel_interrupts_processing_wait_without_cancelling_resource() {
+    let pools = crate::test_pools::pools();
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
     let resource_cancel = CancelToken::never();
     let resource: MemResource = Resource::open(
         resource_cancel.clone(),
         MemOptions::builder()
-            .buffer(crate::test_pools::buffer())
+            .buffer(crate::test_pools::byte_buffer(&pools))
             .build(),
     )
     .expect("open processing test resource");
@@ -276,7 +277,7 @@ fn external_cancel_interrupts_processing_wait_without_cancelling_resource() {
     let writer = ProcessedWriter::builder()
         .inner(BaseWriter::new(StorageResource::from(resource)))
         .processor(process_fn)
-        .pools(crate::test_pools::pools())
+        .pools(pools)
         .build();
     let reader = writer.reader();
     let wait_cancel = CancelToken::never();
@@ -377,17 +378,18 @@ fn reactivate_then_commit_reruns_processor() {
 
 #[kithara::test]
 fn reactivate_then_commit_reruns_processor_mem() {
+    let pools = crate::test_pools::pools();
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
     let first: Vec<u8> = b"first  payload".iter().map(|b| b ^ 0x42).collect();
     let second: Vec<u8> = b"second payload".iter().map(|b| b ^ 0x42).collect();
     assert_eq!(first.len(), second.len());
-    let writer = mock_writer_mem(&first);
+    let writer = mock_writer_mem(&pools, &first);
 
     let writer = ProcessedWriter::builder()
         .inner(writer)
         .processor(process_fn)
-        .pools(crate::test_pools::pools())
+        .pools(pools)
         .build();
     let len = first.len() as u64;
     let reader = writer.commit(Some(len)).expect("first commit");
@@ -514,12 +516,13 @@ fn open_resource_none_ctx_does_not_leak_precommit_guard() {
 #[kithara::test]
 fn a_small_chunk_size_splits_the_commit_into_passes() {
     const CONTENT_LEN: usize = 32;
+    let pools = crate::test_pools::pools();
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
     let writer = ProcessedWriter::builder()
-        .inner(mock_writer_mem(&[7u8; CONTENT_LEN]))
+        .inner(mock_writer_mem(&pools, &[7u8; CONTENT_LEN]))
         .processor(process_fn)
-        .pools(crate::test_pools::pools())
+        .pools(pools)
         .chunk_size(CONTENT_LEN / 4)
         .build();
 
@@ -531,12 +534,13 @@ fn a_small_chunk_size_splits_the_commit_into_passes() {
 #[kithara::test]
 fn a_chunk_size_that_spans_the_resource_commits_in_one_pass() {
     const CONTENT_LEN: usize = 32;
+    let pools = crate::test_pools::pools();
     let call_count = Arc::new(AtomicUsize::new(0));
     let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
     let writer = ProcessedWriter::builder()
-        .inner(mock_writer_mem(&[7u8; CONTENT_LEN]))
+        .inner(mock_writer_mem(&pools, &[7u8; CONTENT_LEN]))
         .processor(process_fn)
-        .pools(crate::test_pools::pools())
+        .pools(pools)
         .chunk_size(CONTENT_LEN)
         .build();
 

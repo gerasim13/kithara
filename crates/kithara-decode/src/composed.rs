@@ -434,7 +434,7 @@ impl DecoderRuntime<crate::test_pools::TestPools> {
     /// Test-only runtime with a crate-local typed pool region.
     pub(crate) fn for_test() -> Self {
         Self {
-            pools: crate::test_pools::default_pools(),
+            pools: crate::test_pools::pools(),
             epoch: 0,
             byte_len_handle: None,
             hooks: None,
@@ -1913,11 +1913,11 @@ mod pool_budget_tests {
     use kithara_test_utils::kithara;
 
     use super::test_stub_codec::ConstFrameCodec;
-    use crate::{codec::FrameCodec, test_pools::default_pools};
+    use crate::{codec::FrameCodec, test_pools::pools};
 
     #[kithara::test]
     fn codec_warm_pool_keeps_allocated_bytes_stable() {
-        let pools = default_pools();
+        let pools = pools();
         for _ in 0..4 {
             let mut buf = pools.get::<f32>();
             buf.ensure_len(2048).unwrap();

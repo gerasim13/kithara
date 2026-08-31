@@ -11,7 +11,7 @@ use super::{
     Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer, sine,
 };
 use super::{StretchControls, WarpRenderer, spec};
-use crate::test_pools::pools as test_pools;
+use crate::test_pools::pools_with_budget as test_pools;
 
 /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -26,6 +26,7 @@ fn live_backend_swap_continues_and_keeps_pitch(
     controls.set_keylock(true);
     controls.set_backend(initial);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let block = sine(4096);
     let mut out: Vec<f32> = Vec::new();
     for i in 0..24 {
@@ -33,7 +34,7 @@ fn live_backend_swap_continues_and_keeps_pitch(
             controls.set_backend(replacement);
             fx.prepare(spec());
         }
-        if let Some(c) = render_serviced(&mut fx, chunk(&block)) {
+        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             out.extend_from_slice(&c.samples);
         }
     }

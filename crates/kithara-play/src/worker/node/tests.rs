@@ -23,12 +23,12 @@ use unimock::{MockFn, Unimock, matching};
 use super::*;
 use crate::{
     effects::EffectDrain,
-    test_pools::{default_pools, sample_buffer},
+    test_pools::{Pools, pools, sample_buffer},
     worker::{EngineLoad, WarpSource},
 };
 
-fn empty_chunk() -> AudioChunk {
-    AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]))
+fn empty_chunk(pools: &Pools) -> AudioChunk {
+    AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
 }
 
 fn test_node<S>(
@@ -56,6 +56,7 @@ struct PersistentEofSource {
 }
 
 struct RetiringSource {
+    pools: Pools,
     seek: Arc<SeekState>,
     retired: Arc<AtomicUsize>,
     chunks_left: usize,
@@ -102,7 +103,7 @@ impl AudioSource for RetiringSource {
             return TrackStep::Eof;
         }
         self.chunks_left -= 1;
-        TrackStep::Produced(Fetch::data(empty_chunk(), 0))
+        TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
     }
 }
 
@@ -120,11 +121,12 @@ impl AudioSource for PersistentEofSource {
 
 #[kithara::test]
 fn decoder_node_eof_under_backpressure() {
+    let pools = pools();
     let gate = Arc::new(PreloadGate::default());
     let (mut port, mut pop) = ProducerPort::probe(1);
 
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
     assert!(port.has_pending());
 
     let source = Unimock::new((
@@ -169,12 +171,12 @@ fn decoder_node_eof_under_backpressure() {
 
 #[kithara::test]
 fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
+    let pools = pools();
     let seek = Arc::new(SeekState::new());
     let source = PersistentEofSource {
         seek: Arc::clone(&seek),
     };
     let effects = Vec::new();
-    let pools = default_pools();
     let drain = EffectDrain::new(effects.len(), &pools)
         .unwrap_or_else(|error| panic!("test effect drain: {error}"));
     let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
@@ -208,6 +210,7 @@ fn decoder_node_does_not_republish_exhausted_warp_source_eof() {
 
 #[kithara::test]
 fn decoder_node_records_engine_load_on_produced() {
+    let pools = pools();
     use std::num::NonZero;
 
     use kithara_signal::AudioSpec;
@@ -225,7 +228,7 @@ fn decoder_node_records_engine_load_on_produced() {
             frames: 4_410,
             ..Default::default()
         },
-        sample_buffer(&vec![0.0f32; 4_410 * 2]),
+        sample_buffer(&pools, &vec![0.0f32; 4_410 * 2]),
     );
     let source = Unimock::new(
         AudioSourceMock::step_track
@@ -403,11 +406,12 @@ fn eof_marker_and_deferred_event_keep_the_decode_epoch() {
 
 #[kithara::test]
 fn decoded_frontier_advances_only_after_final_port_admission() {
+    let pools = pools();
     let (mut port, _pop) = ProducerPort::probe(1);
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
     let end = Duration::from_millis(750);
-    let mut chunk = empty_chunk();
+    let mut chunk = empty_chunk(&pools);
     chunk.meta.end_timestamp = end;
     let source = Unimock::new(
         AudioSourceMock::step_track
@@ -433,16 +437,17 @@ fn decoded_frontier_advances_only_after_final_port_admission() {
 
 #[kithara::test]
 fn source_end_commits_only_after_final_port_admission() {
+    let pools = pools();
     let (mut port, _pop) = ProducerPort::probe(1);
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
     let source_end = SourceEnd::new(
         12_345,
         NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
     );
     let commits = Arc::new(Mutex::new(Vec::new()));
     let source = CommitSource {
-        chunk: Some(empty_chunk()),
+        chunk: Some(empty_chunk(&pools)),
         commits: Arc::clone(&commits),
         seek: Arc::new(SeekState::new()),
         source_end,
@@ -464,15 +469,16 @@ fn source_end_commits_only_after_final_port_admission() {
 
 #[kithara::test]
 fn decoder_node_preload_gate_waits_for_ring() {
+    let pools = pools();
     let gate = Arc::new(PreloadGate::default());
     let (mut port, mut pop) = ProducerPort::probe(1);
 
-    assert!(port.try_push(Fetch::data(empty_chunk(), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
 
     let source = Unimock::new((
         AudioSourceMock::step_track
             .next_call(matching!())
-            .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
         AudioSourceMock::step_track
             .next_call(matching!())
             .returns(TrackStep::Blocked(WaitingReason::Waiting)),
@@ -524,6 +530,7 @@ fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
 
 #[kithara::test]
 fn decoder_node_seek_rearms_preload_gate() {
+    let pools = pools();
     let gate = Arc::new(PreloadGate::default());
     let (port, mut pop) = ProducerPort::probe(2);
 
@@ -531,13 +538,13 @@ fn decoder_node_seek_rearms_preload_gate() {
     let source = Unimock::new((
         AudioSourceMock::step_track
             .next_call(matching!())
-            .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
         AudioSourceMock::step_track
             .next_call(matching!())
             .returns(TrackStep::StateChanged),
         AudioSourceMock::step_track
             .next_call(matching!())
-            .returns(TrackStep::Produced(Fetch::data(empty_chunk(), 0))),
+            .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
     ));
 
     let mut node = test_node(
@@ -570,10 +577,12 @@ fn decoder_node_seek_rearms_preload_gate() {
 
 #[kithara::test]
 fn decoder_node_retires_displaced_seek_chunk_from_recycle_shell() {
+    let pools = pools();
     let (port, _pop) = ProducerPort::probe(1);
     let seek = Arc::new(SeekState::new());
     let retired = Arc::new(AtomicUsize::new(0));
     let source = RetiringSource {
+        pools: pools.clone(),
         seek: Arc::clone(&seek),
         retired: Arc::clone(&retired),
         chunks_left: 2,

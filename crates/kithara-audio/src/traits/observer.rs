@@ -113,7 +113,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{AudioObserveError, AudioObserver, AudioObserverSlot};
-    use crate::test_pools::sample_buffer;
+    use crate::test_pools::{pools, sample_buffer};
 
     struct CountingObserver(Arc<AtomicUsize>);
 
@@ -126,6 +126,7 @@ mod tests {
 
     #[kithara::test]
     fn replacement_before_the_first_chunk_is_latest_wins() {
+        let pools = pools();
         let slot = AudioObserverSlot::default();
         let mut relay = slot.relay();
         let replaced = Arc::new(AtomicUsize::new(0));
@@ -133,7 +134,7 @@ mod tests {
         slot.attach(Box::new(CountingObserver(Arc::clone(&replaced))));
         slot.attach(Box::new(CountingObserver(Arc::clone(&current))));
 
-        let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&[]));
+        let chunk = AudioChunk::new(AudioChunkInfo::default(), sample_buffer(&pools, &[]));
         relay
             .try_observe(&chunk)
             .expect("the current observer accepts the chunk");

@@ -230,7 +230,7 @@ impl AppleAudioFileDemuxer {
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
-        let pools = crate::test_pools::default_pools();
+        let pools = crate::test_pools::pools();
         Self::open_for_with_mode_and_pool(
             source,
             codec,

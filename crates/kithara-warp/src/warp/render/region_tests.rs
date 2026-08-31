@@ -8,7 +8,7 @@ use kithara_test_utils::kithara;
 use super::WarpRenderer as GenericWarpRenderer;
 use crate::{
     GridSegment, RegionPlan, RegionPlanError, StretchControls,
-    test_pools::{TestPools, default_pools, sample_buffer},
+    test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
 type WarpRenderer = GenericWarpRenderer<TestPools>;
@@ -52,7 +52,7 @@ fn spec() -> AudioSpec {
     }
 }
 
-fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
+fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
     let frames = samples.len() / CH;
     AudioChunk::new(
         AudioChunkInfo {
@@ -61,7 +61,7 @@ fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
             frame_offset,
             ..Default::default()
         },
-        sample_buffer(samples),
+        sample_buffer(pools, samples),
     )
 }
 
@@ -99,16 +99,17 @@ fn add_click(buf: &mut [f32], frame: usize) {
 /// 4096-frame chunks with advancing `frame_offset` (source frames).
 #[kithara::hang_watchdog]
 fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[f32]) -> Vec<f32> {
+    let pools = pools();
     let controls = StretchControls::new(speed);
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = WarpRenderer::new(controls, spec(), default_pools());
+    let mut fx = WarpRenderer::new(controls, spec(), pools.clone());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
         let frames = data.len() / CH;
-        let output = fx.render(chunk(data, offset));
+        let output = fx.render(chunk(&pools, data, offset));
         fx.prepare(spec());
         if let Some(o) = output {
             out.extend_from_slice(&o.samples);

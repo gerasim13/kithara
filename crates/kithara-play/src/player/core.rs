@@ -249,7 +249,7 @@ mod tests {
         player::{PlayerConfig, PlayerMember},
         resource::{ResourceConfig, ResourceSrc},
         session::testing,
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     #[derive(Clone, Copy)]
@@ -262,7 +262,7 @@ mod tests {
     }
 
     fn resource_config(input: &str) -> ResourceConfig<TestPools> {
-        let pools = default_pools();
+        let pools = pools();
         let src = ResourceSrc::parse(input).expect("BUG: valid resource config source");
         ResourceConfig::for_src(src)
             .store(AssetStore::builder(pools).build())
@@ -270,7 +270,7 @@ mod tests {
     }
 
     fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build())
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     fn player() -> PlayerImpl<TestPools> {

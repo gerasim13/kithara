@@ -132,7 +132,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlanarBuffer, test_pools::pools};
+    use crate::{PlanarBuffer, test_pools::pools_with_budget};
 
     const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
@@ -165,7 +165,7 @@ mod tests {
         let source = signal(usize::from(channels), frames.get());
         let interleaved =
             InterleavedView::new(&source, spec(channels), frames).expect("fixture shape is exact");
-        let pools = pools(128 * size_of::<f32>());
+        let pools = pools_with_budget(128 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, spec(channels), frames).expect("fixture planar storage fits");
         let mut channel_samples = (0..usize::from(channels))
@@ -237,7 +237,7 @@ mod tests {
 
     #[kithara::test]
     fn non_zero_planar_range_interleaves_only_selected_frames() {
-        let pools = pools(64 * size_of::<f32>());
+        let pools = pools_with_budget(64 * size_of::<f32>());
         let mut planar =
             PlanarBuffer::new(&pools, spec(2), FrameCount::new(4)).expect("planar storage fits");
         planar

@@ -284,14 +284,16 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
-        test_pools::{pools, sample_buffer},
+        test_pools::{Pools, pools, sample_buffer},
     };
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let duration = Duration::from_nanos(36_360_000_000);
         let chunk = timed_chunk(
+            &pools,
             spec,
             148,
             duration.saturating_sub(Duration::from_millis(2)),
@@ -314,7 +316,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let mut cursor = ChunkCursor::new(&pools(), spec).expect("cursor scratch fits test pools");
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
@@ -340,6 +342,7 @@ mod tests {
 
     #[kithara::test]
     fn read_buffer_shorter_than_frame_preserves_current_chunk() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(1, None);
         let (trash_tx, mut trash_rx) = connect::<AudioChunk>(3, None);
@@ -354,11 +357,11 @@ mod tests {
         ring.preloaded = true;
         data_tx
             .try_push(Fetch::data(
-                timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
+                timed_chunk(&pools, spec, 1, Duration::ZERO, Duration::from_millis(1)),
                 0,
             ))
             .expect("chunk reaches test ring");
-        let mut cursor = ChunkCursor::new(&pools(), spec).expect("cursor scratch fits test pools");
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut output = [0.0];
 
@@ -381,7 +384,13 @@ mod tests {
         assert!(trash_rx.try_pop().is_none());
     }
 
-    fn timed_chunk(spec: AudioSpec, frames: u32, start: Duration, end: Duration) -> AudioChunk {
+    fn timed_chunk(
+        pools: &Pools,
+        spec: AudioSpec,
+        frames: u32,
+        start: Duration,
+        end: Duration,
+    ) -> AudioChunk {
         let channels = usize::from(spec.channels.max(1));
         let frame_count = usize::try_from(frames).expect("test frame count fits usize");
         let samples = vec![0.5; frame_count * channels];
@@ -393,7 +402,7 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            sample_buffer(&samples),
+            sample_buffer(pools, &samples),
         )
     }
 }

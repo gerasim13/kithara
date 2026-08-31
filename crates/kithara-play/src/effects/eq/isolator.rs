@@ -100,7 +100,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{default_pools, pools};
+    use crate::test_pools::{pools, pools_with_budget};
 
     #[kithara::test]
     fn a_decaying_tail_never_leaks_denormals() {
@@ -108,7 +108,7 @@ mod tests {
         const TAIL_SECONDS: u32 = 4;
 
         let bands = super::super::band::generate_log_spaced_bands(3);
-        let config = EqConfig::builder(default_pools()).build();
+        let config = EqConfig::builder(pools()).build();
         let mut eq = IsolatorEq::new(&config, &bands, SAMPLE_RATE)
             .unwrap_or_else(|error| panic!("test isolator: {error}"));
         for band in 0..bands.len() {
@@ -126,7 +126,7 @@ mod tests {
 
     #[kithara::test]
     fn reusable_storage_returns_to_the_injected_pool() {
-        let pools = pools(1024 * 1024);
+        let pools = pools_with_budget(1024 * 1024);
         let bands = super::super::band::generate_log_spaced_bands(3);
         let config = EqConfig::builder(pools.clone()).build();
 

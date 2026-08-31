@@ -232,7 +232,8 @@ fn read_during_writes_observes_inner_state() {
 
 #[kithara::test(timeout(Duration::from_secs(2)))]
 fn passthrough_for_memory_inner_has_no_tmp() {
-    let mem = crate::MemResource::new(CancelToken::never(), crate::test_pools::byte_buffer());
+    let pools = crate::test_pools::pools();
+    let mem = crate::MemResource::new(CancelToken::never(), crate::test_pools::byte_buffer(&pools));
     let res = AtomicChunked::passthrough(mem, PathBuf::from("virtual"));
     res.write_at(0, b"in-mem").unwrap();
     res.commit(Some(6)).unwrap();

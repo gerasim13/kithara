@@ -14,7 +14,7 @@ use axum::{
 use bytes::Bytes;
 use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::{Abr, AbrSettings, AbrState};
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, testing::TestPools};
+use kithara_bufpool::testing::pools as test_pools;
 use kithara_events::{
     AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, Event, EventBus, VariantDuration,
     VariantIndex, VariantInfo,
@@ -39,15 +39,6 @@ const CONCURRENCY_TEST_TIMEOUT_SECS: u64 = 30;
 const FLOOD_BATCH_SIZE: usize = 10;
 const PORT_STRESS_TIMEOUT_SECS: u64 = 60;
 const SLOW_DEADLINE_SECS: u64 = 5;
-
-fn test_pools() -> PoolRegion<TestPools> {
-    TestPools::region(
-        OverallBudget(64 * 1024 * 1024),
-        PoolConfig::builder().max_buffers(32).build(),
-        PoolConfig::builder().max_buffers(8).build(),
-    )
-    .unwrap_or_else(|error| panic!("test pool region: {error}"))
-}
 
 struct MockPeer {
     cancel: CancelToken,

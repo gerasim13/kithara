@@ -264,11 +264,11 @@ mod tests {
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::testing,
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     fn player() -> PlayerImpl<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build());
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

@@ -1,16 +1,12 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara::assets::{
-    AssetLayout, AssetResource, AssetSource, AssetStore, DefaultLayout, StorageBackend,
+use kithara::{
+    assets::{AssetLayout, AssetResource, AssetSource, AssetStore, DefaultLayout, StorageBackend},
+    bufpool::testing::pools,
 };
 use libfuzzer_sys::fuzz_target;
 use url::Url;
-
-#[path = "../../src/bufpool_ext.rs"]
-mod bufpool_ext;
-
-use bufpool_ext::pools;
 
 #[derive(Arbitrary, Debug)]
 struct Input {

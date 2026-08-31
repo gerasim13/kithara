@@ -148,11 +148,11 @@ mod tests {
     use super::*;
     use crate::{
         PlayWorkerConfig,
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     fn store() -> AssetStore<TestPools> {
-        AssetStore::builder(default_pools()).build()
+        AssetStore::builder(pools()).build()
     }
 
     fn valid_src(input: &str) -> ResourceSrc {
@@ -175,7 +175,7 @@ mod tests {
     }
 
     fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build())
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]

@@ -119,12 +119,12 @@ mod tests {
     use super::*;
     use crate::{
         bridge::SharedEq,
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     fn make_node() -> (PlayerNode<TestPools>, crate::bridge::SlotControl) {
         let (inputs, control) = slot_channels(SharedEq::new(0));
-        let node = PlayerNode::new(inputs, default_pools());
+        let node = PlayerNode::new(inputs, pools());
         (node, control)
     }
 

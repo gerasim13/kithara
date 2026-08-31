@@ -106,16 +106,17 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
         .expect("one-frame regions are ordered and non-empty"),
     )));
     let mut fx = renderer(controls);
+    let pools = fx.pools.clone();
     let source = sine(4);
 
     for frame in 0..3_u64 {
         let start = usize::try_from(frame).unwrap_or_default() * usize::from(Consts::CH);
-        let mut input = chunk(&source[start..start + usize::from(Consts::CH)]);
+        let mut input = chunk(&pools, &source[start..start + usize::from(Consts::CH)]);
         input.meta.frame_offset = frame;
         assert!(render_serviced(&mut fx, input).is_none());
     }
 
-    let mut input = chunk(&source[3 * usize::from(Consts::CH)..]);
+    let mut input = chunk(&pools, &source[3 * usize::from(Consts::CH)..]);
     input.meta.frame_offset = 3;
     let output = render_serviced(&mut fx, input)
         .expect("the fourth source frame completes one output frame");
@@ -153,8 +154,9 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
         .expect("fixture regions are contiguous"),
     )));
     let mut fx = renderer(controls);
+    let pools = fx.pools.clone();
     let source = sine(3);
-    let mut first = chunk(&source[..2 * usize::from(Consts::CH)]);
+    let mut first = chunk(&pools, &source[..2 * usize::from(Consts::CH)]);
     first.meta.end_timestamp = Duration::from_millis(20);
     first.meta.segment_index = Some(1);
     first.meta.variant_index = Some(1);
@@ -163,7 +165,7 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
     first.meta.source_bytes = 20;
     let first_output = render_serviced(&mut fx, first).expect("first frame renders");
 
-    let mut second = chunk(&source[2 * usize::from(Consts::CH)..]);
+    let mut second = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     second.meta.frame_offset = 2;
     second.meta.timestamp = Duration::from_millis(20);
     second.meta.end_timestamp = Duration::from_millis(30);
@@ -200,6 +202,7 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let source_latency = fx
         .engine
         .as_ref()
@@ -219,9 +222,9 @@ fn rendered_source_frontier_excludes_pending_source(#[case] backend: StretchKind
 
     let source = sine(source_latency + 2);
     let split = source_latency * usize::from(Consts::CH);
-    render_serviced(&mut fx, chunk(&source[..split])).expect("latency-sized span renders");
+    render_serviced(&mut fx, chunk(&pools, &source[..split])).expect("latency-sized span renders");
 
-    let mut input = chunk(&source[split..]);
+    let mut input = chunk(&pools, &source[split..]);
     input.meta.frame_offset = u64::try_from(source_latency).expect("source latency fits u64");
     let output = render_serviced(&mut fx, input).expect("the unity source frame renders");
 
@@ -248,13 +251,17 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let source = sine(3);
-    let mut pending = chunk(&source[..usize::from(Consts::CH)]);
+    let mut pending = chunk(&pools, &source[..usize::from(Consts::CH)]);
     pending.meta.end_timestamp = Duration::from_millis(10);
     assert!(render_serviced(&mut fx, pending).is_none());
 
     controls.set_region_plan(None);
-    let mut unity = chunk(&source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)]);
+    let mut unity = chunk(
+        &pools,
+        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
+    );
     unity.meta.frame_offset = 1;
     unity.meta.timestamp = Duration::from_millis(10);
     unity.meta.end_timestamp = Duration::from_millis(20);
@@ -280,7 +287,7 @@ fn pending_span_is_committed_before_live_unity_passthrough(#[case] backend: Stre
     assert_eq!(unity.meta.frame_offset, 1);
     assert_eq!(unity.meta.end_timestamp, Duration::from_millis(20));
 
-    let mut next = chunk(&source[2 * usize::from(Consts::CH)..]);
+    let mut next = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     next.meta.frame_offset = 2;
     let next_samples = next.samples.to_vec();
     let passthrough = render_serviced(&mut fx, next).expect("unity remains zero-copy");
@@ -305,7 +312,8 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     reference_controls.set_keylock(true);
     reference_controls.set_backend(backend);
     let mut reference = renderer(Arc::clone(&reference_controls));
-    let reference_active = render_serviced(&mut reference, chunk(&source[..split]))
+    let pools = reference.pools.clone();
+    let reference_active = render_serviced(&mut reference, chunk(&pools, &source[..split]))
         .expect("non-unity span emits samples");
     let held_frontier = reference
         .rendered_source_end()
@@ -340,7 +348,7 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     );
 
     reference_controls.set_speed(1.0);
-    let mut reference_unity = chunk(&source[split..]);
+    let mut reference_unity = chunk(&pools, &source[split..]);
     reference_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let reference_unity = render_serviced(&mut reference, reference_unity)
         .expect("unity span follows the drained tail");
@@ -349,14 +357,14 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     let live_controls = StretchControls::new(0.5);
     live_controls.set_keylock(true);
     live_controls.set_backend(backend);
-    let mut live = renderer(Arc::clone(&live_controls));
-    let live_active =
-        render_serviced(&mut live, chunk(&source[..split])).expect("non-unity span emits samples");
+    let mut live = WarpRenderer::new(Arc::clone(&live_controls), spec(), pools.clone());
+    let live_active = render_serviced(&mut live, chunk(&pools, &source[..split]))
+        .expect("non-unity span emits samples");
     assert_eq!(live_active.frames(), reference_active.frames());
     assert_eq!(live.rendered_source_end(), Some(held_frontier));
 
     live_controls.set_speed(1.0);
-    let mut live_unity = chunk(&source[split..]);
+    let mut live_unity = chunk(&pools, &source[split..]);
     live_unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let unity_ptr = live_unity.samples.as_ptr();
     let first_tail = render_serviced(&mut live, live_unity)
@@ -439,12 +447,15 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
         RegionPlan::new(vec![GridSegment::new(0, 1, 2.0)]).expect("fixture region is valid"),
     )));
     let mut reference = renderer(Arc::clone(&reference_controls));
-    let reference_first =
-        render_serviced(&mut reference, chunk(&source[..usize::from(Consts::CH)]))
-            .expect("the no-debt span emits two frames");
+    let pools = reference.pools.clone();
+    let reference_first = render_serviced(
+        &mut reference,
+        chunk(&pools, &source[..usize::from(Consts::CH)]),
+    )
+    .expect("the no-debt span emits two frames");
     assert_eq!(reference_first.frames(), 2);
     reference_controls.set_region_plan(None);
-    let mut reference_unity = chunk(&source[2 * usize::from(Consts::CH)..]);
+    let mut reference_unity = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     reference_unity.meta.frame_offset = 2;
     let reference_transition = render_serviced(&mut reference, reference_unity)
         .expect("the no-debt transition starts its tail");
@@ -464,17 +475,20 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
         ])
         .expect("fixture regions are contiguous"),
     )));
-    let mut fx = renderer(Arc::clone(&controls));
-    let first = render_serviced(&mut fx, chunk(&source[..usize::from(Consts::CH)]))
+    let mut fx = WarpRenderer::new(Arc::clone(&controls), spec(), pools.clone());
+    let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)]))
         .expect("the first span rounds to two frames");
     assert_eq!(first.frames(), 2);
 
-    let mut debt = chunk(&source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)]);
+    let mut debt = chunk(
+        &pools,
+        &source[usize::from(Consts::CH)..2 * usize::from(Consts::CH)],
+    );
     debt.meta.frame_offset = 1;
     assert!(render_serviced(&mut fx, debt).is_none());
 
     controls.set_region_plan(None);
-    let mut unity = chunk(&source[2 * usize::from(Consts::CH)..]);
+    let mut unity = chunk(&pools, &source[2 * usize::from(Consts::CH)..]);
     unity.meta.frame_offset = 2;
     let transition = render_serviced(&mut fx, unity).expect("the debt transition starts its tail");
     let (tail, unity, _) = finish_unity_transition(&mut fx, transition);
@@ -506,13 +520,14 @@ fn reset_discards_pending_span_before_new_timeline(#[case] backend: StretchKind)
         RegionPlan::new(vec![GridSegment::new(0, 1, 0.75)]).expect("fixture region is valid"),
     )));
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let source = sine(2);
-    assert!(render_serviced(&mut fx, chunk(&source[..usize::from(Consts::CH)])).is_none());
+    assert!(render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)])).is_none());
 
     fx.reset();
     controls.set_region_plan(None);
     fx.prepare(spec());
-    let mut landed = chunk(&source[usize::from(Consts::CH)..]);
+    let mut landed = chunk(&pools, &source[usize::from(Consts::CH)..]);
     landed.meta.frame_offset = 100;
     landed.meta.timestamp = Duration::from_secs(1);
     landed.meta.end_timestamp = Duration::from_millis(1_010);

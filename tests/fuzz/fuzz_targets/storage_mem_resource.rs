@@ -2,15 +2,11 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
+    bufpool::testing::pools,
     platform::CancelToken,
     storage::{MemResource, StorageResource},
 };
 use libfuzzer_sys::fuzz_target;
-
-#[path = "../../src/bufpool_ext.rs"]
-mod bufpool_ext;
-
-use bufpool_ext::pools;
 
 #[derive(Debug)]
 enum Op {

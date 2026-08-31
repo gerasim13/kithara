@@ -90,7 +90,7 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
-    use crate::{resource::Resource, rt::track::PlayerResource, test_pools::default_pools};
+    use crate::{resource::Resource, rt::track::PlayerResource, test_pools::pools};
 
     fn track(item_id: TrackId, src: Arc<str>) -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
@@ -109,7 +109,7 @@ mod tests {
                 .returns(Ok(())),
         ));
         let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-        let resource = PlayerResource::new(resource, src, &default_pools())
+        let resource = PlayerResource::new(resource, src, &pools())
             .map(Box::new)
             .unwrap_or_else(|error| panic!("test player resource: {error}"));
 

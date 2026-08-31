@@ -266,7 +266,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn configured_byte_pool_reaches_response_copy_path() {
-        let pools = crate::test_pools::pools(64);
+        let pools = crate::test_pools::pools_with_budget(64);
         let options = NetOptions::default();
         let session = AppleSession::new(&options, pools.clone(), ConnectionMetrics::default());
         let data = NSData::with_bytes(b"abc");
@@ -284,7 +284,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn response_copy_reports_byte_budget_exhaustion() {
-        let buffers = ByteBuffers::new(crate::test_pools::pools(1));
+        let buffers = ByteBuffers::new(crate::test_pools::pools_with_budget(1));
         let data = NSData::with_bytes(b"ab");
 
         let error = copy_data(&data, &buffers).expect_err("budget must reject two-byte body");

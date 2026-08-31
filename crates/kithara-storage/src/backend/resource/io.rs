@@ -170,14 +170,15 @@ mod tests {
             resource::state::ResourceCore,
             traits::DriverIo,
         },
-        test_pools::byte_buffer,
+        test_pools::{byte_buffer, pools},
     };
 
     /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
     fn open_mem() -> ResourceCore<MemDriver> {
+        let pools = pools();
         ResourceCore::open(
             CancelToken::never(),
-            MemOptions::builder().buffer(byte_buffer()).build(),
+            MemOptions::builder().buffer(byte_buffer(&pools)).build(),
         )
         .expect("open mem must succeed")
     }
@@ -206,10 +207,11 @@ mod tests {
     /// path blocks on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_read_does_not_take_state_mutex() {
+        let pools = pools();
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
             MemOptions::builder()
-                .buffer(byte_buffer())
+                .buffer(byte_buffer(&pools))
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )
@@ -245,10 +247,11 @@ mod tests {
     /// on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_len_and_contains_do_not_take_state_mutex() {
+        let pools = pools();
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
             MemOptions::builder()
-                .buffer(byte_buffer())
+                .buffer(byte_buffer(&pools))
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )

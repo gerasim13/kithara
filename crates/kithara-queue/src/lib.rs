@@ -9,7 +9,7 @@ mod loader;
 mod navigation;
 mod queue;
 #[cfg(test)]
-mod test_pools;
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod track;
 
 pub use config::QueueConfig;

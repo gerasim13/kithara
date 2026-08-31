@@ -256,11 +256,11 @@ mod tests {
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::testing,
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     fn worker() -> PlayWorker<TestPools> {
-        PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build())
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]

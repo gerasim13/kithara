@@ -20,7 +20,7 @@ mod progress;
 #[cfg(not(target_arch = "wasm32"))]
 mod slots;
 #[cfg(test)]
-mod test_pools;
+pub(crate) use kithara_bufpool::testing as test_pools;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
 mod waveform;

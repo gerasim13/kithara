@@ -30,7 +30,7 @@ mod retire;
 #[cfg(feature = "symphonia")]
 mod symphonia;
 #[cfg(test)]
-mod test_pools;
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod traits;
 mod types;
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]

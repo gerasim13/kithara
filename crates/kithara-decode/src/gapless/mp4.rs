@@ -172,7 +172,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::probe_mp4_gapless;
-    use crate::{GaplessInfo, test_pools::default_pools};
+    use crate::{GaplessInfo, test_pools::pools};
 
     fn atom(kind: [u8; 4], payload: &[u8]) -> Vec<u8> {
         let size = u32::try_from(payload.len() + 8).unwrap_or(u32::MAX);
@@ -292,7 +292,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &default_pools()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -315,7 +315,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &default_pools()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 0x840,
                 trailing_frames: 0x48,
@@ -339,7 +339,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &default_pools()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             Some(GaplessInfo {
                 leading_frames: 2_112,
                 trailing_frames: 1_920,
@@ -353,7 +353,7 @@ mod tests {
         moov.extend_from_slice(&mvhd(1_000));
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &default_pools()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             None
         );
     }
@@ -373,7 +373,7 @@ mod tests {
 
         let mut reader = Cursor::new(atom(*b"moov", &moov));
         assert_eq!(
-            probe_mp4_gapless(&mut reader, &default_pools()).expect("BUG: probe"),
+            probe_mp4_gapless(&mut reader, &pools()).expect("BUG: probe"),
             None
         );
     }

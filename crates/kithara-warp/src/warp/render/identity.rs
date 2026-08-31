@@ -78,18 +78,19 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::{default_pools, sample_buffer};
+    use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test]
     fn renderer_preserves_samples_exactly() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
         let mut meta = AudioChunkInfo::default();
         meta.spec = spec;
         meta.frames = 1;
         meta.frame_offset = 41;
-        let input = AudioChunk::new(meta, sample_buffer(&[0.25, -0.5]));
+        let input = AudioChunk::new(meta, sample_buffer(&pools, &[0.25, -0.5]));
         let input_ptr = input.samples.as_ptr();
-        let mut renderer = WarpRenderer::new(StretchControls::new(1.5), spec, default_pools());
+        let mut renderer = WarpRenderer::new(StretchControls::new(1.5), spec, pools);
 
         assert_eq!(renderer.rendered_source_end(), None);
         let output = renderer.render(input).expect("identity output");

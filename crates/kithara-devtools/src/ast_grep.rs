@@ -431,9 +431,15 @@ pool_schema![TestPools { samples: f32 }];
 pool_schema! {
     pub InlineTestPools { bytes: u8 }
 }
+
+mod test_pools;
+
+fn local_region() {
+    let pools = TestPools::region(overall, bytes, samples);
+}
 "#;
 
-        assert_eq!(local_test_pool_hits(source), 3);
+        assert_eq!(local_test_pool_hits(source), 5);
         assert_eq!(
             rule_hits_at(
                 "perf.no-local-test-pools.yml",

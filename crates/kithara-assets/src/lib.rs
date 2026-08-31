@@ -12,9 +12,6 @@ pub mod index;
 mod layout;
 mod resource;
 mod store;
-#[cfg(test)]
-mod test_pools;
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use backend::DiskAssetStore;
 pub use backend::MemAssetStore;
@@ -30,6 +27,8 @@ pub use index::pending_resource::{
     WriterOutcome,
 };
 pub use index::persistence::{FlushHub, FlushPolicy};
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 pub use layout::{
     AssetLayout, AssetLayoutRegistry, AssetResource, AssetScope, AssetSource, DefaultLayout,
     ResourceKey,

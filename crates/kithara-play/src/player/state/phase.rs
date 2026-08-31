@@ -362,8 +362,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing,
-        test_pools::default_pools,
+        PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing, test_pools::pools,
     };
 
     #[kithara::test]
@@ -425,7 +424,7 @@ mod tests {
 
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build());
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

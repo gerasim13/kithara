@@ -354,7 +354,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::pools;
+    use crate::test_pools::pools_with_budget;
 
     const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
@@ -364,7 +364,7 @@ mod tests {
 
     #[kithara::test]
     fn reserve_resize_and_front_truncation_preserve_channel_major_data() {
-        let pools = pools(128 * size_of::<f32>());
+        let pools = pools_with_budget(128 * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(3))
             .expect("initial planar storage fits");
         planar
@@ -411,7 +411,7 @@ mod tests {
 
     #[kithara::test]
     fn incremental_resize_grows_stride_geometrically() {
-        let pools = pools(1_024 * size_of::<f32>());
+        let pools = pools_with_budget(1_024 * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(0))
             .expect("empty planar storage is valid");
         let mut growths = 0;
@@ -447,7 +447,7 @@ mod tests {
     #[kithara::test]
     fn exact_budget_growth_is_not_rejected_by_amortization() {
         let exact_samples = 18;
-        let pools = pools(exact_samples * size_of::<f32>());
+        let pools = pools_with_budget(exact_samples * size_of::<f32>());
         let mut planar = PlanarBuffer::new(&pools, stereo(), FrameCount::new(8))
             .expect("initial planar storage fits");
 
@@ -461,7 +461,7 @@ mod tests {
 
     #[kithara::test]
     fn view_ranges_and_channels_are_checked() {
-        let pools = pools(64 * size_of::<f32>());
+        let pools = pools_with_budget(64 * size_of::<f32>());
         let planar =
             PlanarBuffer::new(&pools, stereo(), FrameCount::new(3)).expect("planar storage fits");
 
@@ -484,7 +484,7 @@ mod tests {
 
     #[kithara::test]
     fn caller_and_pool_capacity_failures_are_typed() {
-        let region = pools(64 * size_of::<f32>());
+        let region = pools_with_budget(64 * size_of::<f32>());
         let planar =
             PlanarBuffer::new(&region, stereo(), FrameCount::new(2)).expect("planar storage fits");
         assert_eq!(
@@ -495,7 +495,7 @@ mod tests {
             })
         );
 
-        let exhausted = pools(0);
+        let exhausted = pools_with_budget(0);
         assert!(matches!(
             PlanarBuffer::new(&exhausted, stereo(), FrameCount::new(2)),
             Err(SignalError::PoolCapacity {
@@ -506,7 +506,7 @@ mod tests {
 
     #[kithara::test]
     fn dropped_planar_storage_is_reused_by_the_injected_pool() {
-        let pools = pools(64 * size_of::<f32>());
+        let pools = pools_with_budget(64 * size_of::<f32>());
         let first = PlanarBuffer::new(&pools, stereo(), FrameCount::new(8))
             .expect("first planar storage fits");
         let ptr = first.as_samples().as_ptr();

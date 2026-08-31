@@ -325,9 +325,14 @@ mod tests {
     const ROOT: &str = "test_asset";
 
     fn make_pins_disk(dir: &Path) -> PinsIndex {
+        let pools = crate::test_pools::pools();
         let path = dir.join("_index").join("pins.bin");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        PinsIndex::with_persist_at(path, CancelToken::never(), crate::test_pools::buffer())
+        PinsIndex::with_persist_at(
+            path,
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        )
     }
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
@@ -343,12 +348,16 @@ mod tests {
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
+        let pools = crate::test_pools::pools();
         let path = dir.join("_index").join("pins.bin");
         if !path.exists() {
             return HashSet::new();
         }
-        let idx =
-            PinsIndex::with_persist_at(path, CancelToken::never(), crate::test_pools::buffer());
+        let idx = PinsIndex::with_persist_at(
+            path,
+            CancelToken::never(),
+            crate::test_pools::byte_buffer(&pools),
+        );
         idx.snapshot()
     }
 

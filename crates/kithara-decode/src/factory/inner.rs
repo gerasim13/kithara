@@ -953,7 +953,7 @@ mod apple_factory_tests {
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
         error::DecodeResult,
         fmp4::test_layout::{TestLayoutCodec, build_test_layout},
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
         traits::Decoder,
     };
 
@@ -1108,7 +1108,7 @@ mod apple_factory_tests {
             DecoderConfig::builder()
                 .backend(DecoderBackend::Apple)
                 .byte_map(byte_map)
-                .pools(default_pools())
+                .pools(pools())
                 .build();
 
         let result = DecoderFactory::create_from_media_info(source, &media_info, config);

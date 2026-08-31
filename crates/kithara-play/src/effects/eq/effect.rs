@@ -106,7 +106,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::{super::*, *};
-    use crate::test_pools::{default_pools, sample_buffer};
+    use crate::test_pools::{Pools, pools, sample_buffer};
 
     struct EqFixture;
 
@@ -116,36 +116,42 @@ mod tests {
         }
     }
 
-    fn test_chunk(spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn test_chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            sample_buffer(&samples),
+            sample_buffer(pools, &samples),
         )
     }
 
-    fn make_eq(bands: Vec<EqBandConfig>, sample_rate: u32, channels: u16) -> EqEffect {
-        let config = EqConfig::builder(default_pools()).build();
+    fn make_eq(
+        pools: &Pools,
+        bands: Vec<EqBandConfig>,
+        sample_rate: u32,
+        channels: u16,
+    ) -> EqEffect {
+        let config = EqConfig::builder(pools.clone()).build();
         EqEffect::new(&config, bands, sample_rate, channels)
             .unwrap_or_else(|error| panic!("test EQ: {error}"))
     }
 
-    fn make_isolator(bands: &[EqBandConfig], sample_rate: u32) -> IsolatorEq {
-        let config = EqConfig::builder(default_pools()).build();
+    fn make_isolator(pools: &Pools, bands: &[EqBandConfig], sample_rate: u32) -> IsolatorEq {
+        let config = EqConfig::builder(pools.clone()).build();
         IsolatorEq::new(&config, bands, sample_rate)
             .unwrap_or_else(|error| panic!("test isolator: {error}"))
     }
 
     #[kithara::test]
     fn eq_flat_gain_preserves_magnitude() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(10);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         let warmup = vec![0.0f32; 4096];
-        let _ = eq.process(test_chunk(spec, warmup));
+        let _ = eq.process(test_chunk(&pools, spec, warmup));
 
         let num_frames: u16 = 44100;
         let samples: Vec<f32> = (0..num_frames)
@@ -155,7 +161,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / f32::from(num_frames)).sqrt();
 
-        let chunk = test_chunk(spec, samples);
+        let chunk = test_chunk(&pools, spec, samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -173,8 +179,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_set_gain_clamps() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_eq(bands, 44100, 2);
+        let mut eq = make_eq(&pools, bands, 44100, 2);
 
         eq.set_gain(0, GainDb::from(100.0));
         assert_eq!(eq.target_gain(0).unwrap(), GainDb::MAX);
@@ -188,8 +195,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_set_gain_out_of_bounds_band_is_noop() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_eq(bands, 44100, 2);
+        let mut eq = make_eq(&pools, bands, 44100, 2);
         eq.set_gain(99, GainDb::from(5.0));
         for i in 0..3 {
             assert_eq!(eq.target_gain(i).unwrap(), GainDb::DEFAULT);
@@ -198,13 +206,14 @@ mod tests {
 
     #[kithara::test]
     fn eq_reset_clears_gains_and_history() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_eq(bands, 44100, 2);
+        let mut eq = make_eq(&pools, bands, 44100, 2);
 
         eq.set_gain(0, GainDb::MAX);
         let spec = EqFixture::spec(2, 44100);
         let samples = vec![0.5f32; 256];
-        let chunk = test_chunk(spec, samples);
+        let chunk = test_chunk(&pools, spec, samples);
         let _ = eq.process(chunk);
 
         eq.reset();
@@ -220,13 +229,14 @@ mod tests {
 
     #[kithara::test]
     fn eq_single_band_kill() {
+        let pools = pools();
         let bands = vec![EqBandConfig::builder().frequency(1000.0).build()];
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, GainDb::MIN);
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
-        let gain = measure_sine_gain(&mut eq, 1000.0, spec);
+        let gain = measure_sine_gain(&pools, &mut eq, 1000.0, spec);
         assert!(
             gain < 0.001,
             "single band at min should be killed, got gain={gain:.6}"
@@ -235,14 +245,15 @@ mod tests {
 
     #[kithara::test]
     fn eq_3band_kill_low() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, GainDb::MIN);
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
-        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
-        let gain_treble = measure_sine_gain(&mut eq, 10000.0, spec);
+        let gain_bass = measure_sine_gain(&pools, &mut eq, 40.0, spec);
+        let gain_treble = measure_sine_gain(&pools, &mut eq, 10000.0, spec);
         assert!(
             gain_bass < 0.05,
             "bass should be killed, got {gain_bass:.4}"
@@ -255,14 +266,15 @@ mod tests {
 
     #[kithara::test]
     fn eq_3band_kill_high() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(2, GainDb::MIN);
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
-        let gain_treble = measure_sine_gain(&mut eq, 15000.0, spec);
-        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
+        let gain_treble = measure_sine_gain(&pools, &mut eq, 15000.0, spec);
+        let gain_bass = measure_sine_gain(&pools, &mut eq, 40.0, spec);
         assert!(
             gain_treble < 0.05,
             "treble should be killed, got {gain_treble:.4}"
@@ -272,16 +284,17 @@ mod tests {
 
     #[kithara::test]
     fn eq_3band_kill_all_produces_silence() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         for i in 0..3 {
             eq.set_gain(i, GainDb::MIN);
         }
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
         for freq in [40.0, 1000.0, 10000.0] {
-            let gain = measure_sine_gain(&mut eq, freq, spec);
+            let gain = measure_sine_gain(&pools, &mut eq, freq, spec);
             assert!(
                 gain < 0.001,
                 "all bands killed: {freq}Hz gain should be ~0, got {gain:.6}"
@@ -291,13 +304,14 @@ mod tests {
 
     #[kithara::test]
     fn eq_low_shelf_boosts_bass() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, GainDb::MAX);
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
-        let gain_bass = measure_sine_gain(&mut eq, 40.0, spec);
+        let gain_bass = measure_sine_gain(&pools, &mut eq, 40.0, spec);
         assert!(
             gain_bass > 1.5,
             "40Hz should be boosted, got gain={gain_bass:.3}"
@@ -306,13 +320,14 @@ mod tests {
 
     #[kithara::test]
     fn eq_high_shelf_boosts_treble() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(2, GainDb::MAX);
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
-        let gain_treble = measure_sine_gain(&mut eq, 15000.0, spec);
+        let gain_treble = measure_sine_gain(&pools, &mut eq, 15000.0, spec);
         assert!(
             gain_treble > 1.5,
             "15kHz should be boosted, got gain={gain_treble:.3}"
@@ -321,8 +336,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_gain_change_starts_smoothing() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_eq(bands, 44100, 2);
+        let mut eq = make_eq(&pools, bands, 44100, 2);
 
         assert!(!eq.is_smoothing(), "should not be smoothing initially");
         eq.set_gain(0, GainDb::MAX);
@@ -331,12 +347,13 @@ mod tests {
 
     #[kithara::test]
     fn eq_smooth_gain_converges() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, GainDb::MAX);
 
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
         assert!(
             !eq.is_smoothing(),
@@ -346,14 +363,15 @@ mod tests {
 
     #[kithara::test]
     fn eq_smooth_no_discontinuity() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         let warmup: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i) / 44100.0).sin())
             .collect();
-        let chunk = test_chunk(spec, warmup);
+        let chunk = test_chunk(&pools, spec, warmup);
         let _ = eq.process(chunk);
 
         eq.set_gain(0, GainDb::MAX);
@@ -361,7 +379,7 @@ mod tests {
         let signal: Vec<f32> = (0u16..4096)
             .map(|i| (2.0 * PI * 1000.0 * f32::from(i + 4096) / 44100.0).sin())
             .collect();
-        let chunk = test_chunk(spec, signal);
+        let chunk = test_chunk(&pools, spec, signal);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 
@@ -384,15 +402,16 @@ mod tests {
         #[case] sample_len: usize,
         #[case] gain: Option<(usize, f32)>,
     ) {
+        let pools = pools();
         let bands = generate_log_spaced_bands(5);
         let spec = EqFixture::spec(channels, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         if let Some((band, gain_db)) = gain {
             eq.set_gain(band, GainDb::from(gain_db));
         }
 
         let samples = vec![0.5f32; sample_len];
-        let chunk = test_chunk(spec, samples);
+        let chunk = test_chunk(&pools, spec, samples);
         let result = eq.process(chunk);
         assert!(result.is_some());
         assert_eq!(result.unwrap().samples.len(), sample_len);
@@ -400,16 +419,18 @@ mod tests {
 
     #[kithara::test]
     fn eq_flush_returns_none() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_eq(bands, 44100, 2);
+        let mut eq = make_eq(&pools, bands, 44100, 2);
         assert!(eq.flush().is_none());
     }
 
     #[kithara::test]
     fn eq_output_never_nan_or_inf() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(10);
         let spec = EqFixture::spec(2, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         for round in 0..100 {
             let gain = if round % 2 == 0 {
@@ -422,7 +443,7 @@ mod tests {
             }
 
             let samples: Vec<f32> = (0u16..1024).map(|i| (f32::from(i) * 0.1).sin()).collect();
-            let chunk = test_chunk(spec, samples);
+            let chunk = test_chunk(&pools, spec, samples);
             let output = eq.process(chunk).unwrap();
             for (i, &s) in output.samples.iter().enumerate() {
                 assert!(s.is_finite(), "round {round} sample {i}: got {s}");
@@ -432,17 +453,18 @@ mod tests {
 
     #[kithara::test]
     fn eq_nan_input_produces_safe_output() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
         eq.set_gain(0, GainDb::MAX);
-        converge_smoother(&mut eq, spec);
+        converge_smoother(&pools, &mut eq, spec);
 
         let mut samples = vec![0.5f32; 256];
         samples[10] = f32::NAN;
         samples[20] = f32::INFINITY;
         samples[30] = f32::NEG_INFINITY;
-        let chunk = test_chunk(spec, samples);
+        let chunk = test_chunk(&pools, spec, samples);
         let output = eq.process(chunk).unwrap();
 
         for (i, &s) in output.samples.iter().enumerate() {
@@ -452,9 +474,10 @@ mod tests {
 
     #[kithara::test]
     fn eq_extreme_gain_oscillation_stays_safe() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(2, 44100);
-        let mut eq = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         for round in 0..200 {
             let gain = if round % 2 == 0 {
@@ -470,7 +493,7 @@ mod tests {
             eq.set_gain(2, gain);
 
             let samples: Vec<f32> = (0u16..512).map(|i| (f32::from(i) * 0.3).sin()).collect();
-            let chunk = test_chunk(spec, samples);
+            let chunk = test_chunk(&pools, spec, samples);
             let output = eq.process(chunk).unwrap();
             for &s in &output.samples[..] {
                 assert!(s.is_finite());
@@ -480,8 +503,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_fresh_at_zero_db_is_bypass_active() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let eq = make_isolator(&bands, 44100);
+        let eq = make_isolator(&pools, &bands, 44100);
         assert!(
             eq.bypass_active(),
             "default 0 dB bands should activate bypass so the LR-4 chain \
@@ -491,8 +515,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_bypass_deactivates_on_gain_change() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&bands, 44100);
+        let mut eq = make_isolator(&pools, &bands, 44100);
         assert!(eq.bypass_active(), "precondition: fresh EQ is in bypass");
 
         eq.set_gain(0, GainDb::from(3.0));
@@ -506,17 +531,18 @@ mod tests {
 
     #[kithara::test]
     fn eq_bypass_reactivates_after_return_to_unity() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq_effect = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq_effect = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         eq_effect.set_gain(0, GainDb::MAX);
-        converge_smoother(&mut eq_effect, spec);
+        converge_smoother(&pools, &mut eq_effect, spec);
         assert!(!eq_effect.eq_l.bypass_active());
 
         eq_effect.set_gain(0, GainDb::default());
-        converge_smoother(&mut eq_effect, spec);
-        converge_smoother(&mut eq_effect, spec);
+        converge_smoother(&pools, &mut eq_effect, spec);
+        converge_smoother(&pools, &mut eq_effect, spec);
 
         assert!(
             eq_effect.eq_l.bypass_active(),
@@ -527,8 +553,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_bypass_returns_input_unchanged() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&bands, 44100);
+        let mut eq = make_isolator(&pools, &bands, 44100);
         assert!(eq.bypass_active(), "precondition: bypass is active");
 
         let inputs = [0.0_f32, 0.25, -0.5, 0.999, -0.999, 1e-6, -1e-6];
@@ -543,14 +570,15 @@ mod tests {
 
     #[kithara::test]
     fn eq_all_min_gain_after_smoothing_is_silence_active() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
         let spec = EqFixture::spec(1, 44100);
-        let mut eq_effect = make_eq(bands, spec.sample_rate.get(), spec.channels);
+        let mut eq_effect = make_eq(&pools, bands, spec.sample_rate.get(), spec.channels);
 
         for i in 0..3 {
             eq_effect.set_gain(i, GainDb::MIN);
         }
-        converge_smoother(&mut eq_effect, spec);
+        converge_smoother(&pools, &mut eq_effect, spec);
 
         assert!(
             eq_effect.eq_l.silence_active(),
@@ -561,8 +589,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_silence_returns_zero() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&bands, 44100);
+        let mut eq = make_isolator(&pools, &bands, 44100);
         for i in 0..3 {
             eq.set_gain(i, GainDb::MIN);
             eq.settle_gain(i);
@@ -582,8 +611,9 @@ mod tests {
 
     #[kithara::test]
     fn eq_silence_deactivates_when_any_band_raised() {
+        let pools = pools();
         let bands = generate_log_spaced_bands(3);
-        let mut eq = make_isolator(&bands, 44100);
+        let mut eq = make_isolator(&pools, &bands, 44100);
         for i in 0..3 {
             eq.set_gain(i, GainDb::MIN);
             eq.settle_gain(i);
@@ -599,10 +629,10 @@ mod tests {
         );
     }
 
-    fn converge_smoother(eq: &mut EqEffect, spec: AudioSpec) {
+    fn converge_smoother(pools: &Pools, eq: &mut EqEffect, spec: AudioSpec) {
         let frames = (spec.sample_rate.get() as usize) / 5;
         let samples = vec![0.0f32; frames * spec.channels as usize];
-        let chunk = test_chunk(spec, samples);
+        let chunk = test_chunk(&pools, spec, samples);
         let _ = eq.process(chunk);
     }
 
@@ -610,7 +640,7 @@ mod tests {
         clippy::cast_precision_loss,
         reason = "frame count and index are small integers"
     )]
-    fn measure_sine_gain(eq: &mut EqEffect, freq_hz: f32, spec: AudioSpec) -> f32 {
+    fn measure_sine_gain(pools: &Pools, eq: &mut EqEffect, freq_hz: f32, spec: AudioSpec) -> f32 {
         let num_frames = 44100;
         let mut samples = Vec::with_capacity(num_frames);
         for i in 0..num_frames {
@@ -621,7 +651,7 @@ mod tests {
         let input_rms: f32 =
             (samples.iter().map(|s| s * s).sum::<f32>() / num_frames as f32).sqrt();
 
-        let chunk = test_chunk(spec, samples);
+        let chunk = test_chunk(&pools, spec, samples);
         let output = eq.process(chunk).unwrap();
         let out = &output.samples[..];
 

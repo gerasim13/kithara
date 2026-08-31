@@ -10,20 +10,11 @@ use std::path::{Path, PathBuf};
 
 use common::{Score, f_measure, load_golden};
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, testing::TestPools};
+use kithara_bufpool::testing::pools;
 use kithara_test_utils::kithara;
 
 const WINDOW: f64 = 0.070;
 const SMALL_MIN_F: f64 = 0.99;
-
-fn pools() -> PoolRegion<TestPools> {
-    TestPools::region(
-        OverallBudget(256 * 1024 * 1024),
-        PoolConfig::builder().max_buffers(32).build(),
-        PoolConfig::builder().max_buffers(128).build(),
-    )
-    .unwrap_or_else(|error| panic!("test pool region: {error}"))
-}
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

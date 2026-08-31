@@ -3,7 +3,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
-use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -75,6 +74,7 @@ struct Source {
     at: u64,
     chunks: u64,
     log: Log,
+    pools: Option<kithara_bufpool::PoolRegion<TestPools>>,
 }
 
 impl Source {
@@ -94,6 +94,7 @@ impl Source {
             bus: EventBus::default(),
             log: Log::default(),
             metadata: TrackMetadata::default(),
+            pools: None,
         }
     }
 
@@ -194,7 +195,8 @@ impl AudioRead for Source {
         self.at = at.saturating_add(frames);
         self.chunks = self.chunks.saturating_add(1);
         self.push(Call::Chunk { at });
-        Ok(ChunkOutcome::Chunk(decoded(at, frames)))
+        let pools = self.pools.as_ref().expect("test pass installs pool region");
+        Ok(ChunkOutcome::Chunk(decoded(pools, at, frames)))
     }
 
     fn position(&self) -> Duration {
@@ -242,8 +244,8 @@ impl AudioControl for Source {
     }
 }
 
-fn decoded(at: u64, frames: u64) -> AudioChunk {
-    chunk(&sine_from(at, frames.to_usize().unwrap_or(0)), at)
+fn decoded(pools: &kithara_bufpool::PoolRegion<TestPools>, at: u64, frames: u64) -> AudioChunk {
+    chunk(pools, &sine_from(at, frames.to_usize().unwrap_or(0)), at)
 }
 
 fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
@@ -267,13 +269,13 @@ where
     _jobs: mpsc::Sender<Job>,
 }
 
-impl<B, S> Pass<B, S>
+impl<B> Pass<B, TestPools>
 where
     B: ResamplerBackend,
-    S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn open(source: Source, builder: AnalyzerBuilder<B, S>) -> Self {
+    fn open(mut source: Source, builder: AnalyzerBuilder<B, TestPools>) -> Self {
         let rate = spec().sample_rate;
+        source.pools = Some(builder.pools().clone());
         let log = source.log();
         let (jobs, receiver) = mpsc::channel();
         let (tx, results) = watch::channel(None);

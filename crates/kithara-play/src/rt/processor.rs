@@ -369,7 +369,7 @@ mod tests {
     use super::*;
     use crate::{
         bridge::{SharedEq, slot_channels},
-        test_pools::default_pools,
+        test_pools::pools,
     };
 
     fn processor() -> (PlayerNodeProcessor, crate::bridge::SlotControl) {
@@ -378,10 +378,7 @@ mod tests {
             sample_rate: NonZeroU32::new(44_100).expect("static sample rate"),
             max_block_frames: NonZeroU32::new(512).expect("static block size"),
         };
-        (
-            PlayerNodeProcessor::new(inputs, shape, &default_pools()),
-            control,
-        )
+        (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
     }
 
     #[kithara::test]

@@ -17,18 +17,20 @@ use crate::{
     Driver, DriverIo, ResourceRead,
     backend::memory::driver::{MemDriver, MemOptions, MemResource},
     resource::{ResourceStatus, WaitOutcome},
-    test_pools::{byte_buffer, pools},
+    test_pools::{byte_buffer, pools, pools_with_budget},
 };
 
 fn create_resource() -> MemResource {
-    MemResource::new(CancelToken::never(), byte_buffer())
+    let pools = pools();
+    MemResource::new(CancelToken::never(), byte_buffer(&pools))
 }
 
 fn with_bytes(data: &[u8], cancel: CancelToken) -> MemResource {
+    let pools = pools();
     MemResource::open(
         cancel,
         MemOptions::builder()
-            .buffer(byte_buffer())
+            .buffer(byte_buffer(&pools))
             .initial_data(data.to_vec())
             .build(),
     )
@@ -45,7 +47,7 @@ fn test_create_new_resource() {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn post_commit_replacement_uses_injected_pool() {
-    let pools = pools(1024);
+    let pools = pools_with_budget(1024);
     let (driver, _) = MemDriver::open(
         MemOptions::builder()
             .buffer(pools.get::<u8>())
@@ -159,8 +161,9 @@ fn test_fail_wakes_waiters() {
 
 #[kithara::test(native)]
 fn test_cancel_wakes_waiters() {
+    let pools = pools();
     let cancel = CancelToken::never();
-    let res = MemResource::new(cancel.clone(), byte_buffer());
+    let res = MemResource::new(cancel.clone(), byte_buffer(&pools));
 
     let handle = thread::spawn({
         let cancel = cancel;
@@ -177,8 +180,9 @@ fn test_cancel_wakes_waiters() {
 
 #[kithara::test(native)]
 fn external_cancel_wakes_waiter_without_cancelling_resource() {
+    let pools = pools();
     let resource_cancel = CancelToken::never();
-    let writer = MemResource::new(resource_cancel.clone(), byte_buffer());
+    let writer = MemResource::new(resource_cancel.clone(), byte_buffer(&pools));
     let reader = writer.reader();
     let wait_cancel = CancelToken::never();
     let entering_wait = Arc::new(Barrier::new(2));
@@ -333,10 +337,11 @@ fn test_sparse_write(#[case] offset: u64, #[case] payload: &[u8]) {
 
 #[kithara::test(timeout(Duration::from_secs(1)))]
 fn test_growable_write_beyond_initial_capacity() {
+    let pools = pools();
     let res = MemResource::open(
         CancelToken::never(),
         MemOptions::builder()
-            .buffer(byte_buffer())
+            .buffer(byte_buffer(&pools))
             .capacity(64)
             .build(),
     )

@@ -273,7 +273,7 @@ mod tests {
     use kithara_warp::{StretchControls, StretchKind};
 
     use super::*;
-    use crate::test_pools::{TestPools, default_pools, pools};
+    use crate::test_pools::{TestPools, pools, pools_with_budget};
 
     fn flush_deferred<S>(source: &mut S)
     where
@@ -622,7 +622,7 @@ mod tests {
     #[kithara::test]
     fn buffered_frame_changing_effect_tracks_live_and_flush_frontiers() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pools = default_pools();
+        let pools = pools();
         let head = Arc::new(AtomicU64::new(0));
         let source = RawSource {
             chunks: VecDeque::from([
@@ -684,7 +684,7 @@ mod tests {
     #[kithara::test]
     fn deferred_shell_services_effects_between_source_phases() {
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test sample rate"));
-        let pools = default_pools();
+        let pools = pools();
         let log = Arc::new(Mutex::new(Vec::new()));
         let serviced = Arc::new(Mutex::new(None));
         let source = DeferredSource {
@@ -711,7 +711,7 @@ mod tests {
     fn discontinuity_refreshes_spec_without_resetting_same_revision() {
         let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
         let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
-        let pools = default_pools();
+        let pools = pools();
         let discontinuity = Arc::new(Mutex::new(SourceDiscontinuity::new(7, initial)));
         let resets = Arc::new(AtomicU64::new(0));
         let source = RevisionSource {
@@ -741,7 +741,7 @@ mod tests {
     fn unity_warp_preserves_samples_and_meta_across_discontinuity() {
         let initial = AudioSpec::new(2, NonZeroU32::new(44_100).expect("initial rate"));
         let changed = AudioSpec::new(1, NonZeroU32::new(48_000).expect("changed rate"));
-        let pools = default_pools();
+        let pools = pools();
         let first = chunk(&pools, initial, 256);
         let first_meta = first.meta;
         let first_samples = first.samples.to_vec();
@@ -792,7 +792,7 @@ mod tests {
         const SENTINEL_FRAMES: u32 = 512;
 
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pools = default_pools();
+        let pools = pools();
         let first_active_end = u64::from(ACTIVE_FRAMES);
         let first_unity_end = first_active_end.saturating_add(u64::from(UNITY_FRAMES));
         let second_active_end = first_unity_end.saturating_add(u64::from(ACTIVE_FRAMES));
@@ -918,7 +918,7 @@ mod tests {
     #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
     fn unavailable_warp_target_fails_before_pulling_source(#[case] backend: StretchKind) {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let source_pools = default_pools();
+        let source_pools = pools();
         let head = Arc::new(AtomicU64::new(0));
         let raw = RawSource {
             chunks: VecDeque::from([chunk(&source_pools, spec, 0)]),
@@ -931,7 +931,7 @@ mod tests {
         let config = kithara_warp::WarpConfig::builder()
             .stretch(controls)
             .build();
-        let target_pools = pools(0);
+        let target_pools = pools_with_budget(0);
         let renderer = kithara_warp::Warp::new((), &config).renderer(spec, target_pools.clone());
         let effects = Vec::new();
         let drain = EffectDrain::new(effects.len(), &target_pools)
@@ -948,7 +948,7 @@ mod tests {
     #[kithara::test]
     fn seek_cancels_stale_tail_and_resets_effects_once() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pools = default_pools();
+        let pools = pools();
         let seek = Arc::new(SeekState::new());
         let resets = Arc::new(AtomicU64::new(0));
         let source = SeekApplyingSource {
@@ -984,7 +984,7 @@ mod tests {
     #[kithara::test]
     fn every_effect_tail_precedes_the_single_eof() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pools = default_pools();
+        let pools = pools();
         let source = RawSource {
             chunks: VecDeque::new(),
             head: Arc::new(AtomicU64::new(0)),
@@ -1019,7 +1019,7 @@ mod tests {
     #[kithara::test]
     fn exhausted_drain_stays_terminal_for_the_decode_epoch() {
         let spec = AudioSpec::new(2, NonZeroU32::new(44_100).expect("test sample rate"));
-        let pools = default_pools();
+        let pools = pools();
         let steps = Arc::new(AtomicU64::new(0));
         let flushes = Arc::new(AtomicU64::new(0));
         let resets = Arc::new(AtomicU64::new(0));

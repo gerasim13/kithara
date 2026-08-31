@@ -392,7 +392,7 @@ mod tests {
     use crate::{
         bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     struct Consts;
@@ -624,7 +624,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn loading_next_warp_resource_preserves_shared_target_and_effective_capability() {
         let controls = StretchControls::new(1.0);
-        let pools = default_pools();
+        let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
         let (inputs, mut control) = slot_channels(SharedEq::new(0));
         let shape = StreamShape {

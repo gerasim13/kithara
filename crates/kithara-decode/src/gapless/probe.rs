@@ -178,7 +178,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::test_pools::default_pools;
+    use crate::test_pools::pools;
 
     /// An `ID3v2` tag of `payload_len` bytes followed by one MPEG sync word,
     /// so a probe that stops inside the tag yields no frame at all.
@@ -199,8 +199,7 @@ mod tests {
     fn probe_window_starts_at_the_audio_behind_an_oversized_id3_tag() {
         let mut source = Cursor::new(mp3_behind_id3(32 * 1024));
 
-        let buffer =
-            read_mp3_probe_prefix(&mut source, &default_pools()).expect("BUG: read probe prefix");
+        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(0xFF));
         assert_eq!(buffer.get(1).copied(), Some(0xFB));
@@ -212,8 +211,7 @@ mod tests {
         data.truncate(4 * 1024);
         let mut source = Cursor::new(data);
 
-        let buffer =
-            read_mp3_probe_prefix(&mut source, &default_pools()).expect("BUG: read probe prefix");
+        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.len(), 4 * 1024);
@@ -224,8 +222,7 @@ mod tests {
         let tag_bytes = 10 + 1024;
         let mut source = Cursor::new(mp3_behind_id3(1024));
 
-        let buffer =
-            read_mp3_probe_prefix(&mut source, &default_pools()).expect("BUG: read probe prefix");
+        let buffer = read_mp3_probe_prefix(&mut source, &pools()).expect("BUG: read probe prefix");
 
         assert_eq!(buffer.first().copied(), Some(b'I'));
         assert_eq!(buffer.get(tag_bytes).copied(), Some(0xFF));

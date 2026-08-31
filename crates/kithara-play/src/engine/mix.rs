@@ -83,7 +83,7 @@ mod tests {
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::{Cmd, Reply, SessionDispatcher, testing::test_session},
-        test_pools::{TestPools, default_pools},
+        test_pools::{TestPools, pools},
     };
 
     struct ForeignSession;
@@ -99,7 +99,7 @@ mod tests {
     }
 
     fn player(session: Arc<dyn SessionDispatcher<TestPools>>) -> PlayerImpl<TestPools> {
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(default_pools()).build());
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

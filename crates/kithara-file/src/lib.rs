@@ -7,8 +7,7 @@ mod coord;
 mod error;
 mod session;
 mod stream;
-#[cfg(test)]
-mod test_pools;
-
 pub use config::{FileConfig, FileSrc};
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 pub use stream::File;
