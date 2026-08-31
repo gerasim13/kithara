@@ -60,7 +60,7 @@ fn rhythm_mp3(
         0,
         RhythmControl::Aligned,
     );
-    EncoderFactory::encode_bytes(BytesEncodeRequest {
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target: BytesEncodeTarget::Mp3,
         bit_rate: None,
