@@ -82,6 +82,12 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// then publish inline on the render callback.
     #[builder(default)]
     pub(crate) consumer_wake_mode: ConsumerWakeMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
+    /// here; a direct reader off the real-time thread may opt in itself.
+    /// Never set on a resource consumed by a real-time callback.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject

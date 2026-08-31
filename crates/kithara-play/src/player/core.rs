@@ -39,6 +39,8 @@ pub(crate) struct PlayerCore {
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker,
     pub(crate) gapless_mode: GaplessMode,
+    /// Player-level underrun policy copied into every prepared resource.
+    pub(crate) block_on_underrun: bool,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,

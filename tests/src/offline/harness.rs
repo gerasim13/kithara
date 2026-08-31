@@ -46,6 +46,7 @@ impl OfflinePlayerHarness {
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
+            .block_on_underrun(true)
             .sample_rate(
                 NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero"),
             )
