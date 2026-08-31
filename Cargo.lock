@@ -5334,6 +5334,7 @@ dependencies = [
  "hex",
  "hls_m3u8",
  "inventory",
+ "kithara-analysis",
  "kithara-bufpool",
  "kithara-drm",
  "kithara-encode",

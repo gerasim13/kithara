@@ -56,6 +56,11 @@ one root — races on the same entries. The protocol is double-checked:
 `EntryLock` releases with its file handle, so a producer that panics or is
 killed does not wedge the store.
 
+An asset with named `#[case::...(...)]` cases may use `{case}` in a
+`depends_on` entry. The macro substitutes the current case name before the
+registry is built, so parallel fixture families can declare one dependency
+pattern without a second hand-maintained case map.
+
 ## `embed`
 
 `#[kithara::asset(..., embed)]` changes how an asset is *served*, never how it is

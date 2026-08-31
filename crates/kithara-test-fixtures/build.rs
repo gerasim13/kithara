@@ -268,7 +268,7 @@ fn codegen(
         let _ = writeln!(manifest, "    &{entry},");
         let _ = writeln!(
             by_name,
-            "        {}{name:?} => Some({name}()),",
+            "    {}({name:?}, {name}),",
             cfg.replace('\n', "\n        "),
         );
     }
@@ -276,10 +276,13 @@ fn codegen(
         out,
         "/// Every asset this build materialized.\n\
          pub static MANIFEST: &[&crate::asset::AssetEntry] = &[\n{manifest}];\n\n\
+         type AssetLookup = (&'static str, fn() -> crate::asset::Asset);\n\n\
+         static BY_NAME: &[AssetLookup] = &[\n{by_name}];\n\n\
          /// The asset this build registered under `name`.\n\
          #[must_use]\n\
          pub fn by_name(name: &str) -> Option<crate::asset::Asset> {{\n    \
-         match name {{\n{by_name}        _ => None,\n    }}\n}}\n",
+         BY_NAME\n        .iter()\n        .find(|(candidate, _)| *candidate == name)\n        \
+         .map(|(_, asset)| asset())\n}}\n",
     );
     out
 }
