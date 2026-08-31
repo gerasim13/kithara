@@ -72,8 +72,24 @@ async fn wait_for_status(
     Err(format!("timeout waiting for {target:?}"))
 }
 
-/// Local mirror of the `track_plays_end_to_end` e2e seek scenario against
-/// `assets/drm` (byte-identical to the silvercomet `/drm/` stream): load →
+/// The encrypted ladder both runners below load: three AES-128 AAC variants,
+/// because the cases lock variant 2, over 37 × 6 s. Both runners build it
+/// from here so the only axis between the three tests is the CDN delay and
+/// the clock.
+fn encrypted_ladder() -> HlsFixtureBuilder {
+    HlsFixtureBuilder::new()
+        .variant_count(3)
+        .segments_per_variant(37)
+        .segment_duration_secs(6.0)
+        .variant_bandwidths(vec![66_005, 134_107, 269_930])
+        .packaged_audio_aac_lc(44_100, 2)
+        .encryption(EncryptionRequest {
+            key_hex: hex::encode(aes128_key_bytes()),
+            iv_hex: Some(hex::encode(aes128_iv())),
+        })
+}
+
+/// Local mirror of the `track_plays_end_to_end` e2e seek scenario: load →
 /// play past 0.5s → three seed-42 seeks, each of which must land near the
 /// target AND resume audible progress — the exact sequence that hung on
 /// the real CDN with `AbrMode::manual(2)`.
@@ -86,20 +102,23 @@ async fn wait_for_status(
 /// reproduce the production stall — that needs a mid-body network stall,
 /// pinned separately by `playlist_stall_fails_load` and the kithara-net
 /// `*_when_body_stalls` tests. This mirror pins the healthy-path contract
-/// on identical data across decoder/ABR-mode axes.
+/// across decoder/ABR-mode axes.
 async fn run_drm_seek(backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
     install_tracing();
 
     let helper = TestServerHelper::new().await;
-    let url = helper.asset("drm/master.m3u8");
+    let created = helper
+        .create_hls(encrypted_ladder())
+        .await
+        .expect("create encrypted HLS fixture");
+    let url = created.master_url();
     run_seek_scenario(&url, backend, abr, temp).await;
 }
 
-/// Same scenario against a generated encrypted fixture mirroring the
-/// `assets/drm` geometry (37 × 6s segments, AES-128, 3 AAC variants) with a
-/// per-segment fetch delay modelling CDN RTT. The delay is engine-backed
-/// (virtual) under flash, so the "seek target segment is not yet available"
-/// window the real CDN opens is reproduced deterministically.
+/// Same scenario on the same ladder plus a per-segment fetch delay modelling
+/// CDN RTT. The delay is engine-backed (virtual) under flash, so the "seek
+/// target segment is not yet available" window the real CDN opens is
+/// reproduced deterministically.
 async fn run_delayed_drm_seek(
     backend: DecoderBackend,
     abr: AbrMode,
@@ -109,22 +128,11 @@ async fn run_delayed_drm_seek(
     install_tracing();
 
     let helper = TestServerHelper::new().await;
-    let builder = HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(37)
-        .segment_duration_secs(6.0)
-        .variant_bandwidths(vec![66_005, 134_107, 269_930])
-        .packaged_audio_aac_lc(44_100, 2)
-        .encryption(EncryptionRequest {
-            key_hex: hex::encode(aes128_key_bytes()),
-            iv_hex: Some(hex::encode(aes128_iv())),
-        })
-        .push_delay_rule(DelayRule {
+    let created = helper
+        .create_hls(encrypted_ladder().push_delay_rule(DelayRule {
             delay_ms,
             ..DelayRule::default()
-        });
-    let created = helper
-        .create_hls(builder)
+        }))
         .await
         .expect("create delayed encrypted HLS fixture");
     let url = created.master_url();
