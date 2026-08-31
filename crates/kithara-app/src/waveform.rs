@@ -16,7 +16,7 @@ use kithara::{
         },
     },
     prelude::{PlaybackResamplerBackend, Resource},
-    worker::{TaskError, Worker},
+    worker::Worker,
 };
 use tracing::warn;
 
@@ -52,10 +52,7 @@ impl TrackAnalysisRunner {
     /// `master` must be a child of the app master cancel; the worker thread
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
-    ///
-    /// # Errors
-    ///
-    /// Returns the base worker's task admission error.
+    #[must_use]
     pub fn new(
         master: &CancelToken,
         base_worker: Option<Worker>,
@@ -63,7 +60,7 @@ impl TrackAnalysisRunner {
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
         pools: Pools,
-    ) -> Result<Self, TaskError> {
+    ) -> Self {
         let builder = AnalyzerBuilder::new(pools).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
@@ -74,15 +71,15 @@ impl TrackAnalysisRunner {
                 .chunk_seconds(chunk_seconds)
                 .maybe_worker(base_worker)
                 .build(),
-        )?);
+        ));
         let active = worker.is_active();
         let fingerprint = worker.fingerprint().clone();
-        Ok(Self {
+        Self {
             fingerprint,
             worker,
             active,
             current: None,
-        })
+        }
     }
 
     /// What the active configuration produces, per artifact.

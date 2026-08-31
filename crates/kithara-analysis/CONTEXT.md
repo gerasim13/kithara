@@ -160,24 +160,27 @@ reported as no longer beat-analyzable. Downmix and grid-cleanup scratch stay as
 guards for the pass lifetime; no lower component constructs or stores another
 pool facade.
 
-`AnalysisWorker` owns one `kithara-worker` dispatcher and one long-lived domain
-`AnalysisNode<B, S>` task (absent on wasm32). `AnalysisWorkerConfig` carries the
-analyzer builder, parent cancellation, optional shared base `Worker`, dispatcher
-budgets, task priority, and task compute budget. Without a supplied base it
-creates and retains a standalone base worker. With a supplied base, analysis
-cancellation is OR-composed only onto its dispatcher, so it cannot cancel sibling
-domain dispatchers. The backend and pool-schema types are consumed by `new` and
-stay inside the node rather than leaking into the handle.
+`AnalysisWorker` owns one `kithara-worker` dispatcher and admits every pass as a
+separate `AnalysisNode<B, S>` task (absent on wasm32). `AnalysisWorkerConfig`
+carries the analyzer builder, parent cancellation, optional shared base `Worker`,
+dispatcher capacity and budgets, per-pass priority, and per-pass compute budget.
+Without a supplied base it creates and retains a standalone base worker. With a
+supplied base, analysis cancellation is OR-composed only onto its dispatcher, so
+it cannot cancel sibling domain dispatchers. The backend and pool-schema types
+are consumed by `new` and stay inside the task factory rather than leaking into
+the handle.
 
-`open` gives every pass a child of the long-lived task token; callers may clone
-that pass token for the reader before submitting the pass. Results arrive on a
-`watch` channel: waveform first, then waveform plus beat when configured; on
-failure or cancellation the sender drops without a value. The node owns its job
-receiver, task FSM, and one `Box<dyn BeatDetector>` — detector ownership is never
-shared or locked. `Decode` consumes at most one chunk per tick. `analyze` wakes
-the dispatcher after enqueueing; there is no sleep, backoff loop, or poll
-watcher. `AnalysisObserver` consumes dispatcher events, retains the no-progress
-watchdog, and classifies returned heavy ticks against a 120-second budget.
+`open` gives every pass a child of the analysis scope; task admission folds that
+pass token into the dispatcher's derived task token. Callers may clone it for the
+reader before submitting the pass. Results arrive on a `watch` channel: waveform
+first, then waveform plus beat when configured; on failure or cancellation the
+sender drops without a value. Every node owns one task FSM. Nodes share one
+immutable detector runtime; mutable run buffers and detection requests remain
+per pass, while bounded compute admission prevents a hidden queue. `Decode`
+consumes at most one chunk per tick. Registration wakes the dispatcher; there is
+no sleep, backoff loop, or poll watcher. `AnalysisObserver` consumes dispatcher
+events, retains the no-progress watchdog, and classifies returned heavy ticks
+against a 120-second budget.
 
 **Feature seams.** There is no single `analysis` feature. Artifact types are
 unconditional because analysis and cache keys use them even when a pass is

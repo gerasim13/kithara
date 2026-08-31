@@ -285,8 +285,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
         .with_beat_config(BeatAnalysisConfig::default())
         .with_beat()
         .with_waveform(Consts::ANALYSIS_BUCKETS);
-    let analysis_worker = AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build())
-        .unwrap_or_else(|error| panic!("analysis benchmark worker was not admitted: {error}"));
+    let analysis_worker = AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build());
     let token = AnalysisToken::from("perf-audit-track");
 
     let warm = rt.block_on(analyze_track(

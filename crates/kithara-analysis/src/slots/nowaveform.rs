@@ -4,7 +4,7 @@ use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 
 use crate::{BlobError, progress::WaveformResume, waveform::bucket::Waveform};
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub(crate) struct Config;
 
 #[derive(Default)]

@@ -63,7 +63,7 @@ impl<S> BeatDetector for NnDetector<S>
 where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    fn detect(&mut self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+    fn detect(&self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
         let raw = self
             .inner
             .analyze(mono_window)

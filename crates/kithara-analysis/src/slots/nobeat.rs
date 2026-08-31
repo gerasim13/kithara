@@ -13,15 +13,16 @@ pub(crate) struct DetectionRequest;
 pub(crate) struct DetectionOutput;
 
 impl DetectionRequest {
-    pub(crate) fn detect(self, _detector: &mut Detector) -> DetectionOutput {
+    pub(crate) fn detect(self, _detector: &Detector) -> DetectionOutput {
         DetectionOutput
     }
 }
 
-pub(crate) fn detect(request: DetectionRequest, detector: &mut Detector) -> DetectionOutput {
+pub(crate) fn detect(request: DetectionRequest, detector: &Detector) -> DetectionOutput {
     request.detect(detector)
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct Config<B>(PhantomData<B>);
 
 impl<B> Config<B>
