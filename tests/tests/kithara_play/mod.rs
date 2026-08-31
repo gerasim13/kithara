@@ -34,3 +34,4 @@ mod seamless_queue_advance;
 mod session_transport;
 #[cfg(not(target_arch = "wasm32"))]
 mod sync_oracle;
+mod sync_product_matrix;

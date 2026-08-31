@@ -1,7 +1,7 @@
 use kithara_test_macros as kithara;
 use num_traits::cast;
 
-use crate::signal::{Wave, wav, wav_from_fn};
+use crate::signal::{Pcm, Wave, header, wav, wav_from_fn};
 
 struct Consts;
 
@@ -25,7 +25,7 @@ impl Consts {
 }
 
 #[derive(Clone, Copy)]
-enum RhythmControl {
+pub(super) enum RhythmControl {
     Aligned,
     BarPhaseBeats(usize),
     MissingBeat(usize),
@@ -110,6 +110,32 @@ fn rhythm_wav(
     phase_frame: usize,
     control: RhythmControl,
 ) -> Vec<u8> {
+    let mut bytes = header(
+        sample_rate,
+        channels,
+        Some(total_frames * usize::from(channels) * size_of::<i16>()),
+    );
+    bytes.extend(Vec::<u8>::from(rhythm_pcm(
+        sample_rate,
+        channels,
+        total_frames,
+        bpm,
+        carrier_hz,
+        phase_frame,
+        control,
+    )));
+    bytes
+}
+
+pub(super) fn rhythm_pcm(
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bpm: f64,
+    carrier_hz: f64,
+    phase_frame: usize,
+    control: RhythmControl,
+) -> Pcm {
     let beat_frames: usize =
         cast((f64::from(sample_rate) * Consts::SECONDS_PER_MINUTE / bpm).round())
             .expect("invariant: a fixture beat period fits usize");
@@ -123,7 +149,7 @@ fn rhythm_wav(
         RhythmControl::MissingBeat(missing) => (0, Some(missing)),
     };
 
-    wav_from_fn(sample_rate, channels, total_frames, |frame| {
+    Pcm::from_fn(sample_rate, channels, total_frames, |frame| {
         let Some(since_first) = frame.checked_sub(first_beat) else {
             return 0;
         };

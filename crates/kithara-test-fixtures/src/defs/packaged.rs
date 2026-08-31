@@ -1,10 +1,13 @@
+use std::sync::OnceLock;
+
 use kithara_bufpool::{BytePool, SamplePool};
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_macros as kithara;
 
 use crate::{
-    fmp4::{GaplessEncoding, mux_audio_track},
+    defs::wav::{RhythmControl, rhythm_pcm},
+    fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track},
     signal::{Pcm, Wave},
 };
 
@@ -16,6 +19,71 @@ impl Consts {
     const CHANNELS: u16 = 2;
     const ONE_SECOND_FRAMES: usize = 44_100;
     const SAMPLE_RATE: u32 = 44_100;
+    const RHYTHM_BIT_RATE: u64 = 512_000;
+    const RHYTHM_FRAMES: usize = 576_000;
+    const RHYTHM_SAMPLE_RATE: u32 = 48_000;
+}
+
+static RHYTHM_FMP4: [OnceLock<Fmp4Package>; 2] = [OnceLock::new(), OnceLock::new()];
+
+fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
+    RHYTHM_FMP4[index].get_or_init(|| {
+        let codec = AudioCodec::Flac;
+        let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: FLAC frame size failed: {error}")
+        });
+        let packets = Consts::RHYTHM_FRAMES.div_ceil(frame_samples);
+        let pcm = rhythm_pcm(
+            Consts::RHYTHM_SAMPLE_RATE,
+            Consts::CHANNELS,
+            packets * frame_samples,
+            120.0,
+            carrier_hz,
+            0,
+            RhythmControl::Aligned,
+        );
+        let media_info = MediaInfo::builder()
+            .codec(codec)
+            .container(ContainerFormat::Fmp4)
+            .sample_rate(Consts::RHYTHM_SAMPLE_RATE)
+            .channels(Consts::CHANNELS)
+            .build();
+        let track = EncoderFactory::encode_packaged(
+            PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+                .pcm(&pcm)
+                .media_info(media_info)
+                .timescale(Consts::RHYTHM_SAMPLE_RATE)
+                .bit_rate(Consts::RHYTHM_BIT_RATE)
+                .packets_per_segment(packets)
+                .encoder_delay(0)
+                .trailing_delay(0)
+                .build(),
+        )
+        .unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: rhythmic FLAC encode failed: {error}")
+        });
+        mux_audio_track(&track, GaplessEncoding::None).unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: rhythmic fMP4 mux failed: {error}")
+        })
+    })
+}
+
+#[kithara::asset(ext = "mp4", content_type = "audio/mp4")]
+#[case::deck_a_120bpm_48k(0, 220.0)]
+#[case::deck_b_120bpm_48k(1, 880.0)]
+fn rhythm_fmp4_init(index: usize, carrier_hz: f64) -> Vec<u8> {
+    rhythm_fmp4(index, carrier_hz).init_segment.clone()
+}
+
+#[kithara::asset(ext = "m4s", content_type = "audio/mp4")]
+#[case::deck_a_120bpm_48k(0, 220.0)]
+#[case::deck_b_120bpm_48k(1, 880.0)]
+fn rhythm_fmp4_media(index: usize, carrier_hz: f64) -> Vec<u8> {
+    rhythm_fmp4(index, carrier_hz)
+        .media_segments
+        .first()
+        .cloned()
+        .expect("rhythmic fMP4 has one media segment")
 }
 
 /// A saw packaged as a single-segment fMP4 body, the shape a browser hands to
