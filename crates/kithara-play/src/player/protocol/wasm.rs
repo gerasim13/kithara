@@ -1,6 +1,8 @@
+use std::num::NonZeroU32;
+
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
-    SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
+    BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
+    SyncGroup, SyncGroupSnapshot, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 use portable_atomic::{AtomicF32, Ordering};
 
@@ -14,7 +16,13 @@ pub(crate) struct PlayerSync {
 }
 
 impl PlayerSync {
-    pub(crate) fn new(owned: GroupState<PlayerMember>) -> Self {
+    pub(crate) fn unavailable(
+        id: BeatGridId,
+        sample_rate: NonZeroU32,
+        epoch: SessionEpoch,
+        member_kind: SyncMemberKind,
+    ) -> Self {
+        let owned = GroupState::unavailable(id, sample_rate, epoch, member_kind);
         Self {
             grid: owned.snapshot(),
             topology: owned.topology(),
@@ -22,7 +30,6 @@ impl PlayerSync {
             owned: Some(owned),
         }
     }
-
     pub(crate) fn take(&mut self) -> Option<GroupState<PlayerMember>> {
         let owned = self.owned.take()?;
         self.grid = owned.snapshot();

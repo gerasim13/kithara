@@ -18,7 +18,6 @@ use crate::{
         protocol::PlayerSync,
         state::{ItemQueue, PlayerParams, PlayerPhase},
     },
-    sync::GroupState,
     worker::EngineLoad,
 };
 
@@ -48,14 +47,12 @@ impl<S> PlayerImpl<S> {
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
         let pools = config.worker.pools().clone();
-        let sync = GroupState::unavailable(
+        let sync = PlayerSync::unavailable(
             config.grid_id,
             config.sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Grid,
         );
-        #[cfg(target_arch = "wasm32")]
-        let sync = PlayerSync::new(sync);
 
         let bus = config.bus.clone().unwrap_or_default();
 
