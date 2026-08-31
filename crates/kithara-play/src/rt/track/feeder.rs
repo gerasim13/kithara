@@ -274,10 +274,6 @@ impl PlayerResource {
         }
     }
 
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
     pub(crate) fn playback_rate(&self) -> f32 {
         self.resource.get().playback_rate()
     }

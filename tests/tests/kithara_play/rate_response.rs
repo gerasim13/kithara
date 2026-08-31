@@ -3,9 +3,9 @@
 #[cfg(feature = "perf")]
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    events::TrackId,
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig},
+    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
@@ -24,6 +24,7 @@ const SLOW_TONE_HZ: f64 = 220.0;
 const UNITY_TONE_HZ: f64 = 440.0;
 const FAST_TONE_HZ: f64 = 880.0;
 const TONE_DOMINANCE_RATIO: f64 = 4.0;
+const RATE_COMMAND_BURST: usize = 64;
 const WARMUP_BLOCK_BUDGET: usize = 200;
 const RESPONSE_BLOCK_BUDGET: usize = 15;
 const RESPONSE_OBSERVATION_BLOCK_BUDGET: usize = 400;
@@ -66,6 +67,47 @@ async fn render_until_slow_tone(harness: &OfflinePlayerHarness) -> f64 {
     );
 }
 
+async fn playing_sine_queue(
+    temp_dir: &TestTempDir,
+    backend: StretchKind,
+) -> (OfflinePlayerHarness, Queue) {
+    let stretch = StretchControls::new(1.0);
+    stretch.set_backend(backend);
+    let harness = OfflinePlayerHarness::with_sample_rate(
+        OfflinePlayerOptions::builder()
+            .crossfade_duration(0.0)
+            .timestretch(stretch)
+            .build(),
+        SAMPLE_RATE,
+    );
+    let path = signal_wav_sine440_60s()
+        .path()
+        .expect("generated sine fixture is stored on disk");
+    let config = ResourceConfig::for_src(
+        ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
+            .expect("local media path is a valid resource src"),
+    )
+    .store(disk_asset_store(temp_dir.path().join("live-rate-store")))
+    .build();
+    let config = harness
+        .player()
+        .prepare_config(config)
+        .expect("offline player remains open");
+    let resource = Resource::new(config).await.expect("open local resource");
+    let queue = Queue::new(
+        QueueConfig::builder()
+            .player(harness.take_player())
+            .should_autoplay(false)
+            .build(),
+    );
+    queue.set_default_rate(SLOW_RATE);
+    let id = queue.insert_loaded_for_test(resource);
+    queue
+        .select(id, Transition::None)
+        .expect("select live-rate fixture");
+    (harness, queue)
+}
+
 #[kithara::test(
     tokio,
     multi_thread,
@@ -88,37 +130,7 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     #[case] backend: StretchKind,
     #[case] through_unity: bool,
 ) {
-    let stretch = StretchControls::new(1.0);
-    stretch.set_backend(backend);
-    let harness = OfflinePlayerHarness::with_sample_rate(
-        OfflinePlayerOptions::builder()
-            .crossfade_duration(0.0)
-            .timestretch(stretch)
-            .build(),
-        SAMPLE_RATE,
-    );
-    harness.player().set_default_rate(SLOW_RATE);
-
-    let path = signal_wav_sine440_60s()
-        .path()
-        .expect("generated sine fixture is stored on disk");
-    let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(path.to_str().expect("utf-8 fixture path"))
-            .expect("local media path is a valid resource src"),
-    )
-    .store(disk_asset_store(temp_dir.path().join("live-rate-store")))
-    .build();
-    let config = harness
-        .player()
-        .prepare_config(config)
-        .expect("offline player remains open");
-    let resource = Resource::new(config).await.expect("open local resource");
-    harness.with_player(|player| {
-        player.insert(resource, TrackId::allocate(), None);
-        player
-            .select_item(0, true)
-            .expect("select live-rate fixture");
-    });
+    let (harness, queue) = playing_sine_queue(&temp_dir, backend).await;
 
     let baseline_slow = render_until_slow_tone(&harness).await;
     time::sleep(Duration::from_millis(250)).await;
@@ -136,7 +148,7 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     let _guard = HotpathGuardBuilder::new("live_rate_response").build();
 
     if through_unity {
-        harness.player().set_default_rate(1.0);
+        queue.set_rate(1.0);
         let mut presented_unity = false;
         for block in 1..=RESPONSE_BLOCK_BUDGET {
             let output = harness.render(BLOCK_FRAMES);
@@ -159,7 +171,7 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
              {UNITY_TONE_HZ} Hz within the common {RESPONSE_BLOCK_BUDGET}-block budget"
         );
     }
-    harness.player().set_default_rate(FAST_RATE);
+    queue.set_rate(FAST_RATE);
 
     let mut last = (0.0, 0.0, 0.0);
     let mut peak_fast = 0.0_f64;
@@ -202,5 +214,49 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
          {SLOW_TONE_HZ} Hz to {FAST_TONE_HZ} Hz only at block {first_fast_block} \
          ({actual_ms:.1} ms), beyond the {RESPONSE_BLOCK_BUDGET}-block \
          ({budget_ms:.1} ms) response budget"
+    );
+}
+
+#[kithara::test(
+    tokio,
+    multi_thread,
+    flash(false),
+    timeout(Duration::from_secs(30)),
+    hang_timeout_secs(5)
+)]
+#[case::signalsmith(StretchKind::Signalsmith)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case::bungee(StretchKind::Bungee)
+)]
+async fn latest_rate_wins_after_a_control_burst(
+    temp_dir: TestTempDir,
+    #[case] backend: StretchKind,
+) {
+    let (harness, queue) = playing_sine_queue(&temp_dir, backend).await;
+    let baseline_slow = render_until_slow_tone(&harness).await;
+
+    for _ in 0..RATE_COMMAND_BURST {
+        queue.set_rate(SLOW_RATE);
+    }
+    queue.set_rate(FAST_RATE);
+
+    for block in 1..=RESPONSE_BLOCK_BUDGET {
+        let output = harness.render(BLOCK_FRAMES);
+        let _ = harness.tick_and_drain();
+        let (slow, unity, fast) = tone_magnitudes(&output);
+        if fast > slow * TONE_DOMINANCE_RATIO
+            && fast > unity * TONE_DOMINANCE_RATIO
+            && fast > baseline_slow * 0.2
+        {
+            return;
+        }
+        if block < RESPONSE_BLOCK_BUDGET {
+            time::sleep(block_period()).await;
+        }
+    }
+
+    panic!(
+        "{backend} lost the final {FAST_RATE}x target after {RATE_COMMAND_BURST} prior rate commands"
     );
 }

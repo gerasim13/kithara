@@ -20,13 +20,6 @@ impl PlayerNodeProcessor {
         }
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn apply_playback_rate(&mut self, rate: f32) {
-        for (_, track) in self.tracks.iter_mut() {
-            track.set_playback_rate(rate);
-        }
-    }
-
     fn apply_prefetch_duration(&mut self, duration: f32) {
         self.prefetch_duration = duration.max(0.0);
         for (_, track) in self.tracks.iter_mut() {
@@ -113,9 +106,6 @@ impl PlayerNodeProcessor {
                 }
                 PlayerCmd::SetPrefetchDuration(duration) => {
                     self.apply_prefetch_duration(duration);
-                }
-                PlayerCmd::SetPlaybackRate(rate) => {
-                    self.apply_playback_rate(rate);
                 }
             }
         }

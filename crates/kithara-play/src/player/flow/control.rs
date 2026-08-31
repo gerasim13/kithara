@@ -3,7 +3,6 @@ use kithara_events::RouteDescription;
 use super::super::core::PlayerRuntime;
 use crate::{
     api::{RouteChangeReason, SessionEvent, SlotId},
-    bridge::PlayerCmd,
     effects::eq::{EqBandConfig, GainDb},
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
@@ -129,8 +128,6 @@ impl PlayerRuntime {
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
         self.core.timestretch.set_speed(rate);
-        let target = self.core.timestretch.speed();
-        let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(target));
     }
 
     /// Set volume, clamped to `0.0..=1.0`.
