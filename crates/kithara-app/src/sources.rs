@@ -2,40 +2,38 @@ use std::fmt;
 
 use kithara::{
     hls::KeyOptions,
-    play::Headers,
-    prelude::{PlaybackResamplerBackend, ResourceConfig},
+    play::{Headers, ResourceSrc},
 };
-use kithara_queue::TrackSource;
 use url::Url;
 
-use crate::config::AppConfig;
+use crate::{
+    config::AppConfig,
+    pools::{AppResourceConfig, AppTrackSource},
+};
 
-/// Build a [`TrackSource`] with the app's shared network, asset, and DRM state.
+/// Build an [`AppTrackSource`] with the app's shared network, asset, and DRM state.
 /// Matching policy headers also apply to playlist and segment requests.
 #[must_use]
-pub fn build_source(url: &str, config: &AppConfig) -> TrackSource {
+pub fn build_source(url: &str, config: &AppConfig) -> AppTrackSource {
     build_resource_config(url, config).map_or_else(
-        || TrackSource::Uri(url.to_string()),
-        |cfg| TrackSource::Config(Box::new(cfg)),
+        || AppTrackSource::Uri(url.to_string()),
+        |cfg| AppTrackSource::Config(Box::new(cfg)),
     )
 }
 
-/// Build a [`ResourceConfig`] for `url` with the app's shared stores,
+/// Build an [`AppResourceConfig`] for `url` with the app's shared stores,
 /// downloader, flush hub, and DRM routing injected (same as
 /// [`build_source`]). `None` when `url` is not a valid source.
 #[must_use]
-pub(crate) fn build_resource_config(
-    url: &str,
-    config: &AppConfig,
-) -> Option<ResourceConfig<PlaybackResamplerBackend>> {
-    let src = match ResourceConfig::parse_src(url) {
+pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<AppResourceConfig> {
+    let src = match ResourceSrc::parse(url) {
         Ok(src) => src,
         Err(e) => {
-            tracing::error!(%e, "failed to build ResourceConfig");
+            tracing::error!(%e, "failed to build resource config");
             return None;
         }
     };
-    let builder = ResourceConfig::for_src(src);
+    let builder = AppResourceConfig::for_src(src);
     let registry = config.drm.registry();
     let keys = if registry.is_empty() {
         KeyOptions::default()
@@ -74,9 +72,9 @@ pub(crate) fn build_resource_config(
     )
 }
 
-/// Build the full set of [`TrackSource`]s from `config.tracks`.
+/// Build the full set of [`AppTrackSource`]s from `config.tracks`.
 #[must_use]
-pub fn build_sources(config: &AppConfig) -> Vec<TrackSource> {
+pub fn build_sources(config: &AppConfig) -> Vec<AppTrackSource> {
     config
         .tracks
         .iter()

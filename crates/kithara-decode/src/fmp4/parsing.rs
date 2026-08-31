@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read, Seek, SeekFrom};
 
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 use re_mp4::{BoxHeader, BoxType, MoofBox, Mp4, ReadBox, StsdBoxContent, TfhdBox, TrunBox};
 
@@ -62,7 +62,10 @@ pub(crate) struct Fmp4Frame {
 }
 
 /// Parse an `EXT-X-MAP` init segment.
-pub(crate) fn parse_init(bytes: &[u8], byte_pool: &BytePool) -> DecodeResult<Fmp4InitInfo> {
+pub(crate) fn parse_init<S>(bytes: &[u8], pools: &PoolRegion<S>) -> DecodeResult<Fmp4InitInfo>
+where
+    S: HasPool<u8>,
+{
     let mp4 = Mp4::read_bytes(bytes).map_err(|e| DecodeError::parse("re_mp4", e))?;
 
     let track_box = mp4
@@ -113,7 +116,7 @@ pub(crate) fn parse_init(bytes: &[u8], byte_pool: &BytePool) -> DecodeResult<Fmp
 
     let gapless = {
         let mut cursor = Cursor::new(bytes);
-        crate::gapless::probe_mp4_gapless(&mut cursor, byte_pool).unwrap_or(None)
+        crate::gapless::probe_mp4_gapless(&mut cursor, pools).unwrap_or(None)
     };
 
     Ok(Fmp4InitInfo {
@@ -572,6 +575,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::pools;
 
     fn read_fixture(name: &str) -> Vec<u8> {
         let route = format!("/hls/{name}");
@@ -585,7 +589,7 @@ mod tests {
     #[kithara::test]
     fn parse_init_aac_extracts_codec_and_asc() {
         let bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&bytes, &BytePool::default()).expect("BUG: parse init");
+        let init = parse_init(&bytes, &pools()).expect("BUG: parse init");
         assert_eq!(init.codec, AudioCodec::AacLc);
         assert!(init.timescale > 0, "timescale={}", init.timescale);
         assert!(init.sample_rate >= 8_000 && init.sample_rate <= 96_000);
@@ -603,7 +607,7 @@ mod tests {
     #[kithara::test]
     fn parse_init_flac_extracts_streaminfo() {
         let bytes = read_fixture("init-slossless-a1.mp4");
-        let init = parse_init(&bytes, &BytePool::default()).expect("BUG: parse FLAC init");
+        let init = parse_init(&bytes, &pools()).expect("BUG: parse FLAC init");
         assert_eq!(init.codec, AudioCodec::Flac);
         assert!(matches!(init.config, CodecConfig::Flac(_)));
         let len = init.config.as_ref().len();
@@ -613,7 +617,7 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_aac_yields_monotonic_frames() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse init");
+        let init = parse_init(&init_bytes, &pools()).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(
@@ -649,7 +653,7 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_presizes_vec_to_sample_count() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse init");
+        let init = parse_init(&init_bytes, &pools()).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         assert!(!frames.is_empty(), "segment must yield frames");
@@ -664,7 +668,7 @@ mod tests {
     #[kithara::test]
     fn parse_segment_frames_total_duration_matches_extinf() {
         let init_bytes = read_fixture("init-slq-a1.mp4");
-        let init = parse_init(&init_bytes, &BytePool::default()).expect("BUG: parse init");
+        let init = parse_init(&init_bytes, &pools()).expect("BUG: parse init");
         let seg_bytes = read_fixture("segment-1-slq-a1.m4s");
         let frames = parse_segment_frames(&init, &seg_bytes).expect("BUG: parse seg");
         let total_ticks: u64 = frames.iter().map(|f| u64::from(f.duration)).sum();

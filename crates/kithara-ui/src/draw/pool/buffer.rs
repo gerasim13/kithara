@@ -1,31 +1,10 @@
 use std::fmt;
 
-use kithara_bufpool::{PooledOwned, Reuse, SharedPool};
+use kithara_bufpool::PooledVec;
 
 const SHARDS: usize = 1;
 
-#[derive(Debug)]
-pub(in crate::draw) struct DrawBuffer<T>(Vec<T>);
-
-impl<T> Default for DrawBuffer<T> {
-    fn default() -> Self {
-        Self(Vec::new())
-    }
-}
-
-impl<T> Reuse for DrawBuffer<T> {
-    fn byte_size(&self) -> usize {
-        self.0.capacity().saturating_mul(size_of::<T>())
-    }
-
-    fn reuse(&mut self, max_capacity: usize) -> bool {
-        self.0.clear();
-        self.0.capacity() > 0 && self.0.capacity() <= max_capacity
-    }
-}
-
-pub(in crate::draw) type VecPool<T> = SharedPool<SHARDS, DrawBuffer<T>>;
-type VecGuard<T> = PooledOwned<SHARDS, DrawBuffer<T>>;
+pub(in crate::draw) type VecGuard<T> = PooledVec<T, SHARDS>;
 
 pub(in crate::draw) enum Buffer<T> {
     Owned(Vec<T>),
@@ -37,31 +16,37 @@ impl<T> Buffer<T> {
         Self::Owned(values)
     }
 
-    pub(in crate::draw) fn pooled(pool: &VecPool<T>) -> Self {
-        Self::Pooled(pool.get())
+    pub(in crate::draw) const fn pooled(guard: VecGuard<T>) -> Self {
+        Self::Pooled(guard)
     }
 
     pub(in crate::draw) fn push(&mut self, value: T) {
         match self {
             Self::Owned(values) => values.push(value),
-            Self::Pooled(guard) => guard.0.push(value),
+            Self::Pooled(guard) => {
+                if let Err(error) = guard.try_push(value) {
+                    panic!("draw buffer growth failed: {error}");
+                }
+            }
         }
     }
 
     pub(in crate::draw) fn as_slice(&self) -> &[T] {
         match self {
             Self::Owned(values) => values,
-            Self::Pooled(guard) => &guard.0,
+            Self::Pooled(guard) => guard,
         }
     }
 
-    pub(in crate::draw) fn into_pooled(self, pool: &VecPool<T>) -> Self {
+    pub(in crate::draw) fn into_pooled(self, acquire: impl FnOnce() -> VecGuard<T>) -> Self {
         match self {
             pooled @ Self::Pooled(_) => pooled,
-            Self::Owned(mut values) => {
-                let mut pooled = Self::pooled(pool);
-                if let Self::Pooled(guard) = &mut pooled {
-                    guard.0.append(&mut values);
+            Self::Owned(values) => {
+                let mut pooled = Self::pooled(acquire());
+                if let Self::Pooled(guard) = &mut pooled
+                    && let Err(error) = guard.try_extend(values)
+                {
+                    panic!("draw buffer growth failed: {error}");
                 }
                 pooled
             }

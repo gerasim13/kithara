@@ -12,7 +12,10 @@ use kithara::{
     },
     platform::{sync::Arc, time::Duration},
 };
-use kithara_integration_tests::temp_dir;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
 
@@ -79,8 +82,8 @@ fn create_xor_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessCtx
 fn build_test_processing_scope(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-) -> AssetScope {
-    let builder = AssetStore::builder();
+) -> AssetScope<TestPools> {
+    let builder = AssetStore::builder(pools());
     #[cfg(not(target_arch = "wasm32"))]
     {
         builder
@@ -107,10 +110,10 @@ fn build_test_processing_scope(
 fn build_test_scope_no_processing(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-) -> AssetScope {
+) -> AssetScope<TestPools> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStore::builder()
+        AssetStore::builder(pools())
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
             })
@@ -122,7 +125,7 @@ fn build_test_scope_no_processing(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStore::builder()
+        AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .layouts(literal_layouts())
             .build()

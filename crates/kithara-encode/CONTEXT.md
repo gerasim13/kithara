@@ -41,7 +41,7 @@ Routing inside the single `InnerEncoder` implementation:
 
 ### Scratch ownership
 
-Every `PackagedEncodeRequest` must carry the caller's shared `BytePool` and `SamplePool`. Packaged backends reuse those pools for temporary byte and converted-sample storage; production encoding must not create or default a component-local pool. A scratch lease ends inside the encode call and is returned before the resulting track can outlive the request.
+`EncoderFactory::encode_packaged` takes the caller's typed `PoolRegion` and reuses its byte and sample pools for temporary byte and converted-sample storage. Production encoding must not construct a component-local region. A scratch lease ends inside the encode call and is returned before the resulting track can outlive the request.
 
 ### `EncodedTrack` output contract
 

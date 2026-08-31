@@ -94,7 +94,7 @@ where
                 label,
                 content.to_owned(),
                 self.skin,
-                self.ctx.ui.draw_pools(),
+                self.ctx.ui.draw_buffers(),
             ),
             solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
         )
@@ -113,7 +113,7 @@ where
                 ChromeChevron::new(self.skin),
                 collapsed,
                 self.skin,
-                self.ctx.ui.draw_pools(),
+                self.ctx.ui.draw_buffers(),
             ),
             declared,
         );

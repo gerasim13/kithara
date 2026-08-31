@@ -10,7 +10,7 @@ use super::{
 #[cfg(test)]
 use crate::interact::Gestures;
 use crate::{
-    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform},
+    draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
         recognizers::{Edge, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
@@ -34,7 +34,7 @@ where
     interaction: Option<Interaction<Painter::Data>>,
     index: IndexPress,
     painter: Painter,
-    pools: Option<DrawPools>,
+    pools: Option<DrawBuffers>,
     press: Press,
     refresh: Option<DataRefresh<Painter::Data>>,
     repaint: bool,
@@ -175,7 +175,7 @@ where
         painter: Painter,
         data: Painter::Data,
         skin: &Skin,
-        pools: &DrawPools,
+        pools: &DrawBuffers,
     ) -> Self {
         Self {
             data,
@@ -267,7 +267,7 @@ where
         let mut list = self
             .pools
             .as_ref()
-            .map_or_else(DrawListBuilder::default, DrawPools::list);
+            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
         let indexed = matches!(
             self.interaction
                 .as_ref()

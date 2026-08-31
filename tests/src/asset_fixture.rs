@@ -4,11 +4,13 @@ use std::collections::HashSet;
 
 use kithara::{
     assets::{
-        Assets, AssetsResult, BytePool,
+        Assets, AssetsResult,
         index::{PinDurability, PinsIndex as InnerPinsIndex},
     },
     platform::CancelToken,
 };
+
+use crate::bufpool_ext::Pools;
 
 /// Test-only handle for interacting with the persisted pins index.
 ///
@@ -28,13 +30,13 @@ impl PinsIndex {
     /// # Errors
     ///
     /// Returns `AssetsError` if the underlying index resource cannot be opened.
-    pub fn open<A: Assets>(assets: &A, pool: &BytePool) -> AssetsResult<Self> {
+    pub fn open<A: Assets>(assets: &A, pools: &Pools) -> AssetsResult<Self> {
         let path = assets.root_dir().join("_index").join("pins.bin");
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         Ok(Self {
-            inner: InnerPinsIndex::with_persist_at(path, CancelToken::never(), pool),
+            inner: InnerPinsIndex::with_persist_at(path, CancelToken::never(), pools.get::<u8>()),
         })
     }
 

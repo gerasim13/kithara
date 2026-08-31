@@ -10,7 +10,7 @@ message: |
     - a retained widget keeps its own scratch field and refills it in place;
     - an immediate widget keeps it in the state its tree holds for it;
     - short-lived draw commands, path verbs, and paint text come from the
-      `DrawPools` family the compiled document carries.
+      `DrawBuffers` family the compiled document carries.
 
   A list that is only walked once is not a list: take an iterator instead.
 

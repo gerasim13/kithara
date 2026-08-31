@@ -1,6 +1,7 @@
 use std::fmt;
 
 use kithara_audio::SeekOutcome;
+use kithara_bufpool::HasPool;
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridSnapshot, SyncAdmission, SyncApplied, SyncError, SyncGroup,
     SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
@@ -41,6 +42,9 @@ pub trait Player: BeatGrid + SyncGroup<NestedGroup = PlayerMember> + Send + Sync
 /// Produces a cloneable command capability without sharing player identity or
 /// synchronization topology.
 pub trait PlayerControlSource: Player {
+    /// Typed pool schema shared with the canonical playback session.
+    type Schema;
+
     /// Concrete command capability retained by typed host-owned handles.
     type Control: Clone + Send + Sync + 'static;
 
@@ -48,7 +52,7 @@ pub trait PlayerControlSource: Player {
     fn control(&self) -> Self::Control;
 
     /// Attaches the resident Player to its canonical session exactly once.
-    fn attach_session(&mut self, binding: SessionBinding) -> Result<(), PlayError>;
+    fn attach_session(&mut self, binding: SessionBinding<Self::Schema>) -> Result<(), PlayError>;
 
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
@@ -122,7 +126,10 @@ impl SyncGroup for PlayerMember {
     }
 }
 
-impl BeatGrid for PlayerImpl {
+impl<S> BeatGrid for PlayerImpl<S>
+where
+    S: Send + Sync + 'static,
+{
     delegate::delegate! {
         to self.sync {
             fn id(&self) -> BeatGridId;
@@ -131,7 +138,10 @@ impl BeatGrid for PlayerImpl {
     }
 }
 
-impl SyncGroup for PlayerImpl {
+impl<S> SyncGroup for PlayerImpl<S>
+where
+    S: Send + Sync + 'static,
+{
     type NestedGroup = PlayerMember;
 
     delegate::delegate! {
@@ -150,7 +160,10 @@ impl SyncGroup for PlayerImpl {
     }
 }
 
-impl Player for PlayerImpl {
+impl<S> Player for PlayerImpl<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn play(&self) {
         let _ = self.runtime.with_open(PlayerRuntime::play);
     }
@@ -189,14 +202,18 @@ impl Player for PlayerImpl {
     }
 }
 
-impl PlayerControlSource for PlayerImpl {
-    type Control = crate::player::PlayerControl;
+impl<S> PlayerControlSource for PlayerImpl<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    type Schema = S;
+    type Control = crate::player::PlayerControl<S>;
 
     fn control(&self) -> Self::Control {
         self.make_control()
     }
 
-    fn attach_session(&mut self, binding: SessionBinding) -> Result<(), PlayError> {
+    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.runtime.attach_session(binding)
     }
 

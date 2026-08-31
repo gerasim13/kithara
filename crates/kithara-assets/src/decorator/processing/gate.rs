@@ -11,7 +11,7 @@ pub(super) struct ReadinessGate {
     gate: CondvarGate<bool>,
     /// Backstop between condvar wakeups, so an abort request is noticed even
     /// when no writer ever signals. Mirrors
-    /// `AssetStore::builder().processing_gate_poll_interval(..)`.
+    /// `AssetStore::builder(pools).processing_gate_poll_interval(..)`.
     poll_interval: Duration,
 }
 

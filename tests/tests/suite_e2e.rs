@@ -12,6 +12,8 @@
 //! `just test run --lane=e2e`. No container lane carries it: a runner that
 //! failed here would be reporting the fence around itself rather than the code.
 
+pub use kithara_integration_tests::bufpool_ext;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     #[path = "../kithara_play/engine_cpal_tests.rs"]

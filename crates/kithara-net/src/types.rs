@@ -2,8 +2,7 @@ use std::{cmp::min, collections::HashMap, fmt};
 
 use bitflags::bitflags;
 use bon::Builder;
-use kithara_bufpool::BytePool;
-use kithara_platform::{time::Duration, traits::FromWithParams};
+use kithara_platform::time::Duration;
 
 use crate::{
     error::{NetError, Retryability},
@@ -152,10 +151,6 @@ impl RetryPolicy {
 #[derive(Clone, Debug, Builder)]
 #[non_exhaustive]
 pub struct NetOptions {
-    /// Shared byte buffer pool used by backends that must copy platform-owned
-    /// response buffers before handing bytes to Rust consumers.
-    #[builder(default = BytePool::default())]
-    pub byte_pool: BytePool,
     /// Codings advertised and decoded for whole-body native requests.
     /// Defaults to all four; byte-addressed requests always use `identity`.
     #[builder(default = Compression::all())]
@@ -227,7 +222,6 @@ impl NetOptions {
     #[must_use]
     pub fn with_observer(&self, observer: Option<Observer>) -> Self {
         let Self {
-            byte_pool,
             compression,
             inactivity_timeout,
             impersonate,
@@ -241,7 +235,6 @@ impl NetOptions {
         } = self.clone();
 
         Self::builder()
-            .byte_pool(byte_pool)
             .compression(compression)
             .inactivity_timeout(inactivity_timeout)
             .impersonate(impersonate)
@@ -259,15 +252,6 @@ impl NetOptions {
 impl Default for NetOptions {
     fn default() -> Self {
         Self::builder().build()
-    }
-}
-
-impl FromWithParams<Self, BytePool> for NetOptions {
-    fn build(options: Self, byte_pool: BytePool) -> Self {
-        Self {
-            byte_pool,
-            ..options
-        }
     }
 }
 

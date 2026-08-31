@@ -7,14 +7,15 @@ use std::{
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl},
-    bufpool::Region,
     events::{Event, EventBus},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir, temp_dir,
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
 };
 
 /// Install a panic hook that flips `flag` when a panic message contains
@@ -61,25 +62,22 @@ async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     let watchdog_fired = arm_panic_marker("HangDetector");
 
     let server = PackagedTestServer::new().await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
     let mut audio = worker
-        .open(AudioConfig::<Hls>::for_stream(hls_config).build())
+        .open(AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build())
         .await
         .expect("audio creation");
 
@@ -172,20 +170,17 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     // still running.
     let bus = EventBus::new(8192);
     let mut rx = bus.subscribe();
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .initial_abr_mode(AbrMode::manual(0))
         .download_batch_size(1)
         .look_ahead_bytes(LOOK_AHEAD_BYTES)
@@ -194,7 +189,7 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
 
     let _audio = worker
         .open(
-            AudioConfig::<Hls>::for_stream(hls_config)
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .events(bus.clone())
                 .build(),
         )

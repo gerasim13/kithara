@@ -5,12 +5,16 @@ use kithara::{
     assets::{AcquisitionResult, AssetScope, AssetStore, ReadSide, StorageBackend, WriteSide},
     platform::time::Duration,
 };
-use kithara_integration_tests::{TestTempDir, temp_dir};
+use kithara_integration_tests::{
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
 
-fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope {
-    AssetStore::builder()
+fn asset_scope_with_root(temp_dir: &TestTempDir, asset_root: &str) -> AssetScope<TestPools> {
+    AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })

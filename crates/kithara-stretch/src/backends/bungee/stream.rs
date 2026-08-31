@@ -1,4 +1,5 @@
 use bungee_sys::Request;
+use kithara_bufpool::HasPool;
 use kithara_signal::PlanarBuffer;
 
 use super::{
@@ -31,10 +32,13 @@ impl StreamCore {
     pub(super) const PIPELINE_GRAINS: usize = 4;
     pub(super) const TERMINAL_GRAIN_LIMIT: usize = 64;
 
-    pub(super) fn new(
-        config: &ElasticConfig,
+    pub(super) fn new<S>(
+        config: &ElasticConfig<S>,
         max_source_frames: usize,
-    ) -> Result<Self, ElasticError> {
+    ) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let native = NativeStretcher::new(config.sample_rate(), config.channels())?;
         let max_input_frames = native.max_input_frames()?;
         let source_latency_frames = max_input_frames / 2;
@@ -90,12 +94,11 @@ impl StreamCore {
 mod tests {
     use std::f32::consts::TAU;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
     use super::*;
-    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault};
+    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, test_pools::pools};
 
     struct Fixture;
 
@@ -124,7 +127,7 @@ mod tests {
 
     fn anchored_core() -> StreamCore {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(Fixture::SAMPLE_RATE)
             .channels(Fixture::CHANNELS)
             .max_source_frames(Fixture::CONTEXT_FRAMES)
@@ -157,7 +160,7 @@ mod tests {
         const FRAMES: usize = 8192;
 
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(FRAMES)
@@ -186,7 +189,7 @@ mod tests {
         const SLOW_SOURCE_FRAMES: usize = 400;
 
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(Fixture::SAMPLE_RATE)
             .channels(Fixture::CHANNELS)
             .max_source_frames(Fixture::CONTEXT_FRAMES)

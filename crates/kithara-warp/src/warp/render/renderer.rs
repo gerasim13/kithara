@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
@@ -13,7 +13,7 @@ mod tests;
 /// Source-timeline exact-span time-stretch driven by shared live controls.
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
-pub struct WarpRenderer {
+pub struct WarpRenderer<S> {
     pub(super) controls: Arc<StretchControls>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     /// Engine displaced by a checked render failure. The scheduler shell
@@ -28,7 +28,7 @@ pub struct WarpRenderer {
     /// Region covering the playhead - the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     pub(super) region: Option<ActiveRegion>,
-    pub(super) sample_pool: SamplePool,
+    pub(super) pools: PoolRegion<S>,
     pub(super) spec: AudioSpec,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
@@ -65,7 +65,10 @@ pub struct WarpRenderer {
     pub(super) rebuild_pending: bool,
 }
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
     pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
@@ -76,17 +79,17 @@ impl WarpRenderer {
     pub(crate) fn new(
         controls: Arc<StretchControls>,
         spec: AudioSpec,
-        sample_pool: SamplePool,
+        pools: PoolRegion<S>,
     ) -> Self {
         let current_kind = controls.backend();
         let plan = controls.region_plan();
-        let target = Self::prepare_target(current_kind, spec, &sample_pool, None, None);
+        let target = Self::prepare_target(current_kind, spec, &pools, None, None);
         Self {
             engine: target.engine,
             retired_engine: None,
             current_kind,
             controls,
-            sample_pool,
+            pools,
             spec,
             applied_pitch: f64::NAN,
             active: false,

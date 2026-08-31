@@ -7,13 +7,15 @@
 
 use std::{f32::consts::TAU, ops::RangeInclusive};
 
-use kithara_bufpool::{ByteBudget, SamplePool};
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
     ElasticSpanConfig, StretchKind, build_engine,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
+
+mod common;
+use common::{default_pools, pools};
 
 const CHANNELS: usize = 2;
 const CONTROL_QUANTUM: usize = 64;
@@ -35,7 +37,7 @@ fn prepared_backend(
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
-        .pool(SamplePool::default())
+        .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .max_source_frames(max_source_frames)
@@ -53,7 +55,7 @@ fn prepared_backend_with_rate_envelope(
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
-        .pool(SamplePool::default())
+        .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .max_source_frames(max_source_frames)
@@ -1023,7 +1025,7 @@ mod facade {
 
         let config = ElasticConfig::builder()
             .backend(backend)
-            .pool(SamplePool::default())
+            .pools(default_pools())
             .sample_rate(SAMPLE_RATE)
             .channels(1)
             .max_source_frames(SOURCE_FRAMES)
@@ -1965,10 +1967,10 @@ fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKi
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn prepare_uses_the_injected_sample_pool_budget(#[case] backend: StretchKind) {
+fn prepare_uses_the_injected_pool_region_budget(#[case] backend: StretchKind) {
     let config = ElasticConfig::builder()
         .backend(backend)
-        .pool(SamplePool::with_byte_budget(8, 8192, ByteBudget(0)))
+        .pools(pools(0))
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
         .max_source_frames(8192)
@@ -1977,10 +1979,10 @@ fn prepare_uses_the_injected_sample_pool_budget(#[case] backend: StretchKind) {
         .expect("the numeric preparation shape is valid");
 
     let Err(error) = build_engine(config) else {
-        panic!("zero pool budget cannot prepare resident sample scratch");
+        panic!("zero region budget cannot prepare resident sample scratch");
     };
 
-    assert_eq!(error, ElasticError::SamplePoolBudgetExhausted);
+    assert_eq!(error, ElasticError::PoolCapacity);
 }
 
 #[kithara::test]
@@ -1994,7 +1996,7 @@ fn config_rejects_channels_outside_audio_spec_range(#[case] backend: StretchKind
 
     let result = ElasticConfig::builder()
         .backend(backend)
-        .pool(SamplePool::default())
+        .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(channels)
         .max_source_frames(CONTROL_QUANTUM)
@@ -2011,10 +2013,10 @@ fn config_rejects_channels_outside_audio_spec_range(#[case] backend: StretchKind
 #[kithara::test]
 fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
     fn allocated_bytes(max_source_frames: usize) -> usize {
-        let pool = SamplePool::with_byte_budget(8, 8192, ByteBudget(usize::MAX));
+        let pools = pools(usize::MAX);
         let config = ElasticConfig::builder()
             .backend(StretchKind::Bungee)
-            .pool(pool.clone())
+            .pools(pools.clone())
             .sample_rate(SAMPLE_RATE)
             .channels(CHANNELS)
             .max_source_frames(max_source_frames)
@@ -2022,7 +2024,7 @@ fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
             .build()
             .expect("the numeric preparation shape is valid");
         let engine = build_engine(config).expect("the prepared shape fits an unlimited pool");
-        let allocated = pool.allocated_bytes();
+        let allocated = pools.stats().allocated_bytes;
         drop(engine);
         allocated
     }

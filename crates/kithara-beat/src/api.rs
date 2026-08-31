@@ -1,5 +1,5 @@
 use bon::bon;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use thiserror::Error;
 
 use crate::{
@@ -13,6 +13,8 @@ pub enum BeatError {
     ModelLoad { model: &'static str, reason: String },
     #[error("inference failed: {reason}")]
     Inference { reason: String },
+    #[error("buffer allocation failed: {0}")]
+    Buffer(#[from] PoolError),
 }
 
 /// One detected beat or downbeat: where it is, and how sure the model was.
@@ -36,15 +38,21 @@ pub struct RawBeats {
 }
 
 /// `beat_this` NN detector: mel → chunked inference → peak picking.
-pub struct BeatThis {
+pub struct BeatThis<S>
+where
+    S: HasPool<f32>,
+{
     predictor: BeatPredictor,
     mel: MelExtractor,
     picker: PeakPicker,
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
 }
 
 #[bon]
-impl BeatThis {
+impl<S> BeatThis<S>
+where
+    S: HasPool<f32>,
+{
     /// Models from mel and beat ONNX bytes, decoded with `config`.
     ///
     /// # Errors
@@ -53,14 +61,14 @@ impl BeatThis {
     pub fn new(
         mel_model: &[u8],
         beat_model: &[u8],
-        sample_pool: SamplePool,
+        pools: PoolRegion<S>,
         #[builder(default)] config: BeatConfig,
     ) -> Result<Self, BeatError> {
         Ok(Self {
             mel: MelExtractor::try_from(mel_model)?,
             predictor: BeatPredictor::try_from(beat_model)?,
             picker: PeakPicker::new(config),
-            sample_pool,
+            pools,
         })
     }
 
@@ -70,8 +78,8 @@ impl BeatThis {
     /// [`BeatError::Inference`] when a model run fails or emits an
     /// unexpected output shape.
     pub fn analyze(&mut self, mono_22050: &[f32]) -> Result<RawBeats, BeatError> {
-        let mel = self.mel.extract(mono_22050, &self.sample_pool)?;
-        let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.sample_pool)?;
+        let mel = self.mel.extract(mono_22050, &self.pools)?;
+        let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.pools)?;
         let (beats, downbeats) = self.picker.decode(&beat_logits, &downbeat_logits)?;
         Ok(RawBeats { beats, downbeats })
     }

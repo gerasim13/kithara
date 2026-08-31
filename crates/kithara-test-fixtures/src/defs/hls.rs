@@ -5,7 +5,6 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_bufpool::{BytePool, SamplePool};
 use kithara_encode::{EncodedTrack, EncoderFactory, PackagedEncodeRequest};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_macros as kithara;
@@ -13,6 +12,7 @@ use rayon::prelude::*;
 
 use crate::{
     context::BuildContext,
+    defs::packaged::pools,
     fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track, mux_audio_track_at},
     hls_manifest::{Manifest, Resource},
     signal::{Pcm, Wave},
@@ -115,8 +115,10 @@ fn encode_track(
         .sample_rate(Consts::SAMPLE_RATE)
         .channels(Consts::CHANNELS)
         .build();
+    let pools = pools();
     EncoderFactory::encode_packaged(
-        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &pools,
+        &PackagedEncodeRequest::builder()
             .pcm(&pcm)
             .media_info(media_info)
             .timescale(Consts::SAMPLE_RATE)

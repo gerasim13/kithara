@@ -133,7 +133,7 @@ pub struct FfiItemConfig {
     /// Audio source. Accepts a network URL (`https://example.com/song.mp3`,
     /// `https://…/master.m3u8`) **or** an absolute local file path
     /// (`/Users/…/song.flac`). Parsed via
-    /// [`kithara::play::ResourceConfig::parse_src`] at insert time, then passed
+    /// [`kithara::play::ResourceSrc::parse`] at insert time, then passed
     /// to [`kithara::play::ResourceConfig::for_src`].
     pub url: String,
     /// Caller-declared live-stream flag. `true` means the source is a

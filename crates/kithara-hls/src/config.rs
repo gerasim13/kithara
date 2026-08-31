@@ -4,13 +4,21 @@ use std::fmt;
 
 use bon::Builder;
 use kithara_abr::AbrMode;
-use kithara_assets::{AssetStore, BytePool};
+use kithara_assets::AssetStore;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_drm::KeyProcessorRegistry;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
 use url::Url;
+
+pub(crate) const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
+pub(crate) const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
+pub(crate) const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
+pub(crate) const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
+pub(crate) const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = 3;
+pub(crate) const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
 
 /// Encryption key handling configuration.
 ///
@@ -50,11 +58,14 @@ pub enum SizeProbeMethod {
 
 /// Configuration for HLS streaming.
 ///
-/// Used with `Stream::<Hls>::new(config)`.
-#[derive(Clone, Builder)]
+/// Used with `Stream::<Hls<S>>::new(config)`.
+#[derive(Builder)]
 #[builder(start_fn = for_url)]
 #[non_exhaustive]
-pub struct HlsConfig {
+pub struct HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Master playlist URL.
     #[builder(start_fn)]
     pub url: Url,
@@ -62,10 +73,9 @@ pub struct HlsConfig {
     #[builder(default)]
     pub initial_abr_mode: AbrMode,
     /// Shared asset store.
-    pub store: AssetStore,
-    /// Buffer pool shared across all components.
-    #[builder(default = BytePool::default())]
-    pub pool: BytePool,
+    pub store: AssetStore<S>,
+    /// Buffer-pool facade shared across all components.
+    pub pools: PoolRegion<S>,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub keys: KeyOptions,
@@ -108,34 +118,67 @@ pub struct HlsConfig {
     #[builder(default)]
     pub size_probe_method: SizeProbeMethod,
     /// Max segments to download per step.
-    #[builder(default = HlsConfig::DEFAULT_DOWNLOAD_BATCH_SIZE)]
+    #[builder(default = DEFAULT_DOWNLOAD_BATCH_SIZE)]
     pub download_batch_size: usize,
     /// Acquire attempts a planned segment slot gets before the dispatch
     /// settles it terminally. A requeue is re-dispatched on the peer's next
     /// poll, so this counts dispatch rounds, not wall-clock time. A tmp held
     /// by a live sibling writer is exempt — that holder always settles and
     /// releases, so its retry resolves on its own.
-    #[builder(default = HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
+    #[builder(default = DEFAULT_ACQUIRE_ATTEMPT_BUDGET)]
     pub acquire_attempt_budget: u8,
     /// Maximum media-segment prefetch window for ephemeral HLS stores.
     /// The effective maximum is never lower than
     /// [`Self::ephemeral_cache_min_media_window`].
-    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
+    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW)]
     pub ephemeral_cache_max_media_window: usize,
     /// Minimum media-segment prefetch window for ephemeral HLS stores after
     /// applying [`Self::ephemeral_cache_non_media_reserve`].
-    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
+    #[builder(default = DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW)]
     pub ephemeral_cache_min_media_window: usize,
     /// Number of non-media HLS cache entries reserved when deriving the
     /// ephemeral media prefetch window from the store cache capacity.
-    #[builder(default = HlsConfig::DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
+    #[builder(default = DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE)]
     pub ephemeral_cache_non_media_reserve: usize,
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
 }
 
-impl fmt::Debug for HlsConfig {
+impl<S> Clone for HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            initial_abr_mode: self.initial_abr_mode,
+            store: self.store.clone(),
+            pools: self.pools.clone(),
+            keys: self.keys.clone(),
+            net_options: self.net_options.clone(),
+            base_url: self.base_url.clone(),
+            bus: self.bus.clone(),
+            cancel: self.cancel.clone(),
+            discriminator: self.discriminator.clone(),
+            downloader: self.downloader.clone(),
+            headers: self.headers.clone(),
+            look_ahead_bytes: self.look_ahead_bytes,
+            size_probe_method: self.size_probe_method,
+            download_batch_size: self.download_batch_size,
+            acquire_attempt_budget: self.acquire_attempt_budget,
+            ephemeral_cache_max_media_window: self.ephemeral_cache_max_media_window,
+            ephemeral_cache_min_media_window: self.ephemeral_cache_min_media_window,
+            ephemeral_cache_non_media_reserve: self.ephemeral_cache_non_media_reserve,
+            event_channel_capacity: self.event_channel_capacity,
+        }
+    }
+}
+
+impl<S> fmt::Debug for HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HlsConfig")
             .field("initial_abr_mode", &self.initial_abr_mode)
@@ -158,7 +201,7 @@ impl fmt::Debug for HlsConfig {
                 &self.ephemeral_cache_max_media_window,
             )
             .field("discriminator", &self.discriminator)
-            .field("pool", &self.pool)
+            .field("pools", &self.pools)
             .field("store", &self.store)
             .field("url", &self.url)
             .field("download_batch_size", &self.download_batch_size)
@@ -169,22 +212,28 @@ impl fmt::Debug for HlsConfig {
     }
 }
 
-impl HlsConfig {
+impl<S> HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Default [`Self::acquire_attempt_budget`]. Enough rounds for an
     /// obstruction another task is already clearing to disappear, few enough
     /// that a standing one reaches the reader instead of parking it.
-    pub const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
+    pub const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
     /// Per-stream media window for a shared 128-entry cache. Two concurrent
     /// streams each retain 60 media and four non-media entries.
-    pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize = 60;
-    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize = 3;
-    pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize = 4;
+    pub const DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW: usize =
+        DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW;
+    pub const DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW: usize =
+        DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW;
+    pub const DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE: usize =
+        DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE;
     /// Default [`Self::download_batch_size`]. Three segments keep the fetcher
     /// busy across one round-trip without planning further ahead than a
     /// look-ahead cap would allow anyway.
-    pub const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = 3;
+    pub const DEFAULT_DOWNLOAD_BATCH_SIZE: usize = DEFAULT_DOWNLOAD_BATCH_SIZE;
     /// Default `look_ahead_bytes` cap (~2 `MiB`). Production HLS streams
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.
-    pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = 2 * 1024 * 1024;
+    pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = DEFAULT_LOOK_AHEAD_BYTES;
 }

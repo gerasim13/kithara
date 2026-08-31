@@ -14,7 +14,7 @@ pub(crate) mod demuxer;
 pub(crate) mod parsing;
 pub(crate) mod source_io;
 
-pub(crate) use demuxer::Fmp4SegmentDemuxer;
+pub(crate) use demuxer::{Fmp4SegmentDemuxer, REQUIRED_INPUT};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) mod test_layout;

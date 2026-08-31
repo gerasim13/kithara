@@ -3,7 +3,6 @@
 use std::{env, num::NonZeroU32, path::Path};
 
 use kithara::{
-    bufpool::{BytePool, SamplePool},
     events::TrackStatus,
     hls::AbrMode,
     platform::{
@@ -12,7 +11,7 @@ use kithara::{
     },
     play::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
-        SessionDispatcher, Tempo, player::Player,
+        ResourceSrc, SessionDispatcher, Tempo, player::Player,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     warp::{
@@ -22,6 +21,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
+    bufpool_ext::{TestPools, pools},
     cochlea::synchronization_failures,
     fixture_protocol::EncryptionRequest,
     hls_fixture::{aes128_iv, aes128_key_bytes},
@@ -219,12 +219,12 @@ pub(super) enum HlsProtection {
 }
 
 pub(super) struct ProductHarness {
-    pub(super) decks: Vec<Queue>,
+    pub(super) decks: Vec<Queue<TestPools>>,
     pub(super) failures: Vec<String>,
     block_frames: usize,
     output_frames: u64,
     paced: bool,
-    session: Arc<OfflineSession>,
+    session: Arc<OfflineSession<TestPools>>,
 }
 
 impl ProductHarness {
@@ -251,10 +251,8 @@ impl ProductHarness {
         let server = TestServerHelper::new().await;
         let sources = sources(provider, case.decks, &server).await;
         let session = Arc::new(OfflineSession::new_manual_with_block_frames(block_frames));
-        let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        );
+        let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
@@ -270,7 +268,7 @@ impl ProductHarness {
             let queue = Queue::new(QueueConfig::builder().player(player).build());
             queue.set_muted(index != audible_deck);
             let config = ResourceConfig::for_src(
-                ResourceConfig::parse_src(&source)
+                ResourceSrc::parse(&source)
                     .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
             )
             .store(memory_asset_store())

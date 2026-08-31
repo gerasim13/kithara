@@ -28,9 +28,9 @@ that rejects the codec/container returns terminal `DecodeError::UnsupportedCodec
 
 ## Reader profile contract
 
-`Demuxer::required_input() -> kithara_stream::ReaderInput` declares the *shape*
-of input a demuxer needs before construction (default `Incremental`;
-`Fmp4SegmentDemuxer` overrides to `InitOnly`). It is a reading *discipline*, not a
+`Fmp4SegmentDemuxer` declares `ReaderInput::InitOnly` as the *shape* of input it
+needs before construction. Other demuxers use incremental input. This is a
+reading *discipline*, not a
 byte window — the concrete init range is resolved by the byte-space owner (the
 stream layer), which alone knows the ABR virtual byte shift.
 
@@ -54,12 +54,11 @@ cannot disagree.
 
 ## ComposedDecoder invariants
 
-`ComposedDecoder<D: Demuxer, C: FrameCodec>` is the single decode loop; every
+`ComposedDecoder<D: Demuxer, C: FrameCodec, S>` is the single decode loop; every
 backend is a `(demuxer, codec)` pair fed through it. `DecoderRuntime` carries the
-sample pool, epoch, byte-length handle, and reader hooks; `pool` has no `Default` —
-the host threads its configured pool down, and test-only
-`DecoderRuntime::for_test` (`#[cfg(test)]`) is the only place the global pool is
-reachable.
+typed pool-region facade, epoch, byte-length handle, and reader hooks; `pools`
+has no `Default` - the host threads its configured region down. Test-only
+`DecoderRuntime::for_test` (`#[cfg(test)]`) builds the crate-local closed schema.
 
 - **Frame offset is cumulative**, anchored to `landed_at` on seek and advanced by
   each emitted chunk (per-chunk `floor(pts * rate)` loses precision).
@@ -358,7 +357,7 @@ Runtime initialization is main-thread owned. The doc-hidden FFI bootstrap
 `spawn_webcodecs_probe` creates one host worker and probes the five compile-time
 codec configurations through `AudioDecoder.isConfigSupported()`. The immutable
 host sender and the completed support table publish through separate `OnceLock`s;
-until the snapshot lands, `WebCodecsCodec::supports` returns `false` so the
+until the snapshot lands, the backend support check returns `false` so the
 synchronous factory takes the Symphonia path. Opening a WebCodecs codec before
 runtime initialization is a typed contract error.
 
@@ -368,11 +367,11 @@ is such a parked parent, so neither the codec nor the decode path may spawn the 
 only the main-thread bootstrap, whose event loop stays live, may. The host command
 loop uses `try_recv` plus a local timer; the synchronous per-decoder reply receiver
 uses the Atomics-backed `recv_timeout` path and needs no event loop. The singleton
-host receives the app's `SamplePool` at spawn and owns the decoder-ID → `AudioDecoder`
-map, reply channel, pending input queue, and generation state; `Open` registers a
-codec, `Close` removes it. `HostOut::Pcm` carries a pooled `SampleBuffer` that the codec
-moves into the caller's output buffer. JavaScript values never cross the Rust
-thread boundary.
+host receives the app's typed `PoolRegion<S>` at spawn and owns the decoder-ID ->
+`AudioDecoder` map, reply channel, pending input queue, and generation state;
+`Open` registers a codec, `Close` removes it. `HostOut::Pcm` carries a pooled
+`SampleBuffer` that the codec moves into the caller's output buffer. JavaScript
+values never cross the Rust thread boundary.
 
 The frame codec owns the current generation. A seek advances it, sends `Reset`,
 discards queued output, then sends `Configure` again because WebCodecs `reset()`
@@ -450,7 +449,7 @@ hardware backend cannot handle a codec/container.
 ## Trait bridges
 
 - `From`: `GaplessInfo` → `GaplessTrimmer`; `GaplessProbe` → `Option<GaplessInfo>` (prefers `elst` over
-  `iTunSMPB`); `io::Error` / `TryFromIntError` / `BudgetExhausted` /
+  `iTunSMPB`); `io::Error` / `TryFromIntError` / `PoolError` /
   `AndroidBackendError` → `DecodeError`.
 - `TryFrom`: `DecoderChunkOutcome` → `AudioChunk`; `&[u8]` /
   `&AudioCodecParameters` → `AacStreamConfig` (fdk-aac).

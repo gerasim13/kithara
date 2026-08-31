@@ -8,6 +8,8 @@ mod coordinate;
 mod segment;
 mod sync;
 mod temporal;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod warp;
 
 pub use anchor::{CoordinateError, SessionAnchor, SessionBeat, SessionFrame};

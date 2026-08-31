@@ -14,7 +14,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -27,16 +27,18 @@ use kithara_integration_tests::{
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
 
+use crate::bufpool_ext::{TestPools, pools};
+
 struct Session {
-    queue: Arc<Queue>,
+    queue: Arc<Queue<TestPools>>,
     downloader: Downloader,
-    store: AssetStore,
+    store: AssetStore<TestPools>,
     flush_hub: Arc<FlushHub>,
     tick: tokio::task::JoinHandle<()>,
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -50,19 +52,17 @@ fn build_session(cache_path: &Path) -> Session {
     // checkpoint (`flush_now`) instead of guessing at the background
     // worker's debounce with a timer.
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
-    let byte_pool = kithara::bufpool::BytePool::default();
-    let sample_pool = kithara::bufpool::SamplePool::default();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: cache_path.to_path_buf(),
         })
-        .pool(byte_pool.clone())
         .flush_hub(Arc::clone(&flush_hub))
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool).build(),
+                PlayWorkerConfig::builder(pools.clone()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -76,7 +76,8 @@ fn build_session(cache_path: &Path) -> Session {
     let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool).build(),
+            NetOptions::default(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -90,19 +91,17 @@ fn build_session(cache_path: &Path) -> Session {
     }
 }
 
-fn track_source(url: &Url, session: &Session) -> TrackSource {
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .downloader(session.downloader.clone())
-    .store(session.store.clone())
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(DecoderBackend::Symphonia)
-            .build(),
-    )
-    .initial_abr_mode(AbrMode::Auto(None))
-    .build();
+fn track_source(url: &Url, session: &Session) -> TrackSource<TestPools> {
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(session.downloader.clone())
+        .store(session.store.clone())
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(DecoderBackend::Symphonia)
+                .build(),
+        )
+        .initial_abr_mode(AbrMode::Auto(None))
+        .build();
     TrackSource::Config(Box::new(cfg))
 }
 

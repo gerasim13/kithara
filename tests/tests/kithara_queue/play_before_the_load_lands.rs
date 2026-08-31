@@ -4,7 +4,7 @@
 use kithara::{
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -12,6 +12,8 @@ use kithara_integration_tests::{
     TestServerHelper, kithara, offline::OfflineSession, temp_dir, waits::wait_for_position_event,
 };
 use kithara_test_fixtures::SignalAsset;
+
+use crate::bufpool_ext::pools;
 
 /// `play()` issued before the current track's load has landed must still
 /// start that track once the load completes.
@@ -36,13 +38,7 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -62,15 +58,17 @@ async fn play_issued_before_the_load_lands_still_starts_the_track() {
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .downloader(downloader)
-    .store(store)
-    .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader)
+        .store(store)
+        .build();
 
     let mut rx = queue.subscribe();
     queue

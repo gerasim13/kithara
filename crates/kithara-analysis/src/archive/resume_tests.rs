@@ -1,6 +1,5 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
-use kithara_bufpool::SamplePool;
 use kithara_resampler::NoResamplerBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_test_utils::kithara;
@@ -10,6 +9,7 @@ use crate::{
     AnalysisProgress, AnalyzerBuilder,
     analyzer::{Detector, Ingest, TrackAnalyzers},
     beat::{BeatDetectError, BeatDetector, BeatMark, GridParams, RawBeats},
+    test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
 const CHANNELS: u16 = 2;
@@ -28,8 +28,8 @@ impl BeatDetector for FixtureDetector {
     }
 }
 
-fn configured() -> (AnalyzerBuilder<NoResamplerBackend>, Detector) {
-    let mut builder = AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+fn configured(pools: Pools) -> (AnalyzerBuilder<NoResamplerBackend, TestPools>, Detector) {
+    let mut builder = AnalyzerBuilder::<NoResamplerBackend, _>::new(pools)
         .with_waveform(8)
         .with_beat_detector(Box::new(FixtureDetector), GridParams::default());
     let detector = builder
@@ -46,7 +46,7 @@ fn chunk_frames() -> NonZeroU64 {
     NonZeroU64::new(CHUNK_FRAMES).expect("fixture chunk is non-zero")
 }
 
-fn decoded(at: u64) -> AudioChunk {
+fn decoded(pools: &Pools, at: u64) -> AudioChunk {
     let mut samples =
         Vec::with_capacity(usize::try_from(CHUNK_FRAMES).unwrap_or(0) * usize::from(CHANNELS));
     for frame in at..at + CHUNK_FRAMES {
@@ -64,13 +64,18 @@ fn decoded(at: u64) -> AudioChunk {
             frame_offset: at,
             ..Default::default()
         },
-        SamplePool::default().attach(samples),
+        sample_buffer(pools, &samples),
     )
 }
 
-fn fold(analyzers: &mut TrackAnalyzers<NoResamplerBackend>, detector: &mut Detector, at: u64) {
+fn fold(
+    pools: &Pools,
+    analyzers: &mut TrackAnalyzers<NoResamplerBackend, TestPools>,
+    detector: &mut Detector,
+    at: u64,
+) {
     assert_eq!(
-        analyzers.push(&decoded(at), Some(detector)),
+        analyzers.push(&decoded(pools, at), Some(detector)),
         Ingest::Accepted,
         "a missing fixed chunk is folded once"
     );
@@ -108,7 +113,7 @@ fn apply(update: &AnalysisFileUpdate) -> Vec<u8> {
 }
 
 fn finish(
-    analyzers: &mut TrackAnalyzers<NoResamplerBackend>,
+    analyzers: &mut TrackAnalyzers<NoResamplerBackend, TestPools>,
     detector: &mut Detector,
 ) -> crate::TrackAnalysis {
     analyzers.snapshot(Some(detector), true)
@@ -116,12 +121,15 @@ fn finish(
 
 #[kithara::test(native, flash(false))]
 fn archived_partial_resumes_without_decoding_completed_chunks() {
+    let pools = pools();
     let seed = [0, 2 * CHUNK_FRAMES];
-    let (builder, mut detector) = configured();
-    let mut partial = builder.build(rate(), "resume-track".into());
+    let (builder, mut detector) = configured(pools.clone());
+    let mut partial = builder
+        .build(rate(), "resume-track".into())
+        .expect("analysis buffers fit the test region");
     partial.plan_extent(EXTENT);
     for at in seed {
-        fold(&mut partial, &mut detector, at);
+        fold(&pools, &mut partial, &mut detector, at);
     }
     let progress = partial.progress(Some(&mut detector), false, chunk_frames());
     let partial_revision = progress.analysis().revision();
@@ -141,7 +149,7 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
     );
 
     let progress = file.into();
-    let (builder, mut detector) = configured();
+    let (builder, mut detector) = configured(pools.clone());
     let mut resumed = builder
         .restore(&progress, chunk_frames())
         .expect("active analyzer config restores the opaque state");
@@ -157,15 +165,17 @@ fn archived_partial_resumes_without_decoding_completed_chunks() {
         "completed fixed chunks are never requested again"
     );
     for at in &requested {
-        fold(&mut resumed, &mut detector, *at);
+        fold(&pools, &mut resumed, &mut detector, *at);
     }
     let resumed = finish(&mut resumed, &mut detector);
 
-    let (builder, mut detector) = configured();
-    let mut uninterrupted = builder.build(rate(), "resume-track".into());
+    let (builder, mut detector) = configured(pools.clone());
+    let mut uninterrupted = builder
+        .build(rate(), "resume-track".into())
+        .expect("analysis buffers fit the test region");
     uninterrupted.plan_extent(EXTENT);
     for at in seed.into_iter().chain(requested) {
-        fold(&mut uninterrupted, &mut detector, at);
+        fold(&pools, &mut uninterrupted, &mut detector, at);
     }
     let uninterrupted = finish(&mut uninterrupted, &mut detector);
 

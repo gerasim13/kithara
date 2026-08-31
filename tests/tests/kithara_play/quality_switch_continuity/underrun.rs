@@ -1,5 +1,6 @@
 use cochlea_features::{Audio as ProbeAudio, SegmentOpts, segment_timeline};
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioSession},
     hls::{Hls, HlsConfig},
     play::{PlayWorker, PlayWorkerConfig},
@@ -9,6 +10,7 @@ use kithara_integration_tests::{
 };
 
 use super::*;
+use crate::bufpool_ext::{TestPools, pools};
 
 const OUTPUT_RING_CHUNKS: usize = 1;
 const TARGET_SEGMENT_DELAY_MS: u64 = 250;
@@ -72,19 +74,20 @@ async fn prepare_tiny_ring_player(
     let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .build();
     let hls = HlsConfig::for_url(master_url.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp.path()))
+        .store(store)
+        .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(initial_variant))
         .events(bus.clone())
         .build();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(
-            kithara::bufpool::BytePool::default(),
-            kithara::bufpool::SamplePool::default(),
-        )
-        .build(),
-    );
-    let config = AudioConfig::<Hls>::for_stream(hls)
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)

@@ -19,3 +19,5 @@ pub use elastic::{
     ElasticLatency, ElasticRateEnvelope, ElasticRequest, ElasticSpan, ElasticSpanConfig,
     ElasticSpanPlan, ElasticSpanRequest,
 };
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;

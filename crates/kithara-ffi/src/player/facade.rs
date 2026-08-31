@@ -390,7 +390,7 @@ mod tests {
 
     #[kithara::test]
     fn repeat_mode_round_trips_and_notifies_observer() {
-        let player = AudioPlayer::new(FfiPlayerConfig::default());
+        let player = AudioPlayer::new(FfiPlayerConfig::for_test());
         let (sender, receiver) = channel();
         player.set_observer(Arc::new(ChannelObserver { sender }));
 

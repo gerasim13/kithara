@@ -13,6 +13,8 @@ mod reader;
 mod segment;
 mod signal;
 mod stream;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod variant;
 
 pub use config::{HlsConfig, KeyOptions, SizeProbeMethod};

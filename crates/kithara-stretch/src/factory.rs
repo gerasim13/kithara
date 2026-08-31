@@ -1,3 +1,5 @@
+use kithara_bufpool::HasPool;
+
 #[cfg(feature = "stretch-bungee")]
 use crate::backends::BungeeElastic;
 #[cfg(feature = "stretch-signalsmith")]
@@ -9,7 +11,10 @@ use crate::{ElasticConfig, ElasticEngine, ElasticError, StretchKind};
 /// # Errors
 /// Returns [`ElasticError`] when the config cannot prepare the selected
 /// engine.
-pub fn build_engine(config: ElasticConfig) -> Result<Box<dyn ElasticEngine>, ElasticError> {
+pub fn build_engine<S>(config: ElasticConfig<S>) -> Result<Box<dyn ElasticEngine>, ElasticError>
+where
+    S: HasPool<f32>,
+{
     match config.backend() {
         #[cfg(feature = "stretch-signalsmith")]
         StretchKind::Signalsmith => SignalsmithElastic::prepare(config)

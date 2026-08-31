@@ -1,147 +1,87 @@
 use kithara::{
     self,
-    bufpool::{BudgetExhausted, ByteBudget, Pool, SharedPool},
+    bufpool::{PoolConfig, PoolError},
 };
-use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
+use kithara_integration_tests::bufpool_ext::pools_with;
 
 #[kithara::test]
-fn test_byte_budget_enforced() {
+fn byte_growth_never_crosses_overall_budget() {
     let budget = 64 * 1024;
-    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, ByteBudget(budget));
-
-    let mut successes = 0;
-    let mut failures = 0;
-    let mut bufs = Vec::new();
-
-    for _ in 0..100 {
-        let mut buf = pool.get();
-        match buf.ensure_len(4096) {
-            Ok(()) => {
-                successes += 1;
-                bufs.push(buf);
-            }
-            Err(BudgetExhausted) => {
-                failures += 1;
-            }
-        }
-    }
-
-    assert!(
-        failures > 0,
-        "some ensure_len calls should fail due to budget"
-    );
-    assert!(successes > 0, "some ensure_len calls should succeed");
-
-    let margin = 4096 * 2;
-    assert!(
-        pool.allocated_bytes() <= budget + margin,
-        "allocated_bytes ({}) should be within budget ({}) + margin ({})",
-        pool.allocated_bytes(),
+    let pools = pools_with(
         budget,
-        margin,
+        PoolConfig::builder().max_buffers(64).build(),
+        PoolConfig::builder().max_buffers(8).build(),
     );
-
-    drop(bufs);
-}
-
-#[kithara::test]
-fn test_reuse_rate_after_warmup() {
-    let pool = SharedPool::<4, Vec<f32>>::new(128, 200_000);
-    pool.pre_warm(16, |v| v.resize(4096, 0.0));
+    let mut buffers = Vec::new();
+    let mut rejections = 0;
 
     for _ in 0..100 {
-        let _buf = pool.get();
-    }
-
-    let stats = pool.stats();
-    let total = stats.home_hits + stats.steal_hits + stats.alloc_misses;
-    let reuse = stats.home_hits + stats.steal_hits;
-
-    assert!(total > 0, "should have some operations recorded",);
-
-    let warmup_misses = 16u64;
-    let effective_misses = stats.alloc_misses.saturating_sub(warmup_misses);
-    let effective_total = reuse + effective_misses;
-
-    if effective_total > 0 {
-        #[expect(clippy::cast_precision_loss, reason = "test counters are small")]
-        let rate = reuse as f64 / effective_total as f64;
-        assert!(
-            rate > 0.95,
-            "reuse rate {rate:.2} should be > 0.95 (home_hits={}, steal_hits={}, effective_misses={})",
-            stats.home_hits,
-            stats.steal_hits,
-            effective_misses,
-        );
-    }
-}
-
-#[kithara::test]
-fn test_no_unbounded_growth() {
-    let pool = SharedPool::<4, Vec<u8>>::with_byte_budget(64, 0, ByteBudget(1024 * 1024));
-
-    for _ in 0..10 {
-        let bufs: Vec<_> = (0..20)
-            .map(|_| pool.get_with(|v| v.resize(4096, 0)))
-            .collect();
-        drop(bufs);
-    }
-
-    let bytes_after = pool.allocated_bytes();
-
-    for _ in 0..10 {
-        let bufs: Vec<_> = (0..20)
-            .map(|_| pool.get_with(|v| v.resize(4096, 0)))
-            .collect();
-        drop(bufs);
-    }
-
-    let bytes_final = pool.allocated_bytes();
-
-    let growth = bytes_final.saturating_sub(bytes_after);
-    let threshold = bytes_after / 10 + 4096;
-    assert!(
-        growth <= threshold,
-        "memory should stabilize: after={bytes_after}, final={bytes_final}, growth={growth}, threshold={threshold}",
-    );
-}
-
-#[kithara::test]
-fn test_sample_pool_budget_stable() {
-    let pool =
-        SharedPool::<8, Vec<f32>>::with_byte_budget(128, 200_000, ByteBudget(2 * 1024 * 1024));
-
-    for _ in 0..50 {
-        let mut buf = pool.get();
-        let _ = buf.ensure_len(4096);
-        if buf.len() >= 4096 {
-            buf[0] = 1.0;
-            buf[4095] = 1.0;
+        match pools.get_with_len::<u8>(4_096) {
+            Ok(buffer) => buffers.push(buffer),
+            Err(PoolError::OverallBudgetExceeded { .. }) => rejections += 1,
+            Err(error) => panic!("unexpected pool error: {error}"),
         }
     }
 
-    let bytes = pool.allocated_bytes();
-    let budget = 2 * 1024 * 1024;
-    assert!(
-        bytes <= budget + 16384,
-        "PCM pool should stay within budget: allocated={bytes}, budget={budget}",
-    );
+    assert!(!buffers.is_empty());
+    assert!(rejections > 0);
+    assert!(pools.stats().allocated_bytes <= budget);
 }
 
 #[kithara::test]
-fn test_put_drops_when_shard_full() {
-    let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = pool.shard_index_of();
+fn byte_and_sample_pools_compete_for_one_budget() {
+    let budget = 64 * 1024;
+    let pools = pools_with(
+        budget,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    let bytes = pools
+        .get_with_len::<u8>(32 * 1024)
+        .expect("bytes consume half the shared budget");
+    let samples = pools
+        .get_with_len::<f32>(8 * 1024)
+        .expect("samples consume the other half");
 
-    for _ in 0..5 {
-        let buf = Vec::with_capacity(64);
-        pool.put(buf, shard);
+    let error = pools
+        .get_with_len::<u8>(1)
+        .expect_err("neither pool may exceed the shared cap");
+    assert!(matches!(error, PoolError::OverallBudgetExceeded { .. }));
+    assert_eq!(pools.stats().allocated_bytes, budget);
+
+    drop((bytes, samples));
+}
+
+#[kithara::test]
+fn retained_bytes_stabilize_across_cycles() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+
+    for _ in 0..10 {
+        let buffers: Vec<_> = (0..20)
+            .map(|_| {
+                pools
+                    .get_with_len::<u8>(4_096)
+                    .expect("test bytes fit the region budget")
+            })
+            .collect();
+        drop(buffers);
+    }
+    let bytes_after = pools.stats().allocated_bytes;
+
+    for _ in 0..10 {
+        let buffers: Vec<_> = (0..20)
+            .map(|_| {
+                pools
+                    .get_with_len::<u8>(4_096)
+                    .expect("test bytes fit the region budget")
+            })
+            .collect();
+        drop(buffers);
     }
 
-    let stats = pool.stats();
-    assert!(
-        stats.put_drops > 0,
-        "expected put_drops > 0 when shard overflows; got {}",
-        stats.put_drops,
-    );
+    assert_eq!(pools.stats().allocated_bytes, bytes_after);
 }

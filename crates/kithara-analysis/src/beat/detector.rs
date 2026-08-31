@@ -1,3 +1,4 @@
+use kithara_bufpool::PoolError;
 use thiserror::Error;
 
 #[cfg(feature = "beat-nn")]
@@ -28,8 +29,10 @@ pub(crate) struct RawBeats {
 
 #[derive(Debug, Error)]
 pub(crate) enum BeatDetectError {
-    #[error("beat analysis buffer budget exhausted")]
-    Buffer,
+    #[error("beat analysis buffer allocation failed: {0}")]
+    Buffer(#[from] PoolError),
+    #[error("beat analysis resampler failed: {reason}")]
+    Resample { reason: String },
     #[cfg(feature = "beat-nn")]
     #[error("beat detector init failed: {reason}")]
     Init { reason: String },

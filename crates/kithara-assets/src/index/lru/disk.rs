@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use kithara_bufpool::BytePool;
+use kithara_bufpool::ByteBuffer;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -38,8 +38,8 @@ impl LruIndex {
     /// hydrated synchronously. Otherwise the disk file is **not**
     /// materialised — it appears on the first [`LruIndex::touch`]
     /// or [`LruIndex::remove`].
-    pub(crate) fn with_persist_at(path: PathBuf, cancel: CancelToken, pool: &BytePool) -> Self {
-        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
+    pub(crate) fn with_persist_at(path: PathBuf, cancel: CancelToken, buffer: ByteBuffer) -> Self {
+        let (initial, opened) = hydrate_existing(&path, &cancel, buffer);
         Self {
             inner: Arc::new(LruInner {
                 state: Mutex::new(initial),
@@ -79,7 +79,7 @@ impl LruInner {
 fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancelToken,
-    pool: &BytePool,
+    mut buffer: ByteBuffer,
 ) -> (LruState, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
@@ -88,7 +88,7 @@ fn hydrate_existing(
     match open_existing(path, cancel) {
         Ok(res) => {
             let atomic = Atomic::new(res);
-            let initial = read_state(&atomic, pool).unwrap_or_default();
+            let initial = read_state(&atomic, &mut buffer).unwrap_or_default();
             (initial, Some(atomic))
         }
         Err(e) => {
@@ -98,9 +98,19 @@ fn hydrate_existing(
     }
 }
 
-fn read_state(res: &Atomic<MmapDriver>, pool: &BytePool) -> AssetsResult<LruState> {
-    let mut buf = pool.get();
-    let n = res.read_into(&mut buf)?;
+fn read_state(res: &Atomic<MmapDriver>, buf: &mut ByteBuffer) -> AssetsResult<LruState> {
+    let Some(len) = res.len() else {
+        buf.clear();
+        return Ok(LruState::default());
+    };
+    let len = usize::try_from(len).map_err(|error| {
+        AssetsError::Storage(StorageError::Failed(format!(
+            "LRU index len does not fit usize: {error}"
+        )))
+    })?;
+    buf.ensure_len(len)?;
+    let n = res.read_at(0, &mut buf[..len])?;
+    buf.truncate(n);
 
     if n == 0 {
         return Ok(LruState::default());

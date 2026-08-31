@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{
         AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
     },
@@ -12,7 +13,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -23,6 +24,8 @@ use kithara_integration_tests::{
     offline::OfflineSession,
     temp_dir,
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 /// Track shape: 30 segments × 4 s = 120 s. Long enough that 50 % and
 /// 90 % targets land in distinct cold regions.
@@ -52,7 +55,7 @@ const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
 #[kithara::flash(true)]
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     id: TrackId,
     target: TrackStatus,
     budget: Duration,
@@ -100,7 +103,7 @@ enum ScrubOutcome {
 /// bug), or `budget` elapses.
 #[kithara::flash(true)]
 async fn observe_scrub_outcome(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     rx: &mut EventReceiver,
     target_src: &str,
     seek_target: f64,
@@ -175,14 +178,14 @@ async fn wait_for_playback_progress(
 }
 
 struct Harness {
-    queue: Arc<Queue>,
+    queue: Arc<Queue<TestPools>>,
     rx: EventReceiver,
     master_url: String,
     tick: tokio::task::JoinHandle<()>,
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -244,23 +247,23 @@ impl Harness {
         let master = created.master_url();
         let master_url = master.as_str().to_string();
 
+        let pools = pools();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
+                pools.clone(),
                 CancelToken::never(),
             ))
             .build(),
         );
-        let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+        let store = AssetStore::builder(pools.clone())
+            .backend(StorageBackend::Disk {
+                root: temp_dir.path().to_path_buf(),
+            })
+            .build();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .worker(PlayWorker::new(
-                    PlayWorkerConfig::for_pools(
-                        kithara::bufpool::BytePool::default(),
-                        kithara::bufpool::SamplePool::default(),
-                    )
-                    .build(),
-                ))
+                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
                 .session(OfflineSession::arc_auto())
                 .build(),
         );
@@ -268,12 +271,11 @@ impl Harness {
 
         let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
-        let cfg =
-            ResourceConfig::for_src(ResourceConfig::parse_src(master.as_str()).expect("valid URL"))
-                .downloader(downloader)
-                .store(store)
-                .initial_abr_mode(AbrMode::Auto(None))
-                .build();
+        let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
+            .downloader(downloader)
+            .store(store)
+            .initial_abr_mode(AbrMode::Auto(None))
+            .build();
         let mut rx = queue.subscribe();
         let id = queue
             .append(TrackSource::Config(Box::new(cfg)))

@@ -20,7 +20,6 @@ use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_m
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead},
-    bufpool::{Region, SamplePool},
     file::{File, FileConfig},
     hls::{Hls, HlsConfig},
     net::{HttpClient, NetOptions},
@@ -39,7 +38,10 @@ use kithara::{
         dl::{Downloader, DownloaderConfig},
     },
 };
-use kithara_integration_tests::{TestHttpServer, auto};
+use kithara_integration_tests::{
+    TestHttpServer, auto,
+    bufpool_ext::{TestPools, pools},
+};
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use tempfile::TempDir;
 use url::Url;
@@ -106,7 +108,7 @@ fn build_resampler(source_rate: u32, target_rate: u32, frames: usize) -> Box<dyn
         })
         .quality(ResamplerQuality::High)
         .options(ResamplerOptions::builder().chunk_size(frames).build())
-        .sample_pool(SamplePool::new(64, frames.saturating_mul(16)))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
@@ -317,23 +319,19 @@ fn bench_audio_file_new_and_read(c: &mut Criterion) {
             },
             |(_temp_dir, file_path)| {
                 rt.block_on(async move {
-                    let region = Region::default();
-                    let byte_pool = region.byte_pool();
+                    let pools = pools();
                     let file_config = FileConfig::for_src(file_path.into())
                         .store(
-                            AssetStore::builder()
+                            AssetStore::builder(pools.clone())
                                 .backend(StorageBackend::Memory)
-                                .pool(byte_pool.clone())
                                 .build(),
                         )
-                        .pool(byte_pool.clone())
+                        .pools(pools.clone())
                         .build();
-                    let config = AudioConfig::<File>::for_stream(file_config)
+                    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
                         .hint(("mp3").to_string())
                         .build();
-                    let worker = PlayWorker::new(
-                        PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
-                    );
+                    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
                     let mut audio = worker
                         .open(config)
                         .await
@@ -380,24 +378,30 @@ fn bench_hls_stream_seek_read(c: &mut Criterion) {
             |()| {
                 let url = master_url.clone();
                 rt.block_on(async move {
+                    let pools = pools();
                     let net = NetOptions::builder().pool_max_idle_per_host(8).build();
                     let downloader = Downloader::new(
-                        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never()))
-                            .build(),
+                        DownloaderConfig::for_client(HttpClient::new(
+                            net,
+                            pools.clone(),
+                            CancelToken::never(),
+                        ))
+                        .build(),
                     );
-                    let store = AssetStore::builder()
+                    let store = AssetStore::builder(pools.clone())
                         .backend(StorageBackend::Memory)
                         .max_bytes(200_000)
                         .build();
                     let config = HlsConfig::for_url(url)
                         .store(store)
+                        .pools(pools)
                         .initial_abr_mode(auto(1))
                         .downloader(downloader)
                         .download_batch_size(3)
                         .look_ahead_bytes(96_000)
                         .build();
 
-                    let mut stream = Stream::<Hls>::new(config)
+                    let mut stream = Stream::<Hls<TestPools>>::new(config)
                         .await
                         .unwrap_or_else(|e| panic!("stream init failed: {e}"));
 

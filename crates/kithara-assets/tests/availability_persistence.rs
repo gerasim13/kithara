@@ -56,10 +56,13 @@ fn wait_for_snapshot_naming(path: &Path, key_name: &str) {
 /// Rebuild a store on `root` until its hydrated availability index has dropped
 /// `key`, then hand that store back. A snapshot that still carries the resource
 /// wins over the on-disk scan, so this only clears once the deletion is durable.
-fn wait_for_persisted_deletion(root: &Path, key: &ResourceKey) -> AssetStore {
+fn wait_for_persisted_deletion(
+    root: &Path,
+    key: &ResourceKey,
+) -> AssetStore<support::pools::TestPools> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
-        let reopened = AssetStore::builder()
+        let reopened = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk { root: root.into() })
             .build();
         if reopened.final_len(key).is_none() {
@@ -80,7 +83,7 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
     let root = "p4-persist";
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -94,7 +97,7 @@ fn disk_checkpoint_persists_committed_resource_across_rebuild() {
         store.checkpoint().unwrap();
     }
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -117,7 +120,7 @@ fn remove_resource_persists_availability_deletion_across_rebuild() {
     let key_name = "master.m3u8";
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -132,7 +135,7 @@ fn remove_resource_persists_availability_deletion_across_rebuild() {
     }
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -145,7 +148,7 @@ fn remove_resource_persists_availability_deletion_across_rebuild() {
         store.checkpoint().unwrap();
     }
 
-    let reopened = AssetStore::builder()
+    let reopened = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -162,7 +165,7 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
     let key_name = "master.m3u8";
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -177,7 +180,7 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
     }
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -190,7 +193,7 @@ fn delete_asset_persists_availability_deletion_across_rebuild() {
         store.checkpoint().unwrap();
     }
 
-    let reopened = AssetStore::builder()
+    let reopened = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -213,7 +216,7 @@ fn worker_persists_resource_deletion_without_checkpoint() {
             force_every_n_ops: NonZeroUsize::MIN,
         },
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })
@@ -251,7 +254,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
     let root = "p4-partial";
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -265,7 +268,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
         store.checkpoint().unwrap();
     }
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -288,7 +291,7 @@ fn disk_checkpoint_drops_partial_writes_when_writer_abandons_without_commit() {
 fn disk_checkpoint_without_prior_writes_is_noop() {
     let dir = tempdir().unwrap();
     let root = "p4-empty";
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -296,7 +299,7 @@ fn disk_checkpoint_without_prior_writes_is_noop() {
 
     store.checkpoint().unwrap();
 
-    let store2 = AssetStore::builder()
+    let store2 = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -314,7 +317,7 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
     let root = "p4-slow";
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -324,7 +327,7 @@ fn disk_rebuild_without_checkpoint_falls_back_to_slow_path() {
         write_commit(scope.store().acquire_resource(&key, None).unwrap(), b"xyz");
     }
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -341,7 +344,7 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
     let root = "p4-mem";
 
     {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(support::pools())
             .backend(StorageBackend::Memory)
             .build();
         let scope = store.scope::<Test>(&source(root)).unwrap();
@@ -350,7 +353,7 @@ fn mem_checkpoint_is_noop_and_aggregate_is_ephemeral() {
         store.checkpoint().unwrap();
     }
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store.scope::<Test>(&source(root)).unwrap();
@@ -364,7 +367,7 @@ fn disk_checkpoint_is_idempotent() {
     let dir = tempdir().unwrap();
     let root = "p4-idem";
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -380,7 +383,7 @@ fn disk_checkpoint_is_idempotent() {
     store.checkpoint().unwrap();
     store.checkpoint().unwrap();
 
-    let store2 = AssetStore::builder()
+    let store2 = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

@@ -7,6 +7,7 @@ use std::{
 
 use kithara_abr::{Abr, AbrPublisher, AbrState};
 use kithara_assets::ResourceKey;
+use kithara_bufpool::HasPool;
 use kithara_events::{AbrMode, AbrProgressSnapshot, VariantDuration, VariantInfo};
 use kithara_platform::{
     CancelToken,
@@ -30,8 +31,11 @@ use crate::{
     variant::{PlanConfig, PlanCtx},
 };
 
-struct HlsTrackState {
-    coord: Arc<HlsCoord>,
+struct HlsTrackState<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    coord: Arc<HlsCoord<S>>,
     /// Reused from the parent [`HlsPeer`]: stores the reader's last-known
     /// segment index — read by [`Abr::progress`] and compared against the
     /// freshly resolved segment in `poll_next` to detect a boundary
@@ -69,9 +73,14 @@ struct HlsTrackState {
     reader_variant: usize,
 }
 
-struct PeerPollWake(Weak<HlsPeer>);
+struct PeerPollWake<S>(Weak<HlsPeer<S>>)
+where
+    S: HasPool<u8> + Send + Sync + 'static;
 
-impl WorkerWake for PeerPollWake {
+impl<S> WorkerWake for PeerPollWake<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn wake(&self) {
         if let Some(peer) = self.0.upgrade() {
             peer.wake_poll();
@@ -127,7 +136,10 @@ impl SessionTurns {
 /// After [`activate`](Self::activate): each `poll_next` drains seek/ABR
 /// commit/eviction events and asks the active [`HlsVariant`] for the
 /// next batch of `FetchCmd`s (thin event router per spec).
-pub(crate) struct HlsPeer {
+pub(crate) struct HlsPeer<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     abr_publisher: AbrPublisher,
     abr: Arc<AbrState>,
     cancel: CancelToken,
@@ -145,7 +157,7 @@ pub(crate) struct HlsPeer {
     /// (via `HlsTrackState`) to read the current epoch/target without
     /// holding a wide seek/playhead aggregate.
     seek_obs: Arc<dyn SeekObserve>,
-    state: Arc<Mutex<Option<HlsTrackState>>>,
+    state: Arc<Mutex<Option<HlsTrackState<S>>>>,
     /// Wake-up trigger for the waker-forwarding micro-task: not a
     /// cancellation of work — fires from `teardown()` / `Drop`. A free
     /// `CancelToken` used purely as a one-shot latch (cloned to the
@@ -161,7 +173,10 @@ pub(crate) struct HlsPeer {
     session_turns: SessionTurns,
 }
 
-impl HlsPeer {
+impl<S> HlsPeer<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn new(
         seek_obs: Arc<dyn SeekObserve>,
         activity: Arc<dyn Activity>,
@@ -192,7 +207,7 @@ impl HlsPeer {
 
     pub(crate) fn activate(
         self: &Arc<Self>,
-        coord: Arc<HlsCoord>,
+        coord: Arc<HlsCoord<S>>,
         eviction_rx: mpsc::UnboundedReceiver<ResourceKey>,
         config: PlanConfig,
     ) {
@@ -307,13 +322,19 @@ impl HlsPeer {
     }
 }
 
-impl Drop for HlsPeer {
+impl<S> Drop for HlsPeer<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn drop(&mut self) {
         self.wake_signal.cancel();
     }
 }
 
-impl Abr for HlsPeer {
+impl<S> Abr for HlsPeer<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn cancel(&self) -> CancelToken {
         self.cancel.clone()
     }
@@ -368,7 +389,10 @@ impl Abr for HlsPeer {
     }
 }
 
-impl Peer for HlsPeer {
+impl<S> Peer for HlsPeer<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[kithara::probe]
     fn poll_next(&self, cx: &mut Context<'_>) -> Poll<Option<Vec<FetchCmd>>> {
         let outcome = match self.poll_state_phase(cx) {
@@ -459,12 +483,15 @@ impl Peer for HlsPeer {
     }
 }
 
-fn dispatch_session(
-    coord: &HlsCoord,
-    ctx: &PlanCtx,
+fn dispatch_session<S>(
+    coord: &HlsCoord<S>,
+    ctx: &PlanCtx<S>,
     slot: SessionSlot,
     budget: usize,
-) -> Vec<FetchCmd> {
+) -> Vec<FetchCmd>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     match slot {
         SessionSlot::Active => coord.dispatch_active(ctx, budget),
         SessionSlot::Incoming => coord.dispatch_incoming(ctx, budget),
@@ -476,26 +503,35 @@ fn dispatch_session(
 /// `Pending` (pre-activation), `Ready(None)` (stopped/cancelled), and
 /// the normal continuation with everything `poll_next`'s lock-free
 /// tail needs to dispatch + broadcast evictions.
-enum PollPhase {
+enum PollPhase<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     NotActivated,
     Terminated,
-    Continue(Box<PollOutcome>),
+    Continue(Box<PollOutcome<S>>),
 }
 
-struct PollOutcome {
-    coord: Arc<HlsCoord>,
-    ctx: PlanCtx,
+struct PollOutcome<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    coord: Arc<HlsCoord<S>>,
+    ctx: PlanCtx<S>,
     evictions: Vec<ResourceKey>,
     seg_at_reader: u32,
 }
 
-impl HlsPeer {
+impl<S> HlsPeer<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Acquire the per-peer state lock and drive the four state-mutating
     /// stages of one poll cycle (seek detection → ABR/seek lock sync →
     /// segment-boundary commit → eviction drain). The guard drops at
     /// the end of the function so dispatch + broadcast run lock-free in
     /// the caller.
-    fn poll_state_phase(&self, cx: &mut Context<'_>) -> PollPhase {
+    fn poll_state_phase(&self, cx: &mut Context<'_>) -> PollPhase<S> {
         let mut guard = self.state.lock();
         let Some(state) = guard.as_mut() else {
             *self.pending_waker.lock() = Some(cx.waker().clone());
@@ -531,7 +567,10 @@ impl HlsPeer {
     }
 }
 
-impl HlsTrackState {
+impl<S> HlsTrackState<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Resolve the reader's current segment from `coord.position()` and
     /// drive any pending ABR commit. The persistent variant queue (filled
     /// once by `rebuild`) advances the prefetch tail automatically as
@@ -542,7 +581,7 @@ impl HlsTrackState {
     /// their own commit once the incoming reader is ready, so this poll only
     /// tracks the reader's segment and re-aims the fetch plan when the byte
     /// space under the cursor was re-keyed.
-    fn apply_boundary_crossing(&mut self, coord: &HlsCoord, ctx: &PlanCtx) -> u32 {
+    fn apply_boundary_crossing(&mut self, coord: &HlsCoord<S>, ctx: &PlanCtx<S>) -> u32 {
         let pos = coord.position();
         let prev = self.reader_segment.load(Ordering::Acquire);
         let variant_now = coord.variant_index();
@@ -620,7 +659,7 @@ impl HlsTrackState {
         resolved
     }
 
-    fn apply_seek_change(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
+    fn apply_seek_change(&mut self, coord: &HlsCoord<S>, ctx: &PlanCtx<S>) {
         let cur_seek = self.seek_obs.epoch();
         if cur_seek == self.last_seek_epoch {
             return;
@@ -639,7 +678,7 @@ impl HlsTrackState {
         out
     }
 
-    fn plan_ctx(&self) -> PlanCtx {
+    fn plan_ctx(&self) -> PlanCtx<S> {
         PlanCtx {
             bus: self.coord.emit.bus().clone(),
             scope: self.coord.scope.clone(),
@@ -661,7 +700,7 @@ impl HlsTrackState {
         segment_index = self.reader_segment.load(Ordering::Acquire),
         variant = coord.variant_index()
     )]
-    fn seek_epoch_reset(&mut self, coord: &HlsCoord, ctx: &PlanCtx) {
+    fn seek_epoch_reset(&mut self, coord: &HlsCoord<S>, ctx: &PlanCtx<S>) {
         if let Some(target) = self.seek_obs.target()
             && let Some(seg) = coord.active().rebuild_at_time(ctx, target)
         {
@@ -682,7 +721,7 @@ mod tests {
     fn abr_cancel_observes_the_hls_track_scope() {
         let track_cancel = CancelToken::never();
         let seek = Arc::new(SeekState::new());
-        let peer = HlsPeer::new(
+        let peer: HlsPeer<crate::test_pools::TestPools> = HlsPeer::new(
             Arc::clone(&seek) as Arc<dyn SeekObserve>,
             seek as Arc<dyn Activity>,
             AbrMode::default(),

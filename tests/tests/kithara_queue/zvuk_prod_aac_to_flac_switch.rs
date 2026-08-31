@@ -3,7 +3,6 @@
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, VariantInfo},
     net::{HttpClient, NetOptions},
@@ -15,7 +14,7 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
+use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
 use tracing::info;
 
@@ -179,25 +178,22 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let byte_pool = BytePool::default();
-    let net = NetOptions::builder()
-        .byte_pool(byte_pool.clone())
-        .is_insecure(true)
-        .build();
+    let pools = app_pools().expect("build app pool region");
+    let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+        PlayWorkerConfig::builder(pools)
             .cancel(shutdown.child())
             .build(),
     );
@@ -212,7 +208,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     let TrackSource::Config(cfg) = source_helper::app_track_source(
         PROD_TRACK,
         &config,
-        kithara_integration_tests::disk_asset_store(temp.path()),
+        source_helper::app_disk_asset_store(&config, temp.path()),
         backend,
         AbrMode::manual(START_VARIANT),
         Some(TRACK_NAME),

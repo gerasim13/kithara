@@ -14,30 +14,41 @@
 
 # kithara-hls
 
-HLS (HTTP Live Streaming) VOD orchestration: playlist parsing, segment fetching, adaptive-bitrate decisions, cross-codec variant switching, AES-128-CBC decryption, and persistent caching. Implements `kithara_stream::StreamType` for use with `Stream<Hls>`.
+HLS (HTTP Live Streaming) VOD orchestration: playlist parsing, segment fetching, adaptive-bitrate decisions, cross-codec variant switching, AES-128-CBC decryption, and persistent caching. Implements `kithara_stream::StreamType` for use with `Stream<Hls<S>>`, backed by an application-owned `PoolRegion<S>`.
 
 ## Usage
 
 ```rust
 use kithara_assets::AssetStore;
-use kithara_stream::Stream;
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
 use kithara_hls::{Hls, HlsConfig};
+use kithara_stream::Stream;
 
-let store = AssetStore::builder().build();
+pool_schema! {
+    AppPools {
+        bytes: u8,
+    }
+}
+
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(PoolConfig::builder().max_buffers(128).build())
+    .build()?;
+let store = AssetStore::builder(pools.clone()).build();
 let config = HlsConfig::for_url(master_playlist_url)
     .store(store)
+    .pools(pools)
     .build();
-let stream = Stream::<Hls>::new(config).await?;
+let stream = Stream::<Hls<AppPools>>::new(config).await?;
 // `stream` implements Read + Seek; pass it into kithara-decode / kithara-audio.
 ```
 
-`HlsConfig` is a [`bon`](https://crates.io/crates/bon) builder. Start with `HlsConfig::for_url(url)`, set the required shared asset store with `.store(store)`, and call `.build()`. The same chain accepts non-default settings such as `look_ahead_bytes`, key options, downloader, cache discriminator, cancel token, and event bus.
+`HlsConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `HlsConfig::for_url(url)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default settings such as `look_ahead_bytes`, key options, downloader, cache discriminator, cancel token, and event bus.
 
 ## Key Public Items
 
-- `Hls` — zero-sized `StreamType` marker for HLS streams.
-- `HlsConfig` / `KeyOptions` — bon-builder stream configuration and DRM key-resolution options.
-- `HlsSource` — the `Source` implementation that `Stream<Hls>` wraps.
+- `Hls<S>` - zero-sized `StreamType` marker for HLS streams using schema `S`.
+- `HlsConfig<S>` / `KeyOptions` - bon-builder stream configuration and DRM key-resolution options.
+- `HlsSource<S>` - the `Source` implementation that `Stream<Hls<S>>` wraps.
 - `KeyStore`, `PlaylistCache` — AES-128 key coordination and parsed-playlist cache.
 - `parse_master_playlist`, `parse_media_playlist` — standalone playlist parsers.
 - `HlsError` / `HlsResult` — crate error type and result alias.

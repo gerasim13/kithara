@@ -5,7 +5,6 @@ use kithara::platform::thread;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
-    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -18,6 +17,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 use tracing::info;
@@ -50,7 +50,7 @@ struct Outcome {
 /// Returns total samples read. Unlike `read_to_eof`, this tolerates
 /// early termination because some instances are intentionally cancelled.
 #[cfg(not(target_arch = "wasm32"))]
-fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls>>) -> u64 {
+fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
     let mut buf = vec![0.0f32; 4096];
     let mut total = 0u64;
     loop {
@@ -65,7 +65,7 @@ fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls>>) -> u64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls>>) -> u64 {
+fn read_hls_best_effort(audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) -> u64 {
     const MAX_ZERO_READS: usize = 200;
 
     let mut buf = vec![0.0f32; 4096];
@@ -106,21 +106,19 @@ async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &Path,
     cancel: CancelToken,
-) -> RegisteredAudio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = server.url("/master.m3u8");
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: cache_dir.into(),
                 })
-                .pool(byte_pool.clone())
                 .build(),
         )
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -129,12 +127,11 @@ async fn create_hls_audio(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
 
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     worker
         .open(config)
         .await

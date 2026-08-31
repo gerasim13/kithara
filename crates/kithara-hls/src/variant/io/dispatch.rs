@@ -1,4 +1,5 @@
 use kithara_assets::AssetsError;
+use kithara_bufpool::HasPool;
 use kithara_events::RequestPriority;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::StorageError;
@@ -51,7 +52,10 @@ const fn settle_for(err: &AssetsError, failures: u8, budget: u8) -> AcquireSettl
     }
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[kithara::probe(
         variant = self.variant as u64,
         budget = budget as u64,
@@ -71,7 +75,7 @@ impl HlsVariant {
     #[kithara::hang_watchdog]
     pub(crate) fn dispatch_from(
         self: &Arc<Self>,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
         budget: usize,
         position: u64,
         construction_segment_end: Option<u32>,
@@ -237,9 +241,9 @@ impl HlsVariant {
     )]
     fn emit_fetch_cmd(
         self: &Arc<Self>,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
         seg_idx: u32,
-        handle: FetchClaim<Downloading>,
+        handle: FetchClaim<Downloading, S>,
         cancel: CancelToken,
     ) -> Option<FetchCmd> {
         let entry = &self.segments[seg_idx as usize];
@@ -270,10 +274,10 @@ impl HlsVariant {
     /// [`settle_for`].
     fn settle_unacquirable(
         &self,
-        ctx: &PlanCtx,
+        ctx: &PlanCtx<S>,
         entry: &Segment,
         seg_idx: u32,
-        handle: FetchClaim<Downloading>,
+        handle: FetchClaim<Downloading, S>,
         err: &AssetsError,
     ) {
         let failures = entry.state().note_acquire_failure();
@@ -301,19 +305,22 @@ impl HlsVariant {
         }
     }
 
-    fn prefetch_segment_cap(&self, ctx: &PlanCtx, prefetch_base: u64) -> Option<u32> {
+    fn prefetch_segment_cap(&self, ctx: &PlanCtx<S>, prefetch_base: u64) -> Option<u32> {
         let window = look_ahead_segments(ctx)?;
         let base = self.descriptor_after_byte(prefetch_base)?.segment_index;
         Some(base.saturating_add(window.saturating_sub(1)))
     }
 
-    fn segment_window_entry_byte(&self, ctx: &PlanCtx, seg_idx: u32) -> Option<u64> {
+    fn segment_window_entry_byte(&self, ctx: &PlanCtx<S>, seg_idx: u32) -> Option<u64> {
         let window = look_ahead_segments(ctx)?;
         self.segment_byte_offset(seg_idx.saturating_sub(window.saturating_sub(1)))
     }
 }
 
-fn look_ahead_segments(ctx: &PlanCtx) -> Option<u32> {
+fn look_ahead_segments<S>(ctx: &PlanCtx<S>) -> Option<u32>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let window = ctx.config.look_ahead_segments?;
     Some(u32::try_from(window.max(1)).unwrap_or(u32::MAX))
 }
@@ -333,7 +340,7 @@ mod tests {
         AssetsError::Io(io::Error::from(io::ErrorKind::IsADirectory))
     }
 
-    const BUDGET: u8 = HlsConfig::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
+    const BUDGET: u8 = HlsConfig::<crate::test_pools::TestPools>::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
 
     /// The holder of a claimed tmp always settles and releases it, so this
     /// retry resolves on its own however long it takes.

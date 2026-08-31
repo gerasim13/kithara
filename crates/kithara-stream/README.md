@@ -40,10 +40,9 @@ elsewhere.
 
 ```rust
 use kithara_stream::{Stream, StreamType};
-use kithara_file::File;
 
-// `File` and `Hls` implement `StreamType`.
-let stream = Stream::<File>::new(config).await?;
+// `File<S>` and `Hls<S>` implement `StreamType`.
+let stream = Stream::new(config).await?;
 // `stream` implements `Read + Seek` via the underlying `Source`.
 ```
 

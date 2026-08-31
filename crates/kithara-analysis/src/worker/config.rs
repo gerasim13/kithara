@@ -32,13 +32,13 @@ impl Consts {
 #[derive(Builder)]
 #[builder(start_fn = for_builder)]
 #[non_exhaustive]
-pub struct AnalysisWorkerConfig<B>
+pub struct AnalysisWorkerConfig<B, S>
 where
     B: ResamplerBackend,
 {
     /// Analyzer selection and DSP configuration.
     #[builder(start_fn)]
-    pub(crate) builder: AnalyzerBuilder<B>,
+    pub(crate) builder: AnalyzerBuilder<B, S>,
     /// Parent cancellation token for the analysis worker lifetime.
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers.

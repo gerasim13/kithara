@@ -1,6 +1,6 @@
 use std::fmt;
 
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{HasPool, SampleBuffer};
 use num_traits::ToPrimitive;
 use signalsmith_stretch::Stretch;
 
@@ -45,7 +45,10 @@ impl fmt::Debug for SignalsmithElastic {
 }
 
 impl ElasticEngine for SignalsmithElastic {
-    fn prepare(config: ElasticConfig) -> Result<Self, ElasticError> {
+    fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let channels = u32::try_from(config.channels())
             .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
         let (mut inner, latency) = engine(config.sample_rate(), channels);
@@ -63,10 +66,10 @@ impl ElasticEngine for SignalsmithElastic {
         let prime_samples = prime_window_samples
             .checked_add(prime_window_samples)
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let mut prime_input = config.pool().get();
+        let mut prime_input = config.pools().get::<f32>();
         prime_input
             .ensure_len(prime_samples)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::PoolCapacity)?;
         Ok(Self {
             inner,
             capabilities,

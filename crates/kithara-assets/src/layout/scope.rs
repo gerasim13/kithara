@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 
 use super::{
@@ -9,19 +10,38 @@ use super::{
 use crate::{error::AssetsResult, store::AssetStore};
 
 /// A store handle bound to one layout-selected asset root.
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
+#[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub struct AssetScope {
+pub struct AssetScope<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[field(get)]
     asset_root: Arc<str>,
     layout: Arc<dyn AssetLayout>,
     #[field(get)]
-    store: AssetStore,
+    store: AssetStore<S>,
 }
 
-impl AssetScope {
+impl<S> Clone for AssetScope<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            asset_root: Arc::clone(&self.asset_root),
+            layout: Arc::clone(&self.layout),
+            store: self.store.clone(),
+        }
+    }
+}
+
+impl<S> AssetScope<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn new(
-        store: AssetStore,
+        store: AssetStore<S>,
         source: &AssetSource,
         layout: Arc<dyn AssetLayout>,
     ) -> AssetsResult<Self> {
@@ -51,5 +71,17 @@ impl AssetScope {
         let path = self.layout.path(resource);
         validate_path(&path)?;
         Ok(ResourceKey::relative(Arc::clone(&self.asset_root), path))
+    }
+}
+
+impl<S> std::fmt::Debug for AssetScope<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssetScope")
+            .field("asset_root", &self.asset_root)
+            .field("layout", &self.layout)
+            .finish_non_exhaustive()
     }
 }

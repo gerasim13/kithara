@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
@@ -34,28 +35,29 @@ enum DetectorState {
     Unavailable,
 }
 
-pub(crate) struct AnalysisNode<B>
+pub(crate) struct AnalysisNode<B, S>
 where
     B: ResamplerBackend,
 {
-    builder: AnalyzerBuilder<B>,
+    builder: AnalyzerBuilder<B, S>,
     chunk_seconds: NonZeroU32,
     completed: Receiver<DetectDone>,
     completion: Sender<DetectDone>,
     context: TaskContext,
-    current: Option<AnalysisTask<B>>,
+    current: Option<AnalysisTask<B, S>>,
     detector: DetectorState,
     jobs: Receiver<Job>,
     producer_drain_limit: NonZeroUsize,
     publish_seconds: NonZeroU32,
 }
 
-impl<B> AnalysisNode<B>
+impl<B, S> AnalysisNode<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        mut builder: AnalyzerBuilder<B>,
+        mut builder: AnalyzerBuilder<B, S>,
         jobs: Receiver<Job>,
         context: TaskContext,
         chunk_seconds: NonZeroU32,
@@ -267,9 +269,10 @@ where
     }
 }
 
-impl<B> Task for AnalysisNode<B>
+impl<B, S> Task for AnalysisNode<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     fn tick(&mut self) -> TickResult {
         let completed = self.accept_completion();

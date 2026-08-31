@@ -11,11 +11,13 @@ use kithara::{
         time::{self, Duration, Instant, timeout},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{kithara, temp_dir};
+
+use crate::bufpool_ext::{TestPools, pools};
 
 fn install_tracing() {
     use tracing_subscriber::{EnvFilter, fmt};
@@ -31,7 +33,7 @@ fn install_tracing() {
 
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &QueueControl,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
     deadline: Duration,
@@ -64,7 +66,7 @@ async fn wait_for_status(
 }
 
 async fn wait_for_position_at_least(
-    queue: &QueueControl,
+    queue: &QueueControl<TestPools>,
     target: f64,
     deadline: Duration,
 ) -> Result<f64, String> {
@@ -112,16 +114,10 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never())).build(),
     );
 
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(
-            kithara::bufpool::BytePool::default(),
-            kithara::bufpool::SamplePool::default(),
-        )
-        .build(),
-    );
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let mut host = Host::new(HostConfig::builder().build()).expect("create playback host");
     let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
     let queue = Queue::new(QueueConfig::builder().player(player).build());
@@ -138,16 +134,15 @@ async fn cpal_cold_seek_silvercomet_hls(#[case] backend: DecoderBackend) {
         }
     });
 
-    let cfg =
-        ResourceConfig::for_src(ResourceConfig::parse_src(URL).expect("valid silvercomet URL"))
-            .downloader(downloader.clone())
-            .store(store)
-            .decoder(
-                kithara::audio::AudioDecoderConfig::builder()
-                    .backend(backend)
-                    .build(),
-            )
-            .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(URL).expect("valid silvercomet URL"))
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     let mut rx = queue.subscribe();

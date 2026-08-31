@@ -3,8 +3,7 @@ use super::{Reader, Writer};
 /// Cap speculative `Vec` preallocation from untrusted length prefixes.
 pub(crate) const MAX_PREALLOC: usize = 4096;
 
-/// Failure decoding an artifact byte blob. Callers treat it as a cache miss
-/// and re-analyse.
+/// Failure encoding or decoding an artifact byte blob.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BlobError {
@@ -17,6 +16,9 @@ pub enum BlobError {
     /// A length cannot be represented by the on-disk format.
     #[error("analysis blob is too large")]
     TooLarge,
+    /// A pooled analysis buffer could not grow under its region budget.
+    #[error("analysis buffer allocation failed: {0}")]
+    Pool(#[from] kithara_bufpool::PoolError),
     /// Truncated, mis-sized, trailing garbage, or carrying an invalid value.
     #[error("blob is corrupt")]
     Corrupt,

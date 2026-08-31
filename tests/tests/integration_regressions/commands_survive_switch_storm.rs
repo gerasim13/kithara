@@ -12,12 +12,14 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event},
@@ -32,7 +34,7 @@ const SEEK_TOLERANCE_SECS: f64 = 1.0;
 /// swallowed. A positive fact, so no window of "nothing happened" is needed.
 const MIN_RESUME_PROGRESS_SECS: f64 = 1.0;
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -46,7 +48,11 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
 /// `pause` and `play` reach the sink as slot commands, so the snapshot the
 /// queue exposes converges a tick later. Waiting for that convergence is the
 /// command-took-effect fact; never converging is the reported bug.
-async fn wait_for_playing(queue: &Queue, expected: bool, deadline: Duration) -> Result<(), String> {
+async fn wait_for_playing(
+    queue: &Queue<TestPools>,
+    expected: bool,
+    deadline: Duration,
+) -> Result<(), String> {
     time::timeout(deadline, async {
         while queue.playback_view().playing != expected {
             time::sleep(Duration::from_millis(20)).await;
@@ -59,11 +65,11 @@ async fn wait_for_playing(queue: &Queue, expected: bool, deadline: Duration) -> 
 fn resource_config(
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    store: &AssetStore,
+    store: &AssetStore<TestPools>,
     index: usize,
-) -> ResourceConfig {
+) -> ResourceConfig<TestPools> {
     let url = handle.child_url(&format!("storm-{index}.mp3"));
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
@@ -109,25 +115,24 @@ async fn commands_still_work_after_a_switch_storm(temp_dir: TestTempDir) {
             })
         })
         .collect();
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            NetOptions::default(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),

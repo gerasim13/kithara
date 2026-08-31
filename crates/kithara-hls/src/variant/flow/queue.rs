@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 use tracing::debug;
@@ -5,7 +6,10 @@ use tracing::debug;
 use super::{HlsVariant, PlanCtx, PlanRevision};
 use crate::segment::PlannedFetch;
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Index of the first non-`Loaded` segment — interpreted as the
     /// "download head" by the ABR controller. Returns `num_segments()`
     /// when every segment is `Loaded`. Scans linearly; cheap because it
@@ -67,7 +71,7 @@ impl HlsVariant {
         from_seg,
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
-    pub(crate) fn rebuild(&self, _ctx: &PlanCtx, from_seg: u32) {
+    pub(crate) fn rebuild(&self, _ctx: &PlanCtx<S>, from_seg: u32) {
         if self.queue_matches_plan(from_seg) {
             // Nothing to re-plan, but the rebuild still claims plan
             // ownership: a fetch the triggering rearm cancelled in flight
@@ -79,7 +83,7 @@ impl HlsVariant {
         self.rebuild_queue(from_seg, None);
     }
 
-    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx, target: Duration) -> Option<u32> {
+    pub(crate) fn rebuild_at_time(&self, _ctx: &PlanCtx<S>, target: Duration) -> Option<u32> {
         let seg = self.segment_index_at_time(target)?;
         let fetch_start = self.seek_readahead_start_segment(seg);
         if let Some(byte) = self.segment_byte_offset(fetch_start) {
@@ -148,7 +152,7 @@ impl HlsVariant {
         from_seg,
         old_queue_len = self.flow.queue.lock().len() as u64
     )]
-    pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx, from_seg: u32) {
+    pub(crate) fn rebuild_with_decoder_probe(&self, _ctx: &PlanCtx<S>, from_seg: u32) {
         let from_seg = self.seek_readahead_start_segment(from_seg);
         self.set_segment_aware_seek_tail(from_seg);
         self.rebuild_queue(from_seg, (from_seg > 0).then_some(0));

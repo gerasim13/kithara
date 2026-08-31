@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 
 #[cfg(feature = "fdk-aac")]
@@ -17,20 +18,24 @@ impl OfflineEncoder {
         super::bytes::encode(request)
     }
 
-    pub(crate) fn encode_packaged(
+    pub(crate) fn encode_packaged<S>(
+        pools: &PoolRegion<S>,
         request: &PackagedEncodeRequest<'_>,
-    ) -> EncodeResult<EncodedTrack> {
+    ) -> EncodeResult<EncodedTrack>
+    where
+        S: HasPool<u8> + HasPool<f32>,
+    {
         let codec = request
             .media_info
             .codec
             .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
         match codec {
             #[cfg(feature = "ffmpeg")]
-            AudioCodec::AacLc => AacFFmpegEncoder::encode(request),
+            AudioCodec::AacLc => AacFFmpegEncoder::encode(pools, request),
             #[cfg(feature = "fdk-aac")]
-            AudioCodec::AacHe => AacHeEncoder::encode(request, AacHeProfile::V1),
+            AudioCodec::AacHe => AacHeEncoder::encode(pools, request, AacHeProfile::V1),
             #[cfg(feature = "fdk-aac")]
-            AudioCodec::AacHeV2 => AacHeEncoder::encode(request, AacHeProfile::V2),
+            AudioCodec::AacHeV2 => AacHeEncoder::encode(pools, request, AacHeProfile::V2),
             #[cfg(feature = "ffmpeg")]
             AudioCodec::Flac => FlacFFmpegEncoder::encode(request),
             codec => Err(EncodeError::UnsupportedCodec(codec)),

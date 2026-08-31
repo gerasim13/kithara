@@ -43,6 +43,7 @@ kithara-platform = { workspace = true }
 signalsmith-stretch = { workspace = true, optional = true }
 
 [dev-dependencies]
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "hang", "probe", "tls-rustls"] }
 
 [lints]

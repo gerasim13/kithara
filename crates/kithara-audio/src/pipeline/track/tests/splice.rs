@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::PoolRegion;
 use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory, GaplessMode};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -33,6 +33,7 @@ use crate::{
         stream::shared::SharedStream,
         track::{self, TrackStep},
     },
+    test_pools::{TestPools, pools},
     traits::{AudioSource, AudioSourceExt},
 };
 
@@ -441,12 +442,12 @@ fn decoder_config<T: StreamType>(
     stream: &SharedStream<T>,
     backend: kithara_decode::DecoderBackend,
     byte_len: Arc<AtomicU64>,
-) -> DecoderConfig<kithara_resampler::NoResamplerBackend> {
+    pools: &PoolRegion<TestPools>,
+) -> DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> {
     byte_len.store(stream.len().unwrap_or(0), Ordering::Release);
     DecoderConfig::builder()
         .backend(backend)
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
+        .pools(pools.clone())
         .byte_len_handle(byte_len)
         .maybe_byte_map(stream.byte_map())
         .gapless(false)
@@ -467,24 +468,25 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
     .expect("create in-memory splice stream");
     let shared_stream = SharedStream::new(stream);
     let backend = decoder_backend();
+    let pools = pools();
     let initial_byte_len = Arc::new(AtomicU64::new(0));
     let initial_decoder = DecodeFactory::create_from_media_info(
         shared_stream.clone(),
         &media_info(Consts::SLQ_VARIANT),
-        decoder_config(&shared_stream, backend, initial_byte_len),
+        decoder_config(&shared_stream, backend, initial_byte_len, &pools),
     )
     .expect("create initial slq fMP4 decoder");
     let host_sample_rate = Arc::new(AtomicU32::new(Consts::SAMPLE_RATE));
     let factory_byte_len = Arc::new(AtomicU64::new(0));
+    let factory_pools = pools.clone();
     let decoder_factory = DecoderFactory::new(
         move |mut reader, info| {
             let byte_len = reader.byte_len().unwrap_or(0);
             factory_byte_len.store(byte_len, Ordering::Release);
-            let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
+            let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
                 DecoderConfig::builder()
                     .backend(backend)
-                    .byte_pool(BytePool::default())
-                    .sample_pool(SamplePool::default())
+                    .pools(factory_pools.clone())
                     .byte_len_handle(factory_byte_len.clone())
                     .maybe_byte_map(reader.byte_map())
                     .maybe_hooks(reader.take_event_sink())
@@ -505,10 +507,11 @@ async fn splice_source(variants: Vec<VariantLayout>) -> SpliceFixture {
         gapless_mode: GaplessMode::Disabled,
         media_info: Some(media_info(Consts::SLQ_VARIANT)),
         playback_resampler_backend: "none",
-        sample_pool: SamplePool::default(),
+        pools,
         recreate_on_host_rate_change: false,
     }
-    .into_parts(None, shared_stream.seek_observe().epoch());
+    .into_parts(None, shared_stream.seek_observe().epoch())
+    .expect("decode scratch fits test pools");
     let parts = SourceParts::new(
         &shared_stream,
         decode,

@@ -1,4 +1,4 @@
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_decode::BlenderProfile;
 use kithara_signal::{AudioChunk, AudioSpec};
 
@@ -25,24 +25,25 @@ pub(crate) struct GaplessBlender {
     active: BlenderProfile,
     join: JoinState,
     outgoing: SampleBuffer,
-    pool: SamplePool,
     prepared: BlenderProfile,
     prepared_outgoing: SampleBuffer,
 }
 
 impl GaplessBlender {
-    pub(crate) fn new(active: BlenderProfile, pool: &SamplePool) -> Self {
+    pub(crate) fn new<S>(active: BlenderProfile, pools: &PoolRegion<S>) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let samples = join_samples(active.spec());
-        let outgoing = pool.get_with(|buffer| buffer.resize(samples, 0.0));
-        let prepared_outgoing = pool.get_with(|buffer| buffer.resize(samples, 0.0));
-        Self {
+        let outgoing = pools.get_with_len::<f32>(samples)?;
+        let prepared_outgoing = pools.get_with_len::<f32>(samples)?;
+        Ok(Self {
             active,
             join: JoinState::Steady,
             outgoing,
-            pool: pool.clone(),
             prepared: active,
             prepared_outgoing,
-        }
+        })
     }
 
     fn apply_join(&mut self, chunk: &mut AudioChunk) {
@@ -74,11 +75,12 @@ impl GaplessBlender {
         matches!(self.join, JoinState::Steady)
     }
 
-    pub(crate) fn prepare_active(&mut self, active: BlenderProfile) {
+    pub(crate) fn prepare_active(&mut self, active: BlenderProfile) -> Result<(), PoolError> {
+        self.prepared_outgoing.clear();
+        self.prepared_outgoing
+            .ensure_len(join_samples(active.spec()))?;
         self.prepared = active;
-        self.prepared_outgoing = self
-            .pool
-            .get_with(|buffer| buffer.resize(join_samples(active.spec()), 0.0));
+        Ok(())
     }
 
     pub(crate) fn prepare_join(&mut self, copy_outgoing: impl FnOnce(&mut [f32]) -> bool) -> bool {

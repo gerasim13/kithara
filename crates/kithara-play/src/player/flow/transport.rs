@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use kithara_audio::SeekOutcome;
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
@@ -22,7 +23,10 @@ pub struct SelectTransition {
     pub crossfade_seconds: f32,
 }
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<f32>,
+{
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
@@ -53,14 +57,14 @@ impl PlayerRuntime {
     ///
     /// `false` means the slot held no resource, so nothing reached the
     /// processor and the item is not current.
-    fn load_current_item(&self) -> bool {
+    fn load_current_item(&self) -> Result<bool, PlayError> {
         let index = self.current_index();
-        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index) else {
-            return false;
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(false);
         };
         self.publish_current_track_snapshot(duration_seconds);
         self.start_playback(item_id);
-        true
+        Ok(true)
     }
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
@@ -86,7 +90,10 @@ impl PlayerRuntime {
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        let loaded = self.load_current_item();
+        let loaded = self.load_current_item().unwrap_or_else(|error| {
+            warn!(%error, "failed to allocate track playback buffers");
+            false
+        });
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
@@ -235,7 +242,7 @@ impl PlayerRuntime {
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
             self.core.items.set_current(index);
-            self.load_current_item();
+            self.load_current_item()?;
             self.announce_current_item(index);
         }
 
@@ -250,16 +257,18 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        player::PlayerConfig,
+        session::testing,
+        test_pools::{TestPools, pools},
+    };
 
-    fn player() -> PlayerImpl {
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        );
+    fn player() -> PlayerImpl<TestPools> {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

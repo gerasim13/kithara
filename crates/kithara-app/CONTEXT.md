@@ -2,6 +2,14 @@
 
 Contracts and invariants for the kithara-app crate; the README is the overview.
 
+## Buffer-pool ownership
+
+`pools::AppPools` is the desktop composition schema. `main` builds one
+`PoolRegion<AppPools>` and gives the same facade to the asset store, HTTP
+client, playback worker, queues, and analysis cache. Its `u8` and `f32` slots
+compete under one 256 MiB hard cap; startup allocation is declared in the
+schema configuration rather than warmed later by a component.
+
 ## Broadcast service
 
 The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request

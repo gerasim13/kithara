@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bon::Builder;
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::ToPrimitive;
 
 use super::{
     detector::{BeatDetectError, BeatDetector, BeatMark, RawBeats},
-    grid::{GridParams, build_grid},
+    grid::{GridBuffers, GridParams, build_grid_with},
     runs::Runs,
 };
 use crate::{
@@ -48,14 +48,14 @@ impl DetectRequest {
 }
 
 #[derive(Builder)]
-pub(crate) struct BeatPassConfig<B>
+pub(crate) struct BeatPassConfig<B, S>
 where
     B: ResamplerBackend,
 {
     resampler: BeatAnalysisConfig<B>,
     #[builder(default)]
     params: GridParams,
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
     source_rate: u32,
 }
 
@@ -67,7 +67,8 @@ where
 {
     params: GridParams,
     failure: Option<BeatDetectError>,
-    sample_pool: SamplePool,
+    downmix: SampleBuffer,
+    grid: GridBuffers,
     runs: Runs<B>,
     windows: BTreeMap<usize, RawBeats>,
     short: BTreeSet<usize>,
@@ -84,12 +85,15 @@ where
     B: ResamplerBackend,
 {
     #[must_use]
-    pub(crate) fn new(config: BeatPassConfig<B>) -> Self {
+    pub(crate) fn new<S>(config: BeatPassConfig<B, S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
         let BeatPassConfig {
             source_rate,
             params,
             resampler: config,
-            sample_pool,
+            pools,
         } = config;
 
         let detector_rate = config.target_rate().max(1);
@@ -113,11 +117,12 @@ where
                 .max(1),
             ready_frames,
             window_frames,
-            runs: Runs::new(config, sample_pool.clone(), source_rate, budget),
+            runs: Runs::new(config, source_rate, budget),
             windows: BTreeMap::new(),
             short: BTreeSet::new(),
             failure: None,
-            sample_pool,
+            downmix: pools.get::<f32>(),
+            grid: GridBuffers::new(&pools),
             source_rate,
         }
     }
@@ -130,15 +135,19 @@ where
             .collect()
     }
 
-    pub(crate) fn snapshot(
+    pub(crate) fn snapshot<S>(
         &mut self,
+        pools: &PoolRegion<S>,
         detector: &mut dyn BeatDetector,
         ending: bool,
-    ) -> Result<BeatArtifact, BeatDetectError> {
+    ) -> Result<BeatArtifact, BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
         if ending {
-            self.runs.flush();
+            self.runs.flush()?;
         }
-        self.detect(detector, ending)?;
+        self.detect(pools, detector, ending)?;
 
         self.build_artifact()
     }
@@ -148,7 +157,7 @@ where
         ending: bool,
     ) -> Result<BeatArtifact, BeatDetectError> {
         if ending {
-            self.runs.flush();
+            self.runs.flush()?;
         }
         self.build_artifact()
     }
@@ -169,22 +178,32 @@ where
         normalize_marks(&mut raw.beats);
         normalize_marks(&mut raw.downbeats);
 
-        build_grid(&raw, self.source_rate, &self.params, &self.sample_pool)
-            .map_err(|_| BeatDetectError::Buffer)
+        build_grid_with(&raw, self.source_rate, &self.params, &mut self.grid).map_err(Into::into)
     }
 
-    pub(crate) fn push_interleaved(
+    pub(crate) fn push_interleaved<S>(
         &mut self,
+        pools: &PoolRegion<S>,
         pcm: &[f32],
         channels: usize,
         at: u64,
         detector: &mut dyn BeatDetector,
-    ) {
-        self.push_interleaved_deferred(pcm, channels, at);
-        self.failure = self.detect(detector, false).err();
+    ) where
+        S: HasPool<f32>,
+    {
+        self.push_interleaved_deferred(pools, pcm, channels, at);
+        self.failure = self.detect(pools, detector, false).err();
     }
 
-    pub(crate) fn push_interleaved_deferred(&mut self, pcm: &[f32], channels: usize, at: u64) {
+    pub(crate) fn push_interleaved_deferred<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+    ) where
+        S: HasPool<f32>,
+    {
         if channels == 0 || self.failure.is_some() {
             return;
         }
@@ -194,22 +213,31 @@ where
         }
 
         let inv = 1.0 / channels.to_f32().unwrap_or(1.0);
-        let mut mono = self
-            .sample_pool
-            .get_with(|buffer| buffer.resize(frames, 0.0));
-        for (dst, frame) in mono.iter_mut().zip(pcm.chunks_exact(channels)) {
+        if let Err(error) = self.downmix.ensure_len(frames) {
+            self.failure = Some(error.into());
+            return;
+        }
+        self.downmix.truncate(frames);
+        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
             *dst = frame.iter().sum::<f32>() * inv;
         }
-        self.runs.push(&mono[..], at);
-        drop(mono);
+        self.failure = self.runs.push(pools, &self.downmix, at).err();
     }
 
-    pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<DetectRequest> {
+    pub(crate) fn prepare_detection<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        trailing: bool,
+    ) -> Option<DetectRequest>
+    where
+        S: HasPool<f32>,
+    {
         if self.failure.is_some() {
             return None;
         }
-        if trailing {
-            self.runs.flush();
+        if trailing && let Err(error) = self.runs.flush() {
+            self.failure = Some(error);
+            return None;
         }
         let rate = self.runs.target_rate().to_f32().unwrap_or(1.0);
 
@@ -238,9 +266,13 @@ where
                         mono.len()
                     };
                     let input = mono.get(offset..end)?;
-                    let mut owned = self
-                        .sample_pool
-                        .get_with(|buffer| buffer.resize(input.len(), 0.0));
+                    let mut owned = match pools.get_with_len::<f32>(input.len()) {
+                        Ok(owned) => owned,
+                        Err(error) => {
+                            self.failure = Some(error.into());
+                            return None;
+                        }
+                    };
                     owned.copy_from_slice(input);
                     let keep = if full { self.hop_frames } else { available };
                     return Some(DetectRequest {
@@ -270,7 +302,9 @@ where
     }
 
     pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
-        self.runs.flush();
+        if let Err(error) = self.runs.flush() {
+            self.failure = Some(error);
+        }
         let mut writer = Writer::new(out);
         self.runs.write_resume(&mut writer);
         writer.write_len(self.windows.len());
@@ -285,14 +319,21 @@ where
         }
     }
 
-    pub(crate) fn restore(&mut self, resume: BeatResume) -> Result<(), BlobError> {
+    pub(crate) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        resume: BeatResume,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
         let BeatResume {
             runs,
             dropped,
             windows,
             short,
         } = resume;
-        self.runs.restore(runs, dropped)?;
+        self.runs.restore(pools, runs, dropped)?;
         self.windows = windows
             .into_iter()
             .map(|(index, raw)| (index, raw_beats(raw)))
@@ -324,12 +365,16 @@ where
         }
     }
 
-    fn detect(
+    fn detect<S>(
         &mut self,
+        pools: &PoolRegion<S>,
         detector: &mut dyn BeatDetector,
         trailing: bool,
-    ) -> Result<(), BeatDetectError> {
-        while let Some(request) = self.prepare_detection(trailing) {
+    ) -> Result<(), BeatDetectError>
+    where
+        S: HasPool<f32>,
+    {
+        while let Some(request) = self.prepare_detection(pools, trailing) {
             let DetectOutput { result, window } = request.detect(detector);
             let raw = result?;
             self.apply_raw(window, raw);
@@ -389,9 +434,8 @@ fn normalize_marks(marks: &mut Vec<BeatMark>) {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_platform::sync::{Arc, Mutex};
-    use kithara_resampler::{ResamplerBackend, rubato::RubatoBackend};
+    use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
     use num_traits::cast::AsPrimitive;
     use unimock::{MockFn, Unimock, matching};
@@ -400,7 +444,11 @@ mod tests {
         super::detector::{BeatDetectError, BeatDetector, BeatDetectorMock, BeatMark, RawBeats},
         BeatAnalyzer, normalize_marks, window_marks,
     };
-    use crate::{BeatAnalysisConfig, beat::BeatPassConfig};
+    use crate::{
+        BeatAnalysisConfig,
+        beat::BeatPassConfig,
+        test_pools::{TestPools, pools},
+    };
 
     struct Consts;
 
@@ -467,21 +515,42 @@ mod tests {
         }
     }
 
-    fn sample_pool() -> SamplePool {
-        SamplePool::default()
+    struct Pass {
+        analyzer: BeatAnalyzer<RubatoBackend>,
+        pools: kithara_bufpool::PoolRegion<TestPools>,
     }
 
-    fn analyzer(
-        source_rate: u32,
-        config: BeatAnalysisConfig<RubatoBackend>,
-    ) -> BeatAnalyzer<RubatoBackend> {
-        BeatAnalyzer::new(
+    impl Pass {
+        fn push_interleaved(
+            &mut self,
+            pcm: &[f32],
+            channels: usize,
+            at: u64,
+            detector: &mut dyn BeatDetector,
+        ) {
+            self.analyzer
+                .push_interleaved(&self.pools, pcm, channels, at, detector);
+        }
+
+        fn snapshot(
+            &mut self,
+            detector: &mut dyn BeatDetector,
+            ending: bool,
+        ) -> Result<crate::BeatArtifact, BeatDetectError> {
+            self.analyzer.snapshot(&self.pools, detector, ending)
+        }
+    }
+
+    fn analyzer(source_rate: u32, config: BeatAnalysisConfig<RubatoBackend>) -> Pass {
+        let pools = pools();
+        let analyzer = BeatAnalyzer::new(
             BeatPassConfig::builder()
                 .source_rate(source_rate)
                 .resampler(config)
-                .sample_pool(sample_pool())
+                .pools(pools.clone())
                 .build(),
-        )
+        );
+        Pass { analyzer, pools }
     }
 
     fn detector(check: impl Fn(&[f32]) -> RawBeats + Send + Sync + 'static) -> Unimock {
@@ -502,14 +571,12 @@ mod tests {
         out
     }
 
-    fn push_chunked<B>(
-        analyzer: &mut BeatAnalyzer<B>,
+    fn push_chunked(
+        analyzer: &mut Pass,
         pcm: &[f32],
         frames_per_chunk: usize,
         detector: &mut dyn BeatDetector,
-    ) where
-        B: ResamplerBackend,
-    {
+    ) {
         let mut at = 0;
         for chunk in pcm.chunks(frames_per_chunk * 2) {
             analyzer.push_interleaved(chunk, 2, at, detector);

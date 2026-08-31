@@ -10,5 +10,9 @@ Callers fully construct a player or decorator and transfer that instance with
 and retains the instance; callers receive a typed `HostOwned` control endpoint,
 not the player value or its session dispatcher.
 
+`Host<S>` shares the player's closed buffer-pool schema. Insertion accepts only
+players with that same schema, while each registered deck retains its existing
+`PoolRegion<S>` handle for graph-node scratch allocation.
+
 The current crate is a mechanical ownership extraction. Runtime invariants and
 dependency boundaries are documented in [`CONTEXT.md`](CONTEXT.md).

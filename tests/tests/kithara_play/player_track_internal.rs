@@ -15,7 +15,6 @@ use std::{
 use firewheel::dsp::fade::FadeCurve;
 use kithara::{
     self,
-    bufpool::SamplePool,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -32,6 +31,8 @@ use ringbuf::{
     HeapProd, HeapRb,
     traits::{Consumer, Split},
 };
+
+use crate::bufpool_ext::pools;
 
 /// Slot seek epoch a freshly built track already sits at: nothing published,
 /// nothing pending, so a natural end finalizes immediately.
@@ -60,7 +61,8 @@ fn make_track_with(duration_secs: f64, item_id: TrackId) -> PlayerTrack {
 }
 
 fn make_track_from_resource(resource: Resource, src: Arc<str>, item_id: TrackId) -> PlayerTrack {
-    let player_resource = PlayerResource::new(resource, src, &SamplePool::default());
+    let player_resource = PlayerResource::new(resource, src, &pools())
+        .expect("player resource fits the test pool budget");
     let sample_rate = NonZeroU32::new(44100).expect("BUG: non-zero sample rate");
     PlayerTrack::builder()
         .sample_rate(sample_rate)

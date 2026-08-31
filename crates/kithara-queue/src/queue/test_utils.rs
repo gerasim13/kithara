@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 use kithara_play::Resource;
 
@@ -12,7 +13,10 @@ pub trait QueueProbe {
     fn supply_test_resource_for_respawn(&self, id: TrackId, resource: Resource);
 }
 
-impl QueueProbe for QueueControl {
+impl<S> QueueProbe for QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn complete_load_for_test(&self, id: TrackId, resource: Resource) {
         self.probe_complete_load(id, resource);
     }
@@ -34,7 +38,10 @@ impl QueueProbe for QueueControl {
     }
 }
 
-impl QueueProbe for Queue {
+impl<S> QueueProbe for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn complete_load_for_test(&self, id: TrackId, resource: Resource) {
         QueueProbe::complete_load_for_test(&self.control, id, resource);
     }

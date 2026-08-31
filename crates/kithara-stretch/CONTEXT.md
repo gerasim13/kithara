@@ -6,7 +6,7 @@ Contracts and invariants for the kithara-stretch crate; the README is the overvi
 
 This crate owns pure time-stretch DSP engines only. `kithara-warp` owns the
 synchronous `WarpRenderer`, `StretchControls`, and `RegionPlan`, passing the
-play-configured `SamplePool` through `ElasticConfig`; `kithara-signal` owns
+play-configured `PoolRegion<S>` through `ElasticConfig<S>`; `kithara-signal` owns
 `AudioChunk`, `AudioChunkInfo`, `AudioSpec`, and the canonical sample views.
 Decoder sample-rate conversion remains in the decode/audio seam. This crate must
 not create a default or global pool.
@@ -17,9 +17,9 @@ not create a default or global pool.
   which variants are compiled in: `1 = Signalsmith`, `2 = Bungee`; `3` is reserved for a future
   pure-Rust native backend. An unknown discriminant decodes to `StretchKind::all()[0]`, the first
   compiled-in backend, which is also `Default`.
-- `ElasticConfig` is the single fallible `#[non_exhaustive]` `bon` root config. It owns the
+- `ElasticConfig<S>` is the single fallible `#[non_exhaustive]` `bon` root config. It owns the
   `StretchKind` selection, sample rate, channel count, maximum source/output frame spans and the
-  practical playback-rate envelope, plus the injected `SamplePool`; the selector is not a second
+  practical playback-rate envelope, plus the injected pool region; the selector is not a second
   factory argument.
 - `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
 - Every backend must implement priming; callers may still render a fresh unprimed stream. Nothing
@@ -57,7 +57,7 @@ to "drop this chunk + warn", never a panic.
 
 The produce path must stay allocation-free. Callers provide fixed output slices from scratch
 reserved before the checked render call, and an engine that needs planar scratch checks it out from
-the `SamplePool` supplied in `ElasticConfig`; no engine owns a default or global pool. Bungee keeps
+the `PoolRegion<S>` supplied in `ElasticConfig<S>`; no engine owns a default or global pool. Bungee keeps
 that channel-major scratch in `kithara_signal::PlanarBuffer` instead of a backend-local buffer type.
 
 `flush(out)` writes the next buffered-tail portion into caller-owned storage sized from
@@ -89,7 +89,7 @@ expose `kithara_signal::AudioSpec`; native adapters use it only to shape canonic
   first advances finite requests to the exact source end, clips output by native request timestamps,
   then clears the four-grain pipeline with invalid requests. `flush` therefore returns real terminal
   audio across one or more chunks instead of dropping roughly one latency of the track.
-- Bungee preparation fails when the injected pool budget cannot cover its planar scratch or
+- Bungee preparation fails when the injected region budget cannot cover its planar scratch or
   native stretcher construction fails; the audio adapter warns once and marks the engine unavailable.
 - Bungee priming drains old resident state, stages history, lookahead and warm source in the
   injected pooled rolling source buffer, and performs native preroll without rebuilding the

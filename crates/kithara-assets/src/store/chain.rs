@@ -18,21 +18,22 @@ pub(crate) type OnInvalidatedFn = Arc<dyn Fn(&ResourceKey) + Send + Sync>;
 /// Fully decorated disk store chain. Processing travels per-acquire as a
 /// [`crate::ProcessCtx`], so the chain is not generic over context.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type DiskStore =
-    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>;
+pub(crate) type DiskStore<S> =
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, S>>>;
 
 /// Pending (writer) handle returned by the `Pending` arm of
 /// [`super::AssetStore::acquire_resource`]. Owns the streaming write + decrypt-on-commit
 /// capability; consumes itself on `commit` into an [`AssetReader`].
-pub type AssetWriter = LeaseWriter<CachedWriter<ProcessedWriter<BaseWriter>>, LeaseGuard>;
+pub type AssetWriter<S> = LeaseWriter<CachedWriter<ProcessedWriter<BaseWriter, S>>, LeaseGuard>;
 
 /// Ready (reader) handle returned by [`super::AssetStore::open_resource`] and the
 /// `Ready` arm of [`super::AssetStore::acquire_resource`]. Cheap to clone.
-pub type AssetReader = LeaseReader<CachedReader<ProcessedReader<BaseReader>>, LeaseGuard>;
+pub type AssetReader<S> = LeaseReader<CachedReader<ProcessedReader<BaseReader, S>>, LeaseGuard>;
 
 /// Phase-typed acquisition outcome returned by
 /// [`super::AssetStore::acquire_resource`]: a `Pending` [`AssetWriter`] to stream and
 /// commit, or a `Ready` [`AssetReader`] when the resource is already committed.
-pub type ResourceAcquisition = AcquisitionResult<AssetWriter, AssetReader>;
+pub type ResourceAcquisition<S> = AcquisitionResult<AssetWriter<S>, AssetReader<S>>;
 
-pub(crate) type MemStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore>>>>;
+pub(crate) type MemStore<S> =
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<MemAssetStore<S>>, S>>>;

@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use bon::Builder;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::sync::Mutex;
@@ -23,6 +24,9 @@ use crate::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
 };
+
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
@@ -70,21 +74,26 @@ impl<P: PlayerControlSource> Deref for HostOwned<P> {
 }
 
 /// Exclusive owner and dispatcher for one multi-player output session.
-pub struct Host {
+pub struct Host<S> {
     id: BeatGridId,
     owns_session: bool,
     root_view: RootView,
-    dispatcher: Arc<dyn HostDispatcher>,
+    dispatcher: Arc<dyn HostDispatcher<S>>,
     #[cfg(target_arch = "wasm32")]
-    remote_routes: Mutex<Vec<Arc<crate::wasm::HostRoute>>>,
+    web_state: Option<crate::session::web::WebSessionState<S>>,
+    #[cfg(target_arch = "wasm32")]
+    remote_routes: Mutex<Vec<Arc<crate::wasm::HostRoute<S>>>>,
 }
 
-impl Host {
+impl<S> Host<S> {
     /// Creates the platform session and its canonical synchronization root.
     ///
     /// # Errors
     /// Returns an error when a canonical grid identity cannot be allocated.
-    pub fn new(config: HostConfig) -> Result<Self, PlayError> {
+    pub fn new(config: HostConfig) -> Result<Self, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let sample_rate = config.sample_rate;
         let root = GroupState::unavailable(
@@ -97,40 +106,18 @@ impl Host {
         #[cfg(not(target_arch = "wasm32"))]
         let dispatcher = crate::session::native::spawn(root, root_view.clone(), sample_rate);
         #[cfg(target_arch = "wasm32")]
-        let dispatcher = crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
+        let (dispatcher, web_state) =
+            crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
         Ok(Self {
             id: grid_id,
             owns_session: true,
             root_view,
             dispatcher,
             #[cfg(target_arch = "wasm32")]
+            web_state: Some(web_state),
+            #[cfg(target_arch = "wasm32")]
             remote_routes: Mutex::default(),
         })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn remote(
-        id: BeatGridId,
-        root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher>,
-    ) -> Self {
-        Self {
-            id,
-            owns_session: false,
-            root_view,
-            dispatcher,
-            remote_routes: Mutex::default(),
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
-        (self.id, self.root_view.clone())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn register_remote_route(&self, route: Arc<crate::wasm::HostRoute>) {
-        self.remote_routes.lock().push(route);
     }
 
     /// Attaches and transfers one fully configured player or decorator into
@@ -140,10 +127,10 @@ impl Host {
     /// Returns an error when session binding or canonical attachment fails.
     pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
     where
-        P: PlayerControlSource,
+        P: PlayerControlSource<Schema = S>,
     {
         let grid_id = player.id();
-        let dispatcher: Arc<dyn SessionDispatcher> = self.dispatcher.clone();
+        let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         player.attach_session(SessionBinding::new(dispatcher))?;
         let control = player.control();
         let operations = Box::new([TopologyOperation::Attach {
@@ -168,7 +155,8 @@ impl Host {
     /// Returns an error when close or canonical detachment fails.
     pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
     where
-        P: PlayerControlSource,
+        P: PlayerControlSource<Schema = S>,
+        S: Send + Sync + 'static,
     {
         if player.host_id != self.id {
             return Err(PlayError::ForeignSession);
@@ -269,7 +257,7 @@ impl Host {
         }
     }
 
-    fn exec_play_ok(&self, cmd: Cmd) -> Result<(), PlayError> {
+    fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
         match self.dispatcher.exec(cmd)? {
             Reply::Ok => Ok(()),
             Reply::Err(error) => Err(error.into()),
@@ -280,7 +268,7 @@ impl Host {
     }
 }
 
-impl Drop for Host {
+impl<S> Drop for Host<S> {
     fn drop(&mut self) {
         #[cfg(target_arch = "wasm32")]
         for route in std::mem::take(&mut *self.remote_routes.lock()) {
@@ -294,7 +282,7 @@ impl Drop for Host {
     }
 }
 
-impl BeatGrid for Host {
+impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
     fn id(&self) -> BeatGridId {
         self.id
     }
@@ -304,7 +292,7 @@ impl BeatGrid for Host {
     }
 }
 
-impl SyncGroup for Host {
+impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     type NestedGroup = PlayerMember;
 
     delegate::delegate! {

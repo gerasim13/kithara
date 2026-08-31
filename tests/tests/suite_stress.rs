@@ -6,6 +6,8 @@
 
 mod common;
 
+pub use kithara_integration_tests::bufpool_ext;
+
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;

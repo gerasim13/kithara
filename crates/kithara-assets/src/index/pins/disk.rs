@@ -11,7 +11,7 @@ use std::{
 };
 
 use dashmap::DashMap;
-use kithara_bufpool::BytePool;
+use kithara_bufpool::ByteBuffer;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -40,8 +40,8 @@ impl PinsIndex {
     /// hydrated synchronously. Otherwise the disk file is **not**
     /// materialised — it appears the first time [`PinsIndex::add`]
     /// or [`PinsIndex::remove`] flush a real change.
-    pub fn with_persist_at(path: PathBuf, cancel: CancelToken, pool: &BytePool) -> Self {
-        let (initial, opened) = hydrate_existing(&path, &cancel, pool);
+    pub fn with_persist_at(path: PathBuf, cancel: CancelToken, buffer: ByteBuffer) -> Self {
+        let (initial, opened) = hydrate_existing(&path, &cancel, buffer);
         Self {
             inner: Arc::new(PinsInner {
                 pins: initial,
@@ -90,7 +90,7 @@ impl PinsInner {
 fn hydrate_existing(
     path: &std::path::Path,
     cancel: &CancelToken,
-    pool: &BytePool,
+    mut buffer: ByteBuffer,
 ) -> (DashMap<String, PinCounts>, Option<Atomic<MmapDriver>>) {
     let nonempty = fs::metadata(path).is_ok_and(|m| m.len() > 0);
     if !nonempty {
@@ -99,7 +99,7 @@ fn hydrate_existing(
     match open_existing(path, cancel) {
         Ok(res) => {
             let atomic = Atomic::new(res);
-            let initial = read_pins(&atomic, pool).unwrap_or_default();
+            let initial = read_pins(&atomic, &mut buffer).unwrap_or_default();
             (initial, Some(atomic))
         }
         Err(e) => {
@@ -120,10 +120,20 @@ const fn hydrated_counts() -> PinCounts {
 
 fn read_pins(
     res: &Atomic<MmapDriver>,
-    pool: &BytePool,
+    buf: &mut ByteBuffer,
 ) -> AssetsResult<DashMap<String, PinCounts>> {
-    let mut buf = pool.get();
-    let n = res.read_into(&mut buf)?;
+    let Some(len) = res.len() else {
+        buf.clear();
+        return Ok(DashMap::new());
+    };
+    let len = usize::try_from(len).map_err(|error| {
+        AssetsError::Storage(StorageError::Failed(format!(
+            "pins index len does not fit usize: {error}"
+        )))
+    })?;
+    buf.ensure_len(len)?;
+    let n = res.read_at(0, &mut buf[..len])?;
+    buf.truncate(n);
 
     if n == 0 {
         return Ok(DashMap::new());

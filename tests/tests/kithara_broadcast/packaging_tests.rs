@@ -8,6 +8,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{StreamBackend, StreamEncoder};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::signal::{Wave, goertzel_magnitude};
 
 const SAMPLE_RATE: u32 = 48_000;
@@ -77,9 +78,8 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
             .codec(AudioCodec::AacLc)
             .container(ContainerFormat::Adts)
             .build(),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .expect("create the ADTS AAC-LC decoder");

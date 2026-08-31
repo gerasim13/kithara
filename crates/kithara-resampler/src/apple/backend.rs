@@ -1,3 +1,5 @@
+use kithara_bufpool::HasPool;
+
 use super::resampler::AppleResampler;
 use crate::{
     ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode, ResamplerSettings,
@@ -18,7 +20,13 @@ impl AppleAudioConverterBackend {
 impl ResamplerBackend for AppleAudioConverterBackend {
     type Resampler = AppleResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         settings.validate(self)?;
         let ResamplerMode::FixedRatio {
             source_sample_rate,
@@ -36,7 +44,7 @@ impl ResamplerBackend for AppleAudioConverterBackend {
             target_sample_rate.get(),
             settings.channels.get(),
             settings.options.chunk_size,
-            &settings.sample_pool,
+            &settings.pools,
         )
     }
 
