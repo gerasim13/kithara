@@ -1,4 +1,4 @@
-use kithara_ui::{
+use kithara::ui::{
     module::IconName,
     render::{Node, ReadValue, Scope, TableCell, TableRow, TableValue, TreeRow},
 };

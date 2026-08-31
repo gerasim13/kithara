@@ -49,10 +49,10 @@ const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
-    crate::kithara_queue::app_track_source(
+    crate::kithara::queue::app_track_source(
         url,
         &ctx.config,
-        crate::kithara_queue::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        crate::kithara::queue::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,

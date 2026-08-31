@@ -1,4 +1,4 @@
-use kithara_platform::thread::set_wasm_shim_name;
+use kithara::platform::thread::set_wasm_shim_name;
 use tracing_log::LogTracer;
 use tracing_wasm::WASMLayerConfigBuilder;
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};

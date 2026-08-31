@@ -1,14 +1,16 @@
 use std::rc::Rc;
 
 use iced::{Element, Size};
-use kithara_platform::time::Duration;
-use kithara_ui::{
-    compile::{CompiledUi, compile},
-    error::UiDocError,
-    ids::SourceUri,
-    render::{Clock, Walk, tree},
-    source::UiConfig,
-    view::ViewState,
+use kithara::{
+    platform::time::Duration,
+    ui::{
+        compile::{CompiledUi, compile},
+        error::UiDocError,
+        ids::SourceUri,
+        render::{Clock, Walk, tree},
+        source::UiConfig,
+        view::ViewState,
+    },
 };
 
 use super::{
@@ -104,7 +106,7 @@ pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDoc
         Package::load(None)?.as_ref(),
         layout,
         &UiConfig::default(),
-        &kithara_ui::view::EMPTY,
+        &kithara::ui::view::EMPTY,
     )
 }
 

@@ -7,17 +7,17 @@ use kithara::{
         AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
     audio::AudioReader,
-    prelude::{PlaybackResamplerBackend, Resource},
-};
-use kithara_platform::{
-    CancelToken,
-    sync::Arc,
-    tokio::{
-        sync::watch,
-        task::{self, JoinHandle},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        tokio::{
+            sync::watch,
+            task::{self, JoinHandle},
+        },
     },
+    prelude::{PlaybackResamplerBackend, Resource},
+    worker::{TaskError, Worker},
 };
-use kithara_worker::{TaskError, Worker};
 use tracing::warn;
 
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;

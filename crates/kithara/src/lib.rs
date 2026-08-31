@@ -41,6 +41,7 @@ pub mod audio {
     pub use kithara_audio::*;
 }
 
+#[cfg(feature = "analysis")]
 pub mod analysis {
     pub use kithara_analysis::*;
 }
@@ -56,6 +57,11 @@ pub mod bufpool {
 
 pub mod decode {
     pub use kithara_decode::*;
+}
+
+#[cfg(feature = "encode")]
+pub mod encode {
+    pub use kithara_encode::*;
 }
 
 pub mod events {
@@ -91,8 +97,23 @@ pub mod stream {
     pub use kithara_stream::*;
 }
 
+#[cfg(any(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
+pub mod stretch {
+    pub use kithara_stretch::*;
+}
+
+#[cfg(feature = "ui")]
+pub mod ui {
+    pub use kithara_ui::*;
+}
+
 pub mod warp {
     pub use kithara_warp::*;
+}
+
+#[cfg(feature = "worker")]
+pub mod worker {
+    pub use kithara_worker::*;
 }
 
 #[cfg(feature = "file")]

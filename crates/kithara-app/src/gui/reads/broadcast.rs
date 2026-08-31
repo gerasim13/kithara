@@ -1,4 +1,4 @@
-use kithara_ui::render::{Node, ReadValue, Scope};
+use kithara::ui::render::{Node, ReadValue, Scope};
 
 use super::value::Value;
 

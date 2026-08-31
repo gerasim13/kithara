@@ -3,9 +3,11 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-use kithara_host::{HostConfig, wasm};
-use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
-use kithara_play::wasm as play_wasm;
+use kithara::{
+    host::{HostConfig, wasm},
+    platform::sync::{Mutex, MutexGuard, mpsc},
+    play::wasm as play_wasm,
+};
 use wasm_bindgen::JsValue;
 
 use crate::{
@@ -67,7 +69,7 @@ pub(crate) fn tick_and_poll() {
 
 /// Record the worker's current track id for the main-thread read-back.
 /// Called from the worker's event source on every `CurrentTrackChanged`.
-pub(crate) fn set_current_track_id(id: Option<kithara_queue::TrackId>) {
+pub(crate) fn set_current_track_id(id: Option<kithara::queue::TrackId>) {
     let raw = id.map_or(WorkerBridge::NO_CURRENT_TRACK, |id| {
         i64::try_from(id.as_u64()).unwrap_or(WorkerBridge::NO_CURRENT_TRACK)
     });
@@ -94,11 +96,11 @@ impl WorkerBridge {
     /// Id of the worker's current track, read synchronously from the
     /// shared current-track atomic the worker's event source keeps
     /// in sync. `None` when no track is current.
-    pub(crate) fn current_track_id(&self) -> Option<kithara_queue::TrackId> {
+    pub(crate) fn current_track_id(&self) -> Option<kithara::queue::TrackId> {
         let _ = self;
         match current_track_id_cell().load(Ordering::Relaxed) {
             Self::NO_CURRENT_TRACK => None,
-            raw => u64::try_from(raw).ok().map(kithara_queue::TrackId),
+            raw => u64::try_from(raw).ok().map(kithara::queue::TrackId),
         }
     }
 
@@ -128,7 +130,7 @@ impl WorkerBridge {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = kithara_platform::thread::spawn(move || {
+        let worker = kithara::platform::thread::spawn(move || {
             crate::web::worker::worker_main(cmd_rx, host_sender, pools);
         });
         std::mem::forget(worker);

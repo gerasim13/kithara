@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use kithara_platform::sync::{Arc, Mutex};
-use kithara_queue::{RepeatMode, Transition};
+use kithara::{
+    platform::sync::{Arc, Mutex},
+    queue::{RepeatMode, Transition},
+};
 
 use crate::{
     item::AudioPlayerItem,
@@ -18,13 +20,13 @@ const EQ_BANDS: usize = 10;
 
 /// Caller-facing ordered queue view: the `(TrackId, item)` pairs the
 /// caller inserted, in queue order. The worker owns the canonical
-/// [`Queue`](kithara_queue::Queue); this mirror exists because the caller
-/// allocates the [`TrackId`](kithara_queue::TrackId) on the main thread
+/// [`Queue`](kithara::queue::Queue); this mirror exists because the caller
+/// allocates the [`TrackId`](kithara::queue::TrackId) on the main thread
 /// and the worker plants the identical id via `*_with_id`, so order is
 /// deterministic without a round-trip. Drives `items` / `item_count` /
 /// index-based `select_item` exactly as `NativeInner`'s registry +
 /// `queue.tracks()` order do on native.
-type QueueView = Vec<(kithara_queue::TrackId, Arc<AudioPlayerItem>)>;
+type QueueView = Vec<(kithara::queue::TrackId, Arc<AudioPlayerItem>)>;
 
 /// Wasm implementation of the FFI player engine, parallel to
 /// [`NativeInner`](crate::native::inner::NativeInner). Exposes the same
@@ -143,7 +145,7 @@ impl WasmInner {
         self.eq_gains.get(band as usize).map_or(0.0, load_f32)
     }
 
-    fn id_at(&self, index: u32) -> Option<kithara_queue::TrackId> {
+    fn id_at(&self, index: u32) -> Option<kithara::queue::TrackId> {
         self.queue_view
             .lock()
             .get(index as usize)

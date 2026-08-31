@@ -3,7 +3,7 @@
 
 use std::fmt::{self, Display};
 
-use kithara_ui::{capture::Geometry, draw::PoolStats};
+use kithara::ui::{capture::Geometry, draw::PoolStats};
 
 use crate::gui::{frontend::window_size, ui::cache::DeckLayout};
 
