@@ -720,7 +720,7 @@ async fn run(case: SyncCase, provider: Provider) {
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(900))
+    timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
@@ -744,7 +744,7 @@ async fn synthetic_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase) {
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(900))
+    timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
 #[case::hls_same_play_sync_seek(Provider::HlsSame, PLAY_SYNC_SEEK)]
@@ -804,7 +804,7 @@ async fn real_media_product_rows_reach_the_pcm_oracle(
     multi_thread,
     serial,
     flash(false),
-    timeout(Duration::from_secs(1_800))
+    timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: requires KITHARA_SYNC_LIBRARY and product Warp alignment"]
 #[case::play_sync_seek(PLAY_SYNC_SEEK)]
