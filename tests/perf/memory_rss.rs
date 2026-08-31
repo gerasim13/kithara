@@ -6,10 +6,13 @@
 use hotpath::HotpathGuardBuilder;
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead},
+    audio::{AudioConfig, AudioRead, DecodeError, ReadOutcome},
     bufpool::Region,
     hls::{Hls, HlsConfig},
-    platform::{time::Duration, tokio::task::spawn_blocking},
+    platform::{
+        time::{Duration, Instant},
+        tokio::task::spawn_blocking,
+    },
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
@@ -20,12 +23,91 @@ struct Consts;
 impl Consts {
     const MB: usize = 1024 * 1024;
     const BUDGET_RUNS: usize = 3;
-    const BUDGET_PLAYBACK_SECS: u64 = 10;
-    const BUDGET_SAMPLE_INTERVAL_MS: u64 = 500;
+    const READ_FRAMES: usize = 4096;
+    /// Upper bound on one drain. Nothing paces the reader, so a healthy drain
+    /// ends far below this; it is here so a stalled stream fails the test
+    /// instead of hanging it.
+    const DRAIN_LIMIT: Duration = Duration::from_secs(20);
+    /// Share of a drain that counts as warmup. Measured 2026-08-31: RSS climbs
+    /// from 43.7 MB to 47.0 MB inside the first tenth of the reads and is flat
+    /// for the remaining nine, so a quarter clears the ramp with room to
+    /// spare.
+    const WARMUP_SHARE: usize = 4;
     const RSS_BUDGET_MB: usize = 30;
-    const LEAK_PLAYBACK_SECS: u64 = 15;
-    const LEAK_WARMUP_SECS: u64 = 5;
     const LEAK_TOLERANCE_MB: usize = 5;
+}
+
+/// Why a drain stopped.
+///
+/// Only [`Self::Eof`] leaves a complete measurement behind. The other two
+/// truncate it, and a truncated drain cannot say whether RSS settled.
+#[derive(Debug)]
+enum DrainEnd {
+    Eof,
+    Failed(DecodeError),
+    Deadline,
+}
+
+/// RSS along one read of a stream to its end, and how that read finished.
+struct Drain {
+    samples: Vec<usize>,
+    end: DrainEnd,
+    elapsed: Duration,
+}
+
+impl Drain {
+    /// RSS samples of a drain that reached the end of the stream.
+    ///
+    /// Panics on any other ending. A drain that stops early still produces
+    /// numbers, and those numbers agree with any budget, so scoring one would
+    /// leave the assertions below unable to fail.
+    fn complete_samples(&self) -> &[usize] {
+        assert!(
+            matches!(self.end, DrainEnd::Eof),
+            "drain stopped short of the end of the stream after {:?} and {} reads: {:?}",
+            self.elapsed,
+            self.samples.len(),
+            self.end,
+        );
+        assert!(
+            self.samples.len() >= Consts::WARMUP_SHARE,
+            "drain produced {} reads, too few to tell warmup from the rest",
+            self.samples.len(),
+        );
+        &self.samples
+    }
+}
+
+/// Reads `audio` to the end of the stream, sampling RSS after every read.
+///
+/// The reader is not paced against a clock, so the measurement window is the
+/// drain itself rather than any wall-clock span: the whole track comes out in
+/// a few seconds. That is why the samples are indexed by read below and not by
+/// elapsed time.
+fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
+    let mut buf = vec![0f32; Consts::READ_FRAMES];
+    let mut samples = Vec::new();
+    let start = Instant::now();
+
+    let end = loop {
+        if start.elapsed() >= Consts::DRAIN_LIMIT {
+            break DrainEnd::Deadline;
+        }
+        match audio.read(&mut buf) {
+            Ok(ReadOutcome::Eof { .. }) => break DrainEnd::Eof,
+            Ok(_) => {}
+            Err(error) => break DrainEnd::Failed(error),
+        }
+        if let Some(stats) = memory_stats() {
+            samples.push(stats.physical_mem);
+        }
+    };
+
+    Drain {
+        samples,
+        end,
+        elapsed: start.elapsed(),
+    }
 }
 
 /// Multi-run RSS measurement: peak RSS delta must stay within budget.
@@ -66,45 +148,26 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
         let mut audio = worker.open(config).await.expect("audio creation");
 
-        let samples = spawn_blocking(move || {
-            let mut buf = vec![0f32; 4096];
-            let mut rss_samples = Vec::new();
-            let start = kithara::platform::time::Instant::now();
-            let mut last_sample = start;
+        let drain = spawn_blocking(move || drain_sampling_rss(&mut audio))
+            .await
+            .expect("spawn_blocking");
 
-            while start.elapsed() < Duration::from_secs(Consts::BUDGET_PLAYBACK_SECS) {
-                let outcome = audio.read(&mut buf);
-                let stop = matches!(
-                    outcome,
-                    Ok(kithara::audio::ReadOutcome::Eof { .. }) | Err(_)
-                );
-                if stop {
-                    break;
-                }
-
-                if last_sample.elapsed() >= Duration::from_millis(Consts::BUDGET_SAMPLE_INTERVAL_MS)
-                {
-                    if let Some(stats) = memory_stats() {
-                        rss_samples.push(stats.physical_mem);
-                    }
-                    last_sample = kithara::platform::time::Instant::now();
-                }
-            }
-            rss_samples
-        })
-        .await
-        .expect("spawn_blocking");
-
-        let peak_rss = samples.iter().copied().max().unwrap_or(baseline_rss);
+        let samples = drain.complete_samples();
+        let peak_rss = samples
+            .iter()
+            .copied()
+            .max()
+            .expect("a complete drain has samples");
         let delta = peak_rss.saturating_sub(baseline_rss);
         run_deltas.push(delta);
 
         info!(
-            "Run {run}: baseline={:.1}MB peak={:.1}MB delta={:.1}MB samples={}",
+            "Run {run}: baseline={:.1}MB peak={:.1}MB delta={:.1}MB reads={} elapsed={:?}",
             baseline_rss as f64 / Consts::MB as f64,
             peak_rss as f64 / Consts::MB as f64,
             delta as f64 / Consts::MB as f64,
             samples.len(),
+            drain.elapsed,
         );
 
         drop(server);
@@ -161,50 +224,28 @@ async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
         PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
     let mut audio = worker.open(config).await.expect("audio creation");
 
-    let (warmup_rss, final_rss) = spawn_blocking(move || {
-        let mut buf = vec![0f32; 4096];
-        let start = kithara::platform::time::Instant::now();
-        let mut warmup_rss = None;
-        let mut final_rss = 0usize;
+    let drain = spawn_blocking(move || drain_sampling_rss(&mut audio))
+        .await
+        .expect("spawn_blocking");
 
-        while start.elapsed() < Duration::from_secs(Consts::LEAK_PLAYBACK_SECS) {
-            let outcome = audio.read(&mut buf);
-            let stop = matches!(
-                outcome,
-                Ok(kithara::audio::ReadOutcome::Eof { .. }) | Err(_)
-            );
-            if stop {
-                break;
-            }
-
-            let elapsed = start.elapsed();
-
-            if warmup_rss.is_none()
-                && elapsed >= Duration::from_secs(Consts::LEAK_WARMUP_SECS)
-                && let Some(stats) = memory_stats()
-            {
-                warmup_rss = Some(stats.physical_mem);
-            }
-
-            if let Some(stats) = memory_stats() {
-                final_rss = stats.physical_mem;
-            }
-        }
-
-        let warmup = warmup_rss.unwrap_or(final_rss);
-        (warmup, final_rss)
-    })
-    .await
-    .expect("spawn_blocking");
-
+    let samples = drain.complete_samples();
+    let warmup_reads = samples.len() / Consts::WARMUP_SHARE;
+    let warmup_rss = samples[..warmup_reads]
+        .iter()
+        .copied()
+        .max()
+        .expect("a complete drain has a warmup share");
+    let final_rss = *samples.last().expect("a complete drain has samples");
     let growth = final_rss.saturating_sub(warmup_rss);
 
     info!(
-        "Leak test: warmup={:.1}MB final={:.1}MB growth={:.1}MB tolerance={}MB",
+        "Leak test: warmup={:.1}MB final={:.1}MB growth={:.1}MB tolerance={}MB \
+         reads={} warmup_reads={warmup_reads}",
         warmup_rss as f64 / Consts::MB as f64,
         final_rss as f64 / Consts::MB as f64,
         growth as f64 / Consts::MB as f64,
-        Consts::LEAK_TOLERANCE_MB
+        Consts::LEAK_TOLERANCE_MB,
+        samples.len(),
     );
 
     assert!(
