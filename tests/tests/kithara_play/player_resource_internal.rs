@@ -132,6 +132,7 @@ impl ChunkReader {
         ReadOutcome::Frames {
             count: std::num::NonZeroUsize::new(frames).expect("chunk is non-empty"),
             position: self.position(),
+            source_span: None,
         }
     }
 }
@@ -232,6 +233,7 @@ impl AudioRead for PositionReader {
         Ok(ReadOutcome::Frames {
             count: std::num::NonZeroUsize::new(avail).unwrap(),
             position: self.position(),
+            source_span: None,
         })
     }
 
@@ -256,6 +258,7 @@ impl AudioRead for PositionReader {
         Ok(ReadOutcome::Frames {
             count: std::num::NonZeroUsize::new(avail).unwrap(),
             position: self.position(),
+            source_span: None,
         })
     }
 

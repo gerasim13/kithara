@@ -6,7 +6,7 @@ use realfft::RealFftPlanner;
 
 use super::{StretchControls, WarpRenderer as GenericWarpRenderer};
 use crate::{
-    WarpConfig,
+    RenderPublisher, Warp, WarpConfig,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -113,11 +113,14 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(
-        &WarpConfig::builder().stretch(controls).build(),
-        spec(),
-        pools(),
-    )
+    renderer_with_publisher(controls).1
+}
+
+fn renderer_with_publisher(controls: Arc<StretchControls>) -> (RenderPublisher, WarpRenderer) {
+    let config = WarpConfig::builder().stretch(controls).build();
+    let warp = Warp::new((), &config);
+    let publisher = warp.publisher();
+    (publisher, warp.renderer(spec(), pools()))
 }
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {

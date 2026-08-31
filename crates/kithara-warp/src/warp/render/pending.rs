@@ -215,8 +215,9 @@ where
         remaining: usize,
     ) -> Option<FrameCount> {
         match self.scheduler_plan(meta, remaining) {
-            Ok(prepared) => match Self::prepared_source_frames(&prepared) {
+            Ok(mut prepared) => match Self::prepared_source_frames(&prepared) {
                 Ok(frames) => {
+                    prepared.bind(self.context.load());
                     self.prepared_quantum = Some(prepared);
                     Some(FrameCount::new(frames))
                 }

@@ -281,6 +281,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
         self.sync_seek();
         self.ring.preloaded = true;
         let chunk = if let Some(chunk) = self.ring.current_chunk.take() {
+            self.ring.current_source_span = None;
             Some(chunk)
         } else {
             let was_playing = self.ring.phase == super::ConsumerPhase::Playing;
@@ -295,7 +296,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
                 self.ring.validator.epoch,
             );
             self.wake_for_events();
-            chunk
+            chunk.map(|(chunk, _source_span)| chunk)
         };
         let Some(chunk) = chunk else {
             return chunk_outcome(self.ring.phase, self.position());

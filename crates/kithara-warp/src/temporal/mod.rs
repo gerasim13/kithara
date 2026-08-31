@@ -1,5 +1,6 @@
 mod context;
 mod controls;
+mod live;
 mod region;
 
 pub use context::RenderContext;
@@ -9,4 +10,5 @@ pub use controls::StretchControls;
     any(feature = "stretch-signalsmith", feature = "stretch-bungee")
 ))]
 pub use kithara_stretch::StretchKind;
+pub use live::{RenderPublisher, RenderReader, RenderSnapshot};
 pub use region::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError};

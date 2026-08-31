@@ -361,7 +361,9 @@ fn read_phase_until<S: StreamType>(
 
     while stats.samples < target_samples || !settled() {
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 if stats.samples >= target_samples {
                     paced_backoff(position.saturating_sub(consumed));
                 }

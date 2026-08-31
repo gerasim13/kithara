@@ -6,7 +6,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticCursor, ElasticEngine, ElasticError, ElasticSpanPlan, StretchKind};
 
-use crate::{ActiveRegion, RegionPlan, StretchControls, WarpConfig};
+use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig};
 
 #[cfg(test)]
 mod tests;
@@ -14,6 +14,7 @@ mod tests;
 pub(super) struct PreparedExact {
     pub(super) next_speed: SmoothedParam,
     pub(super) plan: ElasticSpanPlan,
+    pub(super) snapshot: Option<RenderSnapshot>,
     pub(super) speed: f32,
 }
 
@@ -21,15 +22,36 @@ pub(super) enum PreparedQuantum {
     Exact(PreparedExact),
     Legacy {
         source_frames: usize,
+        snapshot: Option<RenderSnapshot>,
         speed: f32,
         target: f32,
     },
+}
+
+impl PreparedQuantum {
+    pub(super) fn bind(&mut self, snapshot: Option<RenderSnapshot>) {
+        match self {
+            Self::Exact(exact) => exact.snapshot = snapshot,
+            Self::Legacy {
+                snapshot: bound, ..
+            } => *bound = snapshot,
+        }
+    }
+
+    pub(super) fn snapshot(&self) -> Option<&RenderSnapshot> {
+        match self {
+            Self::Exact(exact) => exact.snapshot.as_ref(),
+            Self::Legacy { snapshot, .. } => snapshot.as_ref(),
+        }
+    }
 }
 
 /// Source-timeline exact-span time-stretch driven by shared live controls.
 /// Unity speed without a region plan is a byte-identical passthrough.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
+    pub(super) context: RenderReader,
+    pub(super) committed: Option<RenderSnapshot>,
     pub(super) controls: Arc<StretchControls>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     /// Engine displaced by a checked render failure. The scheduler shell
@@ -98,13 +120,20 @@ where
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
-    pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, pools: PoolRegion<S>) -> Self {
+    pub(crate) fn new(
+        config: &WarpConfig,
+        context: RenderReader,
+        spec: AudioSpec,
+        pools: PoolRegion<S>,
+    ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
         let speed = controls.speed();
         let target = Self::prepare_target(current_kind, spec, &pools, None, None);
         Self {
+            context,
+            committed: None,
             engine: target.engine,
             retired_engine: None,
             current_kind,
@@ -282,6 +311,29 @@ where
             meta.spec.sample_rate,
             timestamp,
         ));
+    }
+
+    pub(super) fn commit_snapshot(
+        &mut self,
+        snapshot: RenderSnapshot,
+        output_frames: usize,
+    ) -> bool {
+        let Some((source, _, _)) = self.rendered_source_end else {
+            return false;
+        };
+        let Some(committed) = snapshot.advance(self.committed.as_ref(), source, output_frames)
+        else {
+            return false;
+        };
+        self.committed = Some(committed);
+        true
+    }
+
+    /// Last context and frontier committed by a successful worker quantum.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn render_snapshot(&self) -> Option<&RenderSnapshot> {
+        self.committed.as_ref()
     }
 
     /// Exact decoded-source boundary represented by the latest emitted samples.

@@ -10,6 +10,7 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
+use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
@@ -66,6 +67,7 @@ pub struct Resource {
     cancel: CancelGuard,
     pub(crate) inner: Box<dyn AudioReader>,
     priority: Option<TrackPriority>,
+    render_publisher: Option<RenderPublisher>,
     #[field(get, deref = false)]
     src: Arc<str>,
     #[field(get = event_bus)]
@@ -191,6 +193,7 @@ impl Resource {
         Self {
             inner,
             priority: None,
+            render_publisher: None,
             bus,
             src,
             cancel: CancelGuard(None),
@@ -215,9 +218,23 @@ impl Resource {
     {
         let audio = worker.open(config).await?;
         let priority = audio.priority();
+        let render_publisher = audio.publisher();
         let mut resource = Self::from_reader(audio, Some(src));
         resource.priority = Some(priority);
+        resource.render_publisher = Some(render_publisher);
         Ok(resource)
+    }
+
+    pub(crate) fn clear_render(&self) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.clear();
+        }
+    }
+
+    pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
+        if let Some(publisher) = &self.render_publisher {
+            publisher.publish(context, frontier);
+        }
     }
 
     pub(crate) fn set_service_class(&self, class: ServiceClass) {
@@ -340,6 +357,9 @@ mod tests {
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
+    use kithara_warp::{
+        PresentationFrontier, RenderContext, SessionEpoch, SessionFrame, Warp, WarpConfig,
+    };
     use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
@@ -466,6 +486,7 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: NonZeroUsize::new(samples).expect("non-zero stereo sample count"),
                 position: self.position_duration(),
+                source_span: None,
             })
         }
         fn read_planar<'a>(
@@ -482,6 +503,7 @@ mod tests {
             Ok(ReadOutcome::Frames {
                 count: frames,
                 position: self.position_duration(),
+                source_span: None,
             })
         }
 
@@ -700,5 +722,36 @@ mod tests {
 
         assert!(!track.is_cancelled());
         assert_eq!(state.load(Ordering::SeqCst), DropState::BEFORE_CANCEL);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn seek_withdraws_the_resident_warp_context() {
+        let warp = Warp::new((), &WarpConfig::builder().build());
+        let publisher = warp.publisher();
+        let reader = publisher.reader();
+        let mut resource = Resource::from_reader(EofReader::with_frames(1), None);
+        resource.render_publisher = Some(publisher.clone());
+        let mut resource = PlayerResource::new(resource, Arc::from("seek"), &pools())
+            .unwrap_or_else(|error| panic!("test player resource: {error}"));
+        let context = RenderContext::new(
+            SessionFrame::new(0)..SessionFrame::new(1),
+            NonZeroU32::new(Consts::SAMPLE_RATE).expect("static sample rate"),
+            None,
+            SessionEpoch::new(1),
+            None,
+        )
+        .expect("fixture context is valid");
+        publisher.publish(
+            &context,
+            PresentationFrontier::builder()
+                .source(1)
+                .output(SessionFrame::new(0))
+                .build(),
+        );
+        assert!(reader.load().is_some());
+
+        resource.reset_for_seek();
+
+        assert!(reader.load().is_none());
     }
 }

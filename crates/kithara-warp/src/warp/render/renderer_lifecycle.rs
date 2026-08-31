@@ -299,6 +299,24 @@ where
         self.render_prepared(chunk, prepared, true)
     }
 
+    fn quantum_source_shape_matches(prepared: &PreparedQuantum, actual: usize) -> bool {
+        let expected = match Self::prepared_source_frames(prepared) {
+            Ok(expected) => expected,
+            Err(error) => {
+                warn!(%error, "time-stretch prepared source sizing failed");
+                return false;
+            }
+        };
+        if actual == expected {
+            return true;
+        }
+        warn!(
+            actual,
+            expected, "time-stretch quantum source shape changed"
+        );
+        false
+    }
+
     /// Render the source quantum paired with the speed sampled by
     /// [`Self::prepare_quantum`].
     #[doc(hidden)]
@@ -309,29 +327,33 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         };
-        let expected = match Self::prepared_source_frames(&prepared) {
-            Ok(expected) => expected,
-            Err(error) => {
-                warn!(%error, "time-stretch prepared source sizing failed");
-                self.defer_scratch(Some(chunk.samples));
-                return None;
-            }
-        };
-        if chunk.frames() != expected {
-            warn!(
-                actual = chunk.frames(),
-                expected, "time-stretch quantum source shape changed"
-            );
+        let snapshot = prepared.snapshot().cloned();
+        if snapshot
+            .as_ref()
+            .is_some_and(|snapshot| !self.context.is_current(snapshot))
+        {
+            warn!("time-stretch quantum belongs to an inactive session epoch");
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        self.render_prepared(chunk, prepared, false)
+        if !Self::quantum_source_shape_matches(&prepared, chunk.frames()) {
+            self.defer_scratch(Some(chunk.samples));
+            return None;
+        }
+        let output = self.render_prepared(chunk, prepared, false);
+        if let (Some(snapshot), Some(output)) = (snapshot, output.as_ref())
+            && !self.commit_snapshot(snapshot, output.frames())
+        {
+            warn!("time-stretch quantum produced an invalid presentation frontier");
+        }
+        output
     }
 
     #[doc(hidden)]
     pub fn reset(&mut self) {
         self.reset_pending = true;
         self.clear_render_state();
+        self.committed = None;
         self.snap_speed();
     }
 }

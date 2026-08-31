@@ -7,6 +7,7 @@ use {
 use super::WarpConfig;
 #[cfg(feature = "render")]
 use super::WarpRenderer;
+use crate::RenderPublisher;
 /// Resident warp actuator around one decoded-audio source.
 ///
 /// The wrapper remains present in identity and future synchronized modes. It
@@ -20,6 +21,7 @@ pub struct Warp<S> {
     source: S,
     #[field(get)]
     config: WarpConfig,
+    publisher: RenderPublisher,
 }
 
 impl<S> Warp<S> {
@@ -29,7 +31,14 @@ impl<S> Warp<S> {
         Self {
             source,
             config: config.clone(),
+            publisher: RenderPublisher::default(),
         }
+    }
+
+    /// Returns the callback-side publisher paired with this resident Warp.
+    #[must_use]
+    pub fn publisher(&self) -> RenderPublisher {
+        self.publisher.clone()
     }
 
     /// Creates the worker-side renderer paired with this Warp facade.
@@ -39,7 +48,7 @@ impl<S> Warp<S> {
     where
         P: HasPool<f32>,
     {
-        WarpRenderer::new(&self.config, spec, pools)
+        WarpRenderer::new(&self.config, self.publisher.reader(), spec, pools)
     }
 }
 

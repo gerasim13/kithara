@@ -6,7 +6,7 @@ use kithara_signal::AudioSpec;
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
-use super::{StretchControls, WarpConfig, WarpRenderer, spec};
+use super::{StretchControls, WarpConfig, spec};
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use super::{chunk, chunk_at, render_serviced, renderer, sine};
 use crate::test_pools::pools_with_budget as test_pools;
@@ -65,7 +65,7 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
             controls.set_keylock(true);
             controls.set_backend(backend);
             let config = WarpConfig::builder().stretch(controls).build();
-            let target = WarpRenderer::new(&config, target_spec, pools.clone());
+            let target = crate::Warp::new((), &config).renderer(target_spec, pools.clone());
             assert!(target.engine.is_some());
             pools.stats().allocated_bytes
         })
@@ -78,7 +78,7 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder().stretch(controls).build();
-    let mut fx = WarpRenderer::new(&config, initial, pools.clone());
+    let mut fx = crate::Warp::new((), &config).renderer(initial, pools.clone());
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
     assert!(fx.scratch.is_some());
@@ -103,7 +103,7 @@ fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: 
     controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder().stretch(controls).build();
-    let mut fx = WarpRenderer::new(&config, spec(), pools.clone());
+    let mut fx = crate::Warp::new((), &config).renderer(spec(), pools.clone());
     assert!(fx.engine.is_none());
 
     fx.rebuild_pending = true;

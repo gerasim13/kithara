@@ -153,6 +153,10 @@ impl LoadGeneration {
 pub struct TransportRevision(NonZeroU64);
 
 impl TransportRevision {
+    pub(crate) const fn from_raw(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
     /// Returns the first committed transport revision.
     #[must_use]
     pub const fn first() -> Self {

@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
@@ -5,9 +7,111 @@ use num_traits::ToPrimitive;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced,
-    renderer, sine, spec,
+    renderer, renderer_with_publisher, sine, spec,
 };
-use crate::{GridSegment, RegionPlan};
+use crate::{
+    GridSegment, PresentationFrontier, RegionPlan, RenderContext, SessionEpoch, SessionFrame,
+};
+
+fn context(epoch: u64, start: i64, frames: usize) -> RenderContext {
+    let end = start
+        .checked_add(i64::try_from(frames).expect("fixture frame count fits i64"))
+        .expect("fixture output range fits i64");
+    RenderContext::new(
+        SessionFrame::new(start)..SessionFrame::new(end),
+        NonZeroU32::new(Consts::SR).expect("fixture sample rate is non-zero"),
+        None,
+        SessionEpoch::new(epoch),
+        None,
+    )
+    .expect("fixture render context is valid")
+}
+
+fn frontier(source: u64, output: i64) -> PresentationFrontier {
+    PresentationFrontier::builder()
+        .source(source)
+        .output(SessionFrame::new(output))
+        .build()
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn prepared_quantum_keeps_the_context_it_sampled(#[case] backend: StretchKind) {
+    let controls = StretchControls::new(1.0);
+    controls.set_backend(backend);
+    let (publisher, mut renderer) = renderer_with_publisher(controls);
+    let pools = renderer.pools.clone();
+    let input = chunk(&pools, &sine(16));
+    let sampled = context(7, 1_000, input.frames());
+    let later = context(7, 2_000, input.frames());
+    publisher.publish(&sampled, frontier(0, 1_000));
+    assert_eq!(
+        renderer
+            .prepare_quantum(input.meta, input.frames())
+            .map(kithara_signal::FrameCount::get),
+        Some(input.frames())
+    );
+
+    publisher.publish(&later, frontier(0, 2_000));
+    let output = renderer
+        .render_quantum(input)
+        .expect("same-epoch publication does not invalidate prepared audio");
+    let committed = renderer
+        .render_snapshot()
+        .expect("successful quantum commits its sampled context");
+
+    assert_eq!(committed.context(), &sampled);
+    assert_eq!(
+        committed.frontier(),
+        frontier(
+            u64::try_from(output.frames()).expect("fixture output length fits u64"),
+            1_000 + i64::try_from(output.frames()).expect("fixture output length fits i64")
+        )
+    );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn invalidated_quantum_preserves_the_committed_frontier(#[case] backend: StretchKind) {
+    let controls = StretchControls::new(1.0);
+    controls.set_backend(backend);
+    let (publisher, mut renderer) = renderer_with_publisher(controls);
+    let pools = renderer.pools.clone();
+    let first = chunk(&pools, &sine(16));
+    publisher.publish(&context(7, 1_000, first.frames()), frontier(0, 1_000));
+    assert!(
+        renderer
+            .prepare_quantum(first.meta, first.frames())
+            .is_some()
+    );
+    renderer
+        .render_quantum(first)
+        .expect("first quantum establishes a committed frontier");
+    let committed = renderer
+        .render_snapshot()
+        .cloned()
+        .expect("first quantum committed its context");
+
+    let second = chunk(&pools, &sine(16));
+    publisher.publish(&context(7, 1_016, second.frames()), frontier(16, 1_016));
+    assert!(
+        renderer
+            .prepare_quantum(second.meta, second.frames())
+            .is_some()
+    );
+    publisher.publish(&context(8, 0, second.frames()), frontier(0, 0));
+
+    assert!(renderer.render_quantum(second).is_none());
+    assert_eq!(renderer.render_snapshot(), Some(&committed));
+}
 
 #[kithara::test]
 fn exact_output_frames_do_not_drift_across_partitions() {
@@ -60,7 +164,7 @@ fn exact_output_frames_do_not_drift_across_partitions() {
         output
     });
     assert_eq!(outputs, [2, 0, 0]);
-    assert_eq!(remainder.round() as usize, 1);
+    assert_eq!(remainder.round(), 1.0);
     assert_eq!(outputs.into_iter().sum::<usize>() + 1, 3);
 }
 

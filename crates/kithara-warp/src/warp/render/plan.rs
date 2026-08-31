@@ -90,6 +90,7 @@ where
         Ok(PreparedExact {
             next_speed,
             plan,
+            snapshot: None,
             speed,
         })
     }
@@ -181,6 +182,7 @@ where
         let source_frames = self.source_frames_for_quantum(meta, remaining, speed)?;
         Ok(PreparedQuantum::Legacy {
             source_frames,
+            snapshot: None,
             speed,
             target,
         })
@@ -208,6 +210,7 @@ where
             Self::preview_speed_from(self.applied_speed, target, self.output_quantum_limit())?;
         Ok(PreparedQuantum::Legacy {
             source_frames: frames,
+            snapshot: None,
             speed,
             target,
         })

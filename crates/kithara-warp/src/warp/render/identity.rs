@@ -8,12 +8,15 @@ use std::{marker::PhantomData, num::NonZeroU32};
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_signal::{AudioChunk, AudioSpec};
 
-use crate::WarpConfig;
+use crate::{RenderReader, RenderSnapshot, WarpConfig};
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
 #[non_exhaustive]
 pub struct WarpRenderer<S> {
+    context: RenderReader,
+    committed: Option<RenderSnapshot>,
+    prepared: Option<(usize, Option<RenderSnapshot>)>,
     rendered_source_end: Option<(u64, NonZeroU32)>,
     schema: PhantomData<fn() -> S>,
 }
@@ -22,8 +25,16 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    pub(crate) fn new(_config: &WarpConfig, _spec: AudioSpec, _pools: PoolRegion<S>) -> Self {
+    pub(crate) fn new(
+        _config: &WarpConfig,
+        context: RenderReader,
+        _spec: AudioSpec,
+        _pools: PoolRegion<S>,
+    ) -> Self {
         Self {
+            context,
+            committed: None,
+            prepared: None,
             rendered_source_end: None,
             schema: PhantomData,
         }
@@ -48,7 +59,11 @@ where
         _meta: kithara_signal::AudioChunkInfo,
         remaining: usize,
     ) -> Option<kithara_signal::FrameCount> {
-        (remaining > 0).then(|| kithara_signal::FrameCount::new(remaining))
+        self.prepared = None;
+        (remaining > 0).then(|| {
+            self.prepared = Some((remaining, self.context.load()));
+            kithara_signal::FrameCount::new(remaining)
+        })
     }
 
     #[doc(hidden)]
@@ -65,7 +80,30 @@ where
 
     #[doc(hidden)]
     pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        self.render(chunk)
+        let (frames, context) = self.prepared.take()?;
+        if chunk.frames() != frames
+            || context
+                .as_ref()
+                .is_some_and(|snapshot| !self.context.is_current(snapshot))
+        {
+            return None;
+        }
+        let output = self.render(chunk)?;
+        if let Some(snapshot) = context
+            && let Some((source, _)) = self.rendered_source_end
+            && let Some(committed) =
+                snapshot.advance(self.committed.as_ref(), source, output.frames())
+        {
+            self.committed = Some(committed);
+        }
+        Some(output)
+    }
+
+    /// Last context and frontier committed by a successful worker quantum.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn render_snapshot(&self) -> Option<&RenderSnapshot> {
+        self.committed.as_ref()
     }
 
     #[doc(hidden)]
@@ -75,6 +113,8 @@ where
 
     #[doc(hidden)]
     pub const fn reset(&mut self) {
+        self.committed = None;
+        self.prepared = None;
         self.rendered_source_end = None;
     }
 }
@@ -100,7 +140,9 @@ mod tests {
         let input = AudioChunk::new(meta, sample_buffer(&pools, &[0.25, -0.5]));
         let input_ptr = input.samples.as_ptr();
         let renderer_config = WarpConfig::builder().build();
-        let mut renderer = WarpRenderer::new(&renderer_config, spec, pools);
+        let warp = crate::Warp::new((), &renderer_config);
+        let mut renderer =
+            WarpRenderer::new(&renderer_config, warp.publisher().reader(), spec, pools);
 
         assert_eq!(renderer.rendered_source_end(), None);
         let output = renderer.render(input).expect("identity output");
