@@ -103,12 +103,12 @@ finite unity/bypass samples remain bit-exact.
 
 ## Tempo & Key-Lock
 
-`kithara_warp::StretchControls` (one `Arc` per deck, in
-`PlayerConfig.timestretch`) owns the requested playback target.
-`prepare_config` carries that handle into `ResourceConfig`; `Resource` puts the
-same allocation in `TrackConfig::warp`, and resident `Warp<S>` keeps it beside
-the reader while its `kithara-warp::WarpRenderer` reads it for each live render
-quantum. It always carries `speed` + `region_plan`; with a native backend
+`kithara_warp::StretchControls` (one `Arc` per deck, in `PlayerConfig.warp`)
+owns the requested playback target. `prepare_config` carries the complete
+`WarpConfig` into `ResourceConfig`; `Resource` puts the same config in
+`TrackConfig::warp`, and resident `Warp<S>` keeps it beside the reader while
+its `kithara-warp::WarpRenderer` reads the controls at the configured render
+quantum in frames. It always carries `speed` + `region_plan`; with a native backend
 compiled by `kithara-play` (`stretch-signalsmith` / `stretch-bungee`) it also
 carries `keylock` and `backend`. `Queue` delegates the target to the player;
 key-lock and backend are set directly on the same handle.
@@ -119,11 +119,11 @@ reset/discontinuity, spec change, or failed-engine rebuild; it never discards a
 live backend tail.
 
 The canonical controls are seeded before a track is loaded; the native
-`WarpRenderer` does not cache a second requested target. With a native backend,
-each `PlayerTrack` reads the rate its resource currently applies on every
-render block, so a direct runtime change through the shared controls updates
-its media clock as well as its DSP. The leading track publishes the deck's
-effective rate through `PlaybackShared`.
+`WarpRenderer` does not cache a second requested target. A `PlayerTrack` advances
+its media clock from the reader-position delta represented by frames actually
+consumed from its feeder scratch. Read-ahead and an un-applied rate target
+therefore cannot move near-end or handover triggers ahead of presented media.
+The leading track publishes the deck's effective rate through `PlaybackShared`.
 `Player::rate()` and `PlayerEvent::RateChanged` expose only that effective
 value: fixed/no-backend resources report `1.0`, while a paused deck or a deck
 without a leading track reports `0.0`. Target controls and the effective

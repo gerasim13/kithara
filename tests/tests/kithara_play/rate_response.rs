@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{f64::consts::TAU, num::NonZeroU32};
+use std::{f64::consts::TAU, num::NonZeroUsize};
 
 #[cfg(feature = "perf")]
 use hotpath::HotpathGuardBuilder;
@@ -8,8 +8,7 @@ use kithara::{
     platform::time::{self, Duration},
     play::{Resource, ResourceConfig},
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
-    signal::AudioSpec,
-    warp::{StretchControls, StretchKind},
+    warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     TestTempDir, disk_asset_store, kithara,
@@ -32,7 +31,11 @@ const TONE_DOMINANCE_RATIO: f64 = 4.0;
 const TARGET_WINDOW_FRAMES: usize = 64;
 const RATE_COMMAND_BURST: usize = 64;
 const WARMUP_BLOCK_BUDGET: usize = 200;
-const RESPONSE_BUDGET: Duration = Duration::from_millis(10);
+const RESPONSE_BUDGET_FRAMES: usize = 441;
+const RENDER_QUANTUM_FRAMES: NonZeroUsize = match NonZeroUsize::new(128) {
+    Some(frames) => frames,
+    None => unreachable!(),
+};
 
 const UP: RateCase = RateCase::new(SLOW_RATE, 0, INTERMEDIATE_RATE, 1, false);
 const DOWN: RateCase = RateCase::new(INTERMEDIATE_RATE, 1, SLOW_RATE, 0, false);
@@ -76,16 +79,6 @@ fn frame_period(frames: usize) -> Duration {
         f64::from(u32::try_from(frames).expect("render frame count fits u32"))
             / f64::from(SAMPLE_RATE),
     )
-}
-
-fn response_frame_budget() -> usize {
-    AudioSpec::new(
-        CHANNELS,
-        NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate is non-zero"),
-    )
-    .frames_for(RESPONSE_BUDGET)
-    .expect("response budget fits the fixture sample rate")
-    .get()
 }
 
 fn tone_magnitudes(samples: &[f32]) -> [f64; 3] {
@@ -150,7 +143,12 @@ async fn playing_sine_queue(
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
-            .timestretch(stretch)
+            .warp(
+                WarpConfig::builder()
+                    .stretch(stretch)
+                    .render_quantum_frames(RENDER_QUANTUM_FRAMES)
+                    .build(),
+            )
             .build(),
         SAMPLE_RATE,
     );
@@ -265,13 +263,13 @@ fn assert_response(
             TONES_HZ[case.target_tone]
         )
     });
-    let budget = response_frame_budget();
+    let budget = RESPONSE_BUDGET_FRAMES;
     assert!(
         target_end <= budget,
         "{backend} {label} target {} Hz became dominant at {target_end} frames; hard budget is \
          {budget} frames ({:.1} ms)",
         TONES_HZ[case.target_tone],
-        RESPONSE_BUDGET.as_secs_f64() * 1_000.0,
+        budget as f64 * 1_000.0 / f64::from(SAMPLE_RATE),
     );
 }
 

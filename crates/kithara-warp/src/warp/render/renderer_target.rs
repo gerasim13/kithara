@@ -118,6 +118,10 @@ impl WarpRenderer {
         drop(self.retired_engine.take());
         self.sync_plan();
 
+        if spec.sample_rate != self.spec.sample_rate {
+            self.applied_speed.update_sample_rate(spec.sample_rate);
+        }
+
         let kind = self.controls.backend();
         let channels = usize::from(self.spec.channels.max(1));
         let holds_source = self.active || self.pending_frames(channels) > 0;

@@ -41,4 +41,4 @@ pub use temporal::StretchKind;
 pub use temporal::{ActiveRegion, GridSegment, RegionPlan, RegionPlanError, StretchControls};
 #[cfg(feature = "render")]
 pub use warp::WarpRenderer;
-pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap, supports_playback_rate};
+pub use warp::{Warp, WarpConfig, WarpCursor, WarpMap};

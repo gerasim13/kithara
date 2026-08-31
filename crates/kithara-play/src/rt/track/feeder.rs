@@ -1,8 +1,9 @@
-use std::{num::NonZeroU32, ops::Range};
+use std::{collections::VecDeque, num::NonZeroU32, ops::Range};
 
 use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
+use num_traits::cast::AsPrimitive;
 
 #[rustfmt::skip]
 use crate::resource::Resource;
@@ -10,8 +11,8 @@ use crate::{bridge::RtMetrics, worker::ServiceClass};
 
 /// RT-safe resource wrapper with internal scratch buffers.
 ///
-/// Wraps a [`Resource`] and maintains per-channel scratch buffers
-/// that are filled from the underlying `AudioReader`. The audio thread
+/// Wraps a [`Resource`] and maintains per-channel scratch plus matching
+/// media progress filled from the underlying `AudioReader`. The audio thread
 /// reads from these buffers, avoiding direct interaction with the
 /// potentially-blocking decoder on every callback.
 #[derive(fieldwork::Fieldwork)]
@@ -21,10 +22,35 @@ pub struct PlayerResource {
     src: Arc<str>,
     resource: WasmSend<Resource>,
     channel_buffers: [SampleBuffer; Self::STEREO_CHANNELS],
+    media_spans: VecDeque<MediaSpan>,
     eof_seen: bool,
     failed: bool,
     write_len: usize,
     write_pos: usize,
+    /// Media progress copied by the most recent [`Self::read`].
+    #[field(get, vis = "pub(crate)", copy)]
+    consumed_media_seconds: f64,
+}
+
+#[derive(Clone, Copy)]
+struct MediaSpan {
+    frames: usize,
+    seconds: f64,
+}
+
+impl MediaSpan {
+    fn take(&mut self, frames: usize) -> f64 {
+        if frames >= self.frames {
+            self.frames = 0;
+            return self.seconds;
+        }
+        let consumed_frames: f64 = AsPrimitive::as_(frames);
+        let span_frames: f64 = AsPrimitive::as_(self.frames);
+        let consumed = self.seconds * consumed_frames / span_frames;
+        self.frames -= frames;
+        self.seconds -= consumed;
+        consumed
+    }
 }
 
 /// Result of a bounded audio-thread read from [`PlayerResource`].
@@ -65,13 +91,12 @@ impl PlayerResource {
 
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two per-channel scratch buffers from the given sample pool, each holding
-    /// [`Self::scratch_frames`] frames.
+    /// Allocates channel scratch from the given sample pool.
     #[must_use]
     pub fn new(resource: Resource, src: Arc<str>, pool: &SamplePool) -> Self {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
 
-        let channel_buffers = std::array::from_fn(|_| {
+        let scratch = || {
             pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_frames {
@@ -79,14 +104,16 @@ impl PlayerResource {
                 }
                 b.resize(buffer_frames, 0.0);
             })
-        });
-
+        };
+        let channel_buffers = std::array::from_fn(|_| scratch());
         Self {
             channel_buffers,
+            media_spans: VecDeque::with_capacity(buffer_frames),
             src,
             resource: WasmSend::new(resource),
             write_len: 0,
             write_pos: 0,
+            consumed_media_seconds: 0.0,
             eof_seen: false,
             failed: false,
         }
@@ -122,23 +149,31 @@ impl PlayerResource {
             let right = &mut right_buf[0][self.write_pos..self.write_pos + avail];
             let mut planar: [&mut [f32]; Self::STEREO_CHANNELS] = [left, right];
 
-            let n = match self.resource.get_mut().read_planar(&mut planar) {
-                Ok(kithara_audio::ReadOutcome::Frames { count, .. }) => count.get(),
-                Ok(kithara_audio::ReadOutcome::Pending { .. }) => 0,
+            let start_position = self.resource.get().position();
+            let (n, media_seconds) = match self.resource.get_mut().read_planar(&mut planar) {
+                Ok(kithara_audio::ReadOutcome::Frames { count, position }) => (
+                    count.get(),
+                    position.saturating_sub(start_position).as_secs_f64(),
+                ),
+                Ok(kithara_audio::ReadOutcome::Pending { .. }) => (0, 0.0),
                 Ok(kithara_audio::ReadOutcome::Eof { .. }) => {
                     self.eof_seen = true;
                     eof_reached = true;
-                    0
+                    (0, 0.0)
                 }
                 Err(_) => {
                     metrics.record_decode_error();
                     self.failed = true;
-                    0
+                    (0, 0.0)
                 }
             };
             if n == 0 {
                 break;
             }
+            self.media_spans.push_back(MediaSpan {
+                frames: n,
+                seconds: media_seconds,
+            });
             self.write_len += n;
             self.write_pos += n;
         }
@@ -150,6 +185,22 @@ impl PlayerResource {
         self.write_len
             .saturating_add(callback_frames)
             .min(self.channel_buffers[0].len())
+    }
+
+    fn consume_media(&mut self, mut frames: usize) -> f64 {
+        let mut seconds = 0.0;
+        while frames > 0 {
+            let Some(mut span) = self.media_spans.pop_front() else {
+                break;
+            };
+            let consumed = frames.min(span.frames);
+            seconds += span.take(consumed);
+            frames -= consumed;
+            if span.frames > 0 {
+                self.media_spans.push_front(span);
+            }
+        }
+        seconds
     }
 
     /// Remaining buffered frames when the wrapped reader has reached EOF.
@@ -179,6 +230,7 @@ impl PlayerResource {
         range: Range<usize>,
         metrics: &RtMetrics,
     ) -> ReadOutcome {
+        self.consumed_media_seconds = 0.0;
         let frames_to_read = range.end - range.start;
         let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
 
@@ -200,6 +252,8 @@ impl PlayerResource {
                 output[1][..frames_to_write]
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
+
+            self.consumed_media_seconds = self.consume_media(frames_to_write);
 
             if tail_size > 0 {
                 self.channel_buffers[0]
@@ -251,6 +305,8 @@ impl PlayerResource {
         self.resource.get_mut().sync_seek();
         self.write_len = 0;
         self.write_pos = 0;
+        self.media_spans.clear();
+        self.consumed_media_seconds = 0.0;
         self.eof_seen = false;
         self.failed = false;
     }
@@ -272,10 +328,6 @@ impl PlayerResource {
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
-    }
-
-    pub(crate) fn playback_rate(&self) -> f32 {
-        self.resource.get().playback_rate()
     }
 }
 

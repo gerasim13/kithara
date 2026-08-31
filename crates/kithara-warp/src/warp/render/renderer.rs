@@ -1,14 +1,30 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
 use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
-use kithara_stretch::{ElasticEngine, ElasticError, StretchKind};
+use kithara_stretch::{ElasticCursor, ElasticEngine, ElasticError, ElasticSpanPlan, StretchKind};
 
-use crate::{ActiveRegion, RegionPlan, StretchControls};
+use crate::{ActiveRegion, RegionPlan, StretchControls, WarpConfig};
 
 #[cfg(test)]
 mod tests;
+
+pub(super) struct PreparedExact {
+    pub(super) next_speed: SmoothedParam,
+    pub(super) plan: ElasticSpanPlan,
+    pub(super) speed: f32,
+}
+
+pub(super) enum PreparedQuantum {
+    Exact(PreparedExact),
+    Legacy {
+        source_frames: usize,
+        speed: f32,
+        target: f32,
+    },
+}
 
 /// Source-timeline exact-span time-stretch driven by shared live controls.
 /// Unity speed without a region plan is a byte-identical passthrough.
@@ -28,10 +44,16 @@ pub struct WarpRenderer {
     /// Region covering the playhead - the lookup cursor. `None` forces a
     /// fresh binary search (first chunk, plan swap, region exit, seek).
     pub(super) region: Option<ActiveRegion>,
-    /// Speed sampled with the source quantum prepared by the scheduler shell.
-    pub(super) prepared_quantum_speed: Option<f32>,
+    /// Exact rate plan paired with the source quantum prepared by the scheduler.
+    pub(super) prepared_quantum: Option<PreparedQuantum>,
+    /// Renderer-owned applied speed. Shared controls contain only the target.
+    pub(super) applied_speed: SmoothedParam,
+    /// Exact source coordinate committed with the applied speed after rendering.
+    pub(super) exact_cursor: Option<ElasticCursor>,
     pub(super) sample_pool: SamplePool,
     pub(super) spec: AudioSpec,
+    /// Maximum output frames between samples of live temporal controls.
+    pub(super) render_quantum_frames: NonZeroUsize,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
@@ -53,7 +75,7 @@ pub struct WarpRenderer {
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<AudioChunkInfo>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
-    pub(super) rendered_source_end: Option<(u64, NonZeroU32)>,
+    pub(super) rendered_source_end: Option<(u64, NonZeroU32, Duration)>,
     /// Source frames admitted since the last renderer reset.
     pub(super) source_frames_admitted: u64,
     /// Reset requested by a timeline discontinuity. The scheduler shell
@@ -68,18 +90,16 @@ impl WarpRenderer {
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
     pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
-    pub(super) const RENDER_QUANTUM_FRAMES: NonZeroUsize = NonZeroUsize::new(512).unwrap();
+    pub(super) const RATE_SMOOTH_SECONDS: f32 = 0.002;
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
-    pub(crate) fn new(
-        controls: Arc<StretchControls>,
-        spec: AudioSpec,
-        sample_pool: SamplePool,
-    ) -> Self {
+    pub(crate) fn new(config: &WarpConfig, spec: AudioSpec, sample_pool: SamplePool) -> Self {
+        let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
+        let speed = controls.speed();
         let target = Self::prepare_target(current_kind, spec, &sample_pool, None, None);
         Self {
             engine: target.engine,
@@ -88,7 +108,17 @@ impl WarpRenderer {
             controls,
             sample_pool,
             spec,
-            prepared_quantum_speed: None,
+            render_quantum_frames: config.render_quantum_frames(),
+            prepared_quantum: None,
+            applied_speed: SmoothedParam::new(
+                speed,
+                SmootherConfig {
+                    smooth_seconds: Self::RATE_SMOOTH_SECONDS,
+                    ..SmootherConfig::default()
+                },
+                spec.sample_rate,
+            ),
+            exact_cursor: None,
             applied_pitch: f64::NAN,
             active: false,
             output_remainder: 0.0,
@@ -143,7 +173,8 @@ impl WarpRenderer {
         self.output_start_meta = None;
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
-        self.prepared_quantum_speed = None;
+        self.prepared_quantum = None;
+        self.exact_cursor = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
         self.active = false;
@@ -155,6 +186,13 @@ impl WarpRenderer {
             debug_assert!(self.deferred_scratch.is_none());
             self.deferred_scratch = Some(replacement);
         }
+    }
+
+    pub(super) fn snap_speed(&mut self) {
+        self.applied_speed.set_value(self.controls.speed());
+        self.applied_speed.reset_to_target();
+        self.prepared_quantum = None;
+        self.exact_cursor = None;
     }
 
     /// Region covering `frame`, plus whether the playhead just crossed out
@@ -184,6 +222,8 @@ impl WarpRenderer {
         if !same {
             self.plan = want;
             self.region = None;
+            self.prepared_quantum = None;
+            self.exact_cursor = None;
         }
     }
 
@@ -231,11 +271,13 @@ impl WarpRenderer {
         &mut self,
         meta: AudioChunkInfo,
         held_source_frames: u64,
+        timestamp: Duration,
     ) {
         let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
         self.rendered_source_end = Some((
             admitted.saturating_sub(held_source_frames),
             meta.spec.sample_rate,
+            timestamp,
         ));
     }
 
@@ -243,7 +285,10 @@ impl WarpRenderer {
     #[doc(hidden)]
     #[must_use]
     pub const fn rendered_source_end(&self) -> Option<(u64, NonZeroU32)> {
-        self.rendered_source_end
+        match self.rendered_source_end {
+            Some((frame, sample_rate, _)) => Some((frame, sample_rate)),
+            None => None,
+        }
     }
 
     pub(super) fn meta_at_frame(meta: AudioChunkInfo, frame_offset: u64) -> AudioChunkInfo {

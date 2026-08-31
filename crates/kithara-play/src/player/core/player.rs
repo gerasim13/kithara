@@ -74,14 +74,14 @@ impl PlayerImpl {
         }
 
         // Seed the single speed source with the configured default rate.
-        config.timestretch.set_speed(config.default_rate);
+        config.warp.stretch().set_speed(config.default_rate);
         let params = PlayerParams::from(&config);
         let core = PlayerCore {
             engine,
             worker: config.worker,
             engine_load: Arc::new(EngineLoad::default()),
             params,
-            timestretch: config.timestretch,
+            warp: config.warp,
             gapless_mode: config.gapless_mode,
             block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),

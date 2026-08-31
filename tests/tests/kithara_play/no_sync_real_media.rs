@@ -22,7 +22,7 @@ use kithara::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
         ResourceConfig, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
-    warp::{StretchControls, StretchKind},
+    warp::{StretchControls, StretchKind, WarpConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
@@ -869,7 +869,7 @@ async fn prepare_deck(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
             )
             .crossfade_duration(0.0)
-            .timestretch(Arc::clone(&controls))
+            .warp(WarpConfig::builder().stretch(Arc::clone(&controls)).build())
             .session(dispatcher)
             .build(),
     ));

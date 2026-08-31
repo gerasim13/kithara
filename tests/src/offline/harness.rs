@@ -13,7 +13,7 @@ use kithara::{
         effects::eq::EqBandConfig,
         player::{PlayerControl, PlayerControlSource},
     },
-    warp::StretchControls,
+    warp::WarpConfig,
 };
 
 use super::OfflineSession;
@@ -39,7 +39,7 @@ pub struct OfflinePlayerOptions {
     /// panic instead of inserted silence.
     #[builder(default)]
     block_on_underrun: bool,
-    timestretch: Option<Arc<StretchControls>>,
+    warp: Option<WarpConfig>,
 }
 
 impl OfflinePlayerHarness {
@@ -60,7 +60,7 @@ impl OfflinePlayerHarness {
             .session(Arc::clone(&session_dispatcher))
             .worker(worker)
             .maybe_eq_layout(options.eq_layout)
-            .maybe_timestretch(options.timestretch)
+            .maybe_warp(options.warp)
             .build();
 
         let player = PlayerImpl::new(player_config);

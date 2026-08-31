@@ -3,12 +3,12 @@ use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
 use tracing::warn;
 
-use super::renderer::WarpRenderer;
+use super::renderer::{PreparedQuantum, WarpRenderer};
 
 impl WarpRenderer {
-    /// Assemble an output chunk from `scratch`, preserving the exact source
-    /// start and the latest decoder frontier. `replacement` is retained for
-    /// shell-side preparation before the next checked tick.
+    /// Assemble an output chunk from `scratch` over the source interval that
+    /// became presentable since the previous emission. `replacement` is
+    /// retained for shell-side preparation before the next checked tick.
     fn emit(
         &mut self,
         replacement: Option<SampleBuffer>,
@@ -29,19 +29,59 @@ impl WarpRenderer {
             }
         };
         let mut meta = self.last_input_meta.unwrap_or_default();
-        self.record_rendered_source_end(meta, held_source_frames);
+        let previous_source_end = self.rendered_source_end;
+        let output_start = self.output_start_meta.take();
+        let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
+        let source_end = admitted.saturating_sub(held_source_frames);
+        let sample_rate = meta.spec.sample_rate;
+        let held_duration = match meta.spec.duration_for(held_source_frames) {
+            Ok(duration) => duration,
+            Err(error) => {
+                warn!(
+                    ?error,
+                    held_source_frames, "discarding malformed Warp source interval"
+                );
+                self.scratch.take();
+                self.defer_scratch(replacement);
+                return None;
+            }
+        };
+        let source_end_timestamp = meta.end_timestamp.saturating_sub(held_duration);
+        let (source_start, source_start_timestamp) = match previous_source_end {
+            Some((previous, previous_rate, previous_timestamp)) if previous_rate == sample_rate => {
+                if source_end < previous {
+                    warn!(
+                        previous,
+                        source_end, "discarding regressive Warp source interval"
+                    );
+                    self.scratch.take();
+                    self.defer_scratch(replacement);
+                    return None;
+                }
+                output_start.map_or((previous, previous_timestamp), |start| {
+                    if start.frame_offset == previous {
+                        (start.frame_offset, start.timestamp)
+                    } else {
+                        (previous, previous_timestamp)
+                    }
+                })
+            }
+            _ => output_start.map_or((meta.frame_offset, meta.timestamp), |start| {
+                (start.frame_offset, start.timestamp)
+            }),
+        };
+        self.record_rendered_source_end(meta, held_source_frames, source_end_timestamp);
         // A non-empty output always carries the live source spec. The default
         // metadata sentinel has zero channels and cannot reach the resampler.
         meta.spec = self.spec;
         meta.frames = u32::try_from(frames.get()).unwrap_or(u32::MAX);
-        if let Some(start) = self.output_start_meta.take() {
-            if start.frame_offset != meta.frame_offset {
-                meta.source_byte_offset = None;
-                meta.source_bytes = 0;
-            }
-            meta.frame_offset = start.frame_offset;
-            meta.timestamp = start.timestamp;
+        if source_start != meta.frame_offset {
+            meta.source_byte_offset = None;
+            meta.source_bytes = 0;
         }
+        meta.frame_offset = source_start;
+        meta.timestamp = source_start_timestamp;
+        meta.end_timestamp = source_end_timestamp;
         let samples = self.scratch.take()?;
         self.defer_scratch(replacement);
         Some(AudioChunk::new(meta, samples))
@@ -108,7 +148,12 @@ impl WarpRenderer {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
+    fn process_active(
+        &mut self,
+        chunk: AudioChunk,
+        prepared: PreparedQuantum,
+        direct: bool,
+    ) -> Option<AudioChunk> {
         if self.engine.is_none() || self.scratch.is_none() {
             warn!("time-stretch target was not prepared before rendering");
             self.defer_scratch(Some(chunk.samples));
@@ -133,13 +178,33 @@ impl WarpRenderer {
             self.defer_scratch(Some(samples));
             return None;
         }
-        if let Err(error) = self.render_active(meta, &samples, speed, channels, frames) {
-            warn!(%error, "time-stretch rendering failed; dropping chunk");
-            self.retire_engine();
-            self.clear_render_state();
-            self.defer_scratch(Some(samples));
-            return None;
-        }
+        let rendered = match prepared {
+            PreparedQuantum::Exact(exact) => {
+                self.render_prepared_exact(meta, &samples, channels, exact, direct)
+            }
+            PreparedQuantum::Legacy { speed, target, .. } => {
+                self.exact_cursor = None;
+                self.render_active(meta, &samples, speed, channels, frames)
+                    .and_then(|()| {
+                        let output_frames =
+                            self.scratch.as_deref().map_or(0, <[f32]>::len) / channels;
+                        Self::advance_speed(self.applied_speed, target, output_frames)
+                            .map(|next_speed| (next_speed, None))
+                    })
+            }
+        };
+        let (next_speed, next_cursor) = match rendered {
+            Ok(rendered) => rendered,
+            Err(error) => {
+                warn!(%error, "time-stretch rendering failed; dropping chunk");
+                self.retire_engine();
+                self.clear_render_state();
+                self.defer_scratch(Some(samples));
+                return None;
+            }
+        };
+        self.applied_speed = next_speed;
+        self.exact_cursor = next_cursor;
         self.source_frames_admitted = self
             .source_frames_admitted
             .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
@@ -182,7 +247,12 @@ impl WarpRenderer {
         self.emit(None, held_source_frames)
     }
 
-    fn render_at_speed(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
+    fn render_prepared(
+        &mut self,
+        chunk: AudioChunk,
+        prepared: PreparedQuantum,
+        direct: bool,
+    ) -> Option<AudioChunk> {
         if chunk.spec() != self.spec {
             warn!(
                 expected = %self.spec,
@@ -192,18 +262,38 @@ impl WarpRenderer {
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        if self.can_passthrough(speed) {
-            self.record_rendered_source_end(chunk.meta, 0);
+        if let PreparedQuantum::Legacy { speed, target, .. } = &prepared
+            && self.can_passthrough(*speed)
+        {
+            let next_speed = match Self::advance_speed(self.applied_speed, *target, chunk.frames())
+            {
+                Ok(next_speed) => next_speed,
+                Err(error) => {
+                    warn!(%error, "time-stretch speed smoothing failed");
+                    self.defer_scratch(Some(chunk.samples));
+                    return None;
+                }
+            };
+            self.record_rendered_source_end(chunk.meta, 0, chunk.meta.end_timestamp);
+            self.applied_speed = next_speed;
+            self.exact_cursor = None;
             return Some(chunk);
         }
-        self.process_active(chunk, speed)
+        self.process_active(chunk, prepared, direct)
     }
 
     #[doc(hidden)]
     pub fn render(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        self.prepared_quantum_speed = None;
-        let speed = self.controls.speed();
-        self.render_at_speed(chunk, speed)
+        self.prepared_quantum = None;
+        let prepared = match self.direct_plan(chunk.meta, chunk.frames()) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                warn!(%error, "time-stretch render planning failed");
+                self.defer_scratch(Some(chunk.samples));
+                return None;
+            }
+        };
+        self.render_prepared(chunk, prepared, true)
     }
 
     /// Render the source quantum paired with the speed sampled by
@@ -211,17 +301,34 @@ impl WarpRenderer {
     #[doc(hidden)]
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
-        let Some(speed) = self.prepared_quantum_speed.take() else {
+        let Some(prepared) = self.prepared_quantum.take() else {
             warn!("time-stretch quantum was not prepared before rendering");
             self.defer_scratch(Some(chunk.samples));
             return None;
         };
-        self.render_at_speed(chunk, speed)
+        let expected = match Self::prepared_source_frames(&prepared) {
+            Ok(expected) => expected,
+            Err(error) => {
+                warn!(%error, "time-stretch prepared source sizing failed");
+                self.defer_scratch(Some(chunk.samples));
+                return None;
+            }
+        };
+        if chunk.frames() != expected {
+            warn!(
+                actual = chunk.frames(),
+                expected, "time-stretch quantum source shape changed"
+            );
+            self.defer_scratch(Some(chunk.samples));
+            return None;
+        }
+        self.render_prepared(chunk, prepared, false)
     }
 
     #[doc(hidden)]
     pub fn reset(&mut self) {
         self.reset_pending = true;
         self.clear_render_state();
+        self.snap_speed();
     }
 }

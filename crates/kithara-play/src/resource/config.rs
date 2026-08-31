@@ -9,7 +9,7 @@ use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
-use kithara_warp::StretchControls;
+use kithara_warp::WarpConfig;
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
@@ -78,9 +78,9 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Live time-stretch controls shared with the resident Warp chain.
-    #[builder(default = StretchControls::new(1.0))]
-    pub(crate) stretch: Arc<StretchControls>,
+    /// Resident Warp resources and live temporal controls.
+    #[builder(default = WarpConfig::builder().build())]
+    pub(crate) warp: WarpConfig,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker>,
@@ -383,7 +383,7 @@ mod tests {
     #[kithara::test]
     fn config_stretch_defaults_to_unity() {
         let config = test_config("https://example.com/song.mp3").unwrap();
-        assert!((config.stretch.speed() - 1.0).abs() < f32::EPSILON);
+        assert!((config.warp.stretch().speed() - 1.0).abs() < f32::EPSILON);
     }
 
     #[kithara::test]

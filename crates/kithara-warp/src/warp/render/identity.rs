@@ -1,10 +1,14 @@
+#![cfg(not(all(
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+)))]
+
 use std::num::NonZeroU32;
 
 use kithara_bufpool::SamplePool;
-use kithara_platform::sync::Arc;
 use kithara_signal::{AudioChunk, AudioSpec};
 
-use crate::StretchControls;
+use crate::WarpConfig;
 
 /// Identity renderer for targets without elastic DSP.
 /// It preserves decoded samples exactly and keeps playback-rate capability disabled.
@@ -14,11 +18,7 @@ pub struct WarpRenderer {
 }
 
 impl WarpRenderer {
-    pub(crate) fn new(
-        _controls: Arc<StretchControls>,
-        _spec: AudioSpec,
-        _sample_pool: SamplePool,
-    ) -> Self {
+    pub(crate) fn new(_config: &WarpConfig, _spec: AudioSpec, _sample_pool: SamplePool) -> Self {
         Self {
             rendered_source_end: None,
         }
@@ -93,7 +93,8 @@ mod tests {
         meta.frame_offset = 41;
         let input = AudioChunk::new(meta, sample_pool.attach(vec![0.25, -0.5]));
         let input_ptr = input.samples.as_ptr();
-        let mut renderer = WarpRenderer::new(StretchControls::new(1.5), spec, sample_pool);
+        let renderer_config = WarpConfig::builder().build();
+        let mut renderer = WarpRenderer::new(&renderer_config, spec, sample_pool);
 
         assert_eq!(renderer.rendered_source_end(), None);
         let output = renderer.render(input).expect("identity output");
@@ -104,6 +105,5 @@ mod tests {
         renderer.reset();
         assert_eq!(renderer.rendered_source_end(), None);
         assert!(renderer.flush().is_none());
-        assert!(!crate::supports_playback_rate());
     }
 }

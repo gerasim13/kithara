@@ -78,7 +78,7 @@ fn source_quantum_rejects_a_stationary_terminal_coordinate(#[case] backend: Stre
     meta.frame_offset = u64::MAX;
 
     assert!(fx.prepare_quantum(meta, 1).is_none());
-    assert_eq!(fx.prepared_quantum_speed, None);
+    assert!(fx.prepared_quantum.is_none());
 }
 
 #[kithara::test]
@@ -135,7 +135,7 @@ fn one_frame_regions_accumulate_into_one_portable_request(#[case] backend: Stret
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: StretchKind) {
+fn pending_span_continues_from_presented_frontier(#[case] backend: StretchKind) {
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);
@@ -171,12 +171,16 @@ fn pending_span_uses_earliest_start_and_latest_frontier(#[case] backend: Stretch
         render_serviced(&mut fx, second).expect("pending span completes on the next chunk");
 
     assert!(first_output.meta.end_timestamp < second_output.meta.end_timestamp);
-    assert_eq!(second_output.meta.frame_offset, 1);
+    assert_eq!(second_output.meta.frame_offset, 0);
     assert_eq!(
-        second_output.meta.timestamp,
-        spec().duration_for(1).expect("test timestamp fits")
+        second_output.meta.timestamp, first_output.meta.end_timestamp,
+        "the next output continues from the presented source frontier"
     );
-    assert_eq!(second_output.meta.end_timestamp, Duration::from_millis(30));
+    assert_eq!(
+        second_output.meta.end_timestamp,
+        Duration::from_millis(30)
+            .saturating_sub(spec().duration_for(3).expect("held source duration fits"))
+    );
     assert_eq!(second_output.meta.segment_index, Some(2));
     assert_eq!(second_output.meta.variant_index, Some(2));
     assert_eq!(second_output.meta.epoch, 2);
@@ -287,11 +291,18 @@ fn active_engine_remains_resident_at_live_unity(#[case] backend: StretchKind) {
     let mut unity = chunk(&source[split..]);
     unity.meta.frame_offset = u64::try_from(ACTIVE_FRAMES).expect("fixture fits u64");
     let input_ptr = unity.samples.as_ptr();
-    let output =
-        render_serviced(&mut live, unity).expect("resident engine immediately renders exact unity");
+    let output = render_serviced(&mut live, unity)
+        .expect("resident engine immediately renders the unity target");
 
     assert!(live.active, "exact unity keeps the existing engine active");
-    assert_eq!(output.frames(), UNITY_FRAMES);
+    assert!(
+        output.frames() > UNITY_FRAMES && output.frames() <= UNITY_FRAMES * 2,
+        "the live 0.5x-to-unity ramp remains between its endpoint durations"
+    );
+    assert!(
+        live.applied_speed.has_settled_at(1.0),
+        "the unity target settles within the rendered block"
+    );
     assert_ne!(output.samples.as_ptr(), input_ptr);
     assert!(output.samples.iter().all(|sample| sample.is_finite()));
     assert!(

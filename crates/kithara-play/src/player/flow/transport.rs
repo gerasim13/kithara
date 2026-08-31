@@ -73,7 +73,7 @@ impl PlayerRuntime {
     /// Start playback from the configured default-rate target.
     pub fn play(&self) {
         let rate = self.default_rate().max(Self::MIN_PLAYBACK_RATE);
-        self.core.timestretch.set_speed(rate);
+        self.core.warp.stretch().set_speed(rate);
 
         if let Err(e) = self.ensure_engine_started() {
             warn!(?e, "failed to start engine");
@@ -220,7 +220,7 @@ impl PlayerRuntime {
         }
 
         if autoplay {
-            self.core.timestretch.set_speed(self.default_rate());
+            self.core.warp.stretch().set_speed(self.default_rate());
         }
 
         self.ensure_engine_started()?;

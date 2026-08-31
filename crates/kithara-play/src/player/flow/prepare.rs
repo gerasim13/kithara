@@ -21,7 +21,7 @@ impl ConfigPrep<'_> {
             .cancel
             .or_else(|| self.player.core.engine.cancel_token())
             .map(|parent| parent.child());
-        let stretch = Arc::clone(&self.player.core.timestretch);
+        let warp = self.player.core.warp.clone();
         let host_sample_rate = NonZeroU32::new(self.player.core.engine.master_sample_rate())
             .or_else(|| NonZeroU32::new(self.player.core.engine.configured_sample_rate()));
         let decoder = AudioDecoderConfig::builder()
@@ -37,7 +37,7 @@ impl ConfigPrep<'_> {
             block_on_underrun: self.player.core.block_on_underrun,
             host_sample_rate,
             decoder,
-            stretch,
+            warp,
             engine_load: Some(Arc::clone(&self.player.core.engine_load)),
             ..config
         }

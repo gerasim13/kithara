@@ -49,15 +49,17 @@ pub enum TrackReadOutcome {
 }
 
 impl PlayerTrack {
-    /// Advance the media clock by `frames` of mixed output.
-    ///
-    /// The mix output runs on the output clock; one output frame carries the
-    /// resource's current effective rate in media frames.
-    fn advance_media_clock(&mut self, frames: usize) {
-        let output_frames: f64 = AsPrimitive::as_(frames);
-        let playback_rate = self.playback_rate();
+    /// Advance the media clock by source time represented by consumed scratch.
+    fn advance_media_clock(&mut self, media_seconds: f64, output_frames: usize) {
         self.served_media_frames =
-            output_frames.mul_add(f64::from(playback_rate), self.served_media_frames);
+            f64::from(self.sample_rate.max(1)).mul_add(media_seconds, self.served_media_frames);
+        if output_frames > 0 {
+            let output_frames: f64 = AsPrimitive::as_(output_frames);
+            let rate = media_seconds * f64::from(self.sample_rate.max(1)) / output_frames;
+            if rate.is_finite() && rate >= 0.0 {
+                self.effective_rate = AsPrimitive::as_(rate);
+            }
+        }
     }
 
     fn check_notifications(
@@ -101,7 +103,6 @@ impl PlayerTrack {
             return outcome;
         };
 
-        self.advance_media_clock(frames);
         self.observed_duration = duration;
         self.update_observed_eof(frames_until_eof);
         let position = self.position();
@@ -181,7 +182,6 @@ impl PlayerTrack {
         let published_seek_epoch = sink.seek_epoch;
         let notification_tx = sink.notifications;
         let PartialRead { frames, duration } = partial;
-        self.advance_media_clock(frames);
         let position = self.position();
         self.observed_duration = if position > 0.0 { position } else { duration };
         let duration = self.observed_duration;
@@ -296,7 +296,7 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        match resource.read(&mut scratch_window, 0..range.len(), metrics) {
+        let outcome = match resource.read(&mut scratch_window, 0..range.len(), metrics) {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
                 frames,
                 duration: resource.duration(),
@@ -309,7 +309,16 @@ impl PlayerTrack {
             },
             ReadOutcome::Eof => TrackReadOutcome::Eof,
             ReadOutcome::Failed => TrackReadOutcome::Failed,
-        }
+        };
+        let consumed_media_seconds = resource.consumed_media_seconds();
+        let output_frames = match outcome {
+            TrackReadOutcome::Full { frames, .. } | TrackReadOutcome::Partial { frames, .. } => {
+                frames
+            }
+            TrackReadOutcome::Eof | TrackReadOutcome::Failed => 0,
+        };
+        self.advance_media_clock(consumed_media_seconds, output_frames);
+        outcome
     }
 
     fn update_after_mix(&mut self, notification_tx: &mut HeapProd<PlayerNotification>) {

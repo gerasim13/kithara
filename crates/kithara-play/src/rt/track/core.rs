@@ -43,14 +43,19 @@ pub struct PlayerTrack {
     /// Mirrors `PlayerResource::duration()` (post-gapless-trim, visible
     /// duration) captured under the resource lock.
     pub(super) observed_duration: f64,
-    /// Cumulative *media* frames this track has served into the mix output,
-    /// scaled by the resource's current effective playback rate.
+    /// Cumulative *media* frames represented by audio this track has consumed
+    /// from [`PlayerResource`] into the mix output.
     ///
     /// Used as the source of truth for near-end trigger position so the
     /// trigger reflects what has been rendered to the audio output, not the
     /// decoder's pre-buffered position (which can be ~200 ms ahead of the
-    /// mixer thanks to `PlayerResource`'s scratch buffer).
+    /// mixer thanks to `PlayerResource`'s scratch buffer). The feeder records
+    /// reader-position deltas beside the buffered frames, so neither read-ahead
+    /// nor an un-applied rate target advances this clock.
     pub(super) served_media_frames: f64,
+    /// Media seconds consumed per output second in the latest audible read.
+    #[field(get(copy, name = playback_rate, vis = "pub(crate)"))]
+    pub(super) effective_rate: f32,
     pub(super) sample_rate: u32,
     /// Slot seek epoch this track has been re-based onto.
     ///
@@ -95,6 +100,7 @@ impl PlayerTrack {
             prefetch_duration: prefetch_duration.max(0.0),
             sample_rate: sample_rate.get(),
             served_media_frames: 0.0,
+            effective_rate: 0.0,
             ended_at_eof: false,
         };
         track.update_service_class(TrackState::Preloading);
@@ -119,9 +125,6 @@ impl PlayerTrack {
             /// Source identifier.
             #[must_use]
             pub fn src(&self) -> &Arc<str>;
-            /// Effective media seconds consumed per output second.
-            #[must_use]
-            pub(crate) fn playback_rate(&self) -> f32;
             /// Propagate the host sample rate to the owned resource.
             pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }

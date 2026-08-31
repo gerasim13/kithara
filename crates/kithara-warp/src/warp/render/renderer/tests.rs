@@ -5,7 +5,7 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use realfft::RealFftPlanner;
 
-use super::{StretchControls, WarpRenderer};
+use super::{StretchControls, WarpConfig, WarpRenderer};
 
 mod playback;
 mod target;
@@ -59,6 +59,24 @@ fn chunk(samples: &[f32]) -> AudioChunk {
     )
 }
 
+fn chunk_at(samples: &[f32], frame_offset: u64) -> AudioChunk {
+    let mut chunk = chunk(samples);
+    chunk.meta.frame_offset = frame_offset;
+    chunk.meta.timestamp = spec()
+        .duration_for(frame_offset)
+        .expect("test timestamp fits");
+    chunk.meta.end_timestamp = chunk
+        .meta
+        .timestamp
+        .checked_add(
+            spec()
+                .duration_for(u64::try_from(chunk.frames()).expect("test frame count fits"))
+                .expect("test duration fits"),
+        )
+        .expect("test end timestamp fits");
+    chunk
+}
+
 /// Index of the strongest spectral bin (skipping DC) of a mono window
 /// taken from the middle of `mono`.
 fn dominant_bin(mono: &[f32]) -> usize {
@@ -90,7 +108,11 @@ fn spec() -> AudioSpec {
 }
 
 fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
-    WarpRenderer::new(controls, spec(), SamplePool::default())
+    WarpRenderer::new(
+        &WarpConfig::builder().stretch(controls).build(),
+        spec(),
+        SamplePool::default(),
+    )
 }
 
 fn render_serviced(fx: &mut WarpRenderer, input: AudioChunk) -> Option<AudioChunk> {

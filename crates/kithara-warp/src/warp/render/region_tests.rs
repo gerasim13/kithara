@@ -1,3 +1,9 @@
+#![cfg(all(
+    test,
+    not(target_arch = "wasm32"),
+    any(feature = "stretch-signalsmith", feature = "stretch-bungee")
+))]
+
 use std::num::NonZero;
 
 use kithara_bufpool::SamplePool;
@@ -7,7 +13,7 @@ use kithara_stretch::StretchKind;
 use kithara_test_utils::kithara;
 
 use super::WarpRenderer;
-use crate::{GridSegment, RegionPlan, RegionPlanError, StretchControls};
+use crate::{GridSegment, RegionPlan, RegionPlanError, StretchControls, WarpConfig};
 
 const SR: u32 = 44_100;
 const CH: usize = 2;
@@ -99,7 +105,8 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = WarpRenderer::new(controls, spec(), SamplePool::default());
+    let config = WarpConfig::builder().stretch(controls).build();
+    let mut fx = WarpRenderer::new(&config, spec(), SamplePool::default());
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {
