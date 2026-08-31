@@ -28,11 +28,12 @@ fn vinyl(kind: StretchKind, speed: f32) -> WarpRenderer {
 }
 
 fn render_with_tail(fx: &mut WarpRenderer, input: &[f32]) -> (Vec<f32>, usize) {
+    let pools = fx.pools.clone();
     let mut out: Vec<f32> = Vec::new();
     let mut tail_frames = 0;
     let block = 4096 * usize::from(Consts::CH);
     for data in input.chunks(block) {
-        if let Some(c) = render_serviced(fx, chunk(data)) {
+        if let Some(c) = render_serviced(fx, chunk(&pools, data)) {
             assert_eq!(
                 c.spec().sample_rate.get(),
                 Consts::SR,
@@ -139,8 +140,9 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
     const SOURCE_FRAMES: usize = 4096;
 
     let mut renderer = keylocked(backend, 0.5);
+    let pools = renderer.pools.clone();
     let source = sine(SOURCE_FRAMES);
-    let mut input = chunk(&source);
+    let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     input.meta.timestamp = spec()
         .duration_for(SOURCE_START)
@@ -194,8 +196,9 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
 
     let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let pools = renderer.pools.clone();
     let source = sine(SOURCE_FRAMES);
-    let mut input = chunk(&source);
+    let mut input = chunk(&pools, &source);
     input.meta.frame_offset = SOURCE_START;
     let admitted = SOURCE_START
         .checked_add(u64::try_from(SOURCE_FRAMES).expect("source frame count fits u64"))
@@ -249,12 +252,13 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
 fn output_meta_preserves_decoder_timeline(#[case] backend: StretchKind) {
     let channels = usize::from(Consts::CH);
     let mut fx = keylocked(backend, 0.5);
+    let pools = fx.pools.clone();
     let cf = 1024usize;
     let block = sine(cf);
     let mut fed_ends = HashSet::new();
     let mut emitted = Vec::new();
     for i in 0..40u64 {
-        let mut c = chunk(&block);
+        let mut c = chunk(&pools, &block);
         let end = Duration::from_millis(i * 100 + 100);
         c.meta.timestamp = Duration::from_millis(i * 100);
         c.meta.end_timestamp = end;
@@ -330,14 +334,15 @@ fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
     controls.set_keylock(true);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let block = sine(4096);
-    let unity = render_serviced(&mut fx, chunk(&block)).expect("unity bypass emits");
+    let unity = render_serviced(&mut fx, chunk(&pools, &block)).expect("unity bypass emits");
     assert_eq!(&unity.samples[..], &block[..], "unity phase bypasses");
 
     controls.set_speed(0.5);
     let mut stretched: Vec<f32> = Vec::new();
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&block)) {
+        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             stretched.extend_from_slice(&c.samples);
         }
     }
@@ -363,11 +368,12 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind) {
     controls.set_keylock(false);
     controls.set_backend(backend);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let block = sine(4096);
 
     let mut vinyl_out: Vec<f32> = Vec::new();
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&block)) {
+        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             vinyl_out.extend_from_slice(&c.samples);
         }
     }
@@ -384,7 +390,7 @@ fn live_keylock_toggle_switches_pitch_mode(#[case] backend: StretchKind) {
     controls.set_keylock(true);
     let mut stretched: Vec<f32> = Vec::new();
     for _ in 0..24 {
-        if let Some(c) = render_serviced(&mut fx, chunk(&block)) {
+        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             stretched.extend_from_slice(&c.samples);
         }
     }

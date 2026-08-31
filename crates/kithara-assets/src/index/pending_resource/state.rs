@@ -2,6 +2,7 @@
 
 use std::task::Waker;
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -32,15 +33,15 @@ impl WriterClaim {
     }
 }
 
-pub(crate) struct DemandState {
-    pub(crate) reader: Option<AssetReader>,
+pub(crate) struct DemandState<S> {
+    pub(crate) reader: Option<AssetReader<S>>,
     pub(crate) phase: SessionPhase,
     pub(crate) entries: Vec<Arc<DemandEntry>>,
-    pub(super) writer: Option<AssetWriter>,
     pub(super) writer_claim: Option<Arc<WriterClaim>>,
+    pub(super) writer: Option<AssetWriter<S>>,
 }
 
-impl DemandState {
+impl<S> DemandState<S> {
     pub(crate) fn current_peer_waker(&self) -> Option<Waker> {
         self.writer_claim
             .as_ref()
@@ -95,17 +96,20 @@ impl DemandState {
     }
 }
 
-pub(crate) struct PendingResource {
-    pub(crate) state: Mutex<DemandState>,
+pub(crate) struct PendingResource<S> {
+    pub(crate) state: Mutex<DemandState<S>>,
     pub(super) writer_cancel: CancelToken,
     pub(super) remove: RemoveResource,
 }
 
-impl PendingResource {
+impl<S> PendingResource<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn new(
         writer_cancel: CancelToken,
         consumer: Arc<DemandEntry>,
-        writer: AssetWriter,
+        writer: AssetWriter<S>,
         remove: RemoveResource,
     ) -> Self {
         let reader = writer.reader();
@@ -124,7 +128,7 @@ impl PendingResource {
 
     pub(in crate::index) fn elect_writer(
         &self,
-        state: &mut DemandState,
+        state: &mut DemandState<S>,
         consumer: &Arc<DemandEntry>,
     ) -> Option<Arc<WriterClaim>> {
         if self.writer_cancel.is_cancelled() {

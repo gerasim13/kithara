@@ -3,15 +3,17 @@ use core::num::NonZeroU32;
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
-    diff::{Diff, Patch},
-    event::ProcEvents,
+    diff::{Diff, Patch, PatchError},
+    event::{ParamData, ProcEvents},
     mask::MaskType,
     node::{
         AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig,
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
+use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
+use tracing::warn;
 
 use crate::effects::eq::{EqBandConfig, EqConfig, GainDb, IsolatorEq};
 
@@ -23,17 +25,60 @@ pub(crate) struct MasterEqBand {
     pub(crate) kind: u8,
 }
 
-#[derive(Diff, Patch, Debug, Clone)]
-pub struct MasterEqNode {
+#[derive(Diff, Debug)]
+pub struct MasterEqNode<S> {
     pub(crate) bands: Vec<MasterEqBand>,
     pub(crate) enabled: bool,
     #[diff(skip)]
-    config: EqConfig,
+    config: EqConfig<S>,
 }
 
-impl MasterEqNode {
+/// An opaque runtime parameter patch for [`MasterEqNode`].
+pub struct MasterEqNodePatch(MasterEqNodePatchKind);
+
+enum MasterEqNodePatchKind {
+    Bands(<Vec<MasterEqBand> as Patch>::Patch),
+    Enabled(<bool as Patch>::Patch),
+}
+
+impl<S> Patch for MasterEqNode<S> {
+    type Patch = MasterEqNodePatch;
+
+    fn patch(data: &ParamData, path: &[u32]) -> Result<Self::Patch, PatchError> {
+        match path {
+            [0, tail @ ..] => Ok(MasterEqNodePatch(MasterEqNodePatchKind::Bands(<Vec<
+                MasterEqBand,
+            > as Patch>::patch(
+                data, tail,
+            )?))),
+            [1, tail @ ..] => Ok(MasterEqNodePatch(MasterEqNodePatchKind::Enabled(
+                bool::patch(data, tail)?,
+            ))),
+            _ => Err(PatchError::InvalidPath),
+        }
+    }
+
+    fn apply(&mut self, patch: Self::Patch) {
+        match patch.0 {
+            MasterEqNodePatchKind::Bands(patch) => self.bands.apply(patch),
+            MasterEqNodePatchKind::Enabled(patch) => self.enabled.apply(patch),
+        }
+    }
+}
+
+impl<S> Clone for MasterEqNode<S> {
+    fn clone(&self) -> Self {
+        Self {
+            bands: self.bands.clone(),
+            enabled: self.enabled,
+            config: self.config.clone(),
+        }
+    }
+}
+
+impl<S> MasterEqNode<S> {
     #[must_use]
-    pub fn new(config: EqConfig, layout: &[EqBandConfig]) -> Self {
+    pub fn new(config: EqConfig<S>, layout: &[EqBandConfig]) -> Self {
         let bands = layout
             .iter()
             .map(|band| MasterEqBand {
@@ -63,7 +108,10 @@ impl MasterEqNode {
     }
 }
 
-impl AudioNode for MasterEqNode {
+impl<S> AudioNode for MasterEqNode<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     type Configuration = EmptyConfig;
 
     fn construct_processor(
@@ -84,22 +132,39 @@ impl AudioNode for MasterEqNode {
     }
 }
 
-struct MasterEqProcessor {
-    eq_l: IsolatorEq,
-    eq_r: IsolatorEq,
-    params: MasterEqNode,
+struct MasterEqProcessor<S> {
+    eq_l: Option<IsolatorEq>,
+    eq_r: Option<IsolatorEq>,
+    params: MasterEqNode<S>,
     sample_rate: NonZeroU32,
 }
 
-impl MasterEqProcessor {
-    fn new(params: MasterEqNode, sample_rate: NonZeroU32) -> Self {
+impl<S> MasterEqProcessor<S>
+where
+    S: HasPool<f32>,
+{
+    fn new(params: MasterEqNode<S>, sample_rate: NonZeroU32) -> Self {
         let bands = bands_from_params(&params);
-        let mut eq_l = IsolatorEq::new(&params.config, &bands, sample_rate.get());
-        let mut eq_r = IsolatorEq::new(&params.config, &bands, sample_rate.get());
+        let equalizers =
+            IsolatorEq::new(&params.config, &bands, sample_rate.get()).and_then(|left| {
+                IsolatorEq::new(&params.config, &bands, sample_rate.get())
+                    .map(|right| (left, right))
+            });
+        let (mut eq_l, mut eq_r) = match equalizers {
+            Ok(equalizers) => (Some(equalizers.0), Some(equalizers.1)),
+            Err(error) => {
+                warn!(%error, "master EQ disabled because its pooled scratch allocation failed");
+                (None, None)
+            }
+        };
 
         for (i, band) in params.bands.iter().enumerate() {
-            eq_l.set_gain(i, GainDb::from(band.gain_db));
-            eq_r.set_gain(i, GainDb::from(band.gain_db));
+            if let Some(eq) = eq_l.as_mut() {
+                eq.set_gain(i, GainDb::from(band.gain_db));
+            }
+            if let Some(eq) = eq_r.as_mut() {
+                eq.set_gain(i, GainDb::from(band.gain_db));
+            }
         }
 
         Self {
@@ -112,13 +177,17 @@ impl MasterEqProcessor {
 
     fn sync_gains(&mut self) {
         for (i, band) in self.params.bands.iter().enumerate() {
-            self.eq_l.set_gain(i, GainDb::from(band.gain_db));
-            self.eq_r.set_gain(i, GainDb::from(band.gain_db));
+            if let Some(eq) = self.eq_l.as_mut() {
+                eq.set_gain(i, GainDb::from(band.gain_db));
+            }
+            if let Some(eq) = self.eq_r.as_mut() {
+                eq.set_gain(i, GainDb::from(band.gain_db));
+            }
         }
     }
 }
 
-fn bands_from_params(params: &MasterEqNode) -> Vec<EqBandConfig> {
+fn bands_from_params<S>(params: &MasterEqNode<S>) -> Vec<EqBandConfig> {
     params
         .bands
         .iter()
@@ -133,11 +202,18 @@ fn bands_from_params(params: &MasterEqNode) -> Vec<EqBandConfig> {
         .collect()
 }
 
-impl AudioNodeProcessor for MasterEqProcessor {
+impl<S> AudioNodeProcessor for MasterEqProcessor<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn new_stream(&mut self, stream_info: &StreamInfo, _context: &mut ProcStreamCtx) {
         self.sample_rate = stream_info.sample_rate;
-        self.eq_l.update_sample_rate(self.sample_rate.get());
-        self.eq_r.update_sample_rate(self.sample_rate.get());
+        if let Some(eq) = self.eq_l.as_mut() {
+            eq.update_sample_rate(self.sample_rate.get());
+        }
+        if let Some(eq) = self.eq_r.as_mut() {
+            eq.update_sample_rate(self.sample_rate.get());
+        }
     }
 
     #[kithara::rtsan_forbid_blocking]
@@ -151,7 +227,7 @@ impl AudioNodeProcessor for MasterEqProcessor {
         /// Minimum stereo channel count for processing.
         const MIN_STEREO: usize = 2;
         let mut dirty = false;
-        for patch in events.drain_patches::<MasterEqNode>() {
+        for patch in events.drain_patches::<MasterEqNode<S>>() {
             self.params.apply(patch);
             dirty = true;
         }
@@ -163,7 +239,11 @@ impl AudioNodeProcessor for MasterEqProcessor {
             return ProcessStatus::Bypass;
         }
 
-        if !self.params.enabled || info.in_silence_mask.all_channels_silent(MIN_STEREO) {
+        if !self.params.enabled
+            || self.eq_l.is_none()
+            || self.eq_r.is_none()
+            || info.in_silence_mask.all_channels_silent(MIN_STEREO)
+        {
             buffers.outputs[0].copy_from_slice(buffers.inputs[0]);
             buffers.outputs[1].copy_from_slice(buffers.inputs[1]);
             return ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask));
@@ -180,9 +260,12 @@ impl AudioNodeProcessor for MasterEqProcessor {
         let out_l = &mut out_l_slice[..info.frames];
         let out_r = &mut out_r_slice[..info.frames];
 
+        let (Some(eq_l), Some(eq_r)) = (self.eq_l.as_mut(), self.eq_r.as_mut()) else {
+            return ProcessStatus::Bypass;
+        };
         for frame in 0..info.frames {
-            out_l[frame] = self.eq_l.process_sample(in_l[frame]);
-            out_r[frame] = self.eq_r.process_sample(in_r[frame]);
+            out_l[frame] = eq_l.process_sample(in_l[frame]);
+            out_r[frame] = eq_r.process_sample(in_r[frame]);
         }
 
         ProcessStatus::OutputsModified

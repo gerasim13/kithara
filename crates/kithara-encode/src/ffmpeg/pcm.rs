@@ -7,7 +7,7 @@ use ffmpeg::{
     frame::Audio as AudioFrame,
 };
 use ffmpeg_next as ffmpeg;
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion};
 
 use crate::{EncodeError, EncodeResult, PcmSource};
 
@@ -15,18 +15,21 @@ pub(crate) const PCM_INPUT_FORMAT: Sample = Sample::I16(SampleType::Packed);
 
 const I16_SCALE: f32 = 32_768.0;
 
-fn pump_pcm_bytes(
+fn pump_pcm_bytes<S>(
     pcm: &dyn PcmSource,
-    byte_pool: &BytePool,
+    pools: &PoolRegion<S>,
     chunk_frames: usize,
     mut on_frames: impl FnMut(&[u8], usize) -> EncodeResult<()>,
-) -> EncodeResult<()> {
+) -> EncodeResult<()>
+where
+    S: HasPool<u8>,
+{
     let bytes_per_frame = usize::from(pcm.channels()) * size_of::<i16>();
     let total_byte_len = pcm.total_byte_len().unwrap_or(0);
     let chunk_bytes = chunk_frames
         .checked_mul(bytes_per_frame)
         .ok_or_else(|| EncodeError::InvalidInput("PCM chunk byte count overflow".to_owned()))?;
-    let mut buf = byte_pool.get();
+    let mut buf = pools.get::<u8>();
     buf.ensure_len(chunk_bytes)
         .map_err(|error| EncodeError::Backend(Box::new(error)))?;
     let mut offset = 0;
@@ -54,16 +57,18 @@ fn pump_pcm_bytes(
     Ok(())
 }
 
-pub(crate) fn pump_pcm_samples(
+pub(crate) fn pump_pcm_samples<S>(
     pcm: &dyn PcmSource,
-    byte_pool: &BytePool,
-    sample_pool: &SamplePool,
+    pools: &PoolRegion<S>,
     chunk_frames: usize,
     mut on_samples: impl FnMut(&[f32]) -> EncodeResult<()>,
-) -> EncodeResult<()> {
-    let mut samples = sample_pool.get();
+) -> EncodeResult<()>
+where
+    S: HasPool<u8> + HasPool<f32>,
+{
+    let mut samples = pools.get::<f32>();
 
-    pump_pcm_bytes(pcm, byte_pool, chunk_frames, |frames, _| {
+    pump_pcm_bytes(pcm, pools, chunk_frames, |frames, _| {
         samples.clear();
         let sample_count = frames.len() / size_of::<i16>();
         samples
@@ -167,26 +172,18 @@ pub(crate) fn drain_filtered_frames(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
-
     use super::pump_pcm_samples;
-    use crate::test_pcm::TestPcm;
+    use crate::{test_pcm::TestPcm, test_pools};
 
     #[test]
     fn i16_input_scales_onto_the_full_scale_f32_range() {
         let pcm = TestPcm::from_samples(&[i16::MIN, -16_384, 0, 16_384, i16::MAX], 48_000, 1);
 
         let mut samples = Vec::new();
-        pump_pcm_samples(
-            &pcm,
-            &BytePool::default(),
-            &SamplePool::default(),
-            2,
-            |chunk| {
-                samples.extend_from_slice(chunk);
-                Ok(())
-            },
-        )
+        pump_pcm_samples(&pcm, &test_pools::pools(), 2, |chunk| {
+            samples.extend_from_slice(chunk);
+            Ok(())
+        })
         .expect("read the source");
 
         assert_eq!(samples, [-1.0, -0.5, 0.0, 0.5, 32_767.0 / 32_768.0]);
@@ -197,16 +194,10 @@ mod tests {
         let pcm = TestPcm::from_bytes(vec![0x00, 0x40, 0x00, 0x40, 0x11], 48_000, 2);
 
         let mut samples = Vec::new();
-        pump_pcm_samples(
-            &pcm,
-            &BytePool::default(),
-            &SamplePool::default(),
-            1,
-            |chunk| {
-                samples.extend_from_slice(chunk);
-                Ok(())
-            },
-        )
+        pump_pcm_samples(&pcm, &test_pools::pools(), 1, |chunk| {
+            samples.extend_from_slice(chunk);
+            Ok(())
+        })
         .expect("read the source");
 
         assert_eq!(samples, [0.5, 0.5]);

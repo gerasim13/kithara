@@ -15,12 +15,8 @@ struct TestSession {
     nodes: Mutex<Vec<NodeInputs>>,
 }
 
-impl SessionDispatcher for TestSession {
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl<S> SessionDispatcher<S> for TestSession {
+    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         let reply = match cmd {
             Cmd::RegisterPlayer { .. } => {
                 Reply::PlayerRegistered(self.next_player.fetch_add(1, Ordering::Relaxed))
@@ -37,9 +33,13 @@ impl SessionDispatcher for TestSession {
         };
         Ok(reply)
     }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
 }
 
-pub(crate) fn test_session() -> Arc<dyn SessionDispatcher> {
+pub(crate) fn test_session<S>() -> Arc<dyn SessionDispatcher<S>> {
     Arc::new(TestSession {
         next_player: AtomicU64::new(1),
         next_slot: AtomicU64::new(0),

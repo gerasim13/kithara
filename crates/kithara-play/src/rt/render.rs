@@ -9,7 +9,7 @@ use firewheel::{
     node::ProcBuffers,
     param::smoother::SmootherConfig,
 };
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
@@ -55,9 +55,12 @@ impl RenderPass {
 
     const SCRATCH_BUF_COUNT: usize = 6;
 
-    pub(crate) fn new(pool: &SamplePool, shape: StreamShape) -> Self {
+    pub(crate) fn new<S>(pools: &PoolRegion<S>, shape: StreamShape) -> Self
+    where
+        S: HasPool<f32>,
+    {
         let mut pass = Self {
-            scratch_bufs: std::array::from_fn(|_| pool.get()),
+            scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
             capacity: 0,
             priming: true,
             gate: MixDSP::new(

@@ -1,6 +1,6 @@
 use super::{
     ir::{Pt, Rect},
-    pool::{Buffer, VecPool},
+    pool::{Buffer, VecGuard},
 };
 
 /// One move a vector outline is made of, in logical pixels.
@@ -45,8 +45,8 @@ pub enum FillRule {
 /// leave the draw list and reach a toolkit directly.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PoolPath {
-    verbs: Buffer<Verb>,
     rule: FillRule,
+    verbs: Buffer<Verb>,
 }
 
 impl PoolPath {
@@ -58,22 +58,22 @@ impl PoolPath {
         }
     }
 
+    pub(super) fn pooled(rule: FillRule, guard: VecGuard<Verb>) -> Self {
+        Self {
+            rule,
+            verbs: Buffer::pooled(guard),
+        }
+    }
+
     pub(super) fn extend(&mut self, verbs: impl IntoIterator<Item = Verb>) {
         for verb in verbs {
             self.verbs.push(verb);
         }
     }
 
-    pub(super) fn into_pooled(mut self, pool: &VecPool<Verb>) -> Self {
-        self.verbs = self.verbs.into_pooled(pool);
+    pub(super) fn into_pooled(mut self, acquire: impl FnOnce() -> VecGuard<Verb>) -> Self {
+        self.verbs = self.verbs.into_pooled(acquire);
         self
-    }
-
-    pub(super) fn pooled(rule: FillRule, pool: &VecPool<Verb>) -> Self {
-        Self {
-            rule,
-            verbs: Buffer::pooled(pool),
-        }
     }
 
     #[must_use]

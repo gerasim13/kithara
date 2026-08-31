@@ -4,6 +4,7 @@ use std::io::{Error as IoError, ErrorKind};
 
 use arc_swap::ArcSwap;
 use kithara_abr::{AbrDecision, PendingAbrClaim, PendingAbrDecision};
+use kithara_bufpool::HasPool;
 use kithara_events::{AbrReason, SeekEpoch, VariantIndex};
 use kithara_platform::{
     sync::{Arc, Mutex},
@@ -21,18 +22,27 @@ use super::{
     coord::{HlsCoord, variant_switch_target_time},
     session::HlsSession,
 };
-pub(super) struct SessionSlots {
-    publication: ArcSwap<ResidentSessions>,
-    transition: Mutex<TransitionState>,
+pub(super) struct SessionSlots<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    publication: ArcSwap<ResidentSessions<S>>,
+    transition: Mutex<TransitionState<S>>,
 }
 
-struct ResidentSessions {
-    first: Arc<HlsSession>,
-    second: Option<Arc<HlsSession>>,
+struct ResidentSessions<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    first: Arc<HlsSession<S>>,
+    second: Option<Arc<HlsSession<S>>>,
 }
 
-impl ResidentSessions {
-    fn find(&self, variant_index: usize) -> Option<&Arc<HlsSession>> {
+impl<S> ResidentSessions<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn find(&self, variant_index: usize) -> Option<&Arc<HlsSession<S>>> {
         if self.first.variant_index() == variant_index {
             return Some(&self.first);
         }
@@ -41,14 +51,14 @@ impl ResidentSessions {
             .filter(|session| session.variant_index() == variant_index)
     }
 
-    const fn one(session: Arc<HlsSession>) -> Self {
+    const fn one(session: Arc<HlsSession<S>>) -> Self {
         Self {
             first: session,
             second: None,
         }
     }
 
-    const fn two(first: Arc<HlsSession>, second: Arc<HlsSession>) -> Self {
+    const fn two(first: Arc<HlsSession<S>>, second: Arc<HlsSession<S>>) -> Self {
         Self {
             first,
             second: Some(second),
@@ -56,15 +66,18 @@ impl ResidentSessions {
     }
 }
 
-impl SessionSlots {
-    pub(super) fn new(active: Arc<HlsSession>) -> Self {
+impl<S> SessionSlots<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(super) fn new(active: Arc<HlsSession<S>>) -> Self {
         Self {
             publication: ArcSwap::from_pointee(ResidentSessions::one(active)),
             transition: Mutex::new(TransitionState { incoming: None }),
         }
     }
 
-    pub(super) fn active(&self, mut selected_variant: impl FnMut() -> usize) -> Arc<HlsSession> {
+    pub(super) fn active(&self, mut selected_variant: impl FnMut() -> usize) -> Arc<HlsSession<S>> {
         loop {
             let before = selected_variant();
             let residents = self.publication.load();
@@ -80,7 +93,7 @@ impl SessionSlots {
         }
     }
 
-    pub(super) fn incoming_session(&self) -> Option<Arc<HlsSession>> {
+    pub(super) fn incoming_session(&self) -> Option<Arc<HlsSession<S>>> {
         self.transition
             .lock()
             .incoming
@@ -88,12 +101,12 @@ impl SessionSlots {
             .map(|slot| Arc::clone(&slot.session))
     }
 
-    fn publish_exact_one(&self, session: Arc<HlsSession>) {
+    fn publish_exact_one(&self, session: Arc<HlsSession<S>>) {
         self.publication
             .store(Arc::new(ResidentSessions::one(session)));
     }
 
-    fn publish_exact_two(&self, first: Arc<HlsSession>, second: Arc<HlsSession>) {
+    fn publish_exact_two(&self, first: Arc<HlsSession<S>>, second: Arc<HlsSession<S>>) {
         self.publication
             .store(Arc::new(ResidentSessions::two(first, second)));
     }
@@ -108,12 +121,18 @@ impl SessionSlots {
     }
 }
 
-struct TransitionState {
-    incoming: Option<IncomingSlot>,
+struct TransitionState<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    incoming: Option<IncomingSlot<S>>,
 }
 
-struct IncomingSlot {
-    session: Arc<HlsSession>,
+struct IncomingSlot<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    session: Arc<HlsSession<S>>,
     landing_time: Duration,
     reader: Option<OpenedVariantReader>,
     claim: PendingAbrDecision,
@@ -121,7 +140,10 @@ struct IncomingSlot {
     transition: VariantTransition,
 }
 
-impl HlsCoord {
+impl<S> HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) fn abort_variant(&self, transition: VariantTransition) -> bool {
         let mut state = self.sessions.transition.lock();
         if state
@@ -136,7 +158,7 @@ impl HlsCoord {
         true
     }
 
-    pub(crate) fn active_session(&self) -> Arc<HlsSession> {
+    pub(crate) fn active_session(&self) -> Arc<HlsSession<S>> {
         self.sessions.active(|| {
             self.abr
                 .current_variant_index()
@@ -150,7 +172,7 @@ impl HlsCoord {
     }
 
     #[kithara::probe(abort_intent)]
-    fn discard_incoming(&self, state: &mut TransitionState, abort_intent: bool) {
+    fn discard_incoming(&self, state: &mut TransitionState<S>, abort_intent: bool) {
         let Some(slot) = state.incoming.take() else {
             return;
         };
@@ -178,7 +200,7 @@ impl HlsCoord {
     /// again — the downloader runs a queued pack only when a slot frees.
     pub(crate) fn dispatch_active(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
         let latch = self
@@ -212,7 +234,7 @@ impl HlsCoord {
     /// must serve that decoder's reads.
     pub(crate) fn dispatch_incoming(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
         let incoming = self
@@ -424,7 +446,7 @@ impl HlsCoord {
         &self,
         transition: VariantTransition,
     ) -> StreamResult<VariantReaderTake> {
-        let mut wake_when_unlocked: Option<Arc<HlsSession>> = None;
+        let mut wake_when_unlocked: Option<Arc<HlsSession<S>>> = None;
         let mut state = self.sessions.transition.lock();
         let result = if let Some(slot) = state.incoming.as_mut() {
             if slot.transition != transition {

@@ -4,7 +4,7 @@ use std::{
 };
 
 use bon::Builder;
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use crate::{
@@ -15,18 +15,18 @@ use crate::{
 #[derive(Clone, Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct MonoStreamConfig<B> {
+pub struct MonoStreamConfig<B, S> {
     pub backend: B,
     pub source_sample_rate: NonZeroU32,
     pub target_sample_rate: NonZeroU32,
+    pub pools: PoolRegion<S>,
     #[builder(default)]
     pub options: ResamplerOptions,
     #[builder(default)]
     pub quality: ResamplerQuality,
-    pub sample_pool: SamplePool,
 }
 
-impl<B> fmt::Debug for MonoStreamConfig<B>
+impl<B, S> fmt::Debug for MonoStreamConfig<B, S>
 where
     B: ResamplerBackend,
 {
@@ -34,7 +34,7 @@ where
         f.debug_struct("MonoStreamConfig")
             .field("backend", &self.backend.name())
             .field("options", &self.options)
-            .field("sample_pool", &"<injected>")
+            .field("pools", &"<injected>")
             .field("quality", &self.quality)
             .field("source_sample_rate", &self.source_sample_rate)
             .field("target_sample_rate", &self.target_sample_rate)
@@ -46,11 +46,11 @@ pub struct MonoStream<B>
 where
     B: ResamplerBackend,
 {
-    resampler: B::Resampler,
     input_block: SampleBuffer,
     output_block: SampleBuffer,
     pending: SampleBuffer,
     ready: SampleBuffer,
+    resampler: B::Resampler,
     ratio: f64,
     total_in: u64,
     emitted: usize,
@@ -67,7 +67,10 @@ where
     ///
     /// Returns [`ResamplerBuildError`] when backend construction fails or the
     /// injected pool cannot provide the configured scratch buffers.
-    pub fn new(config: MonoStreamConfig<B>) -> Result<Self, ResamplerBuildError> {
+    pub fn new<S>(config: MonoStreamConfig<B, S>) -> Result<Self, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         let backend = config.backend;
         let backend_name = backend.name();
         let settings = ResamplerSettings::builder()
@@ -78,7 +81,7 @@ where
             })
             .quality(config.quality)
             .options(config.options)
-            .sample_pool(config.sample_pool.clone())
+            .pools(config.pools.clone())
             .build();
         let resampler_config = ResamplerConfig::builder()
             .backend(backend)
@@ -88,26 +91,11 @@ where
         let delay = resampler.output_delay();
         let ratio =
             f64::from(config.target_sample_rate.get()) / f64::from(config.source_sample_rate.get());
-        let input_block = pooled_buffer(
-            &config.sample_pool,
-            resampler.input_frames_max(),
-            backend_name,
-        )?;
-        let output_block = pooled_buffer(
-            &config.sample_pool,
-            resampler.output_frames_max(),
-            backend_name,
-        )?;
-        let pending = pooled_buffer(
-            &config.sample_pool,
-            resampler.input_frames_max(),
-            backend_name,
-        )?;
-        let ready = pooled_buffer(
-            &config.sample_pool,
-            resampler.output_frames_max(),
-            backend_name,
-        )?;
+        let input_block = pooled_buffer(&config.pools, resampler.input_frames_max(), backend_name)?;
+        let output_block =
+            pooled_buffer(&config.pools, resampler.output_frames_max(), backend_name)?;
+        let pending = pooled_buffer(&config.pools, resampler.input_frames_max(), backend_name)?;
+        let ready = pooled_buffer(&config.pools, resampler.output_frames_max(), backend_name)?;
 
         Ok(Self {
             resampler,
@@ -256,12 +244,15 @@ fn extend_zeros(dst: &mut SampleBuffer, count: usize) -> Result<(), ResamplerErr
     Ok(())
 }
 
-fn pooled_buffer(
-    pool: &SamplePool,
+fn pooled_buffer<S>(
+    pools: &PoolRegion<S>,
     capacity: usize,
     backend: &'static str,
-) -> Result<SampleBuffer, ResamplerBuildError> {
-    let mut buffer = pool.get();
+) -> Result<SampleBuffer, ResamplerBuildError>
+where
+    S: HasPool<f32>,
+{
+    let mut buffer = pools.get::<f32>();
     buffer
         .ensure_len(capacity)
         .map_err(|err| ResamplerBuildError::BackendBuild {

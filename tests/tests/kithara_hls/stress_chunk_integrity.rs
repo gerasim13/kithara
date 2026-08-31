@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -22,6 +21,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
@@ -170,31 +170,29 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
 
     let store = if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .pool(worker.byte_pool().clone())
             .cache_capacity(NonZeroUsize::new(Consts::SEGMENT_COUNT * 2 + 10).expect("nonzero"))
             .build()
     } else {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().to_path_buf(),
             })
-            .pool(worker.byte_pool().clone())
             .build()
     };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -203,7 +201,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
     let mut audio = worker

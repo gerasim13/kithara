@@ -13,7 +13,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -27,6 +27,8 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::SignalAsset;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 #[derive(Clone, Copy, Debug)]
 enum LocalSource {
@@ -135,7 +137,7 @@ async fn next_progress_position(rx: &mut EventReceiver, deadline: Duration) -> R
 /// the first sample aligned with the current head.
 async fn sample_positions_via_progress(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     count: usize,
     deadline: Duration,
 ) -> Result<Vec<f64>, String> {
@@ -178,21 +180,15 @@ fn assert_monotonic_nondecreasing(samples: &[f64], label: &str) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    Arc<Queue<TestPools>>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -212,8 +208,12 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
@@ -282,18 +282,16 @@ async fn local_track_plays_end_to_end(
     let temp = temp_dir();
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp);
 
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .downloader(downloader.clone())
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .initial_abr_mode(abr)
-    .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader.clone())
+        .store(store)
+        .decoder(
+            kithara::audio::AudioDecoderConfig::builder()
+                .backend(backend)
+                .build(),
+        )
+        .initial_abr_mode(abr)
+        .build();
     let source = TrackSource::Config(Box::new(cfg));
 
     // Subscribe before the actions that drive loading / playback so no
@@ -420,7 +418,7 @@ where
     .unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
-fn playlist_snapshot(queue: &Queue, ids: &[TrackId]) -> String {
+fn playlist_snapshot(queue: &Queue<TestPools>, ids: &[TrackId]) -> String {
     let current = queue.current().map(|entry| (entry.id, entry.status));
     let statuses: Vec<String> = ids
         .iter()
@@ -495,18 +493,17 @@ async fn local_queue_playlist_behavior(#[case] backend: DecoderBackend) {
     let ids: Vec<TrackId> = urls
         .iter()
         .map(|u| {
-            let cfg = ResourceConfig::for_src(
-                ResourceConfig::parse_src(u.as_str()).expect("valid fixture URL"),
-            )
-            .downloader(downloader.clone())
-            .store(store.clone())
-            .decoder(
-                kithara::audio::AudioDecoderConfig::builder()
-                    .backend(backend)
-                    .build(),
-            )
-            .initial_abr_mode(AbrMode::Auto(None))
-            .build();
+            let cfg =
+                ResourceConfig::for_src(ResourceSrc::parse(u.as_str()).expect("valid fixture URL"))
+                    .downloader(downloader.clone())
+                    .store(store.clone())
+                    .decoder(
+                        kithara::audio::AudioDecoderConfig::builder()
+                            .backend(backend)
+                            .build(),
+                    )
+                    .initial_abr_mode(AbrMode::Auto(None))
+                    .build();
             queue
                 .append(TrackSource::Config(Box::new(cfg)))
                 .expect("append crossfade fixture track")

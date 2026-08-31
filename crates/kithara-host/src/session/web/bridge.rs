@@ -1,10 +1,11 @@
 use std::{cell::RefCell, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::FirewheelCtx;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, mpsc};
 use tracing::warn;
 
-use super::client::WASM_SESSION_STATE;
+use super::client::WebSessionState;
 use crate::{
     bridge::PlaybackShared,
     session::{
@@ -28,29 +29,32 @@ pub(super) fn reset_bridge_state() {
     });
 }
 
-pub(crate) fn tick_and_poll_remote(rx: &mpsc::Receiver<HostCmdMsg>) {
-    WASM_SESSION_STATE.with(|state_cell| {
-        let mut state_opt = state_cell.borrow_mut();
-        let Some(ref mut state) = *state_opt else {
-            return;
-        };
+pub(crate) fn tick_and_poll_remote<S>(
+    state: &WebSessionState<S>,
+    rx: &mpsc::Receiver<HostCmdMsg<S>>,
+) where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let mut state = state.lock();
+    let Some(state) = state.as_mut() else {
+        return;
+    };
 
-        for msg in rx.try_iter() {
-            let reply = run_host_cmd(state, msg.cmd);
-            if let HostReply::Play(Reply::SlotAllocated(ref allocated)) = reply {
-                BRIDGE_PLAYBACK.with(|ps| {
-                    *ps.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
-                });
-            }
-            msg.reply_tx.send(reply).ok();
+    for msg in rx.try_iter() {
+        let reply = run_host_cmd(state, msg.cmd);
+        if let HostReply::Play(Reply::SlotAllocated(ref allocated)) = reply {
+            BRIDGE_PLAYBACK.with(|playback| {
+                *playback.borrow_mut() = Some(Arc::clone(&allocated.control.playback));
+            });
         }
+        msg.reply_tx.send(reply).ok();
+    }
 
-        if let Some(ctx) = state.ctx_mut()
-            && let Err(err) = ctx.update()
-        {
-            warn!("session graph update in tick failed: {err:?}");
-        }
-    });
+    if let Some(ctx) = state.ctx_mut()
+        && let Err(err) = ctx.update()
+    {
+        warn!("session graph update in tick failed: {err:?}");
+    }
 }
 
 pub(crate) fn bridge_position_secs() -> f64 {
@@ -77,16 +81,16 @@ pub(crate) fn bridge_is_playing() -> bool {
     })
 }
 
-pub(crate) fn warm_up_audio() {
-    WASM_SESSION_STATE.with(|state_cell| {
-        let mut state_opt = state_cell.borrow_mut();
-        let Some(ref mut state) = *state_opt else {
-            return;
-        };
-        if let Err(err) = ensure_ctx(state, 0) {
-            warn!("audio warm-up failed: {err}");
-        }
-    });
+pub(crate) fn warm_up_audio<S>(
+    state: &WebSessionState<S>,
+) -> Result<(), crate::session::SessionError> {
+    let mut state = state.lock();
+    let Some(state) = state.as_mut() else {
+        return Err(crate::session::SessionError::Graph(
+            "local web session state is unavailable".to_owned(),
+        ));
+    };
+    ensure_ctx(state, 0)
 }
 
 pub(super) fn start_stream_web_audio(

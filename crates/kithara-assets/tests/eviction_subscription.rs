@@ -17,15 +17,18 @@ use support::{Test, resource, source};
 const ROOT_A: &str = "asset_root_a";
 const ROOT_B: &str = "asset_root_b";
 
-fn ephemeral_store(cap: usize) -> AssetStore {
-    AssetStore::builder()
+type TestAssetStore = AssetStore<support::pools::TestPools>;
+type TestAssetScope = AssetScope<support::pools::TestPools>;
+
+fn ephemeral_store(cap: usize) -> TestAssetStore {
+    AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .cache_capacity(NonZeroUsize::new(cap).expect("test cache capacity must be non-zero"))
         .build()
 }
 
 /// Stream `data` through a Pending writer and commit it.
-fn write_commit(store: &AssetStore, key: &ResourceKey, data: &[u8]) {
+fn write_commit(store: &TestAssetStore, key: &ResourceKey, data: &[u8]) {
     let AcquisitionResult::Pending(w) = store
         .acquire_resource(key, None)
         .expect("test acquire must succeed")
@@ -37,7 +40,7 @@ fn write_commit(store: &AssetStore, key: &ResourceKey, data: &[u8]) {
         .expect("test commit must succeed");
 }
 
-fn fill_scope(store: &AssetStore, scope: &AssetScope, count: usize) -> Vec<ResourceKey> {
+fn fill_scope(store: &TestAssetStore, scope: &TestAssetScope, count: usize) -> Vec<ResourceKey> {
     let keys: Vec<ResourceKey> = (0..count)
         .map(|i| scope.key(&resource(format!("seg_{i}.m4s"))).expect("key"))
         .collect();

@@ -1,6 +1,6 @@
 use kithara::{
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
-    host::{Host, bridge::MixTapWriter},
+    host::bridge::MixTapWriter,
 };
 use kithara_platform::{
     CancelToken,
@@ -10,6 +10,7 @@ use kithara_platform::{
 use ringbuf::{HeapRb, traits::Split};
 
 use super::state::{BroadcastResult, Packager};
+use crate::pools::AppHost;
 
 pub(crate) struct Backend;
 
@@ -19,15 +20,14 @@ pub(crate) struct Stream {
 }
 
 trait BroadcastHost {
-    fn disable_tap(&self) -> BroadcastResult<()>;
-    fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()>;
     fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>>;
+    fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()>;
+    fn disable_tap(&self) -> BroadcastResult<()>;
 }
 
-impl BroadcastHost for Host {
-    fn disable_tap(&self) -> BroadcastResult<()> {
-        self.disable_mix_tap()?;
-        Ok(())
+impl BroadcastHost for AppHost {
+    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+        Ok(self.sample_rate()?.measured)
     }
 
     fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()> {
@@ -35,8 +35,9 @@ impl BroadcastHost for Host {
         Ok(())
     }
 
-    fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-        Ok(self.sample_rate()?.measured)
+    fn disable_tap(&self) -> BroadcastResult<()> {
+        self.disable_mix_tap()?;
+        Ok(())
     }
 }
 
@@ -49,12 +50,8 @@ impl Packager for Backend {
         live.handle.status().is_live
     }
 
-    fn release(host: &Host) -> BroadcastResult<()> {
-        release(host)
-    }
-
     fn start(
-        host: &Host,
+        host: &AppHost,
         shutdown: &CancelToken,
         tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
@@ -62,6 +59,10 @@ impl Packager for Backend {
             return Ok(None);
         };
         start(host, shutdown, &config, tap_lead).map(Some)
+    }
+
+    fn release(host: &AppHost) -> BroadcastResult<()> {
+        release(host)
     }
 
     fn stop(live: Stream) {
@@ -156,6 +157,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::pools::AppPools;
 
     /// The lead every test that does not measure the ring starts on air with.
     const TAP_LEAD: Duration = Duration::from_secs(2);
@@ -177,12 +179,12 @@ mod tests {
         }
     }
 
-    impl SessionDispatcher for SampleRateSession {
+    impl SessionDispatcher<AppPools> for SampleRateSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        fn exec(&self, cmd: Cmd<AppPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => {
                     let sample_rate = self.sample_rate.load(Ordering::Relaxed);
@@ -204,10 +206,9 @@ mod tests {
         }
     }
 
-    impl BroadcastHost for SessionHandle {
-        fn disable_tap(&self) -> BroadcastResult<()> {
-            self.exec_ok(Cmd::DisableMixTap)?;
-            Ok(())
+    impl BroadcastHost for SessionHandle<AppPools> {
+        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
+            Ok(self.sample_rate()?.measured)
         }
 
         fn enable_tap(&self, writer: MixTapWriter) -> BroadcastResult<()> {
@@ -215,8 +216,9 @@ mod tests {
             Ok(())
         }
 
-        fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
-            Ok(self.sample_rate()?.measured)
+        fn disable_tap(&self) -> BroadcastResult<()> {
+            self.exec_ok(Cmd::DisableMixTap)?;
+            Ok(())
         }
     }
 

@@ -71,7 +71,8 @@ pub trait Resampler: Send + 'static {
 
     fn output_frames_next(&self) -> usize;
 
-    /// Process one planar input block into caller-owned planar output buffers.
+    /// Process one planar input block into a call-scoped planar output view.
+    /// Rebuild the mutable channel view before each call.
     ///
     /// # Errors
     ///

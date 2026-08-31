@@ -10,7 +10,7 @@ use super::{
 #[cfg(test)]
 use crate::interact::Gestures;
 use crate::{
-    draw::{DrawList, DrawListBuilder, DrawPools, Rect, Transform},
+    draw::{DrawBuffers, DrawList, DrawListBuilder, Rect, Transform},
     interact::{
         CursorShape, Hit, Hover, Input, Outcome, PointerOwnership, PointerPhase,
         recognizers::{Edge, Scalar, ScalarState, Span as SpanRecognizer, SpanState, click},
@@ -31,21 +31,21 @@ where
     Painter: Retained,
 {
     data: Painter::Data,
-    index: IndexPress,
     interaction: Option<Interaction<Painter::Data>>,
-    pools: Option<DrawPools>,
-    refresh: Option<DataRefresh<Painter::Data>>,
+    index: IndexPress,
     painter: Painter,
+    pools: Option<DrawBuffers>,
     press: Press,
-    text: TextContext,
+    refresh: Option<DataRefresh<Painter::Data>>,
     repaint: bool,
+    text: TextContext,
 }
 
 /// What a control does with the pointer, and where it publishes the answer.
 struct Interaction<Data> {
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
-    recognize: Recognize<Data>,
     path: String,
+    recognize: Recognize<Data>,
 }
 
 enum Recognize<Data> {
@@ -67,8 +67,8 @@ enum Recognize<Data> {
 /// that, so a hand already dragging is not interrupted by its own answer coming
 /// back from the application.
 struct Dragged {
-    spec: Drag,
     recognizer: Scalar,
+    spec: Drag,
     state: ScalarState,
 }
 
@@ -114,8 +114,8 @@ impl Dragged {
 /// built with, so a new interval re-makes it while the gesture's own state
 /// survives the hand's answer arriving back from the application.
 struct Spanned {
-    spec: Span,
     recognizer: SpanRecognizer,
+    spec: Span,
     state: SpanState,
 }
 
@@ -160,9 +160,9 @@ where
     pub(crate) fn new(painter: Painter, data: Painter::Data, skin: &Skin) -> Self {
         Self {
             data,
-            painter,
             interaction: None,
             index: IndexPress::default(),
+            painter,
             pools: None,
             press: Press::default(),
             refresh: None,
@@ -171,26 +171,23 @@ where
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn gestures(&self) -> Gestures {
-        match self
-            .interaction
-            .as_ref()
-            .map(|interaction| &interaction.recognize)
-        {
-            None => Gestures::empty(),
-            Some(Recognize::Press | Recognize::Command(_) | Recognize::Index { .. }) => {
-                Gestures::PRESS
-            }
-            Some(Recognize::Drag(drag)) => drag.spec.gestures(),
-            Some(Recognize::Span(_)) => Gestures::DRAG,
+    pub(crate) fn pooled(
+        painter: Painter,
+        data: Painter::Data,
+        skin: &Skin,
+        pools: &DrawBuffers,
+    ) -> Self {
+        Self {
+            data,
+            interaction: None,
+            index: IndexPress::default(),
+            painter,
+            pools: Some(pools.clone()),
+            press: Press::default(),
+            refresh: None,
+            repaint: false,
+            text: TextContext::from(skin.text_resources()),
         }
-    }
-
-    /// The gesture is measured against the part of the box the painter says the
-    /// pointer works, which for most controls is all of it.
-    fn gripped(&self, hit: &Hit) -> Hit {
-        Hit::new(hit.at(), self.painter.grip_bounds(&self.data, hit.area()))
     }
 
     pub(crate) fn interactive(
@@ -219,6 +216,33 @@ where
         self
     }
 
+    pub(crate) fn refreshing(mut self, refresh: DataRefresh<Painter::Data>) -> Self {
+        self.refresh = Some(refresh);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gestures(&self) -> Gestures {
+        match self
+            .interaction
+            .as_ref()
+            .map(|interaction| &interaction.recognize)
+        {
+            None => Gestures::empty(),
+            Some(Recognize::Press | Recognize::Command(_) | Recognize::Index { .. }) => {
+                Gestures::PRESS
+            }
+            Some(Recognize::Drag(drag)) => drag.spec.gestures(),
+            Some(Recognize::Span(_)) => Gestures::DRAG,
+        }
+    }
+
+    /// The gesture is measured against the part of the box the painter says the
+    /// pointer works, which for most controls is all of it.
+    fn gripped(&self, hit: &Hit) -> Hit {
+        Hit::new(hit.at(), self.painter.grip_bounds(&self.data, hit.area()))
+    }
+
     /// Takes the value the control now draws into whatever counts from it.
     fn moved_to(&mut self, value: &ReadValue<'_>) {
         let Some(interaction) = &mut self.interaction else {
@@ -232,68 +256,18 @@ where
             _ => {}
         }
     }
-
-    pub(crate) fn pooled(
-        painter: Painter,
-        data: Painter::Data,
-        skin: &Skin,
-        pools: &DrawPools,
-    ) -> Self {
-        Self {
-            data,
-            painter,
-            interaction: None,
-            index: IndexPress::default(),
-            pools: Some(pools.clone()),
-            press: Press::default(),
-            refresh: None,
-            repaint: false,
-            text: TextContext::from(skin.text_resources()),
-        }
-    }
-
-    pub(crate) fn refreshing(mut self, refresh: DataRefresh<Painter::Data>) -> Self {
-        self.refresh = Some(refresh);
-        self
-    }
 }
 
 impl<Painter> MasonryControl for Painted<Painter>
 where
     Painter: Retained,
 {
-    fn accepts_input(&self) -> bool {
-        self.interaction.is_some()
-    }
-
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.interaction
-            .as_ref()
-            .map_or(CursorShape::None, |interaction| {
-                match &interaction.recognize {
-                    Recognize::Press | Recognize::Command(_) => {
-                        Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
-                    }
-                    Recognize::Drag(drag) => {
-                        drag.recognizer.cursor(&drag.state, &self.gripped(hit))
-                    }
-                    Recognize::Index { count, .. } => self
-                        .painter
-                        .index_at(&self.data, hit, *count)
-                        .map_or(CursorShape::None, |_| CursorShape::Pointer),
-                    Recognize::Span(span) => {
-                        span.recognizer.cursor(&span.state, &self.gripped(hit))
-                    }
-                }
-            })
-    }
-
     fn draw_list(&mut self, bounds: Rect, transform: Transform) -> DrawList {
         self.repaint = false;
         let mut list = self
             .pools
             .as_ref()
-            .map_or_else(DrawListBuilder::default, DrawPools::list);
+            .map_or_else(DrawListBuilder::default, DrawBuffers::list);
         let indexed = matches!(
             self.interaction
                 .as_ref()
@@ -321,19 +295,9 @@ where
         });
         list.finish()
     }
-    fn hover(&mut self, hovered: bool) -> bool {
-        if !Painter::READS_POINTER {
-            return false;
-        }
-        self.repaint |= match self
-            .interaction
-            .as_ref()
-            .map(|interaction| &interaction.recognize)
-        {
-            Some(Recognize::Index { .. }) => self.index.hover(hovered),
-            _ => self.press.hover(hovered),
-        };
-        self.repaint
+
+    fn measure(&mut self) -> crate::solve::Size {
+        self.painter.measure(&mut self.text, &self.data)
     }
 
     fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction> {
@@ -376,6 +340,8 @@ where
             Recognize::Span(span) => {
                 let outcome = span.follow(input, &gripped);
                 if let Some((edge, value)) = outcome.value() {
+                    // The control draws the end it just authored; the host's
+                    // own answer, snapped and gapped, lands a frame later.
                     let next = span.spec.moved(edge, value);
                     span.at(next);
                     self.repaint |= Painter::set_read(&mut self.data, &ReadValue::Range(next));
@@ -386,6 +352,8 @@ where
             }
             Recognize::Drag(drag) => (drag.follow(input, &gripped), drag.spec),
         };
+        // The control draws the value it just authored: the application is told
+        // the same number, but its answer only comes back a frame later.
         if let Some(value) = outcome.value() {
             self.repaint |= Painter::set_read(&mut self.data, &ReadValue::Scalar(f64::from(value)));
             self.moved_to(&ReadValue::Scalar(f64::from(value)));
@@ -400,13 +368,18 @@ where
             ))
         })
     }
-
-    fn measure(&mut self) -> crate::solve::Size {
-        self.painter.measure(&mut self.text, &self.data)
+    fn accepts_input(&self) -> bool {
+        self.interaction.is_some()
     }
 
     fn reads_pointer(&self) -> bool {
         Painter::READS_POINTER
+    }
+
+    fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
+        self.repaint |= Painter::set_read(&mut self.data, value);
+        self.moved_to(value);
+        self.repaint
     }
 
     fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
@@ -417,18 +390,49 @@ where
         self.repaint
     }
 
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        self.interaction
+            .as_ref()
+            .map_or(CursorShape::None, |interaction| {
+                match &interaction.recognize {
+                    Recognize::Press | Recognize::Command(_) => {
+                        Hover::new(CursorShape::Pointer).cursor(self.press.is_pressed(), hit)
+                    }
+                    Recognize::Drag(drag) => {
+                        drag.recognizer.cursor(&drag.state, &self.gripped(hit))
+                    }
+                    Recognize::Index { count, .. } => self
+                        .painter
+                        .index_at(&self.data, hit, *count)
+                        .map_or(CursorShape::None, |_| CursorShape::Pointer),
+                    Recognize::Span(span) => {
+                        span.recognizer.cursor(&span.state, &self.gripped(hit))
+                    }
+                }
+            })
+    }
+
+    fn hover(&mut self, hovered: bool) -> bool {
+        if !Painter::READS_POINTER {
+            return false;
+        }
+        self.repaint |= match self
+            .interaction
+            .as_ref()
+            .map(|interaction| &interaction.recognize)
+        {
+            Some(Recognize::Index { .. }) => self.index.hover(hovered),
+            _ => self.press.hover(hovered),
+        };
+        self.repaint
+    }
+
     fn repaint(&self) -> Repaint {
         if self.repaint {
             Repaint::NextFrame
         } else {
             Repaint::None
         }
-    }
-
-    fn set_read(&mut self, value: &ReadValue<'_>) -> bool {
-        self.repaint |= Painter::set_read(&mut self.data, value);
-        self.moved_to(value);
-        self.repaint
     }
 }
 
@@ -496,20 +500,20 @@ mod indexed {
         let y = selector_y + (bounds().h - selector_y * 2.0) / 2.0;
         Points {
             first: Pt {
-                y,
                 x: selector_x + chip_width / 2.0,
+                y,
             },
             gap: Pt {
-                y,
                 x: selector_x + chip_width + metrics.chip_gap / 2.0,
+                y,
             },
             second: Pt {
-                y,
                 x: selector_x + chip_width + metrics.chip_gap + chip_width / 2.0,
+                y,
             },
             x_padding: Pt {
-                y,
                 x: selector_x / 2.0,
+                y,
             },
             y_padding: Pt {
                 x: selector_x + chip_width / 2.0,

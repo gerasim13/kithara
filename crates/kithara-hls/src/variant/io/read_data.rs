@@ -1,5 +1,6 @@
 use std::{num::NonZeroUsize, ops::Range};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{PendingReason, ReadOutcome, StreamError, StreamResult};
@@ -12,26 +13,10 @@ use crate::{
     segment::{PlannedFetch, Segment},
 };
 
-impl HlsVariant {
-    /// File the parked read on a fetch it needs bytes from, so the in-flight
-    /// command's demand probe escalates it in the downloader queue.
-    fn note_fetch_demand(&self, planned: PlannedFetch) {
-        let state = match planned {
-            PlannedFetch::Init => self.segments.init.as_ref().map(Segment::state),
-            PlannedFetch::Segment(idx) => self.segments.get(idx as usize).map(Segment::state),
-        };
-        if let Some(state) = state {
-            state.note_reader_demand();
-        }
-    }
-
-    /// Readiness poll of a session under construction. Parks like a wait but
-    /// files no demand: the poll is not a read, and an incoming variant's
-    /// fetches are owed already.
-    pub(crate) fn poll_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome> {
-        self.wait_range_with(range, |_| {})
-    }
-
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     #[kithara::hang_watchdog]
     pub(crate) fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         let uses_seek_alias = self.seek_alias_at(offset).is_some();
@@ -157,6 +142,13 @@ impl HlsVariant {
         self.wait_range_with(range, |planned| self.note_fetch_demand(planned))
     }
 
+    /// Readiness poll of a session under construction. Parks like a wait but
+    /// files no demand: the poll is not a read, and an incoming variant's
+    /// fetches are owed already.
+    pub(crate) fn poll_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome> {
+        self.wait_range_with(range, |_| {})
+    }
+
     #[kithara::hang_watchdog]
     fn wait_range_with(
         &self,
@@ -194,6 +186,18 @@ impl HlsVariant {
             "wait_range: range not ready (budget exceeded)"
         );
         Err(StreamError::Source(HlsError::WaitBudgetExceeded.into()))
+    }
+
+    /// File the parked read on a fetch it needs bytes from, so the in-flight
+    /// command's demand probe escalates it in the downloader queue.
+    fn note_fetch_demand(&self, planned: PlannedFetch) {
+        let state = match planned {
+            PlannedFetch::Init => self.segments.init.as_ref().map(Segment::state),
+            PlannedFetch::Segment(idx) => self.segments.get(idx as usize).map(Segment::state),
+        };
+        if let Some(state) = state {
+            state.note_reader_demand();
+        }
     }
 
     fn wrap(written: usize) -> ReadOutcome {

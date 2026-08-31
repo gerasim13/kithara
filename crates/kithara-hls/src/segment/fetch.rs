@@ -8,6 +8,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
+use kithara_bufpool::HasPool;
 use kithara_events::{DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
@@ -36,8 +37,17 @@ use crate::{
 fn is_terminal_fetch_error(e: &NetError) -> bool {
     match e {
         NetError::Cancelled => false,
-        // WHY: The budget is spent on one download in well under a second, while the slot it parks may not be read for another half a minute
-        // - so what matters is whether the segment is obtainable later, not whether this attempt failed.
+        // The budget is spent on one download in well under a second, while
+        // the slot it parks may not be read for another half a minute — so
+        // what matters is whether the segment is obtainable later, not
+        // whether this attempt failed. A reachable server that answered
+        // "not now" (503, 429, 408) says nothing about later, and an outage
+        // of a few seconds must not cost the track every segment that
+        // happened to be in flight. Anything else that burnt the budget —
+        // a body that stopped arriving, a socket that never answered — the
+        // resilient body already re-fetched and gave up on; parking it is
+        // right, and a reader waiting on it gets a terminal error rather
+        // than a retry loop with nothing behind it.
         NetError::RetryExhausted { source, .. } => match source.as_ref() {
             status @ NetError::Status { .. } => status.retryability() != Retryability::Transient,
             _ => true,
@@ -52,24 +62,31 @@ fn is_terminal_fetch_error(e: &NetError) -> bool {
 /// `impl` blocks below, so the compiler rejects a double settle or an
 /// [`apply_commit`](crate::variant::HlsVariant::apply_commit) on anything but a `Loaded`
 /// handle.
-pub(crate) struct FetchClaim<S: SegmentPhase> {
-    data: S::Data,
-    _phase: PhantomData<S>,
+pub(crate) struct FetchClaim<P, S>
+where
+    P: SegmentPhase<S>,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    data: P::Data,
+    _schema: PhantomData<fn() -> S>,
 }
 
 /// Backing payload of a [`FetchClaim<Downloading>`](FetchClaim). Shares the slot
 /// CAS cell so a terminal transition can flip it, holds the `Weak`
 /// back-reference for the post-commit size apply, and carries the `Drop`
 /// disarm flag.
-pub(crate) struct DownloadClaim {
+pub(crate) struct DownloadClaim<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     slot: Arc<SegmentSlotState>,
-    plan_revision: PlanRevision,
     planned: PlannedFetch,
+    plan_revision: PlanRevision,
+    variant: Weak<HlsVariant<S>>,
     /// Peer-wake handle for the `Drop` recovery: a claim dropped without a
     /// settle must wake the peer to take the requeued work, and the claim
     /// outlives every context that could lend it one.
     signal: SizeSignal,
-    variant: Weak<HlsVariant>,
     settled: bool,
 }
 
@@ -80,7 +97,10 @@ pub(crate) struct LoadedProof {
     final_len: u64,
 }
 
-impl FetchClaim<Downloading> {
+impl<S> FetchClaim<Downloading, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Consume the claim without touching slot state — used for a stale
     /// (cancelled) settle whose resource already committed: the new epoch
     /// owns the slot, so leaving it as-is is correct.
@@ -95,7 +115,7 @@ impl FetchClaim<Downloading> {
     pub(crate) const fn claim(
         planned: PlannedFetch,
         plan_revision: PlanRevision,
-        variant: Weak<HlsVariant>,
+        variant: Weak<HlsVariant<S>>,
         slot: Arc<SegmentSlotState>,
         signal: SizeSignal,
     ) -> Self {
@@ -108,7 +128,7 @@ impl FetchClaim<Downloading> {
                 signal,
                 settled: false,
             },
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
@@ -118,12 +138,12 @@ impl FetchClaim<Downloading> {
     /// `try_claim` will not re-dispatch it and a waiting reader surfaces a
     /// terminal error. Unlike [`into_missing`](Self::into_missing) the
     /// slot does NOT return to the dispatch pool.
-    pub(crate) fn into_failed(mut self) -> FetchClaim<Failed> {
+    pub(crate) fn into_failed(mut self) -> FetchClaim<Failed, S> {
         self.data.slot.mark_failed();
         self.data.settled = true;
         FetchClaim {
             data: (),
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
@@ -132,13 +152,13 @@ impl FetchClaim<Downloading> {
     /// `apply_commit` shrinks the variant's layout to match *before*
     /// `mark_loaded` flips the slot — a reader that observes `Loaded` then
     /// reads the size must never see the stale estimate.
-    pub(crate) fn into_loaded(mut self, actual: u64) -> FetchClaim<Loaded> {
+    pub(crate) fn into_loaded(mut self, actual: u64) -> FetchClaim<Loaded, S> {
         let loaded = FetchClaim {
             data: LoadedProof {
                 planned: self.data.planned,
                 final_len: actual,
             },
-            _phase: PhantomData,
+            _schema: PhantomData,
         };
         if let Some(v) = self.data.variant.upgrade() {
             v.apply_commit(&loaded);
@@ -151,7 +171,7 @@ impl FetchClaim<Downloading> {
     /// `Downloading -> Loaded` without a size apply — the resource
     /// committed by a racing writer but reported no `final_len`, so the
     /// existing layout estimate stands.
-    pub(crate) fn into_loaded_no_apply(mut self) -> FetchClaim<Loaded> {
+    pub(crate) fn into_loaded_no_apply(mut self) -> FetchClaim<Loaded, S> {
         self.data.slot.mark_loaded();
         self.data.settled = true;
         FetchClaim {
@@ -159,30 +179,19 @@ impl FetchClaim<Downloading> {
                 planned: self.data.planned,
                 final_len: 0,
             },
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
     /// `Downloading -> Missing` recovery (recoverable failure / cancel
     /// before commit). The slot returns to the dispatch pool.
-    pub(crate) fn into_missing(mut self) -> FetchClaim<Missing> {
+    pub(crate) fn into_missing(mut self) -> FetchClaim<Missing, S> {
         self.data.slot.mark_missing();
         self.data.settled = true;
         FetchClaim {
             data: (),
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
-    }
-
-    /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
-    /// fetch slow without owning the claim. Cloned before the claim moves into
-    /// the `FetchSlot`'s `on_complete`.
-    pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
-        Arc::clone(&self.data.slot)
-    }
-
-    pub(crate) fn variant(&self) -> Option<Arc<HlsVariant>> {
-        self.data.variant.upgrade()
     }
 
     delegate::delegate! {
@@ -193,9 +202,23 @@ impl FetchClaim<Downloading> {
             pub(crate) const fn plan_revision(&self) -> PlanRevision;
         }
     }
+
+    /// Share the slot's CAS cell so the `on_slow` hook can flag the in-flight
+    /// fetch slow without owning the claim. Cloned before the claim moves into
+    /// the `FetchSlot`'s `on_complete`.
+    pub(crate) fn slot_state(&self) -> Arc<SegmentSlotState> {
+        Arc::clone(&self.data.slot)
+    }
+
+    pub(crate) fn variant(&self) -> Option<Arc<HlsVariant<S>>> {
+        self.data.variant.upgrade()
+    }
 }
 
-impl FetchClaim<Loaded> {
+impl<S> FetchClaim<Loaded, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     delegate::delegate! {
         to self.data {
             #[field]
@@ -218,7 +241,10 @@ impl FetchClaim<Loaded> {
 /// forever on the gap (the transient-failure settle documents the same
 /// contract). The work goes back on the plan and the peer is woken to take
 /// it.
-impl Drop for DownloadClaim {
+impl<S> Drop for DownloadClaim<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn drop(&mut self) {
         if self.settled {
             return;
@@ -229,8 +255,9 @@ impl Drop for DownloadClaim {
             .upgrade()
             .is_some_and(|variant| variant.requeue_planned(self.planned, self.plan_revision));
         self.signal.wake_peer();
-        // WHY: Steady-state recovery, not an incident: a cancelled or superseded fetch drops its claim on every seek and variant switch, so
-        // a stress lane sees thousands of these in green runs.
+        // Steady-state recovery, not an incident: a cancelled or superseded
+        // fetch drops its claim on every seek and variant switch, so a stress
+        // lane sees thousands of these in green runs.
         debug!(
             target: "kithara_hls::settle",
             planned = ?self.planned,
@@ -253,15 +280,18 @@ pub(crate) enum PlannedFetch {
 
 /// Fetch ownership and epoch state settled back into one variant slot.
 /// Its weak variant reference does not extend the variant lifetime.
-pub(crate) struct FetchSlot {
+pub(crate) struct FetchSlot<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Read view of the writer's generation — used to observe a
     /// committed-by-race status before deciding the terminal transition.
-    pub(crate) reader: AssetReader,
+    pub(crate) reader: AssetReader<S>,
     /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    pub(crate) writer: AssetWriter,
+    pub(crate) writer: AssetWriter<S>,
     pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
-    pub(crate) handle: FetchClaim<Downloading>,
+    pub(crate) handle: FetchClaim<Downloading, S>,
     /// Clone-able streaming-write handle for the fetch body closure.
     pub(crate) raw: RawWriteHandle,
     /// Unified reader-wake handle — [`SizeSignal::fire`]d on every terminal
@@ -273,13 +303,19 @@ pub(crate) struct FetchSlot {
     pub(crate) signal: SizeSignal,
 }
 
-impl From<FetchSlot> for OnCompleteFn {
-    fn from(slot: FetchSlot) -> Self {
+impl<S> From<FetchSlot<S>> for OnCompleteFn
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn from(slot: FetchSlot<S>) -> Self {
         Box::new(move |bytes_written, _headers, err| slot.settle(bytes_written, err))
     }
 }
 
-impl FetchSlot {
+impl<S> FetchSlot<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// On success, commits the resource. `bytes_written` is forwarded as
     /// `final_len` — required by [`ProcessedResource::commit`] to trigger
     /// the post-write decrypt pass on encrypted segments (passing `None`
@@ -293,8 +329,11 @@ impl FetchSlot {
     /// [`FetchClaim<Downloading>`](FetchClaim) handle is moved into exactly one
     /// terminal transition, so the slot state can never be double-driven.
     fn settle(self, bytes_written: u64, err: Option<&NetError>) {
-        // WHY: Wake any reader parked on this range AFTER the terminal transition (commit makes bytes readable / fail flips
-        // `range_has_failed`).
+        // Wake any reader parked on this range AFTER the terminal transition
+        // (commit makes bytes readable / fail flips `range_has_failed`). The
+        // worker wake re-ticks the RT decoder's audio worker too — for DRM the
+        // decrypted bytes only become readable at this commit, so settle (not
+        // the ciphertext write) is the load-bearing wake.
         let signal = self.signal.clone();
         self.settle_inner(bytes_written, err);
         signal.fire();
@@ -317,13 +356,22 @@ impl FetchSlot {
             "stale (cancelled)"
         );
         if committed {
-            // WHY: Committed by the new epoch's writer - dropping our (stale) writer fails only its own generation's gate; the cleanup is
+            // Committed by the new epoch's writer — dropping our (stale)
+            // writer fails only its own generation's gate; the cleanup is
             // race-safe (skips removal when the live state is Committed).
             drop(writer);
             handle.abandon();
         } else {
-            // WHY: Release without stamping. The stamp lives on the shared resource, not on this writer, so it would fail the first `write_at`
-            // of whoever refills the slot.
+            // Release without stamping. The stamp lives on the shared resource,
+            // not on this writer, so it would fail the first `write_at` of
+            // whoever refills the slot. Stamping here made a cancel
+            // indistinguishable from a broken sink, and the successor's error
+            // came back as a fatal `Decode`, parking the slot `Failed` for
+            // good. The work itself goes back on the plan it came from — a
+            // transition's look-ahead retire cancels without rebuilding, so
+            // nobody else re-plans the entry dispatch popped; a settle that
+            // outlived a rebuild carries a superseded revision and the
+            // requeue refuses it, leaving the re-dispatch to that rebuild.
             let planned = handle.planned();
             let plan_revision = handle.plan_revision();
             let variant = handle.variant();
@@ -349,7 +397,8 @@ impl FetchSlot {
         let committed = matches!(reader.status(), ResourceStatus::Committed { .. });
         debug!(target: "kithara_hls::settle", err = %e, committed, "fail-path");
         if committed {
-            // WHY: Committed by the new epoch's writer; ours never wrote - drop it (cleanup is race-safe) and adopt the on-disk length.
+            // Committed by the new epoch's writer; ours never wrote — drop it
+            // (cleanup is race-safe) and adopt the on-disk length.
             drop(writer);
             if let ResourceStatus::Committed { final_len: Some(n) } = reader.status() {
                 handle.into_loaded(n);
@@ -358,8 +407,12 @@ impl FetchSlot {
             }
         } else {
             writer.fail(e.to_string());
-            // WHY: A terminal cause parks the slot `Failed`, which stops the re-dispatch loop and lets a waiting reader surface a terminal
-            // error.
+            // A terminal cause parks the slot `Failed`, which stops the
+            // re-dispatch loop and lets a waiting reader surface a terminal
+            // error. Everything else — a cancel (the epoch rebuild owns the
+            // re-dispatch) and a spent retry budget over a transient cause —
+            // returns to `Missing`. The typed cause is logged here; readers
+            // see only the fixed terminal message (no transport detail).
             if is_terminal_fetch_error(e) {
                 error!(
                     target: "kithara_hls::settle",
@@ -371,8 +424,14 @@ impl FetchSlot {
                 });
                 handle.into_failed();
             } else {
-                // WHY: Freeing the slot is not enough to get this segment fetched again. Dispatch popped its plan entry when it sent the fetch, and
-                // `poll_next` only runs on reader progress or the slow-fetch hook - neither of which a failed download produces.
+                // Freeing the slot is not enough to get this segment fetched
+                // again. Dispatch popped its plan entry when it sent the
+                // fetch, and `poll_next` only runs on reader progress or the
+                // slow-fetch hook — neither of which a failed download
+                // produces. So the work has to go back on the plan, and the
+                // peer has to be woken to take it; without both, the segment
+                // is never asked for again and playback stops at the gap it
+                // leaves, even once the network is back.
                 let planned = handle.planned();
                 let plan_revision = handle.plan_revision();
                 let variant = handle.variant();
@@ -405,8 +464,8 @@ impl FetchSlot {
         } = self;
         let planned = handle.planned();
         let variant = handle.variant();
-        // WHY: Consume-self commit returns the Ready reader; read `final_len` off it (PKCS7 unpad shrinks DRM segments below the announced
-        // size).
+        // Consume-self commit returns the Ready reader; read `final_len` off it
+        // (PKCS7 unpad shrinks DRM segments below the announced size).
         match writer.commit(Some(bytes_written)) {
             Ok(reader) => {
                 debug!(target: "kithara_hls::settle", bytes_written, "success");
@@ -450,10 +509,13 @@ impl FetchSlot {
     }
 }
 
-fn decrypt_failure_site(
+fn decrypt_failure_site<S>(
     planned: PlannedFetch,
-    variant: Option<&Arc<HlsVariant>>,
-) -> Option<(u32, u32)> {
+    variant: Option<&Arc<HlsVariant<S>>>,
+) -> Option<(u32, u32)>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let PlannedFetch::Segment(segment_index) = planned else {
         return None;
     };

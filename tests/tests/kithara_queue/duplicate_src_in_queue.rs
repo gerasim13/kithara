@@ -20,6 +20,8 @@ use kithara_integration_tests::{
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader_with_src},
 };
 
+use crate::bufpool_ext::TestPools;
+
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
@@ -29,7 +31,7 @@ const TRACK_SECS: f64 = 30.0;
 const LOUD: f32 = 0.80;
 const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
 
-fn make_fixture() -> (OfflinePlayerHarness, Queue) {
+fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -43,7 +45,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue) {
     (harness, Queue::new(config))
 }
 
-fn load(queue: &Queue, id: TrackId) {
+fn load(queue: &Queue<TestPools>, id: TrackId) {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
@@ -57,14 +59,14 @@ fn load(queue: &Queue, id: TrackId) {
     );
 }
 
-fn render_loop(queue: &Queue, harness: &OfflinePlayerHarness, block_budget: usize) {
+fn render_loop(queue: &Queue<TestPools>, harness: &OfflinePlayerHarness, block_budget: usize) {
     for _ in 0..block_budget {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
     }
 }
 
-fn status_of(queue: &Queue, id: TrackId) -> TrackStatus {
+fn status_of(queue: &Queue<TestPools>, id: TrackId) -> TrackStatus {
     queue
         .tracks()
         .into_iter()
@@ -74,7 +76,7 @@ fn status_of(queue: &Queue, id: TrackId) -> TrackStatus {
 }
 
 /// The failing track is the *second* entry carrying this URL.
-fn fixture_playing_the_second_copy() -> (OfflinePlayerHarness, Queue, TrackId, TrackId) {
+fn fixture_playing_the_second_copy() -> (OfflinePlayerHarness, Queue<TestPools>, TrackId, TrackId) {
     let (harness, queue) = make_fixture();
     let first = queue.append(REPEATED_SRC).expect("append first copy");
     let playing = queue.append(REPEATED_SRC).expect("append second copy");

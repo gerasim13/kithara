@@ -4,16 +4,21 @@ use kithara::{
     assets::{AcquisitionResult, AssetScope, AssetStore, ReadSide, StorageBackend, WriteSide},
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::temp_dir;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; len];
+    let pools = pools();
+    let mut buf = pools
+        .get_with_len::<u8>(len)
+        .expect("read buffer fits the test pool budget");
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
-    buf.truncate(n);
-    buf
+    buf[..n].to_vec()
 }
 
 fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
@@ -26,10 +31,10 @@ fn pending<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>) -> W {
 fn asset_scope_with_root(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-) -> AssetScope {
+) -> AssetScope<TestPools> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        AssetStore::builder()
+        AssetStore::builder(pools())
             .backend(StorageBackend::Disk {
                 root: (temp_dir.path()).into(),
             })
@@ -41,7 +46,7 @@ fn asset_scope_with_root(
     #[cfg(target_arch = "wasm32")]
     {
         let _ = temp_dir;
-        AssetStore::builder()
+        AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .layouts(literal_layouts())
             .build()

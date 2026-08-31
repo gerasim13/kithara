@@ -100,9 +100,9 @@ fn write_commit<W: WriteSide>(acq: AcquisitionResult<W, W::Reader>, data: &[u8])
 
 /// Read the whole committed resource back into a fresh `Vec`.
 fn read_all<R: ReadSide>(reader: &R) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut buf = support::pools().get::<u8>();
     reader.read_into(&mut buf).expect("read_into");
-    buf
+    buf.to_vec()
 }
 
 /// Collect every directory named `_index` reachable under `root`.
@@ -129,7 +129,7 @@ fn index_dirs(root: &Path) -> Vec<PathBuf> {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn one_store_serves_both_none_and_processing_scopes() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStore::builder()
+    let store: AssetStore<support::pools::TestPools> = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -182,7 +182,7 @@ fn one_store_serves_both_none_and_processing_scopes() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn multi_chunk_chaining_matches_reference() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStore::builder()
+    let store: AssetStore<support::pools::TestPools> = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -238,7 +238,7 @@ fn multi_chunk_chaining_matches_reference() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn per_acquire_processor_applies_to_its_own_resource() {
     let dir = tempdir().unwrap();
-    let store: AssetStore = AssetStore::builder()
+    let store: AssetStore<support::pools::TestPools> = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

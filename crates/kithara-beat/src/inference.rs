@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 use smallvec::smallvec;
 
@@ -52,11 +52,14 @@ impl BeatPredictor {
     /// Predict beats from a full mel spectrogram `[1, T, 128]`.
     ///
     /// Returns `(beat_logits, downbeat_logits)`, each of length T.
-    pub(crate) fn predict(
+    pub(crate) fn predict<S>(
         &mut self,
         mel: &Tensor,
-        sample_pool: &SamplePool,
-    ) -> Result<(SampleBuffer, SampleBuffer), BeatError> {
+        pools: &PoolRegion<S>,
+    ) -> Result<(SampleBuffer, SampleBuffer), BeatError>
+    where
+        S: HasPool<f32>,
+    {
         if mel.shape.len() != 3 || mel.shape[0] != 1 || mel.shape[2] != 128 {
             return Err(BeatError::Inference {
                 reason: format!("expected mel shape [1, T, 128], got {:?}", mel.shape),
@@ -66,14 +69,19 @@ impl BeatPredictor {
         let full_time = mel.shape[1];
         let border = as_usize(Consts::BORDER_SIZE);
 
-        let mut beat_logits = sample_pool.collect(std::iter::repeat_n(-1000.0, full_time));
-        let mut downbeat_logits = sample_pool.collect(std::iter::repeat_n(-1000.0, full_time));
+        // Sentinel init; every frame is overwritten by some chunk.
+        let mut beat_logits = pools.get_with_len::<f32>(full_time)?;
+        beat_logits.fill(-1000.0);
+        let mut downbeat_logits = pools.get_with_len::<f32>(full_time)?;
+        downbeat_logits.fill(-1000.0);
 
+        // Reverse order implements keep_first: earlier chunks are written
+        // last and overwrite later chunks in overlapping regions.
         for start in generate_starts(full_time).rev() {
-            let chunk = extract_chunk(mel, start, sample_pool);
+            let chunk = extract_chunk(mel, start, pools)?;
             let chunk_time = chunk.shape[1];
 
-            let mut outputs = self.model.run(&[("spectrogram", &chunk)], sample_pool)?;
+            let mut outputs = self.model.run(&[("spectrogram", &chunk)], pools)?;
 
             let beat = extract_output(&mut outputs, "beat", "beat_logits")?;
             let downbeat = extract_output(&mut outputs, "downbeat", "downbeat_logits")?;
@@ -81,6 +89,7 @@ impl BeatPredictor {
             let valid_beat = &beat.data[border..chunk_time - border];
             let valid_downbeat = &downbeat.data[border..chunk_time - border];
 
+            // start >= -BORDER_SIZE, so this is non-negative.
             let write_start = as_usize(start + Consts::BORDER_SIZE);
             for (i, (&b, &d)) in valid_beat.iter().zip(valid_downbeat.iter()).enumerate() {
                 let dest = write_start + i;
@@ -136,7 +145,10 @@ fn generate_starts(full_time: usize) -> impl DoubleEndedIterator<Item = i64> {
 ///
 /// The right padding is capped at `BORDER_SIZE`:
 /// `right = max(0, min(border_size, start + chunk_size - len(spect)))`.
-fn extract_chunk(mel: &Tensor, start: i64, sample_pool: &SamplePool) -> Tensor {
+fn extract_chunk<S>(mel: &Tensor, start: i64, pools: &PoolRegion<S>) -> Result<Tensor, BeatError>
+where
+    S: HasPool<f32>,
+{
     let full_time = mel.shape[1];
     let n_mels = mel.shape[2];
     let full_time_i = as_i64(full_time);
@@ -150,7 +162,12 @@ fn extract_chunk(mel: &Tensor, start: i64, sample_pool: &SamplePool) -> Tensor {
         as_usize(0.max((start + Consts::CHUNK_SIZE - full_time_i).min(Consts::BORDER_SIZE)));
 
     let chunk_time = pad_left + n_frames + pad_right;
-    let mut data = sample_pool.collect(std::iter::repeat_n(0.0, chunk_time * n_mels));
+    let data_len = chunk_time
+        .checked_mul(n_mels)
+        .ok_or_else(|| BeatError::Inference {
+            reason: "mel chunk size overflow".to_string(),
+        })?;
+    let mut data = pools.get_with_len::<f32>(data_len)?;
 
     for t in actual_start..actual_end {
         let src_offset = t * n_mels;
@@ -160,10 +177,10 @@ fn extract_chunk(mel: &Tensor, start: i64, sample_pool: &SamplePool) -> Tensor {
             .copy_from_slice(&mel.data[src_offset..src_offset + n_mels]);
     }
 
-    Tensor {
+    Ok(Tensor {
         data,
         shape: smallvec![1, chunk_time, n_mels],
-    }
+    })
 }
 
 #[cfg(test)]
@@ -171,6 +188,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{pools, sample_buffer};
 
     #[kithara::test(native, flash(false))]
     fn generate_starts_short() {
@@ -244,12 +262,14 @@ mod tests {
         // Short audio (100 frames < STRIDE): pad_left 6 + 100 + pad_right 6 = 112.
         let n_mels = 128;
         let full_time = 100;
+        let pools = pools();
         let mel = Tensor {
             shape: smallvec![1, full_time, n_mels],
-            data: SamplePool::default().collect(std::iter::repeat_n(1.0, full_time * n_mels)),
+            data: sample_buffer(&pools, &vec![1.0; full_time * n_mels]),
         };
 
-        let chunk = extract_chunk(&mel, -6, &SamplePool::default());
+        let chunk = extract_chunk(&mel, -6, &pools)
+            .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(chunk.shape.as_slice(), [1, 112, n_mels]);
 
         for t in 0..6 {
@@ -274,12 +294,14 @@ mod tests {
     fn extract_chunk_long_audio_first() {
         let n_mels = 128;
         let full_time = 5000;
+        let pools = pools();
         let mel = Tensor {
             shape: smallvec![1, full_time, n_mels],
-            data: SamplePool::default().collect(std::iter::repeat_n(1.0, full_time * n_mels)),
+            data: sample_buffer(&pools, &vec![1.0; full_time * n_mels]),
         };
 
-        let chunk = extract_chunk(&mel, -6, &SamplePool::default());
+        let chunk = extract_chunk(&mel, -6, &pools)
+            .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(
             chunk.shape.as_slice(),
             [1, as_usize(Consts::CHUNK_SIZE), n_mels]
@@ -295,12 +317,14 @@ mod tests {
     fn extract_chunk_long_audio_middle() {
         let n_mels = 128;
         let full_time = 5000;
+        let pools = pools();
         let mel = Tensor {
             shape: smallvec![1, full_time, n_mels],
-            data: SamplePool::default().collect(std::iter::repeat_n(1.0, full_time * n_mels)),
+            data: sample_buffer(&pools, &vec![1.0; full_time * n_mels]),
         };
 
-        let chunk = extract_chunk(&mel, 100, &SamplePool::default());
+        let chunk = extract_chunk(&mel, 100, &pools)
+            .unwrap_or_else(|error| panic!("extract chunk: {error}"));
         assert_eq!(
             chunk.shape.as_slice(),
             [1, as_usize(Consts::CHUNK_SIZE), n_mels]

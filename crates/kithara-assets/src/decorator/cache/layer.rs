@@ -734,13 +734,13 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct ContextMemStore {
-        inner: MemAssetStore,
+        inner: MemAssetStore<crate::test_pools::TestPools>,
     }
 
     impl Default for ContextMemStore {
         fn default() -> Self {
             Self {
-                inner: MemAssetStore::new(CancelToken::never(), None, &crate::BytePool::default()),
+                inner: MemAssetStore::new(CancelToken::never(), None, crate::test_pools::pools()),
             }
         }
     }
@@ -782,11 +782,7 @@ mod tests {
     }
 
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        ));
+        let disk = Arc::new(DiskAssetStore::new(dir, CancelToken::never()));
         CachedAssets::new(disk, capacity, None, false)
     }
 
@@ -829,11 +825,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn durable_displacement_does_not_invalidate() {
         let dir = tempfile::tempdir().unwrap();
-        let disk = Arc::new(DiskAssetStore::new(
-            dir.path(),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        ));
+        let disk = Arc::new(DiskAssetStore::new(dir.path(), CancelToken::never()));
         let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::new(disk, NonZeroUsize::new(2).unwrap(), Some(cb), false);
 
@@ -866,7 +858,7 @@ mod tests {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
             None,
-            &crate::BytePool::default(),
+            crate::test_pools::pools(),
         ));
         let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::new(mem, NonZeroUsize::new(2).unwrap(), Some(cb), true);
@@ -893,7 +885,7 @@ mod tests {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
             None,
-            &crate::BytePool::default(),
+            crate::test_pools::pools(),
         ));
         let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::with_max_bytes(

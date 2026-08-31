@@ -13,12 +13,14 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir, kithara,
+    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -60,7 +62,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -161,8 +163,7 @@ async fn resumes_after_outage(
     url: String,
     look_ahead_bytes: u64,
 ) {
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -172,21 +173,20 @@ async fn resumes_after_outage(
                 .max_delay(Duration::from_millis(200))
                 .build(),
         )
-        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -197,13 +197,12 @@ async fn resumes_after_outage(
             .store(store.clone())
             .build(),
     ));
-    let cfg =
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid HLS URL"))
-            .downloader(downloader)
-            .initial_abr_mode(AbrMode::manual(0))
-            .look_ahead_bytes(look_ahead_bytes)
-            .store(store)
-            .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
+        .downloader(downloader)
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(look_ahead_bytes)
+        .store(store)
+        .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();

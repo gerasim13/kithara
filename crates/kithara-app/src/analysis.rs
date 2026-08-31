@@ -1,10 +1,9 @@
-use std::{collections::VecDeque, future::pending, num::NonZeroU32};
+use std::{collections::VecDeque, num::NonZeroU32};
 
 use kithara::{
     analysis::AnalysisProgress,
     decode::DecodeError,
     events::{EngineEvent, Envelope, Event, EventReceiver, SessionEvent, TrackId},
-    prelude::{PlaybackResamplerBackend, ResourceConfig},
 };
 use kithara_platform::{
     CancelToken,
@@ -12,15 +11,16 @@ use kithara_platform::{
     tokio::{
         self,
         sync::{broadcast::error::RecvError, watch},
-        task::{JoinHandle, spawn},
+        task::JoinHandle,
     },
 };
-use kithara_queue::{QueueControl, QueueEvent, TrackSource};
+use kithara_queue::QueueEvent;
 use kithara_worker::TaskError;
 use tracing::warn;
 
 use crate::{
     config::AppConfig,
+    pools::{AppQueueControl, AppResourceConfig, AppTrackSource},
     sources::build_resource_config,
     state::{UiState, apply_event},
     wave_cache::{
@@ -30,13 +30,11 @@ use crate::{
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 
-type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
-
 /// Analysis-aware state listener: mirrors queue events into [`UiState`] and
 /// drives the background [`AnalysisController`]. Starts analysing the already
 /// loaded library immediately — independent of which UI is open.
 pub(crate) async fn listen(
-    queue: QueueControl,
+    queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -51,6 +49,7 @@ pub(crate) async fn listen(
         }
     };
 
+    // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
 
     loop {
@@ -72,7 +71,7 @@ pub(crate) async fn listen(
 fn handle_event(
     driver: &mut AnalysisController,
     event: &Event,
-    queue: &QueueControl,
+    queue: &AppQueueControl,
     state: &Mutex<UiState>,
     config: &AppConfig,
 ) {
@@ -102,8 +101,8 @@ fn handle_event(
 /// Results land in the two-tier [`TrackAnalysisCache`];
 pub(crate) struct AnalysisController {
     activity: Option<Activity>,
-    persistence: Option<AnalysisPersistence>,
     cache: TrackAnalysisCache,
+    persistence: Option<AnalysisPersistence>,
     runner: TrackAnalysisRunner,
     /// Tracks waiting for background analysis, current track first.
     pending: VecDeque<TrackId>,
@@ -117,16 +116,16 @@ enum Activity {
 /// An in-flight analysis: the track it is for (stale-guard), its content cache
 /// key (`None` for an unkeyable source), and its result channel.
 struct Run {
+    target: Option<AnalysisTarget>,
     /// The rate axis this pass was opened on. A pass pins it, so a host rate
     /// change means the pass has to end rather than keep measuring in frames
     /// that would come to mean something else.
     axis: NonZeroU32,
+    rx: watch::Receiver<Option<AnalysisProgress>>,
     /// Highest revision this run has published. Revisions are monotonic within
     /// one pass and start over in the next, so the guard belongs to the run
     /// rather than to what the UI happens to show.
     shown_revision: Option<u64>,
-    target: Option<AnalysisTarget>,
-    rx: watch::Receiver<Option<AnalysisProgress>>,
     track_id: TrackId,
 }
 
@@ -149,12 +148,12 @@ impl AnalysisController {
             config.analysis_chunk_seconds,
             config.waveform_max_buckets,
             config.beat_analysis.clone(),
-            config.worker.sample_pool().clone(),
+            config.worker.pools().clone(),
         )?;
         Ok(Self {
             cache: TrackAnalysisCache::new(
                 runner.fingerprint().clone(),
-                config.worker.byte_pool().clone(),
+                config.worker.pools().clone(),
                 config.analysis_chunk_seconds,
             ),
             persistence,
@@ -164,11 +163,32 @@ impl AnalysisController {
         })
     }
 
+    /// Persist a closed run before allowing the next analysis to start.
+    fn finish_run(&mut self, state: &Mutex<UiState>) {
+        let Some(Activity::Running(run)) = self.activity.take() else {
+            return;
+        };
+        let Some(progress) = run.rx.borrow().clone() else {
+            return;
+        };
+
+        if let Some(target) = &run.target {
+            self.cache.put(target.clone(), progress.clone());
+        }
+        publish_if_current(state, run.track_id, progress.analysis().clone());
+
+        let (Some(target), Some(persistence)) = (run.target, self.persistence.clone()) else {
+            return;
+        };
+        let task = tokio::task::spawn(async move { persistence.store(target, progress).await });
+        self.activity = Some(Activity::Committing(Commit { task }));
+    }
+
     /// Await the run's next event and handle it: publish the staged
     /// intermediate, or commit and pump on close. Parks when no run is active.
     pub(crate) async fn drive(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -191,36 +211,15 @@ impl AnalysisController {
                 self.activity = None;
                 self.pump(queue, state, config);
             }
-            None => pending::<()>().await,
+            None => std::future::pending::<()>().await,
         }
-    }
-
-    /// Persist a closed run before allowing the next analysis to start.
-    fn finish_run(&mut self, state: &Mutex<UiState>) {
-        let Some(Activity::Running(run)) = self.activity.take() else {
-            return;
-        };
-        let Some(progress) = run.rx.borrow().clone() else {
-            return;
-        };
-
-        if let Some(target) = &run.target {
-            self.cache.put(target.clone(), progress.clone());
-        }
-        publish_if_current(state, run.track_id, progress.analysis().clone());
-
-        let (Some(target), Some(persistence)) = (run.target, self.persistence.clone()) else {
-            return;
-        };
-        let task = spawn(async move { persistence.store(target, progress).await });
-        self.activity = Some(Activity::Committing(Commit { task }));
     }
 
     /// The current track changed: put it at the front of the queue and
     /// preempt an in-flight background run so the visible deck wins.
     pub(crate) fn on_track_changed(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -243,7 +242,7 @@ impl AnalysisController {
     /// keep the background pass going. Cached tracks are skipped cheaply.
     pub(crate) fn on_tracks_changed(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -256,6 +255,31 @@ impl AnalysisController {
             self.pending.retain(|t| *t != run.track_id);
         }
         self.pump(queue, state, config);
+    }
+
+    /// End a pass whose rate axis the engine has moved off, and put its track
+    /// back at the front of the queue so the next pump opens a fresh pass on
+    /// the new axis. Letting the old pass follow the device would leave one
+    /// snapshot series whose frames mean two different things.
+    fn retire_stale_axis(&mut self, queue: &AppQueueControl) {
+        let Some(Activity::Running(run)) = &self.activity else {
+            return;
+        };
+        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
+            return;
+        };
+        if run.axis == rate {
+            return;
+        }
+        let track_id = run.track_id;
+        warn!(
+            from = run.axis.get(),
+            to = rate.get(),
+            "analysis: the host rate moved; the pass restarts on the new axis"
+        );
+        self.runner.clear();
+        self.pending.retain(|pending| *pending != track_id);
+        self.pending.push_front(track_id);
     }
 
     /// Publish and best-effort checkpoint a newer intermediate revision.
@@ -292,7 +316,7 @@ impl AnalysisController {
     /// or unkeyable, decode the first genuine miss.
     pub(crate) fn pump(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -301,12 +325,14 @@ impl AnalysisController {
             return;
         }
 
+        // No analyzers found: decoding would produce nothing.
         if !self.runner.is_active() {
             self.pending.clear();
             return;
         }
 
         while let Some(track_id) = self.pending.pop_front() {
+            // Track gone from the queue since it was enqueued: skip.
             let Some(source) = queue.track_source(track_id) else {
                 continue;
             };
@@ -346,18 +372,21 @@ impl AnalysisController {
                 continue;
             }
 
-            // WHY: An unkeyable background result cannot be cached or displayed.
+            // An unkeyable source cannot be cached, so a background decode
+            // would be thrown away; decode it only for display.
             if !is_current && target.is_none() {
                 continue;
             }
 
-            // WHY: Keep a served partial visible while its missing artifact refills.
+            // A refill keeps what it just served on screen: the pass produces
+            // the missing artifact, not a blank deck.
             if is_current && !served {
                 state.lock().set_analysis(None);
             }
 
-            // WHY: The observer must wait for this track's next load; attaching
-            // mid-play cannot warm the already active load.
+            // The handle waits where this track's load will find it. A track
+            // already loaded keeps it waiting until it loads again, so a pass
+            // opened mid-play warms nothing this time round.
             let queue = queue.clone();
             let rx = if let Some(progress) = resume {
                 match self.runner.resume(cfg, progress, move |producer| {
@@ -380,10 +409,10 @@ impl AnalysisController {
             };
             self.activity = Some(Activity::Running(Run {
                 target,
-                rx,
-                track_id,
                 axis: rate,
+                rx,
                 shown_revision: None,
+                track_id,
             }));
             return;
         }
@@ -399,31 +428,6 @@ impl AnalysisController {
         if current_track_id_in(&state) == Some(track_id) {
             state.set_analysis(None);
         }
-    }
-
-    /// End a pass whose rate axis the engine has moved off, and put its track
-    /// back at the front of the queue so the next pump opens a fresh pass on
-    /// the new axis. Letting the old pass follow the device would leave one
-    /// snapshot series whose frames mean two different things.
-    fn retire_stale_axis(&mut self, queue: &QueueControl) {
-        let Some(Activity::Running(run)) = &self.activity else {
-            return;
-        };
-        let Some(rate) = NonZeroU32::new(queue.sample_rate()) else {
-            return;
-        };
-        if run.axis == rate {
-            return;
-        }
-        let track_id = run.track_id;
-        warn!(
-            from = run.axis.get(),
-            to = rate.get(),
-            "analysis: the host rate moved; the pass restarts on the new axis"
-        );
-        self.runner.clear();
-        self.pending.retain(|pending| *pending != track_id);
-        self.pending.push_front(track_id);
     }
 }
 
@@ -451,7 +455,7 @@ fn plan_analysis(
     source_sample_rate: NonZeroU32,
 ) -> Plan {
     let Some(target) = target else {
-        // WHY: Without a stable key, the result cannot be cached.
+        // No stable key (the reserved non-exhaustive source seam): cannot
         return Plan::Decode;
     };
 
@@ -502,12 +506,12 @@ fn publish_if_current(state: &Mutex<UiState>, track_id: TrackId, analysis: Track
 /// Build an analysis resource from a track's source, reusing the shared
 /// stores so the analysis and the player share one download.
 fn resource_config_from_source(
-    source: TrackSource,
+    source: AppTrackSource,
     config: &AppConfig,
 ) -> Option<AppResourceConfig> {
     match source {
-        TrackSource::Config(cfg) => Some(*cfg),
-        TrackSource::Uri(url) => build_resource_config(&url, config),
+        AppTrackSource::Config(cfg) => Some(*cfg),
+        AppTrackSource::Uri(url) => build_resource_config(&url, config),
         _ => None,
     }
 }
@@ -521,16 +525,14 @@ mod tests {
             AnalysisFile, AnalysisFingerprint, AnalysisProgress, Coverage, FrameRange, Waveform,
         },
         assets::{
-            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, ReadSide,
-            StorageBackend,
+            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
         },
-        bufpool::{BytePool, Region},
         events::{EngineEvent, Event, RouteChangeReason, RouteDescription, SessionEvent, TrackId},
         file::File,
-        host::{Host, HostConfig},
+        host::HostConfig,
         net::{HttpClient, NetOptions},
-        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-        prelude::ResourceConfig,
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        prelude::ResourceSrc,
         stream::dl::{Downloader, DownloaderConfig},
     };
     use kithara_platform::{
@@ -539,7 +541,7 @@ mod tests {
         time::Duration,
         tokio::{runtime::Handle, sync::watch},
     };
-    use kithara_queue::{Queue, QueueConfig, QueueControl};
+    use kithara_queue::QueueConfig;
     use kithara_test_utils::kithara;
     use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
@@ -547,6 +549,10 @@ mod tests {
         Activity, AnalysisController, Plan, Run, handle_event, pending_order, plan_analysis,
     };
     use crate::{
+        pools::{
+            self, AppHost, AppPools, AppQueue, AppQueueControl, AppResourceConfig, AppStore,
+            AppWorker, Pools,
+        },
         state::UiState,
         wave_cache::{
             AnalysisPersistence, AnalysisTarget, TrackAnalysisCache,
@@ -557,6 +563,10 @@ mod tests {
 
     fn chunk_seconds() -> NonZeroU32 {
         NonZeroU32::new(16).expect("fixture chunk duration is non-zero")
+    }
+
+    fn test_pools() -> Pools {
+        pools::build().expect("valid app pool policy")
     }
 
     fn sample_rate() -> NonZeroU32 {
@@ -612,19 +622,19 @@ mod tests {
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fingerprint(), BytePool::default(), chunk_seconds())
+        TrackAnalysisCache::new(fingerprint(), test_pools(), chunk_seconds())
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
-        let store = AssetStore::builder()
+        let store = AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .build();
         target_in(&store, discriminator)
     }
 
-    fn target_in(store: &AssetStore, discriminator: &str) -> AnalysisTarget {
-        let config = ResourceConfig::for_src(
-            ResourceConfig::parse_src("https://analysis.test.invalid/track.mp3")
+    fn target_in(store: &AppStore, discriminator: &str) -> AnalysisTarget {
+        let config = AppResourceConfig::for_src(
+            ResourceSrc::parse("https://analysis.test.invalid/track.mp3")
                 .expect("valid test source"),
         )
         .store(store.clone())
@@ -646,14 +656,11 @@ mod tests {
         Mutex::new(state)
     }
 
-    fn queue() -> (Host, QueueControl) {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
-        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+    fn queue() -> (AppHost, AppQueueControl) {
+        let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = AppQueue::new(QueueConfig::builder().player(player).build());
         let queue = host.insert(queue).expect("host accepts queue");
         let control = queue.control().clone();
         (host, control)
@@ -679,16 +686,16 @@ mod tests {
             .expect("analysis controller fixture starts");
         let (tx, rx) = watch::channel(value.map(progress));
         controller.activity = Some(Activity::Running(Run {
-            track_id,
-            rx,
             shown_revision: None,
             axis: sample_rate(),
+            track_id,
+            rx,
             target: Some(target),
         }));
         (controller, tx)
     }
 
-    fn persistence(cancel: &CancelToken, byte_pool: BytePool) -> AnalysisPersistence {
+    fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersistence {
         let worker = Worker::new(
             WorkerConfig::new()
                 .with_cancel(cancel.child())
@@ -696,7 +703,7 @@ mod tests {
         );
         AnalysisPersistence::new(AnalysisPersistenceConfig::new(
             worker,
-            byte_pool,
+            pools,
             NonZeroUsize::MIN,
             Duration::from_secs(u64::from(chunk_seconds().get())),
             DispatcherConfig::new("analysis-persistence-controller-test"),
@@ -735,7 +742,7 @@ mod tests {
         let a = target("root_refill");
         let stored = TrackAnalysisCache::new(
             AnalysisFingerprint::new(None, Some("wave:v1")),
-            BytePool::default(),
+            test_pools(),
             chunk_seconds(),
         );
         let mut stored = stored;
@@ -743,7 +750,7 @@ mod tests {
 
         let mut current = TrackAnalysisCache::new(
             AnalysisFingerprint::new(None, Some("wave:v2")),
-            BytePool::default(),
+            test_pools(),
             chunk_seconds(),
         );
         assert!(
@@ -783,14 +790,13 @@ mod tests {
     }
 
     fn app_config(cancel: &CancelToken) -> crate::config::AppConfig {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+        let pools = test_pools();
+        let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         crate::config::AppConfig::builder()
             .downloader(Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(
                     NetOptions::builder().build(),
+                    pools.clone(),
                     cancel.child(),
                 ))
                 .build(),
@@ -798,7 +804,7 @@ mod tests {
             .shutdown(cancel.child())
             .worker(worker)
             .store(
-                AssetStore::builder()
+                AppStore::builder(pools)
                     .backend(StorageBackend::Memory)
                     .build(),
             )
@@ -941,14 +947,15 @@ mod tests {
     #[kithara::test(native, tokio)]
     async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
         let directory = tempfile::tempdir().expect("temporary analysis store");
-        let store = AssetStore::builder()
+        let pools = test_pools();
+        let store = AppStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: directory.path().into(),
             })
             .build();
         let target = target_in(&store, "track-a");
         let cancel = CancelToken::root();
-        let persistence = persistence(&cancel, BytePool::default());
+        let persistence = persistence(&cancel, pools.clone());
         let track_a = TrackId::from(1);
         let track_b = TrackId::from(2);
         let (_host, queue) = queue();
@@ -991,7 +998,7 @@ mod tests {
         let reader = store
             .open_resource(target.key(), None)
             .expect("acknowledged checkpoint is committed");
-        let mut bytes = BytePool::default().get();
+        let mut bytes = pools.get::<u8>();
         reader
             .read_into(&mut bytes)
             .expect("committed checkpoint reads");
@@ -1087,13 +1094,14 @@ mod tests {
 
     #[kithara::test(native, tokio)]
     fn invalid_layout_for_current_track_clears_previous_analysis() {
-        let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStore::builder()
+        let layouts =
+            AssetLayoutRegistry::default().with::<File<AppPools>>(Arc::new(InvalidLayout));
+        let store = AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();
-        let resource_config = ResourceConfig::for_src(
-            ResourceConfig::parse_src("https://analysis.test.invalid/invalid.mp3")
+        let resource_config = AppResourceConfig::for_src(
+            ResourceSrc::parse("https://analysis.test.invalid/invalid.mp3")
                 .expect("valid test source"),
         )
         .store(store)

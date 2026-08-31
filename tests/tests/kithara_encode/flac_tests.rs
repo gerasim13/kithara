@@ -1,9 +1,9 @@
 use kithara::{
     self,
-    bufpool::{BytePool, SamplePool},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest, normalize_flac_codec_config};
+use kithara_integration_tests::bufpool_ext::pools;
 use kithara_test_fixtures::signal::{Pcm, Wave};
 
 const CHANNELS: u16 = 2;
@@ -33,8 +33,10 @@ fn encode_packaged_flac_happy_path_emits_monotonic_access_units() {
         .container(ContainerFormat::Fmp4)
         .build();
 
+    let pools = pools();
     let encoded = EncoderFactory::encode_packaged(
-        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &pools,
+        &PackagedEncodeRequest::builder()
             .media_info(media_info)
             .pcm(&pcm)
             .timescale(SAMPLE_RATE)

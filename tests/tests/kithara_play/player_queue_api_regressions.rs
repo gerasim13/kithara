@@ -5,7 +5,7 @@ use std::path::Path;
 use kithara::{
     events::TrackId,
     platform::time::Duration,
-    play::{PlayerEvent, Resource, ResourceConfig, player::PlayerControl},
+    play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, kithara,
@@ -13,6 +13,8 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
+
+use crate::bufpool_ext::TestPools;
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -121,14 +123,14 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
 }
 
 async fn make_signal_resource(
-    player: &PlayerControl,
+    player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
     asset: SignalAsset,
 ) -> Resource {
     let url = server.signal(asset);
-    let mut config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid signal fixture URL"),
+    let mut config = ResourceConfig::<TestPools>::for_src(
+        ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL"),
     )
     .store(kithara_integration_tests::disk_asset_store(cache_dir))
     .build();

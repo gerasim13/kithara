@@ -49,8 +49,8 @@ pub enum SignalError {
         required_samples: usize,
         available_samples: usize,
     },
-    /// The injected sample pool cannot reserve the requested storage.
-    #[display("sample pool cannot reserve {required_samples} samples")]
+    /// The injected pool region cannot reserve the requested storage.
+    #[display("pool region cannot reserve {required_samples} samples")]
     PoolCapacity { required_samples: usize },
     /// A frame-to-duration conversion exceeds the duration representation.
     #[display("duration for {frames} frames at {sample_rate} Hz is out of range")]

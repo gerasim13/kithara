@@ -6,7 +6,7 @@ use std::{num::NonZeroUsize, path::PathBuf};
 
 use bon::bon;
 use dashmap::DashMap;
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
 
@@ -67,7 +67,10 @@ impl Default for StorageBackend {
 }
 
 #[bon]
-impl AssetStore {
+impl<S> AssetStore<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Open a ready-to-use asset store.
     #[builder(
         start_fn = builder,
@@ -76,6 +79,7 @@ impl AssetStore {
     )]
     #[must_use]
     pub fn open(
+        #[builder(start_fn)] pools: PoolRegion<S>,
         backend: Option<StorageBackend>,
         cache_capacity: Option<NonZeroUsize>,
         cancel: Option<CancelToken>,
@@ -85,7 +89,6 @@ impl AssetStore {
         max_assets: Option<usize>,
         max_bytes: Option<u64>,
         mem_resource_capacity: Option<usize>,
-        #[builder(default = BytePool::default())] pool: BytePool,
         /// Bytes read, transformed, and written per pass when a resource is
         /// processed on commit. Unset leaves the processing layer's own
         /// default.
@@ -98,11 +101,13 @@ impl AssetStore {
         segment_reservation: Option<u64>,
     ) -> Self {
         let availability = AvailabilityIndex::new();
-        // WHY: The pending-resource index is a consumer-driven sibling of `availability`: no observer / decorator threading, just a shared
-        // field.
+        // The pending-resource index is a consumer-driven sibling of `availability`:
+        // no observer / decorator threading, just a shared field. Each
+        // slot's `writer_cancel` is a child of this store cancel.
         let pending_resources = PendingResourceIndex::new(CancelScope::new(cancel.clone()).token());
         let transactions = ResourceTransactionIndex::default();
-        // WHY: The eviction router is the third consumer-driven sibling: the memory cache's `on_invalidated` hook routes evicted keys into
+        // The eviction router is the third consumer-driven sibling: the
+        // memory cache's `on_invalidated` hook routes evicted keys into
         // it; the store hands subscribers per `asset_root`.
         let eviction = EvictionRouter::default();
         let layouts = layouts.unwrap_or_default();
@@ -129,17 +134,17 @@ impl AssetStore {
                     root_dir,
                     cancel,
                     flush_hub,
-                    pool,
+                    pools,
                     event_bus,
                     cache_capacity,
-                    processing_chunk_size,
-                    processing_gate_poll_interval,
-                    segment_reservation,
                     availability: availability.clone(),
                     evict_cfg: EvictConfig {
                         max_assets,
                         max_bytes,
                     },
+                    processing_chunk_size,
+                    processing_gate_poll_interval,
+                    segment_reservation,
                 }),
                 availability,
             });
@@ -166,11 +171,11 @@ impl AssetStore {
         let mem = Arc::new(MemAssetStore::with_availability_and_deleter(
             MemStoreSetup {
                 active_resources,
-                mem_resource_capacity,
                 cancel: cancel.clone(),
+                mem_resource_capacity,
                 availability: availability.clone(),
                 deleter: Arc::clone(&deleter),
-                pool: pool.clone(),
+                pools: pools.clone(),
             },
         ));
         let evict = Arc::new(EvictAssets::new(
@@ -187,11 +192,11 @@ impl AssetStore {
         let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
         let processing_assets = Arc::new(ProcessingAssets::new(
             Arc::clone(&evict),
-            pool,
+            pools,
             processing_chunk_size,
             processing_gate_poll_interval,
         ));
-        // WHY: Memory bytes do not survive displacement, so indexes must be invalidated.
+        // Memory bytes do not survive displacement, so indexes must be invalidated.
         let availability_for_hook = availability.clone();
         let eviction_for_hook = eviction.clone();
         let on_invalidated: OnInvalidatedFn = Arc::new(move |key: &ResourceKey| {
@@ -228,29 +233,32 @@ impl AssetStore {
 /// branch. Mirrors [`MemStoreSetup`] on the memory side: one bundle so the
 /// branch is a function instead of another sixty lines in the builder.
 #[cfg(not(target_arch = "wasm32"))]
-struct DiskStoreSetup {
-    availability: AvailabilityIndex,
-    pool: BytePool,
-    evict_cfg: EvictConfig,
-    cache_capacity: Option<NonZeroUsize>,
+struct DiskStoreSetup<S> {
+    root_dir: PathBuf,
     cancel: Option<CancelToken>,
-    event_bus: Option<EventBus>,
     flush_hub: Option<Arc<FlushHub>>,
+    pools: PoolRegion<S>,
+    event_bus: Option<EventBus>,
+    cache_capacity: Option<NonZeroUsize>,
+    availability: AvailabilityIndex,
+    evict_cfg: EvictConfig,
     processing_chunk_size: Option<usize>,
     processing_gate_poll_interval: Option<Duration>,
     segment_reservation: Option<u64>,
-    root_dir: PathBuf,
 }
 
 /// Assemble the disk decorator chain: evict over the disk store, processing
 /// over that, the memory cache over that, leases on top.
 #[cfg(not(target_arch = "wasm32"))]
-fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
+fn open_disk_backend<S>(setup: DiskStoreSetup<S>) -> StoreBackendInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let DiskStoreSetup {
         root_dir,
         cancel,
         flush_hub,
-        pool,
+        pools,
         event_bus,
         cache_capacity,
         availability,
@@ -262,8 +270,8 @@ fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
     let cancel = CancelScope::new(cancel).token();
     let hub = flush_hub.unwrap_or_else(|| FlushHub::new(cancel.child(), FlushPolicy::default()));
 
-    let pins = open_disk_pins_index(&root_dir, &cancel, &pool);
-    let lru = open_disk_lru_index(&root_dir, &cancel, &pool);
+    let pins = open_disk_pins_index(&root_dir, &cancel, pools.get::<u8>());
+    let lru = open_disk_lru_index(&root_dir, &cancel, pools.get::<u8>());
     pins.attach_to(&hub);
     lru.attach_to(&hub);
 
@@ -304,12 +312,12 @@ fn open_disk_backend(setup: DiskStoreSetup) -> StoreBackendInner {
     ));
     let processing_assets = Arc::new(ProcessingAssets::new(
         Arc::clone(&evict),
-        pool,
+        pools,
         processing_chunk_size,
         processing_gate_poll_interval,
     ));
     let capacity = cache_capacity.unwrap_or(Consts::DEFAULT_CACHE_CAPACITY);
-    // WHY: Disk bytes survive LRU displacement, so it needs no invalidation hook.
+    // Disk bytes survive LRU displacement, so it needs no invalidation hook.
     let cached = Arc::new(CachedAssets::new(processing_assets, capacity, None, false));
     let byte_recorder: Option<Arc<dyn ByteRecorder>> =
         Some(Arc::clone(&evict) as Arc<dyn ByteRecorder>);
@@ -341,12 +349,12 @@ fn fresh_temp_root() -> PathBuf {
 fn open_disk_pins_index(
     root_dir: &std::path::Path,
     cancel: &CancelToken,
-    pool: &BytePool,
+    buffer: ByteBuffer,
 ) -> crate::index::PinsIndex {
     let Some(path) = lazy_index_path(root_dir, "pins.bin") else {
         return crate::index::PinsIndex::ephemeral();
     };
-    crate::index::PinsIndex::with_persist_at(path, cancel.clone(), pool)
+    crate::index::PinsIndex::with_persist_at(path, cancel.clone(), buffer)
 }
 
 /// Open `_index/lru.bin` as a disk-backed [`crate::index::LruIndex`].
@@ -356,12 +364,12 @@ fn open_disk_pins_index(
 fn open_disk_lru_index(
     root_dir: &std::path::Path,
     cancel: &CancelToken,
-    pool: &BytePool,
+    buffer: ByteBuffer,
 ) -> crate::index::LruIndex {
     let Some(path) = lazy_index_path(root_dir, "lru.bin") else {
         return crate::index::LruIndex::ephemeral();
     };
-    crate::index::LruIndex::with_persist_at(path, cancel.clone(), pool)
+    crate::index::LruIndex::with_persist_at(path, cancel.clone(), buffer)
 }
 
 /// Build the `root_dir/_index/<name>` path; `None` if the parent dir can't be
@@ -396,8 +404,11 @@ mod tests {
 
     const ROOT: &str = "test_asset";
 
+    type TestAssetWriter = AssetWriter<crate::test_pools::TestPools>;
+    type TestResourceAcquisition = ResourceAcquisition<crate::test_pools::TestPools>;
+
     /// Stream `data` through the Pending writer and commit it.
-    fn write_commit(acq: ResourceAcquisition, data: &[u8]) {
+    fn write_commit(acq: TestResourceAcquisition, data: &[u8]) {
         let AcquisitionResult::Pending(w) = acq else {
             panic!("expected a Pending writer");
         };
@@ -406,7 +417,7 @@ mod tests {
     }
 
     /// Extract the Pending writer or panic.
-    fn pending(acq: ResourceAcquisition) -> AssetWriter {
+    fn pending(acq: TestResourceAcquisition) -> TestAssetWriter {
         match acq {
             AcquisitionResult::Pending(w) => w,
             AcquisitionResult::Ready(_) => panic!("expected a Pending writer"),
@@ -423,7 +434,7 @@ mod tests {
     fn commit_publishes_asset_committed() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .event_bus(bus)
             .build();
@@ -450,7 +461,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn reacquire_after_failure_opens_a_fresh_download() {
         let dir = tempdir().unwrap();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -481,7 +492,7 @@ mod tests {
     fn fail_publishes_asset_failed() {
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .event_bus(bus)
             .build();
@@ -507,7 +518,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let bus = EventBus::new(8);
         let mut events = bus.subscribe();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -537,7 +548,7 @@ mod tests {
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
 
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -562,7 +573,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("test.bin");
         fs::write(&file_path, b"data").unwrap();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .build();
 
@@ -599,7 +610,7 @@ mod tests {
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -622,7 +633,7 @@ mod tests {
         let file_path = dir.path().join("song.mp3");
         fs::write(&file_path, b"test data").unwrap();
 
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -638,7 +649,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_backend_serves_reads_without_a_disk_root() {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .build();
 
@@ -657,7 +668,7 @@ mod tests {
         let key = ResourceKey::relative(ROOT, "seg.m4s");
 
         {
-            let store = AssetStore::builder()
+            let store = AssetStore::builder(crate::test_pools::pools())
                 .backend(StorageBackend::Disk {
                     root: dir.path().into(),
                 })
@@ -665,7 +676,7 @@ mod tests {
             write_commit(store.acquire_resource(&key, None).unwrap(), b"data");
         }
 
-        let reopened = AssetStore::builder()
+        let reopened = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -681,7 +692,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_capabilities_lack_evict_and_lease() {
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .build();
         let caps = store.capabilities();
@@ -695,7 +706,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_defaults_all_capabilities() {
         let dir = tempdir().unwrap();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -705,7 +716,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_retains_data_within_cache_capacity() {
-        let backend = AssetStore::builder()
+        let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(5).unwrap())
             .backend(StorageBackend::Memory)
             .build();
@@ -728,7 +739,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_evicts_data_beyond_cache_capacity() {
-        let backend = AssetStore::builder()
+        let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(3).unwrap())
             .backend(StorageBackend::Memory)
             .build();
@@ -749,7 +760,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_max_bytes_bounds_large_handle_cache() {
-        let backend = AssetStore::builder()
+        let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(128).unwrap())
             .max_bytes(8)
             .backend(StorageBackend::Memory)
@@ -772,7 +783,7 @@ mod tests {
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn memory_max_bytes_does_not_retain_oversized_resource() {
-        let backend = AssetStore::builder()
+        let backend = AssetStore::builder(crate::test_pools::pools())
             .cache_capacity(NonZeroUsize::new(128).unwrap())
             .max_bytes(4)
             .backend(StorageBackend::Memory)
@@ -793,7 +804,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_lease_resource_drop_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })
@@ -843,7 +854,7 @@ mod tests {
         let target = ResourceKey::relative(seg_root, "v0_15.m4s");
         let path = dir.path().join(seg_root).join("v0_15.m4s");
         let open_store = || {
-            AssetStore::builder()
+            AssetStore::builder(crate::test_pools::pools())
                 .backend(StorageBackend::Disk {
                     root: dir.path().into(),
                 })
@@ -884,7 +895,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn red_test_delete_asset_strands_availability_index() {
         let dir = tempdir().unwrap();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk {
                 root: dir.path().into(),
             })

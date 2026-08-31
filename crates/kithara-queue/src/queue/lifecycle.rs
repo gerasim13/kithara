@@ -1,6 +1,7 @@
 #[cfg(any(test, feature = "probe"))]
 use std::sync::PoisonError;
 
+use kithara_bufpool::HasPool;
 #[cfg(any(test, feature = "probe"))]
 use kithara_events::TrackStatus;
 use kithara_events::{AdvanceReason, QueueEvent, TrackId};
@@ -15,7 +16,10 @@ use crate::{
     track::{TrackRecord, TrackSource},
 };
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Append a track. Loading starts immediately in the background.
     /// The id is allocated from the global counter via
     /// [`TrackId::allocate`]; use [`Self::append_with_id`] when the
@@ -24,7 +28,7 @@ impl QueueControl {
     /// # Errors
     ///
     /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append<S: Into<TrackSource>>(&self, source: S) -> Result<TrackId, QueueError> {
+    pub fn append<T: Into<TrackSource<S>>>(&self, source: T) -> Result<TrackId, QueueError> {
         let source = source.into();
         self.with_open(|queue| queue.insert_entry(TrackId::allocate(), source, Placement::Append))
             .map_err(QueueError::from)
@@ -39,10 +43,10 @@ impl QueueControl {
     /// # Errors
     ///
     /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append_with_id<S: Into<TrackSource>>(
+    pub fn append_with_id<T: Into<TrackSource<S>>>(
         &self,
         id: TrackId,
-        source: S,
+        source: T,
     ) -> Result<TrackId, QueueError> {
         let source = source.into();
         self.with_open(|queue| queue.insert_entry(id, source, Placement::Append))
@@ -95,9 +99,9 @@ impl QueueControl {
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `after` does not match any
     /// track.
-    pub fn insert<S: Into<TrackSource>>(
+    pub fn insert<T: Into<TrackSource<S>>>(
         &self,
-        source: S,
+        source: T,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
         let source = source.into();
@@ -110,7 +114,7 @@ impl QueueControl {
     pub(super) fn insert_entry(
         &self,
         id: TrackId,
-        source: TrackSource,
+        source: TrackSource<S>,
         placement: Placement,
     ) -> TrackId {
         let record = TrackRecord::new(id, extract_track_name(&source), source.clone());
@@ -141,10 +145,10 @@ impl QueueControl {
     /// # Errors
     /// Returns [`QueueError::UnknownTrackId`] if `after` does not match
     /// any track.
-    pub fn insert_with_id<S: Into<TrackSource>>(
+    pub fn insert_with_id<T: Into<TrackSource<S>>>(
         &self,
         id: TrackId,
-        source: S,
+        source: T,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
         let source = source.into();
@@ -154,7 +158,7 @@ impl QueueControl {
     fn insert_with_id_inner(
         &self,
         id: TrackId,
-        source: TrackSource,
+        source: TrackSource<S>,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
         let pos = {
@@ -315,10 +319,10 @@ impl QueueControl {
     }
 
     /// Replace the entire queue with the given sources.
-    pub fn set_tracks<I, S>(&self, sources: I)
+    pub fn set_tracks<I, T>(&self, sources: I)
     where
-        I: IntoIterator<Item = S>,
-        S: Into<TrackSource>,
+        I: IntoIterator<Item = T>,
+        T: Into<TrackSource<S>>,
     {
         self.command(|queue| {
             queue.clear_inner();
@@ -337,7 +341,7 @@ mod tests {
     use super::*;
     use crate::queue::state::tests::{make_queue, wait_for_queue_event};
 
-    fn append(queue: &crate::Queue, source: &str) -> TrackId {
+    fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue
             .append(source)
             .expect("BUG: open queue must accept a track")

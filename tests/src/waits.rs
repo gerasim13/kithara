@@ -10,6 +10,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    bufpool::HasPool,
     events::{AudioEvent, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     platform::{
         thread::active_named_thread_count,
@@ -63,11 +64,14 @@ where
 /// `position_seconds()`) does not go stale once an event-driven wait collapses
 /// real time under flash. The returned position is the tick-cached value at
 /// predicate-pass and is only meant for coarse "advanced past X" comparisons.
-pub async fn wait_for_position_at_least(
-    queue: &Queue,
+pub async fn wait_for_position_at_least<S>(
+    queue: &Queue<S>,
     min_secs: f64,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let mut observed = min_secs;
     wait_until(deadline, "position_at_least", || {
         match queue.position_seconds() {
@@ -97,12 +101,15 @@ pub async fn wait_for_position_at_least(
 /// met. The bus event is the primary sink-truth signal; `position_seconds()` is
 /// re-checked on the same virtual poll cadence so a dropped / delayed broadcast
 /// receiver cannot turn already-reached playback state into a timeout.
-pub async fn wait_for_position_event(
+pub async fn wait_for_position_event<S>(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<S>,
     min_secs: f64,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     if let Some(pos) = queue.position_seconds()
         && pos >= min_secs
     {
@@ -142,12 +149,15 @@ pub async fn wait_for_position_event(
 /// Wait until `queue.position_seconds()` is within `tolerance` of `target`, then
 /// return the observed position. Queue-poll variant; prefer
 /// [`wait_for_position_near_event`] when an [`EventReceiver`] is available.
-pub async fn wait_for_position_near(
-    queue: &Queue,
+pub async fn wait_for_position_near<S>(
+    queue: &Queue<S>,
     target: f64,
     tolerance: f64,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let mut observed = target;
     wait_until(deadline, "position_near", || {
         match queue.position_seconds() {
@@ -181,13 +191,16 @@ pub async fn wait_for_position_near(
 /// hiding an already-near position; it is the cache being unable to say
 /// whether the seek has landed, so there is nothing here for a cache read to
 /// fall back to.
-pub async fn wait_for_position_near_event(
+pub async fn wait_for_position_near_event<S>(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<S>,
     target: f64,
     tolerance: f64,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     timeout(deadline, async {
         loop {
             match timeout(POLL_TICK, rx.recv())
@@ -259,11 +272,14 @@ fn loader_outcome(status: &TrackStatus) -> Option<Result<(), String>> {
 /// Wait until `track_id`'s loader finishes (`Loaded`/`Consumed`) by polling the
 /// queue's track status. `Failed` resolves to `Err`. Use the event variant
 /// [`wait_for_loader_done_event`] when a receiver is available.
-pub async fn wait_for_loader_done(
-    queue: &Queue,
+pub async fn wait_for_loader_done<S>(
+    queue: &Queue<S>,
     track_id: TrackId,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let mut outcome: Result<(), String> = Ok(());
     let reached = wait_until(deadline, "loader_done", || {
         if let Some(entry) = queue.track(track_id)
@@ -288,12 +304,15 @@ pub async fn wait_for_loader_done(
 /// `QueueEvent::TrackStatusChanged` (parks on the virtual clock). A fast-path
 /// and `Lagged` re-read guard against an already-terminal status or a dropped
 /// event.
-pub async fn wait_for_loader_done_event(
+pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<S>,
     track_id: TrackId,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     if let Some(entry) = queue.track(track_id)
         && let Some(res) = loader_outcome(&entry.status)
     {

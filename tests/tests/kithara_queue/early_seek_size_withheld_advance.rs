@@ -19,15 +19,14 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    assets::AssetStore,
-    bufpool::Region,
+    assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{AbrMode, PlayerEvent},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
-        SessionDispatcher,
+        ResourceSrc, SessionDispatcher,
     },
     queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
     stream::dl::{Downloader, DownloaderConfig},
@@ -35,6 +34,8 @@ use kithara::{
 use kithara_integration_tests::{
     PackagedTestServer, SegmentGateHandle, TestTempDir, kithara, offline::OfflineSession,
 };
+
+use crate::bufpool_ext::{Pools, TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const BLOCK_FRAMES: usize = 512;
@@ -72,23 +73,20 @@ struct GateMode {
 }
 
 struct Harness {
-    player: Option<PlayerImpl>,
-    worker: PlayWorker,
+    player: Option<PlayerImpl<TestPools>>,
+    worker: PlayWorker<TestPools>,
     session: Arc<OfflineSession>,
 }
 
 impl Harness {
-    fn new() -> Self {
+    fn new(pools: Pools) -> Self {
         let session = Arc::new(OfflineSession::new_manual());
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
         let config = PlayerConfig::builder()
             .crossfade_duration(0.0)
             .sample_rate(NonZeroU32::new(SAMPLE_RATE).expect("sample rate must be non-zero"))
             .worker(worker.clone())
-            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+            .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
             .build();
         let player = Some(PlayerImpl::new(config));
         Self {
@@ -98,11 +96,11 @@ impl Harness {
         }
     }
 
-    fn player(&self) -> &PlayerImpl {
+    fn player(&self) -> &PlayerImpl<TestPools> {
         self.player.as_ref().expect("harness player is available")
     }
 
-    fn take_player(&mut self) -> PlayerImpl {
+    fn take_player(&mut self) -> PlayerImpl<TestPools> {
         self.player.take().expect("harness player was transferred")
     }
 
@@ -114,22 +112,21 @@ impl Harness {
 async fn build_hls_resource(
     master: &url::Url,
     downloader: &Downloader,
-    store: &AssetStore,
-    worker: &PlayWorker,
+    store: &AssetStore<TestPools>,
+    worker: &PlayWorker<TestPools>,
 ) -> Resource {
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .downloader(downloader.clone())
-    .store(store.clone())
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(DecoderBackend::Symphonia)
-            .build(),
-    )
-    .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
-    .worker(worker.clone())
-    .build();
+    let cfg: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader.clone())
+            .store(store.clone())
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(DecoderBackend::Symphonia)
+                    .build(),
+            )
+            .initial_abr_mode(AbrMode::manual(GATED_VARIANT))
+            .worker(worker.clone())
+            .build();
     Resource::new(cfg).await.expect("create HLS resource")
 }
 
@@ -203,13 +200,22 @@ async fn run_case(mode: GateMode) {
 
     let master = server.url("/master.m3u8");
     let temp = TestTempDir::new();
-    let store = kithara_integration_tests::disk_asset_store(temp.path());
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
-    let mut harness = Harness::new();
+    let mut harness = Harness::new(pools);
     let mut rx = harness.player().subscribe();
 
     // Track 0 = the gated HLS track. Track 1 = a second HLS track so a forward

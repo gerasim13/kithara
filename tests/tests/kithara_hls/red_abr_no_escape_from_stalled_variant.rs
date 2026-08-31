@@ -43,14 +43,15 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, AudioSession, ChunkOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, auto, fixture_protocol::DelayRule,
+    HlsFixtureBuilder, TestServerHelper, auto,
+    bufpool_ext::{TestPools, pools},
+    fixture_protocol::DelayRule,
 };
 
 struct Consts;
@@ -97,22 +98,19 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
         .expect("create HLS fixture")
         .master_url();
 
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(64).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .initial_abr_mode(auto(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)

@@ -1,6 +1,5 @@
 use std::mem;
 
-use kithara::host::Host;
 use kithara_platform::{
     CancelToken,
     time::{Duration, Instant},
@@ -8,10 +7,11 @@ use kithara_platform::{
 };
 
 use super::Packager;
+use crate::pools::AppHost;
 
 pub(crate) struct Broadcaster<P: Packager> {
-    pub(super) phase: Phase<P>,
     shutdown: CancelToken,
+    pub(super) phase: Phase<P>,
     tap_lead: Duration,
 }
 
@@ -29,14 +29,22 @@ impl<P: Packager> Broadcaster<P> {
     pub(crate) const fn new(shutdown: CancelToken, tap_lead: Duration) -> Self {
         Self {
             shutdown,
-            tap_lead,
             phase: Phase::Off,
+            tap_lead,
         }
     }
 
     pub(crate) fn complete_stop(&mut self) {
         if matches!(self.phase, Phase::Stopping) {
             self.phase = Phase::Off;
+        }
+    }
+
+    pub(crate) fn release(&mut self, host: &AppHost) {
+        if matches!(self.phase, Phase::Running { .. })
+            && let Err(error) = P::release(host)
+        {
+            tracing::error!(%error, "failed to release broadcast mix tap during shutdown");
         }
     }
 
@@ -49,7 +57,7 @@ impl<P: Packager> Broadcaster<P> {
         matches!(self.phase, Phase::Running { .. })
     }
 
-    pub(crate) fn poll(&mut self, host: &Host) {
+    pub(crate) fn poll(&mut self, host: &AppHost) {
         if matches!(&self.phase, Phase::Running { live } if !P::is_live(live)) {
             if let Err(error) = P::release(host) {
                 tracing::error!(%error, "failed to release stopped broadcast mix tap");
@@ -73,15 +81,7 @@ impl<P: Packager> Broadcaster<P> {
         }
     }
 
-    pub(crate) fn release(&mut self, host: &Host) {
-        if matches!(self.phase, Phase::Running { .. })
-            && let Err(error) = P::release(host)
-        {
-            tracing::error!(%error, "failed to release broadcast mix tap during shutdown");
-        }
-    }
-
-    pub(crate) fn toggle(&mut self, host: &Host) -> Option<BroadcastStop<P>> {
+    pub(crate) fn toggle(&mut self, host: &AppHost) -> Option<BroadcastStop<P>> {
         match mem::replace(&mut self.phase, Phase::Off) {
             Phase::Off => self.phase = Phase::Requested,
             Phase::Requested => {}

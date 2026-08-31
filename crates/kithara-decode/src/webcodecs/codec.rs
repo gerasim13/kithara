@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::{BytePool, SampleBuffer};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{
     sync::{
         Arc,
@@ -66,12 +66,12 @@ struct PcmOut {
     pts_us: u64,
 }
 
-pub(crate) struct WebCodecsCodec {
-    spec: AudioSpec,
-    byte_pool: BytePool,
+pub(crate) struct WebCodecsCodec<S> {
+    pools: PoolRegion<S>,
     config: CodecConfig,
     track_info: DecoderTrackInfo,
     decoded_pts: Duration,
+    spec: AudioSpec,
     out: mpsc::Receiver<HostOut>,
     cmd: mpsc::Sender<HostCmd>,
     eof_draining: bool,
@@ -80,7 +80,10 @@ pub(crate) struct WebCodecsCodec {
     generation: u64,
 }
 
-impl WebCodecsCodec {
+impl<S> WebCodecsCodec<S>
+where
+    S: HasPool<u8>,
+{
     fn drain_output(&mut self, out: &mut SampleBuffer) -> DecodeResult<u32> {
         let deadline = Instant::now() + Consts::DRAIN_TIMEOUT;
         loop {
@@ -155,7 +158,7 @@ impl WebCodecsCodec {
     pub(crate) fn open(
         track: &TrackInfo,
         gapless_enabled: bool,
-        byte_pool: BytePool,
+        pools: PoolRegion<S>,
     ) -> DecodeResult<Self> {
         let config = codec_config(track)?;
         let spec = checked_audio_spec(
@@ -173,7 +176,7 @@ impl WebCodecsCodec {
         })
         .map_err(|_| channel_disconnected("command"))?;
         let codec = Self {
-            byte_pool,
+            pools,
             decoder_id,
             cmd,
             out,
@@ -283,11 +286,6 @@ impl WebCodecsCodec {
         }
     }
 
-    #[must_use]
-    pub(crate) fn supports(codec: AudioCodec) -> bool {
-        codec_string(codec).is_some() && super::probe::supported(codec)
-    }
-
     fn write_pcm(&mut self, out: &mut SampleBuffer, pcm: PcmOut) -> DecodeResult<u32> {
         let PcmOut {
             interleaved,
@@ -302,9 +300,9 @@ impl WebCodecsCodec {
             .and_then(|frames| frames.checked_mul(usize::from(channels)));
         if expected != Some(interleaved.len()) {
             return Err(DecodeError::backend(WebCodecsError::OutputShape {
+                samples: interleaved.len(),
                 frames,
                 channels,
-                samples: interleaved.len(),
             }));
         }
         *out = interleaved;
@@ -322,7 +320,10 @@ impl WebCodecsCodec {
     }
 }
 
-impl FrameCodec for WebCodecsCodec {
+impl<S> FrameCodec for WebCodecsCodec<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn decode_frame(
         &mut self,
         frame_data: &[u8],
@@ -348,10 +349,12 @@ impl FrameCodec for WebCodecsCodec {
         self.eof_draining = false;
         self.eof_flushed = false;
         let pts_us = u64::try_from(pts.as_micros()).unwrap_or(u64::MAX);
+        let mut data = self.pools.get_with_len::<u8>(frame_data.len())?;
+        data.copy_from_slice(frame_data);
         self.send(HostCmd::Decode {
             pts_us,
             decoder_id: self.decoder_id,
-            data: self.byte_pool.collect(frame_data.iter().copied()),
+            data,
             key: true,
             generation: self.generation,
         })?;
@@ -394,7 +397,7 @@ impl FrameCodec for WebCodecsCodec {
     }
 }
 
-impl Drop for WebCodecsCodec {
+impl<S> Drop for WebCodecsCodec<S> {
     fn drop(&mut self) {
         self.cmd
             .send(HostCmd::Close {
@@ -404,7 +407,7 @@ impl Drop for WebCodecsCodec {
     }
 }
 
-impl WebCodecsCodec {
+impl<S> WebCodecsCodec<S> {
     fn send(&self, command: HostCmd) -> DecodeResult<()> {
         self.cmd
             .send(command)
@@ -421,6 +424,11 @@ impl WebCodecsCodec {
             generation: self.generation,
         })
     }
+}
+
+#[must_use]
+pub(crate) fn supports(codec: AudioCodec) -> bool {
+    codec_string(codec).is_some() && super::probe::supported(codec)
 }
 
 fn codec_config(track: &TrackInfo) -> DecodeResult<CodecConfig> {

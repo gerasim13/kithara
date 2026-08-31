@@ -6,7 +6,7 @@ use kithara::{
     audio::DecoderResamplerSettings,
     events::{ResamplerKind, TrackId},
     platform::sync::Arc,
-    play::PlaybackResamplerBackend,
+    play::{PlaybackResamplerBackend, ResourceSrc},
     warp::StretchControls,
 };
 use kithara_integration_tests::{
@@ -189,7 +189,7 @@ async fn prepare_desktop_player(master_url: &url::Url, label: &str) -> DesktopPr
         .maybe_resampler(decoder_defaults.resampler().cloned())
         .build();
     let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
+        ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
     .decoder(decoder)

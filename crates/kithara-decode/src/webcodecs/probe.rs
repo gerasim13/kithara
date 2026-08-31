@@ -1,9 +1,6 @@
 use js_sys::Uint8Array;
-use kithara_bufpool::SamplePool;
-use kithara_platform::{
-    sync::{OnceLock, mpsc},
-    tokio::task::spawn,
-};
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::sync::{OnceLock, mpsc};
 use kithara_stream::AudioCodec;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
@@ -39,14 +36,14 @@ impl Support {
         AudioCodec::Flac,
     ];
 
-    const FLAC_DESCRIPTION_LEN: usize = 42;
     /// Minimal 44.1 kHz, stereo, 16-bit FLAC STREAMINFO for capability probing.
     const FLAC_PROBE_STREAMINFO: [u8; 34] = [
         0x10, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        // WHY: sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
+        // sample rate (20b) | channels - 1 (3b) | bits per sample - 1 (5b) | samples (36b)
         0x0A, 0xC4, 0x42, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     ];
+    const FLAC_DESCRIPTION_LEN: usize = 42;
 
     fn set(&mut self, codec: AudioCodec, supported: bool) {
         match codec {
@@ -73,13 +70,16 @@ impl Support {
 
 /// Initialize the main-thread WebCodecs runtime and capability probe.
 #[doc(hidden)]
-pub fn spawn_webcodecs_probe(sample_pool: SamplePool) {
+pub fn spawn_webcodecs_probe<S>(pools: PoolRegion<S>)
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     if host_cmd().get().is_some() {
         tracing::debug!("WebCodecs host was already initialized");
         return;
     }
-    let _ = host_cmd().set(spawn_host(sample_pool));
-    drop(spawn(async {
+    let _ = host_cmd().set(spawn_host(pools));
+    drop(kithara_platform::tokio::task::spawn(async {
         let mut snapshot = Support::default();
         for codec in Support::CODECS {
             snapshot.set(codec, probe(codec).await);
@@ -110,8 +110,9 @@ async fn probe(codec: AudioCodec) -> bool {
     }
     let promise = AudioDecoder::is_config_supported(&config);
     let supported = match JsFuture::from(promise).await {
-        // WHY: The promise resolves to an AudioDecoderSupport DICTIONARY (a plain JS object with no prototype), so instanceof-based
-        // `dyn_into` always fails; cast unchecked and read the member.
+        // The promise resolves to an AudioDecoderSupport DICTIONARY (a plain
+        // JS object with no prototype), so instanceof-based `dyn_into` always
+        // fails; cast unchecked and read the member.
         Ok(value) => value
             .unchecked_into::<AudioDecoderSupport>()
             .get_supported()

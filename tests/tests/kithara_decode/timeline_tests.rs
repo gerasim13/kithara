@@ -3,8 +3,13 @@ use std::io::Cursor;
 use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     platform::time::Duration,
+    resampler::NoResamplerBackend,
     signal::AudioChunk,
 };
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
+
 use kithara_test_fixtures::assets::signal_wav_sine440_1s;
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
@@ -13,10 +18,7 @@ fn test_progressive_file_timeline_monotonic() {
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
         Some("wav"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .unwrap();
 
@@ -63,10 +65,7 @@ fn test_progressive_file_seek_resets_frame_offset() {
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
         Some("wav"),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .unwrap();
 
@@ -91,13 +90,16 @@ fn test_progressive_file_seek_resets_frame_offset() {
 #[cfg(not(target_arch = "wasm32"))]
 mod hls_timeline {
     use kithara::{
+        assets::{AssetStore, StorageBackend},
         decode::{DecoderConfig, DecoderFactory},
         hls::{AbrMode, Hls, HlsConfig},
         platform::{CancelToken, sync::Arc, time::Duration, tokio},
+        resampler::NoResamplerBackend,
         stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
     };
     use kithara_integration_tests::{
         TestTempDir,
+        bufpool_ext::{TestPools, pools},
         hls_server::{HlsTestServer, HlsTestServerConfig},
     };
     use kithara_test_fixtures::signal::{self, Wave};
@@ -136,22 +138,29 @@ mod hls_timeline {
         let url = server.url("/master.m3u8");
         let temp_dir = TestTempDir::new();
         let cancel = CancelToken::never();
+        let pools = pools();
 
         let hls_config = HlsConfig::for_url(url)
-            .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+            .store(
+                AssetStore::builder(pools.clone())
+                    .backend(StorageBackend::Disk {
+                        root: temp_dir.path().to_path_buf(),
+                    })
+                    .build(),
+            )
+            .pools(pools.clone())
             .cancel(cancel)
             .initial_abr_mode(AbrMode::manual(0))
             .build();
 
-        let stream = Stream::<Hls>::new(hls_config).await.unwrap();
+        let stream = Stream::<Hls<TestPools>>::new(hls_config).await.unwrap();
 
         let wav_info = MediaInfo::builder()
             .maybe_codec(Some(AudioCodec::Pcm))
             .maybe_container(Some(ContainerFormat::Wav))
             .build();
-        let decoder_config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        let decoder_config = DecoderConfig::<NoResamplerBackend, TestPools>::builder()
+            .pools(pools)
             .hint("wav")
             .maybe_byte_map(stream.byte_map())
             .build();

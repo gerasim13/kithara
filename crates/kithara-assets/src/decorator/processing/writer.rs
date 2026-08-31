@@ -1,15 +1,15 @@
 use std::fmt;
 
 use bon::bon;
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_storage::{StorageError, StorageResult};
 
 use super::{contract::ProcessCtx, gate::ReadinessGate, guard::GateGuard, reader::ProcessedReader};
 use crate::resource::{RawWriteHandle, ReadSide, WriteSide};
 
-fn run_process<W>(
-    pool: &BytePool,
+fn run_process<W, S>(
+    pools: &PoolRegion<S>,
     processor: &ProcessCtx,
     inner: &W,
     final_len: u64,
@@ -17,13 +17,18 @@ fn run_process<W>(
 ) -> StorageResult<u64>
 where
     W: WriteSide,
+    S: HasPool<u8>,
 {
     let chunk_size_u64 = chunk_size as u64;
     let mut sink = processor.begin();
     let raw = inner.reader();
 
-    let mut input_buf = pool.get_with(|buffer| buffer.resize(chunk_size, 0));
-    let mut output_buf = pool.get_with(|buffer| buffer.resize(chunk_size, 0));
+    let mut input_buf = pools.get_with_len::<u8>(chunk_size).map_err(|error| {
+        StorageError::Failed(format!("processing input buffer growth failed: {error}"))
+    })?;
+    let mut output_buf = pools.get_with_len::<u8>(chunk_size).map_err(|error| {
+        StorageError::Failed(format!("processing output buffer growth failed: {error}"))
+    })?;
 
     let mut read_offset = 0u64;
     let mut write_offset = 0u64;
@@ -70,16 +75,16 @@ pub(super) const DEFAULT_CHUNK_SIZE: usize = 64 * 1024;
 pub(super) const DEFAULT_GATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Write handle that processes a resource atomically when it is committed.
-pub struct ProcessedWriter<W> {
-    pool: BytePool,
+pub struct ProcessedWriter<W, S> {
+    pools: PoolRegion<S>,
+    chunk_size: usize,
     gate_poll_interval: Duration,
     guard: GateGuard,
     processor: Option<ProcessCtx>,
     inner: W,
-    chunk_size: usize,
 }
 
-impl<W: fmt::Debug> fmt::Debug for ProcessedWriter<W> {
+impl<W: fmt::Debug, S> fmt::Debug for ProcessedWriter<W, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProcessedWriter")
             .field("inner", &self.inner)
@@ -90,9 +95,10 @@ impl<W: fmt::Debug> fmt::Debug for ProcessedWriter<W> {
 }
 
 #[bon]
-impl<W> ProcessedWriter<W>
+impl<W, S> ProcessedWriter<W, S>
 where
     W: WriteSide,
+    S: HasPool<u8>,
 {
     /// Creates a pending writer for a resource and its optional processor.
     /// `chunk_size` and `gate_poll_interval` carry the production defaults, so
@@ -102,7 +108,7 @@ where
     pub fn new(
         inner: W,
         processor: Option<ProcessCtx>,
-        pool: BytePool,
+        pools: PoolRegion<S>,
         #[builder(default = DEFAULT_CHUNK_SIZE)] chunk_size: usize,
         #[builder(default = DEFAULT_GATE_POLL_INTERVAL)] gate_poll_interval: Duration,
     ) -> Self {
@@ -110,42 +116,37 @@ where
         Self {
             inner,
             processor,
-            pool,
+            pools,
             chunk_size,
             gate_poll_interval,
             guard: GateGuard::new(Arc::new(ReadinessGate::new(ready, gate_poll_interval))),
         }
     }
 
-    fn build_reader(&self, inner: W::Reader) -> ProcessedReader<W::Reader> {
+    fn build_reader(&self, inner: W::Reader) -> ProcessedReader<W::Reader, S> {
         ProcessedReader::with_readiness(
             inner,
             self.guard.shared(),
             self.processor.clone(),
-            self.pool.clone(),
+            self.pools.clone(),
             self.chunk_size,
             self.gate_poll_interval,
         )
     }
 }
 
-impl<W> WriteSide for ProcessedWriter<W>
+impl<W, S> WriteSide for ProcessedWriter<W, S>
 where
     W: WriteSide,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
-    type Reader = ProcessedReader<W::Reader>;
+    type Reader = ProcessedReader<W::Reader, S>;
 
-    fn abandon(mut self) {
-        self.inner.abandon();
-        // WHY: Failing this shared gate would poison readers during generation teardown.
-        self.guard.disarm();
-    }
-
-    fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader>> {
+    fn commit(mut self, final_len: Option<u64>) -> StorageResult<ProcessedReader<W::Reader, S>> {
         let needs_processing = self.processor.is_some() && !self.guard.is_ready();
         let actual_len = match (needs_processing, final_len, self.processor.as_ref()) {
             (true, Some(len), Some(processor)) if len > 0 => Some(run_process(
-                &self.pool,
+                &self.pools,
                 processor,
                 &self.inner,
                 len,
@@ -163,7 +164,7 @@ where
             reader_inner,
             self.guard.shared(),
             self.processor.clone(),
-            self.pool.clone(),
+            self.pools.clone(),
             self.chunk_size,
             self.gate_poll_interval,
         ))
@@ -175,7 +176,15 @@ where
         self.guard.disarm();
     }
 
-    fn reader(&self) -> ProcessedReader<W::Reader> {
+    fn abandon(mut self) {
+        self.inner.abandon();
+        // Disarm without failing: the readiness gate is shared with readers of
+        // this generation, and the cancel that brought us here is tearing that
+        // generation down. Failing it would reach the successor's readers.
+        self.guard.disarm();
+    }
+
+    fn reader(&self) -> ProcessedReader<W::Reader, S> {
         self.build_reader(self.inner.reader())
     }
 

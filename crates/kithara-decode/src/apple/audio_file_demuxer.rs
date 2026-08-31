@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara_apple::audio_toolbox::{AudioStreamPacketDescription, pod_to_vec, pod_write_to_slice};
-use kithara_bufpool::{BytePool, PooledOwned};
+use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioSpec, FrameCount};
 use kithara_stream::{AudioCodec, ContainerFormat, PrerollHint};
@@ -38,6 +38,18 @@ fn sample_rate_from_asbd(rate: f64) -> Option<u32> {
 /// [`AudioStreamPacketDescription`].
 pub(crate) struct AppleAudioFileDemuxer {
     file: AppleAudioFile,
+    /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
+    /// issues one batched `audio_file_read_packet_data` for that many
+    /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
+    /// each `Frame` carries its own `AudioStreamPacketDescription`.
+    cbr_batch_packets: Option<u32>,
+    total_packets: Option<u64>,
+    track_info: TrackInfo,
+    read_buf: ByteBuffer,
+    last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
+    frames_per_packet: u32,
+    next_packet: u64,
+    last_read_len: usize,
     /// Live source byte length (total), shared with the pipeline. Lets a
     /// size-less seek report an estimated `landed_byte` so the stream's byte
     /// cursor tracks where the decoder resumes: a size-less open is the one
@@ -46,18 +58,6 @@ pub(crate) struct AppleAudioFileDemuxer {
     /// size-less MP3 seek leaves the stream position stale and the reopen read
     /// mis-classifies as EOF. `None` / `0` when the total is unknown.
     byte_len: Option<Arc<AtomicU64>>,
-    /// `Some(packets_per_call)` for CBR (`LinearPCM`) — every `next_frame`
-    /// issues one batched `audio_file_read_packet_data` for that many
-    /// packets. `None` for VBR (MP3, ALAC) — one packet per call so
-    /// each `Frame` carries its own `AudioStreamPacketDescription`.
-    cbr_batch_packets: Option<u32>,
-    total_packets: Option<u64>,
-    read_buf: PooledOwned<32, Vec<u8>>,
-    track_info: TrackInfo,
-    last_packet_desc_blob: [u8; size_of::<AudioStreamPacketDescription>()],
-    frames_per_packet: u32,
-    next_packet: u64,
-    last_read_len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,34 +71,6 @@ impl AppleAudioFileDemuxer {
     /// source `wait_range` cost on streamed sources (HLS), small enough
     /// to keep the in-flight buffer bounded.
     const CBR_BATCH_TARGET_BYTES: u32 = 16 * 1024;
-
-    fn audio_spec(&self) -> DecodeResult<AudioSpec> {
-        checked_audio_spec(
-            self.track_info.channels,
-            self.track_info.sample_rate,
-            "apple.audio_file",
-        )
-    }
-
-    /// Estimate the source byte offset the decoder resumes reading at after a
-    /// seek that landed at `landed_at`, from the linear ratio of the landed
-    /// time to the track duration scaled by the total byte length. `None`
-    /// unless both the total byte length (live handle) and a positive track
-    /// duration are known — callers that get `None` leave the stream cursor
-    /// untouched (the pre-existing size-less behavior).
-    fn estimate_landed_byte(&self, landed_at: Duration) -> Option<u64> {
-        let total_bytes = self.byte_len.as_ref()?.load(Ordering::Acquire);
-        if total_bytes == 0 {
-            return None;
-        }
-        let total = self.track_info.duration?.as_nanos();
-        if total == 0 {
-            return None;
-        }
-        let landed = landed_at.as_nanos().min(total);
-        let byte = u128::from(total_bytes).saturating_mul(landed) / total;
-        Some(u64::try_from(byte).unwrap_or(total_bytes).min(total_bytes))
-    }
 
     /// Single source of truth: maps `(codec, container)` to the
     /// `kAudioFileXxxType` four-cc hint `AudioFileServices` needs.
@@ -124,17 +96,29 @@ impl AppleAudioFileDemuxer {
         })
     }
 
-    fn open(
+    fn open<S>(
         source: BoxedSource,
         hint: Option<u32>,
         codec: AudioCodec,
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
-        byte_pool: &BytePool,
-    ) -> DecodeResult<Self> {
-        // WHY: MP3 and FLAC are VBR with no on-disk packet index, so a complete open would query `packet_count()` - forcing
-        // `AudioFileServices` to scan the WHOLE file to build a packet table before the first frame (3–37 s on device for large lossless
-        // tracks, and a full download wait on a streamed source).
+        pools: &PoolRegion<S>,
+    ) -> DecodeResult<Self>
+    where
+        S: HasPool<u8>,
+    {
+        // MP3 and FLAC are VBR with no on-disk packet index, so a complete
+        // open would query `packet_count()` — forcing `AudioFileServices` to
+        // scan the WHOLE file to build a packet table before the first frame
+        // (3–37 s on device for large lossless tracks, and a full download
+        // wait on a streamed source). The streaming opens skip that scan;
+        // duration and the read-buffer size come from cheap header metadata
+        // instead (Xing for MP3, STREAMINFO for FLAC).
+        // FLAC additionally needs the real file size handed to AudioFile
+        // (`open_sized_streaming`): without it a not-ready read past the
+        // download boundary is mistaken for EOF (track ends mid-stream) and
+        // seeks degrade to an O(N) forward frame-scan. MP3 stays size-less —
+        // it must not probe tail bytes at open (`open_mp3_demuxer_*`).
         let file = match (open_mode, codec) {
             (SourceOpenMode::Streaming, AudioCodec::Flac) => {
                 AppleAudioFile::open_sized_streaming(source, hint)?
@@ -157,8 +141,9 @@ impl AppleAudioFileDemuxer {
             _ => file.magic_cookie().unwrap_or_default(),
         };
 
-        // WHY: FLAC's magic cookie carries STREAMINFO: `total_samples` yields the exact duration and `max_frame_size` bounds the VBR read
-        // buffer when the streaming open leaves `max_packet_size()` at 0.
+        // FLAC's magic cookie carries STREAMINFO: `total_samples` yields the
+        // exact duration and `max_frame_size` bounds the VBR read buffer when
+        // the streaming open leaves `max_packet_size()` at 0.
         let flac_info = (codec == AudioCodec::Flac)
             .then(|| StreamInfo::parse(&extra_data).ok())
             .flatten();
@@ -202,7 +187,8 @@ impl AppleAudioFileDemuxer {
         };
 
         let (cbr_batch_packets, buf_cap) = if asbd.bytes_per_packet == 0 {
-            // WHY: VBR. A streaming open reports no max packet size, so fall back to the FLAC STREAMINFO frame bound (FLAC frames reach ~16-19
+            // VBR. A streaming open reports no max packet size, so fall back
+            // to the FLAC STREAMINFO frame bound (FLAC frames reach ~16-19
             // KiB, far past the 4 KiB floor) when AudioFile can't supply one.
             let reported = usize::try_from(file.max_packet_size).map_err(DecodeError::backend)?;
             let flac_bound = flac_info.map_or(0, StreamInfo::max_frame_bytes);
@@ -224,7 +210,7 @@ impl AppleAudioFileDemuxer {
             total_packets,
             frames_per_packet,
             cbr_batch_packets,
-            read_buf: byte_pool.get_with(|buffer| buffer.resize(buf_cap, 0)),
+            read_buf: pools.get_with_len::<u8>(buf_cap)?,
             last_read_len: 0,
             last_packet_desc_blob: [0u8; size_of::<AudioStreamPacketDescription>()],
             next_packet: 0,
@@ -244,42 +230,32 @@ impl AppleAudioFileDemuxer {
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
     ) -> DecodeResult<Self> {
+        let pools = crate::test_pools::pools();
         Self::open_for_with_mode_and_pool(
             source,
             codec,
             container,
             open_mode,
             duration_hint,
-            &BytePool::default(),
+            &pools,
         )
     }
 
-    pub(crate) fn open_for_with_mode_and_pool(
+    pub(crate) fn open_for_with_mode_and_pool<S>(
         source: BoxedSource,
         codec: AudioCodec,
         container: Option<ContainerFormat>,
         open_mode: SourceOpenMode,
         duration_hint: Option<Duration>,
-        byte_pool: &BytePool,
-    ) -> DecodeResult<Self> {
+        pools: &PoolRegion<S>,
+    ) -> DecodeResult<Self>
+    where
+        S: HasPool<u8>,
+    {
         let hint = container
             .and_then(|c| Self::file_type_id(codec, c))
             .ok_or(DecodeError::UnsupportedCodec { codec })?;
-        Self::open(
-            source,
-            Some(hint),
-            codec,
-            open_mode,
-            duration_hint,
-            byte_pool,
-        )
-    }
-
-    /// Attach the shared live byte-length handle so a size-less seek can
-    /// report an estimated `landed_byte` (see the `byte_len` field).
-    pub(crate) fn set_byte_len_handle(&mut self, handle: Option<Arc<AtomicU64>>) {
-        self.file.set_byte_len_handle(handle.clone());
-        self.byte_len = handle;
+        Self::open(source, Some(hint), codec, open_mode, duration_hint, pools)
     }
 
     /// Inject encoder priming/padding metadata probed by the factory
@@ -289,6 +265,41 @@ impl AppleAudioFileDemuxer {
     /// captured trim counts through here.
     pub(crate) const fn set_gapless(&mut self, gapless: Option<GaplessInfo>) {
         self.track_info.gapless = gapless;
+    }
+
+    /// Attach the shared live byte-length handle so a size-less seek can
+    /// report an estimated `landed_byte` (see the `byte_len` field).
+    pub(crate) fn set_byte_len_handle(&mut self, handle: Option<Arc<AtomicU64>>) {
+        self.file.set_byte_len_handle(handle.clone());
+        self.byte_len = handle;
+    }
+
+    /// Estimate the source byte offset the decoder resumes reading at after a
+    /// seek that landed at `landed_at`, from the linear ratio of the landed
+    /// time to the track duration scaled by the total byte length. `None`
+    /// unless both the total byte length (live handle) and a positive track
+    /// duration are known — callers that get `None` leave the stream cursor
+    /// untouched (the pre-existing size-less behavior).
+    fn estimate_landed_byte(&self, landed_at: Duration) -> Option<u64> {
+        let total_bytes = self.byte_len.as_ref()?.load(Ordering::Acquire);
+        if total_bytes == 0 {
+            return None;
+        }
+        let total = self.track_info.duration?.as_nanos();
+        if total == 0 {
+            return None;
+        }
+        let landed = landed_at.as_nanos().min(total);
+        let byte = u128::from(total_bytes).saturating_mul(landed) / total;
+        Some(u64::try_from(byte).unwrap_or(total_bytes).min(total_bytes))
+    }
+
+    fn audio_spec(&self) -> DecodeResult<AudioSpec> {
+        checked_audio_spec(
+            self.track_info.channels,
+            self.track_info.sample_rate,
+            "apple.audio_file",
+        )
     }
 
     /// Whether Apple's standalone file path supports this `(codec,
@@ -331,8 +342,10 @@ impl Demuxer for AppleAudioFileDemuxer {
             } else {
                 batch_packets
             };
-            // WHY: Contract: "data not ready" surfaces as `Pending`, never `Err` - an `Err` classifies as `Interrupted` upstream and the decode
-            // loop retries it hot instead of parking the worker.
+            // Contract: "data not ready" surfaces as `Pending`, never `Err` —
+            // an `Err` classifies as `Interrupted` upstream and the decode
+            // loop retries it hot instead of parking the worker. The packet
+            // cursor was not advanced, so the next call re-reads the same
             let (bytes, packets_read) =
                 match self
                     .file
@@ -436,8 +449,14 @@ impl Demuxer for AppleAudioFileDemuxer {
             .duration_for(landed_frame)
             .unwrap_or(Duration::from_nanos(u64::MAX));
 
-        // WHY: Prefer Apple's own packet->byte mapping so `landed_byte` matches the offset its packet read seeks to; fall back to a linear
-        // estimate from the live total when the property is unavailable.
+        // Prefer Apple's own packet→byte mapping so `landed_byte` matches the
+        // offset its packet read seeks to; fall back to a linear estimate from
+        // the live total when the property is unavailable.
+        // Apple's own packet→byte mapping is exact and is the offset its packet
+        // read seeks to, but a size-less open rejects it outright
+        // (`kAudioFileInvalidPacketOffsetError`). That degraded mode — the
+        // streamed MP3 path — falls back to the linear estimate; see
+        // `estimate_landed_byte`.
         let landed_byte = self
             .file
             .packet_to_byte(landed_packet)
@@ -538,9 +557,9 @@ mod tests {
     }
 
     struct TailLoopGuard {
-        tripped: Arc<AtomicBool>,
         inner: Cursor<Vec<u8>>,
         last_short_read: Option<(u64, usize, usize)>,
+        tripped: Arc<AtomicBool>,
     }
 
     impl Read for TailLoopGuard {

@@ -40,20 +40,20 @@ pub(super) struct RingConsumer {
     pub(super) preloaded: bool,
     _epoch: Arc<AtomicU64>,
     reader_wake: Arc<ThreadWake>,
-    #[field(get, vis = "pub(super)", copy)]
-    consumer_wake_mode: ConsumerWakeMode,
     audio_rx: Inlet<Fetch<AudioChunk>>,
     trash_tx: Outlet<AudioChunk>,
     block_on_underrun: bool,
+    #[field(get, vis = "pub(super)", copy)]
+    consumer_wake_mode: ConsumerWakeMode,
 }
 
 pub(super) struct RingParts {
     pub(super) epoch: Arc<AtomicU64>,
     pub(super) reader_wake: Arc<ThreadWake>,
-    pub(super) consumer_wake_mode: ConsumerWakeMode,
     pub(super) audio_rx: Inlet<Fetch<AudioChunk>>,
     pub(super) trash_tx: Outlet<AudioChunk>,
     pub(super) block_on_underrun: bool,
+    pub(super) consumer_wake_mode: ConsumerWakeMode,
 }
 
 impl RingConsumer {
@@ -64,7 +64,6 @@ impl RingConsumer {
             parts.consumer_wake_mode
         };
         Self {
-            consumer_wake_mode,
             audio_rx: parts.audio_rx,
             validator: EpochValidator::default(),
             phase: ConsumerPhase::Buffering,
@@ -74,6 +73,7 @@ impl RingConsumer {
             _epoch: parts.epoch,
             preloaded: false,
             block_on_underrun: parts.block_on_underrun,
+            consumer_wake_mode,
         }
     }
 
@@ -99,6 +99,10 @@ impl RingConsumer {
             break;
         }
         popped
+    }
+
+    pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
+        wake_worker(worker, self.consumer_wake_mode);
     }
 
     fn consumer_hang_ctx(&self, ctx: RecvCtx<'_>) -> ConsumerHangCtx {
@@ -277,10 +281,6 @@ impl RingConsumer {
             }
         }
     }
-
-    pub(super) fn wake_worker(&self, worker: Option<&dyn WorkerWake>) {
-        wake_worker(worker, self.consumer_wake_mode);
-    }
 }
 
 pub(super) fn create_channels(
@@ -334,16 +334,20 @@ fn wake_worker(worker: Option<&dyn WorkerWake>, mode: ConsumerWakeMode) {
 mod tests {
     use std::sync::atomic::AtomicU64;
 
-    use kithara_bufpool::SamplePool;
     use kithara_platform::{CancelToken, sync::Arc};
     use kithara_signal::{AudioChunk, AudioChunkInfo};
     use kithara_stream::PlayheadState;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{ConsumerWakeMode, audio::ReadOutcome};
+    use crate::{
+        ConsumerWakeMode,
+        audio::ReadOutcome,
+        test_pools::{Pools, pools, sample_buffer},
+    };
 
     struct RingFixture {
+        pools: Pools,
         playhead: Arc<PlayheadState>,
         events: crate::audio::event::AudioEvents,
         cursor: ChunkCursor,
@@ -357,35 +361,44 @@ mod tests {
             Self::with_wake_mode(preloaded, false, ConsumerWakeMode::RealtimeDeferred)
         }
 
-        fn recv(&mut self) -> Option<AudioChunk> {
-            self.ring.recv_valid_chunk(empty_ctx())
-        }
-
         fn with_wake_mode(
             preloaded: bool,
             block_on_underrun: bool,
             consumer_wake_mode: ConsumerWakeMode,
         ) -> Self {
+            let pools = pools();
             let (data_tx, audio_rx) = connect::<Fetch<AudioChunk>>(4, None);
             let (trash_tx, trash_rx) = connect::<AudioChunk>(8, None);
-            let pool = SamplePool::default();
             let mut ring = RingConsumer::new(RingParts {
                 audio_rx,
                 trash_tx,
-                block_on_underrun,
-                consumer_wake_mode,
                 reader_wake: Arc::new(ThreadWake::default()),
                 epoch: Arc::new(AtomicU64::new(0)),
+                block_on_underrun,
+                consumer_wake_mode,
             });
             ring.preloaded = preloaded;
             Self {
+                cursor: ChunkCursor::new(&pools, AudioChunkInfo::default().spec)
+                    .expect("cursor scratch fits test pools"),
+                pools,
                 ring,
                 data_tx,
-                cursor: ChunkCursor::new(&pool, AudioChunkInfo::default().spec),
                 events: crate::audio::event::AudioEvents::test(),
                 playhead: Arc::new(PlayheadState::new()),
                 _trash_rx: trash_rx,
             }
+        }
+
+        fn recv(&mut self) -> Option<AudioChunk> {
+            self.ring.recv_valid_chunk(empty_ctx())
+        }
+
+        fn chunk(&self, samples: &[f32]) -> AudioChunk {
+            let mut meta = AudioChunkInfo::default();
+            meta.spec.channels = 1;
+            meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
+            AudioChunk::new(meta, sample_buffer(&self.pools, samples))
         }
     }
 
@@ -395,13 +408,6 @@ mod tests {
             worker: None,
             abr: None,
         }
-    }
-
-    fn make_chunk(samples: &[f32]) -> AudioChunk {
-        let mut meta = AudioChunkInfo::default();
-        meta.spec.channels = 1;
-        meta.frames = u32::try_from(samples.len()).unwrap_or(u32::MAX);
-        AudioChunk::new(meta, SamplePool::default().attach(samples.to_vec()))
     }
 
     #[kithara::test]
@@ -427,13 +433,15 @@ mod tests {
     #[kithara::test]
     fn seek_drain_reports_whether_it_popped_any_item() {
         let mut drained = RingFixture::new(true);
+        let first = drained.chunk(&[0.1]);
         drained
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.1]), 0))
+            .try_push(Fetch::data(first, 0))
             .expect("first stale chunk reaches ring");
+        let second = drained.chunk(&[0.2]);
         drained
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.2]), 0))
+            .try_push(Fetch::data(second, 0))
             .expect("second stale chunk reaches ring");
         drained
             .data_tx
@@ -491,9 +499,10 @@ mod tests {
     #[kithara::test]
     fn consumer_phase_transitions_to_playing_on_first_chunk() {
         let mut fixture = RingFixture::new(true);
+        let chunk = fixture.chunk(&[0.1, 0.2]);
         fixture
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 0))
+            .try_push(Fetch::data(chunk, 0))
             .expect("chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
@@ -513,9 +522,10 @@ mod tests {
     fn consumer_phase_seek_pending_to_playing_on_chunk() {
         let mut fixture = RingFixture::new(true);
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
+        let chunk = fixture.chunk(&[0.1, 0.2]);
         fixture
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 1))
+            .try_push(Fetch::data(chunk, 1))
             .expect("post-seek chunk reaches ring");
         assert!(fixture.ring.fill(&mut fixture.cursor, empty_ctx()));
         assert_eq!(fixture.ring.phase, ConsumerPhase::Playing);
@@ -524,13 +534,15 @@ mod tests {
     #[kithara::test]
     fn seek_drain_preserves_new_epoch_chunk_after_stale_chunks() {
         let mut fixture = RingFixture::new(true);
+        let stale = fixture.chunk(&[0.1, 0.2]);
         fixture
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 0))
+            .try_push(Fetch::data(stale, 0))
             .expect("stale chunk reaches ring");
+        let fresh = fixture.chunk(&[0.7, 0.8]);
         fixture
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.7, 0.8]), 1))
+            .try_push(Fetch::data(fresh, 1))
             .expect("fresh chunk reaches ring");
         let _ = fixture.ring.begin_seek_epoch(1, &mut fixture.cursor);
         let mut buf = [0.0; 2];
@@ -554,9 +566,10 @@ mod tests {
     #[kithara::test]
     fn seek_drain_preserves_new_epoch_eof_after_stale_chunks() {
         let mut fixture = RingFixture::new(true);
+        let stale = fixture.chunk(&[0.1, 0.2]);
         fixture
             .data_tx
-            .try_push(Fetch::data(make_chunk(&[0.1, 0.2]), 0))
+            .try_push(Fetch::data(stale, 0))
             .expect("stale chunk reaches ring");
         fixture
             .data_tx

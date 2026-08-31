@@ -1,6 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use kithara_audio::AudioReader;
+use kithara_bufpool::HasPool;
 use kithara_platform::{CancelGroup, CancelToken, sync::mpsc, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
@@ -65,9 +66,10 @@ impl AnalysisWorker {
     ///
     /// Returns the base worker's canonical task admission error when the task
     /// cannot be registered.
-    pub fn new<B>(config: AnalysisWorkerConfig<B>) -> Result<Self, TaskError>
+    pub fn new<B, S>(config: AnalysisWorkerConfig<B, S>) -> Result<Self, TaskError>
     where
         B: ResamplerBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
     {
         let AnalysisWorkerConfig {
             builder,
@@ -295,13 +297,13 @@ impl AnalysisWorker {
             resume,
         } = pass;
         self.submit(Job {
-            token,
             reader,
             cancel,
-            rate,
-            resume,
             ingest,
+            rate,
+            token,
             tx,
+            resume,
         });
     }
 }
@@ -314,20 +316,19 @@ impl Drop for AnalysisWorker {
 
 #[cfg(all(test, feature = "analysis-beat", not(feature = "beat-nn")))]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_platform::CancelToken;
     use kithara_resampler::NoResamplerBackend;
     use kithara_test_utils::kithara;
 
     use super::{AnalysisWorker, AnalysisWorkerConfig};
-    use crate::AnalyzerBuilder;
+    use crate::{AnalyzerBuilder, test_pools::pools};
 
     #[kithara::test(native, flash(false))]
     fn beat_without_a_detector_is_not_an_effective_analyzer() {
         let cancel = CancelToken::never();
         let worker = AnalysisWorker::new(
             AnalysisWorkerConfig::for_builder(
-                AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_beat(),
+                AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_beat(),
             )
             .cancel(cancel)
             .build(),

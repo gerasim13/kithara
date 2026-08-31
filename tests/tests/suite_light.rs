@@ -7,6 +7,8 @@
 
 mod common;
 
+pub use kithara_integration_tests::bufpool_ext;
+
 #[path = "common/continuity.rs"]
 pub(crate) mod continuity;
 #[path = "common/gapless.rs"]

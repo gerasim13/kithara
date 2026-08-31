@@ -7,7 +7,7 @@ use crate::{
     EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
 };
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S> {
     /// ABR handle of the currently loaded item, if any.
     ///
     /// Reads the stash populated by `enqueue_to_processor` — stays valid for
@@ -70,11 +70,11 @@ impl PlayerRuntime {
         to self.core {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
-            pub const fn engine(&self) -> &EngineImpl;
+            pub const fn engine(&self) -> &EngineImpl<S>;
             /// Shared playback worker configured for this Player.
             #[field(&worker)]
             #[must_use]
-            pub const fn worker(&self) -> &PlayWorker;
+            pub const fn worker(&self) -> &PlayWorker<S>;
         }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.

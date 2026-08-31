@@ -9,7 +9,10 @@ use kithara::{
 };
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-use kithara_integration_tests::decode_ext::DecoderChunkOutcomeTestExt;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    decode_ext::DecoderChunkOutcomeTestExt,
+};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_test_fixtures::{
     assets::alac_silence_1s,
@@ -38,9 +41,8 @@ enum Backend {
 impl Backend {
     fn make_decoder(self, bytes: Vec<u8>, info: &MediaInfo) -> Box<dyn Decoder> {
         let source = Cursor::new(bytes);
-        let config = DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        let config = DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .backend(self.to_choice())
             .build();
         DecoderFactory::create_from_media_info(source, info, config)

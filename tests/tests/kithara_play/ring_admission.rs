@@ -12,7 +12,6 @@ use firewheel::{
 };
 use kithara::{
     self,
-    bufpool::{Region, SamplePool},
     events::EventBus,
     platform::sync::Arc,
     play::{
@@ -24,6 +23,8 @@ use kithara_integration_tests::ring::{
     CountingNode, CountingProbe, DeterministicToneNode, ManualRingConfig, ManualRingSession,
     RingRenderError, RingSessionError, fixtures::install_stereo_source,
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 512;
@@ -59,7 +60,7 @@ fn register_started_player(session: &ManualRingSession) -> PlayerId {
             grid_id: kithara::warp::BeatGridId::allocate().expect("fixture grid id"),
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            sample_pool: SamplePool::default(),
+            pools: pools(),
             sample_rate: SAMPLE_RATE,
         })
         .expect("register player command")
@@ -93,14 +94,11 @@ fn remove_player(session: &ManualRingSession, player_id: PlayerId) {
     );
 }
 
-fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl {
-    let region = Region::default();
-    let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
+fn empty_player(session: &Arc<ManualRingSession>) -> PlayerImpl<TestPools> {
+    let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
     PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .sample_rate(session_rate())
             .crossfade_duration(0.0)
             .session(dispatcher)

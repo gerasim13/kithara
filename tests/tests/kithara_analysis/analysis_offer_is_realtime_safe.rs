@@ -5,12 +5,15 @@ use std::num::NonZeroU32;
 use kithara::{
     analysis::{AnalysisProducer, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     audio::AudioObserveError,
-    bufpool::SamplePool,
     platform::CancelToken,
     resampler::NoResamplerBackend,
     signal::AudioSpec,
 };
-use kithara_integration_tests::{analysis_pass::stalled_reader, kithara};
+use kithara_integration_tests::{
+    analysis_pass::stalled_reader,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+};
 use kithara_test_utils::kithara::rtsan_forbid_blocking;
 
 const RATE: u32 = 44_100;
@@ -46,7 +49,7 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates() {
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
         AnalysisWorkerConfig::for_builder(
-            AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_waveform(64),
+            AnalyzerBuilder::<NoResamplerBackend, TestPools>::new(pools()).with_waveform(64),
         )
         .cancel(cancel)
         .build(),

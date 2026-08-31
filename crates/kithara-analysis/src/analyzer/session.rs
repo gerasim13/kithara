@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioChunk;
 use num_traits::cast::ToPrimitive;
@@ -24,73 +25,31 @@ pub(crate) enum Ingest {
     OutOfExtent,
 }
 
-pub(crate) struct TrackAnalyzers<B>
+pub(crate) struct TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
 {
-    pub(super) fingerprint: AnalysisFingerprint,
-    pub(super) token: AnalysisToken,
-    pub(super) coverage: Coverage,
-    pub(super) source_sample_rate: NonZeroU32,
-    pub(super) extent: Option<u64>,
     pub(super) beat: Slot<B>,
     pub(super) waveform: waveform::Slot,
-    pub(super) ended: bool,
-    pub(super) settled: bool,
+    pub(super) coverage: Coverage,
+    pub(super) fingerprint: AnalysisFingerprint,
+    pub(super) extent: Option<u64>,
     pub(super) revision: u64,
+    pub(super) settled: bool,
+    pub(super) ended: bool,
+    pub(super) source_sample_rate: NonZeroU32,
+    pub(super) token: AnalysisToken,
+    pub(super) pools: PoolRegion<S>,
 }
 
-impl<B> TrackAnalyzers<B>
+impl<B, S> TrackAnalyzers<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32>,
 {
-    fn beat_state(&self) -> BeatState {
-        let covered = self
-            .extent
-            .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)));
-        if covered {
-            BeatState::Final
-        } else {
-            BeatState::Provisional
-        }
-    }
-
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) const fn coverage(&self) -> &Coverage {
         &self.coverage
-    }
-
-    pub(crate) fn covered_frames(&self) -> u64 {
-        self.coverage.frames()
-    }
-
-    fn ingest(
-        &mut self,
-        pcm: &[f32],
-        channels: usize,
-        range: FrameRange,
-        detector: Option<&mut beat::Detector>,
-    ) -> Ingest {
-        if self.ended && self.extent.is_some_and(|extent| range.end() > extent) {
-            warn!(
-                start = range.start(),
-                end = range.end(),
-                extent = self.extent,
-                "analysis: range lies beyond the source extent; dropped"
-            );
-            return Ingest::OutOfExtent;
-        }
-        if self.extent.is_some_and(|extent| range.end() > extent) {
-            self.extent = Some(range.end());
-        }
-        if self.coverage.contains(range) {
-            return Ingest::Covered;
-        }
-        self.coverage.insert(range);
-
-        waveform::push(&mut self.waveform, pcm, channels, range.start());
-        Slot::push(&mut self.beat, pcm, channels, range.start(), detector);
-        Ingest::Accepted
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -98,25 +57,21 @@ where
         self.extent = Some(self.extent.map_or(frames, |held| held.max(frames)));
     }
 
-    pub(crate) fn progress(
-        &mut self,
-        detector: Option<&mut beat::Detector>,
-        ending: bool,
-        chunk_frames: NonZeroU64,
-    ) -> AnalysisProgress {
-        let analysis = self.snapshot(detector, ending);
-        let resume = if analysis.is_settled() {
-            None
-        } else {
-            let waveform = waveform::write_resume(&self.waveform);
-            let beat = self.beat.write_resume();
-            Some(AnalysisResume::capture(
-                chunk_frames,
-                waveform.as_deref(),
-                beat.as_deref(),
-            ))
-        };
-        AnalysisProgress::new(analysis, resume)
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) const fn settle(&mut self) {
+        self.settled = true;
+    }
+
+    pub(crate) fn covered_frames(&self) -> u64 {
+        self.coverage.frames()
+    }
+
+    pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectionRequest> {
+        self.beat.prepare_detection(&self.pools, trailing)
+    }
+
+    pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput) {
+        self.beat.apply_detection(output);
     }
 
     pub(crate) fn push(
@@ -149,34 +104,46 @@ where
         self.ingest(mono, 1, FrameRange::new(at, frames), detector)
     }
 
-    pub(crate) fn restore(
+    fn ingest(
         &mut self,
-        analysis: &TrackAnalysis,
-        resume: ResumeState,
-        chunk_frames: NonZeroU64,
-    ) -> Result<(), BlobError> {
-        if analysis.is_settled()
-            || analysis.extent().is_none()
-            || analysis.source_sample_rate() != self.source_sample_rate
-            || analysis.token() != &self.token
-            || analysis.fingerprint() != &self.fingerprint
-            || resume.chunk_frames != chunk_frames
-        {
-            return Err(BlobError::Corrupt);
+        pcm: &[f32],
+        channels: usize,
+        range: FrameRange,
+        detector: Option<&mut beat::Detector>,
+    ) -> Ingest {
+        if self.ended && self.extent.is_some_and(|extent| range.end() > extent) {
+            warn!(
+                start = range.start(),
+                end = range.end(),
+                extent = self.extent,
+                "analysis: range lies beyond the source extent; dropped"
+            );
+            return Ingest::OutOfExtent;
         }
-        waveform::restore(&mut self.waveform, resume.waveform)?;
-        self.beat.restore(resume.beat)?;
-        self.coverage = analysis.coverage().clone();
-        self.extent = analysis.extent();
-        self.revision = analysis.revision();
-        self.settled = false;
-        self.ended = false;
-        Ok(())
-    }
+        if self.extent.is_some_and(|extent| range.end() > extent) {
+            self.extent = Some(range.end());
+        }
+        if self.coverage.contains(range) {
+            return Ingest::Covered;
+        }
+        self.coverage.insert(range);
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const fn settle(&mut self) {
-        self.settled = true;
+        waveform::push(
+            &mut self.waveform,
+            &self.pools,
+            pcm,
+            channels,
+            range.start(),
+        );
+        Slot::push(
+            &mut self.beat,
+            &self.pools,
+            pcm,
+            channels,
+            range.start(),
+            detector,
+        );
+        Ingest::Accepted
     }
 
     pub(crate) fn snapshot(
@@ -185,8 +152,9 @@ where
         ending: bool,
     ) -> TrackAnalysis {
         if ending {
-            // WHY: Only a pass grown from zero may shrink its planned tail to
-            // the coverage frontier; otherwise the unreached tail stays missing.
+            // The frontier is the extent only for a pass that grew from the
+            // start; one that planned against a longer source keeps that
+            // length, so the tail it never reached stays missing.
             let frontier = self.coverage.frontier();
             self.extent = Some(
                 self.extent
@@ -198,7 +166,7 @@ where
 
         let waveform = waveform::snapshot(&mut self.waveform, self.extent);
         let state = self.beat_state();
-        let beat = Slot::snapshot(&mut self.beat, detector, ending, self.extent)
+        let beat = Slot::snapshot(&mut self.beat, &self.pools, detector, ending, self.extent)
             .map(|(grid, unanalysed)| BeatSnapshot::new(grid, state, unanalysed));
 
         TrackAnalysis::builder()
@@ -214,10 +182,60 @@ where
             .build()
     }
 
-    delegate::delegate! {
-        to self.beat {
-            pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<beat::DetectionRequest>;
-            pub(crate) fn apply_detection(&mut self, output: beat::DetectionOutput);
+    pub(crate) fn progress(
+        &mut self,
+        detector: Option<&mut beat::Detector>,
+        ending: bool,
+        chunk_frames: NonZeroU64,
+    ) -> AnalysisProgress {
+        let analysis = self.snapshot(detector, ending);
+        let resume = if analysis.is_settled() {
+            None
+        } else {
+            let waveform = waveform::write_resume(&self.waveform);
+            let beat = self.beat.write_resume();
+            Some(AnalysisResume::capture(
+                chunk_frames,
+                waveform.as_deref(),
+                beat.as_deref(),
+            ))
+        };
+        AnalysisProgress::new(analysis, resume)
+    }
+
+    pub(crate) fn restore(
+        &mut self,
+        analysis: &TrackAnalysis,
+        resume: ResumeState,
+        chunk_frames: NonZeroU64,
+    ) -> Result<(), BlobError> {
+        if analysis.is_settled()
+            || analysis.extent().is_none()
+            || analysis.source_sample_rate() != self.source_sample_rate
+            || analysis.token() != &self.token
+            || analysis.fingerprint() != &self.fingerprint
+            || resume.chunk_frames != chunk_frames
+        {
+            return Err(BlobError::Corrupt);
+        }
+        waveform::restore(&mut self.waveform, &self.pools, resume.waveform)?;
+        self.beat.restore(&self.pools, resume.beat)?;
+        self.coverage = analysis.coverage().clone();
+        self.extent = analysis.extent();
+        self.revision = analysis.revision();
+        self.settled = false;
+        self.ended = false;
+        Ok(())
+    }
+
+    fn beat_state(&self) -> BeatState {
+        let covered = self
+            .extent
+            .is_some_and(|extent| self.coverage.contains(FrameRange::new(0, extent)));
+        if covered {
+            BeatState::Final
+        } else {
+            BeatState::Provisional
         }
     }
 }

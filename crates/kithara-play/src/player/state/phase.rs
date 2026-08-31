@@ -289,7 +289,7 @@ impl PlayerPhase {
     }
 }
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S> {
     /// Promote the phase to `Loading` carrying `slot`, preserving any armed
     /// next / ABR handle the previous active phase held. A no-op transition
     /// when the phase already holds a slot keeps the existing payload.
@@ -358,11 +358,12 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
+    use crate::{
+        PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing, test_pools::pools,
+    };
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
@@ -421,9 +422,7 @@ mod tests {
 
     #[kithara::test]
     fn require_active_slot_errors_from_idle() {
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        );
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

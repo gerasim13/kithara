@@ -1,13 +1,14 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    fmt,
     io::{Error as IoError, ErrorKind},
     path::Path,
     sync::Weak,
 };
 
 use dashmap::DashMap;
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::{
     AvailabilityObserver, MemOptions, MemResource, Resource, ResourceStatus, StorageResource,
@@ -48,8 +49,7 @@ impl MemCacheKey {
 /// Shares existing [`MemResource`] instances for the same composite key
 /// (`asset_root`, `ResourceKey`, `RequestIdentity`) via an internal weak
 /// cache. Distinct `asset_roots` stay isolated by construction.
-#[derive(Clone, Debug)]
-pub struct MemAssetStore {
+pub struct MemAssetStore<S> {
     /// Weak cache of active resources to ensure sharing.
     active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     /// Single canonical removal channel. Synchronises in-memory
@@ -57,7 +57,7 @@ pub struct MemAssetStore {
     /// See [`AssetDeleter`].
     deleter: Arc<dyn AssetDeleter>,
     availability: AvailabilityIndex,
-    pool: BytePool,
+    pools: PoolRegion<S>,
     cancel: CancelToken,
     mem_resource_capacity: Option<usize>,
 }
@@ -112,25 +112,56 @@ impl AssetDeleter for MemAssetDeleter {
 /// Setup for [`MemAssetStore::with_availability_and_deleter`]: the `cancel`
 /// token, optional `mem_resource_capacity`, the shared `availability` index,
 /// the `active_resources` map, and the canonical `deleter`.
-pub(crate) struct MemStoreSetup {
+pub(crate) struct MemStoreSetup<S> {
     pub(crate) active_resources: Arc<DashMap<MemCacheKey, Weak<StorageResource>>>,
     pub(crate) deleter: Arc<dyn AssetDeleter>,
     pub(crate) availability: AvailabilityIndex,
-    pub(crate) pool: BytePool,
+    pub(crate) pools: PoolRegion<S>,
     pub(crate) cancel: CancelToken,
     pub(crate) mem_resource_capacity: Option<usize>,
 }
 
-impl MemAssetStore {
+impl<S> Clone for MemAssetStore<S> {
+    fn clone(&self) -> Self {
+        Self {
+            active_resources: Arc::clone(&self.active_resources),
+            deleter: Arc::clone(&self.deleter),
+            availability: self.availability.clone(),
+            pools: self.pools.clone(),
+            cancel: self.cancel.clone(),
+            mem_resource_capacity: self.mem_resource_capacity,
+        }
+    }
+}
+
+impl<S> fmt::Debug for MemAssetStore<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemAssetStore")
+            .field("active_resources", &self.active_resources.len())
+            .field("availability", &self.availability)
+            .field("pools", &self.pools)
+            .field("mem_resource_capacity", &self.mem_resource_capacity)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S> MemAssetStore<S>
+where
+    S: HasPool<u8>,
+{
     /// Create a new in-memory asset store with its own unshared
     /// [`AvailabilityIndex`].
     #[must_use]
-    pub fn new(cancel: CancelToken, mem_resource_capacity: Option<usize>, pool: &BytePool) -> Self {
+    pub fn new(
+        cancel: CancelToken,
+        mem_resource_capacity: Option<usize>,
+        pools: PoolRegion<S>,
+    ) -> Self {
         Self::with_availability(
             cancel,
             mem_resource_capacity,
             AvailabilityIndex::new(),
-            pool,
+            pools,
         )
     }
 
@@ -152,7 +183,7 @@ impl MemAssetStore {
         cancel: CancelToken,
         mem_resource_capacity: Option<usize>,
         availability: AvailabilityIndex,
-        pool: &BytePool,
+        pools: PoolRegion<S>,
     ) -> Self {
         let active_resources = Arc::new(DashMap::new());
         let pins = crate::index::PinsIndex::ephemeral();
@@ -167,36 +198,39 @@ impl MemAssetStore {
             active_resources,
             deleter,
             availability,
+            pools,
             cancel,
             mem_resource_capacity,
-            pool: pool.clone(),
         })
     }
 
     /// Like [`Self::with_availability`] but accepts a pre-built
     /// [`AssetDeleter`] so the production builder can share the same
     /// deleter instance with the LRU evictor (`EvictAssets`).
-    pub(crate) fn with_availability_and_deleter(setup: MemStoreSetup) -> Self {
+    pub(crate) fn with_availability_and_deleter(setup: MemStoreSetup<S>) -> Self {
         let MemStoreSetup {
-            cancel,
-            mem_resource_capacity,
-            availability,
             active_resources,
             deleter,
-            pool,
+            availability,
+            pools,
+            cancel,
+            mem_resource_capacity,
         } = setup;
         Self {
             active_resources,
             deleter,
             availability,
-            pool,
+            pools,
             cancel,
             mem_resource_capacity,
         }
     }
 }
 
-impl Assets for MemAssetStore {
+impl<S> Assets for MemAssetStore<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type ActiveRes = BaseWriter;
     type Context = ();
     type IndexRes = StorageResource;
@@ -233,7 +267,7 @@ impl Assets for MemAssetStore {
         }
 
         let options = MemOptions::builder()
-            .pool(self.pool.clone())
+            .buffer(self.pools.get::<u8>())
             .maybe_capacity(self.mem_resource_capacity.filter(|capacity| *capacity > 0))
             .build();
         let mem: MemResource = Resource::open_with_observer(
@@ -259,14 +293,14 @@ impl Assets for MemAssetStore {
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(StorageResource::from(MemResource::new(
             self.cancel.clone(),
-            self.pool.clone(),
+            self.pools.get::<u8>(),
         )))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(StorageResource::from(MemResource::new(
             self.cancel.clone(),
-            self.pool.clone(),
+            self.pools.get::<u8>(),
         )))
     }
 
@@ -344,8 +378,8 @@ mod tests {
     use super::*;
     use crate::resource::{AcquisitionResult, ReadSide, WriteSide};
 
-    fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new(CancelToken::never(), None, &BytePool::default())
+    fn make_mem_store() -> MemAssetStore<crate::test_pools::TestPools> {
+        MemAssetStore::new(CancelToken::never(), None, crate::test_pools::pools())
     }
 
     fn pending(acq: AcquisitionResult<BaseWriter, BaseReader>) -> BaseWriter {

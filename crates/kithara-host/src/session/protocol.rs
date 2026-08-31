@@ -15,8 +15,8 @@ use crate::api::HostLevel;
 pub(crate) type StartStreamFn<B> =
     Box<dyn FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static>;
 
-pub(crate) enum HostCmd {
-    Play(Cmd),
+pub(crate) enum HostCmd<S> {
+    Play(Cmd<S>),
     Sync(SyncCmd),
     ApplyMix { levels: Box<[HostLevel]> },
     Shutdown,
@@ -36,62 +36,46 @@ pub(crate) enum HostReply {
     Err(PlayError),
 }
 
-pub(crate) struct HostCmdMsg {
-    pub(crate) cmd: HostCmd,
+pub(crate) struct HostCmdMsg<S> {
+    pub(crate) cmd: HostCmd<S>,
     pub(crate) reply_tx: mpsc::Sender<HostReply>,
 }
 
-pub(crate) struct HostDispatchError {
-    command: Option<Box<HostCmd>>,
+pub(crate) struct HostDispatchError<S> {
     error: PlayError,
+    command: Option<Box<HostCmd<S>>>,
 }
 
-impl HostDispatchError {
+impl<S> HostDispatchError<S> {
+    pub(crate) fn before_send(error: PlayError, command: HostCmd<S>) -> Self {
+        Self {
+            error,
+            command: Some(Box::new(command)),
+        }
+    }
+
     pub(crate) const fn after_send(error: PlayError) -> Self {
         Self {
             error,
             command: None,
         }
     }
-
-    pub(crate) fn before_send(error: PlayError, command: HostCmd) -> Self {
-        Self {
-            error,
-            command: Some(Box::new(command)),
-        }
-    }
 }
 
-impl From<HostDispatchError> for PlayError {
-    fn from(error: HostDispatchError) -> Self {
+impl<S> From<HostDispatchError<S>> for PlayError {
+    fn from(error: HostDispatchError<S>) -> Self {
         error.error
     }
 }
 
-impl From<HostDispatchError> for (PlayError, Option<Box<HostCmd>>) {
-    fn from(error: HostDispatchError) -> Self {
+impl<S> From<HostDispatchError<S>> for (PlayError, Option<Box<HostCmd<S>>>) {
+    fn from(error: HostDispatchError<S>) -> Self {
         (error.error, error.command)
     }
 }
 
-pub(crate) trait HostDispatcher: SessionDispatcher {
-    fn acknowledge(&self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(applied))) {
-            Ok(HostReply::Acknowledged(result)) => result,
-            Err(error) => {
-                let (reason, command) = error.into();
-                if command.as_deref().is_some_and(|command| {
-                    matches!(command, HostCmd::Sync(SyncCmd::Acknowledge(_)))
-                }) {
-                    return Err(SyncError::OwnerUnavailable);
-                }
-                owner_thread_fail_fast(&reason)
-            }
-            Ok(_) => owner_thread_fail_fast("unexpected acknowledgement reply"),
-        }
-    }
-
-    fn exec_host(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError>;
+pub(crate) trait HostDispatcher<S>: SessionDispatcher<S> {
+    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>>;
 
     fn transact(
         &self,
@@ -132,6 +116,22 @@ pub(crate) trait HostDispatcher: SessionDispatcher {
                 owner_thread_fail_fast(&reason)
             }
             Ok(_) => owner_thread_fail_fast("unexpected current-topology transaction reply"),
+        }
+    }
+
+    fn acknowledge(&self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+        match self.exec_host(HostCmd::Sync(SyncCmd::Acknowledge(applied))) {
+            Ok(HostReply::Acknowledged(result)) => result,
+            Err(error) => {
+                let (reason, command) = error.into();
+                if command.as_deref().is_some_and(|command| {
+                    matches!(command, HostCmd::Sync(SyncCmd::Acknowledge(_)))
+                }) {
+                    return Err(SyncError::OwnerUnavailable);
+                }
+                owner_thread_fail_fast(&reason)
+            }
+            Ok(_) => owner_thread_fail_fast("unexpected acknowledgement reply"),
         }
     }
 }

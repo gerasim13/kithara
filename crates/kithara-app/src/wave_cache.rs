@@ -5,13 +5,13 @@ use std::{
 
 use kithara::{
     analysis::{AnalysisFile, AnalysisFingerprint, AnalysisProgress, AnalysisToken},
-    assets::{AssetResource, AssetResourceState, AssetStore, ReadSide, ResourceKey},
-    bufpool::BytePool,
+    assets::{AssetResource, AssetResourceState, ReadSide, ResourceKey},
     decode::DecodeError,
-    prelude::ResourceConfig,
 };
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
+
+use crate::pools::{AppResourceConfig, AppStore, Pools};
 
 pub(crate) mod persistence;
 
@@ -29,13 +29,13 @@ impl Consts {
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct AnalysisTarget {
-    store: AssetStore,
+    store: AppStore,
     #[field(get, vis = "pub(crate)")]
     key: ResourceKey,
 }
 
 impl AnalysisTarget {
-    pub(crate) fn for_config(config: &ResourceConfig) -> Result<Self, DecodeError> {
+    pub(crate) fn for_config(config: &AppResourceConfig) -> Result<Self, DecodeError> {
         let key = config.asset_key(&AssetResource::Named {
             namespace: "analysis".to_string(),
             name: "track.analysis".to_string(),
@@ -52,8 +52,8 @@ impl AnalysisTarget {
 }
 
 struct MemoryEntry {
-    progress: AnalysisProgress,
     target: AnalysisTarget,
+    progress: AnalysisProgress,
 }
 
 /// Two-tier track-analysis memoization: a session in-memory map plus durable
@@ -61,13 +61,13 @@ struct MemoryEntry {
 /// track's storage lifecycle). Owned by the single listener task, so it needs
 /// no synchronization.
 pub(crate) struct TrackAnalysisCache {
+    pools: Pools,
+    chunk_duration: Duration,
+    mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Active analysis configuration, per artifact: a stored artifact whose
     /// tag differs is dropped on its own, so a waveform resolution change no
     /// longer invalidates stored beat results.
     fingerprint: AnalysisFingerprint,
-    byte_pool: BytePool,
-    chunk_duration: Duration,
-    mem: HashMap<ResourceKey, Vec<MemoryEntry>>,
     /// Insertion order of store-qualified targets; the oldest is evicted past
     /// the cap.
     order: VecDeque<AnalysisTarget>,
@@ -76,16 +76,26 @@ pub(crate) struct TrackAnalysisCache {
 impl TrackAnalysisCache {
     pub(crate) fn new(
         fingerprint: AnalysisFingerprint,
-        byte_pool: BytePool,
+        pools: Pools,
         chunk_seconds: NonZeroU32,
     ) -> Self {
         Self {
-            byte_pool,
-            fingerprint,
+            pools,
             chunk_duration: Duration::from_secs(u64::from(chunk_seconds.get())),
+            fingerprint,
             mem: HashMap::new(),
             order: VecDeque::new(),
         }
+    }
+
+    /// Whether a cached snapshot carries every artifact the active
+    /// configuration expects. A stored artifact whose tag moved is dropped on
+    /// read, so a hit can be real and still need the pass to run.
+    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
+        let analysis = progress.analysis();
+        let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
+        let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
+        waveform && beat
     }
 
     /// Look up a cached analysis: memory first, then the scope resource.
@@ -111,29 +121,19 @@ impl TrackAnalysisCache {
         Some(progress)
     }
 
-    /// Whether a cached snapshot carries every artifact the active
-    /// configuration expects. A stored artifact whose tag moved is dropped on
-    /// read, so a hit can be real and still need the pass to run.
-    pub(crate) fn is_sufficient(&self, progress: &AnalysisProgress) -> bool {
-        let analysis = progress.analysis();
-        let waveform = self.fingerprint.waveform().is_none() || analysis.waveform().is_some();
-        let beat = self.fingerprint.beat().is_none() || analysis.beat().is_some();
-        waveform && beat
-    }
-
     fn load_disk(
         &self,
         target: &AnalysisTarget,
         source_sample_rate: NonZeroU32,
     ) -> Option<AnalysisProgress> {
         let resource = &target.key;
-        // WHY: Opening a missing key would create it, so probe first.
+        // Side-effect-free probe first: opening a missing key would create it.
         match target.store.resource_state(resource).ok()? {
             AssetResourceState::Committed { .. } => {}
             _ => return None,
         }
         let reader = target.store.open_resource(resource, None).ok()?;
-        let mut bytes = self.byte_pool.get();
+        let mut bytes = self.pools.get::<u8>();
         reader.read_into(&mut bytes).ok()?;
         match AnalysisFile::parse(&bytes, &self.fingerprint) {
             Ok(file)
@@ -154,7 +154,8 @@ impl TrackAnalysisCache {
     /// Store the latest publication in the bounded memory tier.
     pub(crate) fn put(&mut self, target: AnalysisTarget, progress: AnalysisProgress) {
         let analysis = progress.analysis();
-        // WHY: Memoizing an empty settled analysis would serve emptiness forever.
+        // An analysis with no meaningful slots would be served forever as
+        // emptiness on later hits; skip memoizing it in either tier.
         if analysis.waveform().is_none() && analysis.beat().is_none() && !progress.is_resumable() {
             return;
         }
@@ -216,26 +217,25 @@ mod tests {
             AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,
             FrameRange, TrackAnalysis, Waveform,
         },
-        assets::{
-            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore,
-            StorageBackend,
-        },
-        bufpool::BytePool,
+        assets::{AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, StorageBackend},
         file::File,
-        prelude::ResourceConfig,
+        prelude::ResourceSrc,
     };
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};
+    use crate::pools::{self, AppPools, AppResourceConfig, AppStore, Pools};
+
+    /// The beat tag two tests must agree on: one of them keeps it while the
+    /// waveform tag moves.
+    const BEAT_TAG: &str = "beat:test:v1";
 
     fn fingerprint(wave: &str, beat: &str) -> AnalysisFingerprint {
         AnalysisFingerprint::new(Some(beat), Some(wave))
     }
 
     fn fp() -> AnalysisFingerprint {
-        const BEAT_TAG: &str = "beat:test:v1";
-
         fingerprint("wave:native:max1500:v1", BEAT_TAG)
     }
 
@@ -245,6 +245,10 @@ mod tests {
 
     fn chunk_seconds() -> NonZeroU32 {
         NonZeroU32::new(16).expect("fixture chunk duration is non-zero")
+    }
+
+    fn test_pools() -> Pools {
+        pools::build().expect("valid app pool policy")
     }
 
     fn progress(analysis: TrackAnalysis) -> AnalysisProgress {
@@ -291,15 +295,15 @@ mod tests {
         analysis(Some(grid()), Some(wave()), 1_234_567)
     }
 
-    fn memory_store() -> AssetStore {
-        AssetStore::builder()
+    fn memory_store() -> AppStore {
+        AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .build()
     }
 
-    fn config(store: &AssetStore, src: &str, discriminator: Option<&str>) -> ResourceConfig {
+    fn config(store: &AppStore, src: &str, discriminator: Option<&str>) -> AppResourceConfig {
         let builder =
-            ResourceConfig::for_src(ResourceConfig::parse_src(src).expect("valid test source"))
+            AppResourceConfig::for_src(ResourceSrc::parse(src).expect("valid test source"))
                 .store(store.clone());
         match discriminator {
             Some(discriminator) => builder.discriminator(discriminator).build(),
@@ -307,12 +311,12 @@ mod tests {
         }
     }
 
-    fn target_for(store: &AssetStore, src: &str, discriminator: Option<&str>) -> AnalysisTarget {
+    fn target_for(store: &AppStore, src: &str, discriminator: Option<&str>) -> AnalysisTarget {
         AnalysisTarget::for_config(&config(store, src, discriminator))
             .expect("test source has a layout-owned analysis target")
     }
 
-    fn target(store: &AssetStore, discriminator: &str) -> AnalysisTarget {
+    fn target(store: &AppStore, discriminator: &str) -> AnalysisTarget {
         target_for(
             store,
             "https://analysis.test.invalid/track.mp3",
@@ -321,7 +325,7 @@ mod tests {
     }
 
     fn analysis_cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fp(), BytePool::default(), chunk_seconds())
+        TrackAnalysisCache::new(fp(), test_pools(), chunk_seconds())
     }
 
     #[kithara::test]
@@ -382,8 +386,9 @@ mod tests {
 
     #[kithara::test]
     fn invalid_layout_is_not_treated_as_an_uncacheable_source() {
-        let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStore::builder()
+        let layouts =
+            AssetLayoutRegistry::default().with::<File<AppPools>>(Arc::new(InvalidLayout));
+        let store = AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();

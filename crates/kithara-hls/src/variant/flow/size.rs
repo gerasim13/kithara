@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 use tracing::trace;
 
@@ -10,7 +11,10 @@ pub(super) struct ExactSeekDemand {
     pub(super) anchor: u64,
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Media-and-init completeness. [`Self::sizes_complete`] is a MEDIA-only
     /// proxy (it ignores the `EXT-X-MAP` init); the exact-byte offset table
     /// seeds from the init size, so a non-exact init shifts every segment

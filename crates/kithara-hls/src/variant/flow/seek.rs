@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_byte_sizes};
 
@@ -19,7 +20,10 @@ impl ResolvedSeekProjection {
     }
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Called from `reset_layout_to_full_range` inside the Layout write
     /// lock: the tail retires atomically with the byte-space re-mint, so a
     /// settle can never park behind a tail whose space is already gone.

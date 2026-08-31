@@ -345,6 +345,14 @@ mod tests {
         rule_hits("perf.prefer-primitive-pool.yml", source)
     }
 
+    fn manual_pool_registration_hits(source: &str) -> usize {
+        rule_hits("perf.no-manual-pool-registration.yml", source)
+    }
+
+    fn local_test_pool_hits(source: &str) -> usize {
+        rule_hits("perf.no-local-test-pools.yml", source)
+    }
+
     fn magic_number_hits(source: &str) -> usize {
         rule_hits("style.no-magic-numbers.yml", source)
     }
@@ -570,21 +578,102 @@ fn values(plain: Option<u8>, captured: Option<u8>, key: &str) {
     }
 
     #[test]
-    fn component_pool_rule_rejects_local_pool_owners() {
+    fn component_pool_rule_rejects_non_owner_region_construction() {
         let source = r#"
-fn component() {
-    let bytes = BytePool::new(32, 0);
-    let samples = SamplePool::new(128, 200_000);
-    let scratch = SharedPool::new(4, 65_536);
-    let typed = SharedPool::<4, Vec<f32>>::new(4, 65_536);
-    let qualified = kithara_bufpool::SamplePool::new(128, 200_000);
+kithara_bufpool::pool_schema! {
+    pub LocalPools {
+        bytes: u8,
+        samples: f32,
+        commands: VecKey<DrawCmd, 1>,
+        text: StringKey<1>,
+    }
+}
+
+impl HasPool<u8> for HandWrittenPools {
+    fn __slot(&self) -> &PoolSlot<u8> { todo!() }
+}
+
+impl<T: Copy> kithara_bufpool::HasPool<f32> for GenericPools<T> {
+    fn __slot(&self) -> &PoolSlot<f32> { todo!() }
+}
+
+fn component(overall_budget: OverallBudget) {
+    let direct = PoolRegion::__build(OverallBudget(64), |_| Ok(()));
+    let typed = PoolRegion::<LocalPools>::__build(OverallBudget(64), |_| Ok(()));
+    let qualified = kithara_bufpool::PoolRegion::__build(OverallBudget(64), |_| Ok(()));
+    let local = LocalPools::builder(OverallBudget(64));
+    let arbitrary_schema = BufferSchema::builder(kithara_bufpool::OverallBudget(64));
+    let imported = crate::pools::AppPools::builder(overall_budget);
+    let ffi = kithara_ffi::pools::FfiPools::builder(overall_budget);
 }
 
 #[cfg(test)]
 mod tests {
     fn fixture() {
-        let pool = SamplePool::new(4, 1024);
+        let pools = TestPools::builder(OverallBudget(64));
+        let region = PoolRegion::__build(OverallBudget(64), |_| Ok(()));
     }
+}
+"#;
+
+        assert_eq!(
+            rule_hits("perf.no-component-pool-construction.yml", source),
+            6
+        );
+        assert_eq!(manual_pool_registration_hits(source), 2);
+    }
+
+    #[test]
+    fn local_test_pool_rule_requires_the_shared_schema() {
+        let source = r#"
+pool_schema! {
+    pub(crate) TestPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+kithara_bufpool::pool_schema!(pub TestPools { bytes: u8 });
+pool_schema![TestPools { samples: f32 }];
+
+pool_schema! {
+    pub InlineTestPools { bytes: u8 }
+}
+
+mod test_pools;
+
+fn local_region() {
+    let pools = TestPools::region(overall, bytes, samples);
+}
+"#;
+
+        assert_eq!(local_test_pool_hits(source), 5);
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-local-test-pools.yml",
+                "crates/kithara-bufpool/src/testing.rs",
+                source,
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn component_pool_rule_covers_aliases_hidden_constructor_and_macro_delimiters() {
+        let source = r#"
+use kithara_bufpool::{pool_schema as schema, PoolRegion as Region};
+
+pool_schema!(pub RoundPools { bytes: u8 });
+pool_schema![pub SquarePools { samples: f32 }];
+schema!(pub AliasedPools { bytes: u8 });
+
+fn component() {
+    let direct = Region::__build(OverallBudget(64), |_| Ok(()));
+    let hidden = crate::RoundPools::__build_region(
+        OverallBudget(64),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    let aliased = AliasedPools::builder(OverallBudget(64));
 }
 "#;
 
@@ -595,48 +684,63 @@ mod tests {
     }
 
     #[test]
-    fn global_pool_rule_ignores_inline_test_fixtures() {
+    fn component_pool_rule_allows_only_exact_owner_modules() {
         let source = r#"
-fn component() {
-    let pool = SamplePool::default();
+pool_schema! {
+    pub AppPools { bytes: u8 }
 }
 
-#[cfg(test)]
-mod tests {
-    fn fixture() {
-        let pool = SamplePool::default();
-    }
+impl HasPool<u8> for HandWrittenPools {
+    fn __slot(&self) -> &PoolSlot<u8> { todo!() }
+}
+
+fn build(overall_budget: OverallBudget) {
+    let direct = PoolRegion::__build(overall_budget, |_| Ok(()));
+    let generated = AppPools::builder(OverallBudget(1024));
 }
 "#;
 
-        assert_eq!(rule_hits("perf.no-global-pool-accessor.yml", source), 1);
-    }
-
-    #[test]
-    fn global_pool_rule_rejects_inferred_default_forms() {
-        let source = r#"
-struct Config {
-    sample_pool: SamplePool,
-}
-
-fn component() {
-    let bytes: BytePool = Default::default();
-    let samples: kithara_bufpool::SamplePool = Default::default();
-    let config = Builder::new().sample_pool(Default::default());
-    let config = Config {
-        sample_pool: Default::default(),
-    };
-}
-"#;
-
-        assert_eq!(rule_hits("perf.no-global-pool-accessor.yml", source), 4);
+        for owner in [
+            "crates/kithara-app/src/pools.rs",
+            "crates/kithara-ffi/src/pools.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", owner, source),
+                0,
+                "composition owner {owner}"
+            );
+            assert_eq!(
+                rule_hits_at("perf.no-manual-pool-registration.yml", owner, source),
+                1,
+                "manual registration at {owner}"
+            );
+        }
+        for non_owner in [
+            "crates/kithara-app/src/app.rs",
+            "crates/kithara-ffi/src/player.rs",
+        ] {
+            assert_eq!(
+                rule_hits_at("perf.no-component-pool-construction.yml", non_owner, source),
+                3,
+                "non-owner module {non_owner}"
+            );
+            assert_eq!(
+                rule_hits_at("perf.no-manual-pool-registration.yml", non_owner, source),
+                1,
+                "manual registration at {non_owner}"
+            );
+        }
     }
 
     #[test]
     fn pool_rules_cover_product_crates_and_ignore_pool_infrastructure() {
         let primitive = "fn scratch() { let values: Vec<f32> = vec![0.0; 8]; }";
-        let global = "fn component() { let pool = SamplePool::default(); }";
-        let local = "fn component() { let pool = SamplePool::new(4, 1024); }";
+        let local = "fn component() { let pools = AppPools::builder(OverallBudget(1024)); }";
+        let manual = r#"
+impl Registered<u8> for HandWrittenPools {
+    fn __slot(&self) -> &PoolSlot<u8> { todo!() }
+}
+"#;
 
         for path in [
             "crates/kithara-beat/src/fixture.rs",
@@ -648,24 +752,20 @@ fn component() {
                 "primitive allocation at {path}"
             );
             assert_eq!(
-                rule_hits_at("perf.no-global-pool-accessor.yml", path, global),
-                1,
-                "global pool at {path}"
-            );
-            assert_eq!(
                 rule_hits_at("perf.no-component-pool-construction.yml", path, local),
                 1,
                 "local pool at {path}"
+            );
+            assert_eq!(
+                rule_hits_at("perf.no-manual-pool-registration.yml", path, manual),
+                1,
+                "manual registration at {path}"
             );
         }
 
         let infrastructure = "crates/kithara-bufpool/src/fixture.rs";
         assert_eq!(
             rule_hits_at("perf.prefer-primitive-pool.yml", infrastructure, primitive),
-            0
-        );
-        assert_eq!(
-            rule_hits_at("perf.no-global-pool-accessor.yml", infrastructure, global),
             0
         );
         assert_eq!(
@@ -678,9 +778,9 @@ fn component() {
         );
         assert_eq!(
             rule_hits_at(
-                "perf.no-global-pool-accessor.yml",
-                "crates/kithara-host/src/session/testing.rs",
-                global
+                "perf.no-manual-pool-registration.yml",
+                infrastructure,
+                manual
             ),
             0
         );
@@ -700,11 +800,19 @@ fn component() {
             ),
             0
         );
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-manual-pool-registration.yml",
+                "crates/kithara-play/src/session/testing.rs",
+                manual
+            ),
+            0
+        );
 
         for (rule, source) in [
             ("perf.prefer-primitive-pool.yml", primitive),
-            ("perf.no-global-pool-accessor.yml", global),
             ("perf.no-component-pool-construction.yml", local),
+            ("perf.no-manual-pool-registration.yml", manual),
         ] {
             assert_eq!(
                 rule_hits_at(rule, "crates/kithara-audio/src/testing.rs", source),
@@ -715,37 +823,63 @@ fn component() {
     }
 
     #[test]
-    fn pool_rules_allow_test_impls_and_wasm_composition_root() {
+    fn pool_rules_allow_test_items_and_reject_wasm_construction() {
         let source = r#"
 #[cfg(test)]
 impl Fixture {
     fn pool() {
-        let pool = SamplePool::default();
-        let local = SamplePool::new(4, 1024);
+        let pools = TestPools::builder(OverallBudget(1024));
+        let region = PoolRegion::__build(OverallBudget(1024), |_| Ok(()));
         let values: Vec<f32> = vec![0.0; 8];
     }
 }
 
 #[cfg(test)]
+impl HasPool<u8> for Fixture {
+    fn __slot(&self) -> &PoolSlot<u8> { todo!() }
+}
+
+#[cfg(test)]
+pool_schema! { pub InlineTestPools { bytes: u8 } }
+
+#[cfg(all(feature = "probe", test))]
+impl HasPool<f32> for AllCfgFixture {
+    fn __slot(&self) -> &PoolSlot<f32> { todo!() }
+}
+
+#[cfg(all(feature = "probe", test))]
+pool_schema!(pub AllCfgPools { samples: f32 });
+
+#[cfg(test)]
 fn fixture() {
-    let pool = SamplePool::default();
-    let local = SamplePool::new(4, 1024);
+    let pools = TestPools::builder(OverallBudget(1024));
+    let region = PoolRegion::__build(OverallBudget(1024), |_| Ok(()));
     let values: Vec<f32> = vec![0.0; 8];
+}
+
+#[cfg(all(feature = "probe", test))]
+fn all_cfg_fixture() {
+    let region = PoolRegion::__build(OverallBudget(1024), |_| Ok(()));
+}
+
+#[kithara::test]
+async fn attributed_fixture() {
+    let region = PoolRegion::__build(OverallBudget(1024), |_| Ok(()));
 }
 
 #[wasm_bindgen(start)]
 fn setup() {
-    let pool = SamplePool::default();
-    let local = SamplePool::new(4, 1024);
+    let pools = FfiPools::builder(OverallBudget(1024));
+    let region = PoolRegion::__build(OverallBudget(1024), |_| Ok(()));
     let values: Vec<f32> = vec![0.0; 8];
 }
 "#;
 
-        assert_eq!(rule_hits("perf.no-global-pool-accessor.yml", source), 0);
         assert_eq!(
             rule_hits("perf.no-component-pool-construction.yml", source),
-            0
+            2
         );
+        assert_eq!(manual_pool_registration_hits(source), 0);
         assert_eq!(primitive_pool_hits(source), 1);
     }
 

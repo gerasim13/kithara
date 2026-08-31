@@ -7,6 +7,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -29,9 +30,12 @@ use crate::{
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct HlsSession {
+pub(crate) struct HlsSession<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     seek: Arc<dyn SeekObserve>,
-    variant: Arc<HlsVariant>,
+    variant: Arc<HlsVariant<S>>,
     active: AtomicBool,
     position: AtomicU64,
     construction_gate: ConstructionGate,
@@ -58,7 +62,10 @@ struct SessionPosition {
     byte: u64,
 }
 
-impl HlsSession {
+impl<S> HlsSession<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn activate(&self) {
         self.active.store(true, Ordering::Release);
     }
@@ -68,7 +75,7 @@ impl HlsSession {
         seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         variant_index: usize,
-        variant: Arc<HlsVariant>,
+        variant: Arc<HlsVariant<S>>,
         position: u64,
     ) -> Self {
         Self {
@@ -103,6 +110,37 @@ impl HlsSession {
         }
     }
 
+    delegate::delegate! {
+        to self.cancel {
+            pub(crate) fn abort(&self);
+            /// Retire this session's look-ahead fetches — queued and in
+            /// flight — while keeping the owed window live. Called when an
+            /// incoming variant slot is installed: the capacity those fetches
+            /// hold is what the construction needs, and their bytes lie past
+            /// the cut the transition latches.
+            pub(crate) fn retire_lookahead(&self);
+        }
+        to self.signal {
+            pub(crate) fn arm_peer(&self);
+            /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
+            /// `false`. Call it only with no transition lock held.
+            #[call(wake_peer)]
+            pub(crate) fn wake_peer_for_readiness(&self);
+        }
+        to self.construction_gate {
+            #[call(is_armed)]
+            pub(crate) fn construction_blocking(&self) -> bool;
+            #[call(clone)]
+            pub(crate) fn construction_gate(&self) -> ConstructionGate;
+        }
+        to self.variant {
+            pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
+            #[call(stream_len)]
+            pub(crate) fn len(&self) -> Option<u64>;
+            pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo;
+        }
+    }
+
     fn check_live(&self) -> io::Result<()> {
         if self.cancel.root.is_cancelled() {
             return Err(Error::other("HLS reader session cancelled"));
@@ -123,7 +161,7 @@ impl HlsSession {
     /// same way the audible session is bounded.
     pub(crate) fn dispatch(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
         self.dispatch_capped(ctx, budget, None)
@@ -131,7 +169,7 @@ impl HlsSession {
 
     fn dispatch_capped(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
         construction_segment_end: Option<u32>,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
@@ -148,30 +186,6 @@ impl HlsSession {
         )
     }
 
-    /// Fetches for an incoming session whose reader has not been handed to a
-    /// decoder yet.
-    ///
-    /// Capped at the construction window, because until the transfer the
-    /// session has no reader position to follow and would otherwise queue the
-    /// whole variant against the audible one. The cap ends at the transfer:
-    /// that window is sized to *build* a decoder, not to feed one, and a
-    /// priming decoder that must stage seconds of audio starves behind it —
-    /// its reads stop being served, the staged span stops growing, and the
-    /// outgoing frontier it is chasing walks away for good.
-    pub(crate) fn dispatch_constructing(
-        &self,
-        ctx: &crate::variant::PlanCtx,
-        budget: usize,
-    ) -> Vec<kithara_stream::dl::FetchCmd> {
-        let cap = match &self.readiness {
-            SessionReadiness::Active => None,
-            SessionReadiness::Profiled { preparation, .. } => {
-                Some(self.variant.construction_segment_end(&preparation.lock()))
-            }
-        };
-        self.dispatch_capped(ctx, budget, cap)
-    }
-
     /// Fetches for the audible session while a variant transition is building.
     ///
     /// Capped at the owed window, so the outgoing look-ahead cannot hold
@@ -185,7 +199,7 @@ impl HlsSession {
     /// splice.
     pub(crate) fn dispatch_owed(
         &self,
-        ctx: &crate::variant::PlanCtx,
+        ctx: &crate::variant::PlanCtx<S>,
         budget: usize,
         latch: Duration,
     ) -> Vec<kithara_stream::dl::FetchCmd> {
@@ -205,13 +219,37 @@ impl HlsSession {
         self.dispatch_capped(ctx, budget, owed_end)
     }
 
+    /// Fetches for an incoming session whose reader has not been handed to a
+    /// decoder yet.
+    ///
+    /// Capped at the construction window, because until the transfer the
+    /// session has no reader position to follow and would otherwise queue the
+    /// whole variant against the audible one. The cap ends at the transfer:
+    /// that window is sized to *build* a decoder, not to feed one, and a
+    /// priming decoder that must stage seconds of audio starves behind it —
+    /// its reads stop being served, the staged span stops growing, and the
+    /// outgoing frontier it is chasing walks away for good.
+    pub(crate) fn dispatch_constructing(
+        &self,
+        ctx: &crate::variant::PlanCtx<S>,
+        budget: usize,
+    ) -> Vec<kithara_stream::dl::FetchCmd> {
+        let cap = match &self.readiness {
+            SessionReadiness::Active => None,
+            SessionReadiness::Profiled { preparation, .. } => {
+                Some(self.variant.construction_segment_end(&preparation.lock()))
+            }
+        };
+        self.dispatch_capped(ctx, budget, cap)
+    }
+
     pub(crate) fn incoming(
         cancel: CancelToken,
         profile: ReaderProfile,
         seek: Arc<dyn SeekObserve>,
         signal: SizeSignal,
         transition: VariantTransition,
-        variant: Arc<HlsVariant>,
+        variant: Arc<HlsVariant<S>>,
         content_time: Duration,
     ) -> StreamResult<Self> {
         let preparation = variant.prepare_reader(profile, content_time)?;
@@ -329,7 +367,7 @@ impl HlsSession {
             .take_prefetch_resume_at(self.position.load(Ordering::Acquire))
     }
 
-    pub(crate) fn variant(&self) -> Arc<HlsVariant> {
+    pub(crate) fn variant(&self) -> Arc<HlsVariant<S>> {
         Arc::clone(&self.variant)
     }
 
@@ -353,7 +391,7 @@ impl HlsSession {
     ) -> StreamResult<WaitOutcome> {
         match timeout {
             Some(_) => self.variant.wait_range(range, timeout),
-            None => HlsCoord::wait_range_blocking(&self.signal, &self.cancel.root, || {
+            None => HlsCoord::<S>::wait_range_blocking(&self.signal, &self.cancel.root, || {
                 let outcome = self.variant.wait_range(range.clone(), Some(Duration::ZERO));
                 if matches!(
                     outcome,
@@ -373,46 +411,14 @@ impl HlsSession {
             }),
         }
     }
-
-    delegate::delegate! {
-        to self.cancel {
-            pub(crate) fn abort(&self);
-            /// Retire this session's look-ahead fetches — queued and in
-            /// flight — while keeping the owed window live. Called when an
-            /// incoming variant slot is installed: the capacity those fetches
-            /// hold is what the construction needs, and their bytes lie past
-            /// the cut the transition latches.
-            pub(crate) fn retire_lookahead(&self);
-        }
-        to self.signal {
-            pub(crate) fn arm_peer(&self);
-            /// Ask the peer to plan for a session that answered [`Self::is_ready`] with
-            /// `false`. Call it only with no transition lock held.
-            #[call(wake_peer)]
-            pub(crate) fn wake_peer_for_readiness(&self);
-        }
-        to self.construction_gate {
-            #[call(is_armed)]
-            pub(crate) fn construction_blocking(&self) -> bool;
-            #[call(clone)]
-            pub(crate) fn construction_gate(&self) -> ConstructionGate;
-        }
-        to self.variant {
-            pub(crate) fn find_at_offset(&self, byte: u64) -> Option<(u32, u64, u64)>;
-            #[call(stream_len)]
-            pub(crate) fn len(&self) -> Option<u64>;
-            pub(crate) fn media_info(&self) -> kithara_stream::MediaInfo;
-        }
-    }
 }
 
-impl ByteMap for HlsSession {
+impl<S> ByteMap for HlsSession<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn anchor_at_time(&self, position: Duration) -> StreamResult<Option<SourceSeekAnchor>> {
         self.prepare_at(position).map(Some)
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.variant.descriptor(segment_index as usize)
     }
 
     delegate::delegate! {
@@ -431,6 +437,10 @@ impl ByteMap for HlsSession {
             #[call(num_segments)]
             fn segment_count(&self) -> Option<u32>;
         }
+    }
+
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.variant.descriptor(segment_index as usize)
     }
 }
 

@@ -15,7 +15,7 @@ use kithara::{
         time::{Duration, Instant, sleep},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -27,6 +27,8 @@ use kithara_integration_tests::{
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -79,7 +81,7 @@ fn fast_url(handle: &BehaviorHandle) -> Url {
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -92,21 +94,15 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
-    Arc<Queue>,
+    Arc<Queue<TestPools>>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -121,26 +117,34 @@ fn build_queue_with_tick(
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(drive_queue_ticks(queue_for_tick));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
-fn mk_cfg(url: &Url, downloader: &Downloader, store: &AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
+fn mk_cfg(
+    url: &Url,
+    downloader: &Downloader,
+    store: &AssetStore<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
 }
 
-fn status_of(queue: &Queue, id: TrackId) -> Option<TrackStatus> {
+fn status_of(queue: &Queue<TestPools>, id: TrackId) -> Option<TrackStatus> {
     queue.track(id).map(|e| e.status)
 }
 
 #[kithara::flash(true)]
 async fn wait_for_status_matching(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     id: TrackId,
     deadline: Duration,
     what: &str,
@@ -288,7 +292,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
 /// Setup invariant: the hung track must still be mid-load when the fast
 /// track resolves, otherwise the scenario did not actually exercise lane
 /// isolation.
-fn assert_hung_still_loading(queue: &Queue, hung_id: TrackId) {
+fn assert_hung_still_loading(queue: &Queue<TestPools>, hung_id: TrackId) {
     assert!(
         matches!(status_of(queue, hung_id), Some(TrackStatus::Loading)),
         "setup invariant broken: hung track should still be Loading (last={:?})",

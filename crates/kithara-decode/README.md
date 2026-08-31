@@ -16,20 +16,31 @@
 
 Audio decoding library with explicit, typed backend selection. `DecoderFactory` creates synchronous `Decoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, ALAC, …) into pool-backed decoded-audio chunks. No threading, no channels — just decoding.
 
-The public surface centres on one trait — `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and frame decoding are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C>` (internal) pairs them so backends can be mixed and matched. The factory hides this detail — callers only ever see `Box<dyn Decoder>`.
+The public surface centres on one trait - `Decoder`. Concrete backends (Symphonia / Apple / Android) implement it directly. Internally, container parsing and frame decoding are split: the `Demuxer` trait owns container framing, the `FrameCodec` trait owns codec decoding, and `ComposedDecoder<D, C, S>` (internal) pairs them with the registered pool schema so backends can be mixed and matched. The factory hides this detail - callers only ever see `Box<dyn Decoder>`.
 
 ## Usage
 
 ```rust
 use std::io::Cursor;
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
 use kithara_decode::{DecoderBackend, DecoderConfig, DecoderFactory};
 
+pool_schema! {
+    pub AppPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+let pool_config = || PoolConfig::builder().max_buffers(32).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(pool_config())
+    .samples(pool_config())
+    .build()?;
 let reader = Cursor::new(wav_bytes);
 let config = DecoderConfig::builder()
     .backend(DecoderBackend::Symphonia)
-    .byte_pool(BytePool::default())
-    .sample_pool(SamplePool::default())
+    .pools(pools)
     .build();
 let mut decoder = DecoderFactory::create_with_probe(reader, Some("wav"), config)?;
 
@@ -63,7 +74,7 @@ For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_
 
 `kithara-play` owns the playback worker and effects. Decoder sample-rate conversion is configured
 through `kithara-audio` and implemented with `kithara-resampler`; this crate stays a synchronous
-decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File>`, `Stream<Hls>`,
+decoder over `R: Read + Seek + Send + Sync + 'static` inputs such as `Stream<File<S>>`, `Stream<Hls<S>>`,
 cursors, or plain files. Shared `AudioSpec`, `AudioChunkInfo`, `AudioChunk`, frame/sample units, and
 pure sample/time math are owned by `kithara-signal`; decoder-specific profiles and errors remain here.
 

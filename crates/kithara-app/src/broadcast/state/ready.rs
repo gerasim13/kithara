@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara::host::{Host, HostConfig};
+use kithara::host::HostConfig;
 use kithara_platform::{CancelToken, time::Duration};
 
 use super::{
@@ -8,6 +8,7 @@ use super::{
     broadcaster::{Broadcaster, Phase},
     fixture::Stream,
 };
+use crate::pools::AppHost;
 
 pub(super) struct Ready;
 
@@ -17,12 +18,12 @@ static LIVE: AtomicBool = AtomicBool::new(true);
 impl Ready {
     pub(super) const URL: &str = "http://packager.test/master.m3u8";
 
-    fn end_stream() {
-        LIVE.store(false, Ordering::Relaxed);
-    }
-
     fn stream() -> Stream {
         Stream(Self::URL.to_owned())
+    }
+
+    fn end_stream() {
+        LIVE.store(false, Ordering::Relaxed);
     }
 }
 
@@ -35,17 +36,17 @@ impl Packager for Ready {
         LIVE.load(Ordering::Relaxed)
     }
 
-    fn release(_host: &Host) -> BroadcastResult<()> {
-        Ok(())
-    }
-
     fn start(
-        _host: &Host,
+        _host: &AppHost,
         _shutdown: &CancelToken,
         _tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
         LIVE.store(true, Ordering::Relaxed);
         Ok(Some(Self::stream()))
+    }
+
+    fn release(_host: &AppHost) -> BroadcastResult<()> {
+        Ok(())
     }
 
     fn stop(_live: Stream) {}
@@ -58,7 +59,7 @@ impl Packager for Ready {
 #[kithara::test]
 fn an_ended_stream_is_noticed_by_the_next_poll() {
     let mut broadcaster = Broadcaster::<Ready>::new(CancelToken::root(), Duration::from_secs(2));
-    let host = Host::new(HostConfig::builder().build()).expect("test host");
+    let host = AppHost::new(HostConfig::builder().build()).expect("test host");
     broadcaster.toggle(&host);
     broadcaster.poll(&host);
     assert!(broadcaster.is_on_air());

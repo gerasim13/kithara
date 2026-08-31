@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use bon::Builder;
 
 #[cfg(any(feature = "render", feature = "vello"))]
-use crate::draw::DrawPools;
+use crate::draw::DrawBuffers;
 
 #[derive(Builder, Clone, Debug)]
 #[non_exhaustive]
@@ -20,12 +20,15 @@ pub struct Limits {
 #[derive(Builder, Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct DrawPoolLimits {
-    /// Command slots retained by one returned draw-list buffer.
-    #[builder(default = 512)]
-    pub command_capacity: usize,
+    /// Hard byte limit shared by every draw buffer kind.
+    #[builder(default = 64 * 1024 * 1024)]
+    pub max_bytes: usize,
     /// Maximum reusable buffers kept by each pool. Zero is treated as one.
     #[builder(default = 64)]
     pub max_buffers: usize,
+    /// Command slots retained by one returned draw-list buffer.
+    #[builder(default = 512)]
+    pub command_capacity: usize,
     /// Vector verbs retained by one returned path buffer.
     #[builder(default = 128)]
     pub path_capacity: usize,
@@ -89,7 +92,7 @@ pub struct UiConfig {
     /// one page.
     #[cfg(any(feature = "render", feature = "vello"))]
     #[builder(default)]
-    pub draw_pools: DrawPools,
+    pub draw_buffers: DrawBuffers,
 }
 
 impl Default for UiConfig {

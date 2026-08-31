@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolError, PoolRegion};
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::{Arc, Mutex};
 use tracing::debug;
@@ -87,18 +87,23 @@ impl ItemQueue {
         debug!(count, "slots reserved");
     }
 
-    pub(crate) fn take_for_load(
+    pub(crate) fn take_for_load<S>(
         &self,
         index: usize,
         host_sample_rate: u32,
-        pool: &SamplePool,
-    ) -> Option<TakenItem> {
+        pools: &PoolRegion<S>,
+    ) -> Result<Option<TakenItem>, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let mut playlist = self.playlist.lock();
         if index >= playlist.len() {
-            return None;
+            return Ok(None);
         }
 
-        let queued = playlist.take(index)?;
+        let Some(queued) = playlist.take(index) else {
+            return Ok(None);
+        };
         let (item_id, resource) = (queued.item_id, queued.resource);
         let duration_seconds = resource
             .duration()
@@ -108,15 +113,15 @@ impl ItemQueue {
             resource.set_host_sample_rate(sample_rate);
         }
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src), pool);
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), pools)?;
         drop(playlist);
 
-        Some(TakenItem {
+        Ok(Some(TakenItem {
             abr_handle,
             player_resource,
             item_id,
             duration_seconds,
-        })
+        }))
     }
 
     delegate::delegate! {

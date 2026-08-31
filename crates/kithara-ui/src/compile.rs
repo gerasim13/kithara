@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 #[cfg(feature = "render")]
-use crate::draw::{DrawPools, PoolStats};
+use crate::draw::{DrawBuffers, PoolStats};
 use crate::{
     error::UiDocError,
     expand::{
@@ -59,7 +59,7 @@ pub struct CompiledUi {
     arena: StrArena,
     includes: Vec<IncludedModule>,
     #[cfg(feature = "render")]
-    draw_pools: DrawPools,
+    draw_buffers: DrawBuffers,
 }
 
 impl CompiledUi {
@@ -71,15 +71,15 @@ impl CompiledUi {
 
     #[cfg(feature = "render")]
     #[must_use]
-    pub(crate) const fn draw_pools(&self) -> &DrawPools {
-        &self.draw_pools
+    pub(crate) const fn draw_buffers(&self) -> &DrawBuffers {
+        &self.draw_buffers
     }
 
     /// Current allocation-reuse counters for this compiled document.
     #[cfg(feature = "render")]
     #[must_use]
     pub fn draw_pool_stats(&self) -> PoolStats {
-        self.draw_pools.stats()
+        self.draw_buffers.stats()
     }
 
     #[cfg(feature = "render")]
@@ -327,7 +327,7 @@ pub fn compile(
         views,
         resize_edges: document.resize_edges,
         #[cfg(feature = "render")]
-        draw_pools: config.draw_pools.clone(),
+        draw_buffers: config.draw_buffers.clone(),
     })
 }
 

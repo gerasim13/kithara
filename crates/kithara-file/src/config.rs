@@ -1,7 +1,8 @@
 use std::{fmt, path::PathBuf};
 
 use bon::Builder;
-use kithara_assets::{AssetStore, BytePool};
+use kithara_assets::AssetStore;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_events::EventBus;
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, time::Duration};
@@ -19,23 +20,21 @@ pub enum FileSrc {
 
 /// Configuration for file streaming.
 ///
-/// Used with `Stream::<File>::new(config)`.
-#[derive(Clone, Builder)]
+/// Used with `Stream::<File<S>>::new(config)`.
+#[derive(Builder)]
 #[builder(on(String, into), start_fn = for_src)]
 #[non_exhaustive]
-pub struct FileConfig {
+pub struct FileConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// File source (remote URL or local path).
     #[builder(start_fn)]
     pub src: FileSrc,
     /// Shared asset store used by local and remote sources.
-    pub store: AssetStore,
-    /// Poll interval while a sibling `AssetStore` instance holds the
-    /// atomic-chunked tmp for this file's canonical path. The default is short
-    /// enough that the observed ~67 ms race window in
-    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
-    /// enough not to busy-spin a tokio worker.
-    #[builder(default = Duration::from_millis(10))]
-    pub tmp_claim_poll_interval: Duration,
+    pub store: AssetStore<S>,
+    /// Buffer-pool facade shared with storage and fallback transport.
+    pub pools: PoolRegion<S>,
     /// Event bus (optional - if not provided, one is created internally).
     #[builder(name = events)]
     pub bus: Option<EventBus>,
@@ -51,8 +50,6 @@ pub struct FileConfig {
     pub headers: Option<Headers>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: Option<u64>,
-    /// Shared byte pool for cache and fallback network buffers.
-    pub pool: Option<BytePool>,
     /// Event bus channel capacity (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
@@ -62,9 +59,42 @@ pub struct FileConfig {
     /// core.
     #[builder(default = 256)]
     pub reader_event_capacity: usize,
+    /// Poll interval while a sibling `AssetStore` instance holds the
+    /// atomic-chunked tmp for this file's canonical path. The default is short
+    /// enough that the observed ~67 ms race window in
+    /// `local_queue_playlist_behavior` resolves in a handful of ticks, long
+    /// enough not to busy-spin a tokio worker.
+    #[builder(default = Duration::from_millis(10))]
+    pub tmp_claim_poll_interval: Duration,
 }
 
-impl fmt::Debug for FileConfig {
+impl<S> Clone for FileConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            src: self.src.clone(),
+            store: self.store.clone(),
+            pools: self.pools.clone(),
+            bus: self.bus.clone(),
+            cancel: self.cancel.clone(),
+            discriminator: self.discriminator.clone(),
+            downloader: self.downloader.clone(),
+            extension: self.extension.clone(),
+            headers: self.headers.clone(),
+            look_ahead_bytes: self.look_ahead_bytes,
+            event_channel_capacity: self.event_channel_capacity,
+            reader_event_capacity: self.reader_event_capacity,
+            tmp_claim_poll_interval: self.tmp_claim_poll_interval,
+        }
+    }
+}
+
+impl<S> fmt::Debug for FileConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileConfig")
             .field("src", &self.src)
@@ -74,7 +104,7 @@ impl fmt::Debug for FileConfig {
             .field("look_ahead_bytes", &self.look_ahead_bytes)
             .field("extension", &self.extension)
             .field("discriminator", &self.discriminator)
-            .field("pool", &self.pool)
+            .field("pools", &self.pools)
             .field("store", &self.store)
             .field("event_channel_capacity", &self.event_channel_capacity)
             .field("reader_event_capacity", &self.reader_event_capacity)
@@ -91,13 +121,17 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{TestPools, pools};
+
+    type TestConfig = FileConfig<TestPools>;
+    type TestStore = AssetStore<TestPools>;
 
     fn test_src() -> FileSrc {
         FileSrc::Remote(Url::parse("http://example.com/audio.mp3").unwrap())
     }
 
-    fn test_store() -> AssetStore {
-        AssetStore::builder()
+    fn test_store() -> TestStore {
+        AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .build()
     }
@@ -106,7 +140,10 @@ mod tests {
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
     fn test_file_config_for_src_preserves_source(#[case] src: FileSrc) {
-        let config = FileConfig::for_src(src.clone()).store(test_store()).build();
+        let config = FileConfig::for_src(src.clone())
+            .store(test_store())
+            .pools(pools())
+            .build();
 
         assert_eq!(config.src, src);
         assert!(config.bus.is_none());
@@ -118,37 +155,40 @@ mod tests {
 
     #[kithara::test]
     fn test_with_store() {
-        let config = FileConfig::for_src(test_src()).store(test_store()).build();
+        let config = FileConfig::for_src(test_src())
+            .store(test_store())
+            .pools(pools())
+            .build();
 
         assert!(config.bus.is_none());
     }
 
-    fn apply_cancel(mut config: FileConfig) -> FileConfig {
+    fn apply_cancel(mut config: TestConfig) -> TestConfig {
         config.cancel = Some(CancelToken::never());
         config
     }
 
-    fn apply_events(mut config: FileConfig) -> FileConfig {
+    fn apply_events(mut config: TestConfig) -> TestConfig {
         config.bus = Some(EventBus::new(32));
         config
     }
 
-    fn apply_headers(mut config: FileConfig) -> FileConfig {
+    fn apply_headers(mut config: TestConfig) -> TestConfig {
         let mut headers = Headers::default();
         headers.insert("Authorization", "Bearer token123");
         config.headers = Some(headers);
         config
     }
 
-    fn has_cancel(config: &FileConfig) -> bool {
+    fn has_cancel(config: &TestConfig) -> bool {
         config.cancel.is_some()
     }
 
-    fn has_bus(config: &FileConfig) -> bool {
+    fn has_bus(config: &TestConfig) -> bool {
         config.bus.is_some()
     }
 
-    fn has_auth_header(config: &FileConfig) -> bool {
+    fn has_auth_header(config: &TestConfig) -> bool {
         config.headers.as_ref().and_then(|h| h.get("Authorization")) == Some("Bearer token123")
     }
 
@@ -157,10 +197,15 @@ mod tests {
     #[case(apply_events, has_bus)]
     #[case(apply_headers, has_auth_header)]
     fn test_optional_setters_update_expected_field(
-        #[case] apply: fn(FileConfig) -> FileConfig,
-        #[case] check: fn(&FileConfig) -> bool,
+        #[case] apply: fn(TestConfig) -> TestConfig,
+        #[case] check: fn(&TestConfig) -> bool,
     ) {
-        let config = apply(FileConfig::for_src(test_src()).store(test_store()).build());
+        let config = apply(
+            FileConfig::for_src(test_src())
+                .store(test_store())
+                .pools(pools())
+                .build(),
+        );
         assert!(check(&config));
     }
 
@@ -171,6 +216,7 @@ mod tests {
 
         let config = FileConfig::for_src(test_src())
             .store(test_store())
+            .pools(pools())
             .cancel(cancel)
             .events(bus)
             .build();
@@ -185,6 +231,7 @@ mod tests {
     fn test_with_discriminator_sets_discriminator(#[case] name: &str) {
         let config = FileConfig::for_src(test_src())
             .store(test_store())
+            .pools(pools())
             .discriminator(name)
             .build();
         assert_eq!(config.discriminator.as_deref(), Some(name));
@@ -192,7 +239,10 @@ mod tests {
 
     #[kithara::test]
     fn test_debug_impl() {
-        let config = FileConfig::for_src(test_src()).store(test_store()).build();
+        let config = FileConfig::for_src(test_src())
+            .store(test_store())
+            .pools(pools())
+            .build();
         let debug_str = format!("{:?}", config);
 
         assert!(debug_str.contains("FileConfig"));
@@ -203,6 +253,7 @@ mod tests {
         let bus = EventBus::new(32);
         let config = FileConfig::for_src(test_src())
             .store(test_store())
+            .pools(pools())
             .events(bus)
             .build();
 

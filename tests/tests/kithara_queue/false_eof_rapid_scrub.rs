@@ -2,7 +2,6 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AbrMode, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
@@ -16,7 +15,11 @@ use kithara::{
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+};
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use kithara_test_utils::probe::capture::{Recorder, install as install_recorder};
 
@@ -54,30 +57,27 @@ const MIN_POST_SEEK_GROWTH_SECS: f64 = 1.0;
 
 struct Ctx {
     config: AppConfig,
-    queue: Arc<Queue>,
+    queue: Arc<Queue<AppPools>>,
     cache: TestTempDir,
 }
 
 async fn build_ctx() -> Ctx {
-    let byte_pool = BytePool::default();
-    let net = NetOptions::builder()
-        .byte_pool(byte_pool.clone())
-        .is_insecure(true)
-        .build();
+    let pools = app_pools().expect("build app pool region");
+    let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+        PlayWorkerConfig::builder(pools)
             .cancel(shutdown.child())
             .build(),
     );
@@ -110,11 +110,11 @@ async fn build_ctx() -> Ctx {
     }
 }
 
-fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource {
+fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSource<AppPools> {
     super::app_track_source(
         url,
         &ctx.config,
-        kithara_integration_tests::disk_asset_store(ctx.cache.path()),
+        super::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         backend,
         AbrMode::Auto(None),
         None,
@@ -123,7 +123,7 @@ fn build_track_source(url: &str, ctx: &Ctx, backend: DecoderBackend) -> TrackSou
 
 async fn wait_for_loaded(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<AppPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -240,7 +240,7 @@ enum AdvanceTrigger {
 }
 
 struct ScrubObservation<'a> {
-    queue: &'a Queue,
+    queue: &'a Queue<AppPools>,
     rx: &'a mut EventReceiver,
     recorder: &'a Recorder,
     event_log: &'a mut Vec<TimedEvent>,

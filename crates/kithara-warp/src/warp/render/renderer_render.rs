@@ -1,10 +1,42 @@
+use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
 use num_traits::ToPrimitive;
 
 use super::renderer::WarpRenderer;
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
+    pub(super) fn source_block_limit(
+        stretch: f64,
+        max_source_frames: usize,
+        max_output_frames: usize,
+    ) -> Result<usize, ElasticError> {
+        if !stretch.is_finite() || stretch <= 0.0 {
+            return Err(ElasticError::InvalidRate(stretch));
+        }
+        let output_limit = max_output_frames
+            .to_f64()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let output_budget = (output_limit - Self::OUTPUT_ROUNDING_MARGIN).max(1.0);
+        let source_limit = (output_budget / stretch)
+            .floor()
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let source_limit = source_limit.min(max_source_frames);
+        if source_limit == 0 {
+            return Err(ElasticError::InvalidRate(1.0 / stretch));
+        }
+        Ok(source_limit)
+    }
+
+    pub(super) fn balanced_source_block(remaining: usize, limit: usize) -> usize {
+        let partitions = remaining.div_ceil(limit);
+        remaining.div_ceil(partitions)
+    }
+
     fn append_pending_source(
         &mut self,
         source: &[f32],
@@ -32,7 +64,7 @@ impl WarpRenderer {
         let pending = self
             .pending_source
             .as_mut()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
+            .ok_or(ElasticError::PoolCapacity)?;
         let start = pending.len();
         let end = start
             .checked_add(source.len())
@@ -45,16 +77,11 @@ impl WarpRenderer {
         }
         pending
             .ensure_len(end)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::PoolCapacity)?;
         pending[start..end].copy_from_slice(source);
         self.pending_meta
             .get_or_insert_with(|| Self::meta_at_frame(meta, frame_offset));
         Ok(())
-    }
-
-    pub(super) fn balanced_source_block(remaining: usize, limit: usize) -> usize {
-        let partitions = remaining.div_ceil(limit);
-        remaining.div_ceil(partitions)
     }
 
     pub(super) fn output_frames(
@@ -72,6 +99,9 @@ impl WarpRenderer {
         if !exact.is_finite() {
             return Err(ElasticError::SampleCountOverflow);
         }
+        // Backends require a non-empty output. Keep a sub-frame source span
+        // pending until its cumulative exact output reaches one full frame;
+        // EOF rounds the final residual once.
         let output_frames = if exact < 1.0 { 0.0 } else { exact.round() };
         let output_frames = output_frames
             .to_usize()
@@ -80,6 +110,73 @@ impl WarpRenderer {
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
         Ok((output_frames, exact - emitted))
+    }
+
+    pub(super) fn render_terminal_pending(&mut self, channels: usize) -> Result<(), ElasticError> {
+        let source_frames = self.pending_frames(channels);
+        if source_frames == 0 {
+            self.output_remainder = 0.0;
+            return Ok(());
+        }
+        let output_frames = self
+            .output_remainder
+            .round()
+            .max(0.0)
+            .to_usize()
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if output_frames == 0 {
+            self.clear_pending_source();
+            self.output_remainder = 0.0;
+            return Ok(());
+        }
+
+        let output_frames = FrameCount::new(output_frames);
+        let request = ElasticRequest::new(source_frames, output_frames.get())?;
+        let output_samples = output_frames
+            .get()
+            .checked_mul(channels)
+            .map(SampleCount::new)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
+        let end = start
+            .checked_add(output_samples.get())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let scratch = self
+            .scratch
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation(
+                "output scratch is unavailable",
+            ))?;
+        if end > scratch.capacity() {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: end / channels,
+                limit: scratch.capacity() / channels,
+            });
+        }
+        scratch
+            .ensure_len(end)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        let source = self
+            .pending_source
+            .as_deref()
+            .ok_or(ElasticError::PoolCapacity)?;
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
+            scratch.truncate(start);
+            return Err(error);
+        }
+        self.output_start_meta = self.pending_meta;
+        self.pending_source
+            .as_mut()
+            .ok_or(ElasticError::PoolCapacity)?
+            .clear();
+        self.pending_meta = None;
+        self.output_remainder = 0.0;
+        self.active = true;
+        Ok(())
     }
 
     pub(super) fn render_active(
@@ -186,7 +283,7 @@ impl WarpRenderer {
             }
             scratch
                 .ensure_len(end)
-                .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+                .map_err(|_| ElasticError::PoolCapacity)?;
             let source = self
                 .pending_source
                 .as_deref()
@@ -216,95 +313,5 @@ impl WarpRenderer {
                 "time-stretch render exceeded its source-frame iteration bound",
             ))
         }
-    }
-
-    pub(super) fn render_terminal_pending(&mut self, channels: usize) -> Result<(), ElasticError> {
-        let source_frames = self.pending_frames(channels);
-        if source_frames == 0 {
-            self.output_remainder = 0.0;
-            return Ok(());
-        }
-        let output_frames = self
-            .output_remainder
-            .round()
-            .max(0.0)
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        if output_frames == 0 {
-            self.clear_pending_source();
-            self.output_remainder = 0.0;
-            return Ok(());
-        }
-
-        let output_frames = FrameCount::new(output_frames);
-        let request = ElasticRequest::new(source_frames, output_frames.get())?;
-        let output_samples = output_frames
-            .get()
-            .checked_mul(channels)
-            .map(SampleCount::new)
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
-        let end = start
-            .checked_add(output_samples.get())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let scratch = self
-            .scratch
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation(
-                "output scratch is unavailable",
-            ))?;
-        if end > scratch.capacity() {
-            return Err(ElasticError::OutputFrameLimit {
-                frames: end / channels,
-                limit: scratch.capacity() / channels,
-            });
-        }
-        scratch
-            .ensure_len(end)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
-        let source = self
-            .pending_source
-            .as_deref()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
-        let engine = self
-            .engine
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
-            scratch.truncate(start);
-            return Err(error);
-        }
-        self.output_start_meta = self.pending_meta;
-        self.pending_source
-            .as_mut()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?
-            .clear();
-        self.pending_meta = None;
-        self.output_remainder = 0.0;
-        self.active = true;
-        Ok(())
-    }
-
-    pub(super) fn source_block_limit(
-        stretch: f64,
-        max_source_frames: usize,
-        max_output_frames: usize,
-    ) -> Result<usize, ElasticError> {
-        if !stretch.is_finite() || stretch <= 0.0 {
-            return Err(ElasticError::InvalidRate(stretch));
-        }
-        let output_limit = max_output_frames
-            .to_f64()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let output_budget = (output_limit - Self::OUTPUT_ROUNDING_MARGIN).max(1.0);
-        let source_limit = (output_budget / stretch)
-            .floor()
-            .to_usize()
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        let source_limit = source_limit.min(max_source_frames);
-        if source_limit == 0 {
-            return Err(ElasticError::InvalidRate(1.0 / stretch));
-        }
-        Ok(source_limit)
     }
 }

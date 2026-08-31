@@ -1,3 +1,5 @@
+use kithara_bufpool::HasPool;
+
 use super::{RubatoAlgorithm, RubatoConfig, resampler::RubatoResampler};
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
@@ -25,7 +27,13 @@ impl RubatoBackend {
 impl ResamplerBackend for RubatoBackend {
     type Resampler = RubatoResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         settings.validate(self)?;
         RubatoResampler::new(self.name(), self.config, settings)
     }

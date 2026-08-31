@@ -18,6 +18,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
+    bufpool_ext::pools,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
     waits::wait_until,
 };
@@ -147,7 +148,7 @@ impl OnAir {
         )
         .expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
-        let client = HttpClient::new(NetOptions::default(), scope.token());
+        let client = HttpClient::new(NetOptions::default(), pools(), scope.token());
 
         Self {
             handle,

@@ -1,12 +1,19 @@
 id: perf.prefer-primitive-pool
 message: |
   Allocating a primitive `Vec` directly in a product crate. Reuse storage
-  through the pool injected by the owning subsystem:
+  through the typed facade injected by the owning subsystem:
 
-    - `Vec<u8>` uses `BytePool`;
-    - `Vec<f32>` containing decoded samples uses `SamplePool`;
+    - `Vec<u8>` uses `PoolRegion<S>::get::<u8>()` or
+      `get_with_len::<u8>()`;
+    - `Vec<f32>` containing decoded samples uses `get::<f32>()` or
+      `get_with_len::<f32>()`;
     - fixed-size scratch uses arrays; transient structural data stays lazy when
       it does not need owned storage.
+
+  Grow built-in guards only through checked `ensure_len` and
+  `try_extend_from_slice`; registered `VecKey<T, N>` guards use `try_push` or
+  `try_extend`. These operations enforce both the typed-pool share and the
+  region-wide hard budget.
 
   The rule covers empty and capacity-bearing constructors, `default`, `vec!`,
   `collect`, `to_vec`, and `repeat` when the primitive type is explicit. An
@@ -18,10 +25,10 @@ message: |
   non-primitive. `collect::<Vec<_>>()` is rejected for the same reason. Bare
   `collect()` returns are rejected when the function signature fixes a
   primitive owned buffer. Repeated primitive literals are also rejected.
-  Component-local pool construction is forbidden. This is a reusable-storage
-  rule: a documented long-lived output that crosses an ownership boundary may
-  own its bytes directly and must not retain a pool lease merely to silence
-  this lint.
+  Component-local schema or region construction is forbidden. Inject the
+  existing `PoolRegion<S>` instead. This is a reusable-storage rule: a
+  documented long-lived output that crosses an ownership boundary may own its
+  bytes directly and must not retain a pool guard merely to silence this lint.
 severity: error
 language: Rust
 files:

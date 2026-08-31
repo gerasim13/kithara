@@ -4,7 +4,6 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use kithara_bufpool::SamplePool;
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -26,11 +25,11 @@ use crate::traits::SeekBegin;
 /// Pull-based PCM facade over a bounded producer ring.
 pub struct Audio<S> {
     events: AudioEvents,
-    runtime: AudioRuntime,
     cursor: ChunkCursor,
     controls: Controls,
     _marker: PhantomData<S>,
     ring: RingConsumer,
+    runtime: AudioRuntime,
     session: Session,
 }
 
@@ -39,13 +38,13 @@ pub struct Audio<S> {
 /// `kithara-play::PlayWorker` registers the task before exposing the reader.
 #[doc(hidden)]
 pub struct PreparedAudio<R, P> {
-    lane: PreparedAudioLane<P>,
     reader: R,
+    lane: PreparedAudioLane<P>,
 }
 
 impl<R, P> PreparedAudio<R, P> {
     pub(super) const fn new(reader: R, lane: PreparedAudioLane<P>) -> Self {
-        Self { lane, reader }
+        Self { reader, lane }
     }
 
     /// Compose the reader facade and its still-concrete producer atomically.
@@ -56,7 +55,7 @@ impl<R, P> PreparedAudio<R, P> {
         F: FnOnce(R, P) -> (R2, P2),
     {
         let (reader, lane) = self.lane.map_source_with(self.reader, map);
-        PreparedAudio { lane, reader }
+        PreparedAudio { reader, lane }
     }
 }
 
@@ -68,12 +67,11 @@ impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedAudioLane<P>) {
 
 pub(super) struct AudioParts<S> {
     pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
-    pub(super) runtime: AudioRuntime,
-    pub(super) spec: AudioSpec,
     pub(super) controls: Controls,
+    pub(super) cursor: ChunkCursor,
     pub(super) marker: PhantomData<S>,
     pub(super) ring: RingConsumer,
-    pub(super) sample_pool: SamplePool,
+    pub(super) runtime: AudioRuntime,
     pub(super) session: Session,
 }
 
@@ -93,8 +91,8 @@ pub(super) struct Controls {
 }
 
 pub(super) struct AudioRuntime {
-    pub(super) wake: Arc<dyn WorkerWake>,
     pub(super) cancel: CancelToken,
+    pub(super) wake: Arc<dyn WorkerWake>,
 }
 
 impl Drop for AudioRuntime {
@@ -109,7 +107,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
         Self {
             runtime: parts.runtime,
             ring: parts.ring,
-            cursor: ChunkCursor::new(&parts.sample_pool, parts.spec),
+            cursor: parts.cursor,
             events: AudioEvents::new(parts.emit, wake_mode),
             session: parts.session,
             controls: parts.controls,
@@ -129,6 +127,17 @@ impl<S> Audio<S> {
     /// Returns metadata for the currently selected adaptive variant.
     pub fn current_variant(&self) -> Option<kithara_events::VariantInfo> {
         self.session.abr_handle.as_ref()?.current_variant()
+    }
+
+    delegate::delegate! {
+        to self.session.playhead {
+            #[must_use]
+            /// Returns the known stream duration.
+            pub fn duration(&self) -> Option<Duration>;
+            #[must_use]
+            /// Returns the committed playback position.
+            pub fn position(&self) -> Duration;
+        }
     }
 
     pub(crate) fn fill_buffer(&mut self) -> bool {
@@ -225,12 +234,6 @@ impl<S> Audio<S> {
         }))
     }
 
-    #[must_use]
-    /// Returns the current output PCM specification.
-    pub fn spec(&self) -> AudioSpec {
-        self.cursor.spec()
-    }
-
     /// Adopt a seek epoch begun elsewhere, dropping everything buffered before it.
     ///
     /// Lock-free and allocation-free: recycled chunks go to the trash outlet and the cursor is
@@ -248,19 +251,22 @@ impl<S> Audio<S> {
         }
     }
 
-    delegate::delegate! {
-        to self.session.playhead {
-            #[must_use]
-            /// Returns the known stream duration.
-            pub fn duration(&self) -> Option<Duration>;
-            #[must_use]
-            /// Returns the committed playback position.
-            pub fn position(&self) -> Duration;
-        }
+    #[must_use]
+    /// Returns the current output PCM specification.
+    pub fn spec(&self) -> AudioSpec {
+        self.cursor.spec()
     }
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
+    delegate::delegate! {
+        to self.session.playhead {
+            #[call(cached)]
+            fn cached_span(&self) -> Duration;
+            fn decoded_frontier(&self) -> Duration;
+        }
+    }
+
     fn next_chunk(&mut self) -> Result<ChunkOutcome, DecodeError> {
         self.sync_seek();
         self.ring.preloaded = true;
@@ -318,17 +324,18 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
     fn spec(&self) -> AudioSpec {
         Self::spec(self)
     }
-
-    delegate::delegate! {
-        to self.session.playhead {
-            #[call(cached)]
-            fn cached_span(&self) -> Duration;
-            fn decoded_frontier(&self) -> Duration;
-        }
-    }
 }
 
 impl<S: kithara_platform::maybe_send::MaybeSend> AudioSession for Audio<S> {
+    delegate::delegate! {
+        to self {
+            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
+            fn duration(&self) -> Option<Duration>;
+            fn is_preloaded(&self) -> bool;
+            fn metadata(&self) -> &TrackMetadata;
+        }
+    }
+
     fn event_bus(&self) -> &EventBus {
         self.events.bus()
     }
@@ -339,15 +346,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioSession for Audio<S> {
 
     fn preload_gate(&self) -> Option<Arc<PreloadGate>> {
         Some(self.session.preload_gate.clone())
-    }
-
-    delegate::delegate! {
-        to self {
-            fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
-            fn duration(&self) -> Option<Duration>;
-            fn is_preloaded(&self) -> bool;
-            fn metadata(&self) -> &TrackMetadata;
-        }
     }
 }
 
@@ -364,6 +362,10 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioControl for Audio<S> {
         Some(Self::seek_handle(self))
     }
 
+    fn sync_seek(&mut self) {
+        Self::sync_seek(self);
+    }
+
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         let previous = self
             .controls
@@ -372,10 +374,6 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioControl for Audio<S> {
         if previous != sample_rate.get() {
             self.runtime.wake.defer();
         }
-    }
-
-    fn sync_seek(&mut self) {
-        Self::sync_seek(self);
     }
 }
 
@@ -414,7 +412,6 @@ mod tests {
         sync::atomic::{AtomicU32, AtomicU64},
     };
 
-    use kithara_bufpool::SamplePool;
     use kithara_events::{AudioEvent, Event, EventReceiver};
     use kithara_platform::{CancelScope, sync::Arc, tokio::sync::broadcast::error::TryRecvError};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -425,20 +422,21 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, Outlet, ThreadWake, connect, ring::RingParts},
+        test_pools::pools,
     };
 
     struct TestWorkerWake;
 
     impl WorkerWake for TestWorkerWake {
-        fn defer(&self) {}
-
         fn wake(&self) {}
+
+        fn defer(&self) {}
     }
 
     struct AudioFixture {
-        emit: Arc<kithara_events::DeferredBus<Event>>,
         audio: Audio<()>,
         data_tx: Outlet<Fetch<AudioChunk>>,
+        emit: Arc<kithara_events::DeferredBus<Event>>,
     }
 
     impl Default for AudioFixture {
@@ -464,13 +462,14 @@ mod tests {
             let seek: Arc<dyn SeekControl> = seek_state.clone();
             let seek_obs: Arc<dyn SeekObserve> = seek_state;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
-            let sample_pool = SamplePool::default();
+            let cursor = ChunkCursor::new(&pools(), AudioChunkInfo::default().spec)
+                .expect("cursor scratch fits test pools");
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
-                    sample_pool,
+                    cursor,
                     emit: Arc::clone(&emit),
                     runtime: AudioRuntime {
                         cancel: CancelScope::new(None).token(),
@@ -489,7 +488,6 @@ mod tests {
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
                     },
-                    spec: AudioChunkInfo::default().spec,
                     marker: PhantomData,
                 }),
                 data_tx,
@@ -511,7 +509,9 @@ mod tests {
     }
 
     fn staged_chunk() -> AudioChunk {
-        let samples = vec![0.0f32; 8];
+        let samples = pools()
+            .get_with_len::<f32>(8)
+            .expect("staged samples fit test pools");
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate is non-zero"));
         let frames = u32::try_from(samples.len() / usize::from(spec.channels))
             .expect("fixture frame count fits u32");
@@ -521,7 +521,7 @@ mod tests {
                 frames,
                 ..AudioChunkInfo::default()
             },
-            SamplePool::default().attach(samples),
+            samples,
         )
     }
 

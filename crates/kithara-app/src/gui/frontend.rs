@@ -174,7 +174,7 @@ impl GuiFrontend {
             .ok_or("GUI analysis persistence requires the app base worker")?;
         let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
             base_worker,
-            config.worker.byte_pool().clone(),
+            config.worker.pools().clone(),
             NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
             Duration::from_secs(u64::from(config.analysis_chunk_seconds.get())),
             DispatcherConfig::new("kithara-analysis-persistence"),

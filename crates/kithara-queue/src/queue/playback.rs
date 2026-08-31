@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_events::TrackStatus;
 use kithara_play::{PlayError, SeekOutcome};
 
@@ -7,7 +8,10 @@ use super::{
 };
 use crate::error::QueueError;
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn freeze_cached_position(&self) {
         if let Some(t) = self.player.position_seconds() {
             self.write_cached_position(CachedPosition::known(t));

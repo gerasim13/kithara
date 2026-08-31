@@ -17,10 +17,13 @@ use kithara_platform::{
     time::Duration,
     tokio::task,
 };
-use kithara_queue::{QueueControl, QueueEvent, TrackEntry};
+use kithara_queue::{QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
-use crate::{config::AppConfig, wave_cache::AnalysisPersistence, waveform::TrackAnalysis};
+use crate::{
+    config::AppConfig, pools::AppQueueControl, wave_cache::AnalysisPersistence,
+    waveform::TrackAnalysis,
+};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -56,7 +59,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &QueueControl) -> Self {
+    fn new(queue: &AppQueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
@@ -67,8 +70,6 @@ impl UiState {
             tracks,
             current_track_index,
             track_name,
-            beat_marks,
-            downbeat_marks,
             abr_variants: Vec::new(),
             abr_mode_is_auto: true,
             selected_variant: None,
@@ -79,6 +80,8 @@ impl UiState {
             volume: queue.volume(),
             eq_bands: vec![GainDb::default(); queue.eq_band_count()],
             analysis: None,
+            beat_marks,
+            downbeat_marks,
             unready_ranges: Arc::default(),
             is_seeking: false,
             seek_position: 0.0,
@@ -92,8 +95,6 @@ impl UiState {
         let beat_marks = empty_marks();
         let downbeat_marks = empty_marks();
         Self {
-            beat_marks,
-            downbeat_marks,
             current_track_index: None,
             selected_variant: None,
             current_variant: None,
@@ -102,6 +103,8 @@ impl UiState {
             eq_bands: Vec::new(),
             tracks: Vec::new(),
             analysis: None,
+            beat_marks,
+            downbeat_marks,
             unready_ranges: Arc::default(),
             abr_mode_is_auto: true,
             is_seeking: false,
@@ -222,13 +225,13 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 #[fieldwork(opt_in, get)]
 pub struct StateController {
     beat_clock: Arc<Mutex<BeatClockState>>,
+    #[field(get, deref = false)]
+    queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
     timestretch: Arc<StretchControls>,
     cancel: CancelToken,
-    #[field(get, deref = false)]
-    queue: QueueControl,
 }
 
 impl StateController {
@@ -240,7 +243,7 @@ impl StateController {
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
     pub(crate) fn new(
-        queue: QueueControl,
+        queue: AppQueueControl,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancelToken,
@@ -421,7 +424,7 @@ impl Drop for StateController {
 }
 
 fn spawn_listener(
-    queue: QueueControl,
+    queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -440,13 +443,13 @@ fn spawn_listener(
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
 /// active slot are no-ops; the master EQ persists once a slot accepts them.
-fn reapply_eq(queue: &QueueControl, eq_bands: &[GainDb]) {
+fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
         let _ = queue.set_eq_gain(band, f32::from(gain));
     }
 }
 
-pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();
@@ -468,10 +471,14 @@ pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiS
             st.playing = started;
             let eq_bands = started.then(|| st.eq_bands.clone());
             drop(st);
+            // Playback just started on an active slot -- push the desired EQ
+            // down so gains set before play take effect.
             if let Some(eq_bands) = eq_bands {
                 reapply_eq(queue, &eq_bands);
             }
         }
+        // Session-mix gain deliberately has no event mapping here: `st.volume`
+        // is content volume, owned by the player's volume path alone.
         Event::Player(PlayerEvent::VolumeChanged { volume }) => {
             let mut st = state.lock();
             st.volume = volume;

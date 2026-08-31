@@ -7,12 +7,15 @@ use std::{
 };
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     file::{File, FileConfig},
     platform::{sync::Arc, time::Duration, tokio::task::spawn_blocking},
     stream::{AudioCodec, ContainerFormat, Stream},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
 };
 use url::Url;
 
@@ -32,6 +35,20 @@ fn audio_behavior(helper: &TestServerHelper, content_type: Option<&'static str>)
         delivery: Delivery::Range,
     });
     handle.url()
+}
+
+fn disk_file_config(url: Url, root: &std::path::Path) -> FileConfig<TestPools> {
+    let pools = pools();
+    FileConfig::for_src(url.into())
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: root.to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
+        .build()
 }
 
 fn collect_file_names(path: &std::path::Path, names: &mut Vec<String>) {
@@ -66,11 +83,9 @@ async fn remote_presigned_file_url_uses_bounded_cache_name(temp_dir: TestTempDir
     ))
     .expect("test URL must parse");
 
-    let config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
+    let config = disk_file_config(url, temp_dir.path());
 
-    if let Err(e) = Stream::<File>::new(config).await {
+    if let Err(e) = Stream::<File<TestPools>>::new(config).await {
         panic!("presigned progressive URL must not fail while opening cache path: {e}");
     }
 
@@ -95,10 +110,8 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, None);
 
-    let config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
-    let mut stream = Stream::<File>::new(config).await.unwrap();
+    let config = disk_file_config(url, temp_dir.path());
+    let mut stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     let expected_len = expected.len();
     let expected_vec = expected.to_vec();
@@ -134,10 +147,8 @@ async fn stream_file_seek_reads_expected_bytes(
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, None);
 
-    let config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
-    let mut stream = Stream::<File>::new(config).await.unwrap();
+    let config = disk_file_config(url, temp_dir.path());
+    let mut stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     spawn_blocking(move || {
         if let Some((len, prefix)) = initial_read {
@@ -179,10 +190,8 @@ async fn stream_media_info_carries_container_from_content_type(
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, Some(mime));
 
-    let config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
-    let mut stream = Stream::<File>::new(config).await.unwrap();
+    let config = disk_file_config(url, temp_dir.path());
+    let mut stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     let info = spawn_blocking(move || {
         let mut primer = [0u8; 1];
@@ -212,10 +221,8 @@ async fn stream_file_seek_past_eof_fails(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, None);
 
-    let config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
-    let mut stream = Stream::<File>::new(config).await.unwrap();
+    let config = disk_file_config(url, temp_dir.path());
+    let mut stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     spawn_blocking(move || {
         let result = stream.seek(SeekFrom::Start(1000));
@@ -231,10 +238,8 @@ async fn stream_file_multiple_seeks_work(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let url = audio_behavior(&helper, None);
 
-    let config = FileConfig::for_src(url.into())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
-        .build();
-    let mut stream = Stream::<File>::new(config).await.unwrap();
+    let config = disk_file_config(url, temp_dir.path());
+    let mut stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     spawn_blocking(move || {
         let mut buf = [0u8; 3];

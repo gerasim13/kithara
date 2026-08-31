@@ -4,7 +4,7 @@ Beat-map synchronization contracts and the source-generic resident Warp decorato
 
 The crate owns musical coordinates, immutable beat-map snapshots, group
 topology, alignment plans, synchronization operations, `Warp<S>`, `WarpConfig`,
-live temporal controls, and the synchronous `WarpRenderer` that drives a
+live temporal controls, and the synchronous `WarpRenderer<S>` that drives a
 `kithara-stretch::ElasticEngine` when one is available and otherwise preserves
 decoded audio through the same renderer contract. It does not decode audio,
 own source lifecycle, own `Player` / `PlayWorker` / Host/session state, access

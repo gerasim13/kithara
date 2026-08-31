@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use bon::Builder;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::sync::Mutex;
@@ -23,6 +24,9 @@ use crate::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
 };
+
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
@@ -70,21 +74,26 @@ impl<P: PlayerControlSource> Deref for HostOwned<P> {
 }
 
 /// Exclusive owner and dispatcher for one multi-player output session.
-pub struct Host {
+pub struct Host<S> {
     id: BeatGridId,
     owns_session: bool,
     root_view: RootView,
-    dispatcher: Arc<dyn HostDispatcher>,
+    dispatcher: Arc<dyn HostDispatcher<S>>,
     #[cfg(target_arch = "wasm32")]
-    remote_routes: Mutex<Vec<Arc<crate::wasm::HostRoute>>>,
+    web_state: Option<crate::session::web::WebSessionState<S>>,
+    #[cfg(target_arch = "wasm32")]
+    remote_routes: Mutex<Vec<Arc<crate::wasm::HostRoute<S>>>>,
 }
 
-impl Host {
+impl<S> Host<S> {
     /// Creates the platform session and its canonical synchronization root.
     ///
     /// # Errors
     /// Returns an error when a canonical grid identity cannot be allocated.
-    pub fn new(config: HostConfig) -> Result<Self, PlayError> {
+    pub fn new(config: HostConfig) -> Result<Self, PlayError>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let sample_rate = config.sample_rate;
         let root = GroupState::unavailable(
@@ -97,15 +106,78 @@ impl Host {
         #[cfg(not(target_arch = "wasm32"))]
         let dispatcher = crate::session::native::spawn(root, root_view.clone(), sample_rate);
         #[cfg(target_arch = "wasm32")]
-        let dispatcher = crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
+        let (dispatcher, web_state) =
+            crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
         Ok(Self {
-            root_view,
-            dispatcher,
             id: grid_id,
             owns_session: true,
+            root_view,
+            dispatcher,
+            #[cfg(target_arch = "wasm32")]
+            web_state: Some(web_state),
             #[cfg(target_arch = "wasm32")]
             remote_routes: Mutex::default(),
         })
+    }
+
+    /// Attaches and transfers one fully configured player or decorator into
+    /// this Host before it can register its lower graph projection.
+    ///
+    /// # Errors
+    /// Returns an error when session binding or canonical attachment fails.
+    pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+    {
+        let grid_id = player.id();
+        let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
+        player.attach_session(SessionBinding::new(dispatcher))?;
+        let control = player.control();
+        let operations = Box::new([TopologyOperation::Attach {
+            member: SyncMember::Group {
+                alignment: None,
+                group: Box::new(PlayerMember::new(player)),
+            },
+        }]);
+        require_topology_change(self.dispatcher.transact_current(operations))?;
+        Ok(HostOwned {
+            host_id: self.id,
+            id: grid_id,
+            control,
+            marker: PhantomData,
+        })
+    }
+
+    /// Closes the lower runtime on the caller thread, then detaches its
+    /// canonical member after graph unregistration has completed.
+    ///
+    /// # Errors
+    /// Returns an error when close or canonical detachment fails.
+    pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
+    where
+        P: PlayerControlSource<Schema = S>,
+        S: Send + Sync + 'static,
+    {
+        if player.host_id != self.id {
+            return Err(PlayError::ForeignSession);
+        }
+        let topology = self.topology().map_err(SessionError::from)?;
+        if !topology
+            .members()
+            .iter()
+            .any(|member| member.grid().id() == player.id())
+        {
+            return Err(SessionError::from(SyncError::MemberNotFound {
+                group_id: self.id,
+                member_id: player.id(),
+            })
+            .into());
+        }
+        P::close_control(player.control())?;
+        let operations = Box::new([TopologyOperation::Detach {
+            member: player.id(),
+        }]);
+        require_topology_change(self.dispatcher.transact_current(operations))
     }
 
     /// Applies one validated, atomic batch of final player levels.
@@ -130,12 +202,44 @@ impl Host {
         }
     }
 
+    /// Reads the current output-rate observation without exposing the lower
+    /// session handle.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session cannot answer the query.
+    pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
+        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
+            Reply::SampleRate(sample_rate) => Ok(sample_rate),
+            Reply::Err(error) => Err(error.into()),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for sample-rate query".into(),
+            )),
+        }
+    }
+
+    /// Installs the single post-limiter mix tap.
+    ///
+    /// # Errors
+    /// Returns an error when a tap is active or graph dispatch fails.
+    pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::EnableMixTap { writer })
+    }
+
     /// Removes the post-limiter mix tap.
     ///
     /// # Errors
     /// Returns an error when graph dispatch fails.
     pub fn disable_mix_tap(&self) -> Result<(), PlayError> {
         self.exec_play_ok(Cmd::DisableMixTap)
+    }
+
+    /// Updates the shared output-session ducking mode.
+    ///
+    /// # Errors
+    /// Returns an error when the canonical session rejects the update.
+    #[cfg(any(test, feature = "probe"))]
+    pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        self.exec_play_ok(Cmd::SetSessionDucking { mode })
     }
 
     /// Reads the shared output-session ducking mode.
@@ -153,15 +257,7 @@ impl Host {
         }
     }
 
-    /// Installs the single post-limiter mix tap.
-    ///
-    /// # Errors
-    /// Returns an error when a tap is active or graph dispatch fails.
-    pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::EnableMixTap { writer })
-    }
-
-    fn exec_play_ok(&self, cmd: Cmd) -> Result<(), PlayError> {
+    fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
         match self.dispatcher.exec(cmd)? {
             Reply::Ok => Ok(()),
             Reply::Err(error) => Err(error.into()),
@@ -170,117 +266,9 @@ impl Host {
             )),
         }
     }
-
-    /// Attaches and transfers one fully configured player or decorator into
-    /// this Host before it can register its lower graph projection.
-    ///
-    /// # Errors
-    /// Returns an error when session binding or canonical attachment fails.
-    pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
-    where
-        P: PlayerControlSource,
-    {
-        let grid_id = player.id();
-        let dispatcher: Arc<dyn SessionDispatcher> = self.dispatcher.clone();
-        player.attach_session(SessionBinding::new(dispatcher))?;
-        let control = player.control();
-        let operations = Box::new([TopologyOperation::Attach {
-            member: SyncMember::Group {
-                alignment: None,
-                group: Box::new(PlayerMember::new(player)),
-            },
-        }]);
-        require_topology_change(self.dispatcher.transact_current(operations))?;
-        Ok(HostOwned {
-            control,
-            host_id: self.id,
-            id: grid_id,
-            marker: PhantomData,
-        })
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn register_remote_route(&self, route: Arc<crate::wasm::HostRoute>) {
-        self.remote_routes.lock().push(route);
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn remote(
-        id: BeatGridId,
-        root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher>,
-    ) -> Self {
-        Self {
-            id,
-            root_view,
-            dispatcher,
-            owns_session: false,
-            remote_routes: Mutex::default(),
-        }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
-        (self.id, self.root_view.clone())
-    }
-
-    /// Closes the lower runtime on the caller thread, then detaches its
-    /// canonical member after graph unregistration has completed.
-    ///
-    /// # Errors
-    /// Returns an error when close or canonical detachment fails.
-    pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
-    where
-        P: PlayerControlSource,
-    {
-        if player.host_id != self.id {
-            return Err(PlayError::ForeignSession);
-        }
-        let topology = self.topology().map_err(SessionError::from)?;
-        if !topology
-            .members()
-            .iter()
-            .any(|member| member.grid().id() == player.id())
-        {
-            return Err(SessionError::from(SyncError::MemberNotFound {
-                group_id: self.id,
-                member_id: player.id(),
-            })
-            .into());
-        }
-        P::close_control(player.control())?;
-        let operations = Box::new([TopologyOperation::Detach {
-            member: player.id(),
-        }]);
-        require_topology_change(self.dispatcher.transact_current(operations))
-    }
-
-    /// Reads the current output-rate observation without exposing the lower
-    /// session handle.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session cannot answer the query.
-    pub fn sample_rate(&self) -> Result<SessionSampleRate, PlayError> {
-        match self.dispatcher.exec(Cmd::QuerySampleRate)? {
-            Reply::SampleRate(sample_rate) => Ok(sample_rate),
-            Reply::Err(error) => Err(error.into()),
-            _ => Err(PlayError::Internal(
-                "unexpected host reply for sample-rate query".into(),
-            )),
-        }
-    }
-
-    /// Updates the shared output-session ducking mode.
-    ///
-    /// # Errors
-    /// Returns an error when the canonical session rejects the update.
-    #[cfg(any(test, feature = "probe"))]
-    pub(crate) fn set_ducking_mode(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::SetSessionDucking { mode })
-    }
 }
 
-impl Drop for Host {
+impl<S> Drop for Host<S> {
     fn drop(&mut self) {
         #[cfg(target_arch = "wasm32")]
         for route in std::mem::take(&mut *self.remote_routes.lock()) {
@@ -294,7 +282,7 @@ impl Drop for Host {
     }
 }
 
-impl BeatGrid for Host {
+impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
     fn id(&self) -> BeatGridId {
         self.id
     }
@@ -304,7 +292,7 @@ impl BeatGrid for Host {
     }
 }
 
-impl SyncGroup for Host {
+impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     type NestedGroup = PlayerMember;
 
     delegate::delegate! {

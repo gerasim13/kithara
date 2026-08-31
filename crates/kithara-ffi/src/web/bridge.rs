@@ -1,24 +1,23 @@
-use std::{
-    mem,
-    sync::{
-        LazyLock,
-        atomic::{AtomicI64, Ordering},
-    },
+use std::sync::{
+    LazyLock,
+    atomic::{AtomicI64, Ordering},
 };
 
-use kithara_host::{Host, HostConfig, wasm};
-use kithara_platform::{
-    sync::{Mutex, MutexGuard, mpsc},
-    thread,
-};
+use kithara_host::{HostConfig, wasm};
+use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
+use kithara_play::wasm as play_wasm;
 use wasm_bindgen::JsValue;
 
-use crate::web::commands::WorkerCmd;
+use crate::{
+    pools::{FfiHost, FfiPools, Pools, build as build_pools},
+    web::commands::WorkerCmd,
+};
 
 struct HostChannel {
-    _host: Host,
-    receiver: wasm::HostReceiver,
-    sender: wasm::HostSender,
+    _host: FfiHost,
+    pools: Pools,
+    receiver: wasm::HostReceiver<FfiPools>,
+    sender: wasm::HostSender<FfiPools>,
 }
 
 fn current_track_id_cell() -> &'static AtomicI64 {
@@ -31,22 +30,32 @@ fn host_channel() -> &'static Mutex<Option<HostChannel>> {
     &CHANNEL
 }
 
-fn ensure_host_channel() -> Result<wasm::HostSender, JsValue> {
+fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue> {
     let mut guard = host_channel().lock();
     if let Some(channel) = guard.as_ref() {
-        return Ok(channel.sender.clone());
+        return Ok((channel.sender.clone(), channel.pools.clone()));
     }
 
-    let host = Host::new(HostConfig::builder().build())
+    let pools = build_pools()
+        .map_err(|error| JsValue::from_str(&format!("pool construction failed: {error}")))?;
+    let host = FfiHost::new(HostConfig::builder().build())
         .map_err(|error| JsValue::from_str(&format!("host construction failed: {error}")))?;
-    let (sender, receiver) = wasm::worker_host_channel(&host);
-    wasm::warm_up_audio();
+    let (sender, receiver) = wasm::worker_host_channel(&host)
+        .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
+    play_wasm::spawn_webcodecs_probe(pools.clone());
+    wasm::warm_up_audio(&host)
+        .map_err(|error| JsValue::from_str(&format!("audio warm-up failed: {error}")))?;
     *guard = Some(HostChannel {
-        receiver,
         _host: host,
+        pools: pools.clone(),
+        receiver,
         sender: sender.clone(),
     });
-    Ok(sender)
+    Ok((sender, pools))
+}
+
+pub(crate) fn initialize() -> Result<(), JsValue> {
+    ensure_host_channel().map(drop)
 }
 
 pub(crate) fn tick_and_poll() {
@@ -112,17 +121,17 @@ impl WorkerBridge {
             return;
         }
 
-        let Ok(host_sender) = ensure_host_channel() else {
+        let Ok((host_sender, pools)) = ensure_host_channel() else {
             return;
         };
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = thread::spawn(move || {
-            crate::web::worker::worker_main(cmd_rx, host_sender);
+        let worker = kithara_platform::thread::spawn(move || {
+            crate::web::worker::worker_main(cmd_rx, host_sender, pools);
         });
-        mem::forget(worker);
+        std::mem::forget(worker);
     }
 
     /// Whether the worker's audio session is currently playing.

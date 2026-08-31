@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 
 use kithara_audio::{AudioReader, ChunkOutcome, SeekOutcome};
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{HasPool, PoolError, SampleBuffer};
 use kithara_platform::{CancelToken, tokio::sync::watch};
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::AudioSpec;
@@ -18,13 +18,13 @@ use crate::{
 };
 
 pub(crate) struct Job {
-    pub(crate) token: AnalysisToken,
     pub(crate) reader: Box<dyn AudioReader>,
     pub(crate) cancel: CancelToken,
-    pub(crate) rate: NonZeroU32,
-    pub(crate) resume: Option<AnalysisProgress>,
     pub(crate) ingest: ring::Reader,
+    pub(crate) rate: NonZeroU32,
+    pub(crate) token: AnalysisToken,
     pub(crate) tx: watch::Sender<Option<AnalysisProgress>>,
+    pub(crate) resume: Option<AnalysisProgress>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,46 +35,47 @@ enum TaskPhase {
 }
 
 struct Run {
-    grew: bool,
-    started: bool,
-    at: u64,
     chosen: u64,
+    at: u64,
     frontier: u64,
+    started: bool,
+    grew: bool,
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub(crate) struct AnalysisTask<B>
+pub(crate) struct AnalysisTask<B, S>
 where
     B: ResamplerBackend,
 {
-    token: AnalysisToken,
     reader: Box<dyn AudioReader>,
     #[field(get = cancel_token, vis = "pub(crate)")]
     cancel: CancelToken,
-    extent: Extent,
-    rate: NonZeroU32,
-    chunk_frames: NonZeroU64,
-    analyzers: Option<TrackAnalyzers<B>>,
-    run: Option<Run>,
-    scratch: Option<SampleBuffer>,
+    analyzers: Option<TrackAnalyzers<B, S>>,
     ingest: ring::Reader,
-    schedule: Schedule,
+    scratch: Option<SampleBuffer>,
+    rate: NonZeroU32,
+    token: AnalysisToken,
     tx: watch::Sender<Option<AnalysisProgress>>,
     phase: TaskPhase,
     beat_dirty: bool,
+    chunk_frames: NonZeroU64,
+    producer_drain_limit: usize,
     publish_frames: u64,
     published_at: u64,
-    producer_drain_limit: usize,
+    extent: Extent,
+    schedule: Schedule,
+    run: Option<Run>,
 }
 
-impl<B> AnalysisTask<B>
+impl<B, S> AnalysisTask<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     pub(crate) fn new(
         job: Job,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         chunk_seconds: NonZeroU32,
         producer_drain_limit: NonZeroUsize,
         publish_seconds: NonZeroU32,
@@ -95,15 +96,15 @@ where
             .map_or_else(Extent::default, Extent::restore);
         Ok(Self {
             analyzers,
-            chunk_frames,
-            extent,
-            published_at,
             beat_dirty: false,
             cancel: job.cancel,
+            chunk_frames,
+            extent,
             ingest: job.ingest,
             phase: TaskPhase::Decode,
             producer_drain_limit: producer_drain_limit.get(),
             publish_frames: rate.saturating_mul(u64::from(publish_seconds.get())),
+            published_at,
             rate: job.rate,
             reader: job.reader,
             run: None,
@@ -114,11 +115,16 @@ where
         })
     }
 
-    pub(crate) fn apply_detection(&mut self, output: DetectionOutput) {
-        if let Some(analyzers) = &mut self.analyzers {
-            analyzers.apply_detection(output);
-            self.beat_dirty = true;
-        }
+    fn is_covered(&self, range: FrameRange) -> bool {
+        self.analyzers
+            .as_ref()
+            .is_some_and(|analyzers| analyzers.coverage().contains(range))
+    }
+
+    fn is_complete(&self) -> bool {
+        self.extent
+            .frames()
+            .is_some_and(|extent| self.is_covered(FrameRange::new(0, extent)))
     }
 
     fn choose(&self, window: Option<u64>) -> Option<u64> {
@@ -132,13 +138,17 @@ where
 
     fn decode(
         &mut self,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> TickResult {
         match self.reader.next_chunk() {
             Ok(ChunkOutcome::Chunk(chunk)) => {
                 let range = FrameRange::from(&chunk.meta);
-                let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token);
+                let Ok(analyzers) = open(&mut self.analyzers, builder, self.rate, &self.token)
+                else {
+                    self.phase = TaskPhase::Done;
+                    return TickResult::Progress;
+                };
                 let before = analyzers.covered_frames();
                 let outcome = analyzers.push(&chunk, detector);
                 if outcome != Ingest::Accepted {
@@ -157,7 +167,7 @@ where
             }
             Ok(ChunkOutcome::Pending { .. }) => TickResult::UpstreamPending,
             Ok(ChunkOutcome::Eof { .. }) => {
-                // WHY: EOF bounds the extent but does not prove earlier gaps filled.
+                // End of stream bounds the extent; gaps behind it may remain.
                 if self.extent.frames().is_none() {
                     self.finish(true);
                 } else {
@@ -174,7 +184,7 @@ where
                 TickResult::Progress
             }
             Err(error) => {
-                // WHY: Preserve ranges delivered before the reader failed.
+                // The reader failed; the ranges it delivered did not.
                 warn!(?error, "analysis: decode error; pass ended");
                 self.finish(false);
                 TickResult::Progress
@@ -182,11 +192,15 @@ where
         }
     }
 
-    fn drain(&mut self, builder: &AnalyzerBuilder<B>, detector: Option<&mut Detector>) -> bool {
+    fn drain(
+        &mut self,
+        builder: &AnalyzerBuilder<B, S>,
+        detector: Option<&mut Detector>,
+    ) -> Result<bool, PoolError> {
         let scratch = self
             .scratch
-            .get_or_insert_with(|| builder.sample_pool().get_with(Vec::clear));
-        let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token);
+            .get_or_insert_with(|| builder.pools().get::<f32>());
+        let analyzers = open(&mut self.analyzers, builder, self.rate, &self.token)?;
         let mut detector = detector;
         let mut folded = false;
 
@@ -200,7 +214,7 @@ where
             }
             folded = true;
         }
-        folded
+        Ok(folded)
     }
 
     fn due(&self) -> bool {
@@ -210,9 +224,13 @@ where
         analyzers.covered_frames().saturating_sub(self.published_at) >= self.publish_frames
     }
 
-    pub(crate) fn fail_compute_unavailable(&mut self) {
-        warn!("analysis: compute pool unavailable; pass ended");
-        self.phase = TaskPhase::Done;
+    fn sync_extent(&mut self) {
+        let Some(frames) = self.extent.frames() else {
+            return;
+        };
+        if let Some(analyzers) = &mut self.analyzers {
+            analyzers.plan_extent(frames);
+        }
     }
 
     /// `settled` when the pass ran out of reachable ranges rather than being
@@ -238,18 +256,6 @@ where
         self.phase = TaskPhase::Ending;
     }
 
-    fn is_complete(&self) -> bool {
-        self.extent
-            .frames()
-            .is_some_and(|extent| self.is_covered(FrameRange::new(0, extent)))
-    }
-
-    fn is_covered(&self, range: FrameRange) -> bool {
-        self.analyzers
-            .as_ref()
-            .is_some_and(|analyzers| analyzers.coverage().contains(range))
-    }
-
     pub(crate) fn is_done(&self) -> bool {
         self.phase == TaskPhase::Done
     }
@@ -261,6 +267,18 @@ where
     pub(crate) fn prepare_detection(&mut self) -> Option<DetectionRequest> {
         let trailing = self.is_ending();
         self.analyzers.as_mut()?.prepare_detection(trailing)
+    }
+
+    pub(crate) fn apply_detection(&mut self, output: DetectionOutput) {
+        if let Some(analyzers) = &mut self.analyzers {
+            analyzers.apply_detection(output);
+            self.beat_dirty = true;
+        }
+    }
+
+    pub(crate) fn fail_compute_unavailable(&mut self) {
+        warn!("analysis: compute pool unavailable; pass ended");
+        self.phase = TaskPhase::Done;
     }
 
     fn publish(&mut self, detector: Option<&mut Detector>, ending: bool) {
@@ -291,7 +309,7 @@ where
             return TickResult::Progress;
         };
         match self.reader.seek(position) {
-            // WHY: `landed_at` echoes the target; the first chunk gives reality.
+            // `landed_at` only echoes the target here; the first chunk says where.
             Ok(SeekOutcome::Landed { .. }) => {
                 debug!(at, "analysis: run scheduled");
                 self.run = Some(Run {
@@ -302,7 +320,8 @@ where
                     grew: false,
                 });
             }
-            // WHY: An undeliverable planned position bounds the real source end.
+            // The source cannot deliver the position the schedule planned
+            // against, which bounds where it ends however long it says it is.
             Ok(SeekOutcome::PastEof { duration, .. }) => {
                 debug!(at, ?duration, "analysis: scheduled position past the end");
                 self.extent.unreachable(at);
@@ -319,8 +338,8 @@ where
         let Some(run) = self.run.take() else {
             return;
         };
-        // WHY: Producer ranges may arrive from elsewhere; retire based only on
-        // whether this run itself grew coverage.
+        // What the run itself decoded, not what the pass covered while it ran:
+        // a producer folds ranges from anywhere and would keep this alive.
         if !run.grew {
             debug!(at = run.chosen, "analysis: position added nothing; retired");
             self.schedule.barren(run.chosen);
@@ -338,13 +357,14 @@ where
         {
             return true;
         }
-        // WHY: Covered audio ends a run only after it reaches its gap; earlier
-        // coverage may be seek lead-in and must not retire the unread gap.
+        // Covered audio ends a run that already reached its gap. Before that
+        // it is the lead-in a seek snapping back off the gap's start left in
+        // front, and ending there would retire the gap unread.
         if run.grew && self.is_covered(FrameRange::new(run.frontier, 1)) {
             return true;
         }
-        // WHY: Passing the aim without growth proves the source cannot land on
-        // the scheduled gap.
+        // Read past what it was aimed at with nothing gained: the gap the
+        // schedule saw there is not where this source can put the reader.
         if !run.grew && run.frontier > run.chosen {
             return true;
         }
@@ -353,7 +373,7 @@ where
 
     fn step(
         &mut self,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> TickResult {
         if self.extent.frames().is_none() {
@@ -370,18 +390,9 @@ where
         self.decode(builder, detector)
     }
 
-    fn sync_extent(&mut self) {
-        let Some(frames) = self.extent.frames() else {
-            return;
-        };
-        if let Some(analyzers) = &mut self.analyzers {
-            analyzers.plan_extent(frames);
-        }
-    }
-
     pub(crate) fn tick(
         &mut self,
-        builder: &AnalyzerBuilder<B>,
+        builder: &AnalyzerBuilder<B, S>,
         detector: Option<&mut Detector>,
     ) -> TickResult {
         if self.cancel.is_cancelled() && self.phase == TaskPhase::Decode {
@@ -393,8 +404,11 @@ where
         match self.phase {
             TaskPhase::Decode => {
                 let mut detector = detector;
-                let drained = self.drain(builder, detector.as_deref_mut());
-                // WHY: Decoding may refine the reported duration upward.
+                let Ok(drained) = self.drain(builder, detector.as_deref_mut()) else {
+                    self.phase = TaskPhase::Done;
+                    return TickResult::Progress;
+                };
+                // Re-read: the decode path refines a duration upward as it goes.
                 self.extent.report(self.reader.duration(), self.rate);
                 let result = self.step(builder, detector.as_deref_mut());
                 self.sync_extent();
@@ -418,14 +432,22 @@ where
     }
 }
 
-fn open<'a, B>(
-    slot: &'a mut Option<TrackAnalyzers<B>>,
-    builder: &AnalyzerBuilder<B>,
+fn open<'a, B, S>(
+    slot: &'a mut Option<TrackAnalyzers<B, S>>,
+    builder: &AnalyzerBuilder<B, S>,
     rate: NonZeroU32,
     token: &AnalysisToken,
-) -> &'a mut TrackAnalyzers<B>
+) -> Result<&'a mut TrackAnalyzers<B, S>, PoolError>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
-    slot.get_or_insert_with(|| builder.build(rate, token.clone()))
+    if let Some(analyzers) = slot {
+        Ok(analyzers)
+    } else {
+        let analyzers = builder.build(rate, token.clone()).inspect_err(|error| {
+            warn!(?error, "analysis: analyzer buffer initialization failed");
+        })?;
+        Ok(slot.insert(analyzers))
+    }
 }

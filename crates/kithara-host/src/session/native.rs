@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_audio::ConsumerWakeMode;
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     sync::{Arc, Mutex, mpsc},
     thread::spawn_named,
@@ -20,14 +21,14 @@ use super::{
 };
 use crate::error::PlayError;
 
-pub(crate) struct SessionClient {
-    cmd_tx: Mutex<mpsc::Sender<HostCmdMsg>>,
+pub(crate) struct SessionClient<S> {
+    cmd_tx: Mutex<mpsc::Sender<HostCmdMsg<S>>>,
 }
 
-impl SessionClient {
+impl<S> SessionClient<S> {
     /// `no_block`: sync command-reply bridge to the dedicated session thread for host/FFI dispatch.
     #[kithara::allow_block]
-    fn call(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         let (reply_tx, reply_rx) = mpsc::channel();
         if let Err(error) = self.cmd_tx.lock().send(HostCmdMsg { cmd, reply_tx }) {
             return Err(HostDispatchError::before_send(
@@ -46,12 +47,8 @@ impl SessionClient {
     }
 }
 
-impl SessionDispatcher for SessionClient {
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
-    }
-
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl<S: Send + Sync + 'static> SessionDispatcher<S> for SessionClient<S> {
+    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
             HostReply::Err(error) => Err(error),
@@ -60,20 +57,25 @@ impl SessionDispatcher for SessionClient {
             )),
         }
     }
+
+    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
+        ConsumerWakeMode::RealtimeDeferred
+    }
 }
 
-impl HostDispatcher for SessionClient {
-    fn exec_host(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+impl<S: Send + Sync + 'static> HostDispatcher<S> for SessionClient<S> {
+    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         self.call(cmd)
     }
 }
 
-fn complete_shutdown<B: AudioBackend>(
-    cmd_rx: mpsc::Receiver<HostCmdMsg>,
-    state: SessionState<B>,
+fn complete_shutdown<B: AudioBackend, S>(
+    cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
+    state: SessionState<B, S>,
     reply_tx: &mpsc::Sender<HostReply>,
 ) {
-    // WHY: Disconnect queued callers before PlayerRuntime::drop takes its admission gate; otherwise each side can wait on the other.
+    // Disconnect queued callers before PlayerRuntime::drop takes its
+    // admission gate; otherwise each side can wait on the other.
     drop(cmd_rx);
     drop(state);
     if reply_tx.send(HostReply::Ok).is_err() {
@@ -81,14 +83,16 @@ fn complete_shutdown<B: AudioBackend>(
     }
 }
 
-fn engine_thread<B: AudioBackend>(
-    cmd_rx: mpsc::Receiver<HostCmdMsg>,
+fn engine_thread<B: AudioBackend, S>(
+    cmd_rx: mpsc::Receiver<HostCmdMsg<S>>,
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
-) {
-    let mut state = SessionState::<B>::new(root, root_view, sample_rate, start_stream_fn);
+) where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let mut state = SessionState::<B, S>::new(root, root_view, sample_rate, start_stream_fn);
     debug!("[KITHARA-ROUTE] native session worker started");
     while let Ok(HostCmdMsg { cmd, reply_tx }) = cmd_rx.recv() {
         if matches!(&cmd, HostCmd::Shutdown) {
@@ -104,16 +108,20 @@ fn engine_thread<B: AudioBackend>(
     debug!("[KITHARA-ROUTE] native session worker stopped");
 }
 
-fn spawn_session_client<B: AudioBackend + Send + 'static>(
+fn spawn_session_client<B, S>(
     thread_name: &'static str,
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
     start_stream_fn: impl FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
-) -> Arc<SessionClient> {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg>();
+) -> Arc<SessionClient<S>>
+where
+    B: AudioBackend + Send + 'static,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let (cmd_tx, cmd_rx) = mpsc::channel::<HostCmdMsg<S>>();
     spawn_named(thread_name, move || {
-        engine_thread::<B>(cmd_rx, root, root_view, sample_rate, start_stream_fn);
+        engine_thread::<B, S>(cmd_rx, root, root_view, sample_rate, start_stream_fn);
     });
     Arc::new(SessionClient {
         cmd_tx: Mutex::new(cmd_tx),
@@ -148,12 +156,12 @@ fn start_stream_cpal(
     }
 }
 
-pub(crate) fn spawn(
+pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
-) -> Arc<dyn HostDispatcher> {
-    spawn_session_client::<firewheel::cpal::CpalBackend>(
+) -> Arc<dyn HostDispatcher<S>> {
+    spawn_session_client::<firewheel::cpal::CpalBackend, S>(
         "kithara-engine",
         root,
         root_view,

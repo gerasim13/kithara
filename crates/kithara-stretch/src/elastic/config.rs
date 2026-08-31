@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 
 use bon::bon;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::PoolRegion;
 use num_traits::{Float, ToPrimitive};
 
 use super::{ElasticError, ElasticRateEnvelope};
@@ -13,9 +13,10 @@ impl Consts {
     const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
     const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
     const MAX_PHASE_ERROR: f64 = 1.0;
+    // i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
+    const RATE_FRACTION_DEPTH: u8 = 64;
     const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
     const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.05;
-    const RATE_FRACTION_DEPTH: u8 = 64;
 }
 
 /// Numeric continuity policy for exact-span planning.
@@ -65,20 +66,20 @@ impl ElasticSpanConfig {
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
-pub struct ElasticConfig {
-    #[field(get(copy), vis = "pub(crate)")]
-    shape: ElasticShape,
-    /// Shared sample pool used by engines that need planar scratch.
-    #[field(get)]
-    pool: SamplePool,
+pub struct ElasticConfig<S> {
     /// Selected compiled implementation.
     #[field(get(copy))]
     backend: StretchKind,
+    /// Shared pool region used by engines that need planar scratch.
+    #[field(get)]
+    pools: PoolRegion<S>,
+    #[field(get(copy), vis = "pub(crate)")]
+    shape: ElasticShape,
 }
 
 #[bon]
-impl ElasticConfig {
-    /// Builds a validated preparation config with its shared sample pool.
+impl<S> ElasticConfig<S> {
+    /// Builds a validated preparation config with its shared pool region.
     ///
     /// # Errors
     /// Returns [`ElasticError`] when a scalar is zero, the requested rate
@@ -91,7 +92,7 @@ impl ElasticConfig {
     )]
     fn new(
         #[builder(default)] backend: StretchKind,
-        pool: SamplePool,
+        pools: PoolRegion<S>,
         sample_rate: u32,
         channels: usize,
         max_source_frames: usize,
@@ -124,9 +125,9 @@ impl ElasticConfig {
             ElasticRateEnvelope::try_from(rate_envelope)?,
         )?;
         Ok(Self {
-            shape,
-            pool,
             backend,
+            pools,
+            shape,
         })
     }
 
@@ -154,12 +155,12 @@ impl ElasticConfig {
 #[derive(Clone, Copy, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, copy, vis = "pub(crate)")]
 pub(crate) struct ElasticShape {
-    #[field(get(copy))]
-    rate_envelope: ElasticRateEnvelope,
-    sample_rate: u32,
     channels: usize,
     max_output_frames: usize,
     max_source_frames: usize,
+    #[field(get(copy))]
+    rate_envelope: ElasticRateEnvelope,
+    sample_rate: u32,
 }
 
 impl ElasticShape {
@@ -193,11 +194,11 @@ impl ElasticShape {
         }
 
         Ok(Self {
-            rate_envelope,
-            sample_rate,
             channels,
             max_output_frames,
             max_source_frames,
+            rate_envelope,
+            sample_rate,
         })
     }
 }
@@ -209,6 +210,7 @@ fn has_representable_request(
 ) -> bool {
     let accepted_minimum = envelope.min_source_frames_per_output().next_down();
     let accepted_maximum = envelope.max_source_frames_per_output().next_up();
+    // Convert the accepted f64 edges into their exact division-rounding basins.
     let Some(minimum) = binary_midpoint(accepted_minimum.next_down(), accepted_minimum) else {
         return false;
     };
@@ -329,6 +331,7 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::pools;
 
     #[kithara::test]
     fn span_config_requires_finite_positive_values() {
@@ -397,7 +400,7 @@ mod tests {
             ),
         ] {
             let actual = ElasticConfig::builder()
-                .pool(SamplePool::default())
+                .pools(pools())
                 .sample_rate(sample_rate)
                 .channels(channels)
                 .max_source_frames(max_source_frames)
@@ -411,7 +414,7 @@ mod tests {
     #[kithara::test]
     fn config_defaults_to_the_common_practical_rate_envelope() {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(960)
@@ -428,7 +431,7 @@ mod tests {
     #[kithara::test]
     fn config_intersects_the_rate_policy_with_common_and_prepared_limits() {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(2)
@@ -445,7 +448,7 @@ mod tests {
     #[kithara::test]
     fn config_rejects_a_rate_envelope_without_a_representable_request() {
         let result = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(4)
@@ -462,7 +465,7 @@ mod tests {
     #[kithara::test]
     fn config_rejects_a_continuous_window_without_a_discrete_request() {
         let result = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(1)
@@ -482,7 +485,7 @@ mod tests {
     #[kithara::test]
     fn config_preserves_a_continuous_window_with_a_discrete_request() {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(2)
@@ -502,7 +505,7 @@ mod tests {
     fn config_accepts_a_request_on_the_tolerated_ulp_boundary() {
         let boundary = 0.75_f64.next_up();
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(3)
@@ -517,7 +520,7 @@ mod tests {
     #[kithara::test]
     fn config_accounts_for_rounding_the_request_rate() {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(2)

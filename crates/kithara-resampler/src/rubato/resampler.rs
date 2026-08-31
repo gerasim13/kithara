@@ -16,10 +16,10 @@ pub struct RubatoResampler {
 }
 
 impl RubatoResampler {
-    pub(super) fn new(
+    pub(super) fn new<S>(
         backend: &'static str,
         config: RubatoConfig,
-        settings: &ResamplerSettings,
+        settings: &ResamplerSettings<S>,
     ) -> Result<Self, ResamplerBuildError> {
         let ResamplerMode::FixedRatio {
             source_sample_rate,
@@ -40,7 +40,6 @@ impl RubatoResampler {
             target_rate,
             settings.channels,
             settings.options,
-            settings.sample_pool.clone(),
         )
         .map_err(|err| ResamplerBuildError::BackendBuild {
             backend,

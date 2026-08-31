@@ -3,7 +3,6 @@
     clippy::unwrap_used,
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
-
 //! The tests that reach a host this workspace does not own, and that a runner
 //! can reach: the public zvuk CDN and silvercomet.
 //!
@@ -21,6 +20,9 @@
 //! ```text
 //! just test run --lane=network
 //! ```
+
+pub use kithara_integration_tests::bufpool_ext;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     mod silvercomet_seek_hang;
@@ -29,7 +31,7 @@ mod kithara_play {
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_queue {
     mod source_helper;
-    use source_helper::app_track_source;
+    pub(crate) use source_helper::{app_disk_asset_store, app_track_source};
 
     mod false_eof_rapid_scrub;
     mod real_playlist;

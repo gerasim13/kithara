@@ -15,7 +15,7 @@ Invariants:
 
 - Input length must be a multiple of the 16-byte AES block size; an unaligned chunk is a hard error.
 - Chunks are not independent: an intermediate chunk decrypts with `NoPadding` and advances `ctx.iv` to its own last ciphertext block, so chunks must be fed in order by one `ChunkSink`. `ResourceProcessor::begin()` hands out a fresh sink (cloned `DecryptContext`) per commit so a retried commit restarts from the segment IV.
-- No heap allocation on the decrypt path; the two 64 KB staging buffers come from the `BytePool`.
+- No heap allocation on the decrypt path; the two 64 KB staging buffers come from the caller's registered `u8` pool in `PoolRegion`.
 - `DecryptProcessor::identity()` is the `key || iv` bytes — that is what makes a cached processed resource identifiable.
 - `DecryptContext` and `DecryptProcessor` redact key material from `Debug`.
 

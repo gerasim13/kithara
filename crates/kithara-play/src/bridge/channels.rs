@@ -1,8 +1,9 @@
-use core::sync::atomic::AtomicU64;
-
 use kithara_audio::SeekBegin;
 use kithara_events::TrackId;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 use smallvec::SmallVec;
 

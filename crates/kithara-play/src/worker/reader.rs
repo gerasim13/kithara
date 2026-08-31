@@ -28,13 +28,13 @@ impl TrackPriority {
     }
 }
 
-pub(crate) struct TrackLease {
-    _worker: PlayWorker,
+pub(crate) struct TrackLease<S> {
     task: TaskHandle,
+    _worker: PlayWorker<S>,
 }
 
-impl TrackLease {
-    pub(crate) const fn new(worker: PlayWorker, task: TaskHandle) -> Self {
+impl<S> TrackLease<S> {
+    pub(crate) const fn new(worker: PlayWorker<S>, task: TaskHandle) -> Self {
         Self {
             task,
             _worker: worker,
@@ -50,13 +50,13 @@ impl TrackLease {
 ///
 /// The reader drops before its registration lease, so its wake handles and
 /// buffers are released before the final worker owner can shut down.
-pub struct RegisteredAudio<S> {
-    _lease: TrackLease,
-    warp: Warp<Audio<S>>,
+pub struct RegisteredAudio<T, S> {
+    warp: Warp<Audio<T>>,
+    _lease: TrackLease<S>,
 }
 
-impl<S> RegisteredAudio<S> {
-    pub(super) const fn new(warp: Warp<Audio<S>>, lease: TrackLease) -> Self {
+impl<T, S> RegisteredAudio<T, S> {
+    pub(super) const fn new(warp: Warp<Audio<T>>, lease: TrackLease<S>) -> Self {
         Self {
             warp,
             _lease: lease,
@@ -68,7 +68,7 @@ impl<S> RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> AudioRead for RegisteredAudio<S> {
+impl<T: MaybeSend, S> AudioRead for RegisteredAudio<T, S> {
     delegate::delegate! {
         to self.warp.source() {
             fn cached_span(&self) -> Duration;
@@ -87,7 +87,7 @@ impl<S: MaybeSend> AudioRead for RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> AudioSession for RegisteredAudio<S> {
+impl<T: MaybeSend, S> AudioSession for RegisteredAudio<T, S> {
     delegate::delegate! {
         to self.warp.source() {
             fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -101,11 +101,7 @@ impl<S: MaybeSend> AudioSession for RegisteredAudio<S> {
     }
 }
 
-impl<S: MaybeSend> AudioControl for RegisteredAudio<S> {
-    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
-        AudioControl::seek_handle(self.warp.source())
-    }
-
+impl<T: MaybeSend, S> AudioControl for RegisteredAudio<T, S> {
     delegate::delegate! {
         to self.warp.source_mut() {
             fn preload(&mut self) -> Result<(), DecodeError>;
@@ -115,5 +111,9 @@ impl<S: MaybeSend> AudioControl for RegisteredAudio<S> {
         to self.warp.source() {
             fn set_host_sample_rate(&self, sample_rate: NonZeroU32);
         }
+    }
+
+    fn seek_handle(&self) -> Option<Arc<dyn SeekBegin>> {
+        AudioControl::seek_handle(self.warp.source())
     }
 }

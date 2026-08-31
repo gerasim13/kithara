@@ -1,6 +1,7 @@
 use std::io::Read;
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     hls::{AbrMode, Hls, HlsConfig},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
@@ -11,6 +12,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::abr::{AbrTestServer, master_playlist},
     temp_dir,
 };
@@ -31,30 +33,43 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     .await;
 
     let cancel = CancelToken::never();
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .cancel(cancel.child())
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .cancel(cancel.child())
+        .build(),
     );
 
     let temp_a = temp_dir.path().join("stream_a");
     let temp_b = temp_dir.path().join("stream_b");
+    let store_a = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk { root: temp_a })
+        .build();
+    let store_b = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk { root: temp_b })
+        .build();
 
     let config_a = HlsConfig::for_url(server_a.url("/master.m3u8"))
         .cancel(cancel.clone())
-        .store(kithara_integration_tests::disk_asset_store(&temp_a))
+        .store(store_a)
+        .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();
     let config_b = HlsConfig::for_url(server_b.url("/master.m3u8"))
         .cancel(cancel.clone())
-        .store(kithara_integration_tests::disk_asset_store(&temp_b))
+        .store(store_b)
+        .pools(pools.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .downloader(downloader.clone())
         .build();
 
-    let mut stream_a = Stream::<Hls>::new(config_a).await.unwrap();
-    let mut stream_b = Stream::<Hls>::new(config_b).await.unwrap();
+    let mut stream_a = Stream::<Hls<TestPools>>::new(config_a).await.unwrap();
+    let mut stream_b = Stream::<Hls<TestPools>>::new(config_b).await.unwrap();
 
     // No warmup sleep: `read_all` reads to EOF via the blocking `Stream::read`,
     // which already waits for every byte to download (the client waits for data,
@@ -85,7 +100,7 @@ async fn hls_config_with_downloader_shares_downloader_across_two_streams(temp_di
     cancel.cancel();
 }
 
-fn read_all(stream: &mut Stream<Hls>) -> Vec<u8> {
+fn read_all(stream: &mut Stream<Hls<TestPools>>) -> Vec<u8> {
     let mut all = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {

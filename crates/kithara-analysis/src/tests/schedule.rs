@@ -3,7 +3,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
-use kithara_bufpool::SamplePool;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{
@@ -28,15 +27,19 @@ use super::{
     fixtures::{SR, chunk, sine_from, spec},
     node::NodeHarness,
 };
-use crate::{AnalysisProgress, coverage::FrameRange};
+use crate::{
+    AnalysisProgress,
+    coverage::FrameRange,
+    test_pools::{TestPools, pools},
+};
 
 struct Consts;
 
 impl Consts {
     const CHUNK: u64 = 8820;
     const EXTENT: u64 = 4 * 44_100;
-    const TICKS: usize = 8192;
     const TOKEN: &'static str = "scheduled-track";
+    const TICKS: usize = 8192;
     const WINDOW_SECONDS: u32 = 1;
 }
 
@@ -58,19 +61,20 @@ type Log = Arc<Mutex<Vec<Call>>>;
 
 struct Source {
     bus: EventBus,
-    log: Log,
-    fails_after: Option<u64>,
-    reports: Option<u64>,
     metadata: TrackMetadata,
-    echoes: bool,
+    frames: u64,
+    reports: Option<u64>,
+    chunk: u64,
+    snap: u64,
+    floor: u64,
     refines: bool,
     stalls: bool,
+    echoes: bool,
+    fails_after: Option<u64>,
     at: u64,
-    chunk: u64,
     chunks: u64,
-    floor: u64,
-    frames: u64,
-    snap: u64,
+    log: Log,
+    pools: Option<kithara_bufpool::PoolRegion<TestPools>>,
 }
 
 impl Source {
@@ -90,6 +94,36 @@ impl Source {
             bus: EventBus::default(),
             log: Log::default(),
             metadata: TrackMetadata::default(),
+            pools: None,
+        }
+    }
+
+    fn snapping(self, snap: u64) -> Self {
+        Self { snap, ..self }
+    }
+
+    fn flooring(self, floor: u64) -> Self {
+        Self { floor, ..self }
+    }
+
+    fn reporting(self, frames: Option<u64>) -> Self {
+        Self {
+            reports: frames,
+            ..self
+        }
+    }
+
+    fn refining(self) -> Self {
+        Self {
+            refines: true,
+            ..self
+        }
+    }
+
+    fn stalling(self) -> Self {
+        Self {
+            stalls: true,
+            ..self
         }
     }
 
@@ -107,41 +141,12 @@ impl Source {
         }
     }
 
-    fn flooring(self, floor: u64) -> Self {
-        Self { floor, ..self }
-    }
-
     fn log(&self) -> Log {
         Arc::clone(&self.log)
     }
 
     fn push(&self, call: Call) {
         self.log.lock().push(call);
-    }
-
-    fn refining(self) -> Self {
-        Self {
-            refines: true,
-            ..self
-        }
-    }
-
-    fn reporting(self, frames: Option<u64>) -> Self {
-        Self {
-            reports: frames,
-            ..self
-        }
-    }
-
-    fn snapping(self, snap: u64) -> Self {
-        Self { snap, ..self }
-    }
-
-    fn stalling(self) -> Self {
-        Self {
-            stalls: true,
-            ..self
-        }
     }
 }
 
@@ -190,7 +195,8 @@ impl AudioRead for Source {
         self.at = at.saturating_add(frames);
         self.chunks = self.chunks.saturating_add(1);
         self.push(Call::Chunk { at });
-        Ok(ChunkOutcome::Chunk(decoded(at, frames)))
+        let pools = self.pools.as_ref().expect("test pass installs pool region");
+        Ok(ChunkOutcome::Chunk(decoded(pools, at, frames)))
     }
 
     fn position(&self) -> Duration {
@@ -238,12 +244,12 @@ impl AudioControl for Source {
     }
 }
 
-fn decoded(at: u64, frames: u64) -> AudioChunk {
-    chunk(&sine_from(at, frames.to_usize().unwrap_or(0)), at)
+fn decoded(pools: &kithara_bufpool::PoolRegion<TestPools>, at: u64, frames: u64) -> AudioChunk {
+    chunk(pools, &sine_from(at, frames.to_usize().unwrap_or(0)), at)
 }
 
-fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend> {
-    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_beat_config(
+fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_beat_config(
         BeatAnalysisConfig::builder()
             .resampler_backend(NoResamplerBackend)
             .detector_window_seconds(window_seconds)
@@ -252,71 +258,34 @@ fn scheduled(window_seconds: u32) -> AnalyzerBuilder<NoResamplerBackend> {
     )
 }
 
-struct Pass<B>
+struct Pass<B, S>
 where
     B: ResamplerBackend,
 {
+    node: NodeHarness<B, S>,
     producer: AnalysisProducer,
-    log: Log,
-    node: NodeHarness<B>,
     results: watch::Receiver<Option<AnalysisProgress>>,
+    log: Log,
     _jobs: mpsc::Sender<Job>,
 }
 
-impl<B> Pass<B>
+impl<B> Pass<B, TestPools>
 where
     B: ResamplerBackend,
 {
-    fn analysis(&self) -> TrackAnalysis {
-        self.results
-            .borrow()
-            .as_ref()
-            .map(|progress| progress.analysis().clone())
-            .expect("the pass publishes what it covered")
-    }
-
-    fn calls(&self) -> Vec<Call> {
-        self.log.lock().clone()
-    }
-
-    fn drive(&mut self, ticks: usize) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut remaining = ticks;
-        while remaining > 0 && !self.has_ended() {
-            match self.node.tick() {
-                TickResult::Backpressured if Instant::now() < deadline => thread::yield_now(),
-                TickResult::Backpressured => return false,
-                _ => remaining -= 1,
-            }
-        }
-        self.has_ended()
-    }
-
-    fn has_ended(&self) -> bool {
-        self.results.has_changed().is_err()
-    }
-
-    fn offer(&mut self, at: u64, frames: u64) {
-        let frames = frames.to_usize().unwrap_or(0);
-        assert_eq!(
-            self.producer.offer(&sine_from(at, frames), spec(), at),
-            Ok(()),
-            "the transport takes a range on its own axis"
-        );
-    }
-
-    fn open(source: Source, builder: AnalyzerBuilder<B>) -> Self {
+    fn open(mut source: Source, builder: AnalyzerBuilder<B, TestPools>) -> Self {
         let rate = spec().sample_rate;
+        source.pools = Some(builder.pools().clone());
         let log = source.log();
         let (jobs, receiver) = mpsc::channel();
         let (tx, results) = watch::channel(None);
         let (writer, ingest) = ring::open_for(rate);
         jobs.send(Job {
+            token: Consts::TOKEN.into(),
+            reader: Box::new(source),
             tx,
             rate,
             ingest,
-            token: Consts::TOKEN.into(),
-            reader: Box::new(source),
             cancel: CancelToken::root(),
             resume: None,
         })
@@ -337,8 +306,46 @@ where
         }
     }
 
+    fn offer(&mut self, at: u64, frames: u64) {
+        let frames = frames.to_usize().unwrap_or(0);
+        assert_eq!(
+            self.producer.offer(&sine_from(at, frames), spec(), at),
+            Ok(()),
+            "the transport takes a range on its own axis"
+        );
+    }
+
     fn tick(&mut self) {
         let _ = self.node.tick();
+    }
+
+    fn drive(&mut self, ticks: usize) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut remaining = ticks;
+        while remaining > 0 && !self.has_ended() {
+            match self.node.tick() {
+                TickResult::Backpressured if Instant::now() < deadline => thread::yield_now(),
+                TickResult::Backpressured => return false,
+                _ => remaining -= 1,
+            }
+        }
+        self.has_ended()
+    }
+
+    fn has_ended(&self) -> bool {
+        self.results.has_changed().is_err()
+    }
+
+    fn analysis(&self) -> TrackAnalysis {
+        self.results
+            .borrow()
+            .as_ref()
+            .map(|progress| progress.analysis().clone())
+            .expect("the pass publishes what it covered")
+    }
+
+    fn calls(&self) -> Vec<Call> {
+        self.log.lock().clone()
     }
 }
 
@@ -859,7 +866,6 @@ fn a_run_is_measured_from_where_it_decoded_not_where_it_asked() {
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 mod artifacts {
-    use kithara_bufpool::SamplePool;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
@@ -870,7 +876,10 @@ mod artifacts {
         },
         Consts, Pass, Source, targets,
     };
-    use crate::BeatAnalysisConfig;
+    use crate::{
+        BeatAnalysisConfig,
+        test_pools::{TestPools, pools},
+    };
 
     const BUCKETS: usize = 64;
     const WINDOW_SECONDS: u32 = 2;
@@ -878,8 +887,8 @@ mod artifacts {
 
     struct Route {
         artifacts: Artifacts,
-        reclaimed: bool,
         seeks: usize,
+        reclaimed: bool,
     }
 
     /// Runs it takes to cover this track at best: its length over the fixed
@@ -889,8 +898,8 @@ mod artifacts {
         usize::try_from(EXTENT.div_ceil(chunk)).unwrap_or(usize::MAX)
     }
 
-    fn beat_pass() -> AnalyzerBuilder<RubatoBackend> {
-        AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+    fn beat_pass() -> AnalyzerBuilder<RubatoBackend, TestPools> {
+        AnalyzerBuilder::<RubatoBackend, _>::new(pools())
             .with_waveform(BUCKETS)
             .with_beat_config(
                 BeatAnalysisConfig::builder()

@@ -7,6 +7,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, ReadSide, ResourceLease, WriterEpoch};
+use kithara_bufpool::HasPool;
 use kithara_events::{
     AudioCodecKind, ContainerKind, EventBus, FileError, FileEvent, TotalBytesSource,
 };
@@ -58,16 +59,19 @@ pub(crate) struct FileSourceCtx {
 ///
 /// The session-owned writer never leaves `kithara-assets`; File keeps only the
 /// synchronous reader and protocol metadata needed to drive HTTP callbacks.
-pub(crate) struct FileAssetCtx {
-    pub(crate) reader: AssetReader,
+pub(crate) struct FileAssetCtx<S> {
+    pub(crate) reader: AssetReader<S>,
     pub(crate) headers: Option<Headers>,
     pub(crate) url: Url,
 }
 
 /// Shared inner state for a `FileSource`. All fields are either immutable
 /// (set at construction) or self-synchronizing - there is no `Mutex`.
-pub(crate) struct FileInner {
-    pub(crate) asset: FileAssetCtx,
+pub(crate) struct FileInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) asset: FileAssetCtx<S>,
     pub(crate) source: FileSourceCtx,
     /// `MediaInfo` discovered from the HTTP `Content-Type` header on
     /// first connect (or sniffed from the cached bytes for local
@@ -86,26 +90,29 @@ pub(crate) struct FileInner {
     /// [`FilePeer`](super::FilePeer) take over the single-writer
     /// election if the original writer drops. `None` for local /
     /// already-cached sources that never download.
-    pub(crate) resource_lease: Option<ResourceLease>,
-    complete: AtomicBool,
+    pub(crate) resource_lease: Option<ResourceLease<S>>,
     completion_started: AtomicBool,
+    complete: AtomicBool,
     terminal_state: AtomicU8,
 
     opened_emitted: OnceLock<()>,
 
-    reader_waker: OnceLock<Waker>,
     /// Late-bound audio-worker wake. Remote file sources can underrun while
     /// HTTP bytes are still arriving, so each write wakes the worker that
     /// previously parked on a non-blocking readiness probe.
     worker_wake: OnceLock<Arc<dyn WorkerWake>>,
+    reader_waker: OnceLock<Waker>,
 }
 
-impl FileInner {
+impl<S> FileInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn new(
         source: FileSourceCtx,
-        asset: FileAssetCtx,
+        asset: FileAssetCtx<S>,
         complete: bool,
-        resource_lease: Option<ResourceLease>,
+        resource_lease: Option<ResourceLease<S>>,
     ) -> Self {
         let terminal_state = FileTerminalState::from(&asset.reader.status());
         let complete = complete && terminal_state == FileTerminalState::Committed;
@@ -128,18 +135,6 @@ impl FileInner {
         inner
     }
 
-    pub(crate) fn arm_reader_waker(self: &Arc<Self>) {
-        let Some(lease) = self.resource_lease.as_ref() else {
-            return;
-        };
-        let waker = self.reader_waker.get_or_init(|| {
-            Waker::from(Arc::new(FileReaderWake {
-                inner: Arc::downgrade(self),
-            }))
-        });
-        lease.register_reader_waker(waker);
-    }
-
     /// Read the fully cached file bytes and parse a fragmented-mp4 index,
     /// or `None` when the file is not yet complete or not fragmented mp4.
     fn build_segment_index_from_cache(&self) -> Option<FileSegmentIndex> {
@@ -151,75 +146,6 @@ impl FileInner {
         let mut buf: Box<[u8]> = std::iter::repeat_n(0u8, total_usize).collect();
         self.asset.reader.read_at(0, &mut buf).ok()?;
         FileSegmentIndex::try_build(&buf)
-    }
-
-    /// Commit the epoch once every byte up to `final_len` has landed.
-    /// Returns whether the resource committed through this epoch.
-    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch, final_len: u64) -> bool {
-        if self.asset.reader.next_gap(0, final_len).is_some() {
-            return false;
-        }
-        match epoch.commit(Some(final_len)).current() {
-            Some(Ok(())) => {
-                self.observe_committed();
-                true
-            }
-            Some(Err(error)) => {
-                self.source.bus.publish(FileEvent::Error {
-                    error: FileError::Io(error.to_string()),
-                });
-                false
-            }
-            None => false,
-        }
-    }
-
-    pub(crate) fn is_complete(&self) -> bool {
-        self.complete.load(Ordering::Acquire)
-    }
-
-    /// Mark the file complete once. The one-shot fragmented-mp4 parse runs
-    /// on this edge so the hot-path `byte_map` audit
-    /// can short-circuit on `segment_index.get()` without re-reading the
-    /// file each tick.
-    pub(crate) fn mark_complete(&self) {
-        if self.completion_started.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        if let Some(total_bytes) = self.source.coord.total_bytes() {
-            self.source
-                .bus
-                .publish(FileEvent::CacheComplete { total_bytes });
-        }
-        self.try_build_segment_index();
-        self.set_terminal_state(FileTerminalState::Committed);
-        self.complete.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn observe_committed(&self) -> bool {
-        if self.resource_lease.is_none() {
-            return self.complete.load(Ordering::Acquire);
-        }
-        let ResourceStatus::Committed { final_len } = self.asset.reader.status() else {
-            return false;
-        };
-        let total_bytes = final_len.map_or_else(|| self.asset.reader.len(), Some);
-        self.source.coord.set_total_bytes(total_bytes);
-        if let Some(total_bytes) = total_bytes {
-            self.source.coord.set_download_pos(total_bytes);
-        }
-        if self.content_type_info.get().is_none()
-            && let Some(codec) = sniff_codec(&self.asset.reader)
-        {
-            let _ = self.content_type_info.set(MediaInfo::from(codec));
-        }
-        self.publish_opened(
-            total_bytes,
-            false,
-            total_bytes.map(|_| TotalBytesSource::CommittedLen),
-        );
-        self.mark_complete();
-        true
     }
 
     pub(crate) fn publish_opened(
@@ -256,6 +182,37 @@ impl FileInner {
         });
     }
 
+    /// Mark the file complete once. The one-shot fragmented-mp4 parse runs
+    /// on this edge so the hot-path `byte_map` audit
+    /// can short-circuit on `segment_index.get()` without re-reading the
+    /// file each tick.
+    pub(crate) fn mark_complete(&self) {
+        if self.completion_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(total_bytes) = self.source.coord.total_bytes() {
+            self.source
+                .bus
+                .publish(FileEvent::CacheComplete { total_bytes });
+        }
+        self.try_build_segment_index();
+        self.set_terminal_state(FileTerminalState::Committed);
+        self.complete.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.complete.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn terminal_state(&self) -> FileTerminalState {
+        match self.terminal_state.load(Ordering::Acquire) {
+            code if code == FileTerminalState::Committed as u8 => FileTerminalState::Committed,
+            code if code == FileTerminalState::Failed as u8 => FileTerminalState::Failed,
+            code if code == FileTerminalState::Cancelled as u8 => FileTerminalState::Cancelled,
+            _ => FileTerminalState::Active,
+        }
+    }
+
     pub(crate) fn refresh_unmanaged_terminal(&self) {
         if self.resource_lease.is_some() || self.is_complete() {
             return;
@@ -271,12 +228,62 @@ impl FileInner {
         let _ = self.worker_wake.set(wake);
     }
 
-    pub(crate) fn terminal_state(&self) -> FileTerminalState {
-        match self.terminal_state.load(Ordering::Acquire) {
-            code if code == FileTerminalState::Committed as u8 => FileTerminalState::Committed,
-            code if code == FileTerminalState::Failed as u8 => FileTerminalState::Failed,
-            code if code == FileTerminalState::Cancelled as u8 => FileTerminalState::Cancelled,
-            _ => FileTerminalState::Active,
+    pub(crate) fn arm_reader_waker(self: &Arc<Self>) {
+        let Some(lease) = self.resource_lease.as_ref() else {
+            return;
+        };
+        let waker = self.reader_waker.get_or_init(|| {
+            Waker::from(Arc::new(FileReaderWake {
+                inner: Arc::downgrade(self),
+            }))
+        });
+        lease.register_reader_waker(waker);
+    }
+
+    pub(crate) fn observe_committed(&self) -> bool {
+        if self.resource_lease.is_none() {
+            return self.complete.load(Ordering::Acquire);
+        }
+        let ResourceStatus::Committed { final_len } = self.asset.reader.status() else {
+            return false;
+        };
+        let total_bytes = final_len.map_or_else(|| self.asset.reader.len(), Some);
+        self.source.coord.set_total_bytes(total_bytes);
+        if let Some(total_bytes) = total_bytes {
+            self.source.coord.set_download_pos(total_bytes);
+        }
+        if self.content_type_info.get().is_none()
+            && let Some(codec) = sniff_codec(&self.asset.reader)
+        {
+            let _ = self.content_type_info.set(MediaInfo::from(codec));
+        }
+        self.publish_opened(
+            total_bytes,
+            false,
+            total_bytes.map(|_| TotalBytesSource::CommittedLen),
+        );
+        self.mark_complete();
+        true
+    }
+
+    /// Commit the epoch once every byte up to `final_len` has landed.
+    /// Returns whether the resource committed through this epoch.
+    pub(crate) fn commit_if_complete(&self, epoch: &WriterEpoch<S>, final_len: u64) -> bool {
+        if self.asset.reader.next_gap(0, final_len).is_some() {
+            return false;
+        }
+        match epoch.commit(Some(final_len)).current() {
+            Some(Ok(())) => {
+                self.observe_committed();
+                true
+            }
+            Some(Err(error)) => {
+                self.source.bus.publish(FileEvent::Error {
+                    error: FileError::Io(error.to_string()),
+                });
+                false
+            }
+            None => false,
         }
     }
 
@@ -301,11 +308,17 @@ impl FileInner {
     }
 }
 
-struct FileReaderWake {
-    inner: Weak<FileInner>,
+struct FileReaderWake<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    inner: Weak<FileInner<S>>,
 }
 
-impl Wake for FileReaderWake {
+impl<S> Wake for FileReaderWake<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn wake(self: Arc<Self>) {
         self.wake_by_ref();
     }
@@ -329,7 +342,10 @@ impl Wake for FileReaderWake {
     }
 }
 
-pub(crate) fn sniff_codec(reader: &AssetReader) -> Option<AudioCodec> {
+pub(crate) fn sniff_codec<S>(reader: &AssetReader<S>) -> Option<AudioCodec>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let mut buf = [0u8; CODEC_SNIFF_BYTES];
     let read = reader.read_at(0, &mut buf).ok()?;
     AudioCodec::try_from(&buf[..read]).ok()

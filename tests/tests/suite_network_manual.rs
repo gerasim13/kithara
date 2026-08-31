@@ -3,7 +3,6 @@
     clippy::unwrap_used,
     reason = "integration test crate — unwraps are acceptable in test code"
 )]
-
 //! The network tests no runner can serve.
 //!
 //! Two reasons put a test here, and both are about the machine rather than the
@@ -18,6 +17,9 @@
 //! CI because part of it could not run there.
 //!
 //! `just test run --lane=network-manual`, from a machine that has both.
+
+pub use kithara_integration_tests::bufpool_ext;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_play {
     mod live_remote_network;
@@ -26,7 +28,7 @@ mod kithara_play {
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_queue {
     mod source_helper;
-    use source_helper::app_track_source;
+    pub(crate) use source_helper::app_track_source;
 
     mod cold_seek_cpal;
     mod zvuk_drm_trace;

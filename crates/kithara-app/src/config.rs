@@ -2,19 +2,19 @@ use std::{fmt, num::NonZeroU32, path::PathBuf};
 
 use bon::Builder;
 use kithara::{
-    analysis::BeatAnalysisConfig,
-    assets::AssetStore,
-    hls::SizeProbeMethod,
-    play::{PlayWorker, policy::DomainKeyPolicy},
-    prelude::PlaybackResamplerBackend,
-    stream::dl::Downloader,
+    analysis::BeatAnalysisConfig, hls::SizeProbeMethod, play::policy::DomainKeyPolicy,
+    prelude::PlaybackResamplerBackend, stream::dl::Downloader,
 };
 use kithara_drm::KeyProcessorRegistry;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_worker::Worker;
 use url::Url;
 
-use crate::{baked, theme::Palette};
+use crate::{
+    baked,
+    pools::{AppStore, AppWorker},
+    theme::Palette,
+};
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -62,10 +62,19 @@ pub struct AppConfig {
     #[builder(default)]
     pub drm: AppDrm,
     /// App-wide shared asset store.
-    pub store: AssetStore,
+    pub store: AppStore,
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
+    /// Fixed source duration covered by one progressive analysis chunk.
+    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
+    pub analysis_chunk_seconds: NonZeroU32,
+    /// One playback worker shared by every deck in this app session.
+    pub worker: AppWorker,
+    /// Optional base runtime shared by playback, analysis, and app-owned
+    /// background dispatchers. Production supplies one; focused consumers may
+    /// let each domain worker own its standalone base.
+    pub base_worker: Option<Worker>,
     /// App master cancel. Single owner for the whole app subtree; the
     /// queue, player, stores, and UI listener all derive children from
     /// it (see `main.rs`). The chain flag reaches the playback worker and HLS
@@ -74,30 +83,9 @@ pub struct AppConfig {
     pub shutdown: CancelToken,
     /// Shared HTTP downloader for every track.
     pub downloader: Downloader,
-    /// Media duration the broadcast mix tap may run ahead of the packager by.
-    /// The app allocates that ring, so it owns its depth: a longer lead rides
-    /// out a longer packager stall and pays for it in the memory those
-    /// interleaved samples occupy.
-    #[builder(default = Duration::from_secs(2))]
-    pub broadcast_tap_lead: Duration,
-    /// Fixed source duration covered by one progressive analysis chunk.
-    #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
-    pub analysis_chunk_seconds: NonZeroU32,
-    /// Optional base runtime shared by playback, analysis, and app-owned
-    /// background dispatchers. Production supplies one; focused consumers may
-    /// let each domain worker own its standalone base.
-    pub base_worker: Option<Worker>,
-    /// Where this application reads its UI package from. What is found there
-    /// is laid over the documents this build carries, so the interface can be
-    /// changed without a rebuild. A path that does not exist means no package
-    /// was laid out and the build's own documents draw; `None` means this
-    /// configuration names no package at all.
-    pub ui_package: Option<PathBuf>,
     /// Color palette for the UI.
     #[builder(default)]
     pub palette: Palette,
-    /// One playback worker shared by every deck in this app session.
-    pub worker: PlayWorker,
     /// HLS size-estimation probe strategy (see
     /// [`kithara::hls::SizeProbeMethod`]).
     #[builder(default = baked::BAKED_SIZE_PROBE_METHOD)]
@@ -114,13 +102,25 @@ pub struct AppConfig {
     /// Crossfade duration in seconds.
     #[builder(default = baked::BAKED_CROSSFADE_SECONDS)]
     pub crossfade_seconds: f32,
-    /// Band count of the EQ layout every deck's player graph is built with.
-    #[builder(default = 3)]
-    pub eq_bands: usize,
+    /// Media duration the broadcast mix tap may run ahead of the packager by.
+    /// The app allocates that ring, so it owns its depth: a longer lead rides
+    /// out a longer packager stall and pays for it in the memory those
+    /// interleaved samples occupy.
+    #[builder(default = Duration::from_secs(2))]
+    pub broadcast_tap_lead: Duration,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.
     #[builder(default = 96_000)]
     pub waveform_max_buckets: usize,
+    /// Band count of the EQ layout every deck's player graph is built with.
+    #[builder(default = 3)]
+    pub eq_bands: usize,
+    /// Where this application reads its UI package from. What is found there
+    /// is laid over the documents this build carries, so the interface can be
+    /// changed without a rebuild. A path that does not exist means no package
+    /// was laid out and the build's own documents draw; `None` means this
+    /// configuration names no package at all.
+    pub ui_package: Option<PathBuf>,
 }
 
 fn default_tracks() -> Vec<String> {

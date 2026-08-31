@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::{AudioSource, Fetch, PreloadGate, ProducerPort, TrackStep, WaitingReason};
-use kithara_bufpool::SamplePool;
 use kithara_events::{DeferredBus, Event, EventBus};
 use kithara_platform::{
     CancelToken,
@@ -15,16 +14,17 @@ use kithara_test_utils::kithara;
 use kithara_worker::{Dispatcher, DispatcherConfig, TaskConfig, TaskHandle, Worker, WorkerConfig};
 
 use super::*;
-use crate::worker::scheduler::ServiceClass;
+use crate::{
+    test_pools::{Pools, pools, sample_buffer},
+    worker::scheduler::ServiceClass,
+};
 
-fn empty_chunk() -> AudioChunk {
-    AudioChunk::new(
-        AudioChunkInfo::default(),
-        SamplePool::default().attach(Vec::new()),
-    )
+fn empty_chunk(pools: &Pools) -> AudioChunk {
+    AudioChunk::new(AudioChunkInfo::default(), sample_buffer(pools, &[]))
 }
 
 struct MockSource {
+    pools: Pools,
     seek: Arc<dyn SeekControl>,
     seek_obs: Arc<dyn SeekObserve>,
     ready: bool,
@@ -34,11 +34,12 @@ struct MockSource {
 }
 
 impl MockSource {
-    fn new(chunks: usize) -> Self {
+    fn new(pools: Pools, chunks: usize) -> Self {
         let state = Arc::new(SeekState::new());
         let seek = Arc::clone(&state) as Arc<dyn SeekControl>;
         let seek_obs = Arc::clone(&state) as Arc<dyn SeekObserve>;
         Self {
+            pools,
             seek,
             seek_obs,
             chunks_to_produce: chunks,
@@ -48,17 +49,17 @@ impl MockSource {
         }
     }
 
-    fn not_ready(chunks: usize) -> Self {
+    fn not_ready(pools: Pools, chunks: usize) -> Self {
         Self {
             ready: false,
-            ..Self::new(chunks)
+            ..Self::new(pools, chunks)
         }
     }
 
-    fn panicking() -> Self {
+    fn panicking(pools: Pools) -> Self {
         Self {
             should_panic: true,
-            ..Self::new(100)
+            ..Self::new(pools, 100)
         }
     }
 }
@@ -87,7 +88,7 @@ impl AudioSource for MockSource {
             return TrackStep::Eof;
         }
         self.cursor += 1;
-        TrackStep::Produced(Fetch::data(empty_chunk(), 0))
+        TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
     }
 }
 
@@ -231,8 +232,9 @@ where
 
 #[kithara::test]
 fn worker_delivers_chunks() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node, mut pop, _) = make_node(MockSource::new(10), 32, 3);
+    let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 10), 32, 3);
     let _id = register(&handle, node);
 
     let received = wait_for_chunks(&mut pop, 5, Duration::from_secs(5));
@@ -241,9 +243,10 @@ fn worker_delivers_chunks() {
 
 #[kithara::test]
 fn worker_multi_track_round_robin() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(10), 32, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::new(10), 32, 1);
+    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
+    let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
     let _id_a = register(&handle, node_a);
     let _id_b = register(&handle, node_b);
 
@@ -255,9 +258,10 @@ fn worker_multi_track_round_robin() {
 
 #[kithara::test]
 fn worker_skips_not_ready_tracks() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(10), 32, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::not_ready(10), 32, 1);
+    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
+    let (node_b, mut pop_b, _) = make_node(MockSource::not_ready(pools.clone(), 10), 32, 1);
     let _id_a = register(&handle, node_a);
     let _id_b = register(&handle, node_b);
 
@@ -271,8 +275,9 @@ fn worker_skips_not_ready_tracks() {
 
 #[kithara::test]
 fn worker_overflow_on_full_ringbuf() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node, mut pop, _) = make_node(MockSource::new(5), 1, 1);
+    let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 5), 1, 1);
     let _id = register(&handle, node);
 
     thread_sleep(Duration::from_millis(50));
@@ -283,9 +288,10 @@ fn worker_overflow_on_full_ringbuf() {
 
 #[kithara::test]
 fn worker_panic_isolation() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node_a, _, _) = make_node(MockSource::panicking(), 32, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::new(10), 32, 1);
+    let (node_a, _, _) = make_node(MockSource::panicking(pools.clone()), 32, 1);
+    let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 10), 32, 1);
     let _id_a = register(&handle, node_a);
     let _id_b = register(&handle, node_b);
 
@@ -295,8 +301,9 @@ fn worker_panic_isolation() {
 
 #[kithara::test]
 fn worker_seek_enters_pending_reset() {
+    let pools = pools();
     let handle = test_scheduler();
-    let source = MockSource::new(100);
+    let source = MockSource::new(pools.clone(), 100);
     let seek = Arc::clone(&source.seek);
     let (node, mut pop, _) = make_node(source, 32, 1);
     let _id = register(&handle, node);
@@ -313,8 +320,9 @@ fn worker_seek_enters_pending_reset() {
 
 #[kithara::test(tokio)]
 async fn worker_preload_gate_fires_on_progress() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node, _pop, gate) = make_node(MockSource::new(10), 32, 3);
+    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), 10), 32, 3);
     let _id = register(&handle, node);
 
     platform_timeout(Duration::from_secs(1), gate.wait())
@@ -325,8 +333,9 @@ async fn worker_preload_gate_fires_on_progress() {
 
 #[kithara::test(tokio)]
 async fn worker_preload_gate_fires_on_eof() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node, _pop, gate) = make_node(MockSource::new(0), 32, 8);
+    let (node, _pop, gate) = make_node(MockSource::new(pools.clone(), 0), 32, 8);
     let _id = register(&handle, node);
 
     platform_timeout(Duration::from_secs(1), gate.wait())
@@ -349,8 +358,9 @@ async fn worker_preload_gate_fires_on_failure() {
 
 #[kithara::test(tokio)]
 async fn worker_preload_gate_reopens_after_seek() {
+    let pools = pools();
     let handle = test_scheduler();
-    let source = MockSource::new(10);
+    let source = MockSource::new(pools.clone(), 10);
     let seek = Arc::clone(&source.seek);
     let (node, _pop, gate) = make_node(source, 32, 1);
     let _id = register(&handle, node);
@@ -368,8 +378,9 @@ async fn worker_preload_gate_reopens_after_seek() {
 
 #[kithara::test]
 fn worker_unregister_removes_track() {
+    let pools = pools();
     let handle = test_scheduler();
-    let (node, mut pop, _) = make_node(MockSource::new(100), 32, 1);
+    let (node, mut pop, _) = make_node(MockSource::new(pools.clone(), 100), 32, 1);
     let id = register(&handle, node);
 
     assert!(wait_for_chunks(&mut pop, 2, Duration::from_secs(5)) >= 2);
@@ -382,9 +393,10 @@ fn worker_unregister_removes_track() {
 
 #[kithara::test]
 fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
+    let pools = pools();
     let handle = scheduler_with_capacity(2);
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(100), 1, 1);
-    let (node_b, mut pop_b, _) = make_node(MockSource::new(100), 1, 1);
+    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 100), 1, 1);
+    let (node_b, mut pop_b, _) = make_node(MockSource::new(pools.clone(), 100), 1, 1);
 
     let id_a = register(&handle, node_a);
     let id_b = register(&handle, node_b);
@@ -392,7 +404,7 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     assert_eq!(wait_for_chunks(&mut pop_b, 1, Duration::from_secs(1)), 1);
 
     handle.unregister(id_a);
-    let (node_c, _, _) = make_node(MockSource::new(1), 1, 1);
+    let (node_c, _, _) = make_node(MockSource::new(pools.clone(), 1), 1, 1);
     let id_c = handle
         .register(node_c)
         .expect("unregister must release capacity");
@@ -411,6 +423,7 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
 
 #[kithara::test]
 fn shared_worker_blocking_track_does_not_starve_producing_track() {
+    let pools = pools();
     struct BlockingSource {
         seek_obs: Arc<dyn SeekObserve>,
         blocking: Arc<AtomicBool>,
@@ -432,7 +445,7 @@ fn shared_worker_blocking_track_does_not_starve_producing_track() {
     }
 
     let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(100), 32, 0);
+    let (node_a, mut pop_a, _) = make_node(MockSource::new(pools.clone(), 100), 32, 0);
     let _id_a = register(&handle, node_a);
 
     let blocking = Arc::new(AtomicBool::new(true));
@@ -458,11 +471,13 @@ fn shared_worker_blocking_track_does_not_starve_producing_track() {
 
 #[kithara::test]
 fn shared_worker_sync_blocking_step_starves_other_tracks() {
+    let pools = pools();
     const SOURCE_CHUNKS: u32 = 1000;
     const POLL_BUDGET: u32 = 600;
     const BLOCK_MS: u64 = 10;
 
     struct SlowDecodeSource {
+        pools: Pools,
         seek_obs: Arc<dyn SeekObserve>,
         block_ms: u64,
     }
@@ -472,7 +487,7 @@ fn shared_worker_sync_blocking_step_starves_other_tracks() {
 
         fn step_track(&mut self) -> TrackStep<AudioChunk> {
             thread_sleep(Duration::from_millis(self.block_ms));
-            TrackStep::Produced(Fetch::data(empty_chunk(), 0))
+            TrackStep::Produced(Fetch::data(empty_chunk(&self.pools), 0))
         }
 
         fn seek_observe(&self) -> Arc<dyn SeekObserve> {
@@ -481,10 +496,15 @@ fn shared_worker_sync_blocking_step_starves_other_tracks() {
     }
 
     let handle = test_scheduler();
-    let (node_a, mut pop_a, _) = make_node(MockSource::new(SOURCE_CHUNKS as usize), 32, 0);
+    let (node_a, mut pop_a, _) = make_node(
+        MockSource::new(pools.clone(), SOURCE_CHUNKS as usize),
+        32,
+        0,
+    );
     let _id_a = register(&handle, node_a);
 
     let slow_source = SlowDecodeSource {
+        pools: pools.clone(),
         seek_obs: Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
         block_ms: BLOCK_MS,
     };

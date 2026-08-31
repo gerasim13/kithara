@@ -19,6 +19,8 @@ mod backend;
 mod decorator;
 mod error;
 mod resource;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod unified;
 
 #[cfg(any(test, feature = "mock"))]

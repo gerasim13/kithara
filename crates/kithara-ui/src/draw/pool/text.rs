@@ -1,25 +1,10 @@
 use std::{fmt, ops::Deref};
 
-use kithara_bufpool::{PooledOwned, Reuse, SharedPool};
+use kithara_bufpool::PooledString;
 
 const SHARDS: usize = 1;
 
-#[derive(Debug, Default)]
-pub(in crate::draw) struct TextBuffer(pub(in crate::draw) String);
-
-impl Reuse for TextBuffer {
-    fn byte_size(&self) -> usize {
-        self.0.capacity()
-    }
-
-    fn reuse(&mut self, max_capacity: usize) -> bool {
-        self.0.clear();
-        self.0.capacity() > 0 && self.0.capacity() <= max_capacity
-    }
-}
-
-pub(in crate::draw) type TextPool = SharedPool<SHARDS, TextBuffer>;
-type TextGuard = PooledOwned<SHARDS, TextBuffer>;
+type TextGuard = PooledString<SHARDS>;
 
 /// UTF-8 text whose allocation can return to its owning draw-pool family.
 pub struct PoolText {
@@ -32,20 +17,21 @@ enum TextStorage {
 }
 
 impl PoolText {
+    pub(in crate::draw) fn pooled(content: &str, mut guard: TextGuard) -> Self {
+        if let Err(error) = guard.try_push_str(content) {
+            panic!("draw text growth failed: {error}");
+        }
+        Self {
+            storage: TextStorage::Pooled(guard),
+        }
+    }
+
     /// Returns the retained UTF-8 text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         match &self.storage {
             TextStorage::Owned(content) => content,
-            TextStorage::Pooled(guard) => &guard.0,
-        }
-    }
-
-    pub(in crate::draw) fn pooled(content: &str, pool: &TextPool) -> Self {
-        let mut guard = pool.get();
-        guard.0.push_str(content);
-        Self {
-            storage: TextStorage::Pooled(guard),
+            TextStorage::Pooled(guard) => guard,
         }
     }
 }

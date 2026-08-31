@@ -5,6 +5,7 @@ use std::{
 };
 
 use kithara_assets::WriterEpoch;
+use kithara_bufpool::HasPool;
 use kithara_events::{FileError, FileEvent, TotalBytesSource};
 use kithara_net::{Headers, NetError, Retryability};
 use kithara_platform::{
@@ -15,15 +16,21 @@ use kithara_stream::MediaInfo;
 
 use crate::session::inner::FileInner;
 
-pub(super) struct FetchWriter {
+pub(super) struct FetchWriter<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) invalid_response: Arc<AtomicBool>,
     pub(super) offset: Arc<AtomicU64>,
     pub(super) cancel: CancelToken,
-    pub(super) inner: Weak<FileInner>,
-    pub(super) epoch: WriterEpoch,
+    pub(super) epoch: WriterEpoch<S>,
+    pub(super) inner: Weak<FileInner<S>>,
 }
 
-impl FetchWriter {
+impl<S> FetchWriter<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) fn write(&self, chunk: &[u8]) -> io::Result<()> {
         if self.invalid_response.load(Ordering::Acquire) {
             return Err(Error::other(
@@ -63,7 +70,10 @@ pub(super) struct FetchCompletion<'a> {
     pub(super) resume_from: u64,
 }
 
-impl FileInner {
+impl<S> FileInner<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Seed size and media hints from a validated response.
     /// Ranges use `Content-Range`; an ignored initial range uses full-body length.
     pub(super) fn capture_content_metadata(
@@ -97,21 +107,7 @@ impl FileInner {
         true
     }
 
-    fn commit_fetch_if_complete(
-        &self,
-        epoch: &WriterEpoch,
-        completion: FetchCompletion<'_>,
-    ) -> bool {
-        if !epoch.is_current() {
-            return false;
-        }
-        let Some(final_len) = self.resolved_final_len(completion) else {
-            return false;
-        };
-        self.commit_if_complete(epoch, final_len)
-    }
-
-    pub(super) fn complete_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
+    pub(super) fn complete_fetch(&self, epoch: &WriterEpoch<S>, completion: FetchCompletion<'_>) {
         if completion.invalid_response && !matches!(completion.error, Some(NetError::Cancelled)) {
             self.fail_current_epoch(
                 epoch,
@@ -125,7 +121,7 @@ impl FileInner {
         self.finalize_fetch(epoch, completion);
     }
 
-    pub(super) fn fail_current_epoch(&self, epoch: &WriterEpoch, reason: String) {
+    pub(super) fn fail_current_epoch(&self, epoch: &WriterEpoch<S>, reason: String) {
         if let Some(result) = epoch.fail(reason.clone()).current() {
             let message = match result {
                 Ok(()) => reason,
@@ -139,7 +135,7 @@ impl FileInner {
 
     /// Settle a fetch against its writer epoch and current byte coverage.
     /// Cancellation relinquishes; fatal or initial zero-progress errors fail.
-    pub(super) fn finalize_fetch(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) {
+    pub(super) fn finalize_fetch(&self, epoch: &WriterEpoch<S>, completion: FetchCompletion<'_>) {
         if !completion.invalid_response
             && matches!(completion.error, Some(NetError::Cancelled))
             && self.commit_fetch_if_complete(epoch, completion)
@@ -150,6 +146,20 @@ impl FileInner {
             return;
         }
         let _ = self.commit_fetch_if_complete(epoch, completion);
+    }
+
+    fn commit_fetch_if_complete(
+        &self,
+        epoch: &WriterEpoch<S>,
+        completion: FetchCompletion<'_>,
+    ) -> bool {
+        if !epoch.is_current() {
+            return false;
+        }
+        let Some(final_len) = self.resolved_final_len(completion) else {
+            return false;
+        };
+        self.commit_if_complete(epoch, final_len)
     }
 
     fn resolved_final_len(&self, completion: FetchCompletion<'_>) -> Option<u64> {
@@ -165,7 +175,7 @@ impl FileInner {
         None
     }
 
-    fn settle_fetch_error(&self, epoch: &WriterEpoch, completion: FetchCompletion<'_>) -> bool {
+    fn settle_fetch_error(&self, epoch: &WriterEpoch<S>, completion: FetchCompletion<'_>) -> bool {
         let Some(error) = completion.error else {
             return false;
         };

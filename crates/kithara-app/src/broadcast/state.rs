@@ -1,7 +1,8 @@
 use std::error::Error;
 
-use kithara::host::Host;
 use kithara_platform::{CancelToken, time::Duration};
+
+use crate::pools::AppHost;
 
 #[cfg(test)]
 mod absent;
@@ -30,15 +31,15 @@ pub(crate) trait Packager: 'static {
 
     fn is_live(live: &Self::Live) -> bool;
 
-    /// Releases the host mix tap before the packager drains.
-    fn release(host: &Host) -> BroadcastResult<()>;
-
     /// `Ok(None)`: no device rate measured yet, so the request stands.
     fn start(
-        host: &Host,
+        host: &AppHost,
         shutdown: &CancelToken,
         tap_lead: Duration,
     ) -> BroadcastResult<Option<Self::Live>>;
+
+    /// Releases the host mix tap before the packager drains.
+    fn release(host: &AppHost) -> BroadcastResult<()>;
 
     /// Drains the stream and shuts it down. Blocking.
     fn stop(live: Self::Live);
@@ -51,7 +52,7 @@ mod tests {
     use kithara::host::HostConfig;
 
     use super::{
-        CancelToken, Duration, Host, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
+        AppHost, CancelToken, Duration, Packager, Phase, absent::Absent, broadcaster::Broadcaster,
         ready::Ready, unmeasured::Unmeasured,
     };
 
@@ -61,8 +62,8 @@ mod tests {
         Broadcaster::new(CancelToken::root(), Duration::from_secs(2))
     }
 
-    fn host() -> Host {
-        Host::new(HostConfig::builder().build()).expect("test host")
+    fn host() -> AppHost {
+        AppHost::new(HostConfig::builder().build()).expect("test host")
     }
 
     #[kithara::test]

@@ -1,12 +1,16 @@
 use std::{io::Error as IoError, ops::Range};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_stream::{SegmentDescriptor, SourceError, StreamError, StreamResult};
 use kithara_test_utils::kithara;
 
 use super::HlsVariant;
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Segment that owns fetch demand for `byte_offset`.
     ///
     /// `find_at_offset` is intentionally media-only: bytes inside an fMP4 init

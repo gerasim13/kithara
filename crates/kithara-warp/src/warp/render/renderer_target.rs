@@ -1,4 +1,4 @@
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_signal::{AudioSpec, SampleCount};
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticError, StretchKind, build_engine};
 use tracing::warn;
@@ -12,30 +12,18 @@ pub(super) struct PreparedTarget {
     pub(super) scratch: Option<SampleBuffer>,
 }
 
-impl WarpRenderer {
-    fn config_for(
-        backend: StretchKind,
-        spec: AudioSpec,
-        sample_pool: &SamplePool,
-    ) -> Result<ElasticConfig, ElasticError> {
-        ElasticConfig::builder()
-            .backend(backend)
-            .sample_rate(spec.sample_rate.get())
-            .channels(usize::from(spec.channels.max(1)))
-            .pool(sample_pool.clone())
-            .max_source_frames(Self::MAX_SOURCE_FRAMES)
-            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
-            .build()
-    }
-
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     pub(super) fn prepare_target(
         kind: StretchKind,
         spec: AudioSpec,
-        sample_pool: &SamplePool,
+        pools: &PoolRegion<S>,
         reusable_pending: Option<SampleBuffer>,
         reusable_scratch: Option<SampleBuffer>,
     ) -> PreparedTarget {
-        let result = Self::config_for(kind, spec, sample_pool)
+        let result = Self::config_for(kind, spec, pools)
             .and_then(build_engine)
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
@@ -44,16 +32,16 @@ impl WarpRenderer {
                         .checked_mul(channels)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 );
-                let mut pending = reusable_pending.unwrap_or_else(|| sample_pool.get());
+                let mut pending = reusable_pending.unwrap_or_else(|| pools.get::<f32>());
                 pending
                     .ensure_len(pending_samples.get())
-                    .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+                    .map_err(|_| ElasticError::PoolCapacity)?;
                 pending.clear();
                 let scratch_samples = Self::scratch_samples(engine.as_ref(), spec)?;
-                let mut scratch = reusable_scratch.unwrap_or_else(|| sample_pool.get());
+                let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
                 scratch
                     .ensure_len(scratch_samples.get())
-                    .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+                    .map_err(|_| ElasticError::PoolCapacity)?;
                 scratch.clear();
                 Ok((engine, pending, scratch))
             });
@@ -68,6 +56,21 @@ impl WarpRenderer {
                 PreparedTarget::default()
             }
         }
+    }
+
+    fn config_for(
+        backend: StretchKind,
+        spec: AudioSpec,
+        pools: &PoolRegion<S>,
+    ) -> Result<ElasticConfig<S>, ElasticError> {
+        ElasticConfig::builder()
+            .backend(backend)
+            .sample_rate(spec.sample_rate.get())
+            .channels(usize::from(spec.channels.max(1)))
+            .pools(pools.clone())
+            .max_source_frames(Self::MAX_SOURCE_FRAMES)
+            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
+            .build()
     }
 
     fn scratch_samples(
@@ -103,9 +106,9 @@ impl WarpRenderer {
         let mut scratch = self
             .deferred_scratch
             .take()
-            .unwrap_or_else(|| self.sample_pool.get());
+            .unwrap_or_else(|| self.pools.get::<f32>());
         if scratch.ensure_len(required.get()).is_err() {
-            warn!("sample pool budget exhausted while preparing time-stretch output scratch");
+            warn!("pool capacity exhausted while preparing time-stretch output scratch");
             return;
         }
         scratch.clear();
@@ -138,13 +141,8 @@ impl WarpRenderer {
             let reusable_pending = self.pending_source.take();
             let reusable_scratch = self.scratch.take();
             drop(self.engine.take());
-            let target = Self::prepare_target(
-                kind,
-                spec,
-                &self.sample_pool,
-                reusable_pending,
-                reusable_scratch,
-            );
+            let target =
+                Self::prepare_target(kind, spec, &self.pools, reusable_pending, reusable_scratch);
             self.engine = target.engine;
             self.pending_source = target.pending_source;
             self.scratch = target.scratch;

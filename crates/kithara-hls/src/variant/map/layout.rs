@@ -1,12 +1,16 @@
 use std::ops::Range;
 
+use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 use tracing::debug;
 
 use super::HlsVariant;
 use crate::segment::PlannedFetch;
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn authoritative_len(&self) -> Option<u64> {
         self.layout.try_published(|| {
             let total = self.total_bytes();

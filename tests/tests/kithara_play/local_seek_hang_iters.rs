@@ -10,7 +10,7 @@ use kithara::{
         time::{self, Duration, Instant, timeout},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
@@ -18,7 +18,10 @@ use kithara_integration_tests::{
 };
 use url::Url;
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    common::test_defaults::Consts as Shared,
+};
 
 struct Consts;
 impl Consts {
@@ -219,21 +222,15 @@ async fn build_resource(
     url: &Url,
     downloader: &Downloader,
     iter_label: &str,
-    store: kithara::assets::AssetStore,
+    store: kithara::assets::AssetStore<TestPools>,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str())
-            .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
+    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(url.as_str())
+            .unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
-    .worker(PlayWorker::new(
-        PlayWorkerConfig::for_pools(
-            kithara::bufpool::BytePool::default(),
-            kithara::bufpool::SamplePool::default(),
-        )
-        .build(),
-    ))
+    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)
@@ -301,6 +298,7 @@ async fn local_seek_middle_hang_iters(#[case] backend: DecoderBackend, #[case] a
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
                 NetOptions::default(),
+                pools(),
                 CancelToken::never(),
             ))
             .build(),

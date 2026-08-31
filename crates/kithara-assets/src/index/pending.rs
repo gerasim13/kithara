@@ -7,6 +7,7 @@ use std::{
 };
 
 use dashmap::{DashMap, mapref::entry::Entry};
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::{Arc, Mutex},
@@ -110,10 +111,10 @@ fn register_waker(slot: &Mutex<Option<Waker>>, waker: &Waker) {
     drop(unused);
 }
 
-pub(super) struct PendingResourceInner {
+pub(super) struct PendingResourceInner<S> {
     /// Parent of every slot's `writer_cancel` (the store cancel).
     pub(super) cancel: CancelToken,
-    pub(super) slots: DashMap<ResourceKey, Arc<PendingResource>>,
+    pub(super) slots: DashMap<ResourceKey, Arc<PendingResource<S>>>,
     #[cfg(test)]
     attach_probe: Mutex<Option<AttachProbe>>,
 }
@@ -122,12 +123,22 @@ pub(super) struct PendingResourceInner {
 ///
 /// Cheap to [`Clone`] (one `Arc` bump); all clones share the same slot
 /// map, so consumer demand aggregates across `AssetStore` clones automatically.
-#[derive(Clone)]
-pub(crate) struct PendingResourceIndex {
-    inner: Arc<PendingResourceInner>,
+pub(crate) struct PendingResourceIndex<S> {
+    inner: Arc<PendingResourceInner<S>>,
 }
 
-impl PendingResourceIndex {
+impl<S> Clone for PendingResourceIndex<S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl<S> PendingResourceIndex<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Create an empty index. `cancel` is the store cancel; each slot's
     /// `writer_cancel` is a child of it.
     pub(crate) fn new(cancel: CancelToken) -> Self {
@@ -145,10 +156,10 @@ impl PendingResourceIndex {
         &self,
         key: &ResourceKey,
         entry: Arc<DemandEntry>,
-        store: AssetStore,
+        store: AssetStore<S>,
         remove: RemoveResource,
-        acquire: impl FnOnce() -> AssetsResult<ResourceAcquisition>,
-    ) -> AssetsResult<AcquisitionResult<ResourceAttachment, AssetReader>> {
+        acquire: impl FnOnce() -> AssetsResult<ResourceAcquisition<S>>,
+    ) -> AssetsResult<AcquisitionResult<ResourceAttachment<S>, AssetReader<S>>> {
         let (slot, epoch, reader, peer_waker) = match self.inner.slots.entry(key.clone()) {
             Entry::Occupied(occupied) => {
                 let slot = Arc::clone(occupied.get());
@@ -213,8 +224,8 @@ impl PendingResourceIndex {
         let writer = epoch.map(|claim| lease.writer(claim));
         Ok(AcquisitionResult::Pending(ResourceAttachment {
             reader,
-            writer,
             lease,
+            writer,
         }))
     }
 
@@ -244,7 +255,7 @@ impl PendingResourceIndex {
     }
 }
 
-impl fmt::Debug for PendingResourceIndex {
+impl<S> fmt::Debug for PendingResourceIndex<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PendingResourceIndex")
             .field("tracked_resources", &self.inner.slots.len())

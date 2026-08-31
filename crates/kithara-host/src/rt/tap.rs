@@ -1,7 +1,4 @@
-use core::{
-    num::{NonZeroU32, NonZeroUsize},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use core::num::{NonZeroU32, NonZeroUsize};
 
 use firewheel::{
     StreamInfo,
@@ -12,7 +9,10 @@ use firewheel::{
         ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus,
     },
 };
-use kithara_platform::sync::{Arc, Mutex};
+use kithara_platform::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 use kithara_test_utils::kithara;
 use ringbuf::{
     HeapProd,
@@ -123,8 +123,6 @@ fn dropped_samples(frames: usize, pushed: usize, stereo: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use core::sync::atomic::AtomicU64;
-
     use ringbuf::{
         HeapRb,
         traits::{Observer, Split},

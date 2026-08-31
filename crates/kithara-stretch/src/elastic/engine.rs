@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_platform::ranged;
 
 use super::{ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticError, ElasticRequest};
@@ -40,9 +41,10 @@ pub trait ElasticEngine: Send + 'static {
     /// # Errors
     /// Returns [`ElasticError`] when the shape is outside what the engine can
     /// represent, or when the engine cannot be constructed.
-    fn prepare(config: ElasticConfig) -> Result<Self, ElasticError>
+    fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
     where
-        Self: Sized;
+        Self: Sized,
+        S: HasPool<f32>;
 
     /// Clears prior stream state, absorbs source history and lookahead, then
     /// renders one latency-sized warmup span into caller-owned discard storage.

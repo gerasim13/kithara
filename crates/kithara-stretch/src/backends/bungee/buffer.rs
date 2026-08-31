@@ -1,22 +1,26 @@
 use std::num::NonZeroU32;
 
 use bungee_sys::InputChunk;
+use kithara_bufpool::HasPool;
 use kithara_signal::{AudioSpec, FrameCount, PlanarBuffer, SignalError};
 use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
 use crate::{ElasticConfig, ElasticError};
 
-pub(super) fn planar_buffer(
-    config: &ElasticConfig,
+pub(super) fn planar_buffer<S>(
+    config: &ElasticConfig<S>,
     frames: usize,
-) -> Result<PlanarBuffer, ElasticError> {
+) -> Result<PlanarBuffer, ElasticError>
+where
+    S: HasPool<f32>,
+{
     let channels = u16::try_from(config.channels())
         .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
     let sample_rate =
         NonZeroU32::new(config.sample_rate()).ok_or(ElasticError::InvalidSampleRate)?;
     PlanarBuffer::new(
-        config.pool(),
+        config.pools(),
         AudioSpec::new(channels, sample_rate),
         FrameCount::new(frames),
     )
@@ -27,7 +31,7 @@ pub(super) fn signal_error(error: SignalError) -> ElasticError {
     match error {
         SignalError::ChannelCountZero => ElasticError::InvalidChannelCount,
         SignalError::SampleCountOverflow { .. } => ElasticError::SampleCountOverflow,
-        SignalError::PoolCapacity { .. } => ElasticError::SamplePoolBudgetExhausted,
+        SignalError::PoolCapacity { .. } => ElasticError::PoolCapacity,
         SignalError::Shape { .. }
         | SignalError::IncompleteFrame { .. }
         | SignalError::FrameRange { .. }
@@ -56,11 +60,14 @@ pub(super) struct InputBuffer {
 }
 
 impl InputBuffer {
-    pub(super) fn new(
-        config: &ElasticConfig,
+    pub(super) fn new<S>(
+        config: &ElasticConfig<S>,
         max_input_frames: usize,
         max_source_frames: usize,
-    ) -> Result<Self, ElasticError> {
+    ) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let capacity = max_input_frames
             .checked_add(max_source_frames)
             .ok_or(ElasticError::SampleCountOverflow)?;

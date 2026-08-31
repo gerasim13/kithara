@@ -8,16 +8,21 @@ use kithara::{
         WriteSide,
         index::schema::{ArchivedPinsIndexFile, PinsIndexFile},
     },
-    bufpool::BytePool,
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::temp_dir;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
 
 /// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ReadSide>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let mut buf = BytePool::default().get_with(|b| b.resize(len, 0));
+    let pools = pools();
+    let mut buf = pools
+        .get_with_len::<u8>(len)
+        .expect("read buffer fits the test pool budget");
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf[..n].to_vec()
 }
@@ -56,8 +61,8 @@ fn read_pins_file(root: &Path) -> Option<Vec<String>> {
 fn asset_scope_with_root(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
-) -> AssetScope {
-    AssetStore::builder()
+) -> AssetScope<TestPools> {
+    AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })
@@ -90,7 +95,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     writer.write_at(0, &payload).unwrap();
     let res = writer.commit(Some(payload.len() as u64)).unwrap();
 
-    let mut read_back = BytePool::default().get();
+    let mut read_back = pools().get::<u8>();
     res.read_into(&mut read_back).unwrap();
     assert_eq!(&*read_back, &payload[..]);
 
@@ -124,7 +129,7 @@ fn atomic_resource_persistence(
     }
 
     let res = scope.store().open_resource(&key, None).unwrap();
-    let mut buf = BytePool::default().get();
+    let mut buf = pools().get::<u8>();
     res.read_into(&mut buf).unwrap();
     assert_eq!(&*buf, payload);
 }
@@ -184,7 +189,7 @@ fn mixed_resource_persistence_across_reopen(temp_dir: kithara_integration_tests:
     }
 
     let atomic = scope.store().open_resource(&atomic_key, None).unwrap();
-    let mut atomic_read = BytePool::default().get();
+    let mut atomic_read = pools().get::<u8>();
     atomic.read_into(&mut atomic_read).unwrap();
     assert_eq!(&*atomic_read, &atomic_payload[..]);
 
@@ -216,11 +221,12 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
             .open_resource(&key_reader, None)
             .unwrap();
         res.wait_range(0..payload_len_reader).unwrap();
-        let mut buf = BytePool::default()
-            .get_with(|b| b.resize(usize::try_from(payload_len_reader).unwrap_or(0), 0));
+        let pools = pools();
+        let mut buf = pools
+            .get_with_len::<u8>(usize::try_from(payload_len_reader).unwrap_or(0))
+            .expect("read buffer fits the test pool budget");
         let n = res.read_at(0, &mut buf).unwrap();
-        buf.truncate(n);
-        buf.to_vec()
+        buf[..n].to_vec()
     });
 
     let payload_writer = payload.clone();
@@ -255,7 +261,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let playlist = pending(scope.store().acquire_resource(&playlist_key, None).unwrap());
     playlist.write_at(0, &playlist_bytes).unwrap();
     let playlist = playlist.commit(Some(playlist_bytes.len() as u64)).unwrap();
-    let mut playlist_read = BytePool::default().get();
+    let mut playlist_read = pools().get::<u8>();
     playlist.read_into(&mut playlist_read).unwrap();
     assert_eq!(&*playlist_read, &playlist_bytes[..]);
 
@@ -330,7 +336,7 @@ fn atomic_resource_roundtrip_with_different_paths(
     writer.write_at(0, &payload).unwrap();
     let res = writer.commit(Some(payload.len() as u64)).unwrap();
 
-    let mut read_back = BytePool::default().get();
+    let mut read_back = pools().get::<u8>();
     res.read_into(&mut read_back).unwrap();
     assert_eq!(&*read_back, &payload[..]);
 }
@@ -398,7 +404,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
     }
 
     for (res, expected_data) in resources {
-        let mut read_back = BytePool::default().get();
+        let mut read_back = pools().get::<u8>();
         res.read_into(&mut read_back).unwrap();
         assert_eq!(&*read_back, &expected_data[..]);
     }
@@ -448,7 +454,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
         let scope = asset_scope_with_root(&temp_dir, "asset-alpha");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
-        let mut buf = BytePool::default().get();
+        let mut buf = pools().get::<u8>();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[0], "asset-alpha data should be intact");
     }
@@ -461,7 +467,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: kithara_integration_tests::
         let scope = asset_scope_with_root(&temp_dir, "asset-gamma");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
-        let mut buf = BytePool::default().get();
+        let mut buf = pools().get::<u8>();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, payloads[2], "asset-gamma data should be intact");
     }
@@ -557,7 +563,7 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_integration_tests::T
         let scope = asset_scope_with_root(&temp_dir, "existing-asset");
         let key = scope.key(&resource("data.bin")).unwrap();
         let res = scope.store().open_resource(&key, None).unwrap();
-        let mut buf = BytePool::default().get();
+        let mut buf = pools().get::<u8>();
         res.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, b"existing data");
     }

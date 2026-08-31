@@ -1,13 +1,11 @@
-use std::{
-    array,
-    collections::{BTreeMap, btree_map::Entry},
-};
+mod ops;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use std::{array, collections::BTreeMap};
+
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
 use num_traits::cast::ToPrimitive;
 use realfft::{RealFftPlanner, RealToComplex, num_complex::Complex};
-use tracing::debug;
 
 use super::{
     Band,
@@ -32,8 +30,8 @@ impl Consts {
 }
 
 struct Partial {
-    written: Coverage,
     samples: SampleBuffer,
+    written: Coverage,
     seq: u64,
 }
 
@@ -45,39 +43,52 @@ struct Partial {
 pub struct WaveformAnalyzer {
     params: AnalysisParams,
     fft: Arc<dyn RealToComplex<f32>>,
-    bands: BTreeMap<u64, [f32; Band::COUNT]>,
-    partial: BTreeMap<u64, Partial>,
     fft_input: SampleBuffer,
-    hann: SampleBuffer,
-    sample_pool: SamplePool,
     fft_output: Vec<Complex<f32>>,
     fft_scratch: Vec<Complex<f32>>,
+    hann: SampleBuffer,
+    downmix: SampleBuffer,
+    bands: BTreeMap<u64, [f32; Band::COUNT]>,
+    partial: BTreeMap<u64, Partial>,
     band_bin_inv: [f32; Band::COUNT],
-    opened: u64,
     low_mid_bin: usize,
     mid_high_bin: usize,
+    opened: u64,
     window_hop: usize,
 }
 
 impl WaveformAnalyzer {
-    #[must_use]
-    pub fn new(sample_rate: u32, params: AnalysisParams, sample_pool: &SamplePool) -> Self {
+    /// Create a waveform analyzer using the registered sample pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when the FFT or window buffers do not fit the
+    /// shared region budget.
+    pub fn new<S>(
+        sample_rate: u32,
+        params: AnalysisParams,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let fft_size = params.fft_size().max(Consts::MIN_FFT_SIZE);
         let mut planner = RealFftPlanner::<f32>::new();
         let fft = planner.plan_fft_forward(fft_size);
-        let fft_input = sample_pool.get_with(|buffer| buffer.resize(fft_size, 0.0));
+        let fft_input = pools.get_with_len::<f32>(fft_size)?;
         let fft_output = fft.make_output_vec();
         let fft_scratch = fft.make_scratch_vec();
 
-        let hann = hann_window(fft_size, sample_pool);
+        let hann = hann_window(fft_size, pools)?;
         let bins = fft_output.len();
         let rate = sample_rate.to_f32().unwrap_or(0.0);
         let size_f = fft_size.to_f32().unwrap_or(1.0);
         let bin_hz = if size_f > 0.0 { rate / size_f } else { 0.0 };
         let low_mid_bin = crossover_bin(params.low_mid_hz(), bin_hz, bins);
         let mid_high_bin = crossover_bin(params.mid_high_hz(), bin_hz, bins).max(low_mid_bin);
-        // WHY: Normalize by bin count so wide bands do not outweigh narrow
-        // bands merely because they contain more bins.
+        // Per-band inverse bin count: divide summed energy by bandwidth so a
+        // wide band (mid/high) doesn't outweigh a narrow one (low) by sheer bin
+        // count. This makes each band an energy density (RMS-like).
         let inv = |count: usize| 1.0 / count.max(1).to_f32().unwrap_or(1.0);
         let band_bin_inv = [
             inv(low_mid_bin.saturating_sub(1)),
@@ -85,10 +96,11 @@ impl WaveformAnalyzer {
             inv(bins.saturating_sub(mid_high_bin)),
         ];
 
-        Self {
+        Ok(Self {
             params,
             fft,
             hann,
+            downmix: pools.get::<f32>(),
             low_mid_bin,
             mid_high_bin,
             band_bin_inv,
@@ -98,234 +110,78 @@ impl WaveformAnalyzer {
             window_hop: (fft_size / Consts::HOP_DIVISOR).max(1),
             bands: BTreeMap::new(),
             partial: BTreeMap::new(),
-            sample_pool: sample_pool.clone(),
             opened: 0,
-        }
-    }
-
-    fn evict_overflow(&mut self) {
-        while self.partial.len() > Consts::MAX_PARTIAL {
-            let oldest = self
-                .partial
-                .iter()
-                .min_by_key(|(_, partial)| partial.seq)
-                .map(|(index, _)| *index);
-            let Some(index) = oldest else {
-                return;
-            };
-            self.partial.remove(&index);
-            debug!(
-                index,
-                "waveform: partial window evicted; span left unanalysed"
-            );
-        }
-    }
-
-    fn hop(&self) -> u64 {
-        u64::try_from(self.window_hop).unwrap_or(1)
-    }
-
-    #[cfg(test)]
-    fn partial_len(&self) -> usize {
-        self.partial.len()
+        })
     }
 
     /// Fold one interleaved block starting at source frame `at`: downmix to
     /// mono (channel mean), scatter it into every window it touches and reduce
     /// every window the block completes. Blocks may arrive in any order, twice,
     /// or overlapping.
-    pub fn push(&mut self, pcm: &[f32], channels: usize, at: u64) {
+    /// # Errors
+    ///
+    /// Returns [`PoolError`] when downmix or partial-window storage cannot
+    /// grow under the shared region budget.
+    pub fn push<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+    ) -> Result<(), PoolError>
+    where
+        S: HasPool<f32>,
+    {
         if channels == 0 {
-            return;
+            return Ok(());
         }
         let frames = pcm.len() / channels;
         let Ok(span) = u64::try_from(frames) else {
-            return;
+            return Ok(());
         };
         if span == 0 {
-            return;
+            return Ok(());
         }
 
         let inv_channels = 1.0 / channels.to_f32().unwrap_or(1.0);
-        let mut mono = self
-            .sample_pool
-            .get_with(|buffer| buffer.resize(frames, 0.0));
-        for (dst, frame) in mono.iter_mut().zip(pcm.chunks_exact(channels)) {
+        self.downmix.ensure_len(frames)?;
+        self.downmix.truncate(frames);
+        for (dst, frame) in self.downmix.iter_mut().zip(pcm.chunks_exact(channels)) {
             *dst = frame.iter().sum::<f32>() * inv_channels;
         }
 
+        let mono = std::mem::replace(&mut self.downmix, pools.get::<f32>());
+        let result = self.push_mono(pools, &mono, at, span);
+        self.downmix = mono;
+        result
+    }
+
+    fn push_mono<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        mono: &[f32],
+        at: u64,
+        span: u64,
+    ) -> Result<(), PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let hop = self.hop();
         let size = self.size();
         let end = at.saturating_add(span);
-        // WHY: Overlap requires `k·hop < end` and `k·hop + size > at`.
+        // Windows overlapping `[at, end)`: `k·hop < end` and `k·hop + size > at`.
         let first = if at >= size { (at - size) / hop + 1 } else { 0 };
         let last = (end - 1) / hop;
 
         for index in first..=last {
-            self.scatter(index, &mono, at, end);
+            self.scatter(pools, index, mono, at, end)?;
         }
-        drop(mono);
 
         for index in first..=last {
             self.reduce_if_complete(index);
         }
         self.evict_overflow();
-    }
-
-    fn reduce(&mut self, index: u64) {
-        let bands = if self
-            .fft
-            .process_with_scratch(
-                &mut self.fft_input,
-                &mut self.fft_output,
-                &mut self.fft_scratch,
-            )
-            .is_ok()
-        {
-            self.window_bands()
-        } else {
-            [0.0; Band::COUNT]
-        };
-        self.bands.insert(index, bands);
-    }
-
-    fn reduce_if_complete(&mut self, index: u64) {
-        if self.bands.contains_key(&index) {
-            return;
-        }
-        let span = FrameRange::new(index.saturating_mul(self.hop()), self.size());
-        if !self
-            .partial
-            .get(&index)
-            .is_some_and(|partial| partial.written.contains(span))
-        {
-            return;
-        }
-        let Some(partial) = self.partial.remove(&index) else {
-            return;
-        };
-        for ((dst, &sample), &w) in self
-            .fft_input
-            .iter_mut()
-            .zip(partial.samples.iter())
-            .zip(self.hann.iter())
-        {
-            *dst = sample * w;
-        }
-        self.reduce(index);
-    }
-
-    fn reduce_padded(&mut self, extent: u64) {
-        if extent == 0 || extent >= self.size() {
-            return;
-        }
-        let Some(partial) = self.partial.remove(&0) else {
-            return;
-        };
-        let covered = usize::try_from(extent).unwrap_or(usize::MAX);
-        for (i, dst) in self.fft_input.iter_mut().enumerate() {
-            *dst = match partial.samples.get(i).filter(|_| i < covered) {
-                Some(sample) => sample * self.hann[i],
-                None => 0.0,
-            };
-        }
-        self.reduce(0);
-    }
-
-    #[cfg(test)]
-    fn reduced(&self, index: u64) -> Option<[f32; Band::COUNT]> {
-        self.bands.get(&index).copied()
-    }
-
-    pub(crate) fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
-        if resume.partials.len() > Consts::MAX_PARTIAL {
-            return Err(BlobError::Corrupt);
-        }
-
-        let mut bands = BTreeMap::new();
-        for (index, energy) in resume.bands {
-            bands.insert(index, energy);
-        }
-
-        let mut partial = BTreeMap::new();
-        for held in resume.partials {
-            if held.samples.len() != self.window_size()
-                || held.seq >= resume.opened
-                || bands.contains_key(&held.index)
-            {
-                return Err(BlobError::Corrupt);
-            }
-            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
-            if held
-                .written
-                .runs()
-                .iter()
-                .any(|range| range.start() < span.start() || range.end() > span.end())
-            {
-                return Err(BlobError::Corrupt);
-            }
-            partial.insert(
-                held.index,
-                Partial {
-                    samples: self.sample_pool.attach(held.samples.into_vec()),
-                    written: held.written,
-                    seq: held.seq,
-                },
-            );
-        }
-
-        self.bands = bands;
-        self.partial = partial;
-        self.opened = resume.opened;
         Ok(())
-    }
-
-    fn scatter(&mut self, index: u64, mono: &[f32], at: u64, end: u64) {
-        if self.bands.contains_key(&index) {
-            return;
-        }
-        let size = self.size();
-        let start = index.saturating_mul(self.hop());
-        let from = start.max(at);
-        let to = start.saturating_add(size).min(end);
-        let (Ok(offset), Ok(source), Ok(len)) = (
-            usize::try_from(from - start),
-            usize::try_from(from - at),
-            usize::try_from(to.saturating_sub(from)),
-        ) else {
-            return;
-        };
-        if len == 0 {
-            return;
-        }
-        let window_size = self.window_size();
-
-        let partial = match self.partial.entry(index) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let opened = self.opened;
-                self.opened = opened.saturating_add(1);
-                entry.insert(Partial {
-                    samples: self
-                        .sample_pool
-                        .get_with(|buffer| buffer.resize(window_size, 0.0)),
-                    written: Coverage::default(),
-                    seq: opened,
-                })
-            }
-        };
-        let (Some(dst), Some(src)) = (
-            partial.samples.get_mut(offset..offset + len),
-            mono.get(source..source + len),
-        ) else {
-            return;
-        };
-        dst.copy_from_slice(src);
-        partial.written.insert(FrameRange::new(from, to - from));
-    }
-
-    fn size(&self) -> u64 {
-        u64::try_from(self.fft_input.len()).unwrap_or(0)
     }
 
     /// Fold the band-energy series into per-bucket band heights, leaving the
@@ -366,42 +222,6 @@ impl WaveformAnalyzer {
         Waveform::from(out)
     }
 
-    fn window_bands(&self) -> [f32; Band::COUNT] {
-        // WHY: A constant offset must not color the low band.
-        let bins = &self.fft_output[1..];
-        let total: f32 = bins.iter().map(Complex::norm_sqr).sum();
-        let rms = (total / self.fft_input.len().to_f32().unwrap_or(1.0)).sqrt();
-        if rms < self.params.energy_floor() {
-            return [0.0; Band::COUNT];
-        }
-
-        let mut band = [0.0_f32; Band::COUNT];
-        for (i, c) in self.fft_output.iter().enumerate().skip(1) {
-            let energy = c.norm_sqr();
-            if i < self.low_mid_bin {
-                band[Band::Low.idx()] += energy;
-            } else if i < self.mid_high_bin {
-                band[Band::Mid.idx()] += energy;
-            } else {
-                band[Band::High.idx()] += energy;
-            }
-        }
-        array::from_fn(|i| band[i] * self.band_bin_inv[i])
-    }
-
-    fn window_count(&self, extent: Option<u64>) -> usize {
-        let slots = match extent {
-            Some(extent) if extent >= self.size() => (extent - self.size()) / self.hop() + 1,
-            Some(_) => u64::from(!self.bands.is_empty()),
-            None => self.bands.keys().next_back().map_or(0, |last| last + 1),
-        };
-        usize::try_from(slots).unwrap_or(usize::MAX)
-    }
-
-    fn window_size(&self) -> usize {
-        self.fft_input.len()
-    }
-
     pub(crate) fn write_resume(&self, out: &mut Vec<u8>) {
         let mut writer = Writer::new(out);
         writer.write_len(self.bands.len());
@@ -420,13 +240,75 @@ impl WaveformAnalyzer {
         }
         writer.write_u64(self.opened);
     }
+
+    pub(crate) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        resume: WaveformResume,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        if resume.partials.len() > Consts::MAX_PARTIAL {
+            return Err(BlobError::Corrupt);
+        }
+
+        let mut bands = BTreeMap::new();
+        for (index, energy) in resume.bands {
+            bands.insert(index, energy);
+        }
+
+        let mut partial = BTreeMap::new();
+        for held in resume.partials {
+            if held.samples.len() != self.window_size()
+                || held.seq >= resume.opened
+                || bands.contains_key(&held.index)
+            {
+                return Err(BlobError::Corrupt);
+            }
+            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
+            if held
+                .written
+                .runs()
+                .iter()
+                .any(|range| range.start() < span.start() || range.end() > span.end())
+            {
+                return Err(BlobError::Corrupt);
+            }
+            partial.insert(
+                held.index,
+                Partial {
+                    samples: sample_buffer(pools, &held.samples)?,
+                    written: held.written,
+                    seq: held.seq,
+                },
+            );
+        }
+
+        self.bands = bands;
+        self.partial = partial;
+        self.opened = resume.opened;
+        Ok(())
+    }
 }
 
-fn hann_window(size: usize, sample_pool: &SamplePool) -> SampleBuffer {
-    let mut hann = sample_pool.get_with(|buffer| buffer.resize(size, 0.0));
+fn sample_buffer<S>(pools: &PoolRegion<S>, samples: &[f32]) -> Result<SampleBuffer, BlobError>
+where
+    S: HasPool<f32>,
+{
+    let mut buffer = pools.get_with_len::<f32>(samples.len())?;
+    buffer.copy_from_slice(samples);
+    Ok(buffer)
+}
+
+fn hann_window<S>(size: usize, pools: &PoolRegion<S>) -> Result<SampleBuffer, PoolError>
+where
+    S: HasPool<f32>,
+{
+    let mut hann = pools.get_with_len::<f32>(size)?;
     if size <= 1 {
         hann.fill(1.0);
-        return hann;
+        return Ok(hann);
     }
     let denom = (size - 1).to_f32().unwrap_or(1.0);
     let scale = std::f32::consts::TAU / denom;
@@ -434,7 +316,7 @@ fn hann_window(size: usize, sample_pool: &SamplePool) -> SampleBuffer {
         let phase = scale * n.to_f32().unwrap_or(0.0);
         *sample = Consts::HANN_A0.mul_add(-phase.cos(), Consts::HANN_A0);
     }
-    hann
+    Ok(hann)
 }
 
 fn crossover_bin(hz: f32, bin_hz: f32, bins: usize) -> usize {
@@ -471,12 +353,14 @@ fn normalize_bands(
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
     use super::WaveformAnalyzer;
-    use crate::waveform::{AnalysisParams, bucket::Bucket};
+    use crate::{
+        test_pools::{TestPools, pools},
+        waveform::{AnalysisParams, bucket::Bucket},
+    };
 
     struct Consts;
 
@@ -487,17 +371,23 @@ mod tests {
 
     struct Pass {
         analyzer: WaveformAnalyzer,
+        pools: kithara_bufpool::PoolRegion<TestPools>,
     }
 
     impl Pass {
         fn new(params: AnalysisParams) -> Self {
+            let pools = pools();
             Self {
-                analyzer: WaveformAnalyzer::new(Consts::SR, params, &SamplePool::default()),
+                analyzer: WaveformAnalyzer::new(Consts::SR, params, &pools)
+                    .expect("waveform buffers fit the test region"),
+                pools,
             }
         }
 
         fn push(&mut self, pcm: &[f32], channels: usize, at: u64) {
-            self.analyzer.push(pcm, channels, at);
+            self.analyzer
+                .push(&self.pools, pcm, channels, at)
+                .expect("waveform buffers fit the test region");
         }
 
         fn whole(&mut self, pcm: &[f32], channels: usize, buckets: usize) -> Vec<Bucket> {

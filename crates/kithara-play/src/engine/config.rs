@@ -1,7 +1,7 @@
 use std::fmt;
 
 use bon::Builder;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::PoolRegion;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_warp::BeatGridId;
 
@@ -11,10 +11,10 @@ use crate::{
 };
 
 /// Configuration for the audio engine.
-#[derive(Clone, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct EngineConfig {
+pub struct EngineConfig<S> {
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,
     /// Master cancel token for the engine. The worker scheduler derives a
@@ -23,9 +23,9 @@ pub struct EngineConfig {
     pub(crate) cancel: Option<CancelToken>,
     /// Optional pre-bound dispatcher for isolated harnesses. Production
     /// engines receive their session when the owning Player enters a Host.
-    pub(crate) session: Option<Arc<dyn SessionDispatcher>>,
-    /// Sample pool for audio-thread scratch buffers.
-    pub(crate) sample_pool: SamplePool,
+    pub(crate) session: Option<Arc<dyn SessionDispatcher<S>>>,
+    /// Typed pool facade for audio-thread scratch buffers.
+    pub(crate) pools: PoolRegion<S>,
     /// EQ band layout per player. Default: 10-band log-spaced.
     #[builder(default = generate_log_spaced_bands(10))]
     pub(crate) eq_layout: Vec<EqBandConfig>,
@@ -40,14 +40,29 @@ pub struct EngineConfig {
     pub(crate) max_slots: usize,
 }
 
-impl fmt::Debug for EngineConfig {
+impl<S> Clone for EngineConfig<S> {
+    fn clone(&self) -> Self {
+        Self {
+            grid_id: self.grid_id,
+            cancel: self.cancel.clone(),
+            session: self.session.clone(),
+            pools: self.pools.clone(),
+            eq_layout: self.eq_layout.clone(),
+            channels: self.channels,
+            sample_rate: self.sample_rate,
+            max_slots: self.max_slots,
+        }
+    }
+}
+
+impl<S> fmt::Debug for EngineConfig<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("EngineConfig")
             .field("eq_layout", &self.eq_layout)
             .field("channels", &self.channels)
             .field("sample_rate", &self.sample_rate)
             .field("max_slots", &self.max_slots)
-            .field("sample_pool", &self.sample_pool)
+            .field("pools", &self.pools)
             .finish_non_exhaustive()
     }
 }

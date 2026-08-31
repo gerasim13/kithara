@@ -14,24 +14,51 @@
 
 # kithara-bufpool
 
-Generic sharded buffer pool for zero-allocation hot paths. Provides thread-safe, RAII-guarded buffers that automatically return to the pool on drop. Supports any type implementing the `Reuse` trait (`Vec<u8>`, `Vec<f32>`, etc.).
+Typed sharded buffers behind one cloneable region facade. A composition root
+declares a closed schema, configures every pool explicitly, and shares one hard
+byte budget across built-in byte/sample buffers and registered vector or string
+keys.
 
 ## Usage
 
 ```rust
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{
+    OverallBudget, PoolAlias, PoolConfig, PoolError, StringKey, VecKey, pool_schema,
+};
 
-// Use the default singleton — typically constructed once at the top of the
-// app and injected through your config structs. Library code should read
-// the pool from injected config rather than calling `default()` itself.
-let pool = SamplePool::default();
-let mut buf = pool.get();
-buf.resize(1024, 0.0);
-// `buf` returns to the pool on drop.
+enum CommandsTag {}
+enum TextTag {}
 
-let bytes = BytePool::default();
-let mut chunk = bytes.get();
-chunk.resize(4096, 0);
+type Commands = PoolAlias<CommandsTag, VecKey<u32, 1>>;
+type Text = PoolAlias<TextTag, StringKey<1>>;
+
+pool_schema! {
+    pub AppPools {
+        bytes: u8,
+        samples: f32,
+        commands: Commands,
+        text: Text,
+    }
+}
+
+fn build() -> Result<(), PoolError> {
+    let config = || PoolConfig::builder().max_buffers(32).build();
+    let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+        .bytes(config())
+        .samples(config())
+        .commands(config())
+        .text(config())
+        .build()?;
+
+    let mut samples = pools.get_with_len::<f32>(1024)?;
+    samples.fill(0.0);
+    let mut commands = pools.get::<Commands>();
+    commands.try_push(7)?;
+    let mut text = pools.get::<Text>();
+    text.try_push_str("ready")?;
+    let _bytes = pools.get::<u8>();
+    Ok(())
+}
 ```
 
 ## Public Types
@@ -40,26 +67,35 @@ chunk.resize(4096, 0);
 
 <tr><th>Type</th><th>Role</th></tr>
 
-<tr><td><code>BytePool</code></td><td>Sharded pool of <code>Vec&lt;u8&gt;</code> for I/O and segment buffers</td></tr>
+<tr><td><code>PoolRegion&lt;S&gt;</code></td><td>Cloneable facade over one closed schema and shared hard budget</td></tr>
 
-<tr><td><code>SamplePool</code></td><td>Sharded pool of <code>Vec&lt;f32&gt;</code> for decoded samples</td></tr>
+<tr><td><code>pool_schema!</code></td><td>Declares the registered keys and their typestate builder</td></tr>
 
-<tr><td><code>SampleBuffer</code></td><td>RAII handle for a pooled sample buffer</td></tr>
+<tr><td><code>PoolConfig</code></td><td>Retention, initial allocation, trim, and per-pool share policy</td></tr>
 
-<tr><td><code>ByteBudget</code></td><td>Soft cap on outstanding bytes; returns <code>BudgetExhausted</code> when exceeded</td></tr>
+<tr><td><code>ByteBuffer</code> / <code>SampleBuffer</code></td><td>Checked RAII guards returned to their typed pool on drop</td></tr>
 
-<tr><td><code>BudgetExhausted</code></td><td>Error returned when a budgeted allocation would breach <code>ByteBudget</code></td></tr>
+<tr><td><code>VecKey</code> / <code>StringKey</code></td><td>Safe registered storage shapes for crate-owned aliases</td></tr>
+
+<tr><td><code>PooledVec</code> / <code>PooledString</code></td><td>Checked guards for registered vector and UTF-8 storage</td></tr>
+
+<tr><td><code>OverallBudget</code> / <code>Percent</code></td><td>Region hard cap and an optional per-pool hard ceiling</td></tr>
+
+<tr><td><code>PoolError</code></td><td>Typed construction, capacity, allocation, and budget failure</td></tr>
 
 </table>
 
-Advanced pool types are exported for workspace-internal integrations, but most callers use `BytePool`, `SamplePool`, and their RAII handles.
-
 ## Role in the workspace
 
-The audio, decode, stream, storage, and network layers receive pools through their configs so each surface owns its sizing policy. `get`/`put` stay lock-free on the hot path.
+The app and FFI composition roots own concrete schemas. Lower layers are
+generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
+Acquisition and return stay lock-free; every capacity increase is checked
+against both the region and selected-pool limits.
 
 ## Features
 
 - `perf` — enables `hotpath` instrumentation on pool hot paths.
+- `test-utils` — exposes the application-shaped `testing::TestPools` schema for
+  workspace test harnesses.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

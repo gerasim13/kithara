@@ -1,10 +1,14 @@
 use std::sync::atomic::Ordering;
 
+use kithara_bufpool::HasPool;
 use kithara_test_utils::kithara;
 
 use super::{HlsVariant, core::NO_PREFETCH_DEFERRAL};
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Record the cursor byte at which the front-of-queue segment enters the
     /// look-ahead window, or [`NO_PREFETCH_DEFERRAL`] when nothing is
     /// deferred. Written by [`HlsVariant::dispatch`] on every pass, so it

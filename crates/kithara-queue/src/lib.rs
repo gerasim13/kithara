@@ -8,6 +8,8 @@ mod error;
 mod loader;
 mod navigation;
 mod queue;
+#[cfg(test)]
+pub(crate) use kithara_bufpool::testing as test_pools;
 mod track;
 
 pub use config::QueueConfig;

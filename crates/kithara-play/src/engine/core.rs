@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
@@ -26,32 +26,29 @@ type SlotHandle = SlotControl;
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub struct EngineImpl {
+pub struct EngineImpl<S> {
     running: AtomicBool,
     master_volume: AtomicF32,
-    config: EngineConfig,
+    config: EngineConfig<S>,
+    eq_layout: Mutex<Vec<EqBandConfig>>,
     #[field(get, vis = "pub(crate)")]
     bus: EventBus,
-    eq_layout: Mutex<Vec<EqBandConfig>>,
     player_id: Mutex<Option<PlayerId>>,
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
-    #[field(get, vis = "pub(crate)")]
-    sample_pool: SamplePool,
-    session: SessionHandle,
+    session: SessionHandle<S>,
 }
 
-impl EngineImpl {
+impl<S> EngineImpl<S> {
     /// Create a new engine with the given configuration.
     #[must_use]
-    pub fn new(mut config: EngineConfig, bus: EventBus) -> Self {
+    pub fn new(mut config: EngineConfig<S>, bus: EventBus) -> Self {
         let session = config
             .session
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
-        let resolved_pool = config.sample_pool.clone();
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
             config,
@@ -59,7 +56,6 @@ impl EngineImpl {
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
-            sample_pool: resolved_pool,
             player_id: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
@@ -68,82 +64,22 @@ impl EngineImpl {
         }
     }
 
-    pub fn active_slots(&self) -> Vec<SlotId> {
-        self.slots.lock().ids()
-    }
-
-    pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
-        if !self.running.load(Ordering::Acquire) {
-            return Err(PlayError::EngineNotRunning);
-        }
-
-        {
-            let slots = self.slots.lock();
-            if slots.len() >= self.config.max_slots {
-                return Err(PlayError::ArenaFull);
-            }
-        }
-
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        let allocated = self.session.allocate_slot(player_id)?;
-        let slot_id = allocated.slot;
-
-        self.slots.lock().insert(slot_id, allocated.control);
-
-        debug!(?slot_id, player_id, "slot allocated");
-        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
-        Ok(slot_id)
-    }
-
-    pub(crate) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
-        self.session.bind(binding)
-    }
-
-    pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
-        let slots = self.slots.lock();
-        if let Some(handle) = slots.get(slot) {
-            handle.begin_seek(position);
-        }
-        drop(slots);
-    }
-
     pub(crate) fn cancel(&self) {
         if let Some(cancel) = &self.config.cancel {
             cancel.cancel();
         }
     }
 
+    pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+        self.session.bind(binding)
+    }
+
+    pub(crate) const fn pools(&self) -> &PoolRegion<S> {
+        &self.config.pools
+    }
+
     pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
         self.config.cancel.clone()
-    }
-
-    /// Explicitly detach this player from its session.
-    ///
-    /// A failed detach retains the registered identity so the owning Host can
-    /// retry or report the still-live member instead of losing lifecycle
-    /// ownership. Repeated successful calls are no-ops.
-    pub fn close(&self) -> Result<(), PlayError> {
-        let _start = self.start_lock.lock();
-        let Some(player_id) = *self.player_id.lock() else {
-            return Ok(());
-        };
-
-        if self.running.load(Ordering::Acquire) {
-            self.session.stop_player(player_id)?;
-            self.slots.lock().clear();
-            self.running.store(false, Ordering::Release);
-            self.emit(EngineEvent::Stopped);
-        }
-
-        self.session.unregister_player(player_id)?;
-        *self.player_id.lock() = None;
-        Ok(())
-    }
-
-    /// Store the desired gain without dispatching: the mixer batch already
-    /// actuated the graph.
-    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
-        self.master_volume.store(level, Ordering::Relaxed);
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
@@ -169,6 +105,10 @@ impl EngineImpl {
         }
     }
 
+    pub(crate) fn eq_band_count(&self) -> usize {
+        self.eq_layout.lock().len()
+    }
+
     fn emit(&self, event: EngineEvent) {
         self.bus.publish(event);
     }
@@ -183,7 +123,7 @@ impl EngineImpl {
             self.config.grid_id,
             self.bus.clone(),
             self.eq_layout.lock().clone(),
-            self.sample_pool.clone(),
+            self.pools().clone(),
             self.config.sample_rate,
         )?;
         *player_id = Some(id);
@@ -191,8 +131,151 @@ impl EngineImpl {
         Ok(id)
     }
 
-    pub(crate) fn eq_band_count(&self) -> usize {
-        self.eq_layout.lock().len()
+    pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
+        self.slots
+            .lock()
+            .get_mut(slot)
+            .and_then(|handle| handle.notif_rx.try_pop())
+    }
+
+    /// Runtime handle captured at engine creation.
+    ///
+    /// Use when building a shared
+    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
+    /// land on the same runtime the audio engine observes, then pass the
+    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
+    #[must_use]
+    pub const fn runtime(&self) -> Option<&RuntimeHandle> {
+        self.runtime.as_ref()
+    }
+
+    pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
+        let mut slots = self.slots.lock();
+        let result = match slots.get_mut(slot) {
+            Some(handle) => {
+                // A resource crossing to the audio thread leaves its seek handle behind: beginning
+                // a seek takes locks, so it stays on this side. Bind only after the command is
+                // accepted; the exact resource generation is released when it returns as trash.
+                let seek = match &cmd {
+                    PlayerCmd::LoadTrack { resource, item_id } => {
+                        resource.seek_handle().map(|handle| (*item_id, handle))
+                    }
+                    _ => None,
+                };
+                let result = handle
+                    .cmd_tx
+                    .try_push(cmd)
+                    .map_err(|_| PlayError::SlotChannelFull { slot });
+                if result.is_ok()
+                    && let Some((item_id, seek)) = seek
+                {
+                    handle.bind_seek(item_id, seek);
+                }
+                result
+            }
+            None => Err(PlayError::SlotNotFound(slot)),
+        };
+        drop(slots);
+        result
+    }
+
+    pub(crate) fn begin_slot_seek(&self, slot: SlotId, position: Duration) {
+        let slots = self.slots.lock();
+        if let Some(handle) = slots.get(slot) {
+            handle.begin_seek(position);
+        }
+        drop(slots);
+    }
+
+    pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        self.session.set_player_eq_gain(player_id, band, gain_db)
+    }
+
+    pub(crate) fn set_master_eq_layout(
+        &self,
+        eq_layout: Vec<EqBandConfig>,
+    ) -> Result<(), PlayError> {
+        let player_id = *self.player_id.lock();
+        if let Some(player_id) = player_id {
+            self.session
+                .set_player_eq_layout(player_id, eq_layout.clone())?;
+        }
+        *self.eq_layout.lock() = eq_layout;
+        Ok(())
+    }
+
+    pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        self.session
+            .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
+    }
+
+    delegate::delegate! {
+        to self.slots.lock() {
+            pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
+            #[call(playback)]
+            pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+        }
+    }
+
+    pub(crate) fn tick(&self) -> Result<(), PlayError> {
+        self.session.tick()
+    }
+    pub fn active_slots(&self) -> Vec<SlotId> {
+        self.slots.lock().ids()
+    }
+
+    /// Explicitly detach this player from its session.
+    ///
+    /// A failed detach retains the registered identity so the owning Host can
+    /// retry or report the still-live member instead of losing lifecycle
+    /// ownership. Repeated successful calls are no-ops.
+    pub fn close(&self) -> Result<(), PlayError> {
+        let _start = self.start_lock.lock();
+        let Some(player_id) = *self.player_id.lock() else {
+            return Ok(());
+        };
+
+        if self.running.load(Ordering::Acquire) {
+            self.session.stop_player(player_id)?;
+            self.slots.lock().clear();
+            self.running.store(false, Ordering::Release);
+            self.emit(EngineEvent::Stopped);
+        }
+
+        self.session.unregister_player(player_id)?;
+        *self.player_id.lock() = None;
+        Ok(())
+    }
+
+    pub fn allocate_slot(&self) -> Result<SlotId, PlayError> {
+        if !self.running.load(Ordering::Acquire) {
+            return Err(PlayError::EngineNotRunning);
+        }
+
+        {
+            let slots = self.slots.lock();
+            if slots.len() >= self.config.max_slots {
+                return Err(PlayError::ArenaFull);
+            }
+        }
+
+        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let allocated = self.session.allocate_slot(player_id)?;
+        let slot_id = allocated.slot;
+
+        self.slots.lock().insert(slot_id, allocated.control);
+
+        debug!(?slot_id, player_id, "slot allocated");
+        self.emit(EngineEvent::SlotAllocated { slot: slot_id });
+        Ok(slot_id)
+    }
+
+    /// Store the desired gain without dispatching: the mixer batch already
+    /// actuated the graph.
+    pub(crate) fn commit_desired_master_volume(&self, level: f32) {
+        self.master_volume.store(level, Ordering::Relaxed);
     }
 
     pub fn invalidate_audio_route(&self, reason: &str) -> Result<(), PlayError> {
@@ -228,15 +311,19 @@ impl EngineImpl {
     pub fn master_volume(&self) -> f32 {
         self.master_volume.load(Ordering::Relaxed)
     }
+
     pub const fn max_slots(&self) -> usize {
         self.config.max_slots
     }
 
-    pub(crate) fn pop_slot_notification(&self, slot: SlotId) -> Option<PlayerNotification> {
-        self.slots
-            .lock()
-            .get_mut(slot)
-            .and_then(|handle| handle.notif_rx.try_pop())
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn start_lock(&self) -> &Mutex<()> {
+        &self.start_lock
+    }
+
+    #[cfg(any(test, feature = "probe"))]
+    pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
+        &self.session
     }
 
     #[cfg(any(test, feature = "probe"))]
@@ -266,75 +353,6 @@ impl EngineImpl {
         Ok(())
     }
 
-    /// Runtime handle captured at engine creation.
-    ///
-    /// Use when building a shared
-    /// [`Downloader`](kithara_stream::dl::Downloader) so its async tasks
-    /// land on the same runtime the audio engine observes, then pass the
-    /// downloader through [`ResourceConfig::with_downloader`](super::config::ResourceConfig::with_downloader).
-    #[must_use]
-    pub const fn runtime(&self) -> Option<&RuntimeHandle> {
-        self.runtime.as_ref()
-    }
-
-    pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let mut slots = self.slots.lock();
-        let result = match slots.get_mut(slot) {
-            Some(handle) => {
-                // WHY: A resource crossing to the audio thread leaves its seek handle behind: beginning a seek takes locks, so it stays on this
-                // side.
-                let seek = match &cmd {
-                    PlayerCmd::LoadTrack { resource, item_id } => {
-                        resource.seek_handle().map(|handle| (*item_id, handle))
-                    }
-                    _ => None,
-                };
-                let result = handle
-                    .cmd_tx
-                    .try_push(cmd)
-                    .map_err(|_| PlayError::SlotChannelFull { slot });
-                if result.is_ok()
-                    && let Some((item_id, seek)) = seek
-                {
-                    handle.bind_seek(item_id, seek);
-                }
-                result
-            }
-            None => Err(PlayError::SlotNotFound(slot)),
-        };
-        drop(slots);
-        result
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn session_handle(&self) -> &SessionHandle {
-        &self.session
-    }
-
-    pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        self.session.set_player_eq_gain(player_id, band, gain_db)
-    }
-
-    pub(crate) fn set_master_eq_layout(
-        &self,
-        eq_layout: Vec<EqBandConfig>,
-    ) -> Result<(), PlayError> {
-        let player_id = *self.player_id.lock();
-        if let Some(player_id) = player_id {
-            self.session
-                .set_player_eq_layout(player_id, eq_layout.clone())?;
-        }
-        *self.eq_layout.lock() = eq_layout;
-        Ok(())
-    }
-
-    pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
-        self.session
-            .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
-    }
-
     pub fn start(&self) -> Result<(), PlayError> {
         let _start = self.start_lock.lock();
         if self.running.load(Ordering::Acquire) {
@@ -359,11 +377,6 @@ impl EngineImpl {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn start_lock(&self) -> &Mutex<()> {
-        &self.start_lock
-    }
-
     pub fn stop(&self) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
@@ -382,17 +395,5 @@ impl EngineImpl {
 
     pub fn subscribe(&self) -> kithara_events::EventReceiver {
         self.bus.subscribe()
-    }
-
-    pub(crate) fn tick(&self) -> Result<(), PlayError> {
-        self.session.tick()
-    }
-
-    delegate::delegate! {
-        to self.slots.lock() {
-            pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
-            #[call(playback)]
-            pub(crate) fn slot_playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
-        }
     }
 }

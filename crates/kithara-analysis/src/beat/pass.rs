@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 use tracing::warn;
 
@@ -19,19 +20,82 @@ impl<B> BeatPass<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn new(config: BeatPassConfig<B>) -> Self {
+    pub(crate) fn new<S>(config: BeatPassConfig<B, S>) -> Self
+    where
+        S: HasPool<f32>,
+    {
         Self {
             analyzer: BeatAnalyzer::new(config),
         }
     }
 
-    pub(crate) fn snapshot(
+    delegate::delegate! {
+        to self.analyzer {
+            pub(crate) fn apply_detection(&mut self, output: DetectOutput);
+            pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
+        }
+    }
+
+    pub(crate) fn push<S>(
         &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+        detector: &mut dyn BeatDetector,
+    ) where
+        S: HasPool<f32>,
+    {
+        self.analyzer
+            .push_interleaved(pools, pcm, channels, at, detector);
+    }
+
+    pub(crate) fn push_deferred<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        pcm: &[f32],
+        channels: usize,
+        at: u64,
+    ) where
+        S: HasPool<f32>,
+    {
+        self.analyzer
+            .push_interleaved_deferred(pools, pcm, channels, at);
+    }
+
+    pub(crate) fn prepare_detection<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        trailing: bool,
+    ) -> Option<DetectRequest>
+    where
+        S: HasPool<f32>,
+    {
+        self.analyzer.prepare_detection(pools, trailing)
+    }
+
+    pub(crate) fn restore<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
+        resume: BeatResume,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
+        self.analyzer.restore(pools, resume)
+    }
+
+    pub(crate) fn snapshot<S>(
+        &mut self,
+        pools: &PoolRegion<S>,
         detector: &mut dyn BeatDetector,
         ending: bool,
         extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
-        match self.analyzer.snapshot(detector, ending) {
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    where
+        S: HasPool<f32>,
+    {
+        match self.analyzer.snapshot(pools, detector, ending) {
             Ok(grid) => {
                 let rate = self.analyzer.source_rate();
                 let grid = match extent {
@@ -65,25 +129,6 @@ where
                 warn!(?error, "beat analysis failed; leaving the beat slot empty");
                 None
             }
-        }
-    }
-
-    delegate::delegate! {
-        to self.analyzer {
-            #[call(push_interleaved)]
-            pub(crate) fn push(
-                &mut self,
-                pcm: &[f32],
-                channels: usize,
-                at: u64,
-                detector: &mut dyn BeatDetector,
-            );
-            #[call(push_interleaved_deferred)]
-            pub(crate) fn push_deferred(&mut self, pcm: &[f32], channels: usize, at: u64);
-            pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<DetectRequest>;
-            pub(crate) fn apply_detection(&mut self, output: DetectOutput);
-            pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>);
-            pub(crate) fn restore(&mut self, resume: BeatResume) -> Result<(), BlobError>;
         }
     }
 }

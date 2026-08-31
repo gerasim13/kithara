@@ -18,22 +18,27 @@ impl DriverIo for MemDriver {
                 "memory commit: len {end} does not fit usize: {err}"
             ))
         })?;
-        // WHY: Buffer released by a prior commit (repeat commit, no `reactivate`): it no longer covers `end`, so the published snapshot
-        // stays authoritative.
+        // Buffer released by a prior commit (repeat commit, no `reactivate`): it
+        // no longer covers `end`, so the published snapshot stays authoritative.
         if end_usize > state.buf.len() {
             return Ok(());
         }
-        // WHY: Publish (or clear) the snapshot AND release the working buffer atomically under the state lock, then shrink `state.len` to
-        // the committed length.
+        // Publish (or clear) the snapshot AND release the working buffer
+        // atomically under the state lock, then shrink `state.len` to the
+        // committed length. `read_at` is working-buffer-first under this same
+        // lock, so a concurrent slow-path read either sees the full pre-commit
+        // buffer or — post-commit — an empty buffer (length 0) and falls through
+        // to the snapshot; it can never read a freed buffer as if it held data
+        // (the bug a non-atomic publish caused). Zero-length committed publishes
+        // no snapshot — matching the mmap `Empty` contract (`committed_len()` →
+        // `None`).
         if end_usize == 0 {
             self.committed.store(None);
         } else {
             let snapshot = state.buf[..end_usize].to_vec();
             self.committed.store(Some(Arc::new(snapshot)));
         }
-        // WHY: Release the working buffer THROUGH THE POOL: replacing it drops the old `PooledOwned`, whose `Drop` returns the buffer to the
-        // pool and credits its bytes back to the byte budget (and trims it).
-        state.buf = state.pool.get();
+        state.buf.renew();
         state.len = end;
         drop(state);
         Ok(())
@@ -51,8 +56,13 @@ impl DriverIo for MemDriver {
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // WHY: Repopulate the working buffer from the committed snapshot so the re-download can rewrite incrementally on top of the prior
-        // generation (e.g. extend `hello` -> `hello world`).
+        // Repopulate the working buffer from the committed snapshot so the
+        // re-download can rewrite incrementally on top of the prior generation
+        // (e.g. extend `hello` -> `hello world`). The snapshot stays published:
+        // reads keep taking the lock-free snapshot fast path and observe the
+        // immutable prior generation until the next `commit` atomically swaps in
+        // the new one — never the half-rewritten working buffer. The lifecycle
+        // flag (`ResourceCore::committed`) is what flips to active; the snapshot
         if let Some(snapshot) = self.committed.load_full() {
             let mut state = self.state.lock();
             let snap_len = snapshot.len();
@@ -75,9 +85,15 @@ impl DriverIo for MemDriver {
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock();
 
-        // WHY: Working-buffer first. While a generation is in flight (initial write, or a re-download rewriting on top of a still-published
-        // prior snapshot) the working buffer holds the *current* bytes - the writer's own read-back (decrypt on commit) must observe them,
-        // not the stale snapshot.
+        // Working-buffer first. While a generation is in flight (initial write,
+        // or a re-download rewriting on top of a still-published prior snapshot)
+        // the working buffer holds the *current* bytes — the writer's own
+        // read-back (decrypt on commit) must observe them, not the stale
+        // snapshot. `commit` frees the working buffer (length 0) AND publishes
+        // the snapshot atomically under this same lock, so once the buffer no
+        // longer covers `offset` the committed snapshot is the source of truth.
+        // `load_full` keeps the `Arc` valid even if a later `reactivate` clears
+        // `committed` after we drop the lock.
         let start = usize::try_from(offset).map_err(|err| {
             StorageError::Failed(format!(
                 "memory read: offset {offset} does not fit usize: {err}"
@@ -195,15 +211,20 @@ mod tests {
 
     use kithara_platform::{sync::Arc, time::Duration};
 
-    use crate::backend::{
-        memory::driver::{MemDriver, MemOptions},
-        traits::{Driver, DriverIo},
+    use crate::{
+        backend::{
+            memory::driver::{MemDriver, MemOptions},
+            traits::{Driver, DriverIo},
+        },
+        test_pools::{byte_buffer, pools},
     };
 
     #[kithara::test]
     fn committed_snapshot_from_initial_data() {
+        let pools = pools();
         let (driver, _state) = MemDriver::open(
             MemOptions::builder()
+                .buffer(byte_buffer(&pools))
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )
@@ -235,8 +256,10 @@ mod tests {
     /// (index out of range) on a reader thread.
     #[kithara::test(timeout(Duration::from_secs(30)))]
     fn concurrent_commit_reactivate_and_reads_never_panic() {
+        let pools = pools();
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open must succeed");
         driver
             .write_at(0, b"hello world", false)
             .expect("active write must succeed");
@@ -277,8 +300,10 @@ mod tests {
 
     #[kithara::test]
     fn read_committed_without_snapshot_returns_none() {
+        let pools = pools();
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open empty must succeed");
 
         assert_eq!(driver.committed_len(), None);
 
@@ -294,8 +319,10 @@ mod tests {
 
     #[kithara::test]
     fn commit_frees_working_buffer_and_reactivate_restores_it() {
+        let pools = pools();
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open empty must succeed");
 
         driver
             .write_at(0, b"hello world", false)
@@ -307,7 +334,7 @@ mod tests {
         // The committed bytes live in the snapshot, not the working buffer: the
         // working buffer is released back to the pool (replaced by an empty one),
         // so it no longer holds a second copy. (Asserting `len`, not `capacity`,
-        // since the pool retains/recycles capacity for reuse — see `Reuse`.)
+        // since the pool can retain the released capacity for reuse.)
         assert_eq!(
             driver.state.lock().buf.len(),
             0,
@@ -353,15 +380,21 @@ mod tests {
 
     #[kithara::test]
     fn zero_length_committed_publishes_no_snapshot() {
+        let pools = pools();
         // Empty initial data: committed but length 0 → no snapshot (matches mmap `Empty`).
-        let (driver, _state) =
-            MemDriver::open(MemOptions::builder().initial_data(Vec::new()).build())
-                .expect("open with empty initial data must succeed");
+        let (driver, _state) = MemDriver::open(
+            MemOptions::builder()
+                .buffer(byte_buffer(&pools))
+                .initial_data(Vec::new())
+                .build(),
+        )
+        .expect("open with empty initial data must succeed");
         assert_eq!(driver.committed_len(), None);
 
         // commit(Some(0)) on an empty buffer likewise publishes no snapshot.
         let (driver, _state) =
-            MemDriver::open(MemOptions::builder().build()).expect("open empty must succeed");
+            MemDriver::open(MemOptions::builder().buffer(byte_buffer(&pools)).build())
+                .expect("open empty must succeed");
         driver.commit(Some(0)).expect("commit(0) must succeed");
         assert_eq!(driver.committed_len(), None);
     }

@@ -1,6 +1,7 @@
 use std::io::{Error as IoError, ErrorKind};
 
 use kithara_abr::PendingAbrClaim;
+use kithara_bufpool::HasPool;
 use kithara_events::VariantIndex;
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_stream::{
@@ -14,7 +15,10 @@ use crate::{
     stream::session::{HlsSession, HlsSessionReader},
 };
 
-impl HlsCoord {
+impl<S> HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(in crate::stream) fn prepare_planned_variant_reader(
         &self,
         plan: VariantReaderPlan,

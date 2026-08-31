@@ -2,6 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara_assets::AssetStore;
 use kithara_audio::AudioObserver;
+use kithara_bufpool::HasPool;
 use kithara_events::{
     DownloaderEvent, Envelope, Event, EventBus, ScopeLabel, TrackId, TrackStatus,
 };
@@ -14,7 +15,7 @@ use kithara_platform::{
         task::{JoinHandle, spawn},
     },
 };
-use kithara_play::{Resource, ResourceConfig, player::PlayerControl};
+use kithara_play::{Resource, ResourceConfig, ResourceSrc, player::PlayerControl};
 use kithara_test_utils::kithara;
 
 use crate::{
@@ -25,34 +26,40 @@ use crate::{
 
 /// Async track loader: `ResourceConfig` -> `Resource`, run in two
 /// isolated permit lanes with one abortable attempt per track.
-pub(crate) struct Loader {
+pub(crate) struct Loader<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    cancel: CancelToken,
     /// User-selection lane: one dedicated permit, isolated from prefetch.
     interactive_lane: Arc<Semaphore>,
+    player: PlayerControl<S>,
     /// Background prefetch lane (`max_concurrent_loads` permits).
     prefetch_lane: Arc<Semaphore>,
     /// Same `Arc<Tracks>` as `Queue::tracks`: owns per-track status and the live attempt,
     /// so both change under one lock.
-    tracks: Arc<Tracks>,
-    store: AssetStore,
-    cancel: CancelToken,
-    player: PlayerControl,
+    tracks: Arc<Tracks<S>>,
+    store: AssetStore<S>,
 }
 
-impl Loader {
+impl<S> Loader<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     pub(crate) fn new(
-        player: PlayerControl,
-        store: AssetStore,
+        player: PlayerControl<S>,
+        store: AssetStore<S>,
         max_concurrent_loads: NonZeroUsize,
-        tracks: Arc<Tracks>,
+        tracks: Arc<Tracks<S>>,
         cancel: CancelToken,
     ) -> Self {
         Self {
             cancel,
+            interactive_lane: Arc::new(Semaphore::new(1)),
             player,
+            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
             tracks,
             store,
-            interactive_lane: Arc::new(Semaphore::new(1)),
-            prefetch_lane: Arc::new(Semaphore::new(max_concurrent_loads.get())),
         }
     }
 
@@ -64,8 +71,8 @@ impl Loader {
     fn attempt_config(
         &self,
         id: TrackId,
-        source: TrackSource,
-    ) -> Result<(ResourceConfig, CancelToken), QueueError> {
+        source: TrackSource<S>,
+    ) -> Result<(ResourceConfig<S>, CancelToken), QueueError> {
         let config = self.build_config(id, source)?;
         let Some(cancel) = config.cancel().cloned() else {
             return Err(QueueError::Resource(format!(
@@ -89,11 +96,11 @@ impl Loader {
     pub(crate) fn build_config(
         &self,
         id: TrackId,
-        source: TrackSource,
-    ) -> Result<ResourceConfig, QueueError> {
+        source: TrackSource<S>,
+    ) -> Result<ResourceConfig<S>, QueueError> {
         let mut config = match source {
             TrackSource::Uri(url) => {
-                let src = ResourceConfig::parse_src(&url)
+                let src = ResourceSrc::parse(&url)
                     .map_err(|e| QueueError::InvalidUrl(format!("{url}: {e}")))?;
                 ResourceConfig::for_src(src)
                     .store(self.store.clone())
@@ -113,7 +120,7 @@ impl Loader {
     /// Load a [`Resource`] from a prepared config, attaching the observer
     /// left for this track when there is one. Caller is responsible
     /// for applying it via `PlayerImpl::replace_item` and emitting [`TrackStatus::Loaded`].
-    async fn load(&self, id: TrackId, config: ResourceConfig) -> Result<Resource, QueueError> {
+    async fn load(&self, id: TrackId, config: ResourceConfig<S>) -> Result<Resource, QueueError> {
         let slow_watcher =
             Self::watch_for_slow_status(id, config.bus().cloned(), Arc::clone(&self.tracks));
         let observer = self.tracks.observer_relay(id);
@@ -134,7 +141,7 @@ impl Loader {
     pub(crate) fn promote_load(
         self: &Arc<Self>,
         id: TrackId,
-        source: TrackSource,
+        source: TrackSource<S>,
     ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
         let (config, cancel) = match self.attempt_config(id, source) {
             Ok(pair) => pair,
@@ -144,10 +151,15 @@ impl Loader {
         Some(self.spawn_attempt(ticket, config, cancel, LoadClass::Interactive))
     }
 
+    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
+        cancel.cancelled().await;
+        track_cancel.cancel();
+    }
+
     fn spawn_attempt(
         self: &Arc<Self>,
         ticket: Ticket,
-        config: ResourceConfig,
+        config: ResourceConfig<S>,
         track_cancel: CancelToken,
         class: LoadClass,
     ) -> JoinHandle<Result<Resource, QueueError>> {
@@ -210,7 +222,7 @@ impl Loader {
     pub(crate) fn spawn_load(
         self: &Arc<Self>,
         id: TrackId,
-        source: TrackSource,
+        source: TrackSource<S>,
         class: LoadClass,
     ) -> Option<JoinHandle<Result<Resource, QueueError>>> {
         let (config, cancel) = match self.attempt_config(id, source) {
@@ -221,11 +233,6 @@ impl Loader {
         Some(self.spawn_attempt(ticket, config, cancel, class))
     }
 
-    async fn wait_and_cancel_track(cancel: &CancelGroup, track_cancel: &CancelToken) {
-        cancel.cancelled().await;
-        track_cancel.cancel();
-    }
-
     /// Watches the [`EventBus`] for the first
     /// [`DownloaderEvent::LoadSlow`] and flips the track status to
     /// [`TrackStatus::Slow`]. Returns a never-completing future:
@@ -234,7 +241,7 @@ impl Loader {
     async fn watch_for_slow_status(
         id: TrackId,
         bus: Option<EventBus>,
-        tracks: Arc<Tracks>,
+        tracks: Arc<Tracks<S>>,
     ) -> std::convert::Infallible {
         let mut rx = match bus {
             Some(b) => b.subscribe(),
@@ -262,7 +269,6 @@ mod tests {
     };
 
     use kithara_assets::{AssetStore, StorageBackend};
-    use kithara_bufpool::Region;
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
@@ -271,11 +277,14 @@ mod tests {
     use kithara_test_utils::{kithara, probe::capture as probe_capture};
 
     use super::*;
-    use crate::track::TrackRecord;
+    use crate::{
+        test_pools::{TestPools, pools},
+        track::TrackRecord,
+    };
 
     struct CancelDropProbe {
-        state: Arc<AtomicUsize>,
         cancel: CancelToken,
+        state: Arc<AtomicUsize>,
     }
 
     impl Drop for CancelDropProbe {
@@ -334,7 +343,7 @@ mod tests {
 
         tokio::select! {
             biased;
-            _ = Loader::wait_and_cancel_track(&group, &track_cancel) => {}
+            _ = Loader::<TestPools>::wait_and_cancel_track(&group, &track_cancel) => {}
             () = in_flight => panic!("in-flight future must stay pending"),
         }
         canceller.await.expect("canceller task must not panic");
@@ -391,18 +400,15 @@ mod tests {
     /// [`Tracks`] store (so tests can seed entries), and the root
     /// [`EventBus`] (so tests can subscribe for assertions).
     struct LoaderFixture {
-        loader: Arc<Loader>,
-        tracks: Arc<Tracks>,
+        loader: Arc<Loader<TestPools>>,
+        _player: PlayerImpl<TestPools>,
+        tracks: Arc<Tracks<TestPools>>,
         bus: EventBus,
-        _player: PlayerImpl,
     }
 
     impl LoaderFixtureSpec {
         fn build(self) -> LoaderFixture {
-            let region = Region::default();
-            let worker = PlayWorker::new(
-                PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-            );
+            let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
             let player = PlayerImpl::new(
                 PlayerConfig::builder()
                     .worker(worker)
@@ -411,9 +417,7 @@ mod tests {
             );
             let bus = player.bus().clone();
             let tracks = Arc::new(Tracks::new(bus.clone()));
-            let store = AssetStore::builder()
-                .pool(player.byte_pool().clone())
-                .build();
+            let store = AssetStore::builder(player.pools().clone()).build();
             let loader = Arc::new(Loader::new(
                 player.control(),
                 store,
@@ -423,9 +427,9 @@ mod tests {
             ));
             LoaderFixture {
                 loader,
+                _player: player,
                 tracks,
                 bus,
-                _player: player,
             }
         }
     }
@@ -434,10 +438,10 @@ mod tests {
     async fn build_config_preserves_caller_supplied_config() {
         let fixture = LoaderFixtureSpec::default().build();
         let loader = &fixture.loader;
-        let supplied_store = AssetStore::builder()
+        let supplied_store = AssetStore::builder(pools())
             .backend(StorageBackend::Memory)
             .build();
-        let Ok(src) = ResourceConfig::parse_src("https://example.com/a.mp3") else {
+        let Ok(src) = ResourceSrc::parse("https://example.com/a.mp3") else {
             panic!("valid url");
         };
         let given = ResourceConfig::for_src(src)

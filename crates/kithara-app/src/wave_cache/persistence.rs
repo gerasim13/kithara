@@ -8,14 +8,10 @@ use kithara::{
     analysis::{
         AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate, AnalysisProgress,
     },
-    assets::{
-        AcquisitionResult, AssetReader, AssetStore, AssetWriter, AssetsError, ReadSide, WriteSide,
-    },
-    bufpool::BytePool,
+    assets::{AcquisitionResult, AssetReader, AssetWriter, AssetsError, ReadSide, WriteSide},
 };
 use kithara_platform::{
     CancelGroup,
-    sync::Arc,
     time::Duration,
     tokio::{
         self,
@@ -31,33 +27,34 @@ use kithara_worker::{
 };
 
 use super::AnalysisTarget;
+use crate::pools::{AppPools, AppStore, Pools};
 
 /// Complete configuration for the app-owned analysis persistence actor.
 pub(crate) struct AnalysisPersistenceConfig {
-    byte_pool: BytePool,
-    dispatcher: DispatcherConfig,
-    chunk_duration: Duration,
-    queue_capacity: NonZeroUsize,
-    task: TaskConfig,
     worker: Worker,
+    pools: Pools,
+    queue_capacity: NonZeroUsize,
+    chunk_duration: Duration,
+    dispatcher: DispatcherConfig,
+    task: TaskConfig,
 }
 
 impl AnalysisPersistenceConfig {
     pub(crate) fn new(
         worker: Worker,
-        byte_pool: BytePool,
+        pools: Pools,
         queue_capacity: NonZeroUsize,
         chunk_duration: Duration,
         dispatcher: DispatcherConfig,
         task: TaskConfig,
     ) -> Self {
         Self {
-            byte_pool,
-            dispatcher,
-            chunk_duration,
-            queue_capacity,
-            task,
             worker,
+            pools,
+            queue_capacity,
+            chunk_duration,
+            dispatcher,
+            task,
         }
     }
 }
@@ -65,7 +62,7 @@ impl AnalysisPersistenceConfig {
 /// Cloneable handle to one ordered, bounded analysis persistence actor.
 #[derive(Clone)]
 pub(crate) struct AnalysisPersistence {
-    inner: Arc<AnalysisPersistenceInner>,
+    inner: kithara_platform::sync::Arc<AnalysisPersistenceInner>,
 }
 
 impl AnalysisPersistence {
@@ -73,7 +70,7 @@ impl AnalysisPersistence {
     pub(crate) fn new(config: AnalysisPersistenceConfig) -> Result<Self, AnalysisPersistenceError> {
         let AnalysisPersistenceConfig {
             worker,
-            byte_pool,
+            pools,
             queue_capacity,
             chunk_duration,
             dispatcher: dispatcher_config,
@@ -88,11 +85,11 @@ impl AnalysisPersistence {
             .ok_or(AnalysisPersistenceError::RuntimeUnavailable)?;
         let (tx, rx) = mpsc::channel(queue_capacity.get());
         let task = pending.start(move |context| {
-            PersistenceTask::new(&context, &runtime, rx, byte_pool, chunk_duration)
+            PersistenceTask::new(&context, &runtime, rx, pools, chunk_duration)
         })?;
 
         Ok(Self {
-            inner: Arc::new(AnalysisPersistenceInner {
+            inner: kithara_platform::sync::Arc::new(AnalysisPersistenceInner {
                 tx,
                 _owner: PersistenceOwner {
                     task,
@@ -113,8 +110,8 @@ impl AnalysisPersistence {
         self.inner
             .tx
             .send(StoreRequest {
-                progress,
                 target,
+                progress,
                 ack,
             })
             .await
@@ -131,8 +128,8 @@ impl AnalysisPersistence {
         self.inner
             .tx
             .try_send(StoreRequest {
-                progress,
                 target,
+                progress,
                 ack,
             })
             .is_ok()
@@ -140,13 +137,13 @@ impl AnalysisPersistence {
 }
 
 struct AnalysisPersistenceInner {
-    _owner: PersistenceOwner,
     tx: mpsc::Sender<StoreRequest>,
+    _owner: PersistenceOwner,
 }
 
 struct PersistenceOwner {
-    dispatcher: Dispatcher,
     task: TaskHandle,
+    dispatcher: Dispatcher,
     _worker: Worker,
 }
 
@@ -158,8 +155,8 @@ impl Drop for PersistenceOwner {
 }
 
 struct StoreRequest {
-    progress: AnalysisProgress,
     target: AnalysisTarget,
+    progress: AnalysisProgress,
     ack: oneshot::Sender<Result<(), AnalysisPersistenceError>>,
 }
 
@@ -172,13 +169,13 @@ impl PersistenceTask {
         context: &TaskContext,
         runtime: &Handle,
         rx: mpsc::Receiver<StoreRequest>,
-        byte_pool: BytePool,
+        pools: Pools,
         chunk_duration: Duration,
     ) -> Self {
         let cancel = context.cancel_group().clone();
         let actor = spawn_on(
             runtime,
-            run_actor(rx, runtime.clone(), byte_pool, chunk_duration, cancel),
+            run_actor(rx, runtime.clone(), pools, chunk_duration, cancel),
         );
         Self { actor: Some(actor) }
     }
@@ -192,12 +189,12 @@ impl PersistenceTask {
 }
 
 impl Task for PersistenceTask {
-    fn on_cancel(&mut self) {
-        self.abort();
-    }
-
     fn tick(&mut self) -> TickResult {
         TickResult::Waiting
+    }
+
+    fn on_cancel(&mut self) {
+        self.abort();
     }
 }
 
@@ -210,7 +207,7 @@ impl Drop for PersistenceTask {
 async fn run_actor(
     mut rx: mpsc::Receiver<StoreRequest>,
     runtime: Handle,
-    byte_pool: BytePool,
+    pools: Pools,
     chunk_duration: Duration,
     cancel: CancelGroup,
 ) {
@@ -232,7 +229,7 @@ async fn run_actor(
                 request.target,
                 request.progress,
                 runtime.clone(),
-                byte_pool.clone(),
+                pools.clone(),
                 chunk_duration,
                 cancel.clone(),
             ) => result,
@@ -257,7 +254,7 @@ async fn persist(
     target: AnalysisTarget,
     progress: AnalysisProgress,
     runtime: Handle,
-    byte_pool: BytePool,
+    pools: Pools,
     chunk_duration: Duration,
     cancel: CancelGroup,
 ) -> Result<WriteOutcome, AnalysisPersistenceError> {
@@ -272,7 +269,7 @@ async fn persist(
                     &operation_store,
                     &operation_key,
                     &progress,
-                    &byte_pool,
+                    &pools,
                     chunk_duration,
                     &cancel,
                 )
@@ -283,10 +280,10 @@ async fn persist(
 }
 
 fn write_request(
-    store: &AssetStore,
+    store: &AppStore,
     key: &kithara::assets::ResourceKey,
     progress: &AnalysisProgress,
-    byte_pool: &BytePool,
+    pools: &Pools,
     chunk_duration: Duration,
     cancel: &CancelGroup,
 ) -> Result<WriteOutcome, AnalysisPersistenceError> {
@@ -298,21 +295,21 @@ fn write_request(
             commit_generation(writer, &update, None, cancel)
         }
         AcquisitionResult::Ready(reader) => {
-            write_existing(reader, &spec, progress, byte_pool, chunk_duration, cancel)
+            write_existing(reader, &spec, progress, pools, chunk_duration, cancel)
         }
         _ => Err(AnalysisPersistenceError::InvalidResourceState),
     }
 }
 
 fn write_existing(
-    reader: AssetReader,
+    reader: AssetReader<AppPools>,
     spec: &AnalysisFileSpec,
     progress: &AnalysisProgress,
-    byte_pool: &BytePool,
+    pools: &Pools,
     chunk_duration: Duration,
     cancel: &CancelGroup,
 ) -> Result<WriteOutcome, AnalysisPersistenceError> {
-    let mut bytes = byte_pool.get();
+    let mut bytes = pools.get::<u8>();
     reader.read_into(&mut bytes).map_err(AssetsError::from)?;
     ensure_active(cancel)?;
 
@@ -371,7 +368,7 @@ fn file_matches(file: &AnalysisFile, spec: &AnalysisFileSpec, chunk_duration: Du
 }
 
 fn commit_generation(
-    writer: AssetWriter,
+    writer: AssetWriter<AppPools>,
     update: &AnalysisFileUpdate,
     prior_prefix: Option<&[u8]>,
     cancel: &CancelGroup,
@@ -543,14 +540,15 @@ mod tests {
 
     use ::kithara::{
         analysis::{AnalysisFingerprint, Coverage, FrameRange, TrackAnalysis},
-        assets::{AssetStore, ReadSide, StorageBackend},
-        prelude::ResourceConfig,
+        assets::{ReadSide, StorageBackend},
+        prelude::ResourceSrc,
     };
     use kithara_platform::{time::Duration, tokio::runtime::Handle};
     use kithara_test_utils::kithara;
     use kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig};
 
     use super::*;
+    use crate::pools::{self, AppResourceConfig};
 
     struct Consts;
 
@@ -576,20 +574,20 @@ mod tests {
     }
 
     async fn round_trip(backend: StorageBackend) {
-        let store = AssetStore::builder().backend(backend).build();
-        let resource = ResourceConfig::for_src(
-            ResourceConfig::parse_src("https://analysis.test.invalid/persistence.mp3")
+        let pools = pools::build().expect("valid app pool policy");
+        let store = AppStore::builder(pools.clone()).backend(backend).build();
+        let resource = AppResourceConfig::for_src(
+            ResourceSrc::parse("https://analysis.test.invalid/persistence.mp3")
                 .expect("fixture source is valid"),
         )
         .store(store.clone())
         .discriminator("persistence-test")
         .build();
         let target = AnalysisTarget::for_config(&resource).expect("fixture target is valid");
-        let byte_pool = BytePool::default();
         let worker = Worker::new(WorkerConfig::new().with_runtime(Handle::current()));
         let persistence = AnalysisPersistence::new(AnalysisPersistenceConfig::new(
             worker,
-            byte_pool.clone(),
+            pools.clone(),
             NonZeroUsize::MIN,
             Duration::from_secs(Consts::CHUNK_FRAMES),
             DispatcherConfig::new("analysis-persistence-test"),
@@ -623,7 +621,7 @@ mod tests {
         let reader = store
             .open_resource(target.key(), None)
             .expect("committed analysis opens");
-        let mut bytes = byte_pool.get();
+        let mut bytes = pools.get::<u8>();
         reader
             .read_into(&mut bytes)
             .expect("committed analysis reads");

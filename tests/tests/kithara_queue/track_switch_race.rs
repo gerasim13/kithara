@@ -31,7 +31,7 @@ use kithara::{
         tokio,
         tokio::sync::broadcast::error::RecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -40,6 +40,8 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -110,21 +112,15 @@ async fn build_hls(
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue>,
+    Arc<Queue<TestPools>>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -137,14 +133,18 @@ fn build_queue_with_tick(
     let queue_for_tick = Arc::clone(&queue);
     let tick_handle = tokio::task::spawn(run_tick_driver(queue_for_tick));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
 #[kithara::flash(true)]
-async fn run_tick_driver(queue: Arc<Queue>) {
+async fn run_tick_driver(queue: Arc<Queue<TestPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -160,17 +160,13 @@ async fn run_tick_driver(queue: Arc<Queue>) {
 /// `select_item` — never via end-of-track auto-advance. The completion-race
 /// test relies on this to isolate a barge-in (slow stomping the current fast)
 /// from the legitimate end-of-`fast` auto-advance to the next queue entry.
-fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, AssetStore) {
+fn build_queue_no_tick(
+    temp_dir: &TestTempDir,
+) -> (Arc<Queue<TestPools>>, Downloader, AssetStore<TestPools>) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -181,8 +177,12 @@ fn build_queue_no_tick(temp_dir: &TestTempDir) -> (Arc<Queue>, Downloader, Asset
             .build(),
     ));
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store)
 }
@@ -224,7 +224,7 @@ where
 /// current status (so an already-terminal track returns immediately), then
 /// blocks on the event stream — no polling.
 async fn wait_for_loader_done(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -270,7 +270,7 @@ async fn wait_for_loader_done(
 /// [`QueueEvent::CurrentTrackChanged`]. Subscribes first, snapshots
 /// `current()` (catches an already-current track), then blocks on the event.
 async fn wait_for_current_id(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     expected: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -320,7 +320,7 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
 /// current status (catches an already-applied transition), then blocks on the
 /// event stream under `deadline` as a hard safety cap.
 async fn wait_for_status(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     track_id: TrackId,
     expected: TrackStatus,
     deadline: Duration,
@@ -356,7 +356,7 @@ async fn wait_for_status(
 /// barge-in is itself the absence-over-the-window success. Caller must have
 /// already confirmed `fast` is current, so the only future current-change is
 /// the end-of-`fast` auto-advance this races.
-async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), String> {
+async fn assert_no_barge_in(queue: &Queue<TestPools>, slow_id: TrackId) -> Result<(), String> {
     let mut rx = queue.subscribe();
     let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
         QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,
@@ -374,8 +374,12 @@ async fn assert_no_barge_in(queue: &Queue, slow_id: TrackId) -> Result<(), Strin
     }
 }
 
-fn mk_cfg(url: &Url, downloader: &Downloader, store: &AssetStore) -> ResourceConfig {
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
+fn mk_cfg(
+    url: &Url,
+    downloader: &Downloader,
+    store: &AssetStore<TestPools>,
+) -> ResourceConfig<TestPools> {
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .initial_abr_mode(AbrMode::Auto(None))

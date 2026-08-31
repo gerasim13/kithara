@@ -8,13 +8,15 @@ use std::num::NonZeroU32;
 
 use kithara::{
     analysis::{BeatAnalysisConfig, Bucket},
-    bufpool::{BytePool, SamplePool},
+    assets::StorageBackend,
     platform::{CancelToken, time::Duration},
-    play::{PlayWorker, PlayWorkerConfig},
-    prelude::ResourceConfig,
+    play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc},
 };
-use kithara_app::waveform::{TrackAnalysis, TrackAnalysisRunner};
-use kithara_integration_tests::{TestServerHelper, memory_asset_store};
+use kithara_app::{
+    pools::{AppPools, AppResourceConfig, AppStore, AppWorker, Pools, build},
+    waveform::{TrackAnalysis, TrackAnalysisRunner},
+};
+use kithara_integration_tests::TestServerHelper;
 use kithara_test_fixtures::SignalAsset;
 
 /// The fixtures decode at 44.1 kHz; the pass is opened on the same axis so
@@ -22,14 +24,21 @@ use kithara_test_fixtures::SignalAsset;
 const RATE: NonZeroU32 = NonZeroU32::new(44_100).expect("fixture rate is non-zero");
 const CHUNK_SECONDS: NonZeroU32 = NonZeroU32::new(16).expect("fixture chunk duration is non-zero");
 
-fn worker() -> PlayWorker {
-    PlayWorker::new(PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build())
+fn worker(pools: Pools) -> AppWorker {
+    PlayWorker::new(PlayWorkerConfig::builder(pools).build())
+}
+
+fn memory_store(pools: Pools) -> AppStore {
+    AppStore::builder(pools)
+        .backend(StorageBackend::Memory)
+        .build()
 }
 
 /// Run one analysis through the production runner and await its result.
 async fn run_analysis(
     master: &CancelToken,
-    config: ResourceConfig,
+    config: AppResourceConfig,
+    pools: Pools,
     buckets: usize,
 ) -> Option<TrackAnalysis> {
     let mut runner = TrackAnalysisRunner::new(
@@ -38,7 +47,7 @@ async fn run_analysis(
         CHUNK_SECONDS,
         buckets,
         BeatAnalysisConfig::default(),
-        SamplePool::default(),
+        pools,
     )
     .ok()?;
     let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
@@ -55,17 +64,18 @@ async fn run_analysis(
 async fn runner_silent_wav_yields_all_zero_envelope() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SILENCE_1S);
-    let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
+    let pools = build().expect("app pools");
+    let config = ResourceConfig::<AppPools>::for_src(
+        ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
-    .store(memory_asset_store())
-    .worker(worker())
+    .store(memory_store(pools.clone()))
+    .worker(worker(pools.clone()))
     .build();
 
     // A silent 1s WAV must decode end to end and finalise to a native-resolution
     // envelope capped by the requested maximum. No frames are loud, so nothing
     // normalises up to 1.0.
-    let analysis = run_analysis(&CancelToken::never(), config, 100)
+    let analysis = run_analysis(&CancelToken::never(), config, pools, 100)
         .await
         .expect("silent WAV must decode to a finalised analysis");
     let waveform = analysis
@@ -89,17 +99,18 @@ async fn runner_silent_wav_yields_all_zero_envelope() {
 async fn runner_returns_nothing_when_cancelled_upfront() {
     let server = TestServerHelper::new().await;
     let url = server.signal(SignalAsset::WAV_SILENCE_1S);
-    let config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("silence URL must build a ResourceConfig"),
+    let pools = build().expect("app pools");
+    let config = ResourceConfig::<AppPools>::for_src(
+        ResourceSrc::parse(url.as_str()).expect("silence URL must build a ResourceConfig"),
     )
-    .store(memory_asset_store())
-    .worker(worker())
+    .store(memory_store(pools.clone()))
+    .worker(worker(pools.clone()))
     .build();
 
     let master = CancelToken::never();
     master.cancel();
     assert!(
-        run_analysis(&master, config, 100).await.is_none(),
+        run_analysis(&master, config, pools, 100).await.is_none(),
         "a pre-cancelled analysis must not return an envelope"
     );
 }
