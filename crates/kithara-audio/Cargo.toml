@@ -100,7 +100,7 @@ web-sys = { workspace = true, features = [
 
 [dev-dependencies]
 kithara-audio = { path = ".", default-features = false, features = ["mock", "probe", "symphonia"] }
-kithara-bufpool = { workspace = true }
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-storage = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }

@@ -95,5 +95,7 @@ against both the region and selected-pool limits.
 ## Features
 
 - `perf` — enables `hotpath` instrumentation on pool hot paths.
+- `test-utils` — exposes the application-shaped `testing::TestPools` schema for
+  workspace test harnesses.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

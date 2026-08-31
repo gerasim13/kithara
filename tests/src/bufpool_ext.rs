@@ -1,11 +1,5 @@
-use kithara::bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
-
-pool_schema! {
-    pub TestPools {
-        bytes: u8,
-        samples: f32,
-    }
-}
+pub use kithara_bufpool::testing::TestPools;
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion};
 
 pub type Pools = PoolRegion<TestPools>;
 
@@ -23,9 +17,6 @@ pub fn pools() -> Pools {
 
 #[must_use]
 pub fn pools_with(overall_bytes: usize, bytes: PoolConfig, samples: PoolConfig) -> Pools {
-    TestPools::builder(OverallBudget(overall_bytes))
-        .bytes(bytes)
-        .samples(samples)
-        .build()
+    TestPools::region(OverallBudget(overall_bytes), bytes, samples)
         .unwrap_or_else(|error| panic!("test pool region: {error}"))
 }

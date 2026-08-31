@@ -1,0 +1,17 @@
+id: perf.no-local-test-pools
+message: |
+  Test harnesses use `kithara_bufpool::testing::TestPools` so composed
+  subsystems share one application-shaped pool facade. Do not declare a
+  crate-local `TestPools` schema.
+severity: error
+language: Rust
+files:
+  - crates/**/*.rs
+  - tests/src/**/*.rs
+ignores:
+  - crates/kithara-bufpool/**
+  - crates/kithara-devtools/**
+rule:
+  all:
+    - kind: macro_invocation
+    - regex: '(?:^|::)pool_schema!\s*(?:\{|\(|\[)\s*(?:pub(?:\s*\([^)]*\))?\s+)?TestPools\b'

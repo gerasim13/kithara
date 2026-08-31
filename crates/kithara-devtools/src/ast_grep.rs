@@ -349,6 +349,10 @@ mod tests {
         rule_hits("perf.no-manual-pool-registration.yml", source)
     }
 
+    fn local_test_pool_hits(source: &str) -> usize {
+        rule_hits("perf.no-local-test-pools.yml", source)
+    }
+
     #[test]
     fn a_reported_hit_names_the_line_an_editor_calls_it() {
         let stdout = r#"{"file":"crates/kithara-ui/src/capture/set.rs","message":"m","ruleId":"perf.prefer-primitive-pool","severity":"error","range":{"start":{"line":29,"column":4}}}"#;
@@ -409,6 +413,35 @@ mod tests {
             6
         );
         assert_eq!(manual_pool_registration_hits(source), 2);
+    }
+
+    #[test]
+    fn local_test_pool_rule_requires_the_shared_schema() {
+        let source = r#"
+pool_schema! {
+    pub(crate) TestPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+kithara_bufpool::pool_schema!(pub TestPools { bytes: u8 });
+pool_schema![TestPools { samples: f32 }];
+
+pool_schema! {
+    pub InlineTestPools { bytes: u8 }
+}
+"#;
+
+        assert_eq!(local_test_pool_hits(source), 3);
+        assert_eq!(
+            rule_hits_at(
+                "perf.no-local-test-pools.yml",
+                "crates/kithara-bufpool/src/testing.rs",
+                source,
+            ),
+            0
+        );
     }
 
     #[test]

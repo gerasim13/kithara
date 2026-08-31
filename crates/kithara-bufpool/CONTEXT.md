@@ -23,6 +23,12 @@ Raw key operations additionally require an unforgeable crate-owned capability.
 Safe downstream code cannot detach a core or attach a slot to another region's
 reported budget.
 
+With the `test-utils` feature, `testing::TestPools` provides the same byte and
+sample capabilities as the application composition roots. Each test harness
+builds one isolated region from that schema and passes the facade through the
+subsystems it composes; tests do not declare narrower per-crate schemas or share
+one process-global region.
+
 ## Allocation flow
 
 The built-in byte key uses 32 shards and the sample key uses 8. Generic vector

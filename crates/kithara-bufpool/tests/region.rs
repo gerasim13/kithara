@@ -2,27 +2,17 @@ use std::{mem::size_of, sync::Barrier, thread};
 
 use kithara_bufpool::{
     HasPool, OverallBudget, Percent, PoolAlias, PoolConfig, PoolError, PoolRegion, StringKey,
-    VecKey, pool_schema,
+    VecKey, pool_schema, testing::TestPools,
 };
 use kithara_platform::sync::Arc;
 use kithara_test_utils::kithara;
-
-pool_schema! {
-    pub TestPools {
-        bytes: u8,
-        samples: f32,
-    }
-}
 
 fn config(max_buffers: usize) -> PoolConfig {
     PoolConfig::builder().max_buffers(max_buffers).build()
 }
 
 fn pools(max_bytes: usize) -> PoolRegion<TestPools> {
-    TestPools::builder(OverallBudget(max_bytes))
-        .bytes(config(usize::MAX))
-        .samples(config(128))
-        .build()
+    TestPools::region(OverallBudget(max_bytes), config(usize::MAX), config(128))
         .unwrap_or_else(|error| panic!("test region: {error}"))
 }
 
@@ -85,16 +75,15 @@ fn byte_growth_exhausts_the_shared_budget_for_samples() {
 
 #[kithara::test]
 fn a_slot_cap_rejects_growth_while_global_capacity_remains() {
-    let pools = TestPools::builder(OverallBudget(100))
-        .bytes(
-            PoolConfig::builder()
-                .max_buffers(32)
-                .max_share(Percent(50))
-                .build(),
-        )
-        .samples(config(32))
-        .build()
-        .unwrap_or_else(|error| panic!("test region: {error}"));
+    let pools = TestPools::region(
+        OverallBudget(100),
+        PoolConfig::builder()
+            .max_buffers(32)
+            .max_share(Percent(50))
+            .build(),
+        config(32),
+    )
+    .unwrap_or_else(|error| panic!("test region: {error}"));
 
     assert!(matches!(
         pools.get_with_len::<u8>(51),
@@ -150,17 +139,16 @@ fn incremental_growth_keeps_amortized_capacity() {
 
 #[kithara::test]
 fn eager_payload_is_a_hit_on_another_thread() {
-    let pools = TestPools::builder(OverallBudget(1024))
-        .bytes(config(32))
-        .samples(
-            PoolConfig::builder()
-                .initial_buffers(1)
-                .initial_capacity(8)
-                .max_buffers(128)
-                .build(),
-        )
-        .build()
-        .unwrap_or_else(|error| panic!("test region: {error}"));
+    let pools = TestPools::region(
+        OverallBudget(1024),
+        config(32),
+        PoolConfig::builder()
+            .initial_buffers(1)
+            .initial_capacity(8)
+            .max_buffers(128)
+            .build(),
+    )
+    .unwrap_or_else(|error| panic!("test region: {error}"));
     let worker_pools = pools.clone();
     let initial_peak = pools.stats().peak_allocated_bytes;
 
@@ -184,35 +172,32 @@ fn zero_initial_buffers_allocate_no_payload_capacity() {
 #[kithara::test]
 fn invalid_configuration_is_rejected_before_publication() {
     let cases = [
-        TestPools::builder(OverallBudget(1024))
-            .bytes(
-                PoolConfig::builder()
-                    .max_buffers(32)
-                    .max_share(Percent(101))
-                    .build(),
-            )
-            .samples(config(128))
-            .build(),
-        TestPools::builder(OverallBudget(1024))
-            .bytes(config(32))
-            .samples(
-                PoolConfig::builder()
-                    .initial_buffers(9)
-                    .initial_capacity(1)
-                    .max_buffers(8)
-                    .build(),
-            )
-            .build(),
-        TestPools::builder(OverallBudget(usize::MAX))
-            .bytes(config(32))
-            .samples(
-                PoolConfig::builder()
-                    .initial_buffers(1)
-                    .initial_capacity(usize::MAX)
-                    .max_buffers(128)
-                    .build(),
-            )
-            .build(),
+        TestPools::region(
+            OverallBudget(1024),
+            PoolConfig::builder()
+                .max_buffers(32)
+                .max_share(Percent(101))
+                .build(),
+            config(128),
+        ),
+        TestPools::region(
+            OverallBudget(1024),
+            config(32),
+            PoolConfig::builder()
+                .initial_buffers(9)
+                .initial_capacity(1)
+                .max_buffers(8)
+                .build(),
+        ),
+        TestPools::region(
+            OverallBudget(usize::MAX),
+            config(32),
+            PoolConfig::builder()
+                .initial_buffers(1)
+                .initial_capacity(usize::MAX)
+                .max_buffers(128)
+                .build(),
+        ),
     ];
 
     assert!(
@@ -291,16 +276,15 @@ fn racing_typed_slots_never_admit_past_the_global_limit() {
 
 #[kithara::test]
 fn trimmed_returns_release_both_pool_and_region_charges() {
-    let pools = TestPools::builder(OverallBudget(4096))
-        .bytes(config(32))
-        .samples(
-            PoolConfig::builder()
-                .max_buffers(128)
-                .trim_capacity(4)
-                .build(),
-        )
-        .build()
-        .unwrap_or_else(|error| panic!("test region: {error}"));
+    let pools = TestPools::region(
+        OverallBudget(4096),
+        config(32),
+        PoolConfig::builder()
+            .max_buffers(128)
+            .trim_capacity(4)
+            .build(),
+    )
+    .unwrap_or_else(|error| panic!("test region: {error}"));
     let samples = pools
         .get_with_len::<f32>(32)
         .unwrap_or_else(|error| panic!("samples: {error}"));

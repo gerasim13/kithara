@@ -4,7 +4,7 @@ use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{HasPool, PoolRegion};
 #[cfg(test)]
-use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_bufpool::{OverallBudget, PoolConfig, testing::TestPools};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
@@ -23,21 +23,16 @@ use super::{
 use crate::Host;
 
 #[cfg(test)]
-pool_schema! {
-    /// Buffer schema used by host graph fixtures.
-    pub HostTestPools {
-        bytes: u8,
-        samples: f32,
-    }
-}
+pub type HostTestPools = TestPools;
 
 #[cfg(test)]
 pub(crate) fn pools() -> PoolRegion<HostTestPools> {
-    HostTestPools::builder(OverallBudget(64 * 1024 * 1024))
-        .bytes(PoolConfig::builder().max_buffers(32).build())
-        .samples(PoolConfig::builder().max_buffers(128).build())
-        .build()
-        .unwrap_or_else(|error| panic!("host test pool region: {error}"))
+    HostTestPools::region(
+        OverallBudget(64 * 1024 * 1024),
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(128).build(),
+    )
+    .unwrap_or_else(|error| panic!("host test pool region: {error}"))
 }
 
 /// Probe-only access to session-output policy.

@@ -1,17 +1,8 @@
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
-
-pool_schema! {
-    pub(crate) TestPools {
-        bytes: u8,
-        samples: f32,
-    }
-}
+pub(crate) use kithara_bufpool::testing::TestPools;
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion};
 
 pub(crate) fn pools() -> PoolRegion<TestPools> {
     let config = || PoolConfig::builder().max_buffers(256).build();
-    TestPools::builder(OverallBudget(256 * 1024 * 1024))
-        .bytes(config())
-        .samples(config())
-        .build()
+    TestPools::region(OverallBudget(256 * 1024 * 1024), config(), config())
         .unwrap_or_else(|error| panic!("test pool region: {error}"))
 }

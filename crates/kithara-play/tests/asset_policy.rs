@@ -1,24 +1,20 @@
 use std::sync::Arc;
 
 use kithara_assets::{AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, StorageBackend};
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, testing::TestPools};
 use kithara_file::File;
 use kithara_hls::Hls;
 use kithara_play::policy::{QueryIdentityLayout, QueryIdentityRule};
 use kithara_test_utils::kithara;
 use url::Url;
 
-pool_schema! {
-    TestPools {
-        bytes: u8,
-    }
-}
-
 fn pools() -> PoolRegion<TestPools> {
-    TestPools::builder(OverallBudget(64 * 1024 * 1024))
-        .bytes(PoolConfig::builder().max_buffers(64).build())
-        .build()
-        .unwrap_or_else(|error| panic!("test pool region: {error}"))
+    TestPools::region(
+        OverallBudget(64 * 1024 * 1024),
+        PoolConfig::builder().max_buffers(64).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    )
+    .unwrap_or_else(|error| panic!("test pool region: {error}"))
 }
 
 fn url(value: &str) -> Url {

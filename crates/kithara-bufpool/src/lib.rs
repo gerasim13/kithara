@@ -12,6 +12,8 @@ mod key;
 mod pool;
 mod region;
 mod schema;
+#[cfg(feature = "test-utils")]
+pub mod testing;
 
 pub use budget::{OverallBudget, Percent};
 pub use buffer::{ByteBuffer, PooledString, PooledVec, SampleBuffer};
