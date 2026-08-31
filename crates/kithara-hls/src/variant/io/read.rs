@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_bufpool::HasPool;
 use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 
 use super::HlsVariant;
@@ -12,7 +13,10 @@ pub(super) enum RangeGate {
     Ready,
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
         // Runs on the produce core inside `phase_at`: the membership mirror,
         // not the queue lock — a blocking lock here spins into `sched_yield`

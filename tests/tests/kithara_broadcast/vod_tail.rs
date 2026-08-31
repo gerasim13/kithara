@@ -4,13 +4,13 @@ use kithara::{
     self,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use url::Url;
 
 use super::origin::{Origin, SAMPLE_RATE, TONE_HZ, assert_carries_the_tone};
@@ -26,28 +26,25 @@ async fn the_production_client_plays_the_stopped_broadcast() {
     origin.advance_to(SEGMENTS).await;
     origin.handle.stop();
 
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(byte_pool.clone())
         .cache_capacity(NonZeroUsize::new(32).expect("nonzero"))
         .build();
     let master = Url::parse(origin.handle.url()).expect("the handle reports a URL");
     let hls_config = HlsConfig::for_url(master)
         .store(store)
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .cancel(CancelToken::never())
         .build();
-    let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
+    let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(DecoderBackend::Symphonia)
                 .build(),
         )
         .build();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
 
     let mut audio = worker
         .open(audio_config)
@@ -71,7 +68,10 @@ async fn the_production_client_plays_the_stopped_broadcast() {
     );
 }
 
-fn read_left_channel(audio: &mut RegisteredAudio<Stream<Hls>>, samples: usize) -> Vec<f32> {
+fn read_left_channel(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    samples: usize,
+) -> Vec<f32> {
     let channels = usize::from(audio.spec().channels);
     let mut buf = vec![0.0f32; READ_BUF_SAMPLES];
     let mut left = Vec::new();

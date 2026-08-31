@@ -1,4 +1,5 @@
 use kithara_assets::{AcquisitionResult, ReadSide, ResourceAcquisition, WriteSide};
+use kithara_bufpool::HasPool;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_storage::ResourceStatus;
 use kithara_stream::dl::{DemandFn, FetchCmd, OnCompleteFn, OnSlowFn, WriterFn};
@@ -10,13 +11,16 @@ use crate::{
     signal::SizeSignal,
 };
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Builds a fetch command whose completion settles the claim under its cancellation epoch.
     pub(super) fn build_cmd(
         self: &Arc<Self>,
         url: Url,
-        acq: ResourceAcquisition,
-        handle: FetchClaim<Downloading>,
+        acq: ResourceAcquisition<S>,
+        handle: FetchClaim<Downloading, S>,
         signal: SizeSignal,
         cancel: CancelToken,
     ) -> Option<FetchCmd> {

@@ -40,14 +40,17 @@ The native cache object graph is owned in Rust:
   the ordinary `register` method for file, HLS, or both; no foreign callback participates in its
   cache-key derivation.
 - `FfiAssetStore::new(root, registry)` snapshots the registry and builds one `AssetStore`.
-  `root = None` preserves the platform `StorageBackend` default; a supplied root selects that outer
-  disk directory without changing paths inside an asset root.
-- `FfiAssetStore` also owns the `Region` whose pools are shared by cache, network, decode, and
+  Construction returns `Result`; an invalid pool configuration is reported as `FfiError::Internal`
+  instead of panicking. Neither `FfiAssetStore` nor `FfiPlayerConfig` has a production `Default`
+  implementation, so native callers always pass the shared store explicitly. `root = None` preserves
+  the platform `StorageBackend` default; a supplied root selects that outer disk directory without
+  changing paths inside an asset root.
+- `FfiAssetStore` also owns the `PoolRegion<FfiPools>` shared by cache, network, decode, and
   playback, plus a store-specific `CancelScope`. Dropping the last foreign `Arc<FfiAssetStore>`
   cancels that store subtree. Player cancellation is a separate `CancelToken` root and does not
   redefine the shared store lifetime.
 - `FfiPlayerConfig.store: Arc<FfiAssetStore>` is the only asset/cache field on the player
-  configuration. `NativeInner` retains that object, takes its `Region`, and clones its inner
+  configuration. `NativeInner` retains that object, clones its pool facade, and clones its inner
   `AssetStore` handle into the queue and every resource, so one FFI store can back multiple players.
 
 Registry mutation and store configuration are separate lifetimes. Registering or replacing a layout
@@ -86,9 +89,10 @@ queue through `append` / `insert` / `selectItem`, transport through `play` / `pa
 receives structured events through `setObserver` / `setItemObserver`. Generated TypeScript
 definitions ship with the wasm-bindgen output.
 
-The Web Worker (`src/web/worker.rs`) owns the `Queue` and builds its own in-memory `AssetStore`
-(`StorageBackend::Memory`) and `Region` in Rust-owned build state, using the default layout
-registry; native foreign layout callbacks are not bridged into JavaScript. `Host::insert` moves only the
+The main-thread bridge builds one `PoolRegion<FfiPools>` and passes that same facade to the
+WebCodecs probe and the Web Worker. The worker owns the `Queue` and builds its in-memory
+`AssetStore` (`StorageBackend::Memory`) from that facade, using the default layout registry;
+native foreign layout callbacks are not bridged into JavaScript. `Host::insert` moves only the
 Queue's sendable synchronization state and current desired level to the main-thread Host; the
 remote Worker Host retains the resident Queue and every reader or JS handle. The main-thread
 `WasmInner` owns the `WorkerCmd` channel plus a local cache so the infallible facade getters can

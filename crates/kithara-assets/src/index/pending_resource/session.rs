@@ -6,17 +6,17 @@ use super::{PendingResource, WriterClaim};
 use crate::{index::pending::PendingResourceInner, layout::ResourceKey};
 
 /// Immutable wiring for one canonical pending resource.
-pub(in crate::index) struct PendingResourceSession {
-    pub(super) inner: Arc<PendingResourceInner>,
-    pub(super) slot: Arc<PendingResource>,
+pub(in crate::index) struct PendingResourceSession<S> {
+    pub(super) inner: Arc<PendingResourceInner<S>>,
+    pub(super) slot: Arc<PendingResource<S>>,
     pub(super) key: ResourceKey,
 }
 
-impl PendingResourceSession {
+impl<S> PendingResourceSession<S> {
     pub(in crate::index) fn new(
-        inner: &Arc<PendingResourceInner>,
+        inner: &Arc<PendingResourceInner<S>>,
         key: &ResourceKey,
-        slot: &Arc<PendingResource>,
+        slot: &Arc<PendingResource<S>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             inner: Arc::clone(inner),
@@ -26,13 +26,16 @@ impl PendingResourceSession {
     }
 }
 
-pub(super) struct WriterIdentity {
+pub(super) struct WriterIdentity<S> {
     pub(super) claim: Arc<WriterClaim>,
-    pub(super) session: Arc<PendingResourceSession>,
+    pub(super) session: Arc<PendingResourceSession<S>>,
 }
 
-impl WriterIdentity {
-    pub(super) fn new(claim: Arc<WriterClaim>, session: &Arc<PendingResourceSession>) -> Arc<Self> {
+impl<S> WriterIdentity<S> {
+    pub(super) fn new(
+        claim: Arc<WriterClaim>,
+        session: &Arc<PendingResourceSession<S>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             claim,
             session: Arc::clone(session),

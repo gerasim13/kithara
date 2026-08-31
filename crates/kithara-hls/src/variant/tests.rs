@@ -25,21 +25,26 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 use url::Url;
 
-use super::{HlsVariant, PlanConfig, PlanCtx, SizeDemand, VariantParts, segment_placeholder_size};
+use super::{PlanConfig, SizeDemand, VariantParts, segment_placeholder_size};
 use crate::{
     playlist::{PlaylistState, SegmentState, VariantState},
     segment::{
-        Downloading, FetchClaim, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent,
-        SegmentSize, SegmentSlotState,
+        Downloading, InitSegment, MediaSegment, PlannedFetch, Segment, SegmentContent, SegmentSize,
+        SegmentSlotState,
     },
     signal::SizeSignal,
-    stream::HlsSession,
 };
+
+type FetchClaim<P> = crate::segment::FetchClaim<P, crate::test_pools::TestPools>;
+type HlsSession = crate::stream::HlsSession<crate::test_pools::TestPools>;
+type HlsVariant = super::HlsVariant<crate::test_pools::TestPools>;
+type PlanCtx = super::PlanCtx<crate::test_pools::TestPools>;
+type TestAssetScope = AssetScope<crate::test_pools::TestPools>;
 
 fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
-        AssetStore::builder()
+        AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cancel(cancel)
             .build(),
@@ -47,7 +52,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     PlanCtx {
         bus: EventBus::new(8),
         scope: backend
-            .scope::<crate::Hls>(&AssetSource::Remote {
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
                 discriminator: Some("test".to_owned()),
             })
@@ -61,7 +66,7 @@ fn test_ctx(prefetch_budget: usize) -> PlanCtx {
     }
 }
 
-fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
+fn make_init(size: u64, scope: &TestAssetScope) -> Option<Segment> {
     if size == 0 {
         return None;
     }
@@ -78,7 +83,7 @@ fn make_init(size: u64, scope: &AssetScope) -> Option<Segment> {
     }))
 }
 
-fn make_placeholder_init(size: u64, scope: &AssetScope) -> Segment {
+fn make_placeholder_init(size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = "https://example.com/init.mp4".parse().expect("valid url");
     let resource_id = scope
         .key(&AssetResource::Url(url.clone()))
@@ -92,7 +97,7 @@ fn make_placeholder_init(size: u64, scope: &AssetScope) -> Segment {
     })
 }
 
-fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
+fn make_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
@@ -110,7 +115,7 @@ fn make_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
     })
 }
 
-fn make_placeholder_seg(idx: u32, size: u64, scope: &AssetScope) -> Segment {
+fn make_placeholder_seg(idx: u32, size: u64, scope: &TestAssetScope) -> Segment {
     let url: Url = format!("https://example.com/seg{idx}.m4s")
         .parse()
         .expect("valid url");
@@ -2923,7 +2928,7 @@ fn an_evicted_slot_is_opened_again() {
 fn disk_ctx(root: &std::path::Path) -> PlanCtx {
     let cancel = CancelToken::never();
     let backend = Arc::new(
-        AssetStore::builder()
+        AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Disk { root: root.into() })
             .cancel(cancel)
             .build(),
@@ -2931,7 +2936,7 @@ fn disk_ctx(root: &std::path::Path) -> PlanCtx {
     PlanCtx {
         bus: EventBus::new(8),
         scope: backend
-            .scope::<crate::Hls>(&AssetSource::Remote {
+            .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                 url: Url::parse("https://example.com/master.m3u8").expect("master url"),
                 discriminator: Some("disk".to_owned()),
             })

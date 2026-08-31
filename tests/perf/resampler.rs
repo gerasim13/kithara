@@ -4,25 +4,24 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use hotpath::HotpathGuardBuilder;
 use kithara::{
-    bufpool::SamplePool,
     resampler::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings, create_resampler, rubato::RubatoBackend,
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
+use kithara_integration_tests::bufpool_ext::pools;
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: AudioSpec) -> AudioChunk {
     let samples = frames * spec.channels as usize;
-    let pool = SamplePool::default();
-    let pcm = pool.get_with(|b| {
-        b.clear();
-        b.resize(samples, 0.0);
-        for i in 0..samples {
-            b[i] = (i as f32 * 0.01).sin() * 0.5;
-        }
-    });
+    let pools = pools();
+    let mut pcm = pools
+        .get_with_len::<f32>(samples)
+        .expect("perf sample buffer");
+    for (index, sample) in pcm.iter_mut().enumerate() {
+        *sample = (index as f32 * 0.01).sin() * 0.5;
+    }
 
     AudioChunk::new(
         AudioChunkInfo {
@@ -65,13 +64,15 @@ fn build_resampler(
         })
         .quality(quality)
         .options(ResamplerOptions::builder().chunk_size(chunk_size).build())
-        .sample_pool(SamplePool::new(64, chunk_size.saturating_mul(16)))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(RubatoBackend::new())
         .settings(settings)
         .build();
-    create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}"))
+    Box::new(
+        create_resampler(&config).unwrap_or_else(|err| panic!("resampler should build: {err}")),
+    )
 }
 
 fn process_stereo(
@@ -145,8 +146,12 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
             ];
 
             for quality in qualities {
-                let mut resampler =
-                    build_resampler(input_spec.sample_rate, output_rate, quality, test_frames);
+                let mut resampler = build_resampler(
+                    input_spec.sample_rate.get(),
+                    output_rate,
+                    quality,
+                    test_frames,
+                );
                 let input = create_planar(test_frames);
                 let mut output = create_output(&*resampler);
 
@@ -166,8 +171,8 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
         PerfScenario::PassthroughDetection => {
             let spec = AudioSpec::new(2, NonZeroU32::new(44100).expect("test rate"));
             let mut resampler = build_resampler(
-                spec.sample_rate,
-                spec.sample_rate,
+                spec.sample_rate.get(),
+                spec.sample_rate.get(),
                 ResamplerQuality::Good,
                 2048,
             );
@@ -225,7 +230,7 @@ fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfS
 
             for &size in &chunk_sizes {
                 let mut resampler = build_resampler(
-                    input_spec.sample_rate,
+                    input_spec.sample_rate.get(),
                     output_rate,
                     ResamplerQuality::High,
                     size,

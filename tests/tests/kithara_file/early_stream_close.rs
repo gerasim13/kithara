@@ -6,6 +6,7 @@ use std::{
 };
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event, EventBus, EventReceiver, FileEvent},
     file::{File, FileConfig, FileSrc},
     net::{HttpClient, NetOptions},
@@ -23,6 +24,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
 };
 
 struct Consts;
@@ -97,12 +99,14 @@ async fn file_stream_closes_early_seek_still_works() {
         },
     });
     let url = handle.url();
+    let pools = pools();
 
     let dl = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::builder()
                 .inactivity_timeout(Duration::from_secs(1))
                 .build(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .cancel(cancel_token.clone())
@@ -116,15 +120,20 @@ async fn file_stream_closes_early_seek_still_works() {
 
     let config = FileConfig::for_src(FileSrc::Remote(url))
         .events(bus)
-        .store(kithara_integration_tests::disk_asset_store(
-            clean_temp_dir.path(),
-        ))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: clean_temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .cancel(cancel_token)
         .look_ahead_bytes(256_000)
         .downloader(dl)
         .build();
 
-    let stream = Stream::<File>::new(config).await.unwrap();
+    let stream = Stream::<File<TestPools>>::new(config).await.unwrap();
 
     // Phase 1: prove the initial sequential bytes are readable, then hand
     // the stream back so the seek runs after a settled download state.
@@ -230,20 +239,26 @@ async fn partial_cache_resume_works() {
         },
     });
     let url = handle.url();
+    let pools = pools();
 
     let cancel1 = CancelToken::never();
     let bus1 = EventBus::new(64);
     let mut rx1 = bus1.subscribe();
     let config1 = FileConfig::for_src(FileSrc::Remote(url.clone()))
         .events(bus1)
-        .store(kithara_integration_tests::disk_asset_store(
-            cache_dir.path(),
-        ))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools.clone())
         .cancel(cancel1.clone())
         .look_ahead_bytes(256_000)
         .build();
 
-    let stream1 = Stream::<File>::new(config1).await.unwrap();
+    let stream1 = Stream::<File<TestPools>>::new(config1).await.unwrap();
 
     let phase1 = spawn_blocking(move || {
         let mut stream1 = stream1;
@@ -276,14 +291,19 @@ async fn partial_cache_resume_works() {
 
     let cancel2 = CancelToken::never();
     let config2 = FileConfig::for_src(FileSrc::Remote(url))
-        .store(kithara_integration_tests::disk_asset_store(
-            cache_dir.path(),
-        ))
+        .store(
+            AssetStore::builder(pools.clone())
+                .backend(StorageBackend::Disk {
+                    root: cache_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
+        .pools(pools)
         .cancel(cancel2.clone())
         .look_ahead_bytes(256_000)
         .build();
 
-    let stream2 = Stream::<File>::new(config2).await.unwrap();
+    let stream2 = Stream::<File<TestPools>>::new(config2).await.unwrap();
 
     let phase2 = spawn_blocking(move || {
         let mut stream2 = stream2;

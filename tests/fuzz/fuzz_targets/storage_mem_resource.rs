@@ -2,7 +2,7 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use kithara::{
-    bufpool::BytePool,
+    bufpool::testing::pools,
     platform::CancelToken,
     storage::{MemResource, StorageResource},
 };
@@ -47,7 +47,7 @@ impl<'a> Arbitrary<'a> for Input {
 }
 
 fuzz_target!(|input: Input| {
-    let res = StorageResource::from(MemResource::new(CancelToken::never(), BytePool::default()));
+    let res = StorageResource::from(MemResource::new(CancelToken::never(), pools().get::<u8>()));
     let mut oracle = vec![0u8; 8192];
     let mut written_len = 0usize;
     let mut committed = false;

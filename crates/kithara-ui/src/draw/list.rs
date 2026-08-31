@@ -1,5 +1,5 @@
 use super::{
-    DrawCmd, DrawPools, FillRule, Geom, Image, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
+    DrawBuffers, DrawCmd, FillRule, Geom, Image, Paint, Path, Pen, PoolText, Pt, Rect, Rgba,
     Transform, Verb, place, pool::Buffer,
 };
 use crate::shaping::GlyphRun;
@@ -20,12 +20,12 @@ impl DrawList {
 #[derive(Default)]
 pub struct DrawListBuilder {
     commands: Buffer<DrawCmd>,
-    pools: Option<DrawPools>,
+    pools: Option<DrawBuffers>,
     transform: Transform,
 }
 
 impl DrawListBuilder {
-    pub(super) fn pooled(pools: &DrawPools) -> Self {
+    pub(super) fn pooled(pools: &DrawBuffers) -> Self {
         Self {
             commands: pools.commands(),
             pools: Some(pools.clone()),
@@ -42,7 +42,7 @@ impl DrawListBuilder {
         let mut child = self
             .pools
             .as_ref()
-            .map_or_else(Self::default, DrawPools::list);
+            .map_or_else(Self::default, DrawBuffers::list);
         child.transform = self.transform;
         child
     }

@@ -8,6 +8,7 @@ use std::{
 };
 
 use kithara_assets::{AssetReader, AssetWriter, RawWriteHandle, ReadSide, WriteSide};
+use kithara_bufpool::HasPool;
 use kithara_events::{DrmEvent, EventBus, HlsError as EventHlsError, HlsEvent};
 use kithara_net::{NetError, Retryability};
 use kithara_platform::{CancelToken, sync::Arc};
@@ -61,20 +62,27 @@ fn is_terminal_fetch_error(e: &NetError) -> bool {
 /// `impl` blocks below, so the compiler rejects a double settle or an
 /// [`apply_commit`](crate::variant::HlsVariant::apply_commit) on anything but a `Loaded`
 /// handle.
-pub(crate) struct FetchClaim<S: SegmentPhase> {
-    data: S::Data,
-    _phase: PhantomData<S>,
+pub(crate) struct FetchClaim<P, S>
+where
+    P: SegmentPhase<S>,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    data: P::Data,
+    _schema: PhantomData<fn() -> S>,
 }
 
 /// Backing payload of a [`FetchClaim<Downloading>`](FetchClaim). Shares the slot
 /// CAS cell so a terminal transition can flip it, holds the `Weak`
 /// back-reference for the post-commit size apply, and carries the `Drop`
 /// disarm flag.
-pub(crate) struct DownloadClaim {
+pub(crate) struct DownloadClaim<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     slot: Arc<SegmentSlotState>,
     planned: PlannedFetch,
     plan_revision: PlanRevision,
-    variant: Weak<HlsVariant>,
+    variant: Weak<HlsVariant<S>>,
     /// Peer-wake handle for the `Drop` recovery: a claim dropped without a
     /// settle must wake the peer to take the requeued work, and the claim
     /// outlives every context that could lend it one.
@@ -89,7 +97,10 @@ pub(crate) struct LoadedProof {
     final_len: u64,
 }
 
-impl FetchClaim<Downloading> {
+impl<S> FetchClaim<Downloading, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Consume the claim without touching slot state — used for a stale
     /// (cancelled) settle whose resource already committed: the new epoch
     /// owns the slot, so leaving it as-is is correct.
@@ -104,7 +115,7 @@ impl FetchClaim<Downloading> {
     pub(crate) const fn claim(
         planned: PlannedFetch,
         plan_revision: PlanRevision,
-        variant: Weak<HlsVariant>,
+        variant: Weak<HlsVariant<S>>,
         slot: Arc<SegmentSlotState>,
         signal: SizeSignal,
     ) -> Self {
@@ -117,7 +128,7 @@ impl FetchClaim<Downloading> {
                 signal,
                 settled: false,
             },
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
@@ -127,12 +138,12 @@ impl FetchClaim<Downloading> {
     /// `try_claim` will not re-dispatch it and a waiting reader surfaces a
     /// terminal error. Unlike [`into_missing`](Self::into_missing) the
     /// slot does NOT return to the dispatch pool.
-    pub(crate) fn into_failed(mut self) -> FetchClaim<Failed> {
+    pub(crate) fn into_failed(mut self) -> FetchClaim<Failed, S> {
         self.data.slot.mark_failed();
         self.data.settled = true;
         FetchClaim {
             data: (),
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
@@ -141,13 +152,13 @@ impl FetchClaim<Downloading> {
     /// `apply_commit` shrinks the variant's layout to match *before*
     /// `mark_loaded` flips the slot — a reader that observes `Loaded` then
     /// reads the size must never see the stale estimate.
-    pub(crate) fn into_loaded(mut self, actual: u64) -> FetchClaim<Loaded> {
+    pub(crate) fn into_loaded(mut self, actual: u64) -> FetchClaim<Loaded, S> {
         let loaded = FetchClaim {
             data: LoadedProof {
                 planned: self.data.planned,
                 final_len: actual,
             },
-            _phase: PhantomData,
+            _schema: PhantomData,
         };
         if let Some(v) = self.data.variant.upgrade() {
             v.apply_commit(&loaded);
@@ -160,7 +171,7 @@ impl FetchClaim<Downloading> {
     /// `Downloading -> Loaded` without a size apply — the resource
     /// committed by a racing writer but reported no `final_len`, so the
     /// existing layout estimate stands.
-    pub(crate) fn into_loaded_no_apply(mut self) -> FetchClaim<Loaded> {
+    pub(crate) fn into_loaded_no_apply(mut self) -> FetchClaim<Loaded, S> {
         self.data.slot.mark_loaded();
         self.data.settled = true;
         FetchClaim {
@@ -168,18 +179,18 @@ impl FetchClaim<Downloading> {
                 planned: self.data.planned,
                 final_len: 0,
             },
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
     /// `Downloading -> Missing` recovery (recoverable failure / cancel
     /// before commit). The slot returns to the dispatch pool.
-    pub(crate) fn into_missing(mut self) -> FetchClaim<Missing> {
+    pub(crate) fn into_missing(mut self) -> FetchClaim<Missing, S> {
         self.data.slot.mark_missing();
         self.data.settled = true;
         FetchClaim {
             data: (),
-            _phase: PhantomData,
+            _schema: PhantomData,
         }
     }
 
@@ -199,12 +210,15 @@ impl FetchClaim<Downloading> {
         Arc::clone(&self.data.slot)
     }
 
-    pub(crate) fn variant(&self) -> Option<Arc<HlsVariant>> {
+    pub(crate) fn variant(&self) -> Option<Arc<HlsVariant<S>>> {
         self.data.variant.upgrade()
     }
 }
 
-impl FetchClaim<Loaded> {
+impl<S> FetchClaim<Loaded, S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     delegate::delegate! {
         to self.data {
             #[field]
@@ -227,7 +241,10 @@ impl FetchClaim<Loaded> {
 /// forever on the gap (the transient-failure settle documents the same
 /// contract). The work goes back on the plan and the peer is woken to take
 /// it.
-impl Drop for DownloadClaim {
+impl<S> Drop for DownloadClaim<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn drop(&mut self) {
         if self.settled {
             return;
@@ -263,15 +280,18 @@ pub(crate) enum PlannedFetch {
 
 /// Fetch ownership and epoch state settled back into one variant slot.
 /// Its weak variant reference does not extend the variant lifetime.
-pub(crate) struct FetchSlot {
+pub(crate) struct FetchSlot<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Read view of the writer's generation — used to observe a
     /// committed-by-race status before deciding the terminal transition.
-    pub(crate) reader: AssetReader,
+    pub(crate) reader: AssetReader<S>,
     /// Sole commit owner (non-`Clone`); consumed in `settle`.
-    pub(crate) writer: AssetWriter,
+    pub(crate) writer: AssetWriter<S>,
     pub(crate) cancel: CancelToken,
     pub(crate) bus: EventBus,
-    pub(crate) handle: FetchClaim<Downloading>,
+    pub(crate) handle: FetchClaim<Downloading, S>,
     /// Clone-able streaming-write handle for the fetch body closure.
     pub(crate) raw: RawWriteHandle,
     /// Unified reader-wake handle — [`SizeSignal::fire`]d on every terminal
@@ -283,13 +303,19 @@ pub(crate) struct FetchSlot {
     pub(crate) signal: SizeSignal,
 }
 
-impl From<FetchSlot> for OnCompleteFn {
-    fn from(slot: FetchSlot) -> Self {
+impl<S> From<FetchSlot<S>> for OnCompleteFn
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn from(slot: FetchSlot<S>) -> Self {
         Box::new(move |bytes_written, _headers, err| slot.settle(bytes_written, err))
     }
 }
 
-impl FetchSlot {
+impl<S> FetchSlot<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// On success, commits the resource. `bytes_written` is forwarded as
     /// `final_len` — required by [`ProcessedResource::commit`] to trigger
     /// the post-write decrypt pass on encrypted segments (passing `None`
@@ -483,10 +509,13 @@ impl FetchSlot {
     }
 }
 
-fn decrypt_failure_site(
+fn decrypt_failure_site<S>(
     planned: PlannedFetch,
-    variant: Option<&Arc<HlsVariant>>,
-) -> Option<(u32, u32)> {
+    variant: Option<&Arc<HlsVariant<S>>>,
+) -> Option<(u32, u32)>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let PlannedFetch::Segment(segment_index) = planned else {
         return None;
     };

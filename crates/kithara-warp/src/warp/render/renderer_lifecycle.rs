@@ -1,6 +1,6 @@
 use std::mem;
 
-use kithara_bufpool::SampleBuffer;
+use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
 use num_traits::ToPrimitive;
@@ -8,7 +8,10 @@ use tracing::warn;
 
 use super::renderer::WarpRenderer;
 
-impl WarpRenderer {
+impl<S> WarpRenderer<S>
+where
+    S: HasPool<f32>,
+{
     /// Assemble an output chunk from `scratch`, preserving the exact source
     /// start and the latest decoder frontier. `replacement` is retained for
     /// shell-side preparation before the next checked tick.
@@ -84,7 +87,7 @@ impl WarpRenderer {
         let pending = self
             .pending_source
             .as_mut()
-            .ok_or(ElasticError::SamplePoolBudgetExhausted)?;
+            .ok_or(ElasticError::PoolCapacity)?;
         if !pending.is_empty() {
             return Err(ElasticError::EnginePreparation(
                 "time-stretch pending source was not committed before unity",
@@ -182,7 +185,7 @@ impl WarpRenderer {
         }
         scratch
             .ensure_len(end)
-            .map_err(|_| ElasticError::SamplePoolBudgetExhausted)?;
+            .map_err(|_| ElasticError::PoolCapacity)?;
         let drain = self
             .engine
             .as_mut()

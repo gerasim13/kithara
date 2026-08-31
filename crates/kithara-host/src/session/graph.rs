@@ -2,6 +2,7 @@ use firewheel::{
     FirewheelCtx, Volume, backend::AudioBackend, diff::Memo,
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
 };
+use kithara_bufpool::HasPool;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -24,8 +25,8 @@ pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
 pub(super) fn master_gain(level: f32) -> Volume {
     Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
 }
-pub(super) fn player_index<B: AudioBackend>(
-    state: &SessionState<B>,
+pub(super) fn player_index<B: AudioBackend, S>(
+    state: &SessionState<B, S>,
     player_id: PlayerId,
 ) -> Result<usize, SessionError> {
     state
@@ -37,14 +38,20 @@ fn graph_state(message: &'static str) -> SessionError {
     SessionError::Graph(message.into())
 }
 
-fn deck_at<B: AudioBackend>(state: &SessionState<B>, index: usize) -> Result<&Deck, SessionError> {
+fn deck_at<B: AudioBackend, S>(
+    state: &SessionState<B, S>,
+    index: usize,
+) -> Result<&Deck<S>, SessionError> {
     state
         .graph
         .deck(index)
         .ok_or_else(|| graph_state("player index out of range"))
 }
 
-fn deck_at_mut(graph: &mut GraphRegistry, index: usize) -> Result<&mut Deck, SessionError> {
+fn deck_at_mut<S>(
+    graph: &mut GraphRegistry<S>,
+    index: usize,
+) -> Result<&mut Deck<S>, SessionError> {
     graph
         .deck_mut(index)
         .ok_or_else(|| graph_state("player index out of range"))
@@ -64,8 +71,8 @@ fn connect_stereo<B: AudioBackend>(
 pub(super) mod tap {
     use super::*;
 
-    pub(in crate::session) fn enable<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn enable<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         writer: MixTapWriter,
     ) -> Result<(), SessionError> {
         if state.mix_tap.is_some() {
@@ -78,7 +85,7 @@ pub(super) mod tap {
         install(state, limiter_id, writer)
     }
 
-    pub(in crate::session) fn disable<B: AudioBackend>(state: &mut SessionState<B>) {
+    pub(in crate::session) fn disable<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
         let Some(MixTap::Installed(tap_id)) = state.mix_tap.take() else {
             return;
         };
@@ -93,8 +100,8 @@ pub(super) mod tap {
         }
     }
 
-    pub(in crate::session) fn install_requested<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn install_requested<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         limiter_id: NodeID,
     ) -> Result<(), SessionError> {
         let Some(MixTap::Requested(writer)) = state.mix_tap.take() else {
@@ -103,8 +110,8 @@ pub(super) mod tap {
         install(state, limiter_id, writer)
     }
 
-    fn install<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    fn install<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         limiter_id: NodeID,
         writer: MixTapWriter,
     ) -> Result<(), SessionError> {
@@ -128,12 +135,20 @@ pub(super) mod tap {
 pub(super) mod lifecycle {
     use super::*;
 
-    pub(in crate::session) fn start_player<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn start_player<B, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
         sample_rate: u32,
-    ) -> Result<(), SessionError> {
-        debug!(player_id, sample_rate, "[KITHARA-ROUTE] starting player");
+        master_volume: f32,
+    ) -> Result<(), SessionError>
+    where
+        B: AudioBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
+        debug!(
+            player_id,
+            sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
+        );
         ensure_ctx(state, sample_rate)?;
         let idx = player_index(state, player_id)?;
         let Some(session_output_id) = state.session_output_node_id else {
@@ -145,7 +160,7 @@ pub(super) mod lifecycle {
         if player.started {
             return Err(SessionError::AlreadyStarted(player_id));
         }
-        let eq_config = EqConfig::for_pool(player.sample_pool.clone()).build();
+        let eq_config = EqConfig::builder(player.pools.clone()).build();
         let mut master_eq = MasterEqNode::new(eq_config, &player.eq_layout);
         for (band, gain) in player.shared_eq.snapshot().into_iter().enumerate() {
             master_eq.set_gain(band, GainDb::from(gain));
@@ -183,16 +198,16 @@ pub(super) mod lifecycle {
         );
         Ok(())
     }
-    pub(in crate::session) fn stop_player<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn stop_player<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
     ) -> Result<(), SessionError> {
         debug!(player_id, "[KITHARA-ROUTE] stopping player");
         let idx = player_index(state, player_id)?;
         stop_player_idx(state, idx)
     }
-    fn stop_player_idx<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    fn stop_player_idx<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         idx: usize,
     ) -> Result<(), SessionError> {
         {
@@ -221,7 +236,9 @@ pub(super) mod lifecycle {
     /// Release the output device once no player is left to feed it. A media
     /// app that has stopped playing must not keep the platform's output
     /// engaged; the next `start_player` builds a fresh context.
-    fn shutdown_if_idle<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
+    fn shutdown_if_idle<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
+    ) -> Result<(), SessionError> {
         let idle = state.graph.decks().all(|deck| !deck.started);
         if idle {
             debug!("[KITHARA-ROUTE] shutting down idle session stream");
@@ -281,9 +298,9 @@ pub(super) mod lifecycle {
         }
         Ok(())
     }
-    pub(super) fn remove_player_graph<B: AudioBackend>(
+    pub(super) fn remove_player_graph<B: AudioBackend, S>(
         fw_ctx: &mut FirewheelCtx<B>,
-        player: &mut Deck,
+        player: &mut Deck<S>,
     ) {
         let player_id = player.player_id;
         for slot in player.slots.drain(..) {
@@ -306,7 +323,7 @@ pub(super) mod lifecycle {
         }
         clear_player_graph_state(player);
     }
-    pub(super) fn clear_player_graph_state(player: &mut Deck) {
+    pub(super) fn clear_player_graph_state<S>(player: &mut Deck<S>) {
         player.master_eq_memo = None;
         player.master_volume_memo = None;
     }
@@ -315,10 +332,14 @@ pub(super) mod lifecycle {
 pub(super) mod slots {
     use super::*;
 
-    pub(in crate::session) fn allocate_slot<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn allocate_slot<B, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
-    ) -> Result<Reply, SessionError> {
+    ) -> Result<Reply, SessionError>
+    where
+        B: AudioBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         debug!(player_id, "[KITHARA-ROUTE] allocating player slot");
         let idx = player_index(state, player_id)?;
         if !deck_at(state, idx)?.started {
@@ -335,7 +356,7 @@ pub(super) mod slots {
         player.next_slot_id += 1;
         let shared_eq = player.shared_eq.clone();
         let (inputs, control) = slot_channels(shared_eq);
-        let player_node = PlayerNode::new(inputs, player.sample_pool.clone());
+        let player_node = PlayerNode::new(inputs, player.pools.clone());
         let player_node_id = fw_ctx.add_node(player_node, None);
         let slot_volume = VolumeNode::from_linear(1.0);
         let slot_volume_memo = Memo::new(slot_volume);
@@ -368,8 +389,8 @@ pub(super) mod slots {
         let reply = Reply::SlotAllocated(AllocatedSlot::new(control, slot_id));
         Ok(reply)
     }
-    pub(in crate::session) fn release_slot<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn release_slot<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
         slot: SlotId,
     ) -> Result<(), SessionError> {
@@ -391,7 +412,10 @@ pub(super) mod slots {
         );
         Ok(())
     }
-    pub(super) fn take_slot(player: &mut Deck, slot: SlotId) -> Result<SlotNodes, SessionError> {
+    pub(super) fn take_slot<S>(
+        player: &mut Deck<S>,
+        slot: SlotId,
+    ) -> Result<SlotNodes, SessionError> {
         let Some(slot_idx) = player.slots.iter().position(|s| s.slot_id == slot) else {
             return Err(SessionError::SlotNotFound(slot));
         };
@@ -419,8 +443,8 @@ pub(super) mod controls {
 
     // Validates the whole request before mutating anything, so an invalid
     // entry leaves the batch untouched. Omitted players are unchanged.
-    pub(in crate::session) fn set_player_master_volumes<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn set_player_master_volumes<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         levels: &[PlayerLevel],
     ) -> Result<(), SessionError> {
         let mut resolved: Vec<(usize, f32)> = Vec::with_capacity(levels.len());
@@ -453,8 +477,8 @@ pub(super) mod controls {
         Ok(())
     }
 
-    fn apply_master_volume<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    fn apply_master_volume<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         idx: usize,
         volume: f32,
     ) -> Result<(), SessionError> {
@@ -472,8 +496,8 @@ pub(super) mod controls {
         }
         Ok(())
     }
-    pub(in crate::session) fn set_player_slot_volume<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn set_player_slot_volume<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
         slot: SlotId,
         volume: f32,
@@ -496,8 +520,8 @@ pub(super) mod controls {
         slot_nodes.volume_memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::session) fn set_player_eq_gain<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn set_player_eq_gain<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
         band: usize,
         gain_db: f32,
@@ -526,11 +550,15 @@ pub(super) mod controls {
         memo.update_memo(&mut queue);
         Ok(())
     }
-    pub(in crate::session) fn set_player_eq_layout<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn set_player_eq_layout<B, S>(
+        state: &mut SessionState<B, S>,
         player_id: PlayerId,
         eq_layout: Vec<EqBandConfig>,
-    ) -> Result<(), SessionError> {
+    ) -> Result<(), SessionError>
+    where
+        B: AudioBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         let idx = player_index(state, player_id)?;
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         if !deck_at(state, idx)?.started {
@@ -540,7 +568,7 @@ pub(super) mod controls {
             return Ok(());
         }
 
-        let (old_eq_id, master_volume_id, slot_volume_ids, sample_pool) = {
+        let (old_eq_id, master_volume_id, slot_volume_ids, pools) = {
             let player = deck_at(state, idx)?;
             let old_eq_id = player
                 .master_eq_node_id
@@ -557,11 +585,11 @@ pub(super) mod controls {
                 old_eq_id,
                 master_volume_id,
                 slot_volume_ids,
-                player.sample_pool.clone(),
+                player.pools.clone(),
             )
         };
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let eq_config = EqConfig::for_pool(sample_pool).build();
+        let eq_config = EqConfig::builder(pools).build();
         let master_eq = MasterEqNode::new(eq_config, &eq_layout);
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
@@ -613,8 +641,8 @@ pub(super) mod controls {
         player.master_eq_memo = Some(master_eq_memo);
         Ok(())
     }
-    pub(in crate::session) fn set_session_ducking<B: AudioBackend>(
-        state: &mut SessionState<B>,
+    pub(in crate::session) fn set_session_ducking<B: AudioBackend, S>(
+        state: &mut SessionState<B, S>,
         mode: SessionDuckingMode,
     ) {
         state.session_ducking = mode;
@@ -637,7 +665,7 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
-    use kithara_bufpool::SamplePool;
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
@@ -681,6 +709,8 @@ mod tests {
         stream: u64,
     }
 
+    type TestState = SessionState<TestBackend, TestPools>;
+
     impl Drop for TestBackend {
         fn drop(&mut self) {
             device(|dev| {
@@ -702,7 +732,7 @@ mod tests {
     impl Default for TestConfig {
         fn default() -> Self {
             Self {
-                sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
+                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             }
         }
     }
@@ -743,7 +773,7 @@ mod tests {
                 dev.next_stream
             });
             let sample_rate = NonZeroU32::new(config.sample_rate).unwrap_or(
-                NonZeroU32::new(SessionState::<Self>::DEFAULT_SAMPLE_RATE)
+                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
                     .expect("invariant: fixture default sample rate is non-zero"),
             );
             let max_block_frames = NonZeroU32::new(512).ok_or(TestBackendError)?;
@@ -796,14 +826,14 @@ mod tests {
         })
     }
 
-    fn processed_frames(state: &SessionState<TestBackend>) -> i64 {
+    fn processed_frames(state: &TestState) -> i64 {
         state
             .ctx
             .as_ref()
             .map_or(-1, |fw_ctx| fw_ctx.audio_clock().samples.0)
     }
 
-    fn register(state: &mut SessionState<TestBackend>) -> PlayerId {
+    fn register(state: &mut TestState) -> PlayerId {
         let grid_id = attach_player(state);
         match run_cmd(
             state,
@@ -811,8 +841,8 @@ mod tests {
                 grid_id,
                 bus: EventBus::default(),
                 eq_layout: generate_log_spaced_bands(5),
-                sample_pool: SamplePool::default(),
-                sample_rate: SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
+                pools: pools(),
+                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             },
         ) {
             Reply::PlayerRegistered(id) => id,
@@ -821,10 +851,11 @@ mod tests {
         }
     }
 
-    fn start_at(state: &mut SessionState<TestBackend>, player_id: PlayerId, sample_rate: u32) {
+    fn start_at(state: &mut TestState, player_id: PlayerId, sample_rate: u32) {
         match run_cmd(
             state,
             Cmd::StartPlayer {
+                master_volume: 1.0,
                 player_id,
                 sample_rate,
             },
@@ -835,15 +866,11 @@ mod tests {
         }
     }
 
-    fn start(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
-        start_at(
-            state,
-            player_id,
-            SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE,
-        );
+    fn start(state: &mut TestState, player_id: PlayerId) {
+        start_at(state, player_id, TestState::DEFAULT_SAMPLE_RATE);
     }
 
-    fn unregister(state: &mut SessionState<TestBackend>, player_id: PlayerId) {
+    fn unregister(state: &mut TestState, player_id: PlayerId) {
         match run_cmd(state, Cmd::UnregisterPlayer { player_id }) {
             Reply::Ok => {}
             Reply::Err(err) => panic!("player {player_id} failed to unregister: {err}"),
@@ -851,9 +878,7 @@ mod tests {
         }
     }
 
-    fn set_tempo_and_read_session_grid(
-        state: &mut SessionState<TestBackend>,
-    ) -> SessionTransportSnapshot {
+    fn set_tempo_and_read_session_grid(state: &mut TestState) -> SessionTransportSnapshot {
         assert!(matches!(
             run_cmd(
                 state,
@@ -982,7 +1007,7 @@ mod tests {
         assert_eq!(
             initial.axis(),
             MapAxis::Session(SessionAxis::new(
-                NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
+                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
                     .expect("the fixture sample rate is non-zero"),
                 SessionEpoch::new(0),
             ))
@@ -1043,7 +1068,7 @@ mod tests {
         assert_eq!(
             unavailable.axis(),
             MapAxis::Session(SessionAxis::new(
-                NonZeroU32::new(SessionState::<TestBackend>::DEFAULT_SAMPLE_RATE)
+                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
                     .expect("the fixture sample rate is non-zero"),
                 SessionEpoch::new(2),
             ))

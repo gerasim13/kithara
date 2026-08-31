@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
@@ -28,7 +28,10 @@ impl<B> Config<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn build(_config: &Self, _rate: NonZeroU32, _sample_pool: &SamplePool) -> Slot<B> {
+    pub(crate) fn build<S>(_config: &Self, _rate: NonZeroU32, _pools: &PoolRegion<S>) -> Slot<B>
+    where
+        S: HasPool<f32>,
+    {
         Slot(PhantomData)
     }
 
@@ -38,7 +41,10 @@ where
 
     pub(crate) fn set_resampler(_config: &mut Self, _resampler: BeatAnalysisConfig<B>) {}
 
-    pub(crate) fn take_detector(_config: &mut Self, _sample_pool: &SamplePool) -> Option<Detector> {
+    pub(crate) fn take_detector<S>(_config: &mut Self, _pools: &PoolRegion<S>) -> Option<Detector>
+    where
+        S: HasPool<f32> + Send + Sync + 'static,
+    {
         None
     }
 
@@ -63,25 +69,39 @@ impl<B> Slot<B>
 where
     B: ResamplerBackend,
 {
-    pub(crate) fn snapshot(
+    pub(crate) fn snapshot<S>(
         _slot: &mut Self,
+        _pools: &PoolRegion<S>,
         _detector: Option<&mut Detector>,
         _ending: bool,
         _extent: Option<u64>,
-    ) -> Option<(BeatArtifact, Vec<FrameRange>)> {
+    ) -> Option<(BeatArtifact, Vec<FrameRange>)>
+    where
+        S: HasPool<f32>,
+    {
         None
     }
 
-    pub(crate) fn push(
+    pub(crate) fn push<S>(
         _slot: &mut Self,
+        _pools: &PoolRegion<S>,
         _pcm: &[f32],
         _channels: usize,
         _at: u64,
         _detector: Option<&mut Detector>,
-    ) {
+    ) where
+        S: HasPool<f32>,
+    {
     }
 
-    pub(crate) fn prepare_detection(&mut self, _trailing: bool) -> Option<DetectionRequest> {
+    pub(crate) fn prepare_detection<S>(
+        &mut self,
+        _pools: &PoolRegion<S>,
+        _trailing: bool,
+    ) -> Option<DetectionRequest>
+    where
+        S: HasPool<f32>,
+    {
         None
     }
 
@@ -91,7 +111,14 @@ where
         None
     }
 
-    pub(crate) fn restore(&mut self, resume: Option<BeatResume>) -> Result<(), BlobError> {
+    pub(crate) fn restore<S>(
+        &mut self,
+        _pools: &PoolRegion<S>,
+        resume: Option<BeatResume>,
+    ) -> Result<(), BlobError>
+    where
+        S: HasPool<f32>,
+    {
         if resume.is_none() {
             Ok(())
         } else {

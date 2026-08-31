@@ -19,10 +19,20 @@ HTTP client with retry, timeout, and streaming. Wraps the selected backend (`req
 ## Usage
 
 ```rust
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
 use kithara_net::{HttpClient, Net, NetOptions};
 use kithara_platform::CancelToken;
 
-let client = HttpClient::new(NetOptions::default(), CancelToken::never());
+pool_schema! {
+    NetPools {
+        bytes: u8,
+    }
+}
+
+let pools = NetPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(PoolConfig::builder().max_buffers(32).build())
+    .build()?;
+let client = HttpClient::new(NetOptions::default(), pools, CancelToken::never());
 let bytes = client.get_bytes(url, None).await?;        // None = no extra headers
 let created = client.post_bytes(url, body, None).await?; // POST bytes, read the response body
 let stream = client.stream(url, None).await?;

@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
-use kithara_bufpool::BudgetExhausted;
+use kithara_bufpool::PoolError;
 use kithara_signal::SignalError;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -42,6 +42,14 @@ pub enum DecodeError {
         #[from]
         #[source]
         source: SignalError,
+    },
+
+    /// The injected pool region rejected a checked buffer allocation.
+    #[error("decode buffer allocation failed: {source}")]
+    Pool {
+        #[from]
+        #[source]
+        source: PoolError,
     },
 
     #[error("Seek failed: {detail}")]
@@ -311,12 +319,6 @@ impl From<io::Error> for DecodeError {
 
 impl From<TryFromIntError> for DecodeError {
     fn from(err: TryFromIntError) -> Self {
-        Self::backend(err)
-    }
-}
-
-impl From<BudgetExhausted> for DecodeError {
-    fn from(err: BudgetExhausted) -> Self {
         Self::backend(err)
     }
 }

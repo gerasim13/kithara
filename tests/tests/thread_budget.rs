@@ -3,7 +3,6 @@
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     audio::{AudioConfig, AudioControl},
-    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
         CancelToken,
@@ -13,7 +12,10 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, TestTempDir, kithara, temp_dir, waits::wait_thread_count_quiesced,
+    PackagedTestServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara, temp_dir,
+    waits::wait_thread_count_quiesced,
 };
 use tracing::info;
 
@@ -46,9 +48,9 @@ fn wait_for_named_threads(target: usize, timeout: Duration) -> usize {
 #[kithara::test(serial)]
 fn thread_budget_audio_worker_is_one_thread() {
     let before = active_named_thread_count();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools)
             .cancel(CancelToken::never())
             .build(),
     );
@@ -83,23 +85,20 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 
     let before = active_named_thread_count();
 
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config).build();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config).build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker.open(config).await.expect("create hls audio");
     audio.preload().expect("preload must succeed");
     // Spawn side: the named-thread increment is eager/synchronous at each
@@ -134,9 +133,9 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     let server = PackagedTestServer::new().await;
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let shared_worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(CancelToken::never())
             .build(),
     );
@@ -145,21 +144,20 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
     // Baseline gate: include the eager shared playback worker, but measure before
     // the store registers with the flush hub and starts its worker.
     let before = wait_thread_count_quiesced(QUIESCE_WATCHDOG).await;
-    let shared_store = AssetStore::builder()
+    let shared_store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(region.byte_pool())
         .flush_hub(shared_hub.clone())
         .build();
 
     let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(shared_store.clone())
-        .pool(region.byte_pool())
+        .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config).build();
+    let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config).build();
     let a1 = shared_worker
         .open(config)
         .await
@@ -167,11 +165,11 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     let hls_config2 = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(shared_store.clone())
-        .pool(region.byte_pool())
+        .pools(pools.clone())
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(1))
         .build();
-    let config: AudioConfig<Hls> = AudioConfig::for_stream(hls_config2).build();
+    let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(hls_config2).build();
     let a2 = shared_worker
         .open(config)
         .await
@@ -179,11 +177,11 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
 
     let drm_config = HlsConfig::for_url(server.url("/master-encrypted.m3u8"))
         .store(shared_store)
-        .pool(region.byte_pool())
+        .pools(pools)
         .cancel(cancel.clone())
         .initial_abr_mode(AbrMode::manual(0))
         .build();
-    let config: AudioConfig<Hls> = AudioConfig::for_stream(drm_config).build();
+    let config: AudioConfig<Hls<TestPools>> = AudioConfig::for_stream(drm_config).build();
     let a3 = shared_worker
         .open(config)
         .await
@@ -194,7 +192,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         audio.preload().expect("preload shared-worker track");
     }
     // Spawn side: the flush-hub worker starts on the first store registration
-    // during `AssetStore::builder().build()`, and its named-thread increment is
+    // during `AssetStore::builder(pools).build()`, and its named-thread increment is
     // eager/synchronous at the spawn call site. No settle is needed.
     let after = active_named_thread_count();
     let delta = after.saturating_sub(before);

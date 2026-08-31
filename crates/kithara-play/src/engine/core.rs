@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_platform::{
     CancelToken,
@@ -26,10 +26,10 @@ type SlotHandle = SlotControl;
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
-pub struct EngineImpl {
+pub struct EngineImpl<S> {
     running: AtomicBool,
     master_volume: AtomicF32,
-    config: EngineConfig,
+    config: EngineConfig<S>,
     eq_layout: Mutex<Vec<EqBandConfig>>,
     #[field(get, vis = "pub(crate)")]
     bus: EventBus,
@@ -37,21 +37,18 @@ pub struct EngineImpl {
     slots: Mutex<SlotTable>,
     start_lock: Mutex<()>,
     runtime: Option<RuntimeHandle>,
-    #[field(get, vis = "pub(crate)")]
-    sample_pool: SamplePool,
-    session: SessionHandle,
+    session: SessionHandle<S>,
 }
 
-impl EngineImpl {
+impl<S> EngineImpl<S> {
     /// Create a new engine with the given configuration.
     #[must_use]
-    pub fn new(mut config: EngineConfig, bus: EventBus) -> Self {
+    pub fn new(mut config: EngineConfig<S>, bus: EventBus) -> Self {
         let session = config
             .session
             .take()
             .map_or_else(SessionHandle::pending, SessionHandle::new);
         let max_slots = config.max_slots;
-        let resolved_pool = config.sample_pool.clone();
         let eq_layout = Mutex::new(std::mem::take(&mut config.eq_layout));
         Self {
             config,
@@ -59,7 +56,6 @@ impl EngineImpl {
             bus,
             session,
             master_volume: AtomicF32::new(1.0),
-            sample_pool: resolved_pool,
             player_id: Mutex::default(),
             running: AtomicBool::new(false),
             start_lock: Mutex::new(()),
@@ -74,8 +70,12 @@ impl EngineImpl {
         }
     }
 
-    pub(crate) fn attach_session(&self, binding: SessionBinding) -> Result<(), PlayError> {
+    pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
         self.session.bind(binding)
+    }
+
+    pub(crate) const fn pools(&self) -> &PoolRegion<S> {
+        &self.config.pools
     }
 
     pub(crate) fn cancel_token(&self) -> Option<CancelToken> {
@@ -123,7 +123,7 @@ impl EngineImpl {
             self.config.grid_id,
             self.bus.clone(),
             self.eq_layout.lock().clone(),
-            self.sample_pool.clone(),
+            self.pools().clone(),
             self.config.sample_rate,
         )?;
         *player_id = Some(id);
@@ -322,7 +322,7 @@ impl EngineImpl {
     }
 
     #[cfg(any(test, feature = "probe"))]
-    pub(super) const fn session_handle(&self) -> &SessionHandle {
+    pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
         &self.session
     }
 
@@ -355,8 +355,9 @@ impl EngineImpl {
         }
 
         let player_id = self.ensure_player_id()?;
+        let master_volume = self.master_volume.load(Ordering::Relaxed);
         self.session
-            .start_player(player_id, self.config.sample_rate)?;
+            .start_player(player_id, self.config.sample_rate, master_volume)?;
 
         self.running.store(true, Ordering::Release);
 

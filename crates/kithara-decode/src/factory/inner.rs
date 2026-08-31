@@ -5,7 +5,7 @@ use std::{
 };
 
 use bon::Builder;
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 #[cfg(all(test, feature = "resample-rubato"))]
 use kithara_resampler::rubato::RubatoBackend;
@@ -138,9 +138,7 @@ where
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct DecoderConfig<B = NoResamplerBackend> {
-    /// Raw byte buffer pool, propagated from the host.
-    pub byte_pool: BytePool,
+pub struct DecoderConfig<B, S> {
     /// Which decoder backend to use. See [`DecoderBackend`].
     #[builder(default)]
     pub backend: DecoderBackend,
@@ -157,26 +155,14 @@ pub struct DecoderConfig<B = NoResamplerBackend> {
     /// Optional decoder-side resampler plan. `None` means the decoder emits
     /// at the source rate.
     pub resampler: Option<DecoderResamplerConfig<B>>,
-    /// PCM buffer pool, propagated from the host.
-    pub sample_pool: SamplePool,
+    /// Shared typed buffer-pool facade propagated from the host.
+    pub pools: PoolRegion<S>,
     /// Enable gapless trim wiring through the per-backend codec.
     #[builder(default = true)]
     pub gapless: bool,
     /// Epoch counter for decoder recreation tracking.
     #[builder(default)]
     pub epoch: u64,
-}
-
-#[cfg(all(test, feature = "apple", any(target_os = "macos", target_os = "ios")))]
-impl DecoderConfig {
-    pub(crate) fn test_builder() -> DecoderConfigBuilder<
-        NoResamplerBackend,
-        decoder_config_builder::SetSamplePool<decoder_config_builder::SetBytePool>,
-    > {
-        Self::builder()
-            .byte_pool(BytePool::default())
-            .sample_pool(SamplePool::default())
-    }
 }
 
 /// Factory for creating decoders with a single, strict backend selection.
@@ -191,14 +177,15 @@ pub struct DecoderFactory;
 
 impl DecoderFactory {
     /// Create a decoder with the single selected backend.
-    pub(crate) fn create<R, B>(
+    pub(crate) fn create<R, B, S>(
         source: R,
         hint: &ProbeHint,
-        config: DecoderConfig<B>,
+        config: DecoderConfig<B, S>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
         B: ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let source: BoxedSource = Box::new(source);
         Self::dispatch_backend(source, hint, config)
@@ -212,14 +199,15 @@ impl DecoderFactory {
     ///
     /// Returns error if codec cannot be determined or decoder creation fails.
     /// No fallback — a failure is terminal.
-    pub fn create_from_media_info<R, B>(
+    pub fn create_from_media_info<R, B, S>(
         source: R,
         media_info: &MediaInfo,
-        config: DecoderConfig<B>,
+        config: DecoderConfig<B, S>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
         B: ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         tracing::debug!(?media_info, "create_from_media_info called");
 
@@ -240,14 +228,15 @@ impl DecoderFactory {
     /// Returns `DecodeError::ProbeFailed` when the hint is missing or too
     /// weak to pick a codec, and `DecodeError::*` for backend failures.
     /// No fallback — callers must supply a usable hint.
-    pub fn create_with_probe<R, B>(
+    pub fn create_with_probe<R, B, S>(
         source: R,
         hint: Option<&str>,
-        config: DecoderConfig<B>,
+        config: DecoderConfig<B, S>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
         B: ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let mut source = source;
         let mut probe_hint = ProbeHint {
@@ -261,7 +250,7 @@ impl DecoderFactory {
             probe_hint.container,
             Some(ContainerFormat::Mp4 | ContainerFormat::Fmp4)
         ) && let Some(codec) =
-            sniff_mp4_codec(&mut source, &config.byte_pool).and_then(codec_from_mp4_fourcc)
+            sniff_mp4_codec(&mut source, &config.pools)?.and_then(codec_from_mp4_fourcc)
         {
             probe_hint.codec = Some(codec);
         }
@@ -270,13 +259,14 @@ impl DecoderFactory {
         Self::create(source, &probe_hint, config)
     }
 
-    pub(super) fn dispatch_backend<B>(
+    pub(super) fn dispatch_backend<B, S>(
         mut source: BoxedSource,
         hint: &ProbeHint,
-        config: DecoderConfig<B>,
+        config: DecoderConfig<B, S>,
     ) -> DecodeResult<Box<dyn Decoder>>
     where
         B: ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let (codec, mut container) = resolve_codec_container(hint)?;
         if container.is_none() {
@@ -312,7 +302,7 @@ impl DecoderFactory {
                     .codec
                     .is_some_and(|codec| segment_aware_container(codec, media_info.container)) =>
             {
-                <crate::fmp4::Fmp4SegmentDemuxer as crate::demuxer::Demuxer>::required_input()
+                crate::fmp4::REQUIRED_INPUT
             }
             _ if matches!(media_info.container, Some(ContainerFormat::Wav)) => {
                 ReaderInput::InitOnly
@@ -324,29 +314,30 @@ impl DecoderFactory {
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs"))]
-fn create_webcodecs<B>(
+fn create_webcodecs<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
-    use crate::webcodecs::codec::WebCodecsCodec;
+    use crate::webcodecs::codec::{WebCodecsCodec, supports as webcodecs_supports};
 
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
     {
-        if WebCodecsCodec::supports(codec) {
+        if webcodecs_supports(codec) {
             tracing::debug!(
                 ?codec,
                 "fmp4_segment: dispatching to segment-aware WebCodecs path"
             );
             let gapless = config.gapless;
-            let byte_pool = config.byte_pool.clone();
+            let pools = config.pools.clone();
             return build_fmp4_segment_decoder(source, layout, config, move |track| {
-                WebCodecsCodec::open(track, gapless, byte_pool.clone())
+                WebCodecsCodec::open(track, gapless, pools.clone())
             });
         }
         #[cfg(feature = "symphonia")]
@@ -359,7 +350,7 @@ where
     }
 
     #[cfg(feature = "symphonia")]
-    if WebCodecsCodec::supports(codec) {
+    if webcodecs_supports(codec) {
         return build_webcodecs_standalone(source, codec, container, config);
     }
 
@@ -373,14 +364,15 @@ where
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "webcodecs", feature = "symphonia"))]
-fn build_webcodecs_standalone<B>(
+fn build_webcodecs_standalone<B, S>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
@@ -396,7 +388,7 @@ where
         "file-symphonia: dispatching to ComposedDecoder<SymphoniaDemuxer, WebCodecsCodec>"
     );
     let probed_gapless = if config.gapless {
-        scoped_probe(&mut *source, codec, &config.byte_pool)?
+        scoped_probe(&mut *source, codec, &config.pools)?
     } else {
         None
     };
@@ -412,35 +404,33 @@ where
     if probed_gapless.is_some() {
         demuxer.set_gapless(probed_gapless);
     }
-    let codec_impl = WebCodecsCodec::open(
-        demuxer.track_info(),
-        config.gapless,
-        config.byte_pool.clone(),
-    )?;
-    let pool = config.sample_pool.clone();
+    let codec_impl =
+        WebCodecsCodec::open(demuxer.track_info(), config.gapless, config.pools.clone())?;
+    let pools = config.pools.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool: pool.clone(),
+            pools: pools.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+    crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn create_apple<B>(
+fn create_apple<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::apple::AppleCodec;
 
@@ -487,14 +477,15 @@ where
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn build_apple_standalone_decoder<B>(
+fn build_apple_standalone_decoder<B, S>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::{
         apple::{AppleAudioFileDemuxer, AppleCodec, SourceOpenMode},
@@ -502,12 +493,12 @@ where
         demuxer::Demuxer,
         gapless::{scoped_probe, scoped_startup_probe},
     };
-    let startup_probe = scoped_startup_probe(&mut *source, codec, &config.byte_pool)?;
+    let startup_probe = scoped_startup_probe(&mut *source, codec, &config.pools)?;
     let probed_gapless = if config.gapless {
         if matches!(codec, AudioCodec::Mp3) {
             startup_probe.gapless
         } else {
-            scoped_probe(&mut *source, codec, &config.byte_pool)?
+            scoped_probe(&mut *source, codec, &config.pools)?
         }
     } else {
         None
@@ -523,7 +514,7 @@ where
         container,
         open_mode,
         startup_probe.duration,
-        &config.byte_pool,
+        &config.pools,
     )?;
     demuxer.set_byte_len_handle(config.byte_len_handle.clone());
     demuxer.set_gapless(probed_gapless);
@@ -534,23 +525,23 @@ where
     }
     let codec_impl =
         AppleCodec::open_with_config(&output_track, config.gapless, target_output_rate)?;
-    let pool = config.sample_pool.clone();
+    let pools = config.pools.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool: pool.clone(),
+            pools: pools.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+    crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-fn decoder_embedded_target_output_rate<B>(config: &DecoderConfig<B>) -> Option<u32>
+fn decoder_embedded_target_output_rate<B, S>(config: &DecoderConfig<B, S>) -> Option<u32>
 where
     B: ResamplerBackend,
 {
@@ -620,14 +611,15 @@ fn round_scaled_frames(count: u64, source_rate: u32, output_rate: u32) -> Decode
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
-fn create_android<B>(
+fn create_android<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::android::AndroidCodec;
 
@@ -681,14 +673,15 @@ fn android_standalone_supports(codec: AudioCodec, container: Option<ContainerFor
 }
 
 #[cfg(all(feature = "android", target_os = "android"))]
-fn build_android_standalone_decoder<B>(
+fn build_android_standalone_decoder<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::{
         android::{AndroidCodec, AndroidMediaExtractorDemuxer},
@@ -708,30 +701,31 @@ where
         _ => return Err(DecodeError::UnsupportedCodec { codec }),
     };
     let codec_impl = AndroidCodec::open_with_config(demuxer.track_info())?;
-    let pool = config.sample_pool.clone();
+    let pools = config.pools.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool: pool.clone(),
+            pools: pools.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+    crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
 #[cfg(feature = "symphonia")]
-fn create_symphonia<B>(
+fn create_symphonia<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     if should_use_segment_aware(codec, container, &config)
         && let Some(layout) = config.byte_map.clone()
@@ -742,14 +736,15 @@ where
 }
 
 #[cfg(feature = "symphonia")]
-fn create_file_symphonia_universal<B>(
+fn create_file_symphonia_universal<B, S>(
     mut source: BoxedSource,
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
@@ -765,7 +760,7 @@ where
     );
 
     let probed_gapless = if config.gapless {
-        scoped_probe(&mut *source, codec, &config.byte_pool)?
+        scoped_probe(&mut *source, codec, &config.pools)?
     } else {
         None
     };
@@ -788,29 +783,29 @@ where
     } else {
         SymphoniaCodec::open_native(&demuxer.native_params)?
     };
-    let pool = config.sample_pool.clone();
+    let pools = config.pools.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec_impl,
         DecoderRuntime {
-            pool: pool.clone(),
+            pools: pools.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+    crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
 /// Gate for the segment-aware fMP4 path. Routes AAC / FLAC fMP4 with a
 /// surfaced `SegmentedSource` (HLS) through `Fmp4SegmentDecoder`. File
 /// sources without segment metadata fall through to the legacy
 /// `IsoMp4Reader` path.
-fn should_use_segment_aware(
+fn should_use_segment_aware<S>(
     codec: AudioCodec,
     container: Option<ContainerFormat>,
-    config: &DecoderConfig<impl ResamplerBackend>,
+    config: &DecoderConfig<impl ResamplerBackend, S>,
 ) -> bool {
     segment_aware_container(codec, container) && config.byte_map.is_some()
 }
@@ -824,14 +819,15 @@ const fn segment_aware_container(codec: AudioCodec, container: Option<ContainerF
 }
 
 #[cfg(feature = "symphonia")]
-fn create_fmp4_segment_symphonia<B>(
+fn create_fmp4_segment_symphonia<B, S>(
     source: BoxedSource,
     codec: AudioCodec,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig};
 
@@ -854,16 +850,17 @@ where
 /// [`Fmp4SegmentDemuxer`] open + pool-resolution + [`ComposedDecoder`]
 /// boilerplate so apple/android/symphonia call-sites collapse into a
 /// single closure that opens the codec from `TrackInfo`.
-fn build_fmp4_segment_decoder<C, F, B>(
+fn build_fmp4_segment_decoder<C, F, B, S>(
     source: BoxedSource,
     layout: Arc<dyn ByteMap>,
-    config: DecoderConfig<B>,
+    config: DecoderConfig<B, S>,
     open_codec: F,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     C: crate::codec::FrameCodec + 'static,
     F: FnOnce(&crate::demuxer::TrackInfo) -> DecodeResult<C>,
     B: ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     use crate::{
         composed::{ComposedDecoder, DecoderRuntime},
@@ -871,21 +868,21 @@ where
         fmp4::Fmp4SegmentDemuxer,
     };
 
-    let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.byte_pool.clone())?;
+    let demuxer = Fmp4SegmentDemuxer::open(source, layout, config.pools.clone())?;
     let codec = open_codec(demuxer.track_info())?;
-    let pool = config.sample_pool.clone();
+    let pools = config.pools.clone();
     let resampler = config.resampler;
     let decoder = ComposedDecoder::new(
         demuxer,
         codec,
         DecoderRuntime {
-            pool: pool.clone(),
+            pools: pools.clone(),
             epoch: config.epoch,
             byte_len_handle: config.byte_len_handle.clone(),
             hooks: config.hooks,
         },
     );
-    crate::resampled::wrap(Box::new(decoder), resampler, &pool)
+    crate::resampled::wrap(Box::new(decoder), resampler, &pools)
 }
 
 #[cfg(test)]
@@ -956,6 +953,7 @@ mod apple_factory_tests {
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer, Frame, TrackInfo},
         error::DecodeResult,
         fmp4::test_layout::{TestLayoutCodec, build_test_layout},
+        test_pools::{TestPools, pools},
         traits::Decoder,
     };
 
@@ -1106,10 +1104,11 @@ mod apple_factory_tests {
             .maybe_codec(Some(AudioCodec::AacLc))
             .maybe_container(None)
             .build();
-        let config: DecoderConfig<kithara_resampler::NoResamplerBackend> =
-            DecoderConfig::test_builder()
+        let config: DecoderConfig<kithara_resampler::NoResamplerBackend, TestPools> =
+            DecoderConfig::builder()
                 .backend(DecoderBackend::Apple)
                 .byte_map(byte_map)
+                .pools(pools())
                 .build();
 
         let result = DecoderFactory::create_from_media_info(source, &media_info, config);

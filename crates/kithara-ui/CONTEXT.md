@@ -88,8 +88,8 @@ Every string retained by the compiled tree is interned in one bounded `String` a
 an allocation failure returns `UiDocError::ArenaFull`.
 
 - The compiled string arena is not pooled: budget-charging `ensure_len` needs `Default + Clone`,
-  which `ExpandedNode` cannot provide. `CompiledUi` does carry a `DrawPools` family cloned from
-  `UiConfig.draw_pools`; its short-lived command, path, and paint-text buffers are not compiled
+  which `ExpandedNode` cannot provide. `CompiledUi` does carry a `DrawBuffers` family cloned from
+  `UiConfig.draw_buffers`; its short-lived command, path, and paint-text buffers are not compiled
   document strings.
 - Layout scratch is not pooled and does not need to be: a retained widget keeps its own vectors
   and refills them in place, and an immediate widget keeps them in the state its tree holds for it.
@@ -101,11 +101,11 @@ an allocation failure returns `UiDocError::ArenaFull`.
   the caller owns, so a walk over a set of pages reuses one buffer instead of taking a pool lease
   for pixels that leave the toolkit as a PNG. It is the single owner of the 256-byte row-padding
   arithmetic wgpu imposes; the conformance tests and `capture::Offscreen` both read through it.
-- `draw/pool/` is this crate's pool home and `perf.no-component-pool-construction` exempts it, the
-  way it exempts `kithara-bufpool`: `DrawPools::new` builds the family a host then injects through
+- `draw/pool/` is this crate's buffer home and `perf.no-component-pool-construction` exempts it, the
+  way it exempts `kithara-bufpool`: `DrawBuffers::new` builds the family a host then injects through
   `UiConfig`, so it is the owner site rather than a component reaching for storage of its own.
 - The pool family belongs to the host, not to the document. `UiConfig` carries it and every
-  document compiled against that configuration shares it, because a `DrawPools` clone is an `Arc`
+  document compiled against that configuration shares it, because a `DrawBuffers` clone is an `Arc`
   clone. A host builds its configuration once - `app::Ui` in `new`, `kithara-app`'s `AppUi` for both
   deck layouts - and compiles every screen and every redress against that one value. Building a
   configuration per compile is the defect this replaced: it gave each document an empty family and
@@ -268,13 +268,12 @@ list is therefore exactly the list callers produced before the rounded shape exi
 
 The retained list is a cloneable, comparable value. Cross-backend identity is therefore asserted
 against the same list rather than promised by two call-through implementations. `UiConfig` is the
-only owner of draw-pool limits, and each `CompiledUi` carries the resulting shared `DrawPools` family
-for both hosts. `max_buffers` bounds the number retained by each command, path, and paint-text pool;
-zero means the smallest useful pool of one buffer. A returned buffer above its kind's capacity limit
-is dropped instead of retained. These are reusable-memory limits, not hostile-document ceilings: a
-live builder may grow past them, but the pool never truncates a command or changes a picture. A
-kithara-bufpool byte budget would not enforce that contract because `Pool::track_byte_delta` runs
-only inside `Pool::acquire`, never when a caller grows a vector with `push`.
+only owner of draw-buffer limits, and each `CompiledUi` carries the resulting shared `DrawBuffers`
+family for both hosts. Its closed `DrawSchema` registers command, path, and paint-text slots under
+one `PoolRegion`; every checked growth competes for `max_bytes`. `max_buffers` bounds the number
+retained by each kind, while a returned buffer above its kind's capacity limit is dropped instead of
+retained. The live builder may grow beyond that retention limit without truncating a command or
+changing a picture, up to the shared hard byte budget.
 The shared control adapters in both hosts start their lists from that compiled owner, and every
 nested clip and authored outline inherits it through the parent builder. `PoolStats::alloc_misses`
 is the standing measure of reuse. The Studio parity capture draws the shipped single- and dual-deck

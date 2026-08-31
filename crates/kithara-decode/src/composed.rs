@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::{
@@ -53,7 +53,7 @@ const ZERO_FRAME_BUDGET: u32 = 32;
 /// Generic decoder built by composition: a [`Demuxer`] feeds raw frames
 /// into a [`FrameCodec`] which produces PCM. One implementation, one
 /// dispatch path — no per-backend duplication.
-pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
+pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec, S> {
     codec: C,
     demuxer: D,
     head_strip: HeadStrip,
@@ -70,7 +70,7 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     /// first frame past the target is consumed. Lets `seek(target)`
     /// land precisely at `target` instead of at the granule boundary.
     pending_seek_target: Option<Duration>,
-    pool: SamplePool,
+    pools: PoolRegion<S>,
     spec: AudioSpec,
     /// Set on every seek; the next emitted chunk may re-anchor the PCM cursor.
     resync_frame_offset_to_pts: bool,
@@ -86,27 +86,24 @@ pub(crate) struct ComposedDecoder<D: Demuxer, C: FrameCodec> {
     timeline_gap_frames: u64,
 }
 
-/// Runtime wiring for a [`ComposedDecoder`], separated from the
-/// `(demuxer, codec)` pair: the PCM buffer `pool`, the initial seek
-/// `epoch`, an optional `byte_len_handle` for byte-length observability,
-/// and optional reader-event `hooks`.
+/// Runtime wiring required to build a [`ComposedDecoder`].
 ///
-/// `pool` is a required field with no `Default`: the host must thread its
-/// configured pool all the way to the decoder, and a missing pool must be
-/// a compile error, not a silent fall-back to the process-global
-/// `SamplePool::default()`. The test-only [`DecoderRuntime::for_test`] is the
-/// single place that opts into the global pool, and it is `#[cfg(test)]`
-/// so production code physically cannot reach it.
-pub(crate) struct DecoderRuntime {
+/// The host must provide its configured pool region explicitly.
+pub(crate) struct DecoderRuntime<S> {
     pub(crate) byte_len_handle: Option<Arc<AtomicU64>>,
     pub(crate) hooks: Option<BoxedEventSink>,
-    pub(crate) pool: SamplePool,
+    pub(crate) pools: PoolRegion<S>,
     pub(crate) epoch: u64,
 }
 
-impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
+impl<D, C, S> ComposedDecoder<D, C, S>
+where
+    D: Demuxer,
+    C: FrameCodec,
+    S: HasPool<f32>,
+{
     /// Build a decoder from a `(demuxer, codec)` pair and its runtime wiring.
-    pub(crate) fn new(demuxer: D, codec: C, runtime: DecoderRuntime) -> Self {
+    pub(crate) fn new(demuxer: D, codec: C, runtime: DecoderRuntime<S>) -> Self {
         let spec = codec.spec();
         let duration = demuxer.duration();
         Self {
@@ -114,7 +111,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             codec,
             spec,
             duration,
-            pool: runtime.pool,
+            pools: runtime.pools,
             epoch: runtime.epoch,
             byte_len_handle: runtime.byte_len_handle,
             hooks: runtime.hooks,
@@ -183,7 +180,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             return Ok(DecoderChunkOutcome::Eof);
         }
 
-        let mut buf = self.pool.get();
+        let mut buf = self.pools.get::<f32>();
         let timestamp = self
             .spec
             .duration_for(self.frame_offset)
@@ -241,7 +238,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
             let frame_duration = frame.duration;
             let frame_end = frame_pts.saturating_add(frame_duration);
             let source_bytes = u64::try_from(frame.data.len()).unwrap_or(u64::MAX);
-            let mut buf = self.pool.get();
+            let mut buf = self.pools.get::<f32>();
             let mut frames =
                 self.codec
                     .decode_frame(frame.data, frame_pts, frame.packet_desc, &mut buf)?;
@@ -357,7 +354,12 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
     }
 }
 
-impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
+impl<D, C, S> Decoder for ComposedDecoder<D, C, S>
+where
+    D: Demuxer + 'static,
+    C: FrameCodec,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     fn blender_profile(&self) -> BlenderProfile {
         BlenderProfile::new(self.spec)
     }
@@ -429,14 +431,11 @@ impl<D: Demuxer + 'static, C: FrameCodec> Decoder for ComposedDecoder<D, C> {
 }
 
 #[cfg(test)]
-impl DecoderRuntime {
-    /// Test-only runtime: the process-global [`SamplePool::default`], epoch 0,
-    /// no byte-length handle, no hooks. Confined to test builds so a
-    /// production decoder can never silently bind the global pool instead
-    /// of the host's configured one.
+impl DecoderRuntime<crate::test_pools::TestPools> {
+    /// Test-only runtime with a crate-local typed pool region.
     pub(crate) fn for_test() -> Self {
         Self {
-            pool: SamplePool::default(),
+            pools: crate::test_pools::pools(),
             epoch: 0,
             byte_len_handle: None,
             hooks: None,
@@ -462,7 +461,8 @@ mod default_priming_tests {
     use super::*;
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
-    fn build_mp3_decoder() -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec> {
+    fn build_mp3_decoder()
+    -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec, crate::test_pools::TestPools> {
         let cursor = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
@@ -1777,7 +1777,7 @@ mod hook_tests {
     fn build(
         demuxer: StubDemuxer,
         log: Arc<Mutex<CallLog>>,
-    ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec> {
+    ) -> ComposedDecoder<StubDemuxer, ConstFrameCodec, crate::test_pools::TestPools> {
         let codec = ConstFrameCodec::new(
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1,
@@ -1909,40 +1909,34 @@ mod pool_budget_tests {
 
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_platform::time::Duration;
     use kithara_signal::AudioSpec;
     use kithara_test_utils::kithara;
 
     use super::test_stub_codec::ConstFrameCodec;
-    use crate::codec::FrameCodec;
+    use crate::{codec::FrameCodec, test_pools::pools};
 
     #[kithara::test]
-    fn codec_warm_pool_does_not_grow_alloc_misses() {
-        let pool = SamplePool::new(32, 8192);
+    fn codec_warm_pool_keeps_allocated_bytes_stable() {
+        let pools = pools();
         for _ in 0..4 {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             buf.ensure_len(2048).unwrap();
         }
-        let warmup_misses = pool.stats().alloc_misses;
+        let warmup_bytes = pools.stats().allocated_bytes;
 
         let mut codec = ConstFrameCodec::new(
             AudioSpec::new(2, NonZeroU32::new(44_100).expect("test rate")),
             1024,
         );
         for _ in 0..200 {
-            let mut buf = pool.get();
+            let mut buf = pools.get::<f32>();
             let frames = codec
                 .decode_frame(&[], Duration::ZERO, &[], &mut buf)
                 .expect("BUG: decode_frame");
             assert_eq!(frames, 1024);
         }
 
-        assert_eq!(
-            pool.stats().alloc_misses,
-            warmup_misses,
-            "no further alloc misses expected after warm-up; \
-             codec must not allocate fresh buffers per call"
-        );
+        assert_eq!(pools.stats().allocated_bytes, warmup_bytes);
     }
 }

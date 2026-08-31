@@ -5,7 +5,6 @@ use kithara_audio::PendingReason;
 use kithara_audio::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome, SeekOutcome,
 };
-use kithara_bufpool::SamplePool;
 use kithara_decode::{DecodeError, TrackMetadata};
 use kithara_events::EventBus;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -16,6 +15,7 @@ use num_traits::cast::{AsPrimitive, ToPrimitive};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use unimock::{MockFn, Unimock, matching};
 
+use crate::test_pools::{Pools, sample_buffer};
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use crate::{
     analyzer::TrackAnalysis,
@@ -102,7 +102,7 @@ pub(super) fn sine_from(at: u64, frames: usize) -> Vec<f32> {
     out
 }
 
-pub(super) fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
+pub(super) fn chunk(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
     let frames = samples.len() / usize::from(CH);
     AudioChunk::new(
         AudioChunkInfo {
@@ -111,7 +111,7 @@ pub(super) fn chunk(samples: &[f32], frame_offset: u64) -> AudioChunk {
             frame_offset,
             ..Default::default()
         },
-        SamplePool::default().collect(samples.iter().copied()),
+        sample_buffer(pools, samples),
     )
 }
 
@@ -130,7 +130,7 @@ impl FakeReader {
         }
     }
 
-    pub(super) fn chunked(samples: &[f32], parts: usize) -> Self {
+    pub(super) fn chunked(pools: &Pools, samples: &[f32], parts: usize) -> Self {
         let per = samples.len().div_ceil(parts.max(1)) / usize::from(CH) * usize::from(CH);
         let mut frame_offset = 0;
         let mut outcomes: VecDeque<_> = samples
@@ -138,7 +138,7 @@ impl FakeReader {
             .map(|part| {
                 let at = frame_offset;
                 frame_offset += u64::try_from(part.len() / usize::from(CH)).unwrap_or(0);
-                Ok(ChunkOutcome::Chunk(chunk(part, at)))
+                Ok(ChunkOutcome::Chunk(chunk(pools, part, at)))
             })
             .collect();
         outcomes.push_back(Ok(eof()));
@@ -146,9 +146,9 @@ impl FakeReader {
     }
 
     #[cfg(feature = "analysis-waveform")]
-    pub(super) fn chunked_with_pending(samples: &[f32], parts: usize) -> Self {
+    pub(super) fn chunked_with_pending(pools: &Pools, samples: &[f32], parts: usize) -> Self {
         let mut with_pending = VecDeque::new();
-        for outcome in Self::chunked(samples, parts).outcomes {
+        for outcome in Self::chunked(pools, samples, parts).outcomes {
             with_pending.push_back(Ok(pending()));
             with_pending.push_back(outcome);
         }

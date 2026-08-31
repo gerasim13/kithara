@@ -24,12 +24,17 @@ use crate::{
     ReadSide, StorageBackend, WriterHandle, layout::ResourceKey,
 };
 
+type TestAssetStore = AssetStore<crate::test_pools::TestPools>;
+type TestPendingResourceIndex = PendingResourceIndex<crate::test_pools::TestPools>;
+type TestResourceLease = ResourceLease<crate::test_pools::TestPools>;
+type TestWriterHandle = WriterHandle<crate::test_pools::TestPools>;
+
 #[derive(Default)]
 struct WakeCount(AtomicUsize);
 
 struct RearmReaderOnDrop {
     dropped: Arc<AtomicBool>,
-    lease: Arc<ResourceLease>,
+    lease: Arc<TestResourceLease>,
     replacement: Waker,
 }
 
@@ -69,19 +74,19 @@ fn entry(read_pos: u64, look_ahead: Option<u64>) -> Arc<DemandEntry> {
     ))
 }
 
-fn test_store() -> AssetStore {
-    AssetStore::builder()
+fn test_store() -> TestAssetStore {
+    AssetStore::builder(crate::test_pools::pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build()
 }
 
 fn attach(
-    index: &PendingResourceIndex,
-    store: &AssetStore,
+    index: &TestPendingResourceIndex,
+    store: &TestAssetStore,
     key: &ResourceKey,
     entry: Arc<DemandEntry>,
-) -> (ResourceLease, Option<WriterHandle>) {
+) -> (TestResourceLease, Option<TestWriterHandle>) {
     let remove_store = store.clone();
     let remove: RemoveResource = Arc::new(move |key| remove_store.remove_resource(key));
     let acquisition = index

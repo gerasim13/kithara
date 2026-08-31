@@ -20,6 +20,7 @@ mod core;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 pub mod player;
+pub mod pools;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 

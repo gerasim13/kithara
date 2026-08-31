@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use bitflags::bitflags;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 
 use crate::{
@@ -137,13 +138,16 @@ impl SegmentSlotState {
     /// the in-flight slot, `None` when another caller already claimed it.
     /// `plan_revision` records the plan the fetch was taken from, so a
     /// cancelled settle can tell a still-current plan from a superseded one.
-    pub(crate) fn try_claim(
+    pub(crate) fn try_claim<S>(
         self: &Arc<Self>,
         planned: PlannedFetch,
         plan_revision: PlanRevision,
-        variant: Weak<HlsVariant>,
+        variant: Weak<HlsVariant<S>>,
         signal: SizeSignal,
-    ) -> Option<FetchClaim<Downloading>> {
+    ) -> Option<FetchClaim<Downloading, S>>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         self.flags
             .compare_exchange(
                 SlotFlags::empty().bits(),
@@ -189,7 +193,10 @@ mod sealed {
 ///
 /// Sealed — the phase set is closed to this module. Each phase carries its
 /// own [`Data`](SegmentPhase::Data) payload; phases without state use `()`.
-pub(crate) trait SegmentPhase: sealed::Sealed {
+pub(crate) trait SegmentPhase<S>: sealed::Sealed
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data;
 }
 
@@ -209,15 +216,27 @@ impl sealed::Sealed for Loaded {}
 impl sealed::Sealed for Missing {}
 impl sealed::Sealed for Failed {}
 
-impl SegmentPhase for Downloading {
-    type Data = super::fetch::DownloadClaim;
+impl<S> SegmentPhase<S> for Downloading
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    type Data = super::fetch::DownloadClaim<S>;
 }
-impl SegmentPhase for Loaded {
+impl<S> SegmentPhase<S> for Loaded
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data = super::fetch::LoadedProof;
 }
-impl SegmentPhase for Missing {
+impl<S> SegmentPhase<S> for Missing
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data = ();
 }
-impl SegmentPhase for Failed {
+impl<S> SegmentPhase<S> for Failed
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data = ();
 }

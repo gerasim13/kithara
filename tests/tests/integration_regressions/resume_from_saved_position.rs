@@ -2,7 +2,6 @@
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    bufpool::{BytePool, Region},
     events::{AudioEvent, Event, TrackId},
     net::{HttpClient, NetOptions},
     platform::{
@@ -11,12 +10,14 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, kithara,
+    TestServerHelper, TestTempDir,
+    bufpool_ext::{Pools, TestPools, pools},
+    kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
@@ -25,7 +26,7 @@ use kithara_test_fixtures::SignalAsset;
 
 const SAVE_AFTER_SECS: f64 = 4.0;
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
@@ -36,15 +37,11 @@ fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn new_queue(region: &Region, store: AssetStore) -> Arc<Queue> {
+fn new_queue(pools: &Pools, store: AssetStore<TestPools>) -> Arc<Queue<TestPools>> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(
-                    region.byte_pool(),
-                    region.sample_pool(),
-                )
-                .build(),
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -54,18 +51,24 @@ fn new_queue(region: &Region, store: AssetStore) -> Arc<Queue> {
     ))
 }
 
-fn new_downloader(byte_pool: BytePool) -> Downloader {
+fn new_downloader(pools: Pools) -> Downloader {
     Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool).build(),
+            NetOptions::default(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
     )
 }
 
-fn append_track(queue: &Queue, url: &str, downloader: &Downloader, store: &AssetStore) -> TrackId {
-    let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url).expect("valid URL"))
+fn append_track(
+    queue: &Queue<TestPools>,
+    url: &str,
+    downloader: &Downloader,
+    store: &AssetStore<TestPools>,
+) -> TrackId {
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url).expect("valid URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .build();
@@ -79,16 +82,14 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let url = helper.signal(SignalAsset::MP3_SINE880_30S);
 
-    let first_region = Region::default();
-    let first_byte_pool = first_region.byte_pool();
-    let first_store = AssetStore::builder()
+    let first_pools = pools();
+    let first_store = AssetStore::builder(first_pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(first_byte_pool.clone())
         .build();
-    let first_queue = new_queue(&first_region, first_store.clone());
-    let first_downloader = new_downloader(first_byte_pool);
+    let first_queue = new_queue(&first_pools, first_store.clone());
+    let first_downloader = new_downloader(first_pools);
     let first_tick = spawn_ticker(Arc::clone(&first_queue));
     let mut first_rx = first_queue.subscribe();
     let first_id = append_track(&first_queue, url.as_str(), &first_downloader, &first_store);
@@ -128,16 +129,14 @@ async fn playback_starts_from_the_seeked_position(temp_dir: TestTempDir) {
     drop(first_queue);
     drop(first_downloader);
 
-    let second_region = Region::default();
-    let second_byte_pool = second_region.byte_pool();
-    let second_store = AssetStore::builder()
+    let second_pools = pools();
+    let second_store = AssetStore::builder(second_pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(second_byte_pool.clone())
         .build();
-    let second_queue = new_queue(&second_region, second_store.clone());
-    let second_downloader = new_downloader(second_byte_pool);
+    let second_queue = new_queue(&second_pools, second_store.clone());
+    let second_downloader = new_downloader(second_pools);
     let second_tick = spawn_ticker(Arc::clone(&second_queue));
     let mut second_rx = second_queue.subscribe();
     let second_id = append_track(

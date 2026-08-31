@@ -1,5 +1,6 @@
 use std::{collections::HashMap, mem};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
     PlayError,
@@ -11,18 +12,20 @@ use kithara_warp::{
 
 use super::super::{Host, HostConfig, HostOwned, SessionRoot};
 use crate::{
-    session::{HostDispatcher, RootView},
+    session::{HostDispatcher, RootView, web::WebSessionState},
     wasm::HostRoute,
 };
 
-pub(in crate::host) struct Platform {
-    remote_routes: Mutex<Vec<Arc<HostRoute>>>,
+pub(in crate::host) struct Platform<S> {
+    web_state: Option<WebSessionState<S>>,
+    remote_routes: Mutex<Vec<Arc<HostRoute<S>>>>,
     remote_residents: Option<HashMap<BeatGridId, Box<dyn Player>>>,
 }
 
-impl Platform {
-    pub(in crate::host) fn owner() -> Self {
+impl<S> Platform<S> {
+    pub(in crate::host) fn owner(web_state: WebSessionState<S>) -> Self {
         Self {
+            web_state: Some(web_state),
             remote_routes: Mutex::default(),
             remote_residents: None,
         }
@@ -30,6 +33,7 @@ impl Platform {
 
     fn remote() -> Self {
         Self {
+            web_state: None,
             remote_routes: Mutex::default(),
             remote_residents: Some(HashMap::new()),
         }
@@ -114,7 +118,7 @@ impl Platform {
     }
 
     pub(in crate::host) fn transact(
-        dispatcher: &Arc<dyn HostDispatcher>,
+        dispatcher: &Arc<dyn HostDispatcher<S>>,
         operation: SyncOperation<PlayerMember>,
     ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
         if matches!(&operation, SyncOperation::Topology { .. }) {
@@ -129,7 +133,10 @@ impl Platform {
     }
 }
 
-impl Host {
+impl<S> Host<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     /// Creates the platform session and its canonical synchronization root.
     ///
     /// # Errors
@@ -141,14 +148,20 @@ impl Host {
             group,
             view,
         } = Self::session_root(config)?;
-        let dispatcher = crate::session::web::spawn(group, view.clone(), sample_rate)?;
-        Ok(Self::owner(id, view, dispatcher))
+        let (dispatcher, web_state) =
+            crate::session::web::spawn::<S>(group, view.clone(), sample_rate)?;
+        Ok(Self::owner(
+            id,
+            view,
+            dispatcher,
+            Platform::owner(web_state),
+        ))
     }
 
     pub(crate) fn remote(
         id: BeatGridId,
         root_view: RootView,
-        dispatcher: Arc<dyn HostDispatcher>,
+        dispatcher: Arc<dyn HostDispatcher<S>>,
     ) -> Self {
         Self {
             id,
@@ -159,11 +172,15 @@ impl Host {
         }
     }
 
+    pub(crate) fn web_state(&self) -> Option<&WebSessionState<S>> {
+        self.platform.web_state.as_ref()
+    }
+
     pub(crate) fn remote_identity(&self) -> (BeatGridId, RootView) {
         (self.id, self.root_view.clone())
     }
 
-    pub(crate) fn register_remote_route(&self, route: Arc<HostRoute>) {
+    pub(crate) fn register_remote_route(&self, route: Arc<HostRoute<S>>) {
         self.platform.remote_routes.lock().push(route);
     }
 
@@ -174,7 +191,7 @@ impl Host {
     /// Returns an error when session binding or canonical attachment fails.
     pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
     where
-        P: PlayerControlSource,
+        P: PlayerControlSource<Schema = S>,
     {
         self.platform.require_remote()?;
         let (grid_id, control) = self.bind_player(&mut player)?;
@@ -196,7 +213,7 @@ impl Host {
     /// Returns an error when close or canonical detachment fails.
     pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
     where
-        P: PlayerControlSource,
+        P: PlayerControlSource<Schema = S>,
     {
         self.validate_removal(player)?;
         let id = player.id();

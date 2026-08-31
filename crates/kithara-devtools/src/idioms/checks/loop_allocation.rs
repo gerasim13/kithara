@@ -29,8 +29,10 @@ locality and add jitter to latency-critical code.
 
 The fix is usually one of:
 - Hoist the allocation out of the loop.
-- Reuse a buffer (`Vec::clear()` + `extend(...)` or `write!(&mut buf, ...)`).
-- Use a pool - `kithara_bufpool::{BytePool, SamplePool}` for byte/sample buffers.
+- Reuse structural storage (`Vec::clear()` + `extend(...)` or `write!(&mut buf, ...)`).
+- For bytes or decoded samples, acquire once from the injected `PoolRegion<S>`
+  with `get::<u8>()` or `get::<f32>()`, then use checked `ensure_len` or
+  `try_extend_from_slice` outside the loop.
 - Pre-size once with `Vec::with_capacity(N)` outside the loop so growth is amortised.
 
 ❌  for sample in chunk.frames() { let label = format!(\"frame-{}\", sample.id); log_debug(&label); }

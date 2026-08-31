@@ -12,7 +12,10 @@ use kithara_platform::{CancelToken, time::Duration};
 use tempfile::TempDir;
 
 use super::core::Atomic;
-use crate::{MemOptions, MemResource, Resource};
+use crate::{
+    MemOptions, MemResource, Resource,
+    test_pools::{byte_buffer, pools},
+};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::{MmapOptions, MmapResource, OpenMode};
 
@@ -30,7 +33,12 @@ fn create_mmap_resource(dir: &TempDir, name: &str) -> MmapResource {
 }
 
 fn create_mem_resource() -> MemResource {
-    Resource::open(CancelToken::never(), MemOptions::default()).unwrap()
+    let pools = pools();
+    Resource::open(
+        CancelToken::never(),
+        MemOptions::builder().buffer(byte_buffer(&pools)).build(),
+    )
+    .unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

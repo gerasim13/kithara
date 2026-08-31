@@ -1,14 +1,16 @@
 use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_platform::time::Duration;
-use kithara_test_utils::kithara;
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
-use {kithara_bufpool::SamplePool, kithara_resampler::rubato::RubatoBackend};
+use kithara_resampler::rubato::RubatoBackend;
+use kithara_test_utils::kithara;
 
 use super::{
     AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate,
     file::{HEADER_LEN, INDEX_ENTRY_LEN},
 };
+#[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
+use crate::test_pools::pools;
 use crate::{
     AnalysisFingerprint, AnalysisProgress, Coverage, FrameRange, TrackAnalysis, blob::Writer,
     progress::AnalysisResume,
@@ -158,7 +160,7 @@ fn create_bytes(analysis: TrackAnalysis) -> Vec<u8> {
 #[cfg(all(feature = "beat-nn", feature = "analysis-waveform"))]
 #[kithara::test(native, flash(false))]
 fn effective_application_fingerprint_fits_the_fixed_header() {
-    let fingerprint = crate::AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+    let fingerprint = crate::AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat()
         .with_waveform(2_000)
         .fingerprint();

@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use kithara_bufpool::{BytePool, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::{Decoder, DecoderConfig, DecoderFactory, DecoderResamplerConfig};
 use kithara_events::{DecoderChangeCause, Event, EventBus, FrameDomain};
 use kithara_platform::{
@@ -23,36 +23,45 @@ use super::{
     PreparedAudioLane, ProducerPort, RebuildRuntime, SharedStream, SourceParts, StreamAudioSource,
     StreamDecoderFactory, ThreadWake,
     core::{Audio, AudioParts, AudioRuntime, Controls, PreparedAudio, Session},
+    cursor::ChunkCursor,
     event::{
         AudioEvents, DecoderChangedEventData, decoder_changed_event, decoder_gapless_event,
         decoder_resampler_event, playback_resampler_event,
     },
     ring::{RingConsumer, RingParts, create_channels, create_trash_channel},
 };
-const WARM_DECODE_FRAMES: usize = 4608;
 
-#[derive(Clone)]
-struct DecoderDeps<B> {
+struct DecoderDeps<B, S> {
     host_sample_rate: Arc<AtomicU32>,
     decoder: AudioDecoderConfig<B>,
-    byte_pool: BytePool,
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
 }
 
-impl<B> DecoderDeps<B>
+impl<B, S> Clone for DecoderDeps<B, S>
+where
+    B: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            host_sample_rate: Arc::clone(&self.host_sample_rate),
+            decoder: self.decoder.clone(),
+            pools: self.pools.clone(),
+        }
+    }
+}
+
+impl<B, S> DecoderDeps<B, S>
 where
     B: Default + ResamplerBackend,
 {
     fn new(
         decoder: AudioDecoderConfig<B>,
-        sample_pool: SamplePool,
-        byte_pool: BytePool,
+        pools: PoolRegion<S>,
         host_sample_rate: &Arc<AtomicU32>,
     ) -> Self {
         Self {
-            byte_pool,
             decoder,
-            sample_pool,
+            pools,
             host_sample_rate: Arc::clone(host_sample_rate),
         }
     }
@@ -72,7 +81,7 @@ where
         decoder: Box<dyn Decoder>,
         decoder_factory: StreamDecoderFactory,
         media_info: Option<MediaInfo>,
-    ) -> DecodeInit {
+    ) -> DecodeInit<S> {
         DecodeInit {
             decoder,
             decoder_factory,
@@ -80,7 +89,7 @@ where
             gapless_mode: self.decoder.gapless_mode(),
             host_sample_rate: Arc::clone(&self.host_sample_rate),
             media_info,
-            sample_pool: self.sample_pool.clone(),
+            pools: self.pools.clone(),
             playback_resampler_backend: self.playback_resampler_backend(),
             // A requested host rate always resolves to a resampler plan, so a
             // route change is decided by `ResumeCursor`'s rate guards alone.
@@ -139,9 +148,9 @@ where
     }
 }
 
-struct FactoryDeps<B> {
+struct FactoryDeps<B, S> {
     epoch: Arc<AtomicU64>,
-    decoder: DecoderDeps<B>,
+    decoder: DecoderDeps<B, S>,
     /// The caller's `MediaInfo` declaration, kept for the life of the track.
     /// Every decoder built for it resolves through the same precedence as the
     /// initial one — a per-variant plan describes the variant, not the bytes
@@ -149,12 +158,12 @@ struct FactoryDeps<B> {
     user_media_info: Option<MediaInfo>,
 }
 
-impl<B> FactoryDeps<B>
+impl<B, S> FactoryDeps<B, S>
 where
     B: ResamplerBackend,
 {
     fn new(
-        decoder: &DecoderDeps<B>,
+        decoder: &DecoderDeps<B, S>,
         epoch: &Arc<AtomicU64>,
         user_media_info: Option<MediaInfo>,
     ) -> Self {
@@ -189,14 +198,14 @@ where
     /// Returns [`DecodeError`] when stream, probe, decoder, or runtime setup fails.
     #[doc(hidden)]
     #[cfg_attr(feature = "perf", hotpath::measure(label = "audio.prepare"))]
-    pub async fn prepare<B>(
+    pub async fn prepare<B, S>(
         config: AudioConfig<T, B>,
         wake: Arc<dyn WorkerWake>,
-        byte_pool: BytePool,
-        sample_pool: SamplePool,
+        pools: PoolRegion<S>,
     ) -> Result<PreparedAudio<Self, impl crate::AudioSource<Chunk = AudioChunk>>, DecodeError>
     where
         B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let AudioConfig {
             hint,
@@ -216,7 +225,7 @@ where
         let runtime_handle = current_runtime_handle()?;
 
         let bus = resolve_event_bus::<T>(&stream_config, config_bus);
-        let stream = create_stream_with_probe::<T>(stream_config, byte_pool.clone()).await?;
+        let stream = create_stream_with_probe::<T>(stream_config).await?;
         let playhead = stream.playhead_write();
         let seek = stream.seek_control();
         let seek_obs = stream.seek_observe();
@@ -227,18 +236,7 @@ where
         let variant_control = stream.variant_control();
         let shared_stream = SharedStream::new(stream);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
-        warm_sample_pool(
-            &sample_pool,
-            warm_channels(initial_media_info.as_ref()),
-            audio_buffer_chunks,
-        );
-
-        let deps = DecoderDeps::new(
-            decoder,
-            sample_pool.clone(),
-            byte_pool.clone(),
-            &host_sample_rate,
-        );
+        let deps = DecoderDeps::new(decoder, pools.clone(), &host_sample_rate);
         let initial_reader = shared_stream.open_initial_reader();
         let decoder =
             create_initial_decoder(initial_reader, initial_media_info.clone(), hint, &deps).await;
@@ -278,7 +276,7 @@ where
                 create_decoder_factory(&deps, &epoch, user_media_info),
                 initial_media_info.clone(),
             )
-            .into_parts(observer, shared_stream.seek_observe().epoch());
+            .into_parts(observer, shared_stream.seek_observe().epoch())?;
         let parts = SourceParts::new(
             &shared_stream,
             decode,
@@ -303,7 +301,7 @@ where
 
         let audio = Self::from(AudioParts {
             ring: RingConsumer::new(prepared.ring),
-            sample_pool,
+            cursor: ChunkCursor::new(&pools, initial_spec).map_err(DecodeError::backend)?,
             emit,
             runtime: AudioRuntime { cancel, wake },
             session: Session {
@@ -317,7 +315,6 @@ where
                 preload_gate: prepared.preload_gate,
             },
             controls: Controls { host_sample_rate },
-            spec: initial_spec,
             marker: PhantomData,
         });
         Ok(PreparedAudio::new(audio, prepared.lane))
@@ -394,13 +391,14 @@ where
     }
 }
 
-fn create_decoder_factory<B>(
-    decoder: &DecoderDeps<B>,
+fn create_decoder_factory<B, S>(
+    decoder: &DecoderDeps<B, S>,
     epoch: &Arc<AtomicU64>,
     user_media_info: Option<MediaInfo>,
 ) -> StreamDecoderFactory
 where
     B: Default + ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     let configured_media_info = user_media_info.clone();
     let deps = FactoryDeps::new(decoder, epoch, user_media_info);
@@ -411,8 +409,7 @@ where
             let config = DecoderConfig::builder()
                 .backend(deps.decoder.decoder.backend())
                 .byte_len_handle(byte_len_handle)
-                .sample_pool(deps.decoder.sample_pool.clone())
-                .byte_pool(deps.decoder.byte_pool.clone())
+                .pools(deps.decoder.pools.clone())
                 .epoch(deps.epoch.load(Ordering::Acquire))
                 .maybe_byte_map(reader.byte_map())
                 .maybe_hooks(reader.take_event_sink())
@@ -438,22 +435,22 @@ where
     )
 }
 
-async fn create_initial_decoder<B>(
+async fn create_initial_decoder<B, S>(
     mut reader: OpenedReader,
     media_info: Option<MediaInfo>,
     hint: Option<String>,
-    deps: &DecoderDeps<B>,
+    deps: &DecoderDeps<B, S>,
 ) -> Result<Box<dyn Decoder>, DecodeError>
 where
     B: Default + ResamplerBackend,
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     let byte_len = reader.byte_len().unwrap_or(0);
     let construction_gate = reader.construction_gate();
     let config = DecoderConfig::builder()
         .backend(deps.decoder.backend())
         .byte_len_handle(Arc::new(AtomicU64::new(byte_len)))
-        .sample_pool(deps.sample_pool.clone())
-        .byte_pool(deps.byte_pool.clone())
+        .pools(deps.pools.clone())
         .maybe_byte_map(reader.byte_map())
         .maybe_hooks(reader.take_event_sink())
         .maybe_hint(hint.clone())
@@ -479,10 +476,7 @@ where
     })?
 }
 
-async fn create_stream_with_probe<T>(
-    stream_config: T::Config,
-    byte_pool: BytePool,
-) -> Result<Stream<T>, DecodeError>
+async fn create_stream_with_probe<T>(stream_config: T::Config) -> Result<Stream<T>, DecodeError>
 where
     T: StreamType,
 {
@@ -491,15 +485,15 @@ where
         .map_err(|error| DecodeError::Io {
             source: IoError::other(error.to_string()),
         })?;
-    probe(stream, byte_pool).await
+    probe(stream).await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-async fn probe<T>(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError>
+async fn probe<T>(stream: Stream<T>) -> Result<Stream<T>, DecodeError>
 where
     T: StreamType,
 {
-    spawn_blocking(move || probe_blocking(stream, &byte_pool))
+    spawn_blocking(move || probe_blocking(stream))
         .await
         .map_err(|error| DecodeError::Io {
             source: IoError::other(format!("probe task panicked: {error}")),
@@ -507,14 +501,14 @@ where
 }
 
 #[cfg(target_arch = "wasm32")]
-async fn probe<T>(stream: Stream<T>, byte_pool: BytePool) -> Result<Stream<T>, DecodeError>
+async fn probe<T>(stream: Stream<T>) -> Result<Stream<T>, DecodeError>
 where
     T: StreamType,
 {
-    probe_blocking(stream, &byte_pool)
+    probe_blocking(stream)
 }
 
-fn probe_blocking<T>(mut stream: Stream<T>, _byte_pool: &BytePool) -> Result<Stream<T>, DecodeError>
+fn probe_blocking<T>(mut stream: Stream<T>) -> Result<Stream<T>, DecodeError>
 where
     T: StreamType,
 {
@@ -531,21 +525,6 @@ where
     T::event_bus(stream_config)
         .or(configured)
         .unwrap_or_default()
-}
-
-fn warm_channels(info: Option<&MediaInfo>) -> usize {
-    info.and_then(|info| info.channels).map_or(2, usize::from)
-}
-
-fn warm_sample_pool(pool: &SamplePool, channels: usize, chunks: usize) {
-    if pool.allocated_bytes() != 0 {
-        return;
-    }
-    let capacity = WARM_DECODE_FRAMES * channels.max(1);
-    pool.pre_warm(chunks.saturating_mul(2).max(1), |buffer| {
-        buffer.clear();
-        buffer.resize(capacity, 0.0);
-    });
 }
 
 fn log_pipeline_ready(spec: AudioSpec, host_sample_rate: &Arc<AtomicU32>) {

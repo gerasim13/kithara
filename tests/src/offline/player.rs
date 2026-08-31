@@ -13,8 +13,10 @@ use kithara::{
 use ringbuf::traits::{Consumer, Producer};
 
 use super::backend::{OfflineBackend, OfflineConfig};
+use crate::bufpool_ext::{Pools, pools};
 
 pub struct OfflinePlayer {
+    pools: Pools,
     playback: Arc<PlaybackShared>,
     ctx: FirewheelCtx<OfflineBackend>,
     control: SlotControl,
@@ -45,8 +47,9 @@ impl OfflinePlayer {
 
         let (inputs, control) = slot_channels(SharedEq::new(0));
         let playback = Arc::clone(&control.playback);
+        let pools = pools();
 
-        let player_node = PlayerNode::new(inputs, kithara::bufpool::SamplePool::default());
+        let player_node = PlayerNode::new(inputs, pools.clone());
         let node_id = ctx.add_node(player_node, None);
         let graph_out = ctx.graph_out_node_id();
         ctx.connect(node_id, graph_out, &[(0, 0), (1, 1)], false)
@@ -54,6 +57,7 @@ impl OfflinePlayer {
         ctx.update().expect("BUG: initial graph update");
 
         Self {
+            pools,
             playback,
             ctx,
             control,
@@ -67,11 +71,8 @@ impl OfflinePlayer {
     /// Panics if the command channel is full.
     pub fn load_and_fadein(&mut self, resource: Resource, src: &str) {
         let src: Arc<str> = Arc::from(src);
-        let pr = PlayerResource::new(
-            resource,
-            Arc::clone(&src),
-            &kithara::bufpool::SamplePool::default(),
-        );
+        let pr = PlayerResource::new(resource, Arc::clone(&src), &self.pools)
+            .expect("offline player resource fits the test pool budget");
         // Keep the control half of the track's seek path, exactly as `EngineImpl::send_slot_cmd`
         // does when a resource crosses to the audio thread. Without it a later `seek` would move
         // the media clock while the source stayed put.

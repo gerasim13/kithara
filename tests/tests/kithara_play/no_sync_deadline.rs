@@ -4,7 +4,6 @@ use std::{hint::black_box, num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::SamplePool,
     events::TrackId,
     platform::{
         sync::Arc,
@@ -19,6 +18,8 @@ use kithara::{
 };
 use kithara_integration_tests::audio_mock::TestPcmReader;
 use ringbuf::traits::Producer;
+
+use crate::bufpool_ext::pools;
 
 struct Consts;
 
@@ -59,10 +60,7 @@ fn processor(block_frames: u32) -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: non_zero(Consts::SAMPLE_RATE, "sample rate"),
         max_block_frames: non_zero(block_frames, "block frames"),
     };
-    (
-        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
-        control,
-    )
+    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
 }
 
 fn send(control: &mut SlotControl, cmd: PlayerCmd) {
@@ -76,7 +74,7 @@ fn load_tracks(
     control: &mut SlotControl,
     count: usize,
 ) -> f32 {
-    let pool = SamplePool::default();
+    let pools = pools();
     let tracks: Vec<(Arc<str>, TrackId)> = (0..count)
         .map(|idx| {
             (
@@ -97,7 +95,10 @@ fn load_tracks(
         send(
             control,
             PlayerCmd::LoadTrack {
-                resource: Box::new(PlayerResource::new(resource, Arc::clone(src), &pool)),
+                resource: Box::new(
+                    PlayerResource::new(resource, Arc::clone(src), &pools)
+                        .expect("player resource fits the test pool budget"),
+                ),
                 item_id: *item_id,
             },
         );

@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_play::{
     BeatGrid, BeatGridId, BeatGridSnapshot, PlayError, SeekOutcome, SessionBinding, SyncAdmission,
     SyncApplied, SyncError, SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected,
@@ -7,7 +8,10 @@ use kithara_play::{
 
 use super::Queue;
 
-impl BeatGrid for Queue {
+impl<S> BeatGrid for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     delegate::delegate! {
         to self.player {
             fn id(&self) -> BeatGridId;
@@ -16,7 +20,10 @@ impl BeatGrid for Queue {
     }
 }
 
-impl SyncGroup for Queue {
+impl<S> SyncGroup for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     type NestedGroup = PlayerMember;
 
     delegate::delegate! {
@@ -40,7 +47,10 @@ impl SyncGroup for Queue {
     }
 }
 
-impl Player for Queue {
+impl<S> Player for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     delegate::delegate! {
         to self.control {
             fn play(&self);
@@ -61,8 +71,12 @@ impl Player for Queue {
     }
 }
 
-impl PlayerControlSource for Queue {
-    type Control = super::QueueControl;
+impl<S> PlayerControlSource for Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    type Schema = S;
+    type Control = super::QueueControl<S>;
 
     fn control(&self) -> Self::Control {
         self.control.clone()
@@ -74,7 +88,7 @@ impl PlayerControlSource for Queue {
 
     delegate::delegate! {
         to self.player {
-            fn attach_session(&mut self, binding: SessionBinding) -> Result<(), PlayError>;
+            fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError>;
             #[cfg(target_arch = "wasm32")]
             fn take_host_member(&mut self) -> Result<PlayerMember, PlayError>;
         }

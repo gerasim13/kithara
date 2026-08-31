@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::{sync::Arc, time::Duration};
 
 use super::{contract::ProcessCtx, reader::ProcessedReader, writer::ProcessedWriter};
@@ -12,34 +12,48 @@ use crate::{
 };
 
 /// Applies optional resource processing to another asset store.
-#[derive(Clone)]
-pub struct ProcessingAssets<A>
+pub struct ProcessingAssets<A, S>
 where
     A: Assets,
 {
     inner: Arc<A>,
-    pool: BytePool,
-    /// `AssetStore::builder().processing_chunk_size(..)`, unset when the
+    pools: PoolRegion<S>,
+    /// `AssetStore::builder(pools).processing_chunk_size(..)`, unset when the
     /// caller left the processing layer's own default in place.
     chunk_size: Option<usize>,
-    /// `AssetStore::builder().processing_gate_poll_interval(..)`, unset when
+    /// `AssetStore::builder(pools).processing_gate_poll_interval(..)`, unset when
     /// the caller left the processing layer's own default in place.
     gate_poll_interval: Option<Duration>,
 }
 
-impl<A> ProcessingAssets<A>
+impl<A, S> Clone for ProcessingAssets<A, S>
 where
     A: Assets,
 {
-    pub const fn new(
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            pools: self.pools.clone(),
+            chunk_size: self.chunk_size,
+            gate_poll_interval: self.gate_poll_interval,
+        }
+    }
+}
+
+impl<A, S> ProcessingAssets<A, S>
+where
+    A: Assets,
+    S: HasPool<u8>,
+{
+    pub fn new(
         inner: Arc<A>,
-        pool: BytePool,
+        pools: PoolRegion<S>,
         chunk_size: Option<usize>,
         gate_poll_interval: Option<Duration>,
     ) -> Self {
         Self {
             inner,
-            pool,
+            pools,
             chunk_size,
             gate_poll_interval,
         }
@@ -49,25 +63,26 @@ where
         &self,
         inner: A::ReadyRes,
         processor: Option<ProcessCtx>,
-    ) -> ProcessedReader<A::ReadyRes> {
+    ) -> ProcessedReader<A::ReadyRes, S> {
         ProcessedReader::wrap_ready()
             .inner(inner)
             .maybe_processor(processor)
-            .pool(self.pool.clone())
+            .pools(self.pools.clone())
             .maybe_chunk_size(self.chunk_size)
             .maybe_gate_poll_interval(self.gate_poll_interval)
             .call()
     }
 }
 
-impl<A> Assets for ProcessingAssets<A>
+impl<A, S> Assets for ProcessingAssets<A, S>
 where
     A: Assets,
+    S: HasPool<u8> + Send + Sync + 'static,
 {
-    type ActiveRes = ProcessedWriter<A::ActiveRes>;
+    type ActiveRes = ProcessedWriter<A::ActiveRes, S>;
     type Context = ProcessCtx;
     type IndexRes = A::IndexRes;
-    type ReadyRes = ProcessedReader<A::ReadyRes>;
+    type ReadyRes = ProcessedReader<A::ReadyRes, S>;
 
     fn acquire_resource_with_ctx(
         &self,
@@ -80,7 +95,7 @@ where
                 ProcessedWriter::builder()
                     .inner(writer)
                     .maybe_processor(ctx)
-                    .pool(self.pool.clone())
+                    .pools(self.pools.clone())
                     .maybe_chunk_size(self.chunk_size)
                     .maybe_gate_poll_interval(self.gate_poll_interval)
                     .build(),

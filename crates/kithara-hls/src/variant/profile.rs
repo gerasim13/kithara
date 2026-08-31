@@ -1,5 +1,6 @@
 use std::{num::NonZeroU64, ops::Range};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -22,7 +23,10 @@ pub(crate) struct VariantReaderPreparation {
     warmup: u64,
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Last segment an inactive session may fetch while it is being built.
     ///
     /// Derived from the same window [`reader_is_ready`](Self::reader_is_ready)

@@ -140,6 +140,7 @@ hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
+test-utils = ["kithara-bufpool/test-utils"]
 queue = ["dep:kithara-queue"]
 flash = ["kithara-platform/flash", "kithara-test-utils/flash"]
 loom = ["kithara-platform/loom"]

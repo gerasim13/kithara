@@ -5,7 +5,7 @@ use firewheel::{
     FirewheelConfig, FirewheelCtx, backend::AudioBackend, channel_config::ChannelCount, diff::Memo,
     node::NodeID, nodes::volume::VolumeNode,
 };
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
 use kithara_play::{GroupState, player::PlayerMember};
@@ -36,13 +36,13 @@ pub(super) struct SlotNodes {
     pub(super) slot_id: SlotId,
 }
 
-pub(super) struct Deck {
+pub(super) struct Deck<S> {
     pub(super) bus: EventBus,
-    pub(super) master_eq_memo: Option<Memo<MasterEqNode>>,
+    pub(super) master_eq_memo: Option<Memo<MasterEqNode<S>>>,
     pub(super) master_eq_node_id: Option<NodeID>,
     pub(super) master_volume_memo: Option<Memo<VolumeNode>>,
     pub(super) master_volume_node_id: Option<NodeID>,
-    pub(super) sample_pool: SamplePool,
+    pub(super) pools: PoolRegion<S>,
     pub(super) player_id: PlayerId,
     pub(super) grid_id: BeatGridId,
     pub(super) shared_eq: SharedEq,
@@ -53,13 +53,13 @@ pub(super) struct Deck {
     pub(super) next_slot_id: u64,
 }
 
-impl Deck {
+impl<S> Deck<S> {
     pub(super) fn new(
         player_id: PlayerId,
         grid_id: BeatGridId,
         bus: EventBus,
         eq_layout: Vec<EqBandConfig>,
-        sample_pool: SamplePool,
+        pools: PoolRegion<S>,
         master_volume: f32,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
@@ -69,7 +69,7 @@ impl Deck {
         Self {
             bus,
             eq_layout,
-            sample_pool,
+            pools,
             player_id,
             grid_id,
             master_eq_memo: None,
@@ -85,13 +85,18 @@ impl Deck {
     }
 }
 
-#[derive(Default)]
-pub(super) struct GraphRegistry {
-    decks: Vec<Deck>,
+pub(super) struct GraphRegistry<S> {
+    decks: Vec<Deck<S>>,
 }
 
-impl GraphRegistry {
-    pub(super) fn insert(&mut self, deck: Deck) -> Result<(), SessionError> {
+impl<S> Default for GraphRegistry<S> {
+    fn default() -> Self {
+        Self { decks: Vec::new() }
+    }
+}
+
+impl<S> GraphRegistry<S> {
+    pub(super) fn insert(&mut self, deck: Deck<S>) -> Result<(), SessionError> {
         if self
             .decks
             .iter()
@@ -105,18 +110,18 @@ impl GraphRegistry {
         Ok(())
     }
 
-    pub(super) fn remove(&mut self, index: usize) -> Option<Deck> {
+    pub(super) fn remove(&mut self, index: usize) -> Option<Deck<S>> {
         (index < self.decks.len()).then(|| self.decks.remove(index))
     }
 
     delegate::delegate! {
         to self.decks {
             #[call(get)]
-            pub(super) fn deck(&self, index: usize) -> Option<&Deck>;
+            pub(super) fn deck(&self, index: usize) -> Option<&Deck<S>>;
             #[call(get_mut)]
-            pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck>;
+            pub(super) fn deck_mut(&mut self, index: usize) -> Option<&mut Deck<S>>;
             #[call(iter)]
-            pub(super) fn decks(&self) -> impl Iterator<Item = &Deck>;
+            pub(super) fn decks(&self) -> impl Iterator<Item = &Deck<S>>;
             pub(super) fn len(&self) -> usize;
         }
     }
@@ -183,7 +188,7 @@ impl RootView {
     }
 }
 
-pub(crate) struct SessionState<B: AudioBackend> {
+pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) ctx: Option<FirewheelCtx<B>>,
     pub(super) transport_control: Option<TransportControl>,
     pub(super) mix_tap: Option<MixTap>,
@@ -199,10 +204,10 @@ pub(crate) struct SessionState<B: AudioBackend> {
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) root: GroupState<PlayerMember>,
     pub(super) root_view: RootView,
-    pub(super) graph: GraphRegistry,
+    pub(super) graph: GraphRegistry<S>,
 }
 
-impl<B: AudioBackend> SessionState<B> {
+impl<B: AudioBackend, S> SessionState<B, S> {
     #[cfg(any(test, feature = "probe"))]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
@@ -250,12 +255,12 @@ impl<B: AudioBackend> SessionState<B> {
     }
 }
 
-pub(super) fn register_player<B: AudioBackend>(
-    state: &mut SessionState<B>,
+pub(super) fn register_player<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     grid_id: BeatGridId,
     bus: EventBus,
     eq_layout: Vec<EqBandConfig>,
-    sample_pool: SamplePool,
+    pools: PoolRegion<S>,
     sample_rate: u32,
 ) -> Result<PlayerId, SessionError> {
     NonZeroU32::new(sample_rate).ok_or(SessionError::InvalidSampleRate(sample_rate))?;
@@ -277,14 +282,7 @@ pub(super) fn register_player<B: AudioBackend>(
             level: master_volume,
         });
     }
-    let deck = Deck::new(
-        player_id,
-        grid_id,
-        bus,
-        eq_layout,
-        sample_pool,
-        master_volume,
-    );
+    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, master_volume);
     state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(
@@ -295,16 +293,16 @@ pub(super) fn register_player<B: AudioBackend>(
     Ok(player_id)
 }
 
-pub(super) fn ensure_ctx<B: AudioBackend>(
-    state: &mut SessionState<B>,
+pub(super) fn ensure_ctx<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     ensure_stream_ready(state, sample_rate)?;
     ensure_session_output(state)
 }
 
-fn ensure_stream_ready<B: AudioBackend>(
-    state: &mut SessionState<B>,
+fn ensure_stream_ready<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     if state.ctx.is_none() {
@@ -322,8 +320,8 @@ fn ensure_stream_ready<B: AudioBackend>(
     Ok(())
 }
 
-fn create_firewheel_context<B: AudioBackend>(
-    state: &mut SessionState<B>,
+fn create_firewheel_context<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     debug!(sample_rate, "[KITHARA-ROUTE] creating firewheel context");
@@ -356,7 +354,9 @@ fn create_firewheel_context<B: AudioBackend>(
     Ok(())
 }
 
-fn ensure_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
+fn ensure_session_output<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+) -> Result<(), SessionError> {
     if state.session_output_node_id.is_none() {
         return create_session_output(state);
     }
@@ -364,7 +364,9 @@ fn ensure_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result
     Ok(())
 }
 
-fn create_session_output<B: AudioBackend>(state: &mut SessionState<B>) -> Result<(), SessionError> {
+fn create_session_output<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
+) -> Result<(), SessionError> {
     debug!("[KITHARA-ROUTE] creating session output graph");
     let Some(ref mut fw_ctx) = state.ctx else {
         return Err(SessionError::NoContext);

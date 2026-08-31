@@ -9,10 +9,9 @@ use std::{
 
 use kithara::{
     assets::DiskAssetStore,
-    bufpool::BytePool,
     platform::{CancelToken, time::Duration},
 };
-use kithara_integration_tests::{asset_fixture::PinsIndex, temp_dir};
+use kithara_integration_tests::{asset_fixture::PinsIndex, bufpool_ext::pools, temp_dir};
 
 fn pins_path(root: &Path) -> PathBuf {
     root.join("_index").join("pins.bin")
@@ -20,7 +19,7 @@ fn pins_path(root: &Path) -> PathBuf {
 
 #[kithara::fixture]
 fn disk_asset_store(temp_dir: kithara_integration_tests::TestTempDir) -> DiskAssetStore {
-    DiskAssetStore::new(temp_dir.path(), CancelToken::never(), &BytePool::default())
+    DiskAssetStore::new(temp_dir.path(), CancelToken::never())
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
@@ -46,7 +45,7 @@ fn pins_index_bad_state_returns_default(
         }
     }
 
-    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx = PinsIndex::open(&base, &pools()).unwrap();
     let pins = idx.load().unwrap();
 
     assert!(
@@ -63,7 +62,7 @@ fn pins_index_roundtrip_store_then_load(
     let _dir = temp_dir.path();
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx = PinsIndex::open(&base, &pools()).unwrap();
 
     let mut pins = HashSet::new();
     pins.insert("asset-a".to_string());
@@ -71,7 +70,7 @@ fn pins_index_roundtrip_store_then_load(
 
     idx.store(&pins).unwrap();
 
-    let idx2 = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx2 = PinsIndex::open(&base, &pools()).unwrap();
     let loaded = idx2.load().unwrap();
 
     assert_eq!(loaded, pins, "pins index must roundtrip via store/load");
@@ -88,7 +87,7 @@ fn pins_index_store_load_with_different_sets(
 ) {
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx = PinsIndex::open(&base, &pools()).unwrap();
 
     let pins: HashSet<String> = asset_names.iter().map(ToString::to_string).collect();
     idx.store(&pins).unwrap();
@@ -109,13 +108,13 @@ fn pins_index_concurrent_updates_handled_correctly(
     let _dir = temp_dir.path();
     let base = disk_asset_store;
 
-    let idx1 = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx1 = PinsIndex::open(&base, &pools()).unwrap();
     let pins1: HashSet<String> = (0..asset_count)
         .map(|i| format!("asset-{}", i + 1))
         .collect();
     idx1.store(&pins1).unwrap();
 
-    let idx2 = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx2 = PinsIndex::open(&base, &pools()).unwrap();
     let loaded1 = idx2.load().unwrap();
     assert_eq!(loaded1, pins1);
 
@@ -124,7 +123,7 @@ fn pins_index_concurrent_updates_handled_correctly(
         .collect();
     idx2.store(&pins2).unwrap();
 
-    let idx3 = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx3 = PinsIndex::open(&base, &pools()).unwrap();
     let loaded2 = idx3.load().unwrap();
     assert_eq!(loaded2, pins2);
 }
@@ -136,7 +135,7 @@ fn pins_index_empty_set_stores_and_loads_correctly(
 ) {
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, &BytePool::default()).unwrap();
+    let idx = PinsIndex::open(&base, &pools()).unwrap();
 
     let empty_pins = HashSet::new();
     idx.store(&empty_pins).unwrap();
@@ -153,8 +152,8 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_test
     let dir = temp_dir.path();
     let cancel = CancelToken::never();
 
-    let base1 = DiskAssetStore::new(dir, cancel.clone(), &BytePool::default());
-    let idx1 = PinsIndex::open(&base1, &BytePool::default()).unwrap();
+    let base1 = DiskAssetStore::new(dir, cancel.clone());
+    let idx1 = PinsIndex::open(&base1, &pools()).unwrap();
 
     let mut pins = HashSet::new();
     pins.insert("persisted-asset".to_string());
@@ -162,8 +161,8 @@ fn pins_index_persists_across_store_instances(temp_dir: kithara_integration_test
 
     idx1.store(&pins).unwrap();
 
-    let base2 = DiskAssetStore::new(dir, cancel, &BytePool::default());
-    let idx2 = PinsIndex::open(&base2, &BytePool::default()).unwrap();
+    let base2 = DiskAssetStore::new(dir, cancel);
+    let idx2 = PinsIndex::open(&base2, &pools()).unwrap();
 
     let loaded = idx2.load().unwrap();
     assert_eq!(loaded, pins, "pins should persist across store instances");

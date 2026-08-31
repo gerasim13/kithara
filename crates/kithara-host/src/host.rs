@@ -72,12 +72,12 @@ impl<P: PlayerControlSource> Deref for HostOwned<P> {
 }
 
 /// Exclusive owner and dispatcher for one multi-player output session.
-pub struct Host {
+pub struct Host<S> {
     id: BeatGridId,
     owns_session: bool,
     root_view: RootView,
-    dispatcher: Arc<dyn HostDispatcher>,
-    platform: Platform,
+    dispatcher: Arc<dyn HostDispatcher<S>>,
+    platform: Platform<S>,
 }
 
 struct SessionRoot {
@@ -87,7 +87,7 @@ struct SessionRoot {
     view: RootView,
 }
 
-impl Host {
+impl<S> Host<S> {
     fn session_root(config: HostConfig) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let sample_rate = config.sample_rate;
@@ -106,22 +106,27 @@ impl Host {
         })
     }
 
-    fn owner(id: BeatGridId, root_view: RootView, dispatcher: Arc<dyn HostDispatcher>) -> Self {
+    fn owner(
+        id: BeatGridId,
+        root_view: RootView,
+        dispatcher: Arc<dyn HostDispatcher<S>>,
+        platform: Platform<S>,
+    ) -> Self {
         Self {
             id,
             owns_session: true,
             root_view,
             dispatcher,
-            platform: Platform::owner(),
+            platform,
         }
     }
 
     fn bind_player<P>(&self, player: &mut P) -> Result<(BeatGridId, P::Control), PlayError>
     where
-        P: PlayerControlSource,
+        P: PlayerControlSource<Schema = S>,
     {
         let grid_id = player.id();
-        let dispatcher: Arc<dyn SessionDispatcher> = self.dispatcher.clone();
+        let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         player.attach_session(SessionBinding::new(dispatcher))?;
         Ok((grid_id, player.control()))
     }
@@ -150,7 +155,8 @@ impl Host {
 
     fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
     where
-        P: PlayerControlSource,
+        P: PlayerControlSource<Schema = S>,
+        S: Send + Sync + 'static,
     {
         if player.host_id != self.id {
             return Err(PlayError::ForeignSession);
@@ -252,7 +258,7 @@ impl Host {
         }
     }
 
-    fn exec_play_ok(&self, cmd: Cmd) -> Result<(), PlayError> {
+    fn exec_play_ok(&self, cmd: Cmd<S>) -> Result<(), PlayError> {
         match self.dispatcher.exec(cmd)? {
             Reply::Ok => Ok(()),
             Reply::Err(error) => Err(error.into()),
@@ -263,7 +269,7 @@ impl Host {
     }
 }
 
-impl Drop for Host {
+impl<S> Drop for Host<S> {
     fn drop(&mut self) {
         Platform::close(&mut self.platform, self.id);
         if self.owns_session
@@ -274,7 +280,7 @@ impl Drop for Host {
     }
 }
 
-impl BeatGrid for Host {
+impl<S: Send + Sync + 'static> BeatGrid for Host<S> {
     fn id(&self) -> BeatGridId {
         self.id
     }
@@ -284,7 +290,7 @@ impl BeatGrid for Host {
     }
 }
 
-impl SyncGroup for Host {
+impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
     type NestedGroup = PlayerMember;
 
     delegate::delegate! {

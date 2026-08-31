@@ -4,12 +4,11 @@ use kithara_platform::{
     time::{Duration, sleep},
     tokio::{sync::broadcast, task::spawn as task_spawn},
 };
-use kithara_queue::QueueControl;
 use wasm_bindgen::JsValue;
 use web_sys::BroadcastChannel;
 
 use super::{encode::encode, encode_item::encode_item_event};
-use crate::types::FfiPlayerEvent;
+use crate::{pools::FfiQueueControl, types::FfiPlayerEvent};
 
 /// `BroadcastChannel` name carrying structured player events from the
 /// worker to the main-thread [`router`](crate::web::observer::router).
@@ -19,7 +18,7 @@ pub(crate) const EVENT_CHANNEL: &str = "kithara-events";
 /// translated [`FfiPlayerEvent`] to the main thread over
 /// [`EVENT_CHANNEL`]. Spawned from
 /// [`worker_main`](crate::web::worker::worker_main).
-pub(crate) fn spawn(queue: &QueueControl) {
+pub(crate) fn spawn(queue: &FfiQueueControl) {
     let rx = queue.subscribe();
     task_spawn(async move {
         run(rx).await;
@@ -29,10 +28,10 @@ pub(crate) fn spawn(queue: &QueueControl) {
 
 /// Emit [`FfiPlayerEvent::DurationChanged`] whenever the current track's
 /// duration changes. `DurationChanged` is not a raw bus event: the native
-/// bridge derives it by polling [`QueueControl::duration_seconds`], so the
+/// bridge derives it by polling [`FfiQueueControl::duration_seconds`], so the
 /// worker must do the same here. Without this the JS control surface never
 /// learns the track length and the seek slider has no range.
-fn spawn_duration_poll(queue: &QueueControl) {
+fn spawn_duration_poll(queue: &FfiQueueControl) {
     /// Poll cadence for the derived `DurationChanged` event, in milliseconds.
     const DURATION_POLL_MS: u64 = 250;
 

@@ -1,6 +1,7 @@
 use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
 
 use kithara_audio::{ConsumerWakeMode, SeekOutcome};
+use kithara_bufpool::testing::TestPools;
 use kithara_platform::sync::Arc;
 use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher,
@@ -118,11 +119,12 @@ impl Player for Resident {
 }
 
 impl PlayerControlSource for Resident {
+    type Schema = TestPools;
     type Control = ();
 
     fn control(&self) -> Self::Control {}
 
-    fn attach_session(&mut self, _binding: SessionBinding) -> Result<(), PlayError> {
+    fn attach_session(&mut self, _binding: SessionBinding<TestPools>) -> Result<(), PlayError> {
         Ok(())
     }
 
@@ -142,8 +144,8 @@ struct Dispatcher {
     detach: Outcome,
 }
 
-impl SessionDispatcher for Dispatcher {
-    fn exec(&self, _cmd: kithara_play::Cmd) -> Result<Reply, PlayError> {
+impl SessionDispatcher<TestPools> for Dispatcher {
+    fn exec(&self, _cmd: kithara_play::Cmd<TestPools>) -> Result<Reply, PlayError> {
         Ok(Reply::Ok)
     }
 
@@ -152,8 +154,11 @@ impl SessionDispatcher for Dispatcher {
     }
 }
 
-impl HostDispatcher for Dispatcher {
-    fn exec_host(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+impl HostDispatcher<TestPools> for Dispatcher {
+    fn exec_host(
+        &self,
+        cmd: HostCmd<TestPools>,
+    ) -> Result<HostReply, HostDispatchError<TestPools>> {
         let HostCmd::Sync(SyncCmd::TransactCurrent(operations)) = cmd else {
             panic!("unexpected fixture Host command")
         };
@@ -187,7 +192,10 @@ fn group(id: BeatGridId) -> GroupState<PlayerMember> {
     )
 }
 
-fn fixture(close: Outcome, detach: Outcome) -> (Host, HostOwned<Resident>, Rc<RefCell<usize>>) {
+fn fixture(
+    close: Outcome,
+    detach: Outcome,
+) -> (Host<TestPools>, HostOwned<Resident>, Rc<RefCell<usize>>) {
     let host_id = BeatGridId::allocate().expect("fixture Host grid id");
     let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
     let mut root = group(host_id);
@@ -206,7 +214,7 @@ fn fixture(close: Outcome, detach: Outcome) -> (Host, HostOwned<Resident>, Rc<Re
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
 
     let root_view = RootView::new(&root);
-    let dispatcher: Arc<dyn HostDispatcher> = Arc::new(Dispatcher {
+    let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
         root: RefCell::new(root),
         detach,
     });

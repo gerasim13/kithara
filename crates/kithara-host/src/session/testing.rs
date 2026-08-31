@@ -2,7 +2,9 @@ use std::num::NonZeroU32;
 
 use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_audio::ConsumerWakeMode;
-use kithara_bufpool::{BytePool, SamplePool};
+#[cfg(test)]
+use kithara_bufpool::testing::{TestPools, pools};
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_platform::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use kithara_play::player::PlayerControlSource;
@@ -33,7 +35,7 @@ pub trait HostProbe {
     fn set_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError>;
 }
 
-impl HostProbe for Host {
+impl<S> HostProbe for Host<S> {
     delegate::delegate! {
         to self {
             #[call(ducking_mode)]
@@ -48,11 +50,15 @@ impl HostProbe for Host {
 ///
 /// The production Host surface never exposes its raw session state. This
 /// probe keeps existing deterministic backend tests on the same graph code.
-pub struct GraphSession<B: AudioBackend> {
-    state: SessionState<B>,
+pub struct GraphSession<B: AudioBackend, S> {
+    state: SessionState<B, S>,
 }
 
-impl<B: AudioBackend> GraphSession<B> {
+impl<B, S> GraphSession<B, S>
+where
+    B: AudioBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     pub const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     #[must_use]
@@ -61,16 +67,16 @@ impl<B: AudioBackend> GraphSession<B> {
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {
         Self {
-            state: state(start_stream_fn),
+            state: state_for(start_stream_fn),
         }
     }
 
     #[must_use]
-    pub fn exec(&mut self, cmd: Cmd) -> Reply {
-        if let Cmd::RegisterPlayer { grid_id, .. } = &cmd
+    pub fn exec(&mut self, cmd: Cmd<S>) -> Reply {
+        if let Cmd::RegisterPlayer { grid_id, pools, .. } = &cmd
             && self.state.root.with_group(*grid_id, |_| ()).is_none()
         {
-            attach_player_with_id(&mut self.state, *grid_id);
+            attach_player_with_id(&mut self.state, *grid_id, pools.clone());
         }
         run_cmd(&mut self.state, cmd)
     }
@@ -82,8 +88,8 @@ impl<B: AudioBackend> GraphSession<B> {
 
 struct FixtureSession;
 
-impl SessionDispatcher for FixtureSession {
-    fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+impl<S> SessionDispatcher<S> for FixtureSession {
+    fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
         Ok(Reply::Ok)
     }
 
@@ -92,14 +98,23 @@ impl SessionDispatcher for FixtureSession {
     }
 }
 
-pub(crate) fn state<B, F>(start_stream_fn: F) -> SessionState<B>
+#[cfg(test)]
+pub(crate) fn state<B, F>(start_stream_fn: F) -> SessionState<B, TestPools>
+where
+    B: AudioBackend,
+    F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+{
+    state_for(start_stream_fn)
+}
+
+fn state_for<B, F, S>(start_stream_fn: F) -> SessionState<B, S>
 where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
     let grid_id = BeatGridId::allocate().expect("fixture host grid id");
     let sample_rate =
-        NonZeroU32::new(SessionState::<B>::DEFAULT_SAMPLE_RATE).expect("fixture sample rate");
+        NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE).expect("fixture sample rate");
     let root = GroupState::unavailable(
         grid_id,
         sample_rate,
@@ -111,14 +126,28 @@ where
 }
 
 #[cfg(test)]
-pub(crate) fn attach_player<B: AudioBackend>(state: &mut SessionState<B>) -> BeatGridId {
+pub(crate) fn attach_player<B: AudioBackend>(state: &mut SessionState<B, TestPools>) -> BeatGridId {
     let grid_id = BeatGridId::allocate().expect("fixture player grid id");
-    attach_player_with_id(state, grid_id);
+    attach_player_with_id(state, grid_id, pools());
     grid_id
 }
 
-fn attach_player_with_id<B: AudioBackend>(state: &mut SessionState<B>, grid_id: BeatGridId) {
-    let member = fixture_member(grid_id);
+fn attach_player_with_id<B, S>(
+    state: &mut SessionState<B, S>,
+    grid_id: BeatGridId,
+    pools: PoolRegion<S>,
+) where
+    B: AudioBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .grid_id(grid_id)
+            .worker(worker)
+            .session(Arc::new(FixtureSession))
+            .build(),
+    );
     let base = state
         .root
         .topology()
@@ -131,7 +160,7 @@ fn attach_player_with_id<B: AudioBackend>(state: &mut SessionState<B>, grid_id: 
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
-                    group: Box::new(member),
+                    group: Box::new(target_member(player)),
                 },
             }]),
         })
@@ -140,10 +169,9 @@ fn attach_player_with_id<B: AudioBackend>(state: &mut SessionState<B>, grid_id: 
     state.publish_root();
 }
 
+#[cfg(test)]
 pub(crate) fn fixture_member(grid_id: BeatGridId) -> PlayerMember {
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-    );
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
@@ -155,12 +183,18 @@ pub(crate) fn fixture_member(grid_id: BeatGridId) -> PlayerMember {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn target_member(player: PlayerImpl) -> PlayerMember {
+fn target_member<S>(player: PlayerImpl<S>) -> PlayerMember
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     PlayerMember::new(player)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn target_member(mut player: PlayerImpl) -> PlayerMember {
+fn target_member<S>(mut player: PlayerImpl<S>) -> PlayerMember
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     player
         .take_host_member()
         .expect("fixture player synchronization member")

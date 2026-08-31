@@ -1,6 +1,6 @@
 use kithara_platform::time::Duration;
 pub(crate) use kithara_stream::PrerollHint;
-use kithara_stream::{AudioCodec, PendingReason, ReaderInput};
+use kithara_stream::{AudioCodec, PendingReason};
 
 use crate::{codec::CodecPriming, error::DecodeResult};
 
@@ -37,16 +37,6 @@ pub(crate) trait Demuxer: Send {
     /// Surfaces parser-level failures verbatim. Source-level pending
     /// states return `Ok(DemuxOutcome::Pending(_))`.
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>>;
-
-    /// The shape of bytes that must be ready before this demuxer can be
-    /// constructed. Defaults to incremental input; init-bearing demuxers must
-    /// override it.
-    fn required_input() -> ReaderInput
-    where
-        Self: Sized,
-    {
-        ReaderInput::Incremental
-    }
 
     /// Seek the demuxer to `target` time.
     ///

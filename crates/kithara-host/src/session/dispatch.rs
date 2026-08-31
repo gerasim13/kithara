@@ -1,4 +1,5 @@
 use firewheel::{FirewheelCtx, backend::AudioBackend, error::UpdateError};
+use kithara_bufpool::HasPool;
 use kithara_play::PlayError;
 use kithara_warp::{SyncCapability, SyncGroup, SyncOperation, SyncRejected, TopologyOperation};
 use tracing::{debug, trace, warn};
@@ -14,10 +15,11 @@ use super::{
 };
 use crate::api::HostLevel;
 
-pub(crate) fn run_host_cmd<B: AudioBackend>(
-    state: &mut SessionState<B>,
-    cmd: HostCmd,
-) -> HostReply {
+pub(crate) fn run_host_cmd<B, S>(state: &mut SessionState<B, S>, cmd: HostCmd<S>) -> HostReply
+where
+    B: AudioBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     match cmd {
         HostCmd::Play(cmd) => HostReply::Play(run_cmd(state, cmd)),
         HostCmd::Sync(cmd) => run_sync_cmd(state, cmd),
@@ -28,7 +30,7 @@ pub(crate) fn run_host_cmd<B: AudioBackend>(
     }
 }
 
-fn run_sync_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: SyncCmd) -> HostReply {
+fn run_sync_cmd<B: AudioBackend, S>(state: &mut SessionState<B, S>, cmd: SyncCmd) -> HostReply {
     let operation = match cmd {
         SyncCmd::Transact(operation) => operation,
         SyncCmd::TransactCurrent(operations) => {
@@ -56,8 +58,8 @@ fn run_sync_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: SyncCmd) -> H
     HostReply::Admission(result)
 }
 
-fn transact_root<B: AudioBackend>(
-    state: &mut SessionState<B>,
+fn transact_root<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     operation: SyncOperation<kithara_play::player::PlayerMember>,
 ) -> Result<kithara_warp::SyncAdmission, SyncRejected<kithara_play::player::PlayerMember>> {
     if topology_conflicts_with_graph(state, &operation) {
@@ -71,8 +73,8 @@ fn transact_root<B: AudioBackend>(
     state.root.transact(operation)
 }
 
-fn topology_conflicts_with_graph<B: AudioBackend>(
-    state: &SessionState<B>,
+fn topology_conflicts_with_graph<B: AudioBackend, S>(
+    state: &SessionState<B, S>,
     operation: &SyncOperation<kithara_play::player::PlayerMember>,
 ) -> bool {
     let SyncOperation::Topology { operations, .. } = operation else {
@@ -91,15 +93,19 @@ fn topology_conflicts_with_graph<B: AudioBackend>(
     })
 }
 
-pub(crate) fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) -> Reply {
+pub(crate) fn run_cmd<B, S>(state: &mut SessionState<B, S>, cmd: Cmd<S>) -> Reply
+where
+    B: AudioBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     match cmd {
         Cmd::RegisterPlayer {
             grid_id,
             bus,
             eq_layout,
-            sample_pool,
+            pools,
             sample_rate,
-        } => match register_player(state, grid_id, bus, eq_layout, sample_pool, sample_rate) {
+        } => match register_player(state, grid_id, bus, eq_layout, pools, sample_rate) {
             Ok(player_id) => Reply::PlayerRegistered(player_id),
             Err(error) => Reply::Err(error),
         },
@@ -108,9 +114,10 @@ pub(crate) fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) ->
             Err(err) => Reply::Err(err),
         },
         Cmd::StartPlayer {
+            master_volume,
             player_id,
             sample_rate,
-        } => match lifecycle::start_player(state, player_id, sample_rate) {
+        } => match lifecycle::start_player(state, player_id, sample_rate, master_volume) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
@@ -198,7 +205,7 @@ pub(crate) fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) ->
     }
 }
 
-pub(super) fn tick_session<B: AudioBackend>(state: &mut SessionState<B>) -> Reply {
+pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Reply {
     if state.stream_needs_restart {
         match restart_stream(state, state.sample_rate_hint) {
             Ok(()) => {}
@@ -222,8 +229,8 @@ pub(super) fn tick_session<B: AudioBackend>(state: &mut SessionState<B>) -> Repl
     Reply::Ok
 }
 
-fn unregister_player<B: AudioBackend>(
-    state: &mut SessionState<B>,
+fn unregister_player<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     player_id: PlayerId,
 ) -> Result<(), SessionError> {
     debug!(player_id, "[KITHARA-ROUTE] unregistering player");
@@ -248,8 +255,8 @@ fn unregister_player<B: AudioBackend>(
     Ok(())
 }
 
-fn apply_mix<B: AudioBackend>(
-    state: &mut SessionState<B>,
+fn apply_mix<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     levels: &[HostLevel],
 ) -> Result<(), PlayError> {
     let mut projected: Vec<PlayerLevel> = Vec::with_capacity(levels.len());
@@ -288,8 +295,8 @@ fn apply_mix<B: AudioBackend>(
     Ok(())
 }
 
-pub(super) fn handle_update_error<B: AudioBackend>(
-    state: &mut SessionState<B>,
+pub(super) fn handle_update_error<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     err: UpdateError<B::StreamError>,
 ) -> Reply {
     match err {
@@ -319,8 +326,8 @@ pub(super) fn handle_update_error<B: AudioBackend>(
     }
 }
 
-pub(super) fn invalidate_audio_route<B: AudioBackend>(
-    state: &mut SessionState<B>,
+pub(super) fn invalidate_audio_route<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     reason: &str,
 ) -> Reply {
     debug!(
@@ -342,8 +349,8 @@ pub(super) fn invalidate_audio_route<B: AudioBackend>(
     }
 }
 
-pub(super) fn restart_stream<B: AudioBackend>(
-    state: &mut SessionState<B>,
+pub(super) fn restart_stream<B: AudioBackend, S>(
+    state: &mut SessionState<B, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
     if state.ctx.is_none() {
@@ -369,7 +376,10 @@ pub(super) fn restart_stream<B: AudioBackend>(
     Ok(())
 }
 
-pub(super) fn trace_stream_info<B: AudioBackend>(state: &SessionState<B>, context: &'static str) {
+pub(super) fn trace_stream_info<B: AudioBackend, S>(
+    state: &SessionState<B, S>,
+    context: &'static str,
+) {
     if let Some(info) = state.ctx.as_ref().and_then(FirewheelCtx::stream_info) {
         trace!(
             context,
@@ -394,15 +404,15 @@ pub(super) fn trace_stream_info<B: AudioBackend>(state: &SessionState<B>, contex
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-    };
+    use std::{num::NonZeroU32, sync::atomic::AtomicBool};
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
-    use kithara_bufpool::SamplePool;
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
-    use kithara_platform::sync::Arc;
+    use kithara_platform::sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    };
     use kithara_test_utils::kithara;
     use kithara_warp::{BeatGrid, BeatGridSnapshot, BeatGridState, BeatGridUnavailable, MapAxis};
     use ringbuf::{HeapRb, traits::Split};
@@ -445,6 +455,8 @@ mod tests {
         _processor: Option<FirewheelProcessor<Self>>,
     }
 
+    type TestState = SessionState<RouteLossBackend, TestPools>;
+
     #[derive(Clone)]
     struct RouteLossConfig {
         sample_rate: u32,
@@ -453,7 +465,7 @@ mod tests {
     impl Default for RouteLossConfig {
         fn default() -> Self {
             Self {
-                sample_rate: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+                sample_rate: TestState::DEFAULT_SAMPLE_RATE,
             }
         }
     }
@@ -499,7 +511,7 @@ mod tests {
             }
 
             let sample_rate = NonZeroU32::new(config.sample_rate).unwrap_or(
-                NonZeroU32::new(SessionState::<Self>::DEFAULT_SAMPLE_RATE)
+                NonZeroU32::new(TestState::DEFAULT_SAMPLE_RATE)
                     .expect("invariant: fixture default sample rate is non-zero"),
             );
             let max_block_frames = NonZeroU32::new(512).ok_or(RouteLossError)?;
@@ -527,24 +539,21 @@ mod tests {
             .map_err(|err| err.to_string())
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd {
+    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
             bus: EventBus::default(),
             eq_layout: Vec::new(),
-            sample_pool: SamplePool::default(),
+            pools: pools(),
             sample_rate,
         }
     }
 
-    fn register_player(state: &mut SessionState<RouteLossBackend>) -> u64 {
+    fn register_player(state: &mut TestState) -> u64 {
         let grid_id = attach_player(state);
         match run_cmd(
             state,
-            register_command(
-                grid_id,
-                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-            ),
+            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) {
             Reply::PlayerRegistered(id) => id,
             Reply::Err(err) => panic!("player registration failed: {err}"),
@@ -552,18 +561,18 @@ mod tests {
         }
     }
 
-    fn deck(state: &SessionState<RouteLossBackend>, index: usize) -> &Deck {
+    fn deck(state: &TestState, index: usize) -> &Deck<TestPools> {
         state
             .graph
             .deck(index)
             .expect("the registered deck is present under the host")
     }
 
-    fn deck_count(state: &SessionState<RouteLossBackend>) -> usize {
+    fn deck_count(state: &TestState) -> usize {
         state.graph.len()
     }
 
-    fn member_count(state: &SessionState<RouteLossBackend>) -> usize {
+    fn member_count(state: &TestState) -> usize {
         state
             .root
             .topology()
@@ -572,7 +581,7 @@ mod tests {
             .len()
     }
 
-    fn host_grid(state: &SessionState<RouteLossBackend>) -> BeatGridSnapshot {
+    fn host_grid(state: &TestState) -> BeatGridSnapshot {
         state.root.snapshot()
     }
 
@@ -591,7 +600,7 @@ mod tests {
         assert!(boundary_axis.epoch() > before_axis.epoch());
     }
 
-    fn deck_by_player_id(state: &SessionState<RouteLossBackend>, player_id: u64) -> &Deck {
+    fn deck_by_player_id(state: &TestState, player_id: u64) -> &Deck<TestPools> {
         let index = state
             .graph
             .index_by_player(player_id)
@@ -620,7 +629,8 @@ mod tests {
                 &mut state,
                 Cmd::StartPlayer {
                     player_id,
-                    sample_rate: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+                    sample_rate: TestState::DEFAULT_SAMPLE_RATE,
+                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -655,10 +665,7 @@ mod tests {
 
         let reply = run_cmd(
             &mut state,
-            register_command(
-                grid_id,
-                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-            ),
+            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         );
 
         assert!(matches!(reply, Reply::Err(SessionError::Graph(_))));
@@ -670,12 +677,7 @@ mod tests {
     fn duplicate_graph_projection_is_rejected() {
         let mut state = test_state(start_route_loss_stream);
         let grid_id = attach_player(&mut state);
-        let command = || {
-            register_command(
-                grid_id,
-                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-            )
-        };
+        let command = || register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE);
 
         assert!(matches!(
             run_cmd(&mut state, command()),
@@ -698,14 +700,11 @@ mod tests {
         let grid_id = attach_player(&mut state);
         let Reply::PlayerRegistered(player_id) = run_cmd(
             &mut state,
-            register_command(
-                grid_id,
-                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-            ),
+            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) else {
             panic!("fixture player is registered")
         };
-        let detach = |state: &SessionState<RouteLossBackend>| SyncOperation::Topology {
+        let detach = |state: &TestState| SyncOperation::Topology {
             base: state.root.topology().expect("fixture topology").stamp(),
             operations: Box::new([TopologyOperation::Detach { member: grid_id }]),
         };
@@ -812,10 +811,7 @@ mod tests {
 
         let reply = run_cmd(
             &mut state,
-            register_command(
-                grid_id,
-                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-            ),
+            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         );
 
         assert!(matches!(reply, Reply::Err(SessionError::PlayerIdExhausted)));
@@ -839,7 +835,7 @@ mod tests {
         );
         assert_eq!(
             before.output(),
-            SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+            TestState::DEFAULT_SAMPLE_RATE,
             "until a stream exists the resampler is built for the requested rate"
         );
 
@@ -848,7 +844,7 @@ mod tests {
             run_cmd(&mut state, Cmd::QuerySampleRate),
             Reply::SampleRate(SessionSampleRate {
                 measured: None,
-                requested: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+                requested: TestState::DEFAULT_SAMPLE_RATE,
                 ..
             })
         ));
@@ -856,6 +852,7 @@ mod tests {
             run_cmd(
                 &mut state,
                 Cmd::StartPlayer {
+                    master_volume: 1.0,
                     player_id,
                     sample_rate: 48_000,
                 },
@@ -883,6 +880,7 @@ mod tests {
             run_cmd(
                 &mut state,
                 Cmd::StartPlayer {
+                    master_volume: 1.0,
                     player_id,
                     sample_rate: 0,
                 },
@@ -975,6 +973,7 @@ mod tests {
             run_cmd(
                 &mut state,
                 Cmd::StartPlayer {
+                    master_volume: 1.0,
                     player_id,
                     sample_rate: 0,
                 },
@@ -1043,6 +1042,7 @@ mod tests {
             run_cmd(
                 &mut state,
                 Cmd::StartPlayer {
+                    master_volume: 1.0,
                     player_id,
                     sample_rate: 44_100,
                 },
@@ -1091,11 +1091,12 @@ mod tests {
         assert!(deck(&state, 0).started);
     }
 
-    fn start_player_cmd(state: &mut SessionState<RouteLossBackend>, player_id: u64) {
+    fn start_player_cmd(state: &mut TestState, player_id: u64) {
         assert!(matches!(
             run_cmd(
                 &mut *state,
                 Cmd::StartPlayer {
+                    master_volume: 1.0,
                     player_id,
                     sample_rate: 44_100,
                 },
@@ -1104,7 +1105,7 @@ mod tests {
         ));
     }
 
-    fn master_volume_of(state: &SessionState<RouteLossBackend>, player_id: u64) -> f32 {
+    fn master_volume_of(state: &TestState, player_id: u64) -> f32 {
         state
             .graph
             .decks()
@@ -1114,7 +1115,7 @@ mod tests {
     }
 
     fn apply_player_mix(
-        state: &mut SessionState<RouteLossBackend>,
+        state: &mut TestState,
         levels: impl IntoIterator<Item = (u64, f32)>,
     ) -> HostReply {
         let levels = levels
@@ -1143,10 +1144,7 @@ mod tests {
         ));
         let Reply::PlayerRegistered(player_id) = run_cmd(
             &mut state,
-            register_command(
-                grid_id,
-                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-            ),
+            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
         ) else {
             panic!("player registration must succeed")
         };

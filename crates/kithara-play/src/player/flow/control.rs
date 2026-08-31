@@ -9,7 +9,7 @@ use crate::{
     player::state::phase::PlayerPhaseKind,
 };
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S> {
     /// Ensure we have an active slot, allocating one if needed.
     pub fn ensure_slot(&self) -> Result<SlotId, PlayError> {
         if let Some(id) = self.slot() {

@@ -2,7 +2,6 @@
 
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::{BytePool, SamplePool},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions},
     platform::{
@@ -16,7 +15,12 @@ use kithara::{
     queue::{Queue, QueueConfig},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig, sources::build_source};
+use kithara_app::{
+    baked,
+    config::AppConfig,
+    pools::{AppPools, build as app_pools},
+    sources::build_source,
+};
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflineSession};
 use tracing_subscriber::EnvFilter;
 
@@ -37,7 +41,7 @@ async fn zvuk_drm_master_playlist_trace() {
     let url = "https://ecs-stage-slicer-01.zvq.me/drm/track/95038745_1/master.m3u8";
 
     let mut config = ctx.config.clone();
-    config.store = kithara_integration_tests::disk_asset_store(cache.path());
+    config.store = super::source_helper::app_disk_asset_store(&ctx.config, cache.path());
     let source = build_source(url, &config);
 
     let mut rx = ctx.queue.subscribe();
@@ -52,32 +56,29 @@ async fn zvuk_drm_master_playlist_trace() {
 
 struct Ctx {
     config: AppConfig,
-    queue: Arc<Queue>,
+    queue: Arc<Queue<AppPools>>,
 }
 
 static CTX: OnceCell<Ctx> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
-        let byte_pool = BytePool::default();
-        let net = NetOptions::builder()
-            .byte_pool(byte_pool.clone())
-            .is_insecure(true)
-            .build();
+        let pools = app_pools().expect("build app pool region");
+        let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+            DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+                .build(),
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let shutdown = CancelToken::never();
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(pools.clone())
             .cancel(shutdown.child())
             .backend(StorageBackend::default())
-            .pool(byte_pool.clone())
             .flush_hub(flush_hub)
             .layouts(baked::build_baked_asset_layouts())
             .build();
         let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(byte_pool, SamplePool::default())
+            PlayWorkerConfig::builder(pools)
                 .cancel(shutdown.child())
                 .build(),
         );
@@ -124,7 +125,7 @@ fn install_tracing() {
 
 async fn wait_for_terminal(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<AppPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {

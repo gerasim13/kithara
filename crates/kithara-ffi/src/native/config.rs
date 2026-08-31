@@ -14,12 +14,13 @@ pub struct FfiPlayerConfig {
     pub eq_band_count: u32,
 }
 
-impl Default for FfiPlayerConfig {
-    fn default() -> Self {
+#[cfg(test)]
+impl FfiPlayerConfig {
+    pub(crate) fn for_test() -> Self {
         Self {
             eq_band_count: 10,
             key_options: FfiKeyOptions::default(),
-            store: Arc::new(FfiAssetStore::default()),
+            store: Arc::new(FfiAssetStore::for_test()),
         }
     }
 }
