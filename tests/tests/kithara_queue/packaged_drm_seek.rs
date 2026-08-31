@@ -18,10 +18,9 @@ use kithara::{
 };
 use kithara_app::{baked, config::AppConfig};
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, TestTempDir, Xorshift64,
-    fixture_protocol::{DelayRule, EncryptionRequest},
-    hls_fixture::{aes128_iv, aes128_key_bytes},
-    kithara,
+    TestServerHelper, TestTempDir, Xorshift64,
+    fixture_protocol::DelayRule,
+    kithara, mixed_codec_ladder_encrypted,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_position_at_least, wait_for_position_near},
@@ -72,27 +71,13 @@ async fn wait_for_status(
     Err(format!("timeout waiting for {target:?}"))
 }
 
-/// The encrypted ladder both runners below load: three AES-128 AAC variants,
-/// because the cases lock variant 2, over 37 × 6 s. Both runners build it
-/// from here so the only axis between the three tests is the CDN delay and
-/// the clock.
-fn encrypted_ladder() -> HlsFixtureBuilder {
-    HlsFixtureBuilder::new()
-        .variant_count(3)
-        .segments_per_variant(37)
-        .segment_duration_secs(6.0)
-        .variant_bandwidths(vec![66_005, 134_107, 269_930])
-        .packaged_audio_aac_lc(44_100, 2)
-        .encryption(EncryptionRequest {
-            key_hex: hex::encode(aes128_key_bytes()),
-            iv_hex: Some(hex::encode(aes128_iv())),
-        })
-}
-
 /// Local mirror of the `track_plays_end_to_end` e2e seek scenario: load →
 /// play past 0.5s → three seed-42 seeks, each of which must land near the
 /// target AND resume audible progress — the exact sequence that hung on
 /// the real CDN with `AbrMode::manual(2)`.
+///
+/// Variant 2 is the top AAC of the production ladder, not its top variant:
+/// above it sits the FLAC one, which only the auto cases climb to.
 ///
 /// Track construction goes through `app_track_source`, the suite's mirror
 /// of the `kithara-app` `build_source` path used by the e2e (same shared
@@ -108,7 +93,7 @@ async fn run_drm_seek(backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) 
 
     let helper = TestServerHelper::new().await;
     let created = helper
-        .create_hls(encrypted_ladder())
+        .create_hls(mixed_codec_ladder_encrypted())
         .await
         .expect("create encrypted HLS fixture");
     let url = created.master_url();
@@ -129,7 +114,7 @@ async fn run_delayed_drm_seek(
 
     let helper = TestServerHelper::new().await;
     let created = helper
-        .create_hls(encrypted_ladder().push_delay_rule(DelayRule {
+        .create_hls(mixed_codec_ladder_encrypted().push_delay_rule(DelayRule {
             delay_ms,
             ..DelayRule::default()
         }))
