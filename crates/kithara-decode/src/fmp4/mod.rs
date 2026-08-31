@@ -16,8 +16,8 @@ pub(crate) mod source_io;
 
 pub(crate) use demuxer::Fmp4SegmentDemuxer;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) mod test_layout;
 
-#[cfg(all(test, feature = "symphonia"))]
+#[cfg(all(test, feature = "symphonia", not(target_arch = "wasm32")))]
 mod tests;

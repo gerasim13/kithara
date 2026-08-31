@@ -24,6 +24,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_name = func.sig.ident.clone();
     let fn_name_literal = fn_name.to_string();
     let content_type = &args.content_type;
+    let context = args.context;
     let dependencies = &args.depends_on;
     let embed = args.embed;
     let env = &args.env;
@@ -32,7 +33,7 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
         let values = &case.values;
-        let call = match (optional, dependencies.is_empty()) {
+        let call = match (optional || context, dependencies.is_empty()) {
             (true, true) => quote! { #fn_name(&__context, #(#values),*) },
             (true, false) => {
                 quote! { #fn_name(&__context, __inputs, #(#values),*) }
@@ -46,11 +47,6 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                     Ok(bytes) => crate::registry::AssetBuild::Ready(bytes),
                     Err(error) => crate::registry::AssetBuild::Unavailable(error.to_string()),
                 }
-            }
-        } else if dependencies.is_empty() {
-            quote! {
-                let _context = __context;
-                crate::registry::AssetBuild::Ready(#call)
             }
         } else {
             quote! { crate::registry::AssetBuild::Ready(#call) }

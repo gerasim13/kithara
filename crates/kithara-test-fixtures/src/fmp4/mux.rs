@@ -139,7 +139,8 @@ fn build_media_segment(
     let data_offset =
         i32::try_from(moof.len() + 8).expect("`moof` fits the signed 32-bit `trun` data offset");
     let moof = moof_box(samples, sequence_number, decode_time, data_offset);
-    let mut bytes = moof;
+    let mut bytes = styp_box();
+    bytes.extend(moof);
     bytes.extend(mdat_box(samples));
     bytes
 }
@@ -151,6 +152,16 @@ fn ftyp_box() -> Vec<u8> {
         buf.push_fourcc(*b"isom");
         buf.push_fourcc(*b"iso6");
         buf.push_fourcc(*b"mp41");
+    })
+}
+
+fn styp_box() -> Vec<u8> {
+    mp4_box(*b"styp", |buf| {
+        buf.push_fourcc(*b"iso6");
+        buf.push_u32(1);
+        buf.push_fourcc(*b"isom");
+        buf.push_fourcc(*b"iso6");
+        buf.push_fourcc(*b"dash");
     })
 }
 
@@ -624,6 +635,7 @@ mod tests {
         let track = test_track();
         let packaged = mux_audio_track(&track, GaplessEncoding::default()).unwrap();
         assert_eq!(packaged.media_segments.len(), 2);
+        assert_eq!(&packaged.media_segments[0][4..8], b"styp");
         assert!(
             packaged.media_segments[0]
                 .windows(4)

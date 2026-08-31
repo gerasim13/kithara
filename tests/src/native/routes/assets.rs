@@ -3,21 +3,57 @@ use std::path::PathBuf;
 use axum::{
     Router,
     body::Body,
-    extract::Query,
+    extract::{Path, Query},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use kithara::platform::sync::Arc;
-use kithara_test_fixtures::assets::by_name;
+use kithara_test_fixtures::{
+    assets::by_name,
+    hls::{HlsBundle, long_drm, long_plain},
+};
 use tower_http::services::ServeDir;
 
 use crate::test_server_state::TestServerState;
 
 pub(crate) fn router() -> Router<Arc<TestServerState>> {
     Router::new()
+        .route("/assets/hls/{*path}", get(plain_hls))
+        .route("/assets/drm/{*path}", get(drm_hls))
         .nest_service("/assets", ServeDir::new(assets_dir()))
         .route("/streamhq", get(streamhq))
+}
+
+async fn plain_hls(Path(path): Path<String>) -> Response {
+    serve_hls(long_plain(), &path)
+}
+
+async fn drm_hls(Path(path): Path<String>) -> Response {
+    serve_hls(long_drm(), &path)
+}
+
+fn serve_hls(bundle: &HlsBundle, path: &str) -> Response {
+    let route = format!("/hls/{}", path.trim_start_matches('/'));
+    let Some(resource) = bundle.get(&route) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match std::fs::read(resource.path()) {
+        Ok(bytes) => (
+            [(header::CONTENT_TYPE, resource.content_type())],
+            Body::from(bytes),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(
+                %route,
+                path = %resource.path().display(),
+                %error,
+                "generated HLS resource is unreadable"
+            );
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 pub(crate) fn assets_dir() -> PathBuf {

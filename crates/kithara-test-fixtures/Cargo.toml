@@ -18,6 +18,7 @@ hex = { workspace = true }
 num-traits = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
+thiserror = { workspace = true }
 toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -31,7 +32,6 @@ kithara-stream = { workspace = true, default-features = false, features = ["clie
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 delegate = { workspace = true }
-thiserror = { workspace = true }
 
 [build-dependencies]
 kithara-bufpool = { workspace = true }
@@ -41,8 +41,10 @@ kithara-platform = { workspace = true }
 kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-macros = { workspace = true }
 
-bytes = { workspace = true }
+aes = { workspace = true }
 
+bytes = { workspace = true }
+cbc = { workspace = true }
 delegate = { workspace = true }
 hex = { workspace = true }
 hls_m3u8 = { workspace = true }
@@ -57,6 +59,7 @@ toml = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+kithara-drm = { workspace = true }
 kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
 # its own: kithara-net, reached through test-utils, refuses to build without one.

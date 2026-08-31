@@ -566,7 +566,7 @@ fn sample_duration_for(trun: &TrunBox, tfhd: &TfhdBox, idx: usize) -> u32 {
     tfhd.default_sample_duration.unwrap_or(0)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
@@ -574,10 +574,12 @@ mod tests {
     use super::*;
 
     fn read_fixture(name: &str) -> Vec<u8> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/hls")
-            .join(name);
-        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+        let route = format!("/hls/{name}");
+        let resource = kithara_test_fixtures::hls::long_plain()
+            .get(&route)
+            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+        std::fs::read(resource.path())
+            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
     }
 
     #[kithara::test]

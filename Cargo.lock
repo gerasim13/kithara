@@ -4668,6 +4668,7 @@ dependencies = [
  "kithara-signal",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -5327,7 +5328,9 @@ dependencies = [
 name = "kithara-test-fixtures"
 version = "0.0.1-alpha4"
 dependencies = [
+ "aes",
  "bytes",
+ "cbc",
  "delegate",
  "hex",
  "hls_m3u8",

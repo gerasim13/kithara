@@ -44,6 +44,8 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
 /// Parsed `#[kithara::asset(ext = "…", content_type = "…")]`.
 pub(crate) struct AssetArgs {
     pub(crate) content_type: LitStr,
+    /// Pass the build context to a required producer.
+    pub(crate) context: bool,
     /// Cached assets that must be materialized before this producer runs.
     pub(crate) depends_on: Vec<LitStr>,
     /// Bake the asset into the binary instead of reading it from the store.
@@ -58,6 +60,7 @@ pub(crate) struct AssetArgs {
 impl Parse for AssetArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut content_type: Option<LitStr> = None;
+        let mut context = false;
         let mut depends_on: Option<Vec<LitStr>> = None;
         let mut embed = false;
         let mut env: Option<Vec<LitStr>> = None;
@@ -66,21 +69,23 @@ impl Parse for AssetArgs {
 
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
-            if key == "embed" {
-                if embed {
-                    return Err(syn::Error::new(key.span(), "duplicate key `embed`"));
+            let flag = if key == "context" {
+                Some(&mut context)
+            } else if key == "embed" {
+                Some(&mut embed)
+            } else if key == "optional" {
+                Some(&mut optional)
+            } else {
+                None
+            };
+            if let Some(flag) = flag {
+                if *flag {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("duplicate key `{key}`"),
+                    ));
                 }
-                embed = true;
-                if !input.is_empty() {
-                    input.parse::<Token![,]>()?;
-                }
-                continue;
-            }
-            if key == "optional" {
-                if optional {
-                    return Err(syn::Error::new(key.span(), "duplicate key `optional`"));
-                }
-                optional = true;
+                *flag = true;
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -120,7 +125,7 @@ impl Parse for AssetArgs {
                         key.span(),
                         format!(
                             "unknown asset key `{other}`; expected `ext`, `content_type`, \
-                             `depends_on`, `env`, `embed`, or `optional`"
+                             `depends_on`, `env`, `context`, `embed`, or `optional`"
                         ),
                     ));
                 }
@@ -154,6 +159,7 @@ impl Parse for AssetArgs {
 
         Ok(Self {
             content_type,
+            context,
             depends_on: depends_on.unwrap_or_default(),
             embed,
             env: env.unwrap_or_default(),
@@ -262,6 +268,19 @@ mod tests {
         )
         .expect("valid attribute");
         assert!(optional.optional);
+    }
+
+    #[test]
+    fn context_is_off_by_default_and_opt_in() {
+        let plain = syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav""#)
+            .expect("valid attribute");
+        assert!(!plain.context);
+
+        let contextual = syn::parse_str::<AssetArgs>(
+            r#"ext = "toml", content_type = "application/toml", context"#,
+        )
+        .expect("valid attribute");
+        assert!(contextual.context);
     }
 
     #[test]
