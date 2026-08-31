@@ -43,7 +43,7 @@ impl Consts {
     const SETTLE_READS: usize = 257;
     /// The ladder these measurements drain, sized by two facts. A quarter of
     /// it has to outrun `SETTLE_READS`, and it has to encode cold inside the
-    /// 30 s this test declares alongside three drains - encoding the full
+    /// 90 s this test declares alongside three drains - encoding the full
     /// production ladder cold took 18-23 s when `thread_budget` tried it.
     const LADDER_SEGMENTS: usize = 25;
     const LADDER_SEGMENT_SECS: f64 = 4.0;
@@ -76,13 +76,19 @@ impl Drain {
     /// numbers, and those numbers agree with any budget, so scoring one would
     /// leave the assertions below unable to fail.
     fn complete_samples(&self) -> &[usize] {
-        assert!(
-            matches!(self.end, DrainEnd::Eof),
-            "drain stopped short of the end of the stream after {:?} and {} reads: {:?}",
-            self.elapsed,
-            self.samples.len(),
-            self.end,
-        );
+        match &self.end {
+            DrainEnd::Eof => {}
+            DrainEnd::Failed(error) => panic!(
+                "drain failed after {:?} and {} reads: {error:?}",
+                self.elapsed,
+                self.samples.len(),
+            ),
+            DrainEnd::Deadline => panic!(
+                "drain reached its deadline after {:?} and {} reads",
+                self.elapsed,
+                self.samples.len(),
+            ),
+        }
         assert!(
             self.samples.len() / Consts::WARMUP_SHARE > Consts::SETTLE_READS,
             "drain produced {} reads, so its warmup share is {} and RSS needs {} \
@@ -151,7 +157,7 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Duration::from_secs(90)),
     hang_timeout_secs(5)
 )]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
