@@ -159,7 +159,7 @@ const SYNC_PLAY_SEEK: SyncCase =
 const SYNC_SEEK_PLAY: SyncCase =
     SyncCase::running("sync-seek-play", 2, 44_100, OperationOrder::SyncSeekPlay)
         .ride(TempoRide::Down, 120);
-const SEQUENTIAL_SYNC: SyncCase =
+pub(super) const SEQUENTIAL_SYNC: SyncCase =
     SyncCase::running("sequential-sync", 2, 48_000, OperationOrder::SequentialSync);
 const PAUSED_SYNC: SyncCase = SyncCase::running(
     "paused-sync-then-play",
