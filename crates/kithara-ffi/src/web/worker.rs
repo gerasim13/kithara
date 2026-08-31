@@ -1,21 +1,23 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
-use kithara_abr::AbrMode;
-use kithara_assets::StorageBackend;
-use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_hls::KeyOptions;
-use kithara_host::wasm;
-use kithara_platform::{
-    sync::{Arc, mpsc},
-    thread::{assert_not_main_thread, keep_worker_alive},
-    time::{Duration, sleep},
-    tokio::task::spawn as task_spawn,
+use kithara::{
+    abr::AbrMode,
+    assets::StorageBackend,
+    drm::{KeyRequest, KeyRequestFactory},
+    hls::KeyOptions,
+    host::wasm,
+    platform::{
+        sync::{Arc, mpsc},
+        thread::{assert_not_main_thread, keep_worker_alive},
+        time::{Duration, sleep},
+        tokio::task::spawn as task_spawn,
+    },
+    play::{
+        ResourceSrc,
+        policy::{DomainKeyPolicy, DomainKeyRule},
+    },
+    queue::{QueueConfig, TrackId},
 };
-use kithara_play::{
-    ResourceSrc,
-    policy::{DomainKeyPolicy, DomainKeyRule},
-};
-use kithara_queue::{QueueConfig, TrackId};
 
 use crate::{
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
@@ -94,10 +96,12 @@ pub(crate) fn worker_main(
         let mut host = wasm::remote_host(host_sender);
         let state = BuildState::new(pools);
         let worker =
-            FfiWorker::new(kithara_play::PlayWorkerConfig::builder(state.pools.clone()).build());
+            FfiWorker::new(kithara::play::PlayWorkerConfig::builder(state.pools.clone()).build());
         let queue_store = state.store.clone();
-        let player = kithara_play::PlayerImpl::new(
-            kithara_play::PlayerConfig::builder().worker(worker).build(),
+        let player = kithara::play::PlayerImpl::new(
+            kithara::play::PlayerConfig::builder()
+                .worker(worker)
+                .build(),
         );
         let queue = FfiQueue::new(
             QueueConfig::builder()

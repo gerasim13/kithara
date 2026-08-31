@@ -1,4 +1,4 @@
-use kithara_encode::InnerEncoder;
+use kithara::encode::InnerEncoder;
 
 #[kithara::test]
 fn trait_is_object_safe() {

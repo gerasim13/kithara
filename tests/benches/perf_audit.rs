@@ -25,10 +25,10 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
+    stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine},
     warp::{StretchControls, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools};
-use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 

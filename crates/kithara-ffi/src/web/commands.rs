@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kithara_queue::{RepeatMode, TrackId, Transition};
+use kithara::queue::{RepeatMode, TrackId, Transition};
 
 /// Commands sent from the main-thread bridge to the engine Worker.
 ///

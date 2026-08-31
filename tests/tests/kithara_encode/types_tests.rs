@@ -1,8 +1,8 @@
 use kithara::{
     self,
+    encode::BytesEncodeTarget,
     stream::{AudioCodec, ContainerFormat},
 };
-use kithara_encode::BytesEncodeTarget;
 use kithara_integration_tests::encode_ext::BytesEncodeTargetExt;
 
 #[kithara::test]

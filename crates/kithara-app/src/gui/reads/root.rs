@@ -1,4 +1,4 @@
-use kithara_ui::render::{Node, Scope};
+use kithara::ui::render::{Node, Scope};
 
 use super::{
     broadcast::BroadcastNode,
@@ -111,8 +111,8 @@ impl<'a, 'b: 'a> Node<'a> for &'a ReadRoot<'b> {
 mod tests {
     use ::kithara::play::effects::eq::GainDb;
     use iced::Size;
+    use kithara::ui::render::{ReadValue, Reads, Walk};
     use kithara_test_utils::kithara;
-    use kithara_ui::render::{ReadValue, Reads, Walk};
 
     use super::*;
     use crate::{

@@ -9,8 +9,10 @@ use axum::{
     routing::get,
 };
 use futures::stream;
-use kithara::platform::sync::Arc;
-use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
+use kithara::{
+    encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory},
+    platform::sync::Arc,
+};
 
 use crate::{
     native::routes::range::build_range_response,

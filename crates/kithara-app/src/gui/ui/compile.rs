@@ -1,13 +1,15 @@
 use std::rc::Rc;
 
 use iced::{Element, Size};
-use kithara_platform::time::Duration;
-use kithara_ui::{
-    compile::{CompiledUi, compile},
-    error::UiDocError,
-    ids::SourceUri,
-    render::{Clock, Walk, tree},
-    source::UiConfig,
+use kithara::{
+    platform::time::Duration,
+    ui::{
+        compile::{CompiledUi, compile},
+        error::UiDocError,
+        ids::SourceUri,
+        render::{Clock, Walk, tree},
+        source::UiConfig,
+    },
 };
 
 use super::{

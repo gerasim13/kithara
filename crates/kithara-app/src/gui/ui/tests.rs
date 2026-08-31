@@ -1,7 +1,6 @@
 use std::{cell::RefCell, collections::BTreeSet, path::Path};
 
-use kithara_test_utils::kithara;
-use kithara_ui::{
+use kithara::ui::{
     builtin,
     compile::{CompiledNode, CompiledUi, compiled_min},
     error::UiDocError,
@@ -11,6 +10,7 @@ use kithara_ui::{
     render::{Clock, ReadValue, Reads, tree},
     size::{Dim, SizeSpec, control_size},
 };
+use kithara_test_utils::kithara;
 
 use super::{
     cache::DeckLayout,

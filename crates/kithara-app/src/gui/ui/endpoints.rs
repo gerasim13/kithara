@@ -1,4 +1,4 @@
-use kithara_ui::{
+use kithara::ui::{
     ids::EndpointId,
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
 };

@@ -4,18 +4,18 @@ use kithara::{
     analysis::AnalysisProgress,
     decode::DecodeError,
     events::{EngineEvent, Envelope, Event, EventReceiver, SessionEvent, TrackId},
-};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    tokio::{
-        self,
-        sync::{broadcast::error::RecvError, watch},
-        task::JoinHandle,
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        tokio::{
+            self,
+            sync::{broadcast::error::RecvError, watch},
+            task::JoinHandle,
+        },
     },
+    queue::QueueEvent,
+    worker::TaskError,
 };
-use kithara_queue::QueueEvent;
-use kithara_worker::TaskError;
 use tracing::warn;
 
 use crate::{
@@ -535,15 +535,17 @@ mod tests {
         prelude::ResourceSrc,
         stream::dl::{Downloader, DownloaderConfig},
     };
-    use kithara_platform::{
-        CancelToken,
-        sync::{Arc, Mutex},
-        time::Duration,
-        tokio::{runtime::Handle, sync::watch},
+    use kithara::{
+        platform::{
+            CancelToken,
+            sync::{Arc, Mutex},
+            time::Duration,
+            tokio::{runtime::Handle, sync::watch},
+        },
+        queue::QueueConfig,
+        worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
     };
-    use kithara_queue::QueueConfig;
     use kithara_test_utils::kithara;
-    use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
     use super::{
         Activity, AnalysisController, Plan, Run, handle_event, pending_order, plan_analysis,

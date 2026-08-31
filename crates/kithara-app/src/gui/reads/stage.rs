@@ -1,4 +1,4 @@
-use kithara_ui::render::{Node, PortalMapView, PortalTarget, ReadValue, ScalarRange, Scope};
+use kithara::ui::render::{Node, PortalMapView, PortalTarget, ReadValue, ScalarRange, Scope};
 use num_traits::cast::AsPrimitive;
 
 use super::value::Value;

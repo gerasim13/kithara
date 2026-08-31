@@ -7,8 +7,8 @@ use kithara::{
     analysis::{AnalysisFile, AnalysisFingerprint, AnalysisProgress, AnalysisToken},
     assets::{AssetResource, AssetResourceState, ReadSide, ResourceKey},
     decode::DecodeError,
+    platform::time::Duration,
 };
-use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
 use crate::pools::{AppResourceConfig, AppStore, Pools};
@@ -221,7 +221,7 @@ mod tests {
         file::File,
         prelude::ResourceSrc,
     };
-    use kithara_platform::sync::Arc;
+    use kithara::platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};

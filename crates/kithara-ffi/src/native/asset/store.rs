@@ -1,8 +1,10 @@
 use std::{fmt, num::NonZeroUsize, path::PathBuf};
 
-use kithara_assets::{AssetLayoutRegistry, StorageBackend};
-use kithara_bufpool::PoolError;
-use kithara_platform::{CancelScope, sync::Arc};
+use kithara::{
+    assets::{AssetLayoutRegistry, StorageBackend},
+    bufpool::PoolError,
+    platform::{CancelScope, sync::Arc},
+};
 
 use super::FfiAssetLayoutRegistry;
 use crate::pools::{FfiStore, Pools, build as build_pools};
@@ -59,7 +61,7 @@ impl FfiAssetStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn cancel_token(&self) -> kithara_platform::CancelToken {
+    pub(crate) fn cancel_token(&self) -> kithara::platform::CancelToken {
         self.shutdown.token()
     }
 }
@@ -101,7 +103,7 @@ impl Drop for FfiAssetStore {
 mod tests {
     use std::sync::Weak;
 
-    use kithara_assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
+    use kithara::assets::{AssetLayout, AssetResource, AssetSource, DefaultLayout};
     use tempfile::tempdir;
     use url::Url;
 

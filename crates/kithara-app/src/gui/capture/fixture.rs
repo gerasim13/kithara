@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use kithara_ui::{
+use kithara::ui::{
     app::App,
     module::IconName,
     registry::ValueKind,

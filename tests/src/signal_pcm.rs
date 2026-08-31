@@ -357,7 +357,7 @@ impl<S: signal::SignalFn> SignalPcm<S> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S: signal::SignalFn + Sync> kithara_encode::PcmSource for SignalPcm<S> {
+impl<S: signal::SignalFn + Sync> kithara::encode::PcmSource for SignalPcm<S> {
     fn channels(&self) -> u16 {
         Self::channels(self)
     }

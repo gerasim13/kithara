@@ -1,10 +1,12 @@
-use kithara::abr::AbrMode;
-use kithara_events::{AbrEvent, AudioEvent, Envelope, Event};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    tokio,
-    tokio::sync::broadcast,
+use kithara::{
+    abr::AbrMode,
+    events::{AbrEvent, AudioEvent, Envelope, Event},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        tokio,
+        tokio::sync::broadcast,
+    },
 };
 
 use crate::{
@@ -166,7 +168,7 @@ impl ItemEventBridge {
     /// and refreshes the shared [`ItemView`] cache backing the item's
     /// synchronous getters (`duration_sec`, `is_live_stream`, …).
     pub(crate) fn spawn(
-        rx: kithara_events::EventReceiver,
+        rx: kithara::events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
@@ -181,7 +183,7 @@ impl ItemEventBridge {
     }
 
     fn spawn_event_task(
-        mut rx: kithara_events::EventReceiver,
+        mut rx: kithara::events::EventReceiver,
         observer: Arc<dyn ItemObserver>,
         mut duration_seconds: Option<f64>,
         state: Arc<Mutex<ItemView>>,
@@ -225,8 +227,10 @@ impl Drop for ItemEventBridge {
 
 #[cfg(test)]
 mod tests {
-    use kithara_events::{Event, FileError, FileEvent};
-    use kithara_platform::sync::{Arc, Mutex};
+    use kithara::{
+        events::{Event, FileError, FileEvent},
+        platform::sync::{Arc, Mutex},
+    };
 
     use super::ItemEventBridge;
     use crate::{

@@ -4,22 +4,22 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
+    drm::{KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
     net::{HttpClient, NetOptions},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+    },
     play::{
         PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
         effects::eq::generate_log_spaced_bands,
+        policy::{DomainKeyPolicy, DomainKeyRule},
     },
+    queue::{QueueConfig, QueueError, RepeatMode, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-};
-use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
-use kithara_queue::{QueueConfig, QueueError, RepeatMode, Transition};
 
 use super::salt;
 use crate::{
@@ -36,7 +36,7 @@ use crate::{
 fn build_processor_closure(
     processor: Arc<dyn FfiKeyProcessor>,
     salt: String,
-) -> kithara_drm::KeyProcessor {
+) -> kithara::drm::KeyProcessor {
     Arc::new(move |key: Bytes| {
         Ok(Bytes::from(
             processor.process_key(key.to_vec(), salt.clone()),

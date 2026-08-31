@@ -11,7 +11,7 @@
 uniffi::setup_scaffolding!();
 
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
-use kithara_events::TrackId;
+use kithara::events::TrackId;
 
 #[cfg(all(feature = "uniffi", not(target_arch = "wasm32")))]
 uniffi::custom_type!(TrackId, u64, { remote });

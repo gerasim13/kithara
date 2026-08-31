@@ -4,10 +4,10 @@ use kithara::{
     self,
     broadcast::{BroadcastConfig, LiveWindow, PlaylistSnapshot, Segmenter},
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+    encode::{StreamBackend, StreamEncoder},
     platform::time::Duration,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::{StreamBackend, StreamEncoder};
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     goertzel::goertzel_magnitude,

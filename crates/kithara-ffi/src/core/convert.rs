@@ -1,8 +1,10 @@
-use kithara_events::{
-    AssetEvent, AudioEvent, DecoderEvent, DjEvent, DownloaderEvent, DrmEvent, EngineEvent, Event,
-    FileEvent, HlsEvent, QueueEvent, SessionEvent,
+use kithara::{
+    events::{
+        AssetEvent, AudioEvent, DecoderEvent, DjEvent, DownloaderEvent, DrmEvent, EngineEvent,
+        Event, FileEvent, HlsEvent, QueueEvent, SessionEvent,
+    },
+    play::PlayerEvent,
 };
-use kithara_play::PlayerEvent;
 
 use crate::types::{
     FfiAdvanceReason, FfiError, FfiEvictReason, FfiItemEvent, FfiPlayerEvent, FfiRepeatMode,
@@ -577,14 +579,16 @@ impl TryFrom<&QueueEvent> for FfiPlayerEvent {
 mod tests {
     use std::num::NonZeroU64;
 
-    use kithara_events::{
-        AssetEvent, AudioEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event,
-        EvictReason, FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, RequestId,
-        RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind, TotalBytesSource,
-        TrackId,
+    use kithara::{
+        events::{
+            AssetEvent, AudioEvent, CancelReason, DownloaderEvent, DrmEvent, EngineEvent, Event,
+            EvictReason, FileEvent, KeyFailureStage, KeySource, MediaTime, QueueEvent, RequestId,
+            RouteChangeReason, RouteDescription, SessionEvent, StretchBackendKind,
+            TotalBytesSource, TrackId,
+        },
+        platform::time::Duration,
+        play::PlayerEvent,
     };
-    use kithara_platform::time::Duration;
-    use kithara_play::PlayerEvent;
 
     use super::{FfiError, FfiItemEvent, FfiPlayerEvent, NotForwarded};
     use crate::types::{
@@ -621,7 +625,7 @@ mod tests {
         let request_id = request_id(9);
         let event = DownloaderEvent::RequestFailed {
             request_id,
-            error: kithara_net::NetError::Network("boom".into()),
+            error: kithara::net::NetError::Network("boom".into()),
             retryable: false,
         };
 
@@ -735,15 +739,15 @@ mod tests {
     fn engine_event_to_ffi_skips_internal_and_duplicate_crossfade_events() {
         assert!(matches!(
             FfiPlayerEvent::try_from(&EngineEvent::CrossfadeStarted {
-                from: kithara_events::SlotId::new(1),
-                to: kithara_events::SlotId::new(2),
+                from: kithara::events::SlotId::new(1),
+                to: kithara::events::SlotId::new(2),
                 duration: Duration::from_secs(1),
             }),
             Err(NotForwarded)
         ));
         assert!(matches!(
             FfiPlayerEvent::try_from(&EngineEvent::SlotAllocated {
-                slot: kithara_events::SlotId::new(3),
+                slot: kithara::events::SlotId::new(3),
             }),
             Err(NotForwarded)
         ));
@@ -773,8 +777,8 @@ mod tests {
     #[kithara::test]
     fn dj_event_to_ffi_skips_beat_tick() {
         assert!(matches!(
-            FfiPlayerEvent::try_from(&kithara_events::DjEvent::BeatTick {
-                slot: kithara_events::SlotId::new(9),
+            FfiPlayerEvent::try_from(&kithara::events::DjEvent::BeatTick {
+                slot: kithara::events::SlotId::new(9),
                 beat_number: 4,
                 timestamp: MediaTime::default(),
             }),
@@ -785,9 +789,9 @@ mod tests {
     #[kithara::test]
     fn dj_event_to_ffi_maps_bpm_detected_fields() {
         assert!(matches!(
-            FfiPlayerEvent::try_from(&kithara_events::DjEvent::BpmDetected {
-                slot: kithara_events::SlotId::new(7),
-                info: kithara_events::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
+            FfiPlayerEvent::try_from(&kithara::events::DjEvent::BpmDetected {
+                slot: kithara::events::SlotId::new(7),
+                info: kithara::events::BpmInfo::new(128.5, Some(0.8), Duration::from_millis(250)),
             }),
             Ok(FfiPlayerEvent::DjBpmDetected {
                 slot: 7,
@@ -801,7 +805,7 @@ mod tests {
     #[kithara::test]
     fn dj_event_to_ffi_maps_stretch_backend_changed() {
         assert!(matches!(
-            FfiPlayerEvent::try_from(&kithara_events::DjEvent::StretchBackendChanged {
+            FfiPlayerEvent::try_from(&kithara::events::DjEvent::StretchBackendChanged {
                 kind: StretchBackendKind::Bungee,
             }),
             Ok(FfiPlayerEvent::DjStretchBackendChanged {
@@ -835,9 +839,9 @@ mod tests {
     #[kithara::test]
     fn player_event_to_ffi_maps_item_did_fail_track_id() {
         let event = PlayerEvent::ItemDidFail {
-            item: kithara_events::ItemRole::Leading(kithara_events::TrackRef::new(
+            item: kithara::events::ItemRole::Leading(kithara::events::TrackRef::new(
                 TrackId::from(7_u64),
-                kithara_events::SlotId::new(0),
+                kithara::events::SlotId::new(0),
                 "src".into(),
             )),
         };
@@ -851,7 +855,7 @@ mod tests {
     #[kithara::test]
     fn queue_event_to_ffi_maps_repeat_mode() {
         let event = QueueEvent::RepeatModeChanged {
-            mode: kithara_events::QueueRepeatMode::All,
+            mode: kithara::events::QueueRepeatMode::All,
         };
 
         assert!(matches!(
@@ -866,7 +870,7 @@ mod tests {
     fn event_to_ffi_error_maps_request_failed() {
         let event = Event::Downloader(DownloaderEvent::RequestFailed {
             request_id: request_id(13),
-            error: kithara_net::NetError::Network("boom".into()),
+            error: kithara::net::NetError::Network("boom".into()),
             retryable: false,
         });
 

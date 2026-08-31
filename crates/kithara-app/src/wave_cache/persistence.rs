@@ -9,22 +9,22 @@ use kithara::{
         AnalysisFile, AnalysisFileError, AnalysisFileSpec, AnalysisFileUpdate, AnalysisProgress,
     },
     assets::{AcquisitionResult, AssetReader, AssetWriter, AssetsError, ReadSide, WriteSide},
-};
-use kithara_platform::{
-    CancelGroup,
-    time::Duration,
-    tokio::{
-        self,
-        runtime::Handle,
-        sync::{mpsc, oneshot},
-        task::{JoinError, JoinHandle, spawn_blocking_on, spawn_on},
+    platform::{
+        CancelGroup,
+        time::Duration,
+        tokio::{
+            self,
+            runtime::Handle,
+            sync::{mpsc, oneshot},
+            task::{JoinError, JoinHandle, spawn_blocking_on, spawn_on},
+        },
+    },
+    worker::{
+        Dispatcher, DispatcherConfig, Task, TaskConfig, TaskContext, TaskError, TaskHandle,
+        TickResult, Worker,
     },
 };
 use kithara_test_utils::kithara as probe;
-use kithara_worker::{
-    Dispatcher, DispatcherConfig, Task, TaskConfig, TaskContext, TaskError, TaskHandle, TickResult,
-    Worker,
-};
 
 use super::AnalysisTarget;
 use crate::pools::{AppPools, AppStore, Pools};
@@ -62,7 +62,7 @@ impl AnalysisPersistenceConfig {
 /// Cloneable handle to one ordered, bounded analysis persistence actor.
 #[derive(Clone)]
 pub(crate) struct AnalysisPersistence {
-    inner: kithara_platform::sync::Arc<AnalysisPersistenceInner>,
+    inner: kithara::platform::sync::Arc<AnalysisPersistenceInner>,
 }
 
 impl AnalysisPersistence {
@@ -89,7 +89,7 @@ impl AnalysisPersistence {
         })?;
 
         Ok(Self {
-            inner: kithara_platform::sync::Arc::new(AnalysisPersistenceInner {
+            inner: kithara::platform::sync::Arc::new(AnalysisPersistenceInner {
                 tx,
                 _owner: PersistenceOwner {
                     task,
@@ -543,9 +543,11 @@ mod tests {
         assets::{ReadSide, StorageBackend},
         prelude::ResourceSrc,
     };
-    use kithara_platform::{time::Duration, tokio::runtime::Handle};
+    use kithara::{
+        platform::{time::Duration, tokio::runtime::Handle},
+        worker::{DispatcherConfig, TaskConfig, WorkerConfig},
+    };
     use kithara_test_utils::kithara;
-    use kithara_worker::{DispatcherConfig, TaskConfig, WorkerConfig};
 
     use super::*;
     use crate::pools::{self, AppResourceConfig};

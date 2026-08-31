@@ -33,13 +33,13 @@ pub type AppResourceConfig<B = kithara::prelude::PlaybackResamplerBackend> =
     kithara::play::ResourceConfig<AppPools, B>;
 
 /// App-owned queue shape.
-pub type AppQueue = kithara_queue::Queue<AppPools>;
+pub type AppQueue = kithara::queue::Queue<AppPools>;
 
 /// App-owned queue control shape.
-pub type AppQueueControl = kithara_queue::QueueControl<AppPools>;
+pub type AppQueueControl = kithara::queue::QueueControl<AppPools>;
 
 /// App-owned track-source shape.
-pub type AppTrackSource = kithara_queue::TrackSource<AppPools>;
+pub type AppTrackSource = kithara::queue::TrackSource<AppPools>;
 
 /// Build the application's single explicitly registered pool region.
 ///

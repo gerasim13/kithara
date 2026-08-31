@@ -1,4 +1,4 @@
-use kithara_encode::{BytesEncodeTarget, EncodedTrack};
+use kithara::encode::{BytesEncodeTarget, EncodedTrack};
 
 use crate::{fixture_protocol::GaplessEncoding, fmp4::mux_audio_track};
 

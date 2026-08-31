@@ -1,12 +1,14 @@
 use std::{error::Error, num::NonZeroUsize};
 
 use iced::{Size, window::Settings};
-use kithara_platform::{
-    sync::{Arc, Mutex},
-    time::Duration,
+use kithara::{
+    platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
+    ui::render::fonts,
+    worker::{DispatcherConfig, TaskConfig},
 };
-use kithara_ui::render::fonts;
-use kithara_worker::{DispatcherConfig, TaskConfig};
 #[cfg(feature = "masonry")]
 use num_traits::cast::AsPrimitive;
 
@@ -150,7 +152,7 @@ impl GuiFrontend {
     }
 
     /// Gives the bar's REC cell a session to put on air.
-    pub fn attach_broadcast(&mut self, shutdown: kithara_platform::CancelToken) {
+    pub fn attach_broadcast(&mut self, shutdown: kithara::platform::CancelToken) {
         self.broadcast = Some(crate::broadcast::Broadcaster::new(
             shutdown,
             self.config.broadcast_tap_lead,

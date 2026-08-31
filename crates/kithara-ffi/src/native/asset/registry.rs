@@ -1,7 +1,9 @@
 use std::fmt;
 
-use kithara_assets::{AssetLayout, AssetLayoutRegistry};
-use kithara_platform::sync::{Arc, Mutex};
+use kithara::{
+    assets::{AssetLayout, AssetLayoutRegistry},
+    platform::sync::{Arc, Mutex},
+};
 
 use crate::{layout::FfiAssetLayout, native::layout::ForeignLayout, pools::FfiPools};
 

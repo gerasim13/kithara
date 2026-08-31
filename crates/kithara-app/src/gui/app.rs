@@ -5,7 +5,7 @@ use iced::{
     theme::{Base, Style},
     time as iced_time, window,
 };
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara::platform::{sync::Arc, time::Duration};
 
 use super::{
     deck::DeckUi, frontend::window_settings, message::Message, subscription,

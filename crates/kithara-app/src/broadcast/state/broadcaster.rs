@@ -1,6 +1,6 @@
 use std::mem;
 
-use kithara_platform::{
+use kithara::platform::{
     CancelToken,
     time::{Duration, Instant},
     tokio::task,
