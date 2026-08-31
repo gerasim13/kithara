@@ -21,8 +21,12 @@ use kithara::{
     },
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, TestServerHelper, cochlea::synchronization_failures, kithara,
-    memory_asset_store, offline::OfflineSession,
+    HlsFixtureBuilder, TestServerHelper,
+    cochlea::synchronization_failures,
+    fixture_protocol::EncryptionRequest,
+    hls_fixture::{aes128_iv, aes128_key_bytes},
+    kithara, memory_asset_store,
+    offline::OfflineSession,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -200,12 +204,18 @@ pub(super) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Provider {
     Synthetic,
-    HlsSame,
+    HlsSame(HlsProtection),
     Library,
     Mp3Same,
     Mp3Distinct,
-    HlsMp3,
+    HlsMp3(HlsProtection),
     Sweep,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum HlsProtection {
+    Plain,
+    Drm,
 }
 
 pub(super) struct ProductHarness {
@@ -577,20 +587,22 @@ async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) ->
             ],
             decks,
         ),
-        Provider::HlsSame => {
+        Provider::HlsSame(protection) => {
             let url = hls(
                 server,
                 rhythm_fmp4_init_deck_a_120bpm_48k(),
                 rhythm_fmp4_media_deck_a_120bpm_48k(),
+                protection,
             )
             .await;
             vec![url; decks]
         }
-        Provider::HlsMp3 => {
+        Provider::HlsMp3(protection) => {
             let hls = hls(
                 server,
                 rhythm_fmp4_init_deck_a_120bpm_48k(),
                 rhythm_fmp4_media_deck_a_120bpm_48k(),
+                protection,
             )
             .await;
             let mp3 = asset_path(rhythm_mp3_deck_b_120bpm_48k());
@@ -659,18 +671,28 @@ fn asset_path(asset: Asset) -> String {
         .to_owned()
 }
 
-async fn hls(server: &TestServerHelper, init: Asset, media: Asset) -> String {
+async fn hls(
+    server: &TestServerHelper,
+    init: Asset,
+    media: Asset,
+    protection: HlsProtection,
+) -> String {
+    let mut builder = HlsFixtureBuilder::new()
+        .variant_count(1)
+        .segments_per_variant(1)
+        .segment_duration_secs(12.0)
+        .segment_size(media.bytes().len())
+        .codecs("fLaC".to_owned())
+        .init_data_per_variant(vec![Arc::new(init.bytes().to_vec())])
+        .custom_data(Arc::new(media.bytes().to_vec()));
+    if matches!(protection, HlsProtection::Drm) {
+        builder = builder.encryption(EncryptionRequest {
+            key_hex: hex::encode(aes128_key_bytes()),
+            iv_hex: Some(hex::encode(aes128_iv())),
+        });
+    }
     server
-        .create_hls(
-            HlsFixtureBuilder::new()
-                .variant_count(1)
-                .segments_per_variant(1)
-                .segment_duration_secs(12.0)
-                .segment_size(media.bytes().len())
-                .codecs("fLaC".to_owned())
-                .init_data_per_variant(vec![Arc::new(init.bytes().to_vec())])
-                .custom_data(Arc::new(media.bytes().to_vec())),
-        )
+        .create_hls(builder)
         .await
         .expect("register build-time rhythmic fMP4 as HLS")
         .master_url()
@@ -720,6 +742,34 @@ async fn run(case: SyncCase, provider: Provider) {
     multi_thread,
     serial,
     flash(false),
+    timeout(Duration::from_secs(60))
+)]
+#[case::mp3(Provider::Mp3Same)]
+#[case::drm(Provider::HlsSame(HlsProtection::Drm))]
+async fn encoded_rhythmic_controls_reach_the_pcm_oracle(#[case] provider: Provider) {
+    let mut harness = ProductHarness::new(ONE_DECK, provider, 0).await;
+    let pcm = harness.capture(ONE_DECK).await;
+    let mut failures = synchronization_failures(
+        &format!("encoded rhythmic control {provider:?}"),
+        &[pcm.as_slice()],
+        CHANNELS,
+        ONE_DECK.sample_rate,
+        START_BPM,
+    );
+    failures.extend(harness.failures);
+    assert!(
+        failures.is_empty(),
+        "encoded rhythmic control {provider:?} failed:\n{}",
+        failures.join("\n"),
+    );
+}
+
+#[kithara::test(
+    native,
+    tokio,
+    multi_thread,
+    serial,
+    flash(false),
     timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
@@ -747,17 +797,28 @@ async fn synthetic_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase) {
     timeout(Duration::from_secs(600))
 )]
 #[ignore = "ignored-red: product Warp alignment is not implemented"]
-#[case::hls_same_play_sync_seek(Provider::HlsSame, PLAY_SYNC_SEEK)]
-#[case::hls_same_play_seek_sync(Provider::HlsSame, PLAY_SEEK_SYNC)]
-#[case::hls_same_seek_play_sync(Provider::HlsSame, SEEK_PLAY_SYNC)]
-#[case::hls_same_seek_sync_play(Provider::HlsSame, SEEK_SYNC_PLAY)]
-#[case::hls_same_sync_play_seek(Provider::HlsSame, SYNC_PLAY_SEEK)]
-#[case::hls_same_sync_seek_play(Provider::HlsSame, SYNC_SEEK_PLAY)]
-#[case::hls_same_sequential_sync(Provider::HlsSame, SEQUENTIAL_SYNC)]
-#[case::hls_same_paused_sync_then_play(Provider::HlsSame, PAUSED_SYNC)]
-#[case::hls_same_four_deck_sequential_sync(Provider::HlsSame, FOUR_DECK_SYNC)]
-#[case::hls_same_tempo_up_120hz(Provider::HlsSame, TEMPO_UP_120)]
-#[case::hls_same_tempo_down_30hz(Provider::HlsSame, TEMPO_DOWN_30)]
+#[case::hls_same_play_sync_seek(Provider::HlsSame(HlsProtection::Plain), PLAY_SYNC_SEEK)]
+#[case::hls_same_play_seek_sync(Provider::HlsSame(HlsProtection::Plain), PLAY_SEEK_SYNC)]
+#[case::hls_same_seek_play_sync(Provider::HlsSame(HlsProtection::Plain), SEEK_PLAY_SYNC)]
+#[case::hls_same_seek_sync_play(Provider::HlsSame(HlsProtection::Plain), SEEK_SYNC_PLAY)]
+#[case::hls_same_sync_play_seek(Provider::HlsSame(HlsProtection::Plain), SYNC_PLAY_SEEK)]
+#[case::hls_same_sync_seek_play(Provider::HlsSame(HlsProtection::Plain), SYNC_SEEK_PLAY)]
+#[case::hls_same_sequential_sync(Provider::HlsSame(HlsProtection::Plain), SEQUENTIAL_SYNC)]
+#[case::hls_same_paused_sync_then_play(Provider::HlsSame(HlsProtection::Plain), PAUSED_SYNC)]
+#[case::hls_same_four_deck_sequential_sync(Provider::HlsSame(HlsProtection::Plain), FOUR_DECK_SYNC)]
+#[case::hls_same_tempo_up_120hz(Provider::HlsSame(HlsProtection::Plain), TEMPO_UP_120)]
+#[case::hls_same_tempo_down_30hz(Provider::HlsSame(HlsProtection::Plain), TEMPO_DOWN_30)]
+#[case::drm_same_play_sync_seek(Provider::HlsSame(HlsProtection::Drm), PLAY_SYNC_SEEK)]
+#[case::drm_same_play_seek_sync(Provider::HlsSame(HlsProtection::Drm), PLAY_SEEK_SYNC)]
+#[case::drm_same_seek_play_sync(Provider::HlsSame(HlsProtection::Drm), SEEK_PLAY_SYNC)]
+#[case::drm_same_seek_sync_play(Provider::HlsSame(HlsProtection::Drm), SEEK_SYNC_PLAY)]
+#[case::drm_same_sync_play_seek(Provider::HlsSame(HlsProtection::Drm), SYNC_PLAY_SEEK)]
+#[case::drm_same_sync_seek_play(Provider::HlsSame(HlsProtection::Drm), SYNC_SEEK_PLAY)]
+#[case::drm_same_sequential_sync(Provider::HlsSame(HlsProtection::Drm), SEQUENTIAL_SYNC)]
+#[case::drm_same_paused_sync_then_play(Provider::HlsSame(HlsProtection::Drm), PAUSED_SYNC)]
+#[case::drm_same_four_deck_sequential_sync(Provider::HlsSame(HlsProtection::Drm), FOUR_DECK_SYNC)]
+#[case::drm_same_tempo_up_120hz(Provider::HlsSame(HlsProtection::Drm), TEMPO_UP_120)]
+#[case::drm_same_tempo_down_30hz(Provider::HlsSame(HlsProtection::Drm), TEMPO_DOWN_30)]
 #[case::mp3_same_play_sync_seek(Provider::Mp3Same, PLAY_SYNC_SEEK)]
 #[case::mp3_same_play_seek_sync(Provider::Mp3Same, PLAY_SEEK_SYNC)]
 #[case::mp3_same_seek_play_sync(Provider::Mp3Same, SEEK_PLAY_SYNC)]
@@ -780,17 +841,28 @@ async fn synthetic_product_rows_reach_the_pcm_oracle(#[case] case: SyncCase) {
 #[case::mp3_distinct_four_deck_sequential_sync(Provider::Mp3Distinct, FOUR_DECK_SYNC)]
 #[case::mp3_distinct_tempo_up_120hz(Provider::Mp3Distinct, TEMPO_UP_120)]
 #[case::mp3_distinct_tempo_down_30hz(Provider::Mp3Distinct, TEMPO_DOWN_30)]
-#[case::hls_mp3_play_sync_seek(Provider::HlsMp3, PLAY_SYNC_SEEK)]
-#[case::hls_mp3_play_seek_sync(Provider::HlsMp3, PLAY_SEEK_SYNC)]
-#[case::hls_mp3_seek_play_sync(Provider::HlsMp3, SEEK_PLAY_SYNC)]
-#[case::hls_mp3_seek_sync_play(Provider::HlsMp3, SEEK_SYNC_PLAY)]
-#[case::hls_mp3_sync_play_seek(Provider::HlsMp3, SYNC_PLAY_SEEK)]
-#[case::hls_mp3_sync_seek_play(Provider::HlsMp3, SYNC_SEEK_PLAY)]
-#[case::hls_mp3_sequential_sync(Provider::HlsMp3, SEQUENTIAL_SYNC)]
-#[case::hls_mp3_paused_sync_then_play(Provider::HlsMp3, PAUSED_SYNC)]
-#[case::hls_mp3_four_deck_sequential_sync(Provider::HlsMp3, FOUR_DECK_SYNC)]
-#[case::hls_mp3_tempo_up_120hz(Provider::HlsMp3, TEMPO_UP_120)]
-#[case::hls_mp3_tempo_down_30hz(Provider::HlsMp3, TEMPO_DOWN_30)]
+#[case::hls_mp3_play_sync_seek(Provider::HlsMp3(HlsProtection::Plain), PLAY_SYNC_SEEK)]
+#[case::hls_mp3_play_seek_sync(Provider::HlsMp3(HlsProtection::Plain), PLAY_SEEK_SYNC)]
+#[case::hls_mp3_seek_play_sync(Provider::HlsMp3(HlsProtection::Plain), SEEK_PLAY_SYNC)]
+#[case::hls_mp3_seek_sync_play(Provider::HlsMp3(HlsProtection::Plain), SEEK_SYNC_PLAY)]
+#[case::hls_mp3_sync_play_seek(Provider::HlsMp3(HlsProtection::Plain), SYNC_PLAY_SEEK)]
+#[case::hls_mp3_sync_seek_play(Provider::HlsMp3(HlsProtection::Plain), SYNC_SEEK_PLAY)]
+#[case::hls_mp3_sequential_sync(Provider::HlsMp3(HlsProtection::Plain), SEQUENTIAL_SYNC)]
+#[case::hls_mp3_paused_sync_then_play(Provider::HlsMp3(HlsProtection::Plain), PAUSED_SYNC)]
+#[case::hls_mp3_four_deck_sequential_sync(Provider::HlsMp3(HlsProtection::Plain), FOUR_DECK_SYNC)]
+#[case::hls_mp3_tempo_up_120hz(Provider::HlsMp3(HlsProtection::Plain), TEMPO_UP_120)]
+#[case::hls_mp3_tempo_down_30hz(Provider::HlsMp3(HlsProtection::Plain), TEMPO_DOWN_30)]
+#[case::drm_mp3_play_sync_seek(Provider::HlsMp3(HlsProtection::Drm), PLAY_SYNC_SEEK)]
+#[case::drm_mp3_play_seek_sync(Provider::HlsMp3(HlsProtection::Drm), PLAY_SEEK_SYNC)]
+#[case::drm_mp3_seek_play_sync(Provider::HlsMp3(HlsProtection::Drm), SEEK_PLAY_SYNC)]
+#[case::drm_mp3_seek_sync_play(Provider::HlsMp3(HlsProtection::Drm), SEEK_SYNC_PLAY)]
+#[case::drm_mp3_sync_play_seek(Provider::HlsMp3(HlsProtection::Drm), SYNC_PLAY_SEEK)]
+#[case::drm_mp3_sync_seek_play(Provider::HlsMp3(HlsProtection::Drm), SYNC_SEEK_PLAY)]
+#[case::drm_mp3_sequential_sync(Provider::HlsMp3(HlsProtection::Drm), SEQUENTIAL_SYNC)]
+#[case::drm_mp3_paused_sync_then_play(Provider::HlsMp3(HlsProtection::Drm), PAUSED_SYNC)]
+#[case::drm_mp3_four_deck_sequential_sync(Provider::HlsMp3(HlsProtection::Drm), FOUR_DECK_SYNC)]
+#[case::drm_mp3_tempo_up_120hz(Provider::HlsMp3(HlsProtection::Drm), TEMPO_UP_120)]
+#[case::drm_mp3_tempo_down_30hz(Provider::HlsMp3(HlsProtection::Drm), TEMPO_DOWN_30)]
 async fn real_media_product_rows_reach_the_pcm_oracle(
     #[case] provider: Provider,
     #[case] case: SyncCase,
