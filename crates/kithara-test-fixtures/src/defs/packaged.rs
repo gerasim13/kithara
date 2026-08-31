@@ -49,7 +49,7 @@ fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
             .channels(Consts::CHANNELS)
             .build();
         let track = EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+            &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
                 .pcm(&pcm)
                 .media_info(media_info)
                 .timescale(Consts::RHYTHM_SAMPLE_RATE)
