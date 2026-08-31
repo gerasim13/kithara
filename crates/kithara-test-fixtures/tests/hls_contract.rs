@@ -9,6 +9,7 @@ use kithara_test_utils::kithara;
 
 const LABELS: [&str; 4] = ["slq", "smq", "shq", "slossless"];
 const SEGMENTS: usize = 37;
+const SILVERCOMET: &str = "https://stream.silvercomet.top";
 
 fn bytes<'a>(bundle: &'a HlsBundle, route: &str) -> Vec<u8> {
     let resource = bundle
@@ -31,6 +32,12 @@ fn route(uri: &str) -> String {
     }
 }
 
+fn variant_uri<'a>(stream: &'a VariantStream<'_>) -> &'a str {
+    match stream {
+        VariantStream::ExtXIFrame { uri, .. } | VariantStream::ExtXStreamInf { uri, .. } => uri,
+    }
+}
+
 fn assert_route(bundle: &HlsBundle, uri: &str) {
     let route = route(uri);
     assert!(bundle.get(&route).is_some(), "bundle has no `{route}`");
@@ -42,11 +49,7 @@ fn assert_bundle(bundle: &HlsBundle, encrypted: bool, segments: usize) {
     assert_eq!(master.variant_streams.len(), LABELS.len());
 
     for stream in &master.variant_streams {
-        let uri = match stream {
-            VariantStream::ExtXIFrame { uri, .. } | VariantStream::ExtXStreamInf { uri, .. } => {
-                uri.as_ref()
-            }
-        };
+        let uri = variant_uri(stream);
         assert_route(bundle, uri);
         let playlist_route = route(uri);
         let playlist_text = text(bundle, &playlist_route);
@@ -85,6 +88,81 @@ fn assert_bundle(bundle: &HlsBundle, encrypted: bool, segments: usize) {
     }
 }
 
+fn live_text(path: &str) -> String {
+    reqwest::blocking::get(format!("{SILVERCOMET}/{path}"))
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .unwrap_or_else(|error| panic!("download Silvercomet `{path}`: {error}"))
+        .text()
+        .unwrap_or_else(|error| panic!("read Silvercomet `{path}`: {error}"))
+}
+
+fn assert_live_parity(bundle: &HlsBundle, live_root: &str, encrypted: bool) {
+    let generated_master_text = text(bundle, bundle.master_route());
+    let generated_master =
+        MasterPlaylist::try_from(generated_master_text.as_str()).expect("parse generated master");
+    let live_master_text = live_text(&format!("{live_root}/master.m3u8"));
+    let live_master =
+        MasterPlaylist::try_from(live_master_text.as_str()).expect("parse Silvercomet master");
+    assert_eq!(
+        generated_master.variant_streams,
+        live_master.variant_streams
+    );
+
+    for stream in &generated_master.variant_streams {
+        let uri = variant_uri(stream);
+        let generated = text(bundle, &route(uri))
+            .parse::<MediaPlaylist>()
+            .unwrap_or_else(|error| panic!("parse generated `{uri}`: {error}"));
+        let live = live_text(&format!("{live_root}/{uri}"))
+            .parse::<MediaPlaylist>()
+            .unwrap_or_else(|error| panic!("parse Silvercomet `{uri}`: {error}"));
+
+        assert_eq!(generated.target_duration, live.target_duration, "{uri}");
+        assert_eq!(generated.media_sequence, live.media_sequence, "{uri}");
+        assert_eq!(generated.playlist_type, live.playlist_type, "{uri}");
+        assert_eq!(generated.has_end_list, live.has_end_list, "{uri}");
+        assert_eq!(
+            generated.segments.values().count(),
+            live.segments.values().count(),
+            "{uri}"
+        );
+
+        let tolerance = if uri.contains("slossless") {
+            0.11
+        } else {
+            0.03
+        };
+        for (generated, live) in generated.segments.values().zip(live.segments.values()) {
+            assert_eq!(generated.uri(), live.uri(), "{uri}");
+            assert_eq!(
+                generated.map.as_ref().map(|map| map.uri()),
+                live.map.as_ref().map(|map| map.uri()),
+                "{uri} {} map",
+                generated.uri()
+            );
+            assert_eq!(
+                !generated.keys.is_empty(),
+                encrypted,
+                "{uri} {} encryption",
+                generated.uri()
+            );
+            assert_eq!(
+                !live.keys.is_empty(),
+                encrypted,
+                "{uri} {} live encryption",
+                live.uri()
+            );
+            let generated_duration = generated.duration.duration().as_secs_f64();
+            let live_duration = live.duration.duration().as_secs_f64();
+            assert!(
+                (generated_duration - live_duration).abs() < tolerance,
+                "{uri} {} duration {generated_duration:.3} differs from Silvercomet {live_duration:.3}",
+                generated.uri()
+            );
+        }
+    }
+}
+
 #[kithara::test(native, flash(false))]
 fn generated_plain_and_drm_bundles_are_complete() {
     let plain = long_plain();
@@ -109,6 +187,13 @@ fn generated_plain_and_drm_bundles_are_complete() {
     let written = aes128_cbc_process_chunk(&encrypted_media, &mut decrypted, &mut context, true)
         .expect("decrypt generated media");
     assert_eq!(&decrypted[..written], plain_media);
+}
+
+#[kithara::test(native, flash(false))]
+#[ignore = "requires live Silvercomet HLS"]
+fn generated_long_bundles_match_silvercomet_semantics() {
+    assert_live_parity(long_plain(), "hls", false);
+    assert_live_parity(long_drm(), "drm", true);
 }
 
 #[kithara::test(native, flash(false))]

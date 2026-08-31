@@ -13,7 +13,7 @@ use rayon::prelude::*;
 use crate::{
     context::BuildContext,
     defs::packaged::pools,
-    fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track, mux_audio_track_at},
+    fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track_at},
     hls_manifest::{Manifest, Resource},
     signal::{Pcm, Wave},
 };
@@ -26,9 +26,10 @@ impl Consts {
     const IV: [u8; 16] = [0; 16];
     const KEY: [u8; 16] = *b"0123456789abcdef";
     const SAMPLE_RATE: u32 = 44_100;
-    const SEGMENT_FRAMES: usize = 264_600;
+    const SEGMENT_MILLIS: u64 = 6_000;
     const SEGMENTS: usize = 37;
-    const TARGET_DURATION: u8 = 7;
+    const TARGET_DURATION: u8 = 6;
+    const TOTAL_MILLIS: u64 = 220_200;
     const VARIANTS: [VariantSpec; 4] = [
         VariantSpec {
             bandwidth: 66_005,
@@ -143,11 +144,17 @@ fn encode(spec: VariantSpec) -> EncodedVariant {
             spec.codec
         )
     });
-    let packets_per_segment = Consts::SEGMENT_FRAMES.div_ceil(frame_samples);
-    let encoded_frames = packets_per_segment
-        .checked_mul(frame_samples)
-        .and_then(|frames| frames.checked_mul(Consts::SEGMENTS))
-        .expect("invariant: long HLS fixture frame count fits usize");
+    let segment_frames = usize::try_from(Consts::SAMPLE_RATE)
+        .expect("invariant: sample rate fits usize")
+        * usize::try_from(Consts::SEGMENT_MILLIS).expect("invariant: duration fits usize")
+        / usize::try_from(GaplessConsts::MILLIS_PER_SECOND)
+            .expect("invariant: millisecond scale fits usize");
+    let packets_per_segment = segment_frames.div_ceil(frame_samples);
+    let encoded_frames = usize::try_from(Consts::SAMPLE_RATE)
+        .expect("invariant: sample rate fits usize")
+        * usize::try_from(Consts::TOTAL_MILLIS).expect("invariant: duration fits usize")
+        / usize::try_from(GaplessConsts::MILLIS_PER_SECOND)
+            .expect("invariant: millisecond scale fits usize");
     // FFmpeg emits one native AAC priming access unit before the source frames.
     let total_frames = if spec.codec == AudioCodec::AacLc {
         encoded_frames
@@ -177,13 +184,23 @@ fn variants() -> &'static [Variant] {
         encoded_variants()
             .iter()
             .map(|variant| {
-                let package = mux_audio_track(&variant.track, GaplessEncoding::None)
-                    .unwrap_or_else(|error| {
-                        panic!(
-                            "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
-                            variant.spec.codec
-                        )
-                    });
+                let boundaries = boundaries_at(
+                    &variant.track,
+                    (1..Consts::SEGMENTS)
+                        .map(|index| {
+                            u64::try_from(index).expect("invariant: segment index fits u64")
+                                * Consts::SEGMENT_MILLIS
+                        })
+                        .chain(std::iter::once(Consts::TOTAL_MILLIS)),
+                );
+                let package =
+                    mux_audio_track_at(&variant.track, GaplessEncoding::None, &boundaries)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
+                                variant.spec.codec
+                            )
+                        });
                 Variant {
                     package,
                     spec: variant.spec,
