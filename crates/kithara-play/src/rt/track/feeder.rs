@@ -172,6 +172,7 @@ impl PlayerResource {
     /// zero-fills the requested range and reports [`ReadOutcome::Full`].
     /// That silence is not a terminal condition and must not trigger track
     /// advancement.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(
         &mut self,
         output: &mut [&mut [f32]],

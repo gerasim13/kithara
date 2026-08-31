@@ -329,6 +329,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         self.render.resize(stream_info.max_block_frames.get().as_());
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::rtsan_forbid_blocking]
     fn process(
         &mut self,

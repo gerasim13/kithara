@@ -53,6 +53,7 @@ impl ReadinessGate {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn source_is_ready<T: StreamType>(&self, stream: &SharedStream<T>) -> bool {
         self.source_ready_for_range(stream, chunk_lookahead_range(stream, stream.position()))
     }

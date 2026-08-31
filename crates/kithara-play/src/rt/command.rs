@@ -20,6 +20,7 @@ impl PlayerNodeProcessor {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn apply_playback_rate(&mut self, rate: f32) {
         for (_, track) in self.tracks.iter_mut() {
             track.set_playback_rate(rate);
@@ -79,6 +80,7 @@ impl PlayerNodeProcessor {
     }
 
     /// Drain all pending commands from the channel.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn drain_commands(&mut self) {
         while let Some(cmd) = self.cmd_rx.try_pop() {
             match cmd {

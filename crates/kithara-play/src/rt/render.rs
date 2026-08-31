@@ -75,6 +75,7 @@ impl RenderPass {
     }
 
     /// Render audio for all active tracks into the output buffers.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn render_audio(
         &mut self,
         targets: RenderTargets<'_>,

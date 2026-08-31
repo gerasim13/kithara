@@ -240,6 +240,7 @@ impl PlayerTrack {
     }
 
     /// Read audio from this track into scratch/mix buffers.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(
         &mut self,
         scratch_bufs: &mut [&mut [f32]],

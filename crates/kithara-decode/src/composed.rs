@@ -197,6 +197,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         Ok(DecoderChunkOutcome::Chunk(chunk))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
         let signal = match outcome {
             DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,

@@ -1,5 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
+#[cfg(feature = "perf")]
+use hotpath::HotpathGuardBuilder;
 use kithara::{
     events::TrackId,
     platform::time::{self, Duration},
@@ -129,6 +131,9 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
         "precondition: expected buffered {SLOW_TONE_HZ} Hz audio before the command, got \
          slow={pre_change_slow:.3}, unity={pre_change_unity:.3}, fast={pre_change_fast:.3}"
     );
+
+    #[cfg(feature = "perf")]
+    let _guard = HotpathGuardBuilder::new("live_rate_response").build();
 
     if through_unity {
         harness.player().set_default_rate(1.0);
