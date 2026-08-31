@@ -15,9 +15,12 @@ use kithara::{
     },
     play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, auto, mixed_codec_ladder, temp_dir,
+};
 use memory_stats::memory_stats;
 use tracing::info;
+use url::Url;
 
 struct Consts;
 impl Consts {
@@ -29,10 +32,21 @@ impl Consts {
     /// instead of hanging it.
     const DRAIN_LIMIT: Duration = Duration::from_secs(20);
     /// Share of a drain that counts as warmup. Measured 2026-08-31: RSS climbs
-    /// from 43.7 MB to 47.0 MB inside the first tenth of the reads and is flat
-    /// for the remaining nine, so a quarter clears the ramp with room to
-    /// spare.
+    /// from 43.7 MB to 47.0 MB and then stays flat, so a quarter of the drain
+    /// clears the ramp as long as the ladder below is long enough.
     const WARMUP_SHARE: usize = 4;
+    /// Reads it took RSS to reach its plateau, measured 2026-08-31: 257, or
+    /// about 12 s of audio. The ramp is a fixed startup cost - pools, decoder,
+    /// first prefetch - and does not grow with the stream, so the warmup share
+    /// has to clear it or warmup gets read off the ramp and every drain looks
+    /// like a leak.
+    const SETTLE_READS: usize = 257;
+    /// The ladder these measurements drain, sized by two facts. A quarter of
+    /// it has to outrun `SETTLE_READS`, and it has to encode cold inside the
+    /// 30 s this test declares alongside three drains - encoding the full
+    /// production ladder cold took 18-23 s when `thread_budget` tried it.
+    const LADDER_SEGMENTS: usize = 25;
+    const LADDER_SEGMENT_SECS: f64 = 4.0;
     const RSS_BUDGET_MB: usize = 30;
     const LEAK_TOLERANCE_MB: usize = 5;
 }
@@ -70,12 +84,34 @@ impl Drain {
             self.end,
         );
         assert!(
-            self.samples.len() >= Consts::WARMUP_SHARE,
-            "drain produced {} reads, too few to tell warmup from the rest",
+            self.samples.len() / Consts::WARMUP_SHARE > Consts::SETTLE_READS,
+            "drain produced {} reads, so its warmup share is {} and RSS needs {} \
+             to settle - warmup would be read off the ramp",
             self.samples.len(),
+            self.samples.len() / Consts::WARMUP_SHARE,
+            Consts::SETTLE_READS,
         );
         &self.samples
     }
+}
+
+/// Serves the production ladder, shortened to `Consts::LADDER_SEGMENTS`, and
+/// hands back its master URL.
+///
+/// The shape is the production one - three AAC-LC variants under a FLAC one -
+/// so `auto` is offered the same codec boundary to cross that it is offered in
+/// production, and a codec switch reallocates decoder state. Only the length is
+/// ours.
+async fn ladder_url(server: &TestServerHelper) -> Url {
+    server
+        .create_hls(
+            mixed_codec_ladder()
+                .segments_per_variant(Consts::LADDER_SEGMENTS)
+                .segment_duration_secs(Consts::LADDER_SEGMENT_SECS),
+        )
+        .await
+        .expect("create the ladder these measurements drain")
+        .master_url()
 }
 
 /// Reads `audio` to the end of the stream, sampling RSS after every read.
@@ -128,7 +164,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             .physical_mem;
 
         let server = TestServerHelper::new().await;
-        let url = server.asset("hls/master.m3u8");
+        let url = ladder_url(&server).await;
 
         let region = Region::default();
         let byte_pool = region.byte_pool();
@@ -204,7 +240,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let _guard = HotpathGuardBuilder::new("rss_leak").build();
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let url = ladder_url(&server).await;
 
     let region = Region::default();
     let byte_pool = region.byte_pool();
