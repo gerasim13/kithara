@@ -6,14 +6,14 @@ use cbc::{
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 use kithara_bufpool::{BytePool, SamplePool};
-use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
+use kithara_encode::{EncodedTrack, EncoderFactory, PackagedEncodeRequest};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_macros as kithara;
 use rayon::prelude::*;
 
 use crate::{
     context::BuildContext,
-    fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track},
+    fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track, mux_audio_track_at},
     hls_manifest::{Manifest, Resource},
     signal::{Pcm, Wave},
 };
@@ -61,6 +61,14 @@ impl Consts {
     ];
 }
 
+struct GaplessConsts;
+
+impl GaplessConsts {
+    const BOUNDARY_SECONDS: [u64; 8] = [4, 8, 18, 28, 38, 48, 58, 68];
+    const TARGET_DURATION: u8 = 10;
+    const TOTAL_FRAMES: usize = 3_142_125;
+}
+
 #[derive(Clone, Copy)]
 struct VariantSpec {
     bandwidth: u64,
@@ -73,6 +81,42 @@ struct VariantSpec {
 struct Variant {
     package: Fmp4Package,
     spec: VariantSpec,
+}
+
+fn encode_track(
+    spec: VariantSpec,
+    total_frames: usize,
+    packets_per_segment: usize,
+) -> EncodedTrack {
+    let pcm = Pcm::new(
+        Consts::SAMPLE_RATE,
+        Consts::CHANNELS,
+        total_frames,
+        Wave::Sawtooth,
+    );
+    let media_info = MediaInfo::builder()
+        .codec(spec.codec)
+        .container(ContainerFormat::Fmp4)
+        .sample_rate(Consts::SAMPLE_RATE)
+        .channels(Consts::CHANNELS)
+        .build();
+    EncoderFactory::encode_packaged(
+        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+            .pcm(&pcm)
+            .media_info(media_info)
+            .timescale(Consts::SAMPLE_RATE)
+            .bit_rate(spec.bit_rate)
+            .packets_per_segment(packets_per_segment)
+            .encoder_delay(0)
+            .trailing_delay(0)
+            .build(),
+    )
+    .unwrap_or_else(|error| {
+        panic!(
+            "kithara-test-fixtures: {:?} HLS encode failed: {error}",
+            spec.codec
+        )
+    })
 }
 
 fn encode(spec: VariantSpec) -> Variant {
@@ -95,35 +139,7 @@ fn encode(spec: VariantSpec) -> Variant {
     } else {
         encoded_frames
     };
-    let pcm = Pcm::new(
-        Consts::SAMPLE_RATE,
-        Consts::CHANNELS,
-        total_frames,
-        Wave::Sawtooth,
-    );
-    let media_info = MediaInfo::builder()
-        .codec(spec.codec)
-        .container(ContainerFormat::Fmp4)
-        .sample_rate(Consts::SAMPLE_RATE)
-        .channels(Consts::CHANNELS)
-        .build();
-    let track = EncoderFactory::encode_packaged(
-        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
-            .pcm(&pcm)
-            .media_info(media_info)
-            .timescale(Consts::SAMPLE_RATE)
-            .bit_rate(spec.bit_rate)
-            .packets_per_segment(packets_per_segment)
-            .encoder_delay(0)
-            .trailing_delay(0)
-            .build(),
-    )
-    .unwrap_or_else(|error| {
-        panic!(
-            "kithara-test-fixtures: {:?} long HLS encode failed: {error}",
-            spec.codec
-        )
-    });
+    let track = encode_track(spec, total_frames, packets_per_segment);
     let package = mux_audio_track(&track, GaplessEncoding::None).unwrap_or_else(|error| {
         panic!(
             "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
@@ -141,6 +157,70 @@ fn variants() -> &'static [Variant] {
             .build()
             .expect("invariant: fixture encoder pool builds")
             .install(|| Consts::VARIANTS.par_iter().copied().map(encode).collect())
+    })
+}
+
+fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
+    let mut boundaries = Vec::with_capacity(GaplessConsts::BOUNDARY_SECONDS.len());
+    let mut targets = GaplessConsts::BOUNDARY_SECONDS.iter().copied();
+    let mut target = targets.next();
+    let mut duration = 0u64;
+
+    for (index, unit) in track.access_units.iter().enumerate() {
+        let next_duration = duration.saturating_add(u64::from(unit.duration));
+        while let Some(seconds) = target {
+            let target_duration = seconds * u64::from(track.timescale);
+            if next_duration < target_duration {
+                break;
+            }
+            let before = index;
+            let after = index + 1;
+            let boundary = if before > boundaries.last().copied().unwrap_or(0)
+                && target_duration - duration <= next_duration - target_duration
+            {
+                before
+            } else {
+                after
+            };
+            boundaries.push(boundary);
+            target = targets.next();
+        }
+        duration = next_duration;
+    }
+    assert!(
+        target.is_none(),
+        "invariant: gapless HLS reaches every boundary"
+    );
+    boundaries
+}
+
+fn encode_gapless(spec: VariantSpec) -> Variant {
+    let track = encode_track(spec, GaplessConsts::TOTAL_FRAMES, 1);
+    let boundaries = gapless_boundaries(&track);
+    let package =
+        mux_audio_track_at(&track, GaplessEncoding::Both, &boundaries).unwrap_or_else(|error| {
+            panic!(
+                "kithara-test-fixtures: {:?} gapless HLS mux failed: {error}",
+                spec.codec
+            )
+        });
+    Variant { package, spec }
+}
+
+fn gapless_variants() -> &'static [Variant] {
+    static ENCODED: OnceLock<Vec<Variant>> = OnceLock::new();
+    ENCODED.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(Consts::ENCODERS)
+            .build()
+            .expect("invariant: fixture encoder pool builds")
+            .install(|| {
+                Consts::VARIANTS
+                    .par_iter()
+                    .copied()
+                    .map(encode_gapless)
+                    .collect()
+            })
     })
 }
 
@@ -181,12 +261,12 @@ fn add(
     Ok(())
 }
 
-fn media_playlist(variant: &Variant, encrypted: bool) -> String {
+fn media_playlist(variant: &Variant, encrypted: bool, target_duration: u8) -> String {
     let label = variant.spec.label;
     let mut playlist = format!(
         "#EXTM3U\n#EXT-X-TARGETDURATION:{}\n#EXT-X-ALLOW-CACHE:YES\n\
          #EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-VERSION:6\n#EXT-X-MEDIA-SEQUENCE:1\n",
-        Consts::TARGET_DURATION
+        target_duration
     );
     if encrypted {
         playlist.push_str(&format!(
@@ -217,9 +297,14 @@ fn master_playlist() -> String {
     master
 }
 
-fn bundle(context: &BuildContext<'_>, encrypted: bool) -> io::Result<Vec<u8>> {
+fn bundle(
+    context: &BuildContext<'_>,
+    encrypted: bool,
+    variants: &[Variant],
+    target_duration: u8,
+) -> io::Result<Vec<u8>> {
     let mut resources = Vec::new();
-    for variant in variants() {
+    for variant in variants {
         let label = variant.spec.label;
         if encrypted {
             add(
@@ -251,7 +336,7 @@ fn bundle(context: &BuildContext<'_>, encrypted: bool) -> io::Result<Vec<u8>> {
             &mut resources,
             &format!("index-{label}-a1.m3u8"),
             "application/vnd.apple.mpegurl",
-            media_playlist(variant, encrypted).as_bytes(),
+            media_playlist(variant, encrypted, target_duration).as_bytes(),
         )?;
     }
     add(
@@ -278,6 +363,23 @@ fn bundle(context: &BuildContext<'_>, encrypted: bool) -> io::Result<Vec<u8>> {
 #[case::plain(false)]
 #[case::drm(true)]
 fn long_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
-    bundle(context, encrypted)
+    bundle(context, encrypted, variants(), Consts::TARGET_DURATION)
         .unwrap_or_else(|error| panic!("kithara-test-fixtures: long HLS bundle failed: {error}"))
+}
+
+#[kithara::asset(
+    ext = "toml",
+    content_type = "application/x-kithara-hls-bundle",
+    context
+)]
+#[case::plain(false)]
+#[case::drm(true)]
+fn gapless_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
+    bundle(
+        context,
+        encrypted,
+        gapless_variants(),
+        GaplessConsts::TARGET_DURATION,
+    )
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: gapless HLS bundle failed: {error}"))
 }

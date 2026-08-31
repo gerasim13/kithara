@@ -29,6 +29,13 @@ pub enum Fmp4MuxError {
     EmptyTrack,
     #[error("encoded track is missing required audio metadata")]
     InvalidMediaInfo,
+    #[error("fMP4 segment boundary {boundary} is not strictly inside {access_units} access units")]
+    InvalidSegmentBoundary {
+        boundary: usize,
+        access_units: usize,
+    },
+    #[error("fMP4 segment boundaries must be strictly increasing")]
+    UnorderedSegmentBoundaries,
 }
 
 /// One track packaged as fMP4: the init segment plus every media segment.
@@ -63,6 +70,62 @@ pub fn mux_audio_track(
     track: &EncodedTrack,
     gapless_encoding: GaplessEncoding,
 ) -> Result<Fmp4Package, Fmp4MuxError> {
+    mux_audio_track_chunks(
+        track,
+        gapless_encoding,
+        track.access_units.chunks(track.packets_per_segment.max(1)),
+    )
+}
+
+/// Packages an encoded track at explicit access-unit boundaries.
+///
+/// Each boundary is the exclusive access-unit index ending one segment. The
+/// track tail after the last boundary becomes the final segment.
+///
+/// # Errors
+///
+/// Returns an error when a boundary is outside the track or the boundaries are
+/// not strictly increasing, in addition to [`mux_audio_track`] errors.
+pub fn mux_audio_track_at(
+    track: &EncodedTrack,
+    gapless_encoding: GaplessEncoding,
+    boundaries: &[usize],
+) -> Result<Fmp4Package, Fmp4MuxError> {
+    if track.access_units.is_empty() {
+        return Err(Fmp4MuxError::EmptyTrack);
+    }
+    let mut previous = 0;
+    for &boundary in boundaries {
+        if boundary <= previous {
+            return Err(Fmp4MuxError::UnorderedSegmentBoundaries);
+        }
+        if boundary >= track.access_units.len() {
+            return Err(Fmp4MuxError::InvalidSegmentBoundary {
+                boundary,
+                access_units: track.access_units.len(),
+            });
+        }
+        previous = boundary;
+    }
+
+    let mut start = 0;
+    let chunks = boundaries
+        .iter()
+        .copied()
+        .chain(std::iter::once(track.access_units.len()))
+        .map(|end| {
+            let chunk = &track.access_units[start..end];
+            start = end;
+            chunk
+        });
+    mux_audio_track_chunks(track, gapless_encoding, chunks)
+}
+
+fn mux_audio_track_chunks<'a>(
+    track: &'a EncodedTrack,
+    gapless_encoding: GaplessEncoding,
+    chunks: impl IntoIterator<Item = &'a [EncodedAccessUnit]>,
+) -> Result<Fmp4Package, Fmp4MuxError> {
     if track.access_units.is_empty() {
         return Err(Fmp4MuxError::EmptyTrack);
     }
@@ -94,7 +157,7 @@ pub fn mux_audio_track(
     let mut decode_time = 0u64;
     let mut sequence_number = 1u32;
 
-    for chunk in track.access_units.chunks(track.packets_per_segment.max(1)) {
+    for chunk in chunks {
         let bytes = build_media_segment(chunk, sequence_number, decode_time);
         let duration = chunk
             .iter()
@@ -648,6 +711,18 @@ mod tests {
         );
         assert!(
             packaged.segment_durations_secs[1] >= packaged.segment_durations_secs[0] - f64::EPSILON
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn explicit_boundaries_partition_without_dropping_access_units() {
+        let track = test_track();
+        let packaged = mux_audio_track_at(&track, GaplessEncoding::None, &[1, 3]).unwrap();
+
+        assert_eq!(packaged.media_segments.len(), 3);
+        assert_eq!(
+            packaged.segment_durations_secs,
+            vec![1024.0 / 44_100.0, 2048.0 / 44_100.0, 1024.0 / 44_100.0]
         );
     }
 

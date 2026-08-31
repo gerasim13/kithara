@@ -2,7 +2,7 @@
 
 use hls_m3u8::{MasterPlaylist, MediaPlaylist, tags::VariantStream};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_test_fixtures::hls::{HlsBundle, long_drm, long_plain};
+use kithara_test_fixtures::hls::{HlsBundle, gapless_drm, gapless_plain, long_drm, long_plain};
 use kithara_test_utils::kithara;
 
 const LABELS: [&str; 4] = ["slq", "smq", "shq", "slossless"];
@@ -34,7 +34,7 @@ fn assert_route(bundle: &HlsBundle, uri: &str) {
     assert!(bundle.get(&route).is_some(), "bundle has no `{route}`");
 }
 
-fn assert_bundle(bundle: &HlsBundle, encrypted: bool) {
+fn assert_bundle(bundle: &HlsBundle, encrypted: bool, segments: usize) {
     let master_text = text(bundle, bundle.master_route());
     let master = MasterPlaylist::try_from(master_text.as_str()).expect("parse generated master");
     assert_eq!(master.variant_streams.len(), LABELS.len());
@@ -54,7 +54,7 @@ fn assert_bundle(bundle: &HlsBundle, encrypted: bool) {
         assert!(playlist.has_end_list, "`{playlist_route}` must be VOD");
         assert_eq!(
             playlist.segments.values().count(),
-            SEGMENTS,
+            segments,
             "`{playlist_route}` segment count"
         );
         let mut maps = 0;
@@ -73,7 +73,7 @@ fn assert_bundle(bundle: &HlsBundle, encrypted: bool) {
         assert_eq!(maps, 1, "`{playlist_route}` EXT-X-MAP count");
         assert_eq!(
             keys,
-            SEGMENTS * usize::from(encrypted),
+            segments * usize::from(encrypted),
             "`{playlist_route}` EXT-X-KEY count"
         );
     }
@@ -88,8 +88,8 @@ fn generated_plain_and_drm_bundles_are_complete() {
     let plain = long_plain();
     let drm = long_drm();
 
-    assert_bundle(plain, false);
-    assert_bundle(drm, true);
+    assert_bundle(plain, false, SEGMENTS);
+    assert_bundle(drm, true, SEGMENTS);
 
     let key = bytes(drm, "/hls/slq.key");
     assert_eq!(key.len(), 16);
@@ -107,4 +107,38 @@ fn generated_plain_and_drm_bundles_are_complete() {
     let written = aes128_cbc_process_chunk(&encrypted_media, &mut decrypted, &mut context, true)
         .expect("decrypt generated media");
     assert_eq!(&decrypted[..written], plain_media);
+}
+
+#[kithara::test(native, flash(false))]
+fn generated_gapless_bundles_have_the_live_segment_topology() {
+    for (bundle, encrypted) in [(gapless_plain(), false), (gapless_drm(), true)] {
+        assert_bundle(bundle, encrypted, 9);
+
+        for label in LABELS {
+            let tolerance = if label == "slossless" { 0.11 } else { 0.03 };
+            let playlist = text(bundle, &format!("/hls/index-{label}-a1.m3u8"))
+                .parse::<MediaPlaylist>()
+                .expect("parse generated gapless playlist");
+            let durations = playlist
+                .segments
+                .values()
+                .map(|segment| segment.duration.duration().as_secs_f64())
+                .collect::<Vec<_>>();
+            assert_eq!(durations.len(), 9);
+            for (actual, expected) in durations
+                .iter()
+                .zip([4.0, 4.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0])
+            {
+                assert!(
+                    (actual - expected).abs() < tolerance,
+                    "{label} segment duration {actual:.3} differs from {expected:.3}"
+                );
+            }
+            assert!(
+                (3.0..4.0).contains(&durations[8]),
+                "{label} tail duration must mirror the short live tail: {:.3}",
+                durations[8]
+            );
+        }
+    }
 }

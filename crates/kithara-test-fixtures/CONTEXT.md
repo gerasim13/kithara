@@ -176,9 +176,11 @@ asserting against.
 build script packages the HE-AAC bodies it embeds, and the integration suite's
 HLS server packages its variants while the tests run. `mux_audio_track` turns an
 `EncodedTrack` into an `Fmp4Package`: one init segment plus one media segment
-per `packets_per_segment` access units, each with its duration in seconds
-derived from the track's `timescale`. `Vec::<u8>::from(package)` concatenates
-them into the single body a decoder reads.
+per `packets_per_segment` access units. `mux_audio_track_at` accepts explicit
+interior access-unit boundaries for non-uniform HLS without re-encoding. Both
+derive segment duration from the track's `timescale` and keep one continuous
+decode timeline. `Vec::<u8>::from(package)` concatenates the package into the
+single body a decoder reads.
 
 It lives here rather than in `kithara-encode` because nothing ships it: the
 workspace *reads* fMP4 in `kithara-decode` and broadcasts ADTS in
