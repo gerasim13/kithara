@@ -88,10 +88,10 @@ impl AsRef<[f32]> for AudioChunk {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{Pools, pools, sample_buffer};
 
     fn audio_spec(channels: u16, sample_rate: u32) -> AudioSpec {
         AudioSpec::new(
@@ -100,13 +100,13 @@ mod tests {
         )
     }
 
-    fn chunk(spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            SamplePool::new(4, 64).attach(samples),
+            sample_buffer(pools, &samples),
         )
     }
 
@@ -119,12 +119,20 @@ mod tests {
 
     #[kithara::test]
     fn chunk_reports_complete_frames() {
-        assert_eq!(chunk(audio_spec(2, 44_100), vec![0.0; 6]).frames(), 3);
+        let pools = pools();
+        assert_eq!(
+            chunk(&pools, audio_spec(2, 44_100), vec![0.0; 6]).frames(),
+            3
+        );
     }
 
     #[kithara::test]
     fn zero_channels_report_no_frames() {
-        assert_eq!(chunk(audio_spec(0, 44_100), vec![0.0; 4]).frames(), 0);
+        let pools = pools();
+        assert_eq!(
+            chunk(&pools, audio_spec(0, 44_100), vec![0.0; 4]).frames(),
+            0
+        );
     }
 
     #[kithara::test]

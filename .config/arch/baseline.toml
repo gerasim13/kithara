@@ -102,7 +102,6 @@ schema_version = 1
 "crates/kithara-stream/src/source.rs::SegmentDescriptor::new" = 1
 
 [generic_param_count]
-"crates/kithara-bufpool/src/pool/pooled.rs::Pooled" = 1
 "crates/kithara-net/src/retry.rs::RetryNet::retry_loop" = 1
 
 [god_module]
@@ -159,7 +158,6 @@ schema_version = 1
 
 [multi_constructor]
 "crates/kithara-bufpool/src/pool/core.rs:Pool" = 1
-"crates/kithara-bufpool/src/pool/shared.rs:SharedPool" = 1
 "crates/kithara-decode/src/android/error.rs:AndroidBackendError" = 1
 "crates/kithara-decode/src/error.rs:DecodeError" = 1
 "crates/kithara-decode/src/gapless/trimmer/core.rs:GaplessTrimmer" = 1

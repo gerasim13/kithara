@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use kithara_bufpool::HasPool;
 #[cfg(test)]
 use kithara_events::{AbrMode, VariantIndex};
 use kithara_events::{DeferredBus, HlsEvent};
@@ -10,12 +11,18 @@ use kithara_stream::{PrerollHint, ReaderChunkSignal, ReaderEventSink, ReaderSeek
 
 use crate::stream::{HlsCoord, HlsSession};
 
-enum HlsReaderRoute {
-    Active(Arc<HlsCoord>),
-    Session(Arc<HlsSession>),
+enum HlsReaderRoute<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    Active(Arc<HlsCoord<S>>),
+    Session(Arc<HlsSession<S>>),
 }
 
-impl HlsReaderRoute {
+impl<S> HlsReaderRoute<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn find_at_offset(&self, cursor: u64) -> Option<(u32, u64, u64)> {
         self.map(
             |coord| coord.find_at_offset(cursor),
@@ -29,8 +36,8 @@ impl HlsReaderRoute {
 
     fn map<T>(
         &self,
-        on_active: impl FnOnce(&HlsCoord) -> T,
-        on_session: impl FnOnce(&HlsSession) -> T,
+        on_active: impl FnOnce(&HlsCoord<S>) -> T,
+        on_session: impl FnOnce(&HlsSession<S>) -> T,
     ) -> T {
         match self {
             Self::Active(coord) => on_active(coord),
@@ -52,10 +59,13 @@ impl HlsReaderRoute {
 ///
 /// Mirrors `kithara-file`'s `FileReaderEventSink` but resolves the landed byte
 /// against the active or fixed incoming session captured at construction.
-pub(crate) struct HlsReaderEventSink {
+pub(crate) struct HlsReaderEventSink<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     bus: Arc<DeferredBus<HlsEvent>>,
     seek_epoch_handle: Arc<AtomicU64>,
-    route: HlsReaderRoute,
+    route: HlsReaderRoute<S>,
     /// `(variant_index, segment_index)` of the last segment the
     /// reader was observed in. A change between `on_chunk` calls
     /// drives [`HlsEvent::SegmentReadStart`]; the same pair held
@@ -74,10 +84,13 @@ pub(crate) struct HlsReaderEventSink {
     last_segment_start_cursor: u64,
 }
 
-impl HlsReaderEventSink {
+impl<S> HlsReaderEventSink<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) fn new(
         bus: Arc<DeferredBus<HlsEvent>>,
-        coord: Arc<HlsCoord>,
+        coord: Arc<HlsCoord<S>>,
         seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
         Self::with_route(bus, HlsReaderRoute::Active(coord), seek_epoch_handle)
@@ -85,7 +98,7 @@ impl HlsReaderEventSink {
 
     pub(crate) fn for_session(
         bus: Arc<DeferredBus<HlsEvent>>,
-        session: Arc<HlsSession>,
+        session: Arc<HlsSession<S>>,
         seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
         Self::with_route(bus, HlsReaderRoute::Session(session), seek_epoch_handle)
@@ -174,7 +187,7 @@ impl HlsReaderEventSink {
 
     fn with_route(
         bus: Arc<DeferredBus<HlsEvent>>,
-        route: HlsReaderRoute,
+        route: HlsReaderRoute<S>,
         seek_epoch_handle: Arc<AtomicU64>,
     ) -> Self {
         let last_cursor = route.position();
@@ -192,7 +205,10 @@ impl HlsReaderEventSink {
     }
 }
 
-impl ReaderEventSink for HlsReaderEventSink {
+impl<S> ReaderEventSink for HlsReaderEventSink<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn flush(&mut self) {
         self.bus.flush();
     }
@@ -258,10 +274,13 @@ mod tests {
         variant::{PlanConfig, PlanCtx, VariantParts},
     };
 
-    fn test_ctx(bus: &EventBus) -> PlanCtx {
+    type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
+    type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
+
+    fn test_ctx(bus: &EventBus) -> TestPlanCtx {
         let cancel = CancelToken::never();
         let store = Arc::new(
-            AssetStore::builder()
+            AssetStore::builder(crate::test_pools::pools())
                 .backend(StorageBackend::Memory)
                 .cancel(cancel)
                 .build(),
@@ -269,7 +288,7 @@ mod tests {
         PlanCtx {
             bus: bus.clone(),
             scope: store
-                .scope::<crate::Hls>(&AssetSource::Remote {
+                .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
                         .parse()
                         .expect("master url"),
@@ -303,7 +322,7 @@ mod tests {
         }]))
     }
 
-    fn coord(bus: &EventBus) -> Arc<HlsCoord> {
+    fn coord(bus: &EventBus) -> Arc<TestHlsCoord> {
         let ctx = test_ctx(bus);
         let playlist = playlist_state();
         let segments = vec![

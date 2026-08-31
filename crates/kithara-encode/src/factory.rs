@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,7 +36,13 @@ impl EncoderFactory {
     ///
     /// Returns an error when `request.media_info.codec` is missing or the codec/backend
     /// rejects the request.
-    pub fn encode_packaged(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
+    pub fn encode_packaged<S>(
+        pools: &PoolRegion<S>,
+        request: &PackagedEncodeRequest<'_>,
+    ) -> EncodeResult<EncodedTrack>
+    where
+        S: HasPool<u8> + HasPool<f32>,
+    {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let codec = request
@@ -43,12 +50,12 @@ impl EncoderFactory {
                 .codec
                 .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
             OfflineEncoder::packaged_frame_samples(codec)?;
-            OfflineEncoder::encode_packaged(request)
+            OfflineEncoder::encode_packaged(pools, request)
         }
 
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = request;
+            let _ = (pools, request);
             Err(Self::wasm_unsupported())
         }
     }

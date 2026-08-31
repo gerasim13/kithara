@@ -21,7 +21,7 @@ use kithara::{
         time::{Duration, sleep},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -30,6 +30,8 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
 };
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -86,21 +88,15 @@ fn build_queue_with_tick(
     temp_dir: &TestTempDir,
     cap: usize,
 ) -> (
-    Arc<Queue>,
+    Arc<Queue<TestPools>>,
     Downloader,
-    AssetStore,
+    AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -122,20 +118,28 @@ fn build_queue_with_tick(
         }
     });
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
     (queue, downloader, store, tick_handle)
 }
 
-fn is_loading(queue: &Queue, id: TrackId) -> bool {
+fn is_loading(queue: &Queue<TestPools>, id: TrackId) -> bool {
     matches!(
         queue.track(id).map(|e| e.status),
         Some(TrackStatus::Loading)
     )
 }
 
-async fn wait_until_loading(queue: &Queue, id: TrackId, deadline: Duration) -> Result<(), String> {
+async fn wait_until_loading(
+    queue: &Queue<TestPools>,
+    id: TrackId,
+    deadline: Duration,
+) -> Result<(), String> {
     let start = kithara::platform::time::Instant::now();
     loop {
         if is_loading(queue, id) {
@@ -163,7 +167,7 @@ async fn hung_loads_must_not_starve_user_selected_track() {
     let (queue, downloader, store, tick_handle) = build_queue_with_tick(&temp, Consts::CAP);
 
     let mk_cfg = |url: &Url| {
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
+        ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
             .downloader(downloader.clone())
             .store(store.clone())
             .initial_abr_mode(AbrMode::Auto(None))

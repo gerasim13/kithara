@@ -42,7 +42,10 @@ Preallocate to max size at `prepare()`/`new_stream()` and reuse (`clear()` + ref
 // bad
 fn process(&mut self, out: &mut [f32]) { let mut s = vec![0.0; out.len()]; /* heap */ }
 // good
-fn new_stream(&mut self, max: usize) { self.scratch.resize(max, 0.0); }
+fn prepare<S: HasPool<f32>>(&mut self, pools: &PoolRegion<S>, max: usize) -> Result<(), PoolError> {
+    self.scratch = pools.get_with_len::<f32>(max)?;
+    Ok(())
+}
 fn process(&mut self, out: &mut [f32]) { let s = &mut self.scratch[..out.len()]; }
 ```
 
@@ -77,12 +80,16 @@ Pre-fill the pool to a computed budget at startup and count every miss so the bu
 
 ```rust
 // bad: silent heap alloc on miss, no accounting
-let buf = pool.get().unwrap_or_else(|| vec![0.0; n]);
-// good: pooled reuse; stat_alloc_misses bumped on the fallback path
-let buf = pool.get_with(|b| { b.clear(); b.resize(n, 0.0); });
+let scratch = match pools.get_with_len::<f32>(max_samples) {
+    Ok(buf) => buf,
+    Err(_) => return run_with_untracked(vec![0.0; max_samples]),
+};
+// good: prepare one checked guard before the callback and retain it
+let scratch = pools.get_with_len::<f32>(max_samples)?;
+processor.install(scratch);
 ```
 
-*tier: hot | detector: perf.prefer-{byte,pcm}-pool (enforced ast-grep) + miss-count review (manual) | present in kithara*
+Configure `initial_buffers` and `initial_capacity` at the composition root; size that inventory with the buffer-pool benchmarks. *tier: hot | detector: `perf.prefer-primitive-pool` + `perf.no-component-pool-construction` (ast-grep) | present in kithara*
 
 **RT thread priority not promoted** (I2) - *watch:* N/A in kithara source: the device callback thread is created and QoS-promoted by cpal/firewheel, and the decode/produce threads are ring-decoupled from the callback deadline (degrade-on-underrun), not workgroup-bound. *tier: hot | detector: manual | preventive*
 

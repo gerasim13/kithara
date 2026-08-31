@@ -1,7 +1,7 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use kithara_resampler::apple::AppleAudioConverterBackend;
 #[cfg(feature = "resample-glide")]
@@ -22,6 +22,19 @@ const RATIOS: &[(u32, u32)] = &[
 ];
 const CHANNELS: &[usize] = &[1, 2];
 const BLOCKS: &[usize] = &[1_024, 4_096];
+
+pool_schema! {
+    pub(crate) BenchPools {
+        samples: f32,
+    }
+}
+
+fn pools() -> PoolRegion<BenchPools> {
+    BenchPools::builder(OverallBudget(64 * 1024 * 1024))
+        .samples(PoolConfig::builder().max_buffers(64).build())
+        .build()
+        .unwrap_or_else(|error| panic!("bench pool region: {error}"))
+}
 
 fn resampler_backends(c: &mut Criterion) {
     let mut group = c.benchmark_group("resampler_backends");
@@ -140,10 +153,7 @@ where
             target_sample_rate: non_zero_u32(target_rate),
         })
         .options(ResamplerOptions::builder().chunk_size(block).build())
-        .sample_pool(SamplePool::new(
-            64,
-            block.saturating_mul(channels).saturating_mul(4),
-        ))
+        .pools(pools())
         .build();
     let config = ResamplerConfig::builder()
         .backend(backend)

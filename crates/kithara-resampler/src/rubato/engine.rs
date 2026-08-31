@@ -1,20 +1,16 @@
 use std::num::NonZeroUsize;
 
-use kithara_bufpool::SamplePool;
 use rubato::{
     Async, Fft, FixedAsync, FixedSync, PolynomialDegree, ResampleError,
     Resampler as RubatoResamplerTrait, ResamplerConstructionError, SincInterpolationParameters,
-    SincInterpolationType, WindowFunction,
-    audioadapter_buffers::direct::{SequentialSliceOfSlices, SequentialSliceOfVecs},
+    SincInterpolationType, WindowFunction, audioadapter_buffers::direct::SequentialSliceOfSlices,
 };
-use smallvec::SmallVec;
 
 use super::{RubatoAlgorithm, RubatoConfig};
 use crate::{ResamplerOptions, ResamplerProcess, ResamplerQuality};
 
 pub(super) struct RubatoEngine {
     inner: Box<dyn RubatoResamplerTrait<f32>>,
-    output_scratch: PooledScratch,
 }
 
 impl RubatoEngine {
@@ -25,20 +21,12 @@ impl RubatoEngine {
         target_rate: u32,
         channels: NonZeroUsize,
         options: ResamplerOptions,
-        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
         match config.algorithm {
-            RubatoAlgorithm::Async => Self::new_async(
-                quality,
-                source_rate,
-                target_rate,
-                channels,
-                options,
-                sample_pool,
-            ),
-            RubatoAlgorithm::Fft => {
-                Self::new_fft(source_rate, target_rate, channels, options, sample_pool)
+            RubatoAlgorithm::Async => {
+                Self::new_async(quality, source_rate, target_rate, channels, options)
             }
+            RubatoAlgorithm::Fft => Self::new_fft(source_rate, target_rate, channels, options),
         }
     }
 
@@ -48,7 +36,6 @@ impl RubatoEngine {
         target_rate: u32,
         channels: NonZeroUsize,
         options: ResamplerOptions,
-        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
         let ratio = ratio_for_target(source_rate, target_rate);
         match quality {
@@ -61,7 +48,9 @@ impl RubatoEngine {
                     channels.get(),
                     FixedAsync::Input,
                 )?;
-                Self::with_inner(Box::new(poly), channels, sample_pool)
+                Ok(Self {
+                    inner: Box::new(poly),
+                })
             }
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
                 let sinc = Async::new_sinc(
@@ -72,7 +61,9 @@ impl RubatoEngine {
                     channels.get(),
                     FixedAsync::Input,
                 )?;
-                Self::with_inner(Box::new(sinc), channels, sample_pool)
+                Ok(Self {
+                    inner: Box::new(sinc),
+                })
             }
         }
     }
@@ -82,17 +73,19 @@ impl RubatoEngine {
         target_rate: u32,
         channels: NonZeroUsize,
         options: ResamplerOptions,
-        sample_pool: SamplePool,
     ) -> Result<Self, ResamplerConstructionError> {
-        let fft = Fft::<f32>::new(
+        let fft = Fft::<f32>::new_custom(
             source_rate as usize,
             target_rate as usize,
             options.chunk_size,
             2,
             channels.get(),
+            WindowFunction::BlackmanHarris2,
             FixedSync::Input,
         )?;
-        Self::with_inner(Box::new(fft), channels, sample_pool)
+        Ok(Self {
+            inner: Box::new(fft),
+        })
     }
 
     pub(super) fn process_into_buffer(
@@ -102,7 +95,6 @@ impl RubatoEngine {
     ) -> Result<ResamplerProcess, ResampleError> {
         let channels = input.len();
         let input_frames = input.first().map_or(0, |channel| channel.len());
-        let caller_output_frames = output.first().map_or(0, |channel| channel.len());
         let input_adapter =
             SequentialSliceOfSlices::new(input, channels, input_frames).map_err(|_| {
                 ResampleError::InsufficientInputBufferSize {
@@ -110,45 +102,42 @@ impl RubatoEngine {
                     expected: self.input_frames_next(),
                 }
             })?;
-        validate_caller_output(output, channels, self.output_frames_next())?;
-        let output_scratch_frames = self.output_scratch.frames();
-        let output_frames_max = self.output_frames_max();
-        let mut output_adapter = SequentialSliceOfVecs::new_mut(
-            self.output_scratch.buffers_mut(),
-            channels,
-            output_scratch_frames,
-        )
-        .map_err(|_| ResampleError::InsufficientOutputBufferSize {
-            actual: output_scratch_frames,
-            expected: output_frames_max,
-        })?;
-        let (input_frames, output_frames) =
-            self.inner
-                .process_into_buffer(&input_adapter, &mut output_adapter, None)?;
-
-        if output_frames > caller_output_frames {
-            return Err(ResampleError::InsufficientOutputBufferSize {
+        let caller_output_frames =
+            validate_caller_output(output, channels, self.output_frames_next())?;
+        let process = if channels <= 8 {
+            let mut output_refs: [&mut [f32]; 8] = std::array::from_fn(|_| &mut [] as &mut [f32]);
+            for (target, channel) in output_refs.iter_mut().zip(output.iter_mut()) {
+                *target = &mut **channel;
+            }
+            let mut output_adapter = SequentialSliceOfSlices::new_mut(
+                &mut output_refs[..channels],
+                channels,
+                caller_output_frames,
+            )
+            .map_err(|_| ResampleError::InsufficientOutputBufferSize {
                 actual: caller_output_frames,
-                expected: output_frames,
-            });
-        }
-        for (dst, src) in output.iter_mut().zip(self.output_scratch.buffers()) {
-            dst[..output_frames].copy_from_slice(&src[..output_frames]);
-        }
+                expected: self.output_frames_next(),
+            })?;
+            self.inner
+                .process_into_buffer(&input_adapter, &mut output_adapter, None)
+        } else {
+            let mut output_refs = output
+                .iter_mut()
+                .take(channels)
+                .map(|channel| &mut **channel)
+                .collect::<Vec<&mut [f32]>>();
+            let mut output_adapter =
+                SequentialSliceOfSlices::new_mut(&mut output_refs, channels, caller_output_frames)
+                    .map_err(|_| ResampleError::InsufficientOutputBufferSize {
+                        actual: caller_output_frames,
+                        expected: self.output_frames_next(),
+                    })?;
+            self.inner
+                .process_into_buffer(&input_adapter, &mut output_adapter, None)
+        };
+        let (input_frames, output_frames) = process?;
 
         Ok(ResamplerProcess::new(input_frames, output_frames))
-    }
-
-    fn with_inner(
-        inner: Box<dyn RubatoResamplerTrait<f32>>,
-        channels: NonZeroUsize,
-        sample_pool: SamplePool,
-    ) -> Result<Self, ResamplerConstructionError> {
-        let output_frames = inner.output_frames_max();
-        Ok(Self {
-            inner,
-            output_scratch: PooledScratch::new(sample_pool, channels, output_frames)?,
-        })
     }
 
     delegate::delegate! {
@@ -160,43 +149,6 @@ impl RubatoEngine {
             pub(super) fn output_frames_next(&self) -> usize;
             pub(super) fn resample_ratio(&self) -> f64;
             pub(super) fn reset(&mut self);
-        }
-    }
-}
-
-#[derive(fieldwork::Fieldwork)]
-struct PooledScratch {
-    pool: SamplePool,
-    #[field(get, get_mut, deref = "[Vec<f32>]", vis = "")]
-    buffers: SmallVec<[Vec<f32>; 8]>,
-}
-
-impl PooledScratch {
-    fn new(
-        pool: SamplePool,
-        channels: NonZeroUsize,
-        frames: usize,
-    ) -> Result<Self, ResamplerConstructionError> {
-        let mut buffers = SmallVec::new();
-        for _ in 0..channels.get() {
-            let mut buffer = pool.get();
-            buffer
-                .ensure_len(frames)
-                .map_err(|_| ResamplerConstructionError::InvalidChunkSize(frames))?;
-            buffers.push(buffer.into_inner());
-        }
-        Ok(Self { pool, buffers })
-    }
-
-    fn frames(&self) -> usize {
-        self.buffers.first().map_or(0, Vec::len)
-    }
-}
-
-impl Drop for PooledScratch {
-    fn drop(&mut self) {
-        for buffer in self.buffers.drain(..) {
-            self.pool.recycle(buffer);
         }
     }
 }
@@ -213,21 +165,21 @@ impl From<ResamplerQuality> for SincInterpolationParameters {
         match quality {
             ResamplerQuality::Good => Self {
                 sinc_len: LEN_GOOD,
-                f_cutoff: CUTOFF,
+                f_cutoff: Some(CUTOFF),
                 interpolation: SincInterpolationType::Linear,
                 oversampling_factor: OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
             ResamplerQuality::High => Self {
                 sinc_len: LEN_HIGH,
-                f_cutoff: CUTOFF,
+                f_cutoff: Some(CUTOFF),
                 interpolation: SincInterpolationType::Cubic,
                 oversampling_factor: OVERSAMPLING_HIGH,
                 window: WindowFunction::BlackmanHarris2,
             },
             ResamplerQuality::Normal | ResamplerQuality::Fast => Self {
                 sinc_len: LEN_NORMAL,
-                f_cutoff: CUTOFF,
+                f_cutoff: Some(CUTOFF),
                 interpolation: SincInterpolationType::Linear,
                 oversampling_factor: OVERSAMPLING_NORMAL,
                 window: WindowFunction::BlackmanHarris2,
@@ -240,7 +192,7 @@ fn validate_caller_output(
     output: &[&mut [f32]],
     channels: usize,
     frames: usize,
-) -> Result<(), ResampleError> {
+) -> Result<usize, ResampleError> {
     if output.len() < channels {
         return Err(ResampleError::WrongNumberOfOutputChannels {
             actual: output.len(),
@@ -260,7 +212,7 @@ fn validate_caller_output(
         });
     }
 
-    Ok(())
+    Ok(actual)
 }
 
 fn ratio_for_target(source_rate: u32, target_rate: u32) -> f64 {

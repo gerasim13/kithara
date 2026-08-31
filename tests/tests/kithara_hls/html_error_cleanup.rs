@@ -1,13 +1,16 @@
 #![forbid(unsafe_code)]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event, EventBus},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration},
     stream::Stream,
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, temp_dir,
+    Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
 };
 use url::Url;
 
@@ -111,12 +114,19 @@ async fn html_playlist_failure_leaves_no_orphan_cache_files(
     let (url, orphan_prefix) = build_scenario(&helper, scenario);
 
     let cancel = CancelToken::never();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(cancel.clone())
         .build();
 
-    let result = Stream::<Hls>::new(config).await;
+    let result = Stream::<Hls<TestPools>>::new(config).await;
     assert!(result.is_err(), "{fail_msg}");
 
     // The failure-path cleanup (LeaseResource::Drop → remove_resource) runs
@@ -158,13 +168,20 @@ async fn html_master_playlist_does_not_retry_storm(temp_dir: TestTempDir) {
 
     let bus = EventBus::new(64);
     let cancel = CancelToken::never();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(master.url())
         .events(bus.clone())
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(cancel.clone())
         .build();
 
-    let _ = Stream::<Hls>::new(config).await;
+    let _ = Stream::<Hls<TestPools>>::new(config).await;
 
     // Subscribe AFTER the initial (failed) attempt so `rx` only carries FUTURE
     // requests — a retry storm. The `request_count` delta is the backstop in

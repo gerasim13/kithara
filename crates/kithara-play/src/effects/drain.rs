@@ -1,4 +1,4 @@
-use kithara_bufpool::{BytePool, PooledOwned};
+use kithara_bufpool::{ByteBuffer, HasPool, PoolError, PoolRegion};
 use kithara_signal::AudioChunk;
 
 use super::AudioEffect;
@@ -18,16 +18,19 @@ pub(crate) enum EffectDrainStep {
 }
 
 pub(crate) struct EffectDrain {
-    exhausted: PooledOwned<32, Vec<u8>>,
+    exhausted: ByteBuffer,
     active: bool,
 }
 
 impl EffectDrain {
-    pub(crate) fn new(effect_count: usize, pool: &BytePool) -> Self {
-        Self {
-            exhausted: pool.get_with(|buffer| buffer.resize(effect_count, 0)),
+    pub(crate) fn new<S>(effect_count: usize, pools: &PoolRegion<S>) -> Result<Self, PoolError>
+    where
+        S: HasPool<u8>,
+    {
+        Ok(Self {
+            exhausted: pools.get_with_len::<u8>(effect_count)?,
             active: false,
-        }
+        })
     }
 
     pub(crate) fn step(&mut self, effects: &mut [Box<dyn AudioEffect>]) -> EffectDrainStep {

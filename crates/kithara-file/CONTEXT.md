@@ -4,20 +4,26 @@ Contracts and invariants for kithara-file; the README is the overview.
 
 ## Architecture
 
-`FileConfig::for_src(src)` → `File` (StreamType marker) → internal `FileCoord`, which splits by
-source: `FileSrc::Local` reads through `AssetStore` with an absolute `ResourceKey`;
+`FileConfig<S>::for_src(src)` -> `File<S>` (StreamType marker) -> internal `FileCoord`, which splits by
+source: `FileSrc::Local` reads through `AssetStore<S>` with an absolute `ResourceKey`;
 `FileSrc::Remote` runs an internal pull-driven `FilePeer` emitting `FetchCmd` batches to the
-shared `dl::Downloader`. The `AssetStore` owns one pending resource per `ResourceKey`: consumer
+shared `dl::Downloader`. The `AssetStore<S>` owns one pending resource per `ResourceKey`: consumer
 demand, the canonical reader/writer, and writer epochs stay in that storage state, while File
-drives HTTP through a writer epoch capability. `FileSource` (impl `kithara_stream::Source`) wraps `FileCoord`; `Stream<File>`
+drives HTTP through a writer epoch capability. `FileSource` (impl `kithara_stream::Source`) wraps `FileCoord`; `Stream<File<S>>`
 (`Read + Seek`) wraps `FileSource`. `FileSource` is synchronous: every async concern (HTTP fetch,
 body streaming, finalization) belongs to the `Downloader` through `FilePeer`, and it holds the
 `PeerHandle` from `Downloader::register` for its whole lifetime — dropping the last handle cancels
 in-flight fetches.
 
+`store: AssetStore<S>` and `pools: PoolRegion<S>` are both required configuration fields. They use
+the same closed schema `S: HasPool<u8>`; `FileConfig<S>` keeps cheap clones of both. Remote source,
+storage, and fallback transport therefore obtain byte buffers through one facade and one shared
+hard budget. Local sources keep the same explicit contract even though they skip the downloader.
+There is no global or lazily inferred pool.
+
 ## Reader contract
 
-`Stream<File>::Read + Seek` goes through `FileSource::wait_range` / `read_at`.
+`Stream<File<S>>::Read + Seek` goes through `FileSource::wait_range` / `read_at`.
 
 - `wait_range(_, Some(_))` is the audio-worker probe: checks phase once, returns
   `SourceError::WaitBudgetExceeded` for missing in-range bytes instead of blocking.
@@ -41,7 +47,7 @@ in-flight fetches.
 ## Fetch targeting
 
 `FilePeer` targets one fetch at a time, and it targets it at the reader cursor
-(`kithara_stream::Source::position`). `Stream<File>::probe_seek` moves that cursor and arms the
+(`kithara_stream::Source::position`). `Stream<File<S>>::probe_seek` moves that cursor and arms the
 peer precisely so the peer re-targets around the new position.
 
 - The next fetch starts at the first gap **at or after** the cursor. Only when nothing is missing
@@ -145,5 +151,5 @@ folding in the explicit discriminator when present. Query parameters are never a
 identity for direct files. A higher layer may register any `AssetLayout` for `File`;
 `kithara_play::policy::QueryIdentityLayout` is the built-in domain-aware option selecting stable
 identity parameters while ignoring rotating signatures and expiry values. Layouts are registered
-once through `AssetStore::builder().layouts`, and every `FileConfig` holds a cheap clone of that
-same store handle.
+once through `AssetStore::builder(pools.clone()).layouts`, and every `FileConfig<S>` holds cheap
+clones of that same store handle and region.

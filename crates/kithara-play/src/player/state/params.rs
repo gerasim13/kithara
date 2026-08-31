@@ -123,8 +123,8 @@ impl PlayerParams {
     }
 }
 
-impl From<&PlayerConfig> for PlayerParams {
-    fn from(config: &PlayerConfig) -> Self {
+impl<S> From<&PlayerConfig<S>> for PlayerParams {
+    fn from(config: &PlayerConfig<S>) -> Self {
         Self {
             auto_advance_enabled: AtomicBool::new(config.auto_advance_enabled),
             crossfade_duration: AtomicF32::new(config.crossfade_duration),

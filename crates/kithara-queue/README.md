@@ -23,7 +23,7 @@ SDK surfaces.
 
 ## Overview
 
-[`Queue`] composes an `Arc<PlayerImpl>` (from `kithara-play`) with:
+[`Queue<S>`] owns a `PlayerImpl<S>` (from `kithara-play`) and composes it with:
 
 - an ordered `Vec<TrackEntry>` indexed by stable [`TrackId`]s,
 - an async [`Loader`] (internal) that caps in-flight `Resource::new`
@@ -38,12 +38,13 @@ underlying player / audio / hls / file events through a single stream.
 
 ## Key Types
 
-- [`Queue::new(QueueConfig)`] — the orchestrator: CRUD (`append`,
+- [`Queue::new(QueueConfig)`] - the orchestrator, generic over the player's
+  registered pool schema: CRUD (`append`,
   `insert`, `remove`, `clear`, `set_tracks`), navigation (`select`,
   `advance_to_next`, `return_to_previous`, shuffle / repeat / `seek`),
   playback controls delegated to `PlayerImpl`, and `tick()` to drive the
   player and drain engine events.
-- [`TrackSource`] — input to `append` / `insert` / `set_tracks`, either a
+- [`TrackSource<S>`] - input to `append` / `insert` / `set_tracks`, either a
   `Uri(String)` (Queue builds a default `ResourceConfig`) or a
   `Config(Box<ResourceConfig>)` (caller-built, for DRM keys / headers /
   format hints).
@@ -55,19 +56,28 @@ underlying player / audio / hls / file events through a single stream.
 ```rust
 use std::sync::Arc;
 
-use kithara_bufpool::Region;
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolError, pool_schema};
 use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl};
 use kithara_queue::{Queue, QueueConfig, Transition};
 
+pool_schema! {
+    pub AppPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
 #[tokio::main]
-async fn main() {
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let player = Arc::new(PlayerImpl::new(
+async fn main() -> Result<(), PoolError> {
+    let config = || PoolConfig::builder().max_buffers(128).build();
+    let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+        .bytes(config())
+        .samples(config())
+        .build()?;
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
+    let player = PlayerImpl::new(
         PlayerConfig::builder().worker(worker).build(),
-    ));
+    );
     let queue = Arc::new(Queue::new(
         QueueConfig::builder().player(player).build(),
     ));
@@ -84,8 +94,14 @@ async fn main() {
     while let Ok(event) = rx.recv().await {
         println!("{event:?}");
     }
+    Ok(())
 }
 ```
+
+`Queue<S>`, `QueueConfig<S>`, and `TrackSource<S>` require the schema to
+provide both `HasPool<u8>` and `HasPool<f32>`. The queue never constructs a
+pool region. When no store is supplied, it builds the store from the exact
+`PoolRegion<S>` already owned by the player, preserving the shared hard budget.
 
 `Queue::set_tracks` must run inside an active tokio runtime because the
 loader uses `tokio::spawn`.

@@ -15,13 +15,15 @@ use kithara::{
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::{
     audio::{AudioConfig, AudioRead, ReadOutcome},
-    bufpool::Region,
     hls::{AbrMode, Hls, HlsConfig},
     play::{PlayWorker, PlayWorkerConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::TestTempDir;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_integration_tests::bufpool_ext::TestPools;
+use kithara_integration_tests::bufpool_ext::pools;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_integration_tests::hls_server::{HlsTestServer, HlsTestServerConfig};
 use kithara_test_fixtures::signal::{self, Wave};
@@ -46,7 +48,7 @@ fn resource_path_follows_storage_backend(#[case] ephemeral: bool, #[case] expect
             root: temp.path().into(),
         }
     };
-    let scope = AssetStore::builder()
+    let scope = AssetStore::builder(pools())
         .backend(backend)
         .build()
         .scope::<StorageProbe>(&AssetSource::Remote {
@@ -135,21 +137,20 @@ async fn ephemeral_pipeline_no_disk_writes() {
     let url = server.url("/master.m3u8");
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
 
     let hls_config = HlsConfig::for_url(url)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
@@ -158,7 +159,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
     let mut audio = worker

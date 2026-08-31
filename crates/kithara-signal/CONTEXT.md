@@ -7,7 +7,7 @@ This crate is the canonical decoded-audio signal data plane. It owns
 sanitation, and pure frame/sample/duration conversion.
 
 `AudioChunk` owns a `kithara-bufpool::SampleBuffer`; `kithara-bufpool` remains
-the owner of allocation budgets, pool mechanics, recycling, `SamplePool`, and
+the owner of allocation budgets, pool-region mechanics, recycling, and
 `SampleBuffer`. `kithara-stream` remains the owner of encoded/container media
 facts and transport positions.
 
@@ -35,7 +35,7 @@ parallel builder migration.
 ## Runtime Contract
 
 Construction and resize may reserve storage only through the caller-injected
-`SamplePool`; borrowed views and layout conversions do not allocate. These
+`PoolRegion<S>` where `S: HasPool<f32>`; borrowed views and layout conversions do not allocate. These
 types do not start work or own mutable runtime coordination. Moving them into
 this crate must preserve buffer lifetime, timeline fields, ordering, and
 failure behavior exactly.

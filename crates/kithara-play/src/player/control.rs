@@ -1,6 +1,7 @@
 use delegate::delegate;
 use kithara_abr::AbrHandle;
 use kithara_audio::SeekOutcome;
+use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, TrackId};
 use kithara_platform::sync::Arc;
 
@@ -15,17 +16,27 @@ use crate::{
 /// The handle deliberately excludes beat-grid identity, synchronization
 /// topology, and engine/session getters. Closing the resident player
 /// invalidates every outstanding clone through the shared runtime gate.
-#[derive(Clone)]
-pub struct PlayerControl {
-    runtime: Arc<PlayerRuntime>,
+pub struct PlayerControl<S> {
+    runtime: Arc<PlayerRuntime<S>>,
 }
 
-impl PlayerControl {
-    pub(super) fn new(runtime: Arc<PlayerRuntime>) -> Self {
+impl<S> Clone for PlayerControl<S> {
+    fn clone(&self) -> Self {
+        Self {
+            runtime: Arc::clone(&self.runtime),
+        }
+    }
+}
+
+impl<S> PlayerControl<S>
+where
+    S: HasPool<f32>,
+{
+    pub(super) fn new(runtime: Arc<PlayerRuntime<S>>) -> Self {
         Self { runtime }
     }
 
-    fn command(&self, command: impl FnOnce(&PlayerRuntime)) {
+    fn command(&self, command: impl FnOnce(&PlayerRuntime<S>)) {
         let _ = self.runtime.with_open(command);
     }
 
@@ -36,7 +47,14 @@ impl PlayerControl {
     }
 
     /// Prepare one resource for this player's runtime.
-    pub fn prepare_config(&self, config: ResourceConfig) -> Result<ResourceConfig, PlayError> {
+    pub fn prepare_config<B>(
+        &self,
+        config: ResourceConfig<S, B>,
+    ) -> Result<ResourceConfig<S, B>, PlayError>
+    where
+        B: Clone + Default,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+    {
         self.runtime
             .with_open(|runtime| runtime.prepare_config(config))
     }

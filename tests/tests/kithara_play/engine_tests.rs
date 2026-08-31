@@ -1,7 +1,6 @@
 use kithara::{
     self,
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, SamplePool},
     events::EventBus,
     host::{Host, HostConfig, HostOwned, testing::HostProbe},
     platform::sync::Arc,
@@ -12,10 +11,12 @@ use kithara::{
     warp::{BeatGrid, BeatGridId},
 };
 
+use crate::bufpool_ext::{TestPools, pools};
+
 struct FixtureSession;
 
-impl SessionDispatcher for FixtureSession {
-    fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+impl SessionDispatcher<TestPools> for FixtureSession {
+    fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         Ok(Reply::Ok)
     }
 
@@ -28,23 +29,21 @@ fn slot_id(value: u64) -> SlotId {
     SlotId::new(value)
 }
 
-fn make_engine() -> EngineImpl {
+fn make_engine() -> EngineImpl<TestPools> {
     EngineImpl::new(
         EngineConfig::builder()
             .grid_id(BeatGridId::allocate().expect("fixture grid id"))
             .session(Arc::new(FixtureSession))
-            .sample_pool(SamplePool::default())
+            .pools(pools())
             .build(),
         EventBus::default(),
     )
 }
 
-fn insert_player(host: &mut Host) -> HostOwned<PlayerImpl> {
+fn insert_player(host: &mut Host<TestPools>) -> HostOwned<PlayerImpl<TestPools>> {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .build(),
     );
     let instance_id = player.id();
@@ -83,7 +82,7 @@ fn engine_config_builder() {
         .sample_rate(48000)
         .channels(1)
         .eq_layout(kithara::play::effects::eq::generate_log_spaced_bands(5))
-        .sample_pool(SamplePool::default())
+        .pools(pools())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.max_slots(), 8);
@@ -138,7 +137,7 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
         .grid_id(BeatGridId::allocate().expect("fixture grid id"))
         .session(Arc::new(FixtureSession))
         .sample_rate(48000)
-        .sample_pool(SamplePool::default())
+        .pools(pools())
         .build();
     let engine = EngineImpl::new(config, EventBus::default());
     assert_eq!(engine.master_sample_rate(), 48000);
@@ -146,7 +145,8 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
 
 #[kithara::test]
 fn engine_session_ducking_roundtrip() {
-    let host = Host::new(HostConfig::builder().build()).expect("create fixture host");
+    let host: Host<TestPools> =
+        Host::new(HostConfig::builder().build()).expect("create fixture host");
     host.set_ducking(SessionDuckingMode::Soft)
         .expect("set soft ducking");
     assert_eq!(

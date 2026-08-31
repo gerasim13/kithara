@@ -5,10 +5,11 @@ use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource, Resource};
 use kithara::{
-    bufpool::BytePool,
     platform::{CancelToken, time::Duration, tokio::task::spawn_blocking},
     storage::{ResourceRead, StorageError, StorageResource},
 };
+#[cfg(target_arch = "wasm32")]
+use kithara_integration_tests::bufpool_ext::pools;
 use kithara_integration_tests::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -24,7 +25,7 @@ fn open_test_resource(temp_dir: &TestTempDir, name: &str, cancel: CancelToken) -
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (temp_dir, name);
-        MemResource::new(cancel)
+        MemResource::new(cancel, pools().get::<u8>())
     }
 }
 
@@ -60,7 +61,7 @@ fn atomic_resource_write_read_success(
 
     let atomic = atomic.write_all(test_data).expect("write should succeed");
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     atomic.read_into(&mut buf).expect("read should succeed");
     assert_eq!(&*buf, test_data, "read data should match");
 }
@@ -71,7 +72,7 @@ fn atomic_resource_empty_write_read(temp_dir: TestTempDir, cancel_token: CancelT
 
     let atomic = atomic.write_all(b"").expect("write should succeed");
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     let n = atomic.read_into(&mut buf).expect("read should succeed");
     assert_eq!(n, 0, "empty write should produce empty read");
 }
@@ -93,7 +94,7 @@ fn atomic_resource_read_missing_file(
 
     let atomic = open_mmap_at(file_path, cancel_token);
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     if create_file_first {
         atomic.read_into(&mut buf).unwrap();
         assert_eq!(&*buf, b"initial");
@@ -114,7 +115,7 @@ fn atomic_resource_cancelled_operations(
     let write_result = atomic.write_at(0, b"data");
     assert!(write_result.is_err(), "write_at should fail when cancelled");
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     let read_result = reader.read_into(&mut buf);
     assert!(read_result.is_err(), "read_into should fail when cancelled");
 
@@ -135,7 +136,7 @@ fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: CancelT
     // reader observes the failure.
     atomic.fail("test failure".to_string());
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     let read_result = reader.read_into(&mut buf);
     assert!(read_result.is_err(), "read_into should fail after fail()");
     let mut probe = [0u8; 4];
@@ -167,7 +168,7 @@ async fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: 
         "at least one concurrent write_all must succeed"
     );
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     atomic.read_into(&mut buf).unwrap();
     assert!(*buf == *b"data1" || *buf == *b"data2");
 }
@@ -192,7 +193,7 @@ fn atomic_resource_large_file_operations() {
     let large_data = vec![0x42; 10 * 1024 * 1024];
     let atomic = atomic.write_all(&large_data).unwrap();
 
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     atomic.read_into(&mut buf).unwrap();
     assert_eq!(buf.len(), large_data.len());
     assert_eq!(&*buf, large_data.as_slice());
@@ -215,7 +216,7 @@ fn atomic_resource_persists_across_reopen(
     }
 
     let reopened = open_mmap_at(file_path, cancel_token);
-    let mut buf = BytePool::default().get();
+    let mut buf = Vec::new();
     let n = reopened.read_into(&mut buf).unwrap();
     assert_eq!(n, payload.len(), "byte count should match written payload");
     assert_eq!(&*buf, payload, "round-tripped bytes should match payload");

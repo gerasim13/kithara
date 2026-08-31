@@ -56,6 +56,7 @@ tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
 
 [dev-dependencies]
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-decode = { workspace = true, features = ["symphonia"] }
 kithara-events = { workspace = true }
 kithara-resampler = { workspace = true, features = ["resample-rubato"] }

@@ -17,7 +17,6 @@ use kithara::{
     },
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
-    bufpool::{BytePool, Region, SamplePool},
     file::{File, FileConfig},
     platform::{
         sync::Arc,
@@ -28,6 +27,7 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     warp::{StretchControls, Warp, WarpConfig, WarpRenderer},
 };
+use kithara_integration_tests::bufpool_ext::{Pools, TestPools, pools};
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use num_traits::ToPrimitive;
@@ -99,14 +99,13 @@ fn frame_throughput(frames: usize) -> Throughput {
     )
 }
 
-fn make_chunk(pool: &SamplePool, pcm: &[f32]) -> AudioChunk {
+fn make_chunk(pools: &Pools, pcm: &[f32]) -> AudioChunk {
     let spec = AudioSpec::new(
         u16::try_from(Consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
         NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
     );
-    let mut samples = pool.get();
-    samples
-        .ensure_len(pcm.len())
+    let mut samples = pools
+        .get_with_len::<f32>(pcm.len())
         .unwrap_or_else(|error| panic!("bench PCM allocation failed: {error}"));
     samples.clone_from_slice(pcm);
     AudioChunk::new(
@@ -120,10 +119,10 @@ fn make_chunk(pool: &SamplePool, pcm: &[f32]) -> AudioChunk {
     )
 }
 
-fn stretch_config(backend: StretchKind, pool: &SamplePool) -> ElasticConfig {
+fn stretch_config(backend: StretchKind, pools: &Pools) -> ElasticConfig<TestPools> {
     ElasticConfig::builder()
         .backend(backend)
-        .pool(pool.clone())
+        .pools(pools.clone())
         .sample_rate(Consts::SAMPLE_RATE)
         .channels(Consts::CHANNELS)
         .max_source_frames(Consts::STRETCH_FRAMES)
@@ -132,8 +131,8 @@ fn stretch_config(backend: StretchKind, pool: &SamplePool) -> ElasticConfig {
         .unwrap_or_else(|error| panic!("invalid stretch benchmark config: {error}"))
 }
 
-fn stretch_engine(backend: StretchKind, pool: &SamplePool) -> Box<dyn ElasticEngine> {
-    build_engine(stretch_config(backend, pool))
+fn stretch_engine(backend: StretchKind, pools: &Pools) -> Box<dyn ElasticEngine> {
+    build_engine(stretch_config(backend, pools))
         .unwrap_or_else(|error| panic!("failed to prepare {backend} benchmark engine: {error}"))
 }
 
@@ -178,23 +177,19 @@ fn bench_gapless_trim(c: &mut Criterion) {
     group.bench_function("decode_mp3_to_eof", |b| {
         b.iter(|| {
             rt.block_on(async {
-                let region = Region::default();
-                let byte_pool = region.byte_pool();
+                let pools = pools();
                 let file_config = FileConfig::for_src(file_path.clone().into())
                     .store(
-                        AssetStore::builder()
+                        AssetStore::builder(pools.clone())
                             .backend(StorageBackend::Memory)
-                            .pool(byte_pool.clone())
                             .build(),
                     )
-                    .pool(byte_pool.clone())
+                    .pools(pools.clone())
                     .build();
-                let config = AudioConfig::<File>::for_stream(file_config)
+                let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
                     .hint("mp3".to_string())
                     .build();
-                let worker = PlayWorker::new(
-                    PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
-                );
+                let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
                 let mut audio = worker
                     .open(config)
                     .await
@@ -224,17 +219,17 @@ fn bench_gapless_trim(c: &mut Criterion) {
 
 async fn analyze_track(
     analysis_worker: &AnalysisWorker,
-    play_worker: &PlayWorker,
+    play_worker: &PlayWorker<TestPools>,
     file_path: &Path,
-    store: &AssetStore,
-    byte_pool: &BytePool,
+    store: &AssetStore<TestPools>,
+    pools: &Pools,
     token: &AnalysisToken,
 ) -> AnalysisProgress {
     let file_config = FileConfig::for_src(file_path.to_path_buf().into())
         .store(store.clone())
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .build();
-    let config = AudioConfig::<File>::for_stream(file_config)
+    let config = AudioConfig::<File<TestPools>>::for_stream(file_config)
         .hint("mp3".to_owned())
         .build();
     let reader = play_worker
@@ -281,17 +276,12 @@ fn assert_complete_analysis(worker: &AnalysisWorker, progress: &AnalysisProgress
 fn bench_analysis_worker(c: &mut Criterion) {
     let rt = make_runtime();
     let file_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
-    let sample_pool = region.sample_pool();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(byte_pool.clone())
         .build();
-    let play_worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool.clone()).build(),
-    );
-    let builder = AnalyzerBuilder::<PlaybackResamplerBackend>::new(sample_pool)
+    let play_worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let builder = AnalyzerBuilder::<PlaybackResamplerBackend, TestPools>::new(pools.clone())
         .with_beat_config(BeatAnalysisConfig::default())
         .with_beat()
         .with_waveform(Consts::ANALYSIS_BUCKETS);
@@ -304,7 +294,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
         &play_worker,
         &file_path,
         &store,
-        &byte_pool,
+        &pools,
         &token,
     ));
     let source_frames = assert_complete_analysis(&analysis_worker, &warm);
@@ -323,7 +313,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
                 &play_worker,
                 black_box(&file_path),
                 &store,
-                &byte_pool,
+                &pools,
                 &token,
             ));
             assert_complete_analysis(&analysis_worker, &progress);
@@ -357,7 +347,7 @@ fn bench_analysis_worker(c: &mut Criterion) {
 }
 
 fn bench_stretch_prepare(c: &mut Criterion) {
-    let pool = SamplePool::default();
+    let pools = pools();
     let mut group = c.benchmark_group("audit_stretch_prepare");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(20);
@@ -370,7 +360,7 @@ fn bench_stretch_prepare(c: &mut Criterion) {
             &backend,
             |b, &backend| {
                 b.iter_batched(
-                    || stretch_config(backend, &pool),
+                    || stretch_config(backend, &pools),
                     |config| {
                         build_engine(config).unwrap_or_else(|error| {
                             panic!("failed to prepare {backend} benchmark engine: {error}")
@@ -386,7 +376,7 @@ fn bench_stretch_prepare(c: &mut Criterion) {
 }
 
 fn bench_stretch_backends(c: &mut Criterion) {
-    let pool = SamplePool::default();
+    let pools = pools();
     let steady_request = ElasticRequest::new(Consts::STRETCH_FRAMES, Consts::STRETCH_FRAMES)
         .unwrap_or_else(|error| panic!("invalid steady stretch request: {error}"));
     let control_requests = [
@@ -405,7 +395,7 @@ fn bench_stretch_backends(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(4));
 
     for &backend in StretchKind::all() {
-        let mut prime_target = stretch_engine(backend, &pool);
+        let mut prime_target = stretch_engine(backend, &pools);
         let mut prime_buffers = prime_fixture(prime_target.as_ref());
         group.throughput(frame_throughput(prime_buffers.request.output_frames()));
         group.bench_function(BenchmarkId::new("prime", backend), |b| {
@@ -425,7 +415,7 @@ fn bench_stretch_backends(c: &mut Criterion) {
         });
         drop(prime_target);
 
-        let mut steady_target = stretch_engine(backend, &pool);
+        let mut steady_target = stretch_engine(backend, &pools);
         let mut steady_prime = prime_fixture(steady_target.as_ref());
         prime_engine(steady_target.as_mut(), &mut steady_prime);
         let mut steady_output = vec![0.0; steady_request.output_frames() * Consts::CHANNELS];
@@ -445,7 +435,7 @@ fn bench_stretch_backends(c: &mut Criterion) {
         });
         drop(steady_target);
 
-        let mut control_target = stretch_engine(backend, &pool);
+        let mut control_target = stretch_engine(backend, &pools);
         let mut control_prime = prime_fixture(control_target.as_ref());
         prime_engine(control_target.as_mut(), &mut control_prime);
         let mut control_output = vec![0.0; Consts::CONTROL_OUTPUT_FRAMES * Consts::CHANNELS];
@@ -479,7 +469,7 @@ fn bench_stretch_backends(c: &mut Criterion) {
 
 fn bench_stretch_process(c: &mut Criterion) {
     let pcm = make_pcm(Consts::STRETCH_FRAMES);
-    let pool = SamplePool::default();
+    let pools = pools();
     let spec = AudioSpec::new(
         u16::try_from(Consts::CHANNELS).unwrap_or_else(|_| panic!("bench channels")),
         NonZeroU32::new(Consts::SAMPLE_RATE).unwrap_or_else(|| panic!("bench sample rate")),
@@ -500,11 +490,11 @@ fn bench_stretch_process(c: &mut Criterion) {
                 || {
                     let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
                     let warp = Warp::new((), &config);
-                    let renderer = warp.renderer(spec, pool.clone());
-                    let chunk = make_chunk(&pool, &pcm);
+                    let renderer = warp.renderer(spec, pools.clone());
+                    let chunk = make_chunk(&pools, &pcm);
                     (renderer, chunk)
                 },
-                |(mut renderer, chunk): (WarpRenderer, AudioChunk)| {
+                |(mut renderer, chunk): (WarpRenderer<TestPools>, AudioChunk)| {
                     black_box(renderer.render(chunk));
                 },
                 BatchSize::SmallInput,

@@ -25,8 +25,9 @@ implementations.
 Every resampler is built from explicit BON config. Built-in and custom backends
 all implement `ResamplerBackend`; the config carries the backend object/factory
 directly. Backends do not choose another backend when a requested mode is
-unavailable. Hot paths use caller-owned buffers or scratch from an injected
-`kithara-bufpool::SamplePool`; library code must not create a hidden default pool.
+unavailable. Hot paths use caller-owned buffers or scratch acquired from an
+injected `kithara-bufpool::PoolRegion<S>`; library code must not create a hidden
+pool region.
 
 The current built-in backends are exposed by explicit crate features:
 

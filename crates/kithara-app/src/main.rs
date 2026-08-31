@@ -5,11 +5,10 @@ use std::num::NonZeroUsize;
 
 use clap::Parser;
 use kithara::{
-    assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
-    bufpool::Region,
-    host::{Host, HostConfig},
+    assets::{FlushHub, FlushPolicy, StorageBackend},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
-    play::{PlayWorker, PlayWorkerConfig},
+    play::PlayWorkerConfig,
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
@@ -17,6 +16,7 @@ use kithara_app::{
     config::AppConfig,
     deck::{Deck, DeckId, DeckSet},
     gui::{self, GuiFrontend},
+    pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
 use kithara_platform::{CancelToken, thread, tokio};
@@ -78,9 +78,7 @@ fn main() -> AppResult {
     // every subsystem derives from `shutdown.child()`, so a frontend
     // `config.shutdown.cancel()` propagates through the whole app subtree.
     let shutdown = CancelToken::root();
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
-    let sample_pool = region.sample_pool();
+    let pools = pools::build()?;
     let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
     let base_worker = Worker::new(
         WorkerConfig::new()
@@ -89,8 +87,8 @@ fn main() -> AppResult {
             .with_max_compute_tasks(compute_threads)
             .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute")),
     );
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
+    let worker = AppWorker::new(
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(shutdown.child())
             .worker(base_worker.clone())
             .build(),
@@ -98,16 +96,14 @@ fn main() -> AppResult {
     let net = NetOptions::builder()
         .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
         .compression(baked::BAKED_COMPRESSION)
-        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, shutdown.child())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    let store = AssetStore::builder()
+    let store = AppStore::builder(pools)
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
-        .pool(byte_pool.clone())
         .flush_hub(flush_hub)
         .layouts(baked::build_baked_asset_layouts())
         .build();
@@ -122,7 +118,7 @@ fn main() -> AppResult {
         .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
         .build();
 
-    let mut host = Host::new(HostConfig::builder().build())?;
+    let mut host = AppHost::new(HostConfig::builder().build())?;
     let decks = vec![
         Deck::build(DeckId(0), &config, &mut host)?,
         Deck::build(DeckId(1), &config, &mut host)?,

@@ -42,11 +42,16 @@ in one private envelope. On web, the main-thread Host and its Worker facade use
 that same envelope and shared `RootView`; the Worker is never given a raw
 `SessionHandle` with which to construct an unattached player.
 
-On web, one local Host is exclusive per JavaScript thread. It owns both the TLS
-session state and every remote command receiver; sender and receiver wrappers
-are capabilities, not owners. Host shutdown drops those receivers before the
-TLS state so queued reply channels disconnect and a Worker call cannot wait
-forever. A replacement Host starts with cleared bridge playback observations.
+The envelope is typed by the composition root's pool schema. `Host<S>` accepts
+only `PlayerControlSource<Schema = S>`, and each graph deck retains the same
+`PoolRegion<S>` handle carried by the player's registration command.
+
+On web, one local Host is exclusive per JavaScript thread. It owns the session
+state and every remote command receiver; TLS retains only a nongeneric active
+Host flag. Sender and receiver wrappers are capabilities, not owners. Host
+shutdown drops those receivers before session state so queued reply channels
+disconnect and a Worker call cannot wait forever. A replacement Host starts
+with cleared bridge playback observations.
 
 If a command cannot be sent, ownership has not transferred and the original
 operation is rejected as owner-unavailable. If the sole owner thread stops

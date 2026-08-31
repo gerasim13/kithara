@@ -4,6 +4,7 @@ use delegate::delegate;
 use kithara_audio::{
     AudioObserver, AudioReader, ChunkOutcome, ReadOutcome, ResamplerBackend, SeekOutcome,
 };
+use kithara_bufpool::HasPool;
 use kithara_decode::{DecodeError, DecodeResult, TrackMetadata};
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -28,19 +29,27 @@ use crate::{
 ///
 /// ```ignore
 /// use kithara_assets::AssetStore;
-/// use kithara_bufpool::Region;
-/// use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig};
+/// use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+/// use kithara_play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc};
 ///
-/// let region = Region::default();
-/// let worker = PlayWorker::new(
-///     PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-/// );
+/// pool_schema! {
+///     pub AppPools {
+///         bytes: u8,
+///         samples: f32,
+///     }
+/// }
+/// let config = || PoolConfig::builder().max_buffers(128).build();
+/// let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+///     .bytes(config())
+///     .samples(config())
+///     .build()?;
+/// let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
-/// let config: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
+/// let config: ResourceConfig<AppPools> = ResourceConfig::for_src(ResourceSrc::parse(
 ///     "https://example.com/song.mp3",
 /// )?)
-/// .store(AssetStore::builder().pool(region.byte_pool()).build())
+/// .store(AssetStore::builder(pools).build())
 /// .worker(worker)
 /// .build();
 /// let mut resource = Resource::new(config).await?;
@@ -132,9 +141,10 @@ impl Resource {
     ///
     /// Returns an error if source type detection fails, or if the underlying
     /// audio stream cannot be created (network failure, invalid format, etc.).
-    pub async fn new<B>(config: ResourceConfig<B>) -> DecodeResult<Self>
+    pub async fn new<S, B>(config: ResourceConfig<S, B>) -> DecodeResult<Self>
     where
         B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         Self::open(config, None).await
     }
@@ -144,22 +154,24 @@ impl Resource {
     /// This is a narrow cross-crate composition seam used by queue-owned
     /// orchestration. The ordinary resource API remains [`Self::new`].
     #[doc(hidden)]
-    pub async fn new_observed<B>(
-        config: ResourceConfig<B>,
+    pub async fn new_observed<S, B>(
+        config: ResourceConfig<S, B>,
         observer: Box<dyn AudioObserver>,
     ) -> DecodeResult<Self>
     where
         B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         Self::open(config, Some(observer)).await
     }
 
-    async fn open<B>(
-        config: ResourceConfig<B>,
+    async fn open<S, B>(
+        config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> DecodeResult<Self>
     where
         B: Default + ResamplerBackend,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
     {
         let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
@@ -226,15 +238,16 @@ impl Resource {
     /// Generic over any [`StreamType`] whose config carries an optional
     /// `kithara_events::EventBus`. Callers wanting fine-grained control
     /// over `FileConfig` / `HlsConfig` (ABR, keys, etc.) use this path.
-    pub(crate) async fn from_stream_audio<T, B>(
+    pub(crate) async fn from_stream_audio<T, B, S>(
         config: TrackConfig<T, B>,
         src: Arc<str>,
-        worker: &PlayWorker,
+        worker: &PlayWorker<S>,
     ) -> DecodeResult<Self>
     where
         T: StreamType<Events = EventBus> + 'static,
         B: Default + ResamplerBackend,
-        crate::RegisteredAudio<Stream<T>>: AudioReader + 'static,
+        S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+        crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
         let warp_controls = Arc::clone(config.warp().stretch());
         let audio = worker.open(config).await?;
@@ -367,7 +380,7 @@ mod tests {
         },
     };
     use kithara_audio::{AudioControl, AudioRead, AudioSession, ReadOutcome, SeekOutcome};
-    use kithara_bufpool::SamplePool;
+    use kithara_bufpool::PoolRegion;
     use kithara_decode::TrackMetadata;
     use kithara_events::TrackId;
     use kithara_platform::{CancelToken, sync::Arc};
@@ -379,6 +392,7 @@ mod tests {
     use crate::{
         bridge::{PlayerCmd, PlayerNotification, SharedEq, TrackTransition, slot_channels},
         rt::{PlayerNodeProcessor, StreamShape, track::PlayerResource},
+        test_pools::{TestPools, pools},
     };
 
     struct Consts;
@@ -531,15 +545,17 @@ mod tests {
         }
     }
 
-    fn warped_player_resource(controls: &Arc<StretchControls>, src: &str) -> Box<PlayerResource> {
+    fn warped_player_resource(
+        pools: &PoolRegion<TestPools>,
+        controls: &Arc<StretchControls>,
+        src: &str,
+    ) -> Box<PlayerResource> {
         let total_frames = usize::try_from(Consts::SAMPLE_RATE).expect("sample rate fits usize");
         let resource = Resource::from_reader(EofReader::with_frames(total_frames), None)
             .with_playback_rate(PlaybackRate::for_warp(Arc::clone(controls)));
-        Box::new(PlayerResource::new(
-            resource,
-            Arc::from(src),
-            &SamplePool::default(),
-        ))
+        PlayerResource::new(resource, Arc::from(src), pools)
+            .map(Box::new)
+            .unwrap_or_else(|error| panic!("test player resource: {error}"))
     }
 
     fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {
@@ -608,6 +624,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn loading_next_warp_resource_preserves_shared_target_and_effective_capability() {
         let controls = StretchControls::new(1.0);
+        let pools = pools();
         let effective_rate = if supports_playback_rate() { 1.5 } else { 1.0 };
         let (inputs, mut control) = slot_channels(SharedEq::new(0));
         let shape = StreamShape {
@@ -617,7 +634,7 @@ mod tests {
             )
             .expect("static block size"),
         };
-        let mut processor = PlayerNodeProcessor::new(inputs, shape, &SamplePool::default());
+        let mut processor = PlayerNodeProcessor::new(inputs, shape, &pools);
         let (logger, _logger_rx) = realtime_logger(RealtimeLoggerConfig::default());
         let mut extra = ProcExtra {
             logger,
@@ -630,7 +647,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&controls, &first),
+                resource: warped_player_resource(&pools, &controls, &first),
                 item_id: first_id,
             })
             .expect("load first track");
@@ -676,7 +693,7 @@ mod tests {
         control
             .cmd_tx
             .try_push(PlayerCmd::LoadTrack {
-                resource: warped_player_resource(&controls, &next),
+                resource: warped_player_resource(&pools, &controls, &next),
                 item_id: next_id,
             })
             .expect("load next track");

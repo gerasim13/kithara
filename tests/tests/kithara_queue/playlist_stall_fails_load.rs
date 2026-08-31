@@ -1,6 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
@@ -9,7 +10,7 @@ use kithara::{
         time::{self, Duration, Instant, timeout},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -18,9 +19,11 @@ use kithara_integration_tests::{
     offline::OfflineSession, temp_dir,
 };
 
+use crate::bufpool_ext::{TestPools, pools};
+
 async fn wait_for_failed(
     rx: &mut EventReceiver,
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     id: TrackId,
     deadline: Duration,
 ) -> Result<String, String> {
@@ -54,7 +57,7 @@ async fn wait_for_failed(
     ))
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(50)).await;
@@ -94,18 +97,16 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
                 .build(),
         )
         .build();
+    let pools = pools();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
 
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(
-                    kithara::bufpool::BytePool::default(),
-                    kithara::bufpool::SamplePool::default(),
-                )
-                .build(),
+                PlayWorkerConfig::builder(pools.clone()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -113,9 +114,15 @@ async fn stalled_master_playlist_fails_load(temp_dir: TestTempDir) {
     let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
     let tick_handle = spawn_ticker(Arc::clone(&queue));
 
-    let cfg = ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid URL"))
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid URL"))
         .downloader(downloader)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(
+            AssetStore::builder(pools)
+                .backend(StorageBackend::Disk {
+                    root: temp_dir.path().to_path_buf(),
+                })
+                .build(),
+        )
         .build();
 
     let mut rx = queue.subscribe();

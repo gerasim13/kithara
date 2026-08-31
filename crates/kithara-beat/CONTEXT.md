@@ -11,8 +11,9 @@ Detailed contracts and invariants for the kithara-beat crate; the README is the 
   conversion belong to the consumer (`kithara-analysis`).
 - Models load from `(mel, beat)` ONNX bytes via `BeatThis::builder()` — the caller decides embed
   vs file vs download; `embed-small-model` exposes the bundled bytes. The same builder takes the
-  `BeatConfig` the peak picker runs with and the caller-owned `SamplePool`. Tensor inputs, copied
-  runtime outputs, inference scratch, and returned marks all reuse that injected pool.
+  `BeatConfig` the peak picker runs with and a caller-owned `PoolRegion<S>` where
+  `S: HasPool<f32>`. Tensor inputs, copied runtime outputs, and inference scratch all reuse that
+  facade's registered sample pool.
 
 ## Pipeline
 

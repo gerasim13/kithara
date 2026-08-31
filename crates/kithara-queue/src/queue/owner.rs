@@ -1,15 +1,19 @@
+use kithara_bufpool::HasPool;
 use kithara_events::{AdvanceReason, TrackId};
 
 use super::{Queue, Transition};
 use crate::{QueueError, TrackSource};
 
-impl Queue {
+impl<S> Queue<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Append a track while this concrete queue remains owned by its caller.
     ///
     /// # Errors
     ///
     /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append<S: Into<TrackSource>>(&self, source: S) -> Result<TrackId, QueueError> {
+    pub fn append<T: Into<TrackSource<S>>>(&self, source: T) -> Result<TrackId, QueueError> {
         self.control.append(source)
     }
 
@@ -18,10 +22,10 @@ impl Queue {
     /// # Errors
     ///
     /// Returns [`QueueError::Play`] after the resident player is closed.
-    pub fn append_with_id<S: Into<TrackSource>>(
+    pub fn append_with_id<T: Into<TrackSource<S>>>(
         &self,
         id: TrackId,
-        source: S,
+        source: T,
     ) -> Result<TrackId, QueueError> {
         self.control.append_with_id(id, source)
     }
@@ -31,9 +35,9 @@ impl Queue {
     /// # Errors
     ///
     /// Returns [`QueueError`] when `after` is not present.
-    pub fn insert<S: Into<TrackSource>>(
+    pub fn insert<T: Into<TrackSource<S>>>(
         &self,
-        source: S,
+        source: T,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
         self.control.insert(source, after)
@@ -44,10 +48,10 @@ impl Queue {
     /// # Errors
     ///
     /// Returns [`QueueError`] when `after` is not present.
-    pub fn insert_with_id<S: Into<TrackSource>>(
+    pub fn insert_with_id<T: Into<TrackSource<S>>>(
         &self,
         id: TrackId,
-        source: S,
+        source: T,
         after: Option<TrackId>,
     ) -> Result<TrackId, QueueError> {
         self.control.insert_with_id(id, source, after)

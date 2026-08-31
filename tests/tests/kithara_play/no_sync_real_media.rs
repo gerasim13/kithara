@@ -12,7 +12,6 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, SamplePool},
     events::{EventBus, TrackId},
     hls::AbrMode,
     platform::{
@@ -21,7 +20,7 @@ use kithara::{
     },
     play::{
         Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, Resource,
-        ResourceConfig, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
+        ResourceConfig, ResourceSrc, SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
     warp::{StretchControls, StretchKind},
 };
@@ -36,6 +35,8 @@ use reference::capture_references;
 use runtime::{Deck, DeckObservation, EventPolicy};
 use serde::Serialize;
 use url::Url;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
@@ -859,12 +860,10 @@ async fn prepare_deck(
     controls.set_backend(StretchKind::Signalsmith);
     controls.set_keylock(true);
     let bus = EventBus::new(16_384);
-    let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
+    let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
     let player = Arc::new(PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .bus(bus)
             .sample_rate(
                 NonZeroU32::new(case.host_rate).expect("host sample rate must be non-zero"),
@@ -883,7 +882,7 @@ async fn prepare_deck(
         Media::Hls => hls.to_string(),
     };
     let playback_config =
-        ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
+        ResourceConfig::for_src(ResourceSrc::parse(&src).unwrap_or_else(|error| {
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
         .store(memory_asset_store())
@@ -899,7 +898,7 @@ async fn prepare_deck(
     .await;
 
     let reference_config =
-        ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
+        ResourceConfig::for_src(ResourceSrc::parse(&src).unwrap_or_else(|error| {
             panic!("{} deck {deck_index}: parse {src}: {error}", case.label)
         }))
         .store(memory_asset_store())
@@ -938,7 +937,7 @@ async fn open_resource(
     case: &Case,
     deck_index: usize,
     role: &str,
-    config: ResourceConfig,
+    config: ResourceConfig<TestPools>,
 ) -> Resource {
     let mut resource = time::timeout(PRELOAD_TIMEOUT, Resource::new(config))
         .await

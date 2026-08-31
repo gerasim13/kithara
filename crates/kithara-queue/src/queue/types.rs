@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use kithara_bufpool::HasPool;
 use kithara_events::TrackId;
 #[cfg(test)]
 use kithara_play::PlaybackShared;
@@ -261,7 +262,10 @@ pub(crate) fn should_arm_crossfade(
         && !armed_for.is_armed_for(current_id)
 }
 
-pub(super) fn extract_track_name(source: &TrackSource) -> String {
+pub(super) fn extract_track_name<S>(source: &TrackSource<S>) -> String
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let raw = match source {
         TrackSource::Uri(s) => s.as_str(),
         TrackSource::Config(cfg) => return name_from_src(cfg.source()),

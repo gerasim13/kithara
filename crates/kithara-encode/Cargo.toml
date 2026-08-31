@@ -43,5 +43,8 @@ fdk-aac-sys = { workspace = true, optional = true }
 ffmpeg-next = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 
+[dev-dependencies]
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
+
 [lints]
 workspace = true

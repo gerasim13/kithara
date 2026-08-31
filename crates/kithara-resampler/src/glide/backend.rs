@@ -1,3 +1,5 @@
+use kithara_bufpool::HasPool;
+
 use super::{GlideConfig, resampler::GlideResampler};
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings};
 
@@ -28,7 +30,13 @@ impl GlideBackend {
 impl ResamplerBackend for GlideBackend {
     type Resampler = GlideResampler;
 
-    fn build(&self, settings: &ResamplerSettings) -> Result<Self::Resampler, ResamplerBuildError> {
+    fn build<S>(
+        &self,
+        settings: &ResamplerSettings<S>,
+    ) -> Result<Self::Resampler, ResamplerBuildError>
+    where
+        S: HasPool<f32>,
+    {
         settings.validate(self)?;
         GlideResampler::new(self.name(), self.config, settings)
     }

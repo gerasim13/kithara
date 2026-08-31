@@ -8,7 +8,9 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
-    decode_ext::DecoderChunkOutcomeTestExt, fixture_protocol::PackagedSignal,
+    bufpool_ext::{TestPools, pools},
+    decode_ext::DecoderChunkOutcomeTestExt,
+    fixture_protocol::PackagedSignal,
 };
 use kithara_test_fixtures::{
     SignalAsset,
@@ -106,9 +108,8 @@ async fn test_signal_server_encoded_formats_are_decodable(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .unwrap();
@@ -145,9 +146,8 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     let mut decoder = DecoderFactory::create_with_probe(
         Cursor::new(bytes.to_vec()),
         Some(ext),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .unwrap_or_else(|error| panic!("probe {name} decode failed: {error}"));
@@ -464,9 +464,8 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
         "packaged {label} bytes must contain mdat, got {box_summaries:?}"
     );
     let config = || {
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .backend(backend)
             .build()
     };

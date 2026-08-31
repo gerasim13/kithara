@@ -2,7 +2,6 @@
 
 use kithara::{
     abr::AbrMode,
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     net::{HttpClient, NetOptions},
     platform::{
@@ -10,7 +9,7 @@ use kithara::{
         flash::real_io,
         time::{self, Duration, Instant},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::{
         AudioCodec,
         dl::{Downloader, DownloaderConfig},
@@ -23,6 +22,8 @@ use kithara_integration_tests::{
     swallow_detector::{assert_committed_reached, assert_no_committed_swallow},
 };
 use kithara_test_utils::probe::capture as probe_capture;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 /// `b"0123456789abcdef"` — the AES-128 key/zero-IV pair used across the
 /// repo's DRM fixtures.
@@ -129,15 +130,17 @@ async fn flac_swallow_fixture(#[case] backend: DecoderBackend) {
 
     let temp = TestTempDir::new();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-    );
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
 
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(created.master_url().as_str()).expect("valid master URL"),
+    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(created.master_url().as_str()).expect("valid master URL"),
     )
     .downloader(downloader)
     .discriminator("t0")

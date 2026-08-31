@@ -4,17 +4,21 @@ Contracts and invariants for the kithara-hls crate; the README is the overview.
 
 ## Architecture
 
-`HlsConfig` (bon, `start_fn = for_url`) → `Hls` (`StreamType`) → `HlsCoord`, which owns
-`SessionSlots` (active + optional incoming `HlsSession` → `HlsVariant`: layout / queue / seek),
-`PlaylistCache`, and `KeyStore`. `HlsPeer` (`impl dl::Peer`) drives the coord and emits `FetchCmd`
-batches to `kithara-stream::dl::Downloader` → `AssetStore` (kithara-assets), which performs
-AES-128-CBC decryption (kithara-drm); `HlsSource` (`impl Source`) reads through the coord.
-`HlsCoord`, `HlsSession`, `HlsPeer`, and `HlsVariant` are internal, not contract; `VariantIndex` =
+`HlsConfig<S>` (bon, `start_fn = for_url`) -> `Hls<S>` (`StreamType`) -> `HlsCoord<S>`, which owns
+`SessionSlots<S>` (active + optional incoming `HlsSession<S>` -> `HlsVariant<S>`: layout / queue / seek),
+`PlaylistCache<S>`, and `KeyStore<S>`. `HlsPeer<S>` (`impl dl::Peer`) drives the coord and emits `FetchCmd`
+batches to `kithara-stream::dl::Downloader` -> `AssetStore<S>` (kithara-assets), which performs
+AES-128-CBC decryption (kithara-drm); `HlsSource<S>` (`impl Source`) reads through the coord.
+`HlsCoord<S>`, `HlsSession<S>`, `HlsPeer<S>`, and `HlsVariant<S>` are internal, not contract; `VariantIndex` =
 `usize`.
 
 ## Configuration
 
-`store` is the only required non-`url` field. `look_ahead_bytes: None` resolves to
+`store: AssetStore<S>` and `pools: PoolRegion<S>` are the required non-`url` fields. They use the
+same closed schema `S: HasPool<u8>`; `HlsConfig<S>` keeps cheap clones of both. The HTTP client,
+playlist cache, key store, segment storage, and temporary byte buffers therefore share one facade
+and one hard overall budget, with no global or per-component fallback pool.
+`look_ahead_bytes: None` resolves to
 `HlsConfig::DEFAULT_LOOK_AHEAD_BYTES` (2 MiB) at the consumer site; `Some(0)` disables the cap.
 `net_options` builds the internal HTTP client only when no `downloader` is injected; an injected
 downloader carries its own. The ephemeral media prefetch window is `capacity - non_media_reserve`,
@@ -326,9 +330,9 @@ the settle path adopts the committed `final_len`.
 
 Every playlist, init/media segment, and encryption key is an `AssetResource::Url` in the `Hls` asset
 scope — playlists are cache resources like anything else, not a side channel. `stream/hls.rs` mints
-the scope once via `store.scope::<Hls>(&AssetSource::Remote { url, discriminator })`; each semantic
+the scope once via `store.scope::<Hls<S>>(&AssetSource::Remote { url, discriminator })`; each semantic
 site calls `scope.key(&resource)` once and reuses the minted key. Path and root naming belong to the
-layout registered for the `Hls` marker (via `AssetStore::builder().layouts`, default kithara-assets
+layout registered for the `Hls<S>` marker (via `AssetStore::builder(pools.clone()).layouts`, default kithara-assets
 `DefaultLayout`); this crate does not own it, and there is no separate playlist or analysis layout.
 
 Playlist and key bytes are one validated cache transaction (`AtomicFetch::fetch_validated`, run
@@ -356,7 +360,7 @@ again.
 
 ## Integration
 
-Composes with `kithara-audio` as `Audio<Stream<Hls>>`; emits `HlsEvent` / `DrmEvent` through a
+Composes with `kithara-audio` as `Audio<Stream<Hls<S>>>`; emits `HlsEvent` / `DrmEvent` through a
 `DeferredBus` on the shared `EventBus`. Throughput estimation and ABR decision policy live in
 `kithara-abr`; this crate only publishes claims/commits and reports `Abr::progress`. The
 `client-*` / `tls-*` features forward the HTTP backend and TLS selection to every network-reaching

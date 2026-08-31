@@ -11,12 +11,14 @@ use kithara::{
         CancelToken, thread,
         time::{Duration, Instant, timeout},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     offline::OfflinePlayer, temp_dir, test_defaults::Consts as Shared,
 };
+
+use crate::bufpool_ext::{TestPools, pools};
 
 struct Consts;
 impl Consts {
@@ -106,7 +108,7 @@ fn blocks_for_seconds(secs: f64) -> u32 {
 fn fresh_downloader() -> Downloader {
     let net = NetOptions::builder().is_insecure(true).build();
     Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools(), CancelToken::never())).build(),
     )
 }
 
@@ -114,21 +116,14 @@ async fn build_resource(
     url: &str,
     downloader: &Downloader,
     iter_label: &str,
-    store: kithara::assets::AssetStore,
+    store: kithara::assets::AssetStore<TestPools>,
     backend: DecoderBackend,
     abr: AbrMode,
 ) -> Resource {
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url)
-            .unwrap_or_else(|e| panic!("ResourceConfig::parse_src({url}): {e}")),
+    let cfg: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(url).unwrap_or_else(|e| panic!("ResourceSrc::parse({url}): {e}")),
     )
-    .worker(PlayWorker::new(
-        PlayWorkerConfig::for_pools(
-            kithara::bufpool::BytePool::default(),
-            kithara::bufpool::SamplePool::default(),
-        )
-        .build(),
-    ))
+    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .downloader(downloader.clone())
     .discriminator(format!("{iter_label}|{url}"))
     .store(store)

@@ -150,7 +150,6 @@ fn read_ranges(reader: &mut Reader<'_>) -> Result<Vec<FrameRange>, BlobError> {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::{ByteBuffer, BytePool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -233,8 +232,8 @@ mod tests {
             .build()
     }
 
-    fn encode(analysis: &TrackAnalysis) -> ByteBuffer {
-        let mut bytes = BytePool::default().get();
+    fn encode(analysis: &TrackAnalysis) -> Vec<u8> {
+        let mut bytes = Vec::new();
         analysis.write_to(&mut bytes).expect("encodes");
         bytes
     }
@@ -269,7 +268,7 @@ mod tests {
         assert!(decoded.waveform().is_none());
         assert!(decoded.beat().is_none());
 
-        let mut encoded = BytePool::default().get();
+        let mut encoded = Vec::new();
         decoded.write_to(&mut encoded).expect("v6 re-encodes");
         assert_eq!(encoded.as_slice(), Consts::V6_FIXTURE);
     }
@@ -301,7 +300,7 @@ mod tests {
             .build();
 
         let bytes = encode(&analysis);
-        let restored = TrackAnalysis::try_from((bytes.as_slice(), &AnalysisFingerprint::default()))
+        let restored = TrackAnalysis::try_from((&bytes[..], &AnalysisFingerprint::default()))
             .expect("empty-fingerprint analysis restores");
 
         assert_eq!(restored.fingerprint(), &AnalysisFingerprint::default());

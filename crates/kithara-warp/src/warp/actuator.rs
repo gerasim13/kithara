@@ -1,6 +1,9 @@
 use kithara_platform::sync::Arc;
 #[cfg(feature = "render")]
-use {kithara_bufpool::SamplePool, kithara_signal::AudioSpec};
+use {
+    kithara_bufpool::{HasPool, PoolRegion},
+    kithara_signal::AudioSpec,
+};
 
 use super::WarpConfig;
 #[cfg(feature = "render")]
@@ -35,8 +38,11 @@ impl<S> Warp<S> {
     /// Creates the worker-side renderer paired with this Warp facade.
     #[cfg(feature = "render")]
     #[must_use]
-    pub fn renderer(&self, spec: AudioSpec, sample_pool: SamplePool) -> WarpRenderer {
-        WarpRenderer::new(Arc::clone(&self.stretch), spec, sample_pool)
+    pub fn renderer<P>(&self, spec: AudioSpec, pools: PoolRegion<P>) -> WarpRenderer<P>
+    where
+        P: HasPool<f32>,
+    {
+        WarpRenderer::new(Arc::clone(&self.stretch), spec, pools)
     }
 }
 

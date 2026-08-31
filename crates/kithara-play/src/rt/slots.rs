@@ -83,7 +83,6 @@ mod tests {
     use std::num::NonZeroU32;
 
     use kithara_audio::mock::{AudioControlMock, AudioReadMock, AudioSessionMock};
-    use kithara_bufpool::SamplePool;
     use kithara_events::EventBus;
     use kithara_platform::{sync::Arc, time::Duration};
     use kithara_signal::AudioSpec;
@@ -91,7 +90,7 @@ mod tests {
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
-    use crate::{resource::Resource, rt::track::PlayerResource};
+    use crate::{resource::Resource, rt::track::PlayerResource, test_pools::pools};
 
     fn track(item_id: TrackId, src: Arc<str>) -> PlayerTrack {
         let sample_rate = NonZeroU32::new(44_100).expect("static sample rate");
@@ -110,7 +109,9 @@ mod tests {
                 .returns(Ok(())),
         ));
         let resource = Resource::from_reader(reader, Some(Arc::clone(&src)));
-        let resource = Box::new(PlayerResource::new(resource, src, &SamplePool::default()));
+        let resource = PlayerResource::new(resource, src, &pools())
+            .map(Box::new)
+            .unwrap_or_else(|error| panic!("test player resource: {error}"));
 
         PlayerTrack::builder()
             .sample_rate(sample_rate)

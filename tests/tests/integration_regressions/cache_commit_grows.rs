@@ -7,13 +7,16 @@ use kithara::{
     events::{AssetEvent, DownloaderEvent, Event},
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir, kithara,
-    offline::OfflineSession, temp_dir,
+    BehaviorHandle, Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
@@ -63,11 +66,11 @@ async fn observe_transfer(rx: &mut kithara::events::EventReceiver, deadline: Dur
 fn resource_config(
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    store: &AssetStore,
+    store: &AssetStore<TestPools>,
     name: &str,
-) -> ResourceConfig {
+) -> ResourceConfig<TestPools> {
     let url = handle.child_url(name);
-    ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"))
+    ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader.clone())
         .store(store.clone())
         .build()
@@ -92,11 +95,11 @@ fn dir_size_bytes(root: &Path) -> u64 {
 }
 
 async fn load_and_observe(
-    queue: &Queue,
+    queue: &Queue<TestPools>,
     rx: &mut kithara::events::EventReceiver,
     handle: &BehaviorHandle,
     downloader: &Downloader,
-    store: &AssetStore,
+    store: &AssetStore<TestPools>,
     name: &str,
 ) -> Transfer {
     let id = queue
@@ -127,11 +130,11 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
             })
         })
         .collect();
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            NetOptions::default(),
+            pools.clone(),
             CancelToken::never(),
         ))
         .build(),
@@ -139,17 +142,15 @@ async fn played_tracks_land_in_the_disk_cache(temp_dir: TestTempDir) {
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool())
-                    .build(),
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools)
         .backend(StorageBackend::Disk {
             root: temp_dir.path().to_path_buf(),
         })
-        .pool(byte_pool)
         .event_bus(player.bus().clone())
         .build();
     let queue = Queue::new(

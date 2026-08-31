@@ -1,5 +1,8 @@
 //! Hostile custom layout output must be rejected at the scope/key boundary.
 
+#[path = "support/pools.rs"]
+mod support;
+
 use kithara_assets::{
     AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, AssetsError,
     StorageBackend,
@@ -34,10 +37,10 @@ fn source() -> AssetSource {
     }
 }
 
-fn store(layout: HostileLayout) -> (tempfile::TempDir, AssetStore) {
+fn store(layout: HostileLayout) -> (tempfile::TempDir, AssetStore<support::TestPools>) {
     let dir = tempdir().expect("test cache directory");
     let layouts = AssetLayoutRegistry::default().with::<HostileProtocol>(Arc::new(layout));
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().into(),
         })

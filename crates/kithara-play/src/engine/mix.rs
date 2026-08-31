@@ -14,11 +14,12 @@ use crate::{error::PlayError, player::PlayerImpl, session::PlayerLevel};
 /// Returns [`PlayError`] on validation failure ([`PlayError::MixLevel`],
 /// [`PlayError::MixForeignSession`], [`PlayError::MixDuplicatePlayer`]) or on
 /// dispatch failure.
-pub fn apply_mix<'a, I>(inputs: I) -> Result<(), PlayError>
+pub fn apply_mix<'a, I, S>(inputs: I) -> Result<(), PlayError>
 where
-    I: IntoIterator<Item = (&'a PlayerImpl, f32)>,
+    I: IntoIterator<Item = (&'a PlayerImpl<S>, f32)>,
+    S: 'a,
 {
-    let inputs: Vec<(&EngineImpl, f32)> = inputs
+    let inputs: Vec<(&EngineImpl<S>, f32)> = inputs
         .into_iter()
         .map(|(player, level)| (&player.core.engine, level))
         .collect();
@@ -48,7 +49,7 @@ where
     }
 
     // Stable address order: two batches sharing players cannot deadlock.
-    let mut ordered: Vec<&EngineImpl> = inputs.iter().map(|&(engine, _)| engine).collect();
+    let mut ordered: Vec<&EngineImpl<S>> = inputs.iter().map(|&(engine, _)| engine).collect();
     ordered.sort_by_key(|engine| std::ptr::from_ref(*engine).addr());
     let _guards: Vec<_> = ordered
         .iter()
@@ -75,7 +76,6 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_audio::ConsumerWakeMode;
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -83,12 +83,13 @@ mod tests {
         PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
         session::{Cmd, Reply, SessionDispatcher, testing::test_session},
+        test_pools::{TestPools, pools},
     };
 
     struct ForeignSession;
 
-    impl SessionDispatcher for ForeignSession {
-        fn exec(&self, _cmd: Cmd) -> Result<Reply, PlayError> {
+    impl SessionDispatcher<TestPools> for ForeignSession {
+        fn exec(&self, _cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
             Ok(Reply::Ok)
         }
 
@@ -97,10 +98,8 @@ mod tests {
         }
     }
 
-    fn player(session: Arc<dyn SessionDispatcher>) -> PlayerImpl {
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        );
+    fn player(session: Arc<dyn SessionDispatcher<TestPools>>) -> PlayerImpl<TestPools> {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)
@@ -151,7 +150,7 @@ mod tests {
         let session = test_session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
-        let foreign = player(Arc::new(ForeignSession) as Arc<dyn SessionDispatcher>);
+        let foreign = player(Arc::new(ForeignSession) as Arc<dyn SessionDispatcher<TestPools>>);
 
         let err = apply_mix([(&a, 0.5), (&foreign, 0.5)]).unwrap_err();
         assert!(matches!(err, PlayError::MixForeignSession));
@@ -192,7 +191,7 @@ mod tests {
         let session = test_session();
         let a = player(session.clone());
         a.core.engine.start().unwrap();
-        let empty: [(&PlayerImpl, f32); 0] = [];
+        let empty: [(&PlayerImpl<TestPools>, f32); 0] = [];
         apply_mix(empty).unwrap();
         assert_eq!(a.core.engine.master_volume(), 1.0);
     }

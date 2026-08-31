@@ -24,13 +24,18 @@ use kithara::{
         tokio,
     },
     play::{
-        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, SessionDispatcher,
-        player::PlayerControlSource,
+        Cmd, PlayError, PlayerConfig, PlayerImpl, Reply, ResourceConfig, ResourceSrc,
+        SessionDispatcher, player::PlayerControlSource,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
 };
 use kithara_integration_tests::{
-    TestTempDir, kithara, offline::OfflineSession, temp_dir, waits::wait_for_event,
+    TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineSession,
+    temp_dir,
+    waits::wait_for_event,
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
@@ -39,13 +44,13 @@ const TRACK_COUNT: usize = 2;
 /// Holds the first `StartPlayer` until the test releases it, standing in for
 /// the audio-device stream start that makes the window wide on a real device.
 struct StartGatedSession {
-    inner: Arc<dyn SessionDispatcher>,
+    inner: Arc<dyn SessionDispatcher<TestPools>>,
     gate: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl StartGatedSession {
     fn new(
-        inner: Arc<dyn SessionDispatcher>,
+        inner: Arc<dyn SessionDispatcher<TestPools>>,
         entered: mpsc::Sender<()>,
         release: mpsc::Receiver<()>,
     ) -> Self {
@@ -56,8 +61,8 @@ impl StartGatedSession {
     }
 }
 
-impl SessionDispatcher for StartGatedSession {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl SessionDispatcher<TestPools> for StartGatedSession {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         if matches!(cmd, Cmd::StartPlayer { .. })
             && let Some((entered, release)) = self.gate.lock().take()
         {
@@ -72,7 +77,7 @@ impl SessionDispatcher for StartGatedSession {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -92,9 +97,13 @@ fn fixture_path(temp_dir: &TestTempDir, index: usize) -> PathBuf {
     path
 }
 
-fn resource_config(temp_dir: &TestTempDir, store: &AssetStore, index: usize) -> ResourceConfig {
+fn resource_config(
+    temp_dir: &TestTempDir,
+    store: &AssetStore<TestPools>,
+    index: usize,
+) -> ResourceConfig<TestPools> {
     ResourceConfig::for_src(
-        ResourceConfig::parse_src(fixture_path(temp_dir, index).to_string_lossy())
+        ResourceSrc::parse(fixture_path(temp_dir, index).to_string_lossy())
             .expect("absolute fixture path"),
     )
     .store(store.clone())
@@ -110,18 +119,16 @@ async fn a_track_play_consumed_mid_load_can_be_selected_again(temp_dir: TestTemp
         entered_tx,
         release_rx,
     ));
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(session)
             .build(),

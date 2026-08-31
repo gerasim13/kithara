@@ -160,16 +160,15 @@ impl ElasticCapabilities {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::ElasticConfig;
+    use crate::{ElasticConfig, test_pools::pools};
 
     #[kithara::test]
     fn common_validation_rejects_an_extreme_rate_before_backend_access() {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(64)

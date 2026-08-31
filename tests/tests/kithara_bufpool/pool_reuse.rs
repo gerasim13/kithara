@@ -1,152 +1,58 @@
-use kithara::{self, bufpool::*};
-use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
+use kithara::{
+    self,
+    bufpool::{PoolConfig, PoolError},
+};
+use kithara_integration_tests::bufpool_ext::{pools, pools_with};
 
 #[kithara::test]
-fn test_reuse_trim_zero_preserves_capacity() {
-    use kithara::bufpool::Reuse;
-    let mut v: Vec<u8> = Vec::with_capacity(1024);
-    v.push(1);
-    let accepted = v.reuse(0);
-    assert!(accepted);
-    assert!(v.capacity() > 0);
+fn oversized_sample_buffer_is_trimmed_on_return() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder()
+            .max_buffers(8)
+            .trim_capacity(4_096)
+            .build(),
+    );
+    let oversized_capacity = {
+        let buffer = pools
+            .get_with_len::<f32>(100_000)
+            .expect("test samples fit the region budget");
+        buffer.capacity()
+    };
+
+    let reused = pools.get::<f32>();
+    assert!(reused.capacity() < oversized_capacity);
+    assert!(reused.capacity() >= 4_096);
 }
 
 #[kithara::test]
-fn test_reuse_skip_trim_when_within_range() {
-    use kithara::bufpool::Reuse;
-    let mut v: Vec<f32> = Vec::with_capacity(4096);
-    v.resize(100, 0.0);
-    let cap_before = v.capacity();
-    let accepted = v.reuse(4096);
-    assert!(accepted);
-    assert_eq!(v.capacity(), cap_before);
+fn ensure_len_within_capacity_does_not_change_accounting() {
+    let pools = pools();
+    let mut buffer = pools
+        .get_with_len::<f32>(200)
+        .expect("test samples fit the region budget");
+    let bytes_before = pools.stats().allocated_bytes;
+    let capacity_before = buffer.capacity();
+
+    buffer
+        .ensure_len(100)
+        .expect("shorter request needs no growth");
+
+    assert_eq!(buffer.len(), 200);
+    assert_eq!(buffer.capacity(), capacity_before);
+    assert_eq!(pools.stats().allocated_bytes, bytes_before);
 }
 
 #[kithara::test]
-fn test_reuse_trim_when_oversize() {
-    use kithara::bufpool::Reuse;
-    let mut v: Vec<f32> = Vec::with_capacity(100_000);
-    v.resize(100, 0.0);
-    let accepted = v.reuse(4096);
-    assert!(accepted);
-    assert!(v.capacity() < 100_000);
-}
-
-#[kithara::test]
-fn test_byte_pool_reuses_buffers() {
-    let pool =
-        SharedPool::<4, Vec<u8>>::with_byte_budget(usize::MAX, 0, ByteBudget(256 * 1024 * 1024));
-
-    {
-        let mut buf = pool.get();
-        buf.resize(64 * 1024, 0xAB);
-    }
-
-    let buf = pool.get();
-    assert!(buf.capacity() >= 64 * 1024);
-}
-
-#[kithara::test]
-fn test_byte_pool_budget_tracks_correctly() {
-    let pool =
-        SharedPool::<4, Vec<u8>>::with_byte_budget(usize::MAX, 0, ByteBudget(256 * 1024 * 1024));
-    let bufs: Vec<_> = (0..10)
-        .map(|_| pool.get_with(|v| v.resize(1024, 0)))
-        .collect();
-
-    assert!(pool.allocated_bytes() > 0);
-    let bytes_before_drop = pool.allocated_bytes();
-    drop(bufs);
-    assert!(pool.allocated_bytes() <= bytes_before_drop);
-}
-
-#[kithara::test]
-fn test_sample_pool_shard_capacity() {
-    let pool = Pool::<8, Vec<f32>>::new(128, 200_000);
-    let shard = pool.shard_index_of();
-
-    for _ in 0..8 {
-        let mut buf = Vec::with_capacity(4096);
-        buf.resize(1024, 0.0);
-        pool.put(buf, shard);
-    }
-
-    let bufs: Vec<_> = (0..8).map(|_| pool.get()).collect();
-    let reused = bufs.iter().filter(|buf| buf.capacity() > 0).count();
-    assert!(reused >= 8);
-}
-
-#[kithara::test]
-fn test_sample_pool_no_cross_shard_needed_typical() {
-    let pool = Pool::<8, Vec<f32>>::new(128, 200_000);
-
-    {
-        let mut buf = pool.get();
-        buf.resize(4096, 0.0);
-    }
-
-    let mut fresh_allocs = 0;
-    for _ in 0..100 {
-        let buf = pool.get();
-        if buf.capacity() == 0 {
-            fresh_allocs += 1;
-        }
-    }
-    assert_eq!(fresh_allocs, 0);
-}
-
-#[kithara::test]
-#[case::nearby_probe_finds_buf(2, true)]
-#[case::out_of_range_fresh_alloc(7, false)]
-fn test_cross_shard_probe(#[case] offset: usize, #[case] expect_reuse: bool) {
-    let pool = Pool::<8, Vec<u8>>::new(128, 1024);
-    let home = pool.shard_index_of();
-    let target = (home + offset) % 8;
-
-    let mut buf = Vec::with_capacity(512);
-    buf.push(0);
-    pool.put(buf, target);
-
-    let retrieved = pool.get();
-    if expect_reuse {
-        assert!(retrieved.capacity() > 0);
-    } else {
-        assert_eq!(retrieved.capacity(), 0);
-    }
-}
-
-#[kithara::test]
-fn test_ensure_len_f32_basic() {
-    let pool = SharedPool::<4, Vec<f32>>::new(16, 4096);
-    let mut buf = pool.get();
-    buf.ensure_len(1024).expect("should succeed");
-    assert_eq!(buf.len(), 1024);
-    assert!(pool.allocated_bytes() > 0);
-}
-
-#[kithara::test]
-fn test_ensure_len_f32_budget_exceeded() {
-    use kithara::bufpool::BudgetExhausted;
-    let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(16, 4096, ByteBudget(1024));
-    let mut buf = pool.get();
-    let result = buf.ensure_len(1000);
-    assert_eq!(result, Err(BudgetExhausted));
-}
-
-#[kithara::test]
-fn test_ensure_len_noop_when_sufficient() {
-    let pool = SharedPool::<4, Vec<f32>>::new(16, 4096);
-    let mut buf = pool.get_with(|v| v.resize(200, 0.0));
-    let bytes_before = pool.allocated_bytes();
-    buf.ensure_len(100).expect("should be noop");
-    assert_eq!(buf.len(), 200);
-    assert_eq!(pool.allocated_bytes(), bytes_before);
-}
-
-#[kithara::test]
-fn test_ensure_len_u8_still_works() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 4096);
-    let mut buf = pool.get();
-    buf.ensure_len(512).expect("should succeed");
-    assert_eq!(buf.len(), 512);
+fn sample_growth_respects_hard_budget() {
+    let pools = pools_with(
+        1_024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    let error = pools
+        .get_with_len::<f32>(1_000)
+        .expect_err("sample request must exceed the region budget");
+    assert!(matches!(error, PoolError::OverallBudgetExceeded { .. }));
 }
