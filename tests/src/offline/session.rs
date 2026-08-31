@@ -75,14 +75,20 @@ impl OfflineSession {
     /// thread never calls [`render`](Self::render).
     #[must_use]
     pub fn new() -> Self {
-        Self::spawn(true)
+        Self::spawn(true, OFFLINE_BLOCK_FRAMES)
     }
 
     /// Manual mode: the worker only dispatches commands; the audio
     /// graph advances only when [`render`](Self::render) is called.
     #[must_use]
     pub fn new_manual() -> Self {
-        Self::spawn(false)
+        Self::new_manual_with_block_frames(OFFLINE_BLOCK_FRAMES)
+    }
+
+    /// Manual mode with the audio callback size used by the scenario.
+    #[must_use]
+    pub fn new_manual_with_block_frames(block_frames: usize) -> Self {
+        Self::spawn(false, block_frames)
     }
 
     /// Convenience: `Arc<dyn SessionDispatcher>` over a fresh
@@ -104,10 +110,12 @@ impl OfflineSession {
         Arc::new(Self::new_manual())
     }
 
-    fn spawn(auto_render: bool) -> Self {
+    fn spawn(auto_render: bool, block_frames: usize) -> Self {
+        let block_frames = u32::try_from(block_frames).expect("offline block size fits u32");
+        assert!(block_frames > 0, "offline block size must be non-zero");
         let (cmd_tx, cmd_rx) = mpsc::channel::<OfflineMsg>();
         let handle = spawn_named("kithara-engine-offline-instance", move || {
-            offline_session_thread(&cmd_rx, auto_render);
+            offline_session_thread(&cmd_rx, auto_render, block_frames);
         });
         Self {
             cmd_tx: Mutex::new(cmd_tx),
@@ -207,18 +215,29 @@ impl SessionDispatcher for OfflineSession {
 fn start_stream_offline(
     ctx: &mut firewheel::FirewheelCtx<OfflineBackend>,
     sample_rate: u32,
+    block_frames: u32,
 ) -> Result<(), String> {
     let config = OfflineConfig {
+        block_frames,
         sample_rate,
-        block_frames: u32::try_from(OFFLINE_BLOCK_FRAMES).unwrap_or(u32::MAX),
     };
     ctx.start_stream(config).map_err(|err| err.to_string())
 }
 
-fn offline_session_thread(cmd_rx: &mpsc::Receiver<OfflineMsg>, auto_render: bool) {
-    let mut state = GraphSession::<OfflineBackend>::new(start_stream_offline);
+fn offline_session_thread(
+    cmd_rx: &mpsc::Receiver<OfflineMsg>,
+    auto_render: bool,
+    block_frames: u32,
+) {
+    let mut state = GraphSession::<OfflineBackend>::new(move |ctx, sample_rate| {
+        start_stream_offline(ctx, sample_rate, block_frames)
+    });
     if auto_render {
-        run_auto(&mut state, cmd_rx);
+        run_auto(
+            &mut state,
+            cmd_rx,
+            usize::try_from(block_frames).expect("offline block size fits usize"),
+        );
     } else {
         run_manual(&mut state, cmd_rx);
     }
@@ -240,7 +259,11 @@ fn run_manual(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<
     }
 }
 
-fn run_auto(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<OfflineMsg>) {
+fn run_auto(
+    state: &mut GraphSession<OfflineBackend>,
+    cmd_rx: &mpsc::Receiver<OfflineMsg>,
+    block_frames: usize,
+) {
     loop {
         // Block on the next command, but no longer than one render budget: a
         // command (or `Shutdown`) wakes us at once through the engine-aware
@@ -259,7 +282,7 @@ fn run_auto(state: &mut GraphSession<OfflineBackend>, cmd_rx: &mpsc::Receiver<Of
             }
             Ok(OfflineMsg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = render_block(state, OFFLINE_BLOCK_FRAMES);
+                let _ = render_block(state, block_frames);
             }
         }
     }

@@ -19,9 +19,9 @@ use kithara::{
 use kithara_integration_tests::{
     audio_mock::TestPcmReader,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions, resource_from_reader},
-    signal_pcm::signal::SineWave,
     waits::wait_until,
 };
+use kithara_test_fixtures::signal::Wave;
 use ringbuf::{HeapRb, traits::Split};
 use url::Url;
 
@@ -41,7 +41,7 @@ fn tone_resource() -> Resource {
     resource_from_reader(TestPcmReader::with_signal(
         spec,
         TRACK_SECS,
-        SineWave(TONE_HZ),
+        Wave::sine(TONE_HZ),
     ))
 }
 

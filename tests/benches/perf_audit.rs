@@ -1,36 +1,45 @@
 #![forbid(unsafe_code)]
 
-use std::{fs, hint::black_box, num::NonZeroU32};
+use std::{
+    fs,
+    hint::black_box,
+    num::{NonZeroU32, NonZeroU64},
+    path::Path,
+};
 
 use criterion::{
     BatchSize, BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use kithara::{
-    analysis::{AnalysisParams, WaveformAnalyzer},
+    analysis::{
+        AnalysisFile, AnalysisFileSpec, AnalysisProgress, AnalysisToken, AnalysisWorker,
+        AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
+    },
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
-    bufpool::{Region, SamplePool},
+    bufpool::{BytePool, Region, SamplePool},
     file::{File, FileConfig},
     platform::{
         sync::Arc,
         time::Duration,
         tokio::runtime::{Builder, Runtime},
     },
-    play::{PlayWorker, PlayWorkerConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlaybackResamplerBackend},
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
     warp::{StretchControls, Warp, WarpConfig, WarpRenderer},
 };
 use kithara_stretch::{ElasticConfig, ElasticEngine, ElasticRequest, StretchKind, build_engine};
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 use num_traits::ToPrimitive;
 use tempfile::TempDir;
 
 struct Consts;
 
 impl Consts {
-    const TEST_MP3_BYTES: &'static [u8] = include_bytes!("../../assets/test.mp3");
     const CHANNELS: usize = 2;
     const SAMPLE_RATE: u32 = 44_100;
-    const ANALYSIS_SECONDS: usize = 30;
+    const ANALYSIS_BUCKETS: usize = 2_000;
+    const ANALYSIS_CHUNK_SECONDS: u64 = 16;
     const DECODE_READ_LIMIT: usize = 16_384;
     const STRETCH_FRAMES: usize = 8_192;
     const CONTROL_OUTPUT_FRAMES: usize = 4_096;
@@ -43,6 +52,11 @@ struct PrimeFixture {
     source: Vec<f32>,
     source_history: Vec<f32>,
     source_lookahead: Vec<f32>,
+}
+
+/// The generated full-length MPEG clip the decode benchmarks read.
+fn test_mp3_bytes() -> &'static [u8] {
+    signal_mp3_track_sine440_187s().bytes()
 }
 
 fn make_runtime() -> Runtime {
@@ -152,7 +166,7 @@ fn bench_gapless_trim(c: &mut Criterion) {
     let rt = make_runtime();
     let temp_dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
     let file_path = temp_dir.path().join("audit-gapless.mp3");
-    fs::write(&file_path, Consts::TEST_MP3_BYTES)
+    fs::write(&file_path, test_mp3_bytes())
         .unwrap_or_else(|e| panic!("failed to write bench mp3: {e}"));
 
     let mut group = c.benchmark_group("audit_gapless_trim");
@@ -208,30 +222,138 @@ fn bench_gapless_trim(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_beat_analysis(c: &mut Criterion) {
-    let frames = usize::try_from(Consts::SAMPLE_RATE)
-        .unwrap_or_else(|_| panic!("bench sample rate exceeds usize"))
-        * Consts::ANALYSIS_SECONDS;
-    let extent = u64::try_from(frames).unwrap_or_else(|_| panic!("bench frame count exceeds u64"));
-    let pcm = make_pcm(frames);
-    let pool = SamplePool::default();
+async fn analyze_track(
+    analysis_worker: &AnalysisWorker,
+    play_worker: &PlayWorker,
+    file_path: &Path,
+    store: &AssetStore,
+    byte_pool: &BytePool,
+    token: &AnalysisToken,
+) -> AnalysisProgress {
+    let file_config = FileConfig::for_src(file_path.to_path_buf().into())
+        .store(store.clone())
+        .pool(byte_pool.clone())
+        .build();
+    let config = AudioConfig::<File>::for_stream(file_config)
+        .hint("mp3".to_owned())
+        .build();
+    let reader = play_worker
+        .open(config)
+        .await
+        .unwrap_or_else(|error| panic!("analysis benchmark reader failed to open: {error}"));
+    let rate = reader.spec().sample_rate;
+    let (mut results, _producer) = analysis_worker.analyze(Box::new(reader), token.clone(), rate);
+    while results.changed().await.is_ok() {}
 
-    let mut group = c.benchmark_group("audit_beat_analysis");
+    let progress = results.borrow().clone();
+    progress.unwrap_or_else(|| panic!("analysis benchmark produced no result"))
+}
+
+fn assert_complete_analysis(worker: &AnalysisWorker, progress: &AnalysisProgress) -> u64 {
+    let analysis = progress.analysis();
+    assert!(
+        worker.fingerprint().beat().is_some(),
+        "benchmark requires an effective beat detector"
+    );
+    assert!(analysis.is_settled(), "analysis did not reach final state");
+    assert!(analysis.waveform().is_some(), "waveform result is missing");
+    let beat = analysis
+        .beat()
+        .unwrap_or_else(|| panic!("beat result is missing"));
+    assert!(
+        beat.artifact().bpm().is_finite() && beat.artifact().bpm() > 0.0,
+        "beat detector produced no effective BPM"
+    );
+    assert!(
+        !beat.artifact().beats().is_empty(),
+        "beat detector produced no beat markers"
+    );
+    assert!(
+        !progress.is_resumable(),
+        "settled analysis retained resume state"
+    );
+    analysis
+        .extent()
+        .filter(|extent| *extent > 0)
+        .unwrap_or_else(|| panic!("analysis benchmark result has no source extent"))
+}
+
+fn bench_analysis_worker(c: &mut Criterion) {
+    let rt = make_runtime();
+    let file_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/test.mp3");
+    let region = Region::default();
+    let byte_pool = region.byte_pool();
+    let sample_pool = region.sample_pool();
+    let store = AssetStore::builder()
+        .backend(StorageBackend::Memory)
+        .pool(byte_pool.clone())
+        .build();
+    let play_worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool.clone()).build(),
+    );
+    let builder = AnalyzerBuilder::<PlaybackResamplerBackend>::new(sample_pool)
+        .with_beat_config(BeatAnalysisConfig::default())
+        .with_beat()
+        .with_waveform(Consts::ANALYSIS_BUCKETS);
+    let analysis_worker = AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build())
+        .unwrap_or_else(|error| panic!("analysis benchmark worker was not admitted: {error}"));
+    let token = AnalysisToken::from("perf-audit-track");
+
+    let warm = rt.block_on(analyze_track(
+        &analysis_worker,
+        &play_worker,
+        &file_path,
+        &store,
+        &byte_pool,
+        &token,
+    ));
+    let source_frames = assert_complete_analysis(&analysis_worker, &warm);
+
+    let mut group = c.benchmark_group("audit_analysis_worker");
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
     group.measurement_time(Duration::from_secs(4));
+    group.throughput(Throughput::Elements(source_frames));
 
-    group.bench_function("waveform_30s_stereo", |b| {
-        b.iter(|| {
-            let mut analyzer =
-                WaveformAnalyzer::new(Consts::SAMPLE_RATE, AnalysisParams::default(), &pool);
-            analyzer.push(black_box(&pcm), Consts::CHANNELS, 0);
-            black_box(analyzer.snapshot(512, Some(extent)));
+    group.bench_function("decode_waveform_and_beat_to_settled", |b| {
+        b.iter_with_large_drop(|| {
+            let progress = rt.block_on(analyze_track(
+                &analysis_worker,
+                &play_worker,
+                black_box(&file_path),
+                &store,
+                &byte_pool,
+                &token,
+            ));
+            assert_complete_analysis(&analysis_worker, &progress);
+            black_box(progress)
         });
     });
 
     group.finish();
+
+    let chunk_frames = NonZeroU64::new(
+        u64::from(warm.analysis().source_sample_rate().get()) * Consts::ANALYSIS_CHUNK_SECONDS,
+    )
+    .unwrap_or_else(|| panic!("analysis checkpoint chunk size is zero"));
+    let file_spec = AnalysisFileSpec::for_analysis(warm.analysis(), chunk_frames)
+        .unwrap_or_else(|error| panic!("analysis checkpoint spec failed: {error}"));
+    let mut checkpoint = c.benchmark_group("audit_analysis_checkpoint");
+    checkpoint.sampling_mode(SamplingMode::Flat);
+    checkpoint.sample_size(50);
+    checkpoint.warm_up_time(Duration::from_secs(1));
+    checkpoint.measurement_time(Duration::from_secs(4));
+    checkpoint.throughput(Throughput::Elements(source_frames));
+    checkpoint.bench_function("serialize_full_update", |b| {
+        b.iter_with_large_drop(|| {
+            black_box(
+                AnalysisFile::create(black_box(&file_spec), black_box(&warm))
+                    .unwrap_or_else(|error| panic!("analysis checkpoint encoding failed: {error}")),
+            )
+        });
+    });
+    checkpoint.finish();
 }
 
 fn bench_stretch_prepare(c: &mut Criterion) {
@@ -396,7 +518,7 @@ fn bench_stretch_process(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_gapless_trim,
-    bench_beat_analysis,
+    bench_analysis_worker,
     bench_stretch_prepare,
     bench_stretch_backends,
     bench_stretch_process

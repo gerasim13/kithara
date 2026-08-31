@@ -10,11 +10,10 @@ use kithara_platform::{
 };
 use kithara_signal::AudioChunk;
 use kithara_stream::{PlayheadWrite, SeekObserve};
+use kithara_test_utils::kithara;
+use kithara_worker::{Task, TickResult};
 
-use super::{
-    EngineLoad,
-    scheduler::{AtomicServiceClass, Node, ServiceClass, TickResult},
-};
+use super::EngineLoad;
 
 /// Per-tick state of a [`DecoderNode`].
 #[derive(Default)]
@@ -34,7 +33,6 @@ pub(crate) struct DecoderNode<S> {
     playhead: Arc<dyn PlayheadWrite>,
     preload_gate: Arc<PreloadGate>,
     seek_obs: Arc<dyn SeekObserve>,
-    service_class: Arc<AtomicServiceClass>,
     source: S,
     /// Chunk displaced by a seek inside the checked tick. The scheduler shell
     /// reclaims it in `recycle` before the next tick.
@@ -162,11 +160,7 @@ impl<S> DecoderNode<S>
 where
     S: AudioSource<Chunk = AudioChunk>,
 {
-    pub(super) fn new(
-        lane: PreparedAudioLane<S>,
-        engine_load: Option<Arc<EngineLoad>>,
-        service_class: Arc<AtomicServiceClass>,
-    ) -> Self {
+    pub(super) fn new(lane: PreparedAudioLane<S>, engine_load: Option<Arc<EngineLoad>>) -> Self {
         let seek_obs = lane.source.seek_observe();
         let seek_epoch = seek_obs.epoch();
         Self {
@@ -176,7 +170,6 @@ where
             port: lane.port,
             playhead: lane.playhead,
             emit: lane.emit,
-            service_class,
             preload_gate: lane.preload_gate,
             preload_chunks: lane.preload_chunks,
             engine_load,
@@ -188,7 +181,7 @@ where
     }
 }
 
-impl<S> Node for DecoderNode<S>
+impl<S> Task for DecoderNode<S>
 where
     S: AudioSource<Chunk = AudioChunk>,
 {
@@ -206,10 +199,8 @@ where
         self.port.flush_wake();
     }
 
-    fn service_class(&self) -> ServiceClass {
-        self.service_class.load()
-    }
-
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "play.decoder.tick"))]
+    #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 

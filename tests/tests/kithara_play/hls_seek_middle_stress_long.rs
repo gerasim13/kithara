@@ -21,7 +21,7 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
+    HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
     offline::{OfflinePlayer, OfflineSession},
     temp_dir,
     waits::{
@@ -58,6 +58,12 @@ impl Consts {
     const SEEK_STOP_MARGIN: Duration = Duration::from_secs(5);
     const SEEK_MIN_SECONDS: f64 = 6.0;
     const SEEK_MAX_SECONDS: f64 = 160.0;
+    /// The ladder the seek stress runs over. One variant, because the config
+    /// below locks variant 0, and long enough to outlast `SEEK_MAX_SECONDS` -
+    /// every seek target has to be readable, so a shorter ladder would turn
+    /// the stress into a walk off the end.
+    const LADDER_SEGMENTS: usize = 28;
+    const LADDER_SEGMENT_SECS: f64 = 6.0;
     const MIN_RATE_CHANGES: usize = 3_000;
     const MIN_SEEKS: usize = 40;
     const MIN_OBSERVATIONS_PER_SEEK: usize = 4;
@@ -388,8 +394,26 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
+    let ladder_secs = Consts::LADDER_SEGMENTS as f64 * Consts::LADDER_SEGMENT_SECS;
+    assert!(
+        Consts::SEEK_MAX_SECONDS < ladder_secs,
+        "seek targets reach {} s but the ladder is only {ladder_secs} s",
+        Consts::SEEK_MAX_SECONDS,
+    );
+
     let server = TestServerHelper::new().await;
-    let master = server.asset("hls/master.m3u8");
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(Consts::LADDER_SEGMENTS)
+                .segment_duration_secs(Consts::LADDER_SEGMENT_SECS)
+                .variant_bandwidths(vec![128_000])
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the seek stress runs over");
+    let master = created.master_url();
     let temp = temp_dir();
     let shutdown = CancelScope::new(None);
     let shutdown_token = shutdown.token();

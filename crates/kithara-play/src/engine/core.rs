@@ -113,7 +113,7 @@ impl EngineImpl {
         self.bus.publish(event);
     }
 
-    fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
+    pub(super) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
         let mut player_id = self.player_id.lock();
         if let Some(id) = *player_id {
             return Ok(id);
@@ -326,11 +326,6 @@ impl EngineImpl {
         &self.session
     }
 
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) fn registered_player_id(&self) -> Option<PlayerId> {
-        *self.player_id.lock()
-    }
-
     pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {
         if !self.running.load(Ordering::Acquire) {
             return Err(PlayError::EngineNotRunning);
@@ -360,9 +355,8 @@ impl EngineImpl {
         }
 
         let player_id = self.ensure_player_id()?;
-        let master_volume = self.master_volume.load(Ordering::Relaxed);
         self.session
-            .start_player(player_id, self.config.sample_rate, master_volume)?;
+            .start_player(player_id, self.config.sample_rate)?;
 
         self.running.store(true, Ordering::Release);
 

@@ -249,7 +249,7 @@ pub(crate) const REPORT_DIR: &str = ".ci-artifacts/junit";
 /// request.
 pub(crate) fn produced_report(lane: &str) -> Option<&'static str> {
     match lane {
-        "apple-test" | "linux-test" | "windows-arm64" | "windows-x64" => {
+        "apple-test" | "linux-test-simulated-clock" | "windows-arm64" | "windows-x64" => {
             Some("target/nextest/ci/junit.xml")
         }
         "apple-test-flash-off" => Some("target-flash-off/nextest/ci/junit.xml"),

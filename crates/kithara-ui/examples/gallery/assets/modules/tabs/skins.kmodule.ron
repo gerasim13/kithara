@@ -8,10 +8,10 @@
         children: [
             Text(id: "heading", style: Section, label: "SKINS", size: (w: Fill, h: Fixed(20.0))),
             Row(gap: Some(12.0), size: (w: Fill, h: Shrink), children: [
-                Include(id: "kithara-dark", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "DARK", "tab": "gallery.skin.kithara-dark" }),
-                Include(id: "kithara-light", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "LIGHT", "tab": "gallery.skin.kithara-light" }),
-                Include(id: "kithara-neon", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "NEON", "tab": "gallery.skin.kithara-neon" }),
-                Include(id: "kithara-soft", source: "../nav/item.kmodule.ron", with: { "icon": "Disc", "label": "SOFT", "tab": "gallery.skin.kithara-soft" }),
+                Include(id: "kithara-dark", source: "../nav/choice.kmodule.ron", with: { "icon": "Disc", "label": "DARK", "lit": "gallery.skin.kithara-dark" }),
+                Include(id: "kithara-light", source: "../nav/choice.kmodule.ron", with: { "icon": "Disc", "label": "LIGHT", "lit": "gallery.skin.kithara-light" }),
+                Include(id: "kithara-neon", source: "../nav/choice.kmodule.ron", with: { "icon": "Disc", "label": "NEON", "lit": "gallery.skin.kithara-neon" }),
+                Include(id: "kithara-soft", source: "../nav/choice.kmodule.ron", with: { "icon": "Disc", "label": "SOFT", "lit": "gallery.skin.kithara-soft" }),
             ]),
             Text(id: "palette-heading", style: Section, label: "PALETTE", size: (w: Fill, h: Fixed(20.0))),
             Row(gap: Some(20.0), size: (w: Fill, h: Shrink), children: [

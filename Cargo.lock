@@ -4281,6 +4281,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4f0c30c76f2f4ccee3fe55a2435f691ca00c0e4bd87abe4f4a851b1d4dac39b"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "ipnet"
 version = "2.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4497,7 +4506,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
- "criterion",
  "dashmap",
  "delegate",
  "fieldwork",
@@ -4518,6 +4526,7 @@ name = "kithara-analysis"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "bytes",
  "delegate",
  "derive_more",
  "fieldwork",
@@ -4531,6 +4540,7 @@ dependencies = [
  "kithara-signal",
  "kithara-test-macros",
  "kithara-test-utils",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "realfft",
@@ -4562,6 +4572,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-ui",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "obfstr",
@@ -4623,7 +4634,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "unimock",
  "url",
  "wasm-bindgen-test",
 ]
@@ -4735,7 +4745,6 @@ dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
- "criterion",
  "delegate",
  "derive_more",
  "fdk-aac",
@@ -4751,6 +4760,7 @@ dependencies = [
  "kithara-signal",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-fixtures",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
@@ -4900,7 +4910,6 @@ dependencies = [
 name = "kithara-file"
 version = "0.0.1-alpha4"
 dependencies = [
- "axum",
  "bon",
  "delegate",
  "derive_more",
@@ -4915,7 +4924,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "memory-stats",
  "re_mp4",
  "tempfile",
  "thiserror 2.0.18",
@@ -4973,6 +4981,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "unimock",
  "url",
  "wasm-bindgen-test",
 ]
@@ -4999,6 +5008,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "triple_buffer",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5028,10 +5038,10 @@ dependencies = [
  "kithara-devtools",
  "kithara-encode",
  "kithara-stretch",
+ "kithara-test-fixtures",
  "kithara-test-utils",
  "memory-stats",
  "mmap-io",
- "moka",
  "num-traits",
  "rand 0.10.2",
  "reqwest",
@@ -5093,7 +5103,6 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "memory-stats",
  "num-traits",
  "reqwest",
  "thiserror 2.0.18",
@@ -5154,6 +5163,7 @@ dependencies = [
  "firewheel",
  "firewheel-core",
  "hex",
+ "hotpath",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5171,6 +5181,7 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-warp",
+ "kithara-worker",
  "kithara-workspace-hack",
  "num-traits",
  "portable-atomic",
@@ -5213,7 +5224,6 @@ dependencies = [
  "bon",
  "criterion",
  "delegate",
- "derive_more",
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
@@ -5285,7 +5295,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "memory-stats",
  "tempfile",
  "thiserror 2.0.18",
  "thunderdome",
@@ -5315,6 +5324,26 @@ dependencies = [
  "signalsmith-stretch",
  "smallvec",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kithara-test-fixtures"
+version = "0.0.1-alpha4"
+dependencies = [
+ "delegate",
+ "hex",
+ "inventory",
+ "kithara-bufpool",
+ "kithara-encode",
+ "kithara-stream",
+ "kithara-test-macros",
+ "kithara-test-utils",
+ "kithara-workspace-hack",
+ "num-traits",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
@@ -5411,6 +5440,21 @@ dependencies = [
  "num-traits",
  "portable-atomic",
  "realfft",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "kithara-worker"
+version = "0.0.1-alpha4"
+dependencies = [
+ "criterion",
+ "delegate",
+ "fieldwork",
+ "kithara-platform",
+ "kithara-test-macros",
+ "kithara-test-utils",
+ "rayon",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -6006,23 +6050,6 @@ dependencies = [
  "memmap2 0.7.1",
  "parking_lot",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "moka"
-version = "0.12.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "957228ad12042ee839f93c8f257b62b4c0ab5eaae1d4fa60de53b27c9d7c5046"
-dependencies = [
- "crossbeam-channel",
- "crossbeam-epoch",
- "crossbeam-utils",
- "equivalent",
- "parking_lot",
- "portable-atomic",
- "smallvec",
- "tagptr",
- "uuid",
 ]
 
 [[package]]
@@ -9322,12 +9349,6 @@ checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
  "libc",
 ]
-
-[[package]]
-name = "tagptr"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tar"

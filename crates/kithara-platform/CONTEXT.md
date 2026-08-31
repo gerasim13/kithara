@@ -390,4 +390,6 @@ scope never cancels a token handed from above).
 `CancelGroup` is a read-only OR-combinator built from `CancelToken` or `Vec<CancelToken>` via
 `From` and composable with `|`: `is_cancelled()` is true once **any** source is cancelled,
 `cancelled()` is one future parking a slot per source (dropping it unregisters every slot), and
-equality is source-array identity (`Arc::ptr_eq`). An empty group never resolves.
+equality is source-array identity (`Arc::ptr_eq`). `on_cancel()` registers one shared once-gated
+synchronous wake across all sources; its returned guards own the registrations. An empty group
+never resolves.

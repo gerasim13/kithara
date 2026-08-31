@@ -70,8 +70,9 @@ stretch-signalsmith = ["kithara-warp/stretch-signalsmith"]
 stretch-bungee = ["kithara-warp/stretch-bungee"]
 # Re-export of testing helpers (engine module + macro mocks).
 # Offline backend lives in `kithara-integration-tests::offline` since 2026-05-07.
-probe = []
+probe = ["kithara-worker/probe"]
 mock = ["dep:unimock"]
+perf = ["dep:hotpath", "hotpath/hotpath", "kithara-audio/perf", "kithara-decode/perf"]
 
 [dependencies]
 kithara-abr = { workspace = true, default-features = false }
@@ -91,6 +92,7 @@ kithara-stream = { workspace = true, default-features = false }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true }
 kithara-warp = { workspace = true, default-features = false, features = ["render"] }
+kithara-worker = { workspace = true }
 
 # Utilities
 arc-swap = { workspace = true }
@@ -120,6 +122,10 @@ url = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# hotpath profiling does not build on wasm32; keep it off the wasm closure.
+hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock", "probe"] }

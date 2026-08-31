@@ -11,6 +11,7 @@ mod runtime;
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
+    audio::ConsumerWakeMode,
     bufpool::{BytePool, SamplePool},
     events::{EventBus, TrackId},
     hls::AbrMode,
@@ -25,13 +26,16 @@ use kithara::{
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
-    TestServerHelper, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
-    memory_asset_store, offline::OfflineSession,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
+    cochlea::CochleaReport, fixture_protocol::PackagedSignal, memory_asset_store,
+    offline::OfflineSession,
 };
+use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
 use reference::capture_references;
 use runtime::{Deck, DeckObservation, EventPolicy};
 use serde::Serialize;
+use url::Url;
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
@@ -52,18 +56,22 @@ const EXACT_ZERO_RUN_LIMIT_FRAMES: usize = 8;
 const MIN_BOUNDARY_JUMP: f32 = 0.05;
 const BOUNDARY_OUTLIER_RATIO: f32 = 6.0;
 const PRELOAD_TIMEOUT: Duration = Duration::from_secs(30);
+const HLS_LADDER_SEGMENTS: usize = 12;
+const HLS_LADDER_SEGMENT_SECS: f64 = 4.0;
+const HLS_SWEEP_START_HZ: f64 = 1_000.0;
+const HLS_SWEEP_END_HZ: f64 = 5_000.0;
 
 #[derive(Clone, Copy)]
 enum Media {
-    Mp3(&'static str),
+    Mp3(SignalAsset),
     Hls,
 }
 
 impl Media {
     const fn label(self) -> &'static str {
         match self {
-            Self::Mp3(name) => name,
-            Self::Hls => "hls/master.m3u8",
+            Self::Mp3(asset) => asset.name(),
+            Self::Hls => "hls-sweep",
         }
     }
 }
@@ -74,21 +82,28 @@ struct Case {
     media: &'static [Media],
 }
 
-const MP3_ONE: &[Media] = &[Media::Mp3("test.mp3")];
-const MP3_TWO: &[Media] = &[Media::Mp3("test.mp3"), Media::Mp3("track.mp3")];
+const MP3_ONE: &[Media] = &[Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S)];
+const MP3_TWO: &[Media] = &[
+    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
+    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
+];
+// Alternating media put two decks in the same body, `CAPTURE_START_STEP_SECS`
+// apart. The mix oracle solves for one gain per deck, which needs their stems
+// independent, so a body read twice has to read differently at the two
+// offsets: chirps, not steady tones.
 const MP3_FOUR: &[Media] = &[
-    Media::Mp3("test.mp3"),
-    Media::Mp3("track.mp3"),
-    Media::Mp3("test.mp3"),
-    Media::Mp3("track.mp3"),
+    Media::Mp3(SignalAsset::MP3_SWEEP_UP_60S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_DOWN_60S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_UP_60S),
+    Media::Mp3(SignalAsset::MP3_SWEEP_DOWN_60S),
 ];
 const HLS_ONE: &[Media] = &[Media::Hls];
-const HLS_MP3_TWO: &[Media] = &[Media::Hls, Media::Mp3("track.mp3")];
+const HLS_MP3_TWO: &[Media] = &[Media::Hls, Media::Mp3(SignalAsset::MP3_SINE880_48K_162S)];
 const HLS_MP3_FOUR: &[Media] = &[
     Media::Hls,
-    Media::Mp3("track.mp3"),
+    Media::Mp3(SignalAsset::MP3_SINE880_48K_162S),
     Media::Hls,
-    Media::Mp3("test.mp3"),
+    Media::Mp3(SignalAsset::MP3_TRACK_SINE440_187S),
 ];
 
 const CASES: &[Case] = &[
@@ -181,12 +196,58 @@ async fn record_no_sync_real_media_artifacts() {
     run_real_media_matrix(true).await;
 }
 
+/// The one body every HLS deck reads.
+///
+/// It sweeps instead of holding a tone because `HLS_MP3_FOUR` puts two decks
+/// in this body `CAPTURE_START_STEP_SECS` apart, and the mix oracle solves a
+/// least-squares system over the deck stems: two windows of the same steady
+/// tone are near-collinear and leave that system singular. The sweep runs
+/// continuously across segments, so the two windows land in different bands,
+/// and its range clears the 440 Hz and 880 Hz tones the MP3 decks carry.
+async fn hls_ladder_url(server: &TestServerHelper) -> Url {
+    let deepest_capture = CAPTURE_START_SECS
+        + (CASES
+            .iter()
+            .map(|case| case.media.len())
+            .max()
+            .expect("the matrix has cases") as f64
+            - 1.0)
+            * CAPTURE_START_STEP_SECS
+        + f64::from(CAPTURE_SECS);
+    let ladder_secs = HLS_LADDER_SEGMENTS as f64 * HLS_LADDER_SEGMENT_SECS;
+    assert!(
+        ladder_secs > deepest_capture,
+        "the last deck captures through {deepest_capture} s but the ladder is only {ladder_secs} s",
+    );
+
+    server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(HLS_LADDER_SEGMENTS)
+                .segment_duration_secs(HLS_LADDER_SEGMENT_SECS)
+                .variant_bandwidths(vec![128_000])
+                .packaged_audio_signal_aac_lc(
+                    SOURCE_RATE,
+                    CHANNELS,
+                    PackagedSignal::Sweep {
+                        start_hz: HLS_SWEEP_START_HZ,
+                        end_hz: HLS_SWEEP_END_HZ,
+                    },
+                ),
+        )
+        .await
+        .expect("create the ladder the HLS decks read")
+        .master_url()
+}
+
 async fn run_real_media_matrix(record_artifacts: bool) {
     let server = TestServerHelper::new().await;
+    let hls = hls_ladder_url(&server).await;
     let mut failures = Vec::new();
     for case in CASES {
         failures.extend(
-            run_case(case, &server, record_artifacts)
+            run_case(case, &hls, record_artifacts)
                 .await
                 .into_iter()
                 .map(|failure| format!("{}: {failure}", case.label)),
@@ -199,13 +260,14 @@ async fn run_real_media_matrix(record_artifacts: bool) {
     );
 }
 
-async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool) -> Vec<String> {
+async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
     let session = Arc::new(OfflineSession::new_manual());
     let mut failures = Vec::new();
 
+    let media_dir = TestTempDir::new();
     let mut decks = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks.push(prepare_deck(case, deck_index, media, server, &session).await);
+        decks.push(prepare_deck(case, deck_index, media, hls, &media_dir, &session).await);
     }
 
     load_decks(case, &decks, &mut failures);
@@ -535,8 +597,10 @@ async fn reset_for_capture(
         deck.player.play();
     }
     let mut completed = false;
+    let mut seek_blocks = 0_u32;
     for _ in 0..oracle::blocks_for_secs(case.host_rate, MAX_SEEK_SECS) {
         let block = render_paced(session, decks, case.host_rate).await;
+        seek_blocks += 1;
         if block.len() != BLOCK_FRAMES * usize::from(CHANNELS) {
             failures.push(format!(
                 "{} {label}: seek render produced {} samples",
@@ -585,6 +649,32 @@ async fn reset_for_capture(
                 ))
                 .collect::<Vec<_>>(),
         ));
+        return false;
+    }
+
+    let rendered_secs = f64::from(seek_blocks) * BLOCK_FRAMES as f64 / f64::from(case.host_rate);
+    let mut positions_valid = true;
+    for (deck_index, deck) in decks.iter().enumerate() {
+        let Some(served) = deck.player.position_seconds() else {
+            positions_valid = false;
+            failures.push(format!(
+                "{} {label} deck {deck_index} ({}): seek completed without a playback position",
+                case.label, deck.observation.label,
+            ));
+            continue;
+        };
+        let advance = served - deck.capture_target_secs;
+        if advance < -SEEK_POSITION_TOLERANCE_SECS
+            || advance > rendered_secs + SEEK_POSITION_TOLERANCE_SECS
+        {
+            positions_valid = false;
+            failures.push(format!(
+                "{} {label} deck {deck_index} ({}): seek position {served:.9}s exceeded the {rendered_secs:.9}s rendered budget from {:.9}s",
+                case.label, deck.observation.label, deck.capture_target_secs,
+            ));
+        }
+    }
+    if !positions_valid {
         return false;
     }
 
@@ -761,7 +851,8 @@ async fn prepare_deck(
     case: &Case,
     deck_index: usize,
     media: Media,
-    server: &TestServerHelper,
+    hls: &Url,
+    media_dir: &TestTempDir,
     session: &Arc<OfflineSession>,
 ) -> Deck {
     let controls = StretchControls::new(1.0);
@@ -785,11 +876,11 @@ async fn prepare_deck(
     ));
     let events = player.subscribe();
     let src = match media {
-        Media::Mp3(name) => media_path(name)
+        Media::Mp3(asset) => media_path(media_dir, asset)
             .to_str()
-            .expect("repository media path is UTF-8")
+            .expect("temporary media path is UTF-8")
             .to_owned(),
-        Media::Hls => server.asset("hls/master.m3u8").to_string(),
+        Media::Hls => hls.to_string(),
     };
     let playback_config =
         ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
@@ -813,6 +904,7 @@ async fn prepare_deck(
         }))
         .store(memory_asset_store())
         .worker(player.worker().clone())
+        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
         .initial_abr_mode(AbrMode::manual(0))
         .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
         .events(EventBus::new(16_384))
@@ -911,10 +1003,10 @@ fn inspect_block(
     }
 }
 
-fn media_path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repository root above tests crate")
-        .join("assets")
-        .join(name)
+/// Materializes one generated body as a file the deck can open by path.
+fn media_path(dir: &TestTempDir, asset: SignalAsset) -> PathBuf {
+    let bytes = by_name(asset.name())
+        .unwrap_or_else(|| panic!("`{}` is generated", asset.name()))
+        .bytes();
+    dir.write(&format!("{}.{}", asset.name(), asset.ext()), bytes)
 }

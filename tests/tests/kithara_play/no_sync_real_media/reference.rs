@@ -3,7 +3,7 @@ use kithara::{
     events::{AudioEvent, DecoderEvent, Event, EventReceiver, SeekLifecycleStage},
     platform::{
         time::{self, Duration},
-        tokio::sync::broadcast::error::TryRecvError,
+        tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{Resource, SeekOutcome},
 };
@@ -134,6 +134,8 @@ async fn read_reference_pcm(
             ReadOutcome::Frames { count, .. } => {
                 drain_reference_seek_events(events, &mut request_epoch, &mut completion)?;
                 if pcm.is_empty() {
+                    wait_for_reference_seek_completion(events, &mut request_epoch, &mut completion)
+                        .await?;
                     validate_reference_seek_barrier(request_epoch, completion)?;
                 }
                 let count = count.get();
@@ -153,6 +155,27 @@ async fn read_reference_pcm(
         drain_reference_seek_events(events, &mut request_epoch, &mut completion)?;
     }
     Ok(pcm)
+}
+
+async fn wait_for_reference_seek_completion(
+    events: &mut EventReceiver,
+    request_epoch: &mut Option<u64>,
+    completion: &mut Option<u64>,
+) -> Result<(), String> {
+    time::timeout(PRELOAD_TIMEOUT, async {
+        while completion.is_none() {
+            let envelope = events.recv().await.map_err(|error| match error {
+                RecvError::Lagged(count) => {
+                    format!("reference event receiver lost {count} events")
+                }
+                RecvError::Closed => "reference event receiver closed".to_owned(),
+            })?;
+            observe_reference_seek_event(envelope.event, request_epoch, completion)?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| "reference seek completion timed out".to_owned())?
 }
 
 fn validate_reference_seek_barrier(
@@ -187,29 +210,9 @@ fn drain_reference_seek_events(
 ) -> Result<(), String> {
     loop {
         match events.try_recv() {
-            Ok(envelope) => match envelope.event {
-                Event::Audio(AudioEvent::SeekLifecycle {
-                    stage: SeekLifecycleStage::SeekRequest,
-                    seek_epoch,
-                    ..
-                }) => *request_epoch = Some(seek_epoch),
-                Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => {
-                    *completion = Some(seek_epoch)
-                }
-                Event::Audio(AudioEvent::SeekRejected { epoch, target }) => {
-                    return Err(format!(
-                        "reference rejected seek epoch {epoch} to {:.9}s",
-                        target.as_secs_f64(),
-                    ));
-                }
-                Event::Audio(AudioEvent::TrackFailed { failure, .. }) => {
-                    return Err(format!("reference track failed: {failure:?}"));
-                }
-                Event::Decoder(DecoderEvent::DecodeError { detail, .. }) => {
-                    return Err(format!("reference decode failed: {detail}"));
-                }
-                _ => {}
-            },
+            Ok(envelope) => {
+                observe_reference_seek_event(envelope.event, request_epoch, completion)?;
+            }
             Err(TryRecvError::Empty) => return Ok(()),
             Err(TryRecvError::Lagged(count)) => {
                 return Err(format!("reference event receiver lost {count} events"));
@@ -217,4 +220,33 @@ fn drain_reference_seek_events(
             Err(TryRecvError::Closed) => return Err("reference event receiver closed".to_owned()),
         }
     }
+}
+
+fn observe_reference_seek_event(
+    event: Event,
+    request_epoch: &mut Option<u64>,
+    completion: &mut Option<u64>,
+) -> Result<(), String> {
+    match event {
+        Event::Audio(AudioEvent::SeekLifecycle {
+            stage: SeekLifecycleStage::SeekRequest,
+            seek_epoch,
+            ..
+        }) => *request_epoch = Some(seek_epoch),
+        Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. }) => *completion = Some(seek_epoch),
+        Event::Audio(AudioEvent::SeekRejected { epoch, target }) => {
+            return Err(format!(
+                "reference rejected seek epoch {epoch} to {:.9}s",
+                target.as_secs_f64(),
+            ));
+        }
+        Event::Audio(AudioEvent::TrackFailed { failure, .. }) => {
+            return Err(format!("reference track failed: {failure:?}"));
+        }
+        Event::Decoder(DecoderEvent::DecodeError { detail, .. }) => {
+            return Err(format!("reference decode failed: {detail}"));
+        }
+        _ => {}
+    }
+    Ok(())
 }

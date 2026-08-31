@@ -10,6 +10,25 @@ use kithara_warp::{
 use super::{PlaybackView, PlayerImpl, PlayerRuntime};
 use crate::{PlayError, SessionBinding};
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "protocol/native.rs"]
+mod target;
+#[cfg(target_arch = "wasm32")]
+#[path = "protocol/wasm.rs"]
+mod target;
+
+pub use target::PlayerMember;
+pub(crate) use target::PlayerSync;
+
+impl fmt::Debug for PlayerMember {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PlayerMember")
+            .field("grid_id", &self.id())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Canonical object-safe protocol implemented by a standalone player and its
 /// orchestration decorators.
 ///
@@ -37,6 +56,9 @@ pub trait Player:
     /// Commit the host-applied deck level after a validated graph batch.
     fn set_host_level(&self, level: f32);
 
+    /// Read the desired host-applied deck level.
+    fn host_level(&self) -> f32;
+
     /// Stop owned work and detach the player from its playback session.
     fn close(&mut self) -> Result<(), PlayError>;
 }
@@ -55,74 +77,11 @@ pub trait PlayerControlSource: Player {
 
     /// Closes the resident player through a previously issued capability.
     fn close_control(control: &Self::Control) -> Result<(), PlayError>;
-}
 
-/// Exclusively owned, sized erasure of one concrete [`Player`].
-///
-/// Host dispatch uses closure-based access so a reference to the resident
-/// player cannot escape the owner's command/lock boundary.
-pub struct PlayerMember {
-    inner: Box<dyn Player>,
-}
-
-impl PlayerMember {
-    /// Erases one concrete player while retaining exclusive ownership.
-    #[must_use]
-    pub fn new<P: Player>(player: P) -> Self {
-        Self {
-            inner: Box::new(player),
-        }
-    }
-
-    /// Dispatches against the object-safe player protocol without exposing a
-    /// borrowed player in the result.
-    pub fn dispatch<R, F>(&self, dispatch: F) -> R
-    where
-        R: 'static,
-        F: for<'a> FnOnce(&'a dyn Player) -> R,
-    {
-        dispatch(self.inner.as_ref())
-    }
-}
-
-impl fmt::Debug for PlayerMember {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PlayerMember")
-            .field("grid_id", &self.id())
-            .finish_non_exhaustive()
-    }
-}
-
-impl BeatGrid for PlayerMember {
-    delegate::delegate! {
-        to self.inner.as_ref() {
-            fn id(&self) -> BeatGridId;
-            fn snapshot(&self) -> BeatGridSnapshot;
-        }
-    }
-}
-
-impl SyncGroup for PlayerMember {
-    type NestedGroup = Self;
-
-    delegate::delegate! {
-        to self.inner.as_mut() {
-            fn transact(
-                &mut self,
-                operation: SyncOperation<Self>,
-            ) -> Result<SyncAdmission, SyncRejected<Self>>;
-            fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
-        }
-    }
-
-    fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.inner.topology()
-    }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        SyncGroup::status(self.inner.as_ref())
-    }
+    /// Transfers only the sendable Host-owned part of a wasm player.
+    #[cfg(target_arch = "wasm32")]
+    #[doc(hidden)]
+    fn take_host_member(&mut self) -> Result<PlayerMember, PlayError>;
 }
 
 impl BeatGrid for PlayerImpl {
@@ -187,6 +146,10 @@ impl Player for PlayerImpl {
         }
     }
 
+    fn host_level(&self) -> f32 {
+        self.runtime.core.engine.master_volume()
+    }
+
     fn close(&mut self) -> Result<(), PlayError> {
         self.make_control().close()
     }
@@ -205,5 +168,16 @@ impl PlayerControlSource for PlayerImpl {
 
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn take_host_member(&mut self) -> Result<PlayerMember, PlayError> {
+        let sync = self.sync.take().ok_or_else(|| {
+            PlayError::Internal("player synchronization ownership was already transferred".into())
+        })?;
+        Ok(PlayerMember::new(
+            sync,
+            self.runtime.core.engine.master_volume(),
+        ))
     }
 }

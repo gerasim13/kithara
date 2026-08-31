@@ -34,6 +34,7 @@ impl ConfigPrep<'_> {
             cancel,
             worker: Some(self.player.core.worker.clone()),
             consumer_wake_mode: self.player.core.engine.consumer_wake_mode(),
+            block_on_underrun: self.player.core.block_on_underrun,
             host_sample_rate,
             decoder,
             stretch,
@@ -122,5 +123,29 @@ mod tests {
             .build_hls_config(player.worker(), None)
             .expect("valid HLS config");
         assert_eq!(audio.consumer_wake_mode(), ConsumerWakeMode::ImmediateOffRt);
+    }
+
+    #[kithara::test]
+    fn prepare_config_overwrites_a_builder_declared_wake_mode() {
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .build(),
+        );
+
+        let src =
+            ResourceConfig::parse_src("https://example.com/song.mp3").expect("valid test source");
+        let config = ResourceConfig::for_src(src)
+            .store(AssetStore::builder().build())
+            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+            .build();
+
+        let prepared = player.prepare_config(config);
+        assert_eq!(
+            prepared.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred,
+            "a player-managed resource cannot smuggle an off-RT capability past the session policy"
+        );
     }
 }

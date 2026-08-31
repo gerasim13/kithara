@@ -20,7 +20,7 @@ mod kithara {
 
 use crate::{
     error::NetError,
-    retry::{DefaultRetryPolicy, RetryNet},
+    retry::RetryNet,
     timeout::TimeoutNet,
     types::{Headers, RangeSpec, RetryPolicy},
 };
@@ -124,12 +124,8 @@ pub trait Net: MaybeSend + MaybeSync {
 
 pub trait NetExt: Net + Sized {
     /// Add retry layer
-    fn with_retry(
-        self,
-        policy: RetryPolicy,
-        cancel: CancelToken,
-    ) -> RetryNet<Self, DefaultRetryPolicy> {
-        RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel, None)
+    fn with_retry(self, policy: RetryPolicy, cancel: CancelToken) -> RetryNet<Self> {
+        RetryNet::new(self, policy, cancel, None)
     }
 
     /// Add timeout layer

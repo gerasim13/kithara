@@ -224,6 +224,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "decode.composed.next"))]
     #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
@@ -448,6 +449,7 @@ mod default_priming_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
+    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
     use symphonia::{
         core::{
             formats::{FormatOptions, probe::Hint},
@@ -461,11 +463,7 @@ mod default_priming_tests {
     use crate::symphonia::{SymphoniaCodec, SymphoniaConfig, SymphoniaDemuxer};
 
     fn build_mp3_decoder() -> ComposedDecoder<SymphoniaDemuxer, SymphoniaCodec> {
-        const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/test.mp3"
-        ));
-        let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -522,6 +520,7 @@ mod smoke_tests {
     use std::io::Cursor;
 
     use kithara_stream::AudioCodec;
+    use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
     use kithara_test_utils::kithara;
     use symphonia::{
         core::{
@@ -538,13 +537,8 @@ mod smoke_tests {
         traits::{Decoder, DecoderChunkOutcome, DecoderSeekOutcome},
     };
 
-    const TEST_MP3_BYTES: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/test.mp3"
-    ));
-
     fn build_mp3_demuxer() -> SymphoniaDemuxer {
-        let cursor = Cursor::new(TEST_MP3_BYTES.to_vec());
+        let cursor = Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec());
         let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
         let mut hint = Hint::new();
         hint.with_extension("mp3");
@@ -630,7 +624,7 @@ mod smoke_tests {
     #[kithara::test]
     fn symphonia_mp3_demuxer_emits_notneeded_preroll_after_seek() {
         let (demuxer, _byte_len_handle) = SymphoniaDemuxer::open_file(
-            Cursor::new(TEST_MP3_BYTES),
+            Cursor::new(signal_mp3_track_sine440_187s().bytes()),
             FileOpen {
                 hint: Some("mp3".into()),
                 container: None,

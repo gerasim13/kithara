@@ -365,24 +365,6 @@ static ENDPOINTS: &[Endpoint] = &[
     },
     Endpoint {
         category: EndpointCategory::Model,
-        id: "ui.menu.open",
-        value: ValueKind::Bool,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "ui.menu.toggle",
-        value: ValueKind::Trigger,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Command,
-        id: "ui.menu.close",
-        value: ValueKind::Trigger,
-        scopes: Endpoint::GLOBAL,
-    },
-    Endpoint {
-        category: EndpointCategory::Model,
         id: "ui.menu.group_open",
         value: ValueKind::Bool,
         scopes: Endpoint::GROUP,

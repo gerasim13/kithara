@@ -19,8 +19,8 @@ all:
 # why they do not go through `just test run`. `just platform wasm` keeps the
 # artifacts (check, build, size-check); the tests belong here.
 #
-# SUITE `all` adds the integration browser suite; `webcodecs` runs only
-# kithara-decode's own target, which is what the browser CI job asks for.
+# Both suites run the wasm Host unit tests. SUITE `all` also runs the integration
+# browser suite; `webcodecs` adds only kithara-decode's browser target.
 
 # Run the Rust tests that need a browser (SUITE: all | webcodecs).
 [positional-arguments]
@@ -56,6 +56,13 @@ wasm BROWSER="chrome" SUITE="all":
     # without this the run dies with "failed to start test_server ... No such
     # file or directory".
     cargo build -p kithara-integration-tests --bin test_server
+    WASM_BINDGEN_TEST_TIMEOUT=300 WASM_BINDGEN_USE_BROWSER=1 \
+      cargo "+$toolchain" test --profile test-release \
+      --target wasm32-unknown-unknown \
+      -Z build-std=std,panic_abort,core,alloc \
+      -Z build-std-features=optimize_for_size \
+      -p kithara-host --lib --no-default-features \
+      --features backend-web-audio,wasm-bindgen,symphonia,webcodecs,resample-rubato,client-reqwest,tls-rustls
     if [[ "$suite" == "all" ]]; then
       # The integration browser tests live in `suite_heavy`. Building the whole
       # crate for wasm compiles every native suite too, and those reach for
@@ -287,6 +294,11 @@ loom-debug FILE *ARGS:
 # an FFI call into one, so the selection is the crates that hold atomics and
 # forbid `unsafe` themselves. What it can still answer is whether their memory
 # ordering is sound and whether a dependency reaches undefined behaviour.
+#
+# Flashless on purpose. Under `flash` the platform's `Mutex`, `RwLock` and
+# `Condvar` are flash's own, so the lane would interpret the harness instead of
+# the primitives it is here to check. The cost is the handful of tests whose
+# assertion is a wall-clock interval; they say so at their own `cfg_attr`.
 [positional-arguments]
 miri *ARGS:
     #!/usr/bin/env bash

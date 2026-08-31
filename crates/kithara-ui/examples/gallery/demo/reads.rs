@@ -72,15 +72,15 @@ pub(crate) struct DemoReads {
     menu: MenuState,
     pivot: PivotState,
     mixer: MixerState,
-    #[field(get, vis = "pub(crate)", copy)]
-    active_module: Page,
     quality: QualityState,
     scene: SceneState,
     stress: StressState,
     #[field(set, vis = "pub(crate)")]
     library_query: String,
-    #[field(get, vis = "pub(crate)", copy)]
-    active_tab: Page,
+    /// The page on screen, which the screen's own state owns and this model
+    /// is told after every turn: a page with a feed of its own is fed only
+    /// while it is the page shown.
+    showing: Page,
     /// Which shipped skin the gallery wears, as an index into
     /// [`builtin::skins`]. It lives beside the page rather than on it, so a
     /// skin chosen here outlives every page turned afterwards.
@@ -142,8 +142,7 @@ impl Default for DemoReads {
             wave_downbeats,
             tree_expanded,
             tree_selected,
-            active_module: sections::modules()[0],
-            active_tab: sections::FIRST,
+            showing: sections::first(),
             active_skin: 0,
             active_font: 0,
             button_cue: false,
@@ -223,12 +222,6 @@ impl DemoReads {
             return;
         }
         if self.transport.activate(path) {
-            return;
-        }
-        if let Some(module) = path.strip_prefix("modules-tabs/") {
-            if let Some(named) = sections::module_named(module) {
-                self.active_module = named;
-            }
             return;
         }
         match path {
@@ -330,13 +323,13 @@ impl DemoReads {
         }
     }
 
-    pub(crate) fn select_tab(&mut self, tab: Page) {
-        if self.active_tab != tab {
+    /// Told which page the screen now stands at. A page arriving is a page
+    /// opening, so the feed behind it starts where the page does.
+    pub(crate) fn show(&mut self, page: Page) {
+        if self.showing != page {
             self.stress.reset_clock();
         }
-        self.active_tab = tab;
-        self.menu.set_open(tab == "menu");
-        self.clock.set_open(tab == "clock");
+        self.showing = page;
     }
 
     /// The skin the gallery is dressed in, which every host asks for and no
@@ -359,10 +352,6 @@ impl DemoReads {
         if let Some(index) = FONT_FAMILIES.iter().position(|named| *named == family) {
             self.active_font = index;
         }
-    }
-
-    pub(crate) const fn select_module(&mut self, module: Page) {
-        self.active_module = module;
     }
 
     /// Rebuilds the stress page's waveforms at a different bucket count, which
@@ -461,12 +450,6 @@ impl DemoReads {
 
     fn shell(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let value = match endpoint {
-            endpoint if let Some(slug) = endpoint.strip_prefix("gallery.tab.") => {
-                self.active_tab == slug
-            }
-            endpoint if let Some(slug) = endpoint.strip_prefix("gallery.module.") => {
-                self.active_module == slug
-            }
             endpoint if let Some(skin) = endpoint.strip_prefix("gallery.skin.") => {
                 builtin::skins()[self.active_skin].id() == skin
             }
@@ -482,11 +465,11 @@ impl DemoReads {
 
     /// Whether the application moves a reading on the page it is showing.
     pub(crate) fn feeds(&self) -> bool {
-        Feed::of(self.active_tab).is_some()
+        Feed::of(self.showing).is_some()
     }
 
     pub(crate) fn tick(&mut self) {
-        match Feed::of(self.active_tab) {
+        match Feed::of(self.showing) {
             Some(Feed::Bench) => self.stress.tick(),
             Some(Feed::Vis) => self.tick_vis(),
             Some(Feed::Phase) => self.tick_phase(),
@@ -673,12 +656,12 @@ impl Reads for DemoReads {
             "deck.track.key" | "demo.key" => ReadValue::Text(Consts::KEY),
             "deck.view.zoom" => ReadValue::Scalar(self.transport.zoom()),
             "player.output.levels" => ReadValue::Stereo(StereoLevels {
-                l: if self.active_tab == "vis" {
+                l: if self.showing == "vis" {
                     self.vis_levels[0]
                 } else {
                     0.66
                 },
-                r: if self.active_tab == "vis" {
+                r: if self.showing == "vis" {
                     self.vis_levels[1]
                 } else {
                     0.52

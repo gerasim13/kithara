@@ -26,6 +26,7 @@ use kithara_ui::{
     },
     size::SizeSpec,
     source::UiConfig,
+    view,
 };
 
 /// One control, and where the document put what it draws.
@@ -196,6 +197,7 @@ fn document(root: &str) -> CompiledUi {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the fixture must compile: {error}"))
 }
@@ -205,7 +207,13 @@ fn placed(root: &str, reads: &Phase) -> Vec<Placed> {
 
     render(
         &ui.root,
-        Ctx::new(&ui, reads, builtin::skin_doc(), Clock::default()),
+        Ctx::new(
+            &ui,
+            reads,
+            &view::EMPTY,
+            builtin::skin_doc(),
+            Clock::default(),
+        ),
         Spy { ui: &ui },
     )
 }
@@ -427,7 +435,7 @@ fn at(clock: Clock) -> Transform {
     let ui = document(HOSTED);
     let placed = render(
         &ui.root,
-        Ctx::new(&ui, &Silent, builtin::skin_doc(), clock),
+        Ctx::new(&ui, &Silent, &view::EMPTY, builtin::skin_doc(), clock),
         Spy { ui: &ui },
     );
     let [one] = placed.as_slice() else {

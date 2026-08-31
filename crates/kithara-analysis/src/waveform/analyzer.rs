@@ -15,7 +15,12 @@ use super::{
     bucketize::bucketize,
     params::AnalysisParams,
 };
-use crate::coverage::{Coverage, FrameRange};
+use crate::{
+    BlobError,
+    blob::Writer,
+    coverage::{Coverage, FrameRange},
+    progress::{WaveformResume, write_coverage, write_samples},
+};
 
 struct Consts;
 
@@ -177,6 +182,68 @@ impl WaveformAnalyzer {
             .map(|b| Bucket::new(b[Band::Low.idx()], b[Band::Mid.idx()], b[Band::High.idx()]))
             .collect();
         Waveform::from(out)
+    }
+
+    pub(crate) fn write_resume(&self, out: &mut Vec<u8>) {
+        let mut writer = Writer::new(out);
+        writer.write_len(self.bands.len());
+        for (index, bands) in &self.bands {
+            writer.write_u64(*index);
+            for band in bands {
+                writer.write_f32(*band);
+            }
+        }
+        writer.write_len(self.partial.len());
+        for (index, partial) in &self.partial {
+            writer.write_u64(*index);
+            write_samples(&mut writer, &partial.samples);
+            write_coverage(&mut writer, &partial.written);
+            writer.write_u64(partial.seq);
+        }
+        writer.write_u64(self.opened);
+    }
+
+    pub(crate) fn restore(&mut self, resume: WaveformResume) -> Result<(), BlobError> {
+        if resume.partials.len() > Consts::MAX_PARTIAL {
+            return Err(BlobError::Corrupt);
+        }
+
+        let mut bands = BTreeMap::new();
+        for (index, energy) in resume.bands {
+            bands.insert(index, energy);
+        }
+
+        let mut partial = BTreeMap::new();
+        for held in resume.partials {
+            if held.samples.len() != self.window_size()
+                || held.seq >= resume.opened
+                || bands.contains_key(&held.index)
+            {
+                return Err(BlobError::Corrupt);
+            }
+            let span = FrameRange::new(held.index.saturating_mul(self.hop()), self.size());
+            if held
+                .written
+                .runs()
+                .iter()
+                .any(|range| range.start() < span.start() || range.end() > span.end())
+            {
+                return Err(BlobError::Corrupt);
+            }
+            partial.insert(
+                held.index,
+                Partial {
+                    samples: self.sample_pool.attach(held.samples.into_vec()),
+                    written: held.written,
+                    seq: held.seq,
+                },
+            );
+        }
+
+        self.bands = bands;
+        self.partial = partial;
+        self.opened = resume.opened;
+        Ok(())
     }
 
     fn evict_overflow(&mut self) {

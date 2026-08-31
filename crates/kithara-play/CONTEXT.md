@@ -10,8 +10,9 @@ Contracts and invariants for the kithara-play crate; the README is the overview.
 - `policy/` - domain-aware cache identity and DRM key-request routing.
 - `resource/` - source detection, `ResourceConfig`, reader construction.
 - `player/` - playlist and parameter state in `state/`, transitions in `flow/`.
-- `worker/` - shared `PlayWorker`, generic scheduler, per-track `DecoderNode`,
-  final producer admission, registration leases, and `EngineLoad`.
+- `worker/` - shared `PlayWorker`, per-track `DecoderNode`, final producer
+  admission, registration leases, and `EngineLoad`; generic dispatch lives in
+  `kithara-worker`.
 - `effects/` - the post-Warp per-track `AudioEffect` chain, terminal drain, EQ
   primitives, and limiter primitives.
 - `engine/` - session registration, slot table, mix batch.
@@ -58,10 +59,10 @@ reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
 frontier publication, terminal event publication, and per-track load
 measurement before the task is registered on the shared worker.
 
-The generic scheduler kernel and concrete playback scheduler are private to
-`kithara-play::PlayWorker`. `kithara-audio` exposes only the prepared source and
-wake contracts. `kithara-analysis` owns a separate private single-node runner.
-No workspace production code can construct a second playback scheduler path.
+`PlayWorker` derives a dedicated dispatcher from `kithara-worker` and supplies
+the play-owned node and observer. `kithara-audio` exposes only the prepared
+source and wake contracts. No workspace production code can construct a second
+playback scheduling path.
 
 There is one chain and one final output path:
 
@@ -239,7 +240,10 @@ session output node, and limiter are torn down and the next `start_player` build
 Drop order is load-bearing. `PlayerImpl` declares `phase` before `core`, and `PlayerCore` declares
 `items` before `engine`, so undelivered resources (which hold worker references) release before the
 engine and resource registrations. `worker` is declared after those owners, so the final
-`PlayWorker` reference cannot shut down its thread while a track still holds a lease.
+`PlayWorker` reference cannot shut down its thread while a track still holds a lease. Inside the
+worker, the dispatcher is declared before the base-worker clone; inside each lease, the task handle
+is declared before its worker clone. Task unregister and dispatcher shutdown therefore precede any
+possible final base-worker release.
 
 ## Cancel Hierarchy
 
@@ -248,8 +252,8 @@ Cancel is the typed propagate-down tree from `kithara-platform` (`common/cancel/
 `PlayerImpl` derives its token through `CancelScope::new(config.cancel)`: a passed `CancelToken`
 (consumer crates `Queue` / `App` / FFI mint their own root and pass a child through
 `PlayerConfig.cancel`) makes the token a child of it; `None` makes it a fresh root. The same token
-is handed to `EngineConfig.cancel`, which scopes the session engine. The shared playback worker
-has its own explicit lifetime in `PlayWorkerConfig.cancel`. `prepare_config` gives every track a
+is handed to `EngineConfig.cancel`, which scopes the session engine. The playback dispatcher has
+its own explicit lifetime in `PlayWorkerConfig.cancel`. `prepare_config` gives every track a
 `.child()` of the player token, and subsystems (Downloader, AssetStore, HlsPeer, epoch cancel)
 derive further children.
 
@@ -359,9 +363,8 @@ Withdrawal is a compare-exchange against the published value: a newer seek havin
 meantime makes it a no-op, because that seek carries its own command and rolling back over it would
 strand *it* instead.
 
-`PlayWorker` owns the shared playback worker, its generic scheduler, and its
-registered `DecoderNode`s. The scheduler's `produce_tick_rt` carries the
-real-time attribute.
+`PlayWorker` owns its base-worker clone, dedicated dispatcher, and registered
+`DecoderNode`s. `DecoderNode::tick` carries the real-time attribute.
 Off-core work (pooled-buffer free, event flush, parking, symphonia allocation)
 belongs to the scheduler shell. Cross-thread wakes reached on the core are
 *armed* lock-free (`kithara_stream::DeferredWake::arm`) and delivered by the
@@ -382,10 +385,12 @@ violation fails the job. `permit()` and the RT attribute macros live in `kithara
 one Player. `kithara-host` owns every concrete native/web session, the existing
 `kithara-engine` thread, the Firewheel graph, and the root synchronization
 group. A Player is constructed as an unbound instance and receives an opaque,
-one-shot `SessionBinding` only when that instance is transferred through
-`Host::insert`; decorators may only delegate the binding to their resident
-Player. There is no standalone concrete production session constructor in this
-crate.
+one-shot `SessionBinding` only through `Host::insert`; decorators may only
+delegate the binding to their resident Player. Native insertion transfers the
+whole resident player. Wasm insertion transfers its `GroupState` and current
+desired level to the main-thread Host, which becomes their canonical
+owner, while the Worker Host retains the runtime and JS-bound resources. There
+is no standalone concrete production session constructor in this crate.
 
 `kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
 `SyncGroup` protocols; `kithara-play` owns one Player instance and
@@ -401,9 +406,12 @@ consumer capability. Real-time session implementations explicitly return
 off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
 their inner capability. Requiring the method keeps wrappers from silently
 erasing an off-RT capability through a trait default. `ConfigPrep` copies the
-capability through an internal, builder-skipped `ResourceConfig` field into
-`AudioConfig`. There is no public resource setter and therefore no second
-source of session wake policy.
+capability into `ResourceConfig::consumer_wake_mode`, unconditionally
+overwriting whatever the builder carried, so a player-managed resource has no
+second source of session wake policy. The builder setter (default
+`RealtimeDeferred`) exists for direct `Resource` readers that never pass
+through a player: such a reader declares `ImmediateOffRt` itself to get
+immediate worker wakes and inline reader-event delivery.
 
 ### Host transport anchor
 
@@ -417,7 +425,7 @@ another snapshot.
 ## Session Mixing
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
-(`master_volume`, read by `start`). The session `SessionState` owns the *applied* graph gain (each
+(`master_volume`). The session `SessionState` owns the *applied* graph gain (each
 `PlayerState.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
 through `Host::apply_mix` / `HostCmd::ApplyMix`, which validates the whole vector - every level
 finite and in `0.0..=1.0`, every member owned by the Host, no member repeated, graph initialised for
@@ -439,8 +447,9 @@ Slot/content volume and session ducking keep their own taper; they are separate 
 The Host validates every canonical grid identity, level, and duplicate before
 mutating the graph. Desired Player levels are committed only after dispatch succeeds.
 `engine/mix.rs`, `Cmd::SetPlayerMasterVolumes`, and the matching session-handle method compile only
-for tests or the `probe` feature. They keep deterministic offline render tests on their existing
-lower `SessionDispatcher`; they are not a second production path. Removing that probe seam first
+for tests or the `probe` feature. The probe path registers an unstarted player before storing its
+level, so the first start uses that session value. This keeps deterministic offline render tests on
+their existing lower `SessionDispatcher`; it is not a second production path. Removing that seam first
 requires the existing offline harness to exercise canonical Host ownership while preserving its
 explicit `render` API; that test migration is separate from the production cutover.
 
@@ -540,6 +549,7 @@ resampler fields.
 | `client-wreq` | no | Forward the wreq HTTP backend to network-reaching deps |
 | `tls-rustls` | yes | Forward rustls TLS selection to network-reaching deps |
 | `tls-native` | no | Forward native TLS selection to network-reaching deps |
+| `perf` | no | Native `hotpath` timing for play/audio/decode; ordinary builds compile probes out |
 | `probe` | no | USDT runtime tracing opt-in (forwards nothing on its own) |
 | `mock` | no | Exposes the `mock` module (`EqualizerMock`) |
 

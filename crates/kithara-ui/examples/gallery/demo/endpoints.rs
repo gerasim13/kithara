@@ -11,7 +11,6 @@ use super::{
     pages::{mixer, stress},
     reads::FONT_FAMILIES,
 };
-use crate::sections;
 
 #[derive(Default)]
 pub(crate) struct DemoRegistry {
@@ -107,7 +106,6 @@ fn insert_deck_endpoints(registry: &mut DemoRegistry) {
 
 fn insert_clock_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
-        ("clock.open", ValueKind::Bool),
         ("clock.bpm", ValueKind::Text),
         ("clock.source", ValueKind::Text),
         ("clock.warning", ValueKind::Text),
@@ -153,8 +151,6 @@ fn insert_clock_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for id in [
-        "clock.toggle",
-        "clock.close",
         "clock.nudge_up",
         "clock.nudge_down",
         "clock.family.step",
@@ -482,23 +478,6 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    // Named from the pages themselves, so the nav offering a page and the
-    // reading answering for it cannot come to differ.
-    for id in sections::pages()
-        .iter()
-        .map(|tab| format!("gallery.tab.{tab}"))
-        .chain(
-            sections::modules()
-                .iter()
-                .map(|demo| format!("gallery.module.{demo}")),
-        )
-    {
-        registry.insert(
-            EndpointCategory::Model,
-            &id,
-            EndpointDesc::new(ValueKind::Bool),
-        );
-    }
     // Named from the shipped skins themselves, for the same reason.
     for skin in builtin::skins() {
         registry.insert(
@@ -545,7 +524,6 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
 
 fn insert_menu_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
-        ("ui.menu.open", ValueKind::Bool),
         ("ui.window.can_open", ValueKind::Bool),
         ("ui.prefs.wave_follow", ValueKind::Bool),
         ("ui.prefs.autogain", ValueKind::Bool),
@@ -586,8 +564,6 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for id in [
-        "ui.menu.toggle",
-        "ui.menu.close",
         "ui.window.open",
         "ui.window.toggle_full_screen",
         "ui.prefs.toggle_wave_follow",

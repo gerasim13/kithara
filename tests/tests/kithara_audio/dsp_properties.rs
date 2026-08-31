@@ -15,10 +15,7 @@ use kithara::{
     },
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
-use kithara_integration_tests::signal_pcm::{
-    SweepMode,
-    signal::{SignalFn, SineWave, Sweep},
-};
+use kithara_test_fixtures::signal::{SweepMode, Wave};
 
 const HOST_RATE: u16 = 48_000;
 const INTERMEDIATE_RATE: u16 = 44_100;
@@ -61,9 +58,9 @@ fn pcm_chunk(pool: &SamplePool, spec: AudioSpec, samples: Vec<f32>) -> AudioChun
     AudioChunk::new(meta, pool.attach(samples))
 }
 
-fn render(signal: &dyn SignalFn, sample_rate: u16, frames: usize) -> Vec<f32> {
+fn render(wave: Wave, sample_rate: u16, frames: usize) -> Vec<f32> {
     (0..frames)
-        .map(|frame| f32::from(signal.sample(frame, u32::from(sample_rate))) / 32_768.0)
+        .map(|frame| f32::from(wave.sample(frame, u32::from(sample_rate))) / 32_768.0)
         .collect()
 }
 
@@ -188,7 +185,7 @@ fn eq_at_zero_db_is_bit_exact_identity(#[case] channels: u16, #[case] band_count
     let pool = sample_pool();
     let spec = host_spec(channels);
     let mut eq = eq_with_gain(&pool, GainDb::default(), band_count, channels);
-    let input = render(&SineWave(440.0), HOST_RATE, 8_192 * usize::from(channels));
+    let input = render(Wave::sine(440.0), HOST_RATE, 8_192 * usize::from(channels));
 
     let output = process_eq(&mut eq, &pool, spec, input.clone());
 
@@ -210,7 +207,7 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
     settle(&mut eq, &pool, spec);
     settle(&mut eq, &pool, spec);
 
-    let input = render(&SineWave(440.0), HOST_RATE, 8_192);
+    let input = render(Wave::sine(440.0), HOST_RATE, 8_192);
     let output = process_eq(&mut eq, &pool, spec, input.clone());
 
     assert_eq!(
@@ -226,7 +223,7 @@ fn eq_returns_to_bit_exact_identity_after_a_gain_round_trip() {
 fn limiter_below_ceiling_is_bit_exact_identity(#[case] ceiling: f32) {
     let mut limiter = limiter_with_ceiling(ceiling);
 
-    let sine = render(&SineWave(220.0), HOST_RATE, 8_192);
+    let sine = render(Wave::sine(220.0), HOST_RATE, 8_192);
     let input: Vec<f32> = sine.iter().map(|sample| sample * ceiling * 0.9).collect();
 
     let mut output = Vec::new();
@@ -246,7 +243,7 @@ fn master_chain_at_unity_is_bit_exact_identity() {
     let mut eq = eq_with_gain(&pool, GainDb::default(), 5, 2);
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let sine = render(&SineWave(440.0), HOST_RATE, 8_192);
+    let sine = render(Wave::sine(440.0), HOST_RATE, 8_192);
     let input: Vec<f32> = sine.iter().map(|sample| sample * 0.5).collect();
 
     let output = master_chain(&mut eq, &mut limiter, &pool, input.clone());
@@ -273,12 +270,12 @@ fn eq_output_stays_finite_on_pathological_input(#[case] poison: f32) {
         let mut eq = eq_with_gain(&pool, gain_db, 3, spec.channels);
         settle(&mut eq, &pool, spec);
 
-        let mut input = render(&SineWave(440.0), HOST_RATE, 1_024);
+        let mut input = render(Wave::sine(440.0), HOST_RATE, 1_024);
         input[512] = poison;
         let output = process_eq(&mut eq, &pool, spec, input);
         violations.extend(non_finite_report(path, &output));
 
-        let clean = render(&SineWave(440.0), HOST_RATE, 1_024);
+        let clean = render(Wave::sine(440.0), HOST_RATE, 1_024);
         let recovered = process_eq(&mut eq, &pool, spec, clean);
         violations.extend(non_finite_report(&format!("{path}/recovered"), &recovered));
     }
@@ -298,11 +295,11 @@ fn eq_output_stays_finite_on_pathological_input(#[case] poison: f32) {
 fn limiter_output_stays_finite_on_pathological_input(#[case] poison: f32) {
     let mut limiter = limiter_with_ceiling(LIMITER_CEILING);
 
-    let mut input = render(&SineWave(220.0), HOST_RATE, 1_024);
+    let mut input = render(Wave::sine(220.0), HOST_RATE, 1_024);
     input[512] = poison;
     let output = limit_stereo(&mut limiter, &input);
 
-    let clean = render(&SineWave(220.0), HOST_RATE, 1_024);
+    let clean = render(Wave::sine(220.0), HOST_RATE, 1_024);
     let recovered = limit_stereo(&mut limiter, &clean);
 
     let mut violations = non_finite_report("limited", &output);
@@ -399,7 +396,7 @@ fn shape_tolerance(freq_hz: f32) -> f32 {
 #[case::mid(1_000.0)]
 fn resample_round_trip_preserves_wave_shape(#[case] freq_hz: f32) {
     let pool = sample_pool();
-    let mut input = render(&SineWave(f64::from(freq_hz)), HOST_RATE, ROUND_TRIP_FRAMES);
+    let mut input = render(Wave::sine(f64::from(freq_hz)), HOST_RATE, ROUND_TRIP_FRAMES);
     input.resize(ROUND_TRIP_FRAMES + ROUND_TRIP_PAD, 0.0);
 
     let (output, predicted) = round_trip(&pool, &input);
@@ -436,8 +433,8 @@ fn resample_round_trip_keeps_sweep_band_energy() {
     const TOLERANCE: f32 = 0.03;
 
     let pool = sample_pool();
-    let sweep = Sweep::new(100.0, 15_000.0, ROUND_TRIP_FRAMES, SweepMode::Log);
-    let input = render(&sweep, HOST_RATE, ROUND_TRIP_FRAMES + ROUND_TRIP_PAD);
+    let sweep = Wave::sweep(100.0, 15_000.0, ROUND_TRIP_FRAMES, SweepMode::Log);
+    let input = render(sweep, HOST_RATE, ROUND_TRIP_FRAMES + ROUND_TRIP_PAD);
 
     let (output, predicted) = round_trip(&pool, &input);
 
@@ -470,7 +467,7 @@ fn resample_round_trip_stays_finite_on_pathological_input(#[case] poison: f32) {
 
 fn assert_round_trip_stays_finite(poison: f32) {
     let pool = sample_pool();
-    let mut input = render(&SineWave(440.0), HOST_RATE, ROUND_TRIP_FRAMES);
+    let mut input = render(Wave::sine(440.0), HOST_RATE, ROUND_TRIP_FRAMES);
     input.resize(ROUND_TRIP_FRAMES + ROUND_TRIP_PAD, 0.0);
     input[4_096] = poison;
 

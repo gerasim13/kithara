@@ -39,6 +39,8 @@ pub(crate) struct PlayerCore {
     /// Explicit shared playback worker. Declared after both resource owners.
     pub(crate) worker: PlayWorker,
     pub(crate) gapless_mode: GaplessMode,
+    /// Player-level underrun policy copied into every prepared resource.
+    pub(crate) block_on_underrun: bool,
     /// Status kept explicit (not derived from phase): `set_status` emits
     /// `StatusChanged` only on change and its values are not 1:1 with phase.
     pub(crate) status: Mutex<PlayerStatus>,
@@ -213,10 +215,9 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        sync::mpsc::{RecvTimeoutError, channel},
-    };
+    use std::num::NonZeroU32;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
     use kithara_bufpool::{BytePool, SamplePool};
@@ -224,15 +225,12 @@ mod tests {
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGrid, StretchControls};
+    use kithara_warp::StretchControls;
 
     use super::*;
     use crate::{
-        PlayWorkerConfig,
-        bridge::PlayerCmd,
-        effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerMember},
-        session::testing,
+        PlayWorkerConfig, bridge::PlayerCmd, effects::eq::generate_log_spaced_bands,
+        player::PlayerConfig, session::testing,
     };
 
     #[derive(Clone, Copy)]
@@ -267,6 +265,7 @@ mod tests {
         )
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn close_waits_for_an_admitted_operation() {
         let player = player();
@@ -320,6 +319,7 @@ mod tests {
         ));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn player_lifecycle_admits_only_one_concurrent_close() {
         let lifecycle = Arc::new(PlayerLifecycle::open());
@@ -341,15 +341,6 @@ mod tests {
             lifecycle.begin_close(),
             Ok(CloseAdmission::AlreadyClosed)
         ));
-    }
-
-    #[kithara::test]
-    fn player_member_preserves_object_safe_identity_and_typed_access() {
-        let player = player();
-        let grid_id = player.id();
-        let member = PlayerMember::new(player);
-
-        assert_eq!(member.dispatch(BeatGrid::id), grid_id);
     }
 
     #[kithara::test]

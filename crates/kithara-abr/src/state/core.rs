@@ -126,6 +126,17 @@ impl AbrState {
     /// Build an `AbrState` with the initial variant set from `mode`.
     #[must_use]
     pub fn new(mode: AbrMode) -> Self {
+        Self::new_at(mode, Instant::now())
+    }
+
+    /// Build an `AbrState` whose session starts at `reference`.
+    ///
+    /// The anti-oscillation interval before the first switch is measured from
+    /// the session's start, so a test that states what that interval holds has
+    /// to be able to say when the session started - otherwise the assertion is
+    /// a race against its own setup.
+    #[must_use]
+    pub(crate) fn new_at(mode: AbrMode, reference: Instant) -> Self {
         let initial_variant = match mode {
             AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx.get(),
             AbrMode::Auto(None) => 0,
@@ -137,7 +148,7 @@ impl AbrState {
             lock_count: AtomicUsize::new(0),
             mode: AtomicUsize::new(mode.into()),
             flags: AtomicU8::new(AbrFlags::empty().bits()),
-            reference_instant: Instant::now(),
+            reference_instant: reference,
             pending: Mutex::default(),
         }
     }

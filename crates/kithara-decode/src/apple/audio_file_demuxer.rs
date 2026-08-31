@@ -485,6 +485,9 @@ mod tests {
     use kithara_stream::{
         AudioCodec, ContainerFormat, NotReadyCause, PendingReason, SourcePhase, StreamPending,
     };
+    use kithara_test_fixtures::assets::{
+        flac_unknown_length_saw_6s, signal_mp3_track_sine440_187s, signal_wav_sine440_1s,
+    };
     use kithara_test_utils::kithara;
 
     use super::{AppleAudioFileDemuxer, Duration, SourceOpenMode};
@@ -493,19 +496,9 @@ mod tests {
         demuxer::{DemuxOutcome, DemuxSeekOutcome, Demuxer},
     };
 
-    fn read_asset(name: &str) -> Vec<u8> {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("workspace root")
-            .join("assets")
-            .join(name);
-        std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-    }
-
     #[kithara::test]
     fn open_wav_demuxer_track_info_and_first_frame() {
-        let bytes = read_asset("silence_1s.wav");
+        let bytes = signal_wav_sine440_1s().bytes().to_vec();
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
             AudioCodec::Pcm,
@@ -653,7 +646,7 @@ mod tests {
     /// stall lasts instead of parking the worker.
     #[kithara::test]
     fn next_frame_surfaces_not_ready_as_pending_not_err() {
-        let bytes = read_asset("silence_1s.wav");
+        let bytes = signal_wav_sine440_1s().bytes().to_vec();
         let ready = u64::try_from(bytes.len() / 2).expect("fixture length fits in u64");
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(NotReadySource::new(bytes, ready, None)),
@@ -676,7 +669,7 @@ mod tests {
 
     #[kithara::test]
     fn open_mp3_demuxer_does_not_require_tail_bytes() {
-        let bytes = read_asset("test.mp3");
+        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
         let ready = 16_u64 * 1024;
         let tail_read_attempted = Arc::new(AtomicBool::new(false));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
@@ -711,12 +704,10 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, flash(false))]
-    fn size_less_mp3_with_id3v1_tail_reaches_eof() {
-        let mut bytes = read_asset("test.mp3");
-        let mut id3v1 = [0_u8; 128];
-        id3v1[..3].copy_from_slice(b"TAG");
-        bytes.extend_from_slice(&id3v1);
+    /// Demuxes `bytes` to EOF in size-less streaming mode and returns how many
+    /// packets came out, failing if `AudioFileServices` repeats a short tail
+    /// read.
+    fn packets_to_eof(bytes: Vec<u8>) -> u64 {
         let byte_len = u64::try_from(bytes.len()).expect("fixture length fits u64");
         let tripped = Arc::new(AtomicBool::new(false));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
@@ -738,7 +729,12 @@ mod tests {
             match dx.next_frame() {
                 Ok(DemuxOutcome::Frame(_)) => {
                     packets += 1;
-                    assert!(packets <= 7_163, "demuxer produced too many packets");
+                    // A packet costs at least one byte, so this cannot be
+                    // reached by a run that is making progress.
+                    assert!(
+                        packets <= byte_len,
+                        "demuxer produced more packets than bytes"
+                    );
                 }
                 Ok(DemuxOutcome::Eof) => break,
                 Ok(DemuxOutcome::Pending(reason)) => {
@@ -752,7 +748,30 @@ mod tests {
             !tripped.load(Ordering::Acquire),
             "AudioFileServices repeated the same short tail read"
         );
-        assert_eq!(packets, 7_163, "the final MPEG packet must not be lost");
+        packets
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn size_less_mp3_with_id3v1_tail_reaches_eof() {
+        let plain = signal_mp3_track_sine440_187s().bytes().to_vec();
+        let mut tagged = plain.clone();
+        let mut id3v1 = [0_u8; 128];
+        id3v1[..3].copy_from_slice(b"TAG");
+        tagged.extend_from_slice(&id3v1);
+
+        let plain_packets = packets_to_eof(plain);
+        // The fixture is a 187 s 44.1 kHz clip and MPEG Layer III carries 1152
+        // frames per packet, so a run that reached EOF cannot come back with
+        // less than that budget.
+        assert!(
+            plain_packets >= 187 * 44_100 / 1_152,
+            "a complete pass must cover the fixture's own frame budget, got {plain_packets}"
+        );
+        assert_eq!(
+            packets_to_eof(tagged),
+            plain_packets,
+            "the ID3v1 tail must not cost the final MPEG packet"
+        );
     }
 
     /// Seeks `dx` to three seconds and returns the reported `landed_byte`.
@@ -766,10 +785,10 @@ mod tests {
         }
     }
 
-    /// Opens `assets/test.mp3` as MP3 in `mode`, returning the demuxer and the
-    /// fixture's total byte length.
+    /// Opens the generated full-length MP3 clip in `mode`, returning the
+    /// demuxer and the fixture's total byte length.
     fn open_mp3(mode: SourceOpenMode) -> (AppleAudioFileDemuxer, u64) {
-        let bytes = read_asset("test.mp3");
+        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
         let total = u64::try_from(bytes.len()).expect("fixture length fits in u64");
         let dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
@@ -844,11 +863,15 @@ mod tests {
     /// download wait on a streamed source. Mirrors the MP3 contract above.
     #[kithara::test]
     fn open_flac_demuxer_does_not_require_tail_bytes() {
-        let bytes = read_asset("sawtooth.flac");
+        let bytes = flac_unknown_length_saw_6s().bytes().to_vec();
         // A bounded streaming open reads the header + first frame (~27 KiB)
-        // regardless of file size; this prefix covers that. The fixture is
-        // ~204 KiB, so a full-file packet-table scan would cross this bound.
+        // regardless of file size; this prefix covers that.
         let ready = 64_u64 * 1024;
+        assert!(
+            u64::try_from(bytes.len()).is_ok_and(|len| len > ready),
+            "the fixture must outlast the ready prefix, or a full-file scan \
+             would not cross it and this test would pass for nothing",
+        );
         let tail_read_attempted = Arc::new(AtomicBool::new(false));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(NotReadySource::new(
@@ -879,7 +902,7 @@ mod tests {
 
     #[kithara::test]
     fn open_mp3_demuxer_complete_source_reports_duration() {
-        let bytes = read_asset("test.mp3");
+        let bytes = signal_mp3_track_sine440_187s().bytes().to_vec();
         let dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(Cursor::new(bytes)),
             AudioCodec::Mp3,
@@ -909,7 +932,7 @@ mod tests {
     /// more data exists) and `read_packet` consulting the stashed error.
     #[kithara::test]
     fn flac_streaming_not_ready_surfaces_pending_not_eof() {
-        let bytes = read_asset("sawtooth.flac");
+        let bytes = flac_unknown_length_saw_6s().bytes().to_vec();
         // Header + several frames are ready; the rest is "not downloaded".
         let ready = 64_u64 * 1024;
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
@@ -979,7 +1002,7 @@ mod tests {
     /// known at open, the decoder must resolve the size O(1), not O(packets).
     #[kithara::test]
     fn flac_streaming_size_query_is_bounded() {
-        let bytes = read_asset("sawtooth.flac");
+        let bytes = flac_unknown_length_saw_6s().bytes().to_vec();
         let end_seeks = Arc::new(AtomicUsize::new(0));
         let mut dx = AppleAudioFileDemuxer::open_for_with_mode(
             Box::new(CountingSource {

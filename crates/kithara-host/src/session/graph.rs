@@ -132,12 +132,8 @@ pub(super) mod lifecycle {
         state: &mut SessionState<B>,
         player_id: PlayerId,
         sample_rate: u32,
-        master_volume: f32,
     ) -> Result<(), SessionError> {
-        debug!(
-            player_id,
-            sample_rate, master_volume, "[KITHARA-ROUTE] starting player"
-        );
+        debug!(player_id, sample_rate, "[KITHARA-ROUTE] starting player");
         ensure_ctx(state, sample_rate)?;
         let idx = player_index(state, player_id)?;
         let Some(session_output_id) = state.session_output_node_id else {
@@ -156,7 +152,6 @@ pub(super) mod lifecycle {
         }
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
-        player.master_volume = master_volume.clamp(0.0, 1.0);
         let master_volume = VolumeNode {
             volume: master_gain(player.master_volume),
             ..VolumeNode::default()
@@ -832,7 +827,6 @@ mod tests {
             Cmd::StartPlayer {
                 player_id,
                 sample_rate,
-                master_volume: 1.0,
             },
         ) {
             Reply::Ok => {}

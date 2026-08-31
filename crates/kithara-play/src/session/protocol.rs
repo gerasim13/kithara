@@ -70,7 +70,6 @@ mod wire {
             player_id: PlayerId,
         },
         StartPlayer {
-            master_volume: f32,
             player_id: PlayerId,
             sample_rate: u32,
         },
@@ -411,14 +410,8 @@ mod handle {
             .map(|_| ())
         }
 
-        pub fn start_player(
-            &self,
-            player_id: PlayerId,
-            sample_rate: u32,
-            master_volume: f32,
-        ) -> Result<(), PlayError> {
+        pub fn start_player(&self, player_id: PlayerId, sample_rate: u32) -> Result<(), PlayError> {
             self.exec_ok(Cmd::StartPlayer {
-                master_volume,
                 player_id,
                 sample_rate,
             })

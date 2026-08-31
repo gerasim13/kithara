@@ -13,7 +13,9 @@ use kithara::{
     },
     stream::{SourcePhase, Stream},
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, auto, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, auto, mixed_codec_ladder_url, temp_dir,
+};
 use tracing::{debug, error, info, warn};
 
 const fn is_known_box(tag: &[u8; 4]) -> bool {
@@ -195,27 +197,27 @@ fn assert_boxes_contiguous(boxes: &[(u64, u64, String)], label: &str) {
     timeout(Duration::from_secs(45)),
     hang_timeout_secs(3)
 )]
-#[case::hls_disk_v0("hls/master.m3u8", "HLS-disk-v0", false, 0)]
-#[case::hls_disk_v3("hls/master.m3u8", "HLS-disk-v3", false, 3)]
-#[case::hls_eph_v0("hls/master.m3u8", "HLS-eph-v0", true, 0)]
-#[case::hls_eph_v3("hls/master.m3u8", "HLS-eph-v3", true, 3)]
-#[case::drm_disk_v0("drm/master.m3u8", "DRM-disk-v0", false, 0)]
-#[case::drm_disk_v3("drm/master.m3u8", "DRM-disk-v3", false, 3)]
-#[case::drm_eph_v0("drm/master.m3u8", "DRM-eph-v0", true, 0)]
-#[case::drm_eph_v3("drm/master.m3u8", "DRM-eph-v3", true, 3)]
-#[case::hls_disk_auto("hls/master.m3u8", "HLS-disk-auto", false, 99)]
-#[case::hls_eph_auto("hls/master.m3u8", "HLS-eph-auto", true, 99)]
-#[case::drm_disk_auto("drm/master.m3u8", "DRM-disk-auto", false, 99)]
-#[case::drm_eph_auto("drm/master.m3u8", "DRM-eph-auto", true, 99)]
+#[case::hls_disk_v0("HLS-disk-v0", false, false, 0)]
+#[case::hls_disk_v3("HLS-disk-v3", false, false, 3)]
+#[case::hls_eph_v0("HLS-eph-v0", false, true, 0)]
+#[case::hls_eph_v3("HLS-eph-v3", false, true, 3)]
+#[case::drm_disk_v0("DRM-disk-v0", true, false, 0)]
+#[case::drm_disk_v3("DRM-disk-v3", true, false, 3)]
+#[case::drm_eph_v0("DRM-eph-v0", true, true, 0)]
+#[case::drm_eph_v3("DRM-eph-v3", true, true, 3)]
+#[case::hls_disk_auto("HLS-disk-auto", false, false, 99)]
+#[case::hls_eph_auto("HLS-eph-auto", false, true, 99)]
+#[case::drm_disk_auto("DRM-disk-auto", true, false, 99)]
+#[case::drm_eph_auto("DRM-eph-auto", true, true, 99)]
 async fn drm_stream_byte_integrity(
     temp_dir: TestTempDir,
-    #[case] path: &str,
     #[case] label: &str,
+    #[case] encrypted: bool,
     #[case] ephemeral: bool,
     #[case] abr_variant: usize,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
     let cancel = CancelToken::never();
 
     let store = if ephemeral {

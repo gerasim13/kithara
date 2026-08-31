@@ -12,8 +12,8 @@ use kithara_devtools::{Ctx, lease, lock::FileLock};
 use tracing::warn;
 
 use super::{
-    HOST_JOB_CONCURRENCY, SCCACHE_SLOT_CACHE_NAMESPACE, SCCACHE_SLOT_CONTROL_NAMESPACE,
-    build_cache, config::CiConfig, run::CacheGroup,
+    HOST_JOB_CONCURRENCY, LINUX_LINKER_ENV, SCCACHE_SLOT_CACHE_NAMESPACE,
+    SCCACHE_SLOT_CONTROL_NAMESPACE, build_cache, config::CiConfig, run::CacheGroup,
 };
 
 pub(crate) const PROVISIONED_LINUX_IMAGE_ENV: &str = "KITHARA_CI_PROVISIONED_LINUX_IMAGE";
@@ -333,6 +333,15 @@ impl CiEnvironment {
         insert(&mut vars, "CARGO_HOME", cargo_home);
         insert(&mut vars, "CARGO_INCREMENTAL", "0");
         insert(&mut vars, "CARGO_TARGET_DIR", target);
+        // Same statement as the GitHub fleet's container: a Linux job links
+        // with `lld`. The lane executor is the other way a job reaches this
+        // machine, and a linker chosen for only one of them is a measurement
+        // that does not carry between them.
+        if cfg!(target_os = "linux") {
+            for (name, value) in LINUX_LINKER_ENV {
+                insert(&mut vars, name, value);
+            }
+        }
         insert(&mut vars, "GRADLE_USER_HOME", gradle_home);
         insert(&mut vars, "KITHARA_FIXTURE_CACHE", fixture_cache);
         insert(

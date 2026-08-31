@@ -17,13 +17,6 @@ const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d66110
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";
-const HEAVY_LINUX_WORKFLOWS: [&str; 5] = [
-    "coverage.yml",
-    "lanes.yml",
-    "miri.yml",
-    "mutants.yml",
-    "quality.yml",
-];
 const STRESS_EXECUTE_COMMAND: &str = r#"args=(
   --subject-root "$GITHUB_WORKSPACE/subject"
   --output "$RUNNER_TEMP/kithara-stress/raw"
@@ -360,16 +353,6 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
     let jobs = workflow_jobs(&workflow);
 
-    let advisory_browser = workflow_job(jobs, "wasm-browser");
-    assert_eq!(
-        mapping_field(advisory_browser, "name").as_str(),
-        Some("Chromium WebCodecs (advisory)")
-    );
-    assert_eq!(
-        mapping_field(advisory_browser, "continue-on-error").as_bool(),
-        Some(true)
-    );
-
     let authorize = workflow_job(jobs, "authorize");
     assert_hosted_authorization(authorize);
     // The one condition this job may carry. Anything else here, and a push that
@@ -393,9 +376,7 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             continue;
         }
         let job = workflow_job(jobs, &name);
-        if name != "wasm-browser" {
-            assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
-        }
+        assert_no_key(&Value::Mapping(job.clone()), "continue-on-error");
         assert_eq!(
             job_needs(job),
             BTreeSet::from(["gate".to_owned()]),
@@ -404,6 +385,23 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
         let condition = job.get("if").and_then(Value::as_str).unwrap_or_default();
         assert!(!condition.contains("KITHARA_RUNNER_LABELS"));
         assert!(!condition.contains("github.actor"));
+    }
+
+    // The push entry describes no lane of its own. It names a role, and the
+    // catalog answers which lanes that is - so a gate lane cannot be declared
+    // here and nowhere else, which is how GitHub and GitLab drifted apart.
+    let lanes = workflow_job(jobs, "lanes");
+    assert_eq!(
+        mapping_field(lanes, "uses").as_str(),
+        Some("./.github/workflows/run.yml")
+    );
+    let with = mapping_field(lanes, "with")
+        .as_mapping()
+        .expect("the gate call passes inputs");
+    assert_eq!(mapping_field(with, "role").as_str(), Some("gate"));
+    for name in workflow_job_names(jobs) {
+        let job = workflow_job(jobs, &name);
+        assert_no_key(&Value::Mapping(job.clone()), "strategy");
     }
 
     let required = workflow_job(jobs, "required");
@@ -422,7 +420,6 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
     );
     let mut expected = workflow_job_names(jobs);
     expected.remove("required");
-    expected.remove("wasm-browser");
     assert_eq!(job_needs(required), expected);
 
     let step = first_step(required);
@@ -439,6 +436,28 @@ fn github_ci_is_fail_closed_and_aggregates_every_job() {
             .expect("required step is a script")
             .trim(),
         REQUIRED_SCRIPT
+    );
+}
+
+// One entry per push, and it is the gate. A workflow that also declares `push`
+// spends the fleet on every commit outside the gate's own budget and outside
+// the aggregate that decides whether the push was green - which is how a
+// two-hour UI suite came to start on every push to a runner pool one machine
+// deep. Everything else is reached by its caller, by the night, or by hand.
+#[test]
+fn the_gate_is_the_only_workflow_a_push_starts() {
+    let mut entries = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        let on = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on");
+        if on.as_mapping().is_some_and(|on| on.contains_key("push")) {
+            entries.push(name);
+        }
+    }
+    assert_eq!(
+        entries,
+        vec!["ci.yml".to_owned()],
+        "a push starts more than the gate"
     );
 }
 
@@ -565,18 +584,59 @@ fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
     // minutes with fifteen of eighteen runner slots and two thirds of the CPU
     // idle. Coverage, the extra suites, Miri, mutation, and assessment ask for
     // the whole fleet, so they take turns; a push does not wait behind them.
-    for name in HEAVY_LINUX_WORKFLOWS {
-        let workflow = github_workflow(name);
-        let concurrency = workflow_concurrency(&workflow);
+    // `network.yml` holds the group itself. `dispatch.yml` holds it on the jobs
+    // that call the fan-out for the heavy roles, because a lane cannot: one
+    // `run.yml` serves every role, and a group declared there would serialise
+    // the light lanes with the heavy ones.
+    let network = github_workflow("network.yml");
+    let concurrency = workflow_concurrency(&network);
+    assert_eq!(
+        mapping_field(concurrency, "group").as_str(),
+        Some(HEAVY_LINUX_GROUP)
+    );
+    assert_eq!(mapping_field(concurrency, "queue").as_str(), Some("max"));
+
+    let dispatch = github_workflow("dispatch.yml");
+    let jobs = workflow_jobs(&dispatch);
+    for role in ["deep", "quality"] {
+        let job = workflow_job(jobs, role);
+        let group = mapping_field(job, "concurrency")
+            .as_mapping()
+            .unwrap_or_else(|| panic!("the {role} call names a concurrency group"));
         assert_eq!(
-            mapping_field(concurrency, "group").as_str(),
+            mapping_field(group, "group").as_str(),
             Some(HEAVY_LINUX_GROUP),
-            "{name}"
+            "{role}"
         );
         assert_eq!(
-            mapping_field(concurrency, "queue").as_str(),
+            mapping_field(group, "queue").as_str(),
             Some("max"),
-            "{name}"
+            "{role}"
+        );
+    }
+
+    // Every lane that says it wants the whole fleet must be scheduled by one of
+    // those two calls; a lane declaring the queue under a role nobody holds the
+    // group for would run beside the pushes it is meant to take turns with.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    for (name, lane) in config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog is a table")
+    {
+        if lane.get("queue").and_then(toml::Value::as_str) != Some("heavy-linux") {
+            continue;
+        }
+        let role = lane["role"].as_str().expect("a lane names a role");
+        assert!(
+            matches!(role, "deep" | "quality"),
+            "lane `{name}` queues with the heavy lanes under role `{role}`, \
+             which holds no group"
         );
     }
 
@@ -589,137 +649,68 @@ fn the_heavy_lanes_queue_together_and_ordinary_ci_queues_per_branch() {
     assert_ne!(group_prefix(&group), group_prefix(HEAVY_LINUX_GROUP));
 }
 
+// The three lanes are separate so a red one names which playback path broke,
+// and each pins the standalone backend: one gate runs one backend, and a second
+// axis doubles the runner's bill. The instrumented backend is no longer offered
+// from a run dialog - the catalog carries no per-run knobs - and an
+// investigation sets `KITHARA_RTSAN_BACKEND` for itself.
 #[test]
 fn standalone_rtsan_is_fail_closed_before_expanding_every_lane() {
-    let workflow = github_workflow("rtsan.yml");
-    assert_no_key(&workflow, "continue-on-error");
-    let jobs = workflow_jobs(&workflow);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lanes = config["ext"]["ci"]["lanes"]
+        .as_table()
+        .expect("the catalog is a table");
 
-    let authorize = workflow_job(jobs, "authorize");
-    assert_hosted_authorization(authorize);
-    // Nothing starts this workflow on a repository without runners: it is only
-    // ever called. So it needs no guard, and a condition here could only ever
-    // skip a judgement someone asked for.
-    assert!(!authorize.contains_key("if"));
-    let rtsan = workflow_job(jobs, "rtsan");
-    assert_eq!(job_needs(rtsan), BTreeSet::from(["authorize".to_owned()]));
-    assert!(!rtsan.contains_key("if"));
-
-    let strategy = mapping_field(rtsan, "strategy")
-        .as_mapping()
-        .expect("RTSan strategy is a mapping");
-    let matrix = mapping_field(strategy, "matrix")
-        .as_mapping()
-        .expect("RTSan matrix is a mapping");
-    let lanes: Vec<&str> = mapping_field(matrix, "lane")
-        .as_sequence()
-        .expect("RTSan lanes are a sequence")
-        .iter()
-        .map(|lane| lane.as_str().expect("RTSan lane is a string"))
-        .collect();
-    assert_eq!(lanes, ["rtsan", "rtsan-file", "rtsan-hls"]);
-
-    assert!(
-        !matrix.contains_key("backend"),
-        "one gate runs one backend; a second matrix axis doubles the runner's bill"
-    );
-
-    let lane_step = named_step(rtsan, "Run RTSan lane");
-    let lane_env = mapping_field(lane_step, "env")
-        .as_mapping()
-        .expect("RTSan lane environment is a mapping");
-    assert_eq!(
-        mapping_field(lane_env, "KITHARA_RTSAN_BACKEND").as_str(),
-        Some("${{ inputs.backend || 'standalone' }}")
-    );
-    assert_eq!(
-        mapping_field(lane_env, "LANE").as_str(),
-        Some("${{ matrix.lane }}")
-    );
-
-    let upload = named_step(rtsan, "Upload the RTSan report");
-    assert_uploads(upload, &["target/nextest/rtsan/junit.xml"]);
-    let upload_inputs = mapping_field(upload, "with")
-        .as_mapping()
-        .expect("RTSan upload inputs are a mapping");
-    let artifact = mapping_field(upload_inputs, "name")
-        .as_str()
-        .expect("RTSan artifact name is a string");
-    for coordinate in [
-        "${{ inputs.backend || 'standalone' }}",
-        "${{ matrix.lane }}",
-        "${{ github.run_id }}",
-        "${{ github.run_attempt }}",
+    let mut artifacts = BTreeSet::new();
+    for (name, recipe) in [
+        ("deep-rtsan-fast", "rtsan"),
+        ("deep-rtsan-file", "rtsan-file"),
+        ("deep-rtsan-hls", "rtsan-hls"),
     ] {
-        assert!(
-            artifact.contains(coordinate),
-            "RTSan artifact name omits {coordinate:?} and collides across cells"
-        );
-    }
-    assert_eq!(
-        mapping_field(upload_inputs, "if-no-files-found").as_str(),
-        Some("error")
-    );
-}
-
-/// The gate judges with the standalone runtime unless someone says otherwise.
-/// Both backends are kept working; only one is paid for per run.
-#[test]
-fn rtsan_defaults_to_the_standalone_backend() {
-    let workflow = github_workflow("rtsan.yml");
-    let root = workflow.as_mapping().expect("workflow is a mapping");
-    let triggers = mapping_field(root, "on")
-        .as_mapping()
-        .expect("workflow triggers are a mapping");
-    for trigger in ["workflow_call", "workflow_dispatch"] {
-        let inputs = mapping_field(
-            mapping_field(triggers, trigger)
-                .as_mapping()
-                .unwrap_or_else(|| panic!("{trigger} is a mapping")),
-            "inputs",
-        )
-        .as_mapping()
-        .expect("RTSan inputs are a mapping");
-        let backend = mapping_field(inputs, "backend")
-            .as_mapping()
-            .expect("RTSan backend input is a mapping");
+        let lane = lanes[name].as_table().unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(lane["os"].as_str(), Some("linux"), "{name}");
+        let steps = lane["steps"].as_array().expect("a lane has steps");
         assert_eq!(
-            mapping_field(backend, "default").as_str(),
+            steps.len(),
+            1,
+            "{name} runs one backend, not a matrix of them"
+        );
+        let step = steps[0].as_table().expect("a step is a table");
+        let args: Vec<&str> = step["args"]
+            .as_array()
+            .expect("a step has args")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect();
+        assert_eq!(args, ["test", recipe], "{name}");
+        assert_eq!(
+            step["env"]["KITHARA_RTSAN_BACKEND"].as_str(),
             Some("standalone"),
-            "{trigger} must default to the standalone backend"
+            "{name}"
+        );
+
+        // A shared artifact name would have the three lanes overwrite each
+        // other's evidence, and the report would describe one of them.
+        let artifact = lane["artifact"]
+            .as_table()
+            .expect("a lane names its artifact");
+        assert_eq!(
+            artifact["path"].as_str(),
+            Some("target/nextest/rtsan/junit.xml"),
+            "{name}"
+        );
+        assert_eq!(artifact["when"].as_str(), Some("always"), "{name}");
+        assert!(
+            artifacts.insert(artifact["name"].as_str().expect("an artifact is named")),
+            "{name} shares its artifact name with another RTSan lane"
         );
     }
-}
-
-/// The instrumented backend is one dropdown away, not deleted: a verdict that
-/// needs the compiler's own instrumentation must be reachable from the UI.
-#[test]
-fn rtsan_offers_the_instrumented_backend_from_the_run_dialog() {
-    let workflow = github_workflow("rtsan.yml");
-    let root = workflow.as_mapping().expect("workflow is a mapping");
-    let dispatch = mapping_field(
-        mapping_field(root, "on")
-            .as_mapping()
-            .expect("workflow triggers are a mapping"),
-        "workflow_dispatch",
-    )
-    .as_mapping()
-    .expect("workflow_dispatch is a mapping");
-    let backend = mapping_field(
-        mapping_field(dispatch, "inputs")
-            .as_mapping()
-            .expect("RTSan inputs are a mapping"),
-        "backend",
-    )
-    .as_mapping()
-    .expect("RTSan backend input is a mapping");
-    let options: Vec<&str> = mapping_field(backend, "options")
-        .as_sequence()
-        .expect("RTSan backend options are a sequence")
-        .iter()
-        .map(|option| option.as_str().expect("RTSan backend option is a string"))
-        .collect();
-    assert_eq!(options, ["standalone", "instrumented"]);
 }
 
 #[test]
@@ -1101,7 +1092,7 @@ fn stress_workflow_is_a_thin_fork_adapter() {
 
 #[test]
 fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
-    let workflow = github_workflow("schedule.yml");
+    let workflow = github_workflow("dispatch.yml");
     let stress = workflow_job(workflow_jobs(&workflow), "stress");
     assert_eq!(
         mapping_field(stress, "uses").as_str(),
@@ -1113,11 +1104,101 @@ fn scheduled_stress_respects_the_repository_switch_and_runner_pool() {
     for contract in [
         "vars.KITHARA_STRESS_ENABLED == 'true'",
         "vars.KITHARA_STRESS_RUNNER_LABELS != ''",
-        "github.event.schedule == '0 3 * * *'",
+        "(inputs.kind || 'nightly') == 'nightly'",
     ] {
         assert!(
             condition.contains(contract),
             "scheduled stress omits `{contract}`"
+        );
+    }
+}
+
+/// Eleven crons fired the same workflow so that one job ran and ten skipped,
+/// and the collector then reported on each nearly-empty run. What a night runs
+/// is a property of the lanes, not of which cron fired, so there is one cron
+/// per cadence and the cadence is an input every job reads the same way.
+#[test]
+fn the_dispatcher_has_one_cron_per_cadence() {
+    let workflow = github_workflow("dispatch.yml");
+    let root = workflow.as_mapping().expect("workflow is a mapping");
+    let triggers = mapping_field(root, "on")
+        .as_mapping()
+        .expect("on is a mapping");
+
+    let crons: Vec<&str> = mapping_field(triggers, "schedule")
+        .as_sequence()
+        .expect("schedule is a sequence")
+        .iter()
+        .map(|entry| {
+            mapping_field(
+                entry.as_mapping().expect("a schedule entry is a mapping"),
+                "cron",
+            )
+            .as_str()
+            .expect("a cron is a string")
+        })
+        .collect();
+    assert_eq!(crons, ["0 1 * * *", "0 8 * * 6"]);
+
+    // Started by hand, the cadence is chosen rather than inferred, and `only`
+    // is how one lane runs on its own instead of a role's whole selection.
+    let inputs = mapping_field(
+        mapping_field(triggers, "workflow_dispatch")
+            .as_mapping()
+            .expect("workflow_dispatch is a mapping"),
+        "inputs",
+    )
+    .as_mapping()
+    .expect("dispatch inputs are a mapping");
+    let kind = mapping_field(inputs, "kind")
+        .as_mapping()
+        .expect("kind is a mapping");
+    assert_eq!(mapping_field(kind, "type").as_str(), Some("choice"));
+    assert_eq!(
+        mapping_field(kind, "options")
+            .as_sequence()
+            .expect("kind options are a sequence")
+            .iter()
+            .map(|option| option.as_str().expect("an option is a string"))
+            .collect::<Vec<_>>(),
+        ["nightly", "weekly"]
+    );
+    assert!(inputs.contains_key("only"), "one lane runs on its own");
+
+    // Every role reaches the fleet through the one fan-out, and none of them
+    // reads the weekly cron differently from the others: a cadence resolved
+    // two ways is a night that half-runs.
+    let jobs = workflow_jobs(&workflow);
+    let cadence =
+        "${{ inputs.kind || (github.event.schedule == '0 8 * * 6' && 'weekly' || 'nightly') }}";
+    for role in ["gate", "platforms", "deep", "quality"] {
+        let job = workflow_job(jobs, role);
+        assert_eq!(
+            mapping_field(job, "uses").as_str(),
+            Some("./.github/workflows/run.yml"),
+            "role `{role}` runs through the fan-out"
+        );
+        let with = mapping_field(job, "with")
+            .as_mapping()
+            .expect("a role call passes inputs");
+        assert_eq!(mapping_field(with, "role").as_str(), Some(role));
+        assert_eq!(mapping_field(with, "kind").as_str(), Some(cadence));
+        assert_eq!(
+            mapping_field(with, "only").as_str(),
+            Some("${{ inputs.only || '' }}")
+        );
+    }
+
+    // A copy of the repository without the runners spends a scheduled run
+    // doing nothing, rather than a machine's night doing nothing.
+    for name in workflow_job_names(jobs) {
+        let job = workflow_job(jobs, &name);
+        let condition = mapping_field(job, "if")
+            .as_str()
+            .expect("every dispatched job names the pool it needs");
+        assert!(
+            condition.contains("RUNNER_LABELS != ''") || condition.contains("STRESS_ENABLED"),
+            "job `{name}` starts without checking that a pool serves it"
         );
     }
 }
@@ -1481,8 +1562,8 @@ fn block_value(block: &syn::Block) -> Option<&Expr> {
 }
 
 #[test]
-fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
-    let workflow = github_workflow("nightly-report.yml");
+fn the_dispatch_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
+    let workflow = github_workflow("report.yml");
     assert_no_key(&workflow, "continue-on-error");
     let root = workflow.as_mapping().expect("workflow is a mapping");
     let permissions = mapping_field(root, "permissions")
@@ -1518,29 +1599,29 @@ fn nightly_collector_is_read_only_and_does_not_mirror_the_source_verdict() {
     let collect = named_step(job, "Collect the source run jobs");
     let script = mapping_field(collect, "run")
         .as_str()
-        .expect("nightly collector is a script");
+        .expect("dispatch collector is a script");
     for contract in [
         "gh api \"repos/$REPOSITORY/actions/runs/$RUN_ID/jobs\"",
-        "target/nightly-report.md",
+        "target/dispatch-report.md",
         "$GITHUB_STEP_SUMMARY",
     ] {
         assert!(
             script.contains(contract),
-            "nightly report omits `{contract}`"
+            "dispatch report omits `{contract}`"
         );
     }
     assert!(!script.contains("exit 1"));
 
     assert_uploads(
-        named_step(job, "Upload the nightly report"),
-        &["target/nightly-report.md"],
+        named_step(job, "Upload the dispatch report"),
+        &["target/dispatch-report.md"],
     );
 
-    let text = github_workflow_text("nightly-report.yml");
+    let text = github_workflow_text("report.yml");
     for forbidden in ["gh issue", "issues: write"] {
         assert!(
             !text.contains(forbidden),
-            "nightly collector contains forbidden `{forbidden}`"
+            "dispatch collector contains forbidden `{forbidden}`"
         );
     }
 }
@@ -1600,5 +1681,309 @@ fn a_github_job_never_calls_the_gitlab_only_lane_runner() {
     assert!(
         callers.is_empty(),
         "`just ci run` needs the GitLab host profile: {callers:?}"
+    );
+}
+
+// `only` is how one subtask is run on its own, and the dispatcher hands the
+// same list to every job it starts. The role fan-out answers it by rendering
+// an empty selection for a lane it does not own; the jobs beside the fan-out
+// have no selection to render, so they answer it in their own condition. A
+// request for one lane that also started the Windows guest, the emulator and
+// the stress campaign would be a request for one lane in name only.
+#[test]
+fn a_request_for_one_lane_starts_nothing_beside_it() {
+    let workflow = github_workflow("dispatch.yml");
+    let jobs = workflow_jobs(&workflow);
+    let fan_out = ["gate", "platforms", "deep", "quality"];
+
+    for (name, job) in jobs {
+        let name = name.as_str().expect("a dispatcher job name is a string");
+        if fan_out.contains(&name) {
+            continue;
+        }
+        let condition = job
+            .get("if")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("`{name}` runs unconditionally"));
+        assert!(
+            condition.contains("inputs.only"),
+            "`{name}` starts on a request for another lane: {condition}"
+        );
+    }
+
+    // The UI suite is the one of them that is a declared lane, and this is
+    // the only caller that can start it, so it answers to its own name rather
+    // than standing aside for every request.
+    let ui = workflow_job(jobs, "ui")
+        .get("if")
+        .and_then(Value::as_str)
+        .expect("the UI job is guarded");
+    assert!(
+        ui.contains("contains(inputs.only, 'deep-ui')"),
+        "the UI job answers to its lane's name: {ui}"
+    );
+}
+
+// A lane declared in the catalog and a workflow spelling out the same command
+// are two places for one suite to change. The UI lane stays out of the role
+// fan-out - it wants a runner pool of its own, and the fan-out schedules onto
+// the single Linux pool - but staying out of the selection is not a licence to
+// restate what it runs.
+#[test]
+fn the_ui_workflow_names_its_lane_instead_of_repeating_it() {
+    let text = github_workflow_text("ui.yml");
+    assert!(
+        text.contains("just ci lane deep-ui"),
+        "the UI workflow runs the declared lane"
+    );
+    assert!(
+        !text.contains("just test"),
+        "the UI workflow carries no suite command of its own"
+    );
+
+    // Nothing selects the lane it names, on either provider, so this workflow
+    // is the only caller that can start it. A kind appearing here would put a
+    // GPU suite on a pool with no graphics device.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask has a workspace root");
+    let config: toml::Value = toml::from_str(
+        &fs::read_to_string(root.join(".config/xtask.toml")).expect("xtask config is readable"),
+    )
+    .expect("xtask config is valid TOML");
+    let lane = &config["ext"]["ci"]["lanes"]["deep-ui"];
+    for field in ["kinds", "kinds_github"] {
+        let kinds = lane[field]
+            .as_array()
+            .unwrap_or_else(|| panic!("deep-ui.{field} is an array"));
+        assert!(
+            kinds.is_empty(),
+            "deep-ui.{field} schedules a GPU-less pool"
+        );
+    }
+}
+
+/// Every declared lane runs through this workflow, so where a lane builds is
+/// something this workflow says. Naming a directory inside the checkout names
+/// an empty one: the workspace is deleted before the lane starts, and the job
+/// then compiles the whole dependency tree and links every binary again. The
+/// store the fixtures are read from is already on a volume that outlives the
+/// job, and the build directory belongs on the same one.
+#[test]
+fn a_lane_builds_on_the_volume_that_outlives_it() {
+    let workflow = github_workflow("lane.yml");
+    let env = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "env")
+        .as_mapping()
+        .expect("env is a mapping");
+    let target = mapping_field(env, "CARGO_TARGET_DIR")
+        .as_str()
+        .expect("the executor names where the lane builds");
+    let fixtures = mapping_field(env, "KITHARA_FIXTURE_CACHE")
+        .as_str()
+        .expect("the executor names where the fixtures are read from");
+
+    assert!(
+        Path::new(target).is_absolute(),
+        "a relative build directory is one inside the checkout: {target}"
+    );
+    assert_eq!(
+        Path::new(target).parent(),
+        Path::new(fixtures).parent(),
+        "the build directory and the fixture store share the mounted volume"
+    );
+}
+
+// The executor's whole job is to run a lane the catalog named. A workflow that
+// can be handed an arbitrary command is a second place for a command to live.
+#[test]
+fn the_lane_executor_runs_a_named_lane_and_nothing_else() {
+    let workflow = github_workflow("lane.yml");
+    let on = mapping_field(workflow.as_mapping().expect("workflow is a mapping"), "on")
+        .as_mapping()
+        .expect("on is a mapping");
+    let workflow_call = mapping_field(on, "workflow_call")
+        .as_mapping()
+        .expect("workflow_call is a mapping");
+    let inputs = mapping_field(workflow_call, "inputs")
+        .as_mapping()
+        .expect("inputs are a mapping");
+    assert!(
+        inputs.contains_key("lane"),
+        "the executor takes a lane name"
+    );
+    assert!(!inputs.contains_key("run"), "the executor takes no command");
+
+    let text = github_workflow_text("lane.yml");
+    assert!(
+        text.contains("just ci lane \"${{ inputs.lane }}\" --kind \"${{ inputs.kind }}\""),
+        "the executor runs the named lane"
+    );
+
+    // A caller reaches this through `uses:`, and GitHub renders the callee's
+    // job name under the caller's own. Without this every lane of an
+    // eighteen-way fan-out reads `run`, and which lane failed is legible only
+    // through the API.
+    let job = workflow_job(workflow_jobs(&workflow), "run");
+    assert_eq!(
+        mapping_field(job, "name").as_str(),
+        Some("${{ inputs.lane }}"),
+        "the executor's job carries the lane's name"
+    );
+}
+
+// The other half of the same tree. Each calling job has to be named, because
+// an unnamed one falls back to its id plus every matrix value it passed and
+// the level above each lane reads `run (deep-rtsan-file, 120, 0,
+// rtsan-junit-file, ...)` - the parameters, where a name belongs. The name may
+// not come from the matrix: a job skipped by its `if:` never expands one, and
+// GitHub prints the expression instead of a name, which is how a run tree came
+// to end in a skipped `Gate / matrix.lane`. The lane's own name comes from the
+// callee, which is rendered only when the job runs, so the caller's name has to
+// stand on its own when it does not.
+#[test]
+fn the_fan_out_names_each_branch_without_reading_the_matrix() {
+    let workflow = github_workflow("run.yml");
+    let jobs = workflow_jobs(&workflow);
+    for job in ["run", "dependent"] {
+        let name = mapping_field(workflow_job(jobs, job), "name")
+            .as_str()
+            .unwrap_or_else(|| panic!("`{job}` is named"));
+        assert!(
+            !name.contains("matrix."),
+            "`{job}` is named `{name}`, which a skipped job cannot resolve"
+        );
+    }
+}
+
+/// A caller and a called workflow agree on inputs across two files, and
+/// nothing in the repository checked that they still do. A renamed input is
+/// not a compile error and not a failing test: GitHub rejects the run at
+/// validation time, the calling job never starts, and the aggregate reads a
+/// job that never ran as a failure with no cause named in it.
+fn called_workflow_inputs(name: &str) -> Option<Mapping> {
+    let workflow = github_workflow(name);
+    let on = workflow.as_mapping()?.get("on")?.as_mapping()?;
+    // `workflow_call:` with nothing under it is a workflow that takes no
+    // inputs, not a workflow that cannot be called.
+    let Some(call) = on.get("workflow_call")?.as_mapping() else {
+        return Some(Mapping::new());
+    };
+    match call.get("inputs") {
+        Some(inputs) => inputs.as_mapping().cloned(),
+        None => Some(Mapping::new()),
+    }
+}
+
+fn local_workflow_calls() -> Vec<(String, String, String, Mapping)> {
+    let mut calls = Vec::new();
+    for name in workflow_file_names() {
+        let workflow = github_workflow(&name);
+        for (job_name, job) in workflow_jobs(&workflow) {
+            let job_name = job_name.as_str().expect("workflow job name is a string");
+            let Some(job) = job.as_mapping() else {
+                continue;
+            };
+            let Some(uses) = job.get("uses").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(called) = uses.strip_prefix("./.github/workflows/") else {
+                continue;
+            };
+            let passed = job
+                .get("with")
+                .and_then(Value::as_mapping)
+                .cloned()
+                .unwrap_or_default();
+            calls.push((name.clone(), job_name.to_owned(), called.to_owned(), passed));
+        }
+    }
+    calls
+}
+
+#[test]
+fn a_caller_never_passes_an_input_the_called_workflow_does_not_take() {
+    for (caller, job, called, passed) in local_workflow_calls() {
+        let declared = called_workflow_inputs(&called)
+            .unwrap_or_else(|| panic!("{called} is called by {caller} but takes no workflow_call"));
+        for key in passed.keys() {
+            let key = key.as_str().expect("workflow input name is a string");
+            assert!(
+                declared.contains_key(key),
+                "{caller} job `{job}` passes `{key}` to {called}, which does not take it"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_caller_always_passes_every_input_the_called_workflow_requires() {
+    for (caller, job, called, passed) in local_workflow_calls() {
+        let declared = called_workflow_inputs(&called)
+            .unwrap_or_else(|| panic!("{called} is called by {caller} but takes no workflow_call"));
+        for (key, spec) in &declared {
+            let key = key.as_str().expect("workflow input name is a string");
+            let required = spec
+                .as_mapping()
+                .and_then(|spec| spec.get("required"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            assert!(
+                !required || passed.contains_key(key),
+                "{called} requires `{key}`, which {caller} job `{job}` does not pass"
+            );
+        }
+    }
+}
+
+// One fan-out for every role. Five role workflows differing by one string is
+// the duplication this catalog exists to remove.
+#[test]
+fn the_role_runner_reads_its_matrix_from_the_catalog() {
+    let workflow = github_workflow("run.yml");
+    let jobs = workflow_jobs(&workflow);
+    assert_eq!(
+        workflow_job_names(jobs),
+        BTreeSet::from([
+            "select".to_owned(),
+            "run".to_owned(),
+            "dependent".to_owned()
+        ])
+    );
+
+    // The role and the kind reach the script as environment variables. A
+    // workflow that pastes a caller's string into a shell command runs a
+    // command the caller wrote, not one this repository reviewed.
+    let render = named_step(
+        workflow_job(jobs, "select"),
+        "Render the jobs this role schedules",
+    );
+    let env = mapping_field(render, "env")
+        .as_mapping()
+        .expect("the render step has an environment");
+    assert_eq!(
+        mapping_field(env, "ROLE").as_str(),
+        Some("${{ inputs.role }}")
+    );
+    assert_eq!(
+        mapping_field(env, "KIND").as_str(),
+        Some("${{ inputs.kind }}")
+    );
+    assert!(
+        mapping_field(render, "run")
+            .as_str()
+            .unwrap_or_default()
+            .contains(r#"just ci lanes --role "$ROLE" --kind "$KIND""#),
+        "the selection comes from the catalog"
+    );
+
+    let text = github_workflow_text("run.yml");
+    assert!(
+        text.contains("uses: ./.github/workflows/lane.yml"),
+        "the fan-out runs through the executor"
+    );
+    assert_eq!(
+        job_needs(workflow_job(jobs, "dependent")),
+        BTreeSet::from(["select".to_owned(), "run".to_owned()]),
+        "a dependent lane runs after the matrix it reads"
     );
 }

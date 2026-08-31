@@ -37,7 +37,7 @@ linux:test:
   timeout: 60 minutes
   needs: []
   script:
-    - just ci run linux-test
+    - just ci run linux-test-simulated-clock
   artifacts:
     when: always
     expire_in: 30 days

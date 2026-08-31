@@ -312,7 +312,6 @@ fn context_scope_selection_is_host_owned() {
 fn default_menu_state_is_the_frozen_design_snapshot() {
     let reads = DemoReads::default();
 
-    assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
     assert_eq!(
         reads.get("ui.window.count"),
         Some(ReadValue::Text("2 WINDOWS"))
@@ -353,25 +352,6 @@ fn default_menu_state_is_the_frozen_design_snapshot() {
     assert_eq!(reads.get("ui.prefs.mono"), Some(ReadValue::Bool(false)));
     assert_eq!(reads.get("ui.set.recording"), Some(ReadValue::Bool(false)));
     assert_eq!(reads.get("ui.set.casting"), Some(ReadValue::Bool(true)));
-}
-
-#[kithara::test]
-fn the_popover_path_only_closes_while_the_burger_toggles() {
-    let mut reads = DemoReads::default();
-
-    reads.apply("app-menu/menu/pop", &ControlAction::Activate);
-    assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
-    reads.apply("app-menu/menu/pop", &ControlAction::Activate);
-    assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
-
-    reads.apply("app-menu/menu/burger", &ControlAction::Activate);
-    assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(true)));
-    reads.apply("app-menu/menu/burger", &ControlAction::Activate);
-    assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
-
-    reads.apply("app-menu/menu/burger", &ControlAction::Activate);
-    reads.apply("app-menu/menu/header-close", &ControlAction::Activate);
-    assert_eq!(reads.get("ui.menu.open"), Some(ReadValue::Bool(false)));
 }
 
 #[kithara::test]

@@ -1,18 +1,37 @@
-#[cfg(feature = "analysis-waveform")]
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_audio::{AudioObserveError, AudioReader};
 #[cfg(feature = "analysis-waveform")]
+use kithara_audio::AudioObserveError;
+use kithara_audio::AudioReader;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_bufpool::SamplePool;
 #[cfg(feature = "analysis-beat")]
 use kithara_platform::sync::Arc;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_platform::sync::{
+    Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use kithara_platform::{CancelToken, sync::mpsc, tokio::sync::watch};
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_platform::{
+    thread,
+    time::{Duration, Instant},
+};
+#[cfg(feature = "analysis-waveform")]
+use kithara_resampler::NoResamplerBackend;
+use kithara_resampler::ResamplerBackend;
 #[cfg(feature = "analysis-beat")]
 use kithara_resampler::rubato::RubatoBackend;
-use kithara_resampler::{NoResamplerBackend, ResamplerBackend};
 #[cfg(feature = "analysis-waveform")]
 use kithara_signal::AudioSpec;
 use kithara_test_utils::kithara;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use kithara_worker::TaskContext;
+use kithara_worker::{
+    Dispatcher, DispatcherConfig, PendingTask, RayonConfig, Task, TaskConfig, TickResult, Worker,
+    WorkerConfig,
+};
 #[cfg(feature = "analysis-beat")]
 use num_traits::cast::ToPrimitive;
 #[cfg(feature = "analysis-beat")]
@@ -20,13 +39,19 @@ use unimock::{MockFn, Unimock, matching};
 
 #[cfg(feature = "analysis-beat")]
 use super::super::beat::{BeatDetector, BeatDetectorMock, BeatMark, GridParams, RawBeats};
+#[cfg(feature = "analysis-waveform")]
+use super::fixtures::CH;
 use super::{
     super::{
         analyzer::AnalyzerBuilder,
-        worker::{AnalysisNode, AnalysisStep, Job},
+        worker::{AnalysisNode, Job},
     },
-    fixtures::{CH, FakeReader, SR, sine},
+    fixtures::{FakeReader, SR, sine},
 };
+#[cfg(feature = "analysis-beat")]
+use crate::BeatState;
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+use crate::analyzer::BeatAnalysisConfig;
 #[cfg(feature = "analysis-waveform")]
 use crate::blob::to_bytes;
 #[cfg(feature = "analysis-waveform")]
@@ -35,14 +60,159 @@ use crate::coverage::FrameRange;
 use crate::producer::{AnalysisProducer, ring};
 #[cfg(feature = "analysis-waveform")]
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
-use crate::{BeatState, TrackAnalysis};
+use crate::{AnalysisProgress, TrackAnalysis};
 
 #[cfg(feature = "analysis-waveform")]
 const BUCKETS: usize = 64;
 
+pub(super) struct NodeHarness<B>
+where
+    B: ResamplerBackend,
+{
+    node: AnalysisNode<B>,
+    _pending: PendingTask,
+    _dispatcher: Dispatcher,
+    _worker: Worker,
+}
+
+impl<B> NodeHarness<B>
+where
+    B: ResamplerBackend,
+{
+    pub(super) fn new(builder: AnalyzerBuilder<B>, jobs: mpsc::Receiver<Job>) -> Self {
+        Self::with_settings(
+            builder,
+            jobs,
+            NonZeroU32::new(16).expect("test chunk duration is non-zero"),
+            NonZeroUsize::new(8).expect("test drain limit is non-zero"),
+            NonZeroU32::new(5).expect("test publish duration is non-zero"),
+        )
+    }
+
+    pub(super) fn with_settings(
+        builder: AnalyzerBuilder<B>,
+        jobs: mpsc::Receiver<Job>,
+        chunk_seconds: NonZeroU32,
+        producer_drain_limit: NonZeroUsize,
+        publish_seconds: NonZeroU32,
+    ) -> Self {
+        let compute_tasks = NonZeroUsize::MIN;
+        let worker = Worker::new(
+            WorkerConfig::new()
+                .with_max_compute_tasks(compute_tasks)
+                .with_owned_pool(RayonConfig::new(compute_tasks, "analysis-node-test")),
+        );
+        let dispatcher = worker.dispatcher(DispatcherConfig::new("analysis-node-test"));
+        let pending = dispatcher
+            .reserve(TaskConfig::new().with_max_compute_tasks(compute_tasks))
+            .expect("test analysis task is reserved");
+        let context = pending.context().clone();
+        let node = AnalysisNode::new(
+            builder,
+            jobs,
+            context.clone(),
+            chunk_seconds,
+            producer_drain_limit,
+            publish_seconds,
+        );
+
+        Self {
+            node,
+            _pending: pending,
+            _dispatcher: dispatcher,
+            _worker: worker,
+        }
+    }
+
+    #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+    fn context(&self) -> &TaskContext {
+        self._pending.context()
+    }
+
+    pub(super) fn tick(&mut self) -> TickResult {
+        self.node.tick()
+    }
+}
+
 #[cfg(feature = "analysis-waveform")]
 fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
     AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_waveform(BUCKETS)
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+fn beat_waveform(
+    detector: Box<dyn BeatDetector>,
+    min_window_seconds: u32,
+    window_seconds: u32,
+) -> AnalyzerBuilder<NoResamplerBackend> {
+    let config = BeatAnalysisConfig::builder()
+        .resampler_backend(NoResamplerBackend)
+        .target_rate(SR)
+        .detector_min_window_seconds(min_window_seconds)
+        .detector_window_seconds(window_seconds)
+        .detector_overlap_seconds(0)
+        .build();
+    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+        .with_beat_config(config)
+        .with_beat_detector(detector, GridParams::default())
+        .with_waveform(BUCKETS)
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+fn raw_beat(at: f32) -> RawBeats {
+    RawBeats {
+        beats: vec![BeatMark::at(at)],
+        downbeats: vec![BeatMark::at(at)],
+    }
+}
+
+#[cfg(feature = "analysis-waveform")]
+fn enqueue(
+    jobs: &mpsc::Sender<Job>,
+    token: &str,
+    reader: Box<dyn AudioReader>,
+    cancel: CancelToken,
+    ingest: ring::Reader,
+) -> watch::Receiver<Option<AnalysisProgress>> {
+    let (tx, results) = watch::channel(None);
+    jobs.send(Job {
+        token: token.into(),
+        tx,
+        rate: super::fixtures::spec().sample_rate,
+        ingest,
+        reader,
+        cancel,
+        resume: None,
+    })
+    .expect("analysis node accepts the test job");
+    results
+}
+
+fn latest_analysis(results: &watch::Receiver<Option<AnalysisProgress>>) -> Option<TrackAnalysis> {
+    results
+        .borrow()
+        .as_ref()
+        .map(|progress| progress.analysis().clone())
+}
+
+fn take_analysis(results: &mut watch::Receiver<Option<AnalysisProgress>>) -> Option<TrackAnalysis> {
+    results
+        .borrow_and_update()
+        .as_ref()
+        .map(|progress| progress.analysis().clone())
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+fn drive_until<B>(node: &mut NodeHarness<B>, mut done: impl FnMut() -> bool)
+where
+    B: ResamplerBackend,
+{
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !done() {
+        assert!(Instant::now() < deadline, "analysis node made no progress");
+        let _ = node.tick();
+        thread::yield_now();
+    }
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -57,17 +227,18 @@ fn pending_reader_yields_one_scheduler_tick() {
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked_with_pending(&sine(1024), 1)),
         cancel: CancelToken::root(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
 
-    assert_eq!(node.tick(), AnalysisStep::UpstreamPending);
-    assert_eq!(node.tick(), AnalysisStep::Progress);
+    assert_eq!(node.tick(), TickResult::UpstreamPending);
+    assert_eq!(node.tick(), TickResult::Progress);
 }
 
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
-fn cancel_racing_finalize_drops_sender_without_emitting() {
+fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
     let cancel = CancelToken::root();
@@ -78,15 +249,17 @@ fn cancel_racing_finalize_drops_sender_without_emitting() {
         ingest: super::fixtures::idle_ingest(),
         reader: Box::new(FakeReader::chunked(&sine(1024), 1)),
         cancel: cancel.clone(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
 
-    assert_eq!(node.tick(), AnalysisStep::Progress, "decode one chunk");
-    assert_eq!(node.tick(), AnalysisStep::Progress, "EOF arms finalize");
+    assert_eq!(node.tick(), TickResult::Progress, "decode one chunk");
     cancel.cancel();
-    assert_eq!(node.tick(), AnalysisStep::Progress, "cancel drops the task");
-    assert!(results.borrow().is_none());
+    assert_eq!(node.tick(), TickResult::Progress, "cancel arms finalize");
+    assert_eq!(node.tick(), TickResult::Progress, "finalize publishes");
+    let snapshot = latest_analysis(&results).expect("covered audio is retained");
+    assert!(!snapshot.is_settled(), "a cancelled pass remains resumable");
     assert!(results.has_changed().is_err(), "task sender is dropped");
 }
 
@@ -104,9 +277,10 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
         rate,
         ingest,
         cancel: CancelToken::root(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
 
     for (at, frames) in ranges {
         assert_eq!(
@@ -121,7 +295,7 @@ fn offered(ranges: &[(u64, usize)]) -> Option<TrackAnalysis> {
     }
     // The watch keeps the last publication even once the task's sender is
     // gone, so this reads the final snapshot either way.
-    results.borrow().clone()
+    latest_analysis(&results)
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -155,11 +329,12 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
             rate,
             ingest,
             cancel: CancelToken::root(),
+            resume: None,
         })
         .expect("analysis node accepts the test job");
         (
             jobs,
-            AnalysisNode::new(waveform_only(), receiver),
+            NodeHarness::new(waveform_only(), receiver),
             results,
             AnalysisProducer::new(writer, rate, token.into()),
         )
@@ -177,10 +352,7 @@ fn an_offer_reaches_only_the_pass_its_handle_names() {
         let _ = idle_node.tick();
     }
 
-    let fed = fed_results
-        .borrow()
-        .clone()
-        .expect("the fed pass publishes");
+    let fed = latest_analysis(&fed_results).expect("the fed pass publishes");
     assert_eq!(fed.token().as_str(), "track-a");
     assert_eq!(
         fed.coverage().runs(),
@@ -212,9 +384,10 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
         rate,
         ingest,
         cancel: CancelToken::root(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
 
     assert_eq!(
         producer.offer(&sine(1024), super::fixtures::spec(), 0),
@@ -232,7 +405,7 @@ fn an_offer_on_another_axis_leaves_the_coverage_alone() {
     for _ in 0..128 {
         let _ = node.tick();
     }
-    let analysis = results.borrow().clone().expect("the pass publishes");
+    let analysis = latest_analysis(&results).expect("the pass publishes");
     assert_eq!(
         analysis.coverage().runs(),
         &[FrameRange::new(0, 1024)],
@@ -259,16 +432,17 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
         rate,
         ingest,
         cancel: CancelToken::root(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
     let pcm = sine(usize::try_from(BLOCK).unwrap_or(0));
 
     let mut published = Vec::new();
-    let collect = |results: &mut watch::Receiver<Option<TrackAnalysis>>,
+    let collect = |results: &mut watch::Receiver<Option<AnalysisProgress>>,
                    out: &mut Vec<TrackAnalysis>| {
         if results.has_changed().is_ok_and(|changed| changed)
-            && let Some(analysis) = results.borrow_and_update().clone()
+            && let Some(analysis) = take_analysis(results)
         {
             out.push(analysis);
         }
@@ -293,7 +467,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
     // The task drops its sender the moment it finishes, so its last
     // publication is readable from the watch but never reported as a
     // change. Take it from the value itself.
-    let last = results.borrow().clone().expect("the pass publishes");
+    let last = latest_analysis(&results).expect("the pass publishes");
     if published
         .last()
         .is_none_or(|prev| prev.revision() < last.revision())
@@ -357,9 +531,10 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
         rate,
         ingest,
         cancel: CancelToken::root(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
     let pcm = sine(usize::try_from(BLOCK).unwrap_or(0));
 
     let mut at = 0;
@@ -399,7 +574,7 @@ fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
         let _ = node.tick();
     }
 
-    let analysis = results.borrow().clone().expect("the pass publishes");
+    let analysis = latest_analysis(&results).expect("the pass publishes");
     (analysis, refused, refused.start() + PAST * BLOCK)
 }
 
@@ -470,9 +645,10 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
         rate,
         ingest,
         cancel: CancelToken::root(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(waveform_only(), receiver);
     let pcm = sine(usize::try_from(BLOCK).unwrap_or(0));
 
     let mut published: Vec<TrackAnalysis> = Vec::new();
@@ -485,7 +661,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
         for _ in 0..4 {
             let _ = node.tick();
             if results.has_changed().is_ok_and(|changed| changed)
-                && let Some(analysis) = results.borrow_and_update().clone()
+                && let Some(analysis) = take_analysis(&mut results)
             {
                 published.push(analysis);
             }
@@ -494,7 +670,7 @@ fn a_seek_order_pass_keeps_publishing_and_covers_the_union() {
     for _ in 0..STALLS {
         let _ = node.tick();
     }
-    let last = results.borrow().clone().expect("the pass publishes");
+    let last = latest_analysis(&results).expect("the pass publishes");
 
     assert!(
         published.len() >= 2,
@@ -567,21 +743,22 @@ where
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
         cancel: cancel.clone(),
+        resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = AnalysisNode::new(builder, receiver);
+    let mut node = NodeHarness::new(builder, receiver);
     let mut out = Vec::new();
     for _ in 0..128 {
         let _ = node.tick();
         match results.has_changed() {
             Ok(true) => {
-                if let Some(analysis) = results.borrow_and_update().clone() {
+                if let Some(analysis) = take_analysis(&mut results) {
                     out.push(analysis);
                 }
             }
             Ok(false) => {}
             Err(_) => {
-                if let Some(analysis) = results.borrow_and_update().clone() {
+                if let Some(analysis) = take_analysis(&mut results) {
                     out.push(analysis);
                 }
                 break;
@@ -637,6 +814,359 @@ fn empty_stream_yields_none() {
     let reader = Box::new(FakeReader::empty());
     let out = stages(reader, waveform_only(), &CancelToken::root());
     assert!(out.is_empty(), "EOF with no chunks is not an analysis");
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test(native, flash(false))]
+fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_detector = Arc::clone(&calls);
+    let (started, started_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let release_for_detector = Arc::clone(&release_rx);
+    let detector = Box::new(Unimock::new(
+        BeatDetectorMock
+            .each_call(matching!(_))
+            .answers_arc(Arc::new(move |_, mono| {
+                if calls_for_detector.fetch_add(1, Ordering::SeqCst) == 0 {
+                    started.send(mono.len()).ok();
+                    release_for_detector.lock().recv().ok();
+                }
+                Ok(raw_beat(0.5))
+            })),
+    ));
+    let builder = beat_waveform(detector, 1, 1);
+    let rate = super::fixtures::spec().sample_rate;
+    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let (jobs, receiver) = mpsc::channel();
+    let (writer, ingest) = ring::open_for(rate);
+    let mut producer = AnalysisProducer::new(writer, rate, "same-track".into());
+    let mut results = enqueue(
+        &jobs,
+        "same-track",
+        Box::new(FakeReader::chunked(&sine(3 * frames), 3)),
+        CancelToken::root(),
+        ingest,
+    );
+    let mut node = NodeHarness::with_settings(
+        builder,
+        receiver,
+        NonZeroU32::new(16).expect("test chunk duration is non-zero"),
+        NonZeroUsize::new(8).expect("test drain limit is non-zero"),
+        NonZeroU32::MIN,
+    );
+
+    assert_eq!(node.tick(), TickResult::Progress, "first chunk is decoded");
+    assert_eq!(
+        started_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(2))
+            .expect("detector starts"),
+        frames,
+        "one source second reaches the detector"
+    );
+
+    let offered_at = 2 * u64::from(SR);
+    assert_eq!(
+        producer.offer(&sine(frames), super::fixtures::spec(), offered_at),
+        Ok(())
+    );
+    assert_eq!(
+        node.tick(),
+        TickResult::Progress,
+        "decode and producer ingest continue while Rayon is occupied"
+    );
+    let snapshot = results
+        .borrow_and_update()
+        .clone()
+        .expect("progress is published while detection is blocked");
+    assert!(
+        snapshot
+            .analysis()
+            .coverage()
+            .contains(FrameRange::new(u64::from(SR), u64::from(SR))),
+        "the decoder reached its second chunk"
+    );
+    assert!(
+        snapshot
+            .analysis()
+            .coverage()
+            .contains(FrameRange::new(offered_at, u64::from(SR))),
+        "the playback ring was drained"
+    );
+
+    release.send(()).expect("release the slow detector");
+    drive_until(&mut node, || results.has_changed().is_err());
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test(native, flash(false))]
+fn saturation_retries_the_exact_detection_payload_once() {
+    let (detected, detected_rx) = mpsc::channel();
+    let detector = Box::new(Unimock::new(
+        BeatDetectorMock
+            .each_call(matching!(_))
+            .answers_arc(Arc::new(move |_, mono| {
+                detected.send(mono.to_vec()).ok();
+                Ok(raw_beat(0.5))
+            })),
+    ));
+    let builder = beat_waveform(detector, 1, 1);
+    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let pcm = sine(frames);
+    let expected: Vec<f32> = pcm
+        .chunks_exact(usize::from(CH))
+        .map(|frame| frame.iter().sum::<f32>() / f32::from(CH))
+        .collect();
+    let (jobs, receiver) = mpsc::channel();
+    let results = enqueue(
+        &jobs,
+        "saturated-track",
+        Box::new(FakeReader::chunked(&pcm, 1)),
+        CancelToken::root(),
+        super::fixtures::idle_ingest(),
+    );
+    let mut node = NodeHarness::with_settings(
+        builder,
+        receiver,
+        NonZeroU32::new(16).expect("test chunk duration is non-zero"),
+        NonZeroUsize::new(8).expect("test drain limit is non-zero"),
+        NonZeroU32::MIN,
+    );
+    let (blocked, blocked_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let (finished, finished_rx) = mpsc::channel();
+    node.context()
+        .submit_compute((), move |_, ()| {
+            blocked.send(()).ok();
+            release_rx.recv().ok();
+            finished.send(()).ok();
+        })
+        .expect("the blocker occupies the only compute budget");
+    blocked_rx
+        .recv_timeout(Instant::now() + Duration::from_secs(2))
+        .expect("compute budget is occupied");
+
+    assert_eq!(node.tick(), TickResult::Progress, "the request is retained");
+    assert!(
+        detected_rx.try_recv().is_err(),
+        "saturation does not execute the detector inline"
+    );
+
+    release.send(()).expect("release the compute budget");
+    finished_rx
+        .recv_timeout(Instant::now() + Duration::from_secs(2))
+        .expect("compute budget is released");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let detected = loop {
+        let _ = node.tick();
+        match detected_rx.try_recv() {
+            Ok(detected) => break detected,
+            Err(_) if Instant::now() < deadline => thread::yield_now(),
+            Err(error) => panic!("the retained request was not retried: {error:?}"),
+        }
+    };
+    assert_eq!(
+        detected, expected,
+        "the pooled detector input survives saturation unchanged"
+    );
+    drive_until(&mut node, || results.has_changed().is_err());
+    assert!(
+        detected_rx.try_recv().is_err(),
+        "the retained request executes exactly once"
+    );
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test(native, flash(false))]
+fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_for_detector = Arc::clone(&calls);
+    let (called, called_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let release_for_detector = Arc::clone(&release_rx);
+    let detector = Box::new(Unimock::new(
+        BeatDetectorMock
+            .each_call(matching!(_))
+            .answers_arc(Arc::new(move |_, _| {
+                let call = calls_for_detector.fetch_add(1, Ordering::SeqCst);
+                called.send(call).ok();
+                if call == 0 {
+                    release_for_detector.lock().recv().ok();
+                    Ok(raw_beat(0.25))
+                } else {
+                    Ok(raw_beat(0.75))
+                }
+            })),
+    ));
+    let builder = beat_waveform(detector, 1, 1);
+    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let (jobs, receiver) = mpsc::channel();
+    let cancel_a = CancelToken::root();
+    let mut results_a = enqueue(
+        &jobs,
+        "same-token",
+        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        cancel_a.clone(),
+        super::fixtures::idle_ingest(),
+    );
+    let mut results_b = enqueue(
+        &jobs,
+        "same-token",
+        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        CancelToken::root(),
+        super::fixtures::idle_ingest(),
+    );
+    let mut node = NodeHarness::new(builder, receiver);
+
+    let _ = node.tick();
+    assert_eq!(
+        called_rx
+            .recv_timeout(Instant::now() + Duration::from_secs(2))
+            .expect("pass A detector starts"),
+        0
+    );
+    cancel_a.cancel();
+    let _ = node.tick();
+    let _ = node.tick();
+    assert!(
+        take_analysis(&mut results_a).is_some_and(|snapshot| !snapshot.is_settled()),
+        "cancelled A publishes its resumable partial"
+    );
+    let _ = node.tick();
+    let _ = node.tick();
+    assert!(
+        called_rx.try_recv().is_err(),
+        "B waits for ownership of the detector"
+    );
+
+    release.send(()).expect("let A return after B has started");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let _ = node.tick();
+        match called_rx.try_recv() {
+            Ok(call) => {
+                assert_eq!(call, 1, "the next detection belongs to B");
+                break;
+            }
+            Err(_) if Instant::now() < deadline => thread::yield_now(),
+            Err(error) => panic!("B detection did not start: {error:?}"),
+        }
+    }
+    drive_until(&mut node, || results_b.has_changed().is_err());
+    let snapshot = take_analysis(&mut results_b).expect("B publishes its final analysis");
+    assert_eq!(snapshot.token().as_str(), "same-token");
+    let beats = snapshot
+        .beat()
+        .expect("B detection fills the beat slot")
+        .artifact()
+        .beats();
+    assert!(
+        beats.contains(&(3 * u64::from(SR) / 4)),
+        "B's marker is retained: {beats:?}"
+    );
+    assert!(
+        !beats.contains(&(u64::from(SR) / 4)),
+        "A's late marker cannot enter B: {beats:?}"
+    );
+}
+
+#[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
+#[kithara::test(native, flash(false))]
+fn final_publication_waits_for_trailing_detection() {
+    let (started, started_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let detector = Box::new(Unimock::new(
+        BeatDetectorMock
+            .next_call(matching!(_))
+            .answers_arc(Arc::new(move |_, _| {
+                started.send(()).ok();
+                release_rx.lock().recv().ok();
+                Ok(raw_beat(0.5))
+            })),
+    ));
+    let builder = beat_waveform(detector, 2, 2);
+    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let (jobs, receiver) = mpsc::channel();
+    let mut results = enqueue(
+        &jobs,
+        "trailing-track",
+        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        CancelToken::root(),
+        super::fixtures::idle_ingest(),
+    );
+    let mut node = NodeHarness::new(builder, receiver);
+
+    let _ = node.tick();
+    let _ = node.tick();
+    started_rx
+        .recv_timeout(Instant::now() + Duration::from_secs(2))
+        .expect("EOF starts the short trailing window");
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert!(
+        results.borrow().is_none(),
+        "nothing final is published early"
+    );
+    assert!(
+        matches!(results.has_changed(), Ok(false)),
+        "the final sender remains alive while detection runs"
+    );
+
+    release.send(()).expect("release trailing detection");
+    drive_until(&mut node, || results.has_changed().is_err());
+    assert!(
+        results
+            .borrow_and_update()
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.analysis().beat().is_some()),
+        "the trailing result rides the final publication"
+    );
+}
+
+#[cfg(feature = "analysis-waveform")]
+#[kithara::test(native, flash(false))]
+fn producer_drain_limit_bounds_one_tick() {
+    let rate = super::fixtures::spec().sample_rate;
+    let frames = usize::try_from(SR).expect("test rate fits usize");
+    let (jobs, receiver) = mpsc::channel();
+    let (writer, ingest) = ring::open_for(rate);
+    let mut producer = AnalysisProducer::new(writer, rate, "drain-track".into());
+    let mut results = enqueue(
+        &jobs,
+        "drain-track",
+        Box::new(FakeReader::stalled(8)),
+        CancelToken::root(),
+        ingest,
+    );
+    let mut node = NodeHarness::with_settings(
+        waveform_only(),
+        receiver,
+        NonZeroU32::new(16).expect("test chunk duration is non-zero"),
+        NonZeroUsize::MIN,
+        NonZeroU32::MIN,
+    );
+    let pcm = sine(frames);
+    for block in 0..3u64 {
+        assert_eq!(
+            producer.offer(&pcm, super::fixtures::spec(), block * u64::from(SR)),
+            Ok(())
+        );
+    }
+
+    for expected in 1..=3u64 {
+        assert_eq!(node.tick(), TickResult::Progress);
+        let snapshot = results
+            .borrow_and_update()
+            .clone()
+            .expect("each drained source second is published");
+        assert_eq!(
+            snapshot.analysis().coverage().runs(),
+            &[FrameRange::new(0, expected * u64::from(SR))],
+            "one tick drains exactly one descriptor"
+        );
+    }
 }
 
 #[cfg(feature = "analysis-beat")]

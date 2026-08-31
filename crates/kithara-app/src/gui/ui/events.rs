@@ -23,7 +23,14 @@ use crate::{
 /// come from the app documents and may contain nested include segments.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
-        UiEvent::Control { path, action } => control(state, &path, &action),
+        UiEvent::Control { path, action } => {
+            // What the document turns for itself is answered here, before the
+            // application is told the press happened at all.
+            if matches!(action, ControlAction::Activate) {
+                state.ui.press(&path);
+            }
+            control(state, &path, &action)
+        }
         UiEvent::ToggleModule(module) => {
             state.ui.cache.toggle_module(module);
             None
@@ -198,9 +205,6 @@ fn menu_control(cache: &mut ViewCache, control: &str, action: &ControlAction) ->
         return None;
     }
     match control {
-        "burger" => cache.menu.toggle(),
-        // The popover publishes its dismissal on its own path.
-        "pop" | "header-close" => cache.menu.close(),
         "layouts-head" => cache.menu.toggle_layouts(),
         "modules-head" => cache.menu.toggle_modules(),
         "full-screen" => return Some(Message::Window(WindowCommand::ToggleFullScreen)),
@@ -278,9 +282,9 @@ fn strip_control(state: &mut Kithara, control: &str, action: &ControlAction) -> 
     }
 }
 
-/// The library hands a row to whichever deck the pointer released it over.
-/// Neither side knows the other: the list reports the drag it started, the
-/// deck reports the pointer crossing it, and the host joins them here.
+/// The list reports the drag, the deck reports the pointer crossing it, and the
+/// host joins them here. A row is a position in its group, resolved back to a
+/// catalog entry through the scope the rows were drawn from.
 fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -> Option<Message> {
     match (control, action) {
         ("browser" | "context", ControlAction::SelectIndex(row)) => {
@@ -288,14 +292,18 @@ fn library_control(state: &mut Kithara, control: &str, action: &ControlAction) -
             state.ui.cache.library.scope = picked;
             None
         }
-        ("tracks", ControlAction::SelectIndex(index)) => Some(Message::SelectCatalogTrack(*index)),
+        ("tracks", ControlAction::SelectIndex(row)) => {
+            let index = state.ui.cache.library.catalog_index(&state.catalog, *row)?;
+            Some(Message::SelectCatalogTrack(index))
+        }
         ("tracks", ControlAction::Drag(DragPhase::Start(row))) => {
             state.ui.cache.drag = Some(*row);
             None
         }
         ("tracks", ControlAction::Drag(DragPhase::Drop)) => {
             let (row, deck) = state.ui.cache.take_drop()?;
-            Some(Message::LoadOntoDeck(row, deck_id(state, deck)?))
+            let index = state.ui.cache.library.catalog_index(&state.catalog, row)?;
+            Some(Message::LoadOntoDeck(index, deck_id(state, deck)?))
         }
         _ => None,
     }
@@ -352,28 +360,6 @@ mod tests {
         let ceiling = press_zoom(&mut cache, "zoom-out");
         assert!(ceiling < 1.0, "the window never spans the whole track");
         assert_eq!(press_zoom(&mut cache, "zoom-out"), ceiling);
-    }
-
-    #[kithara::test]
-    fn the_burger_opens_the_menu_and_both_dismissals_close_it() {
-        let mut cache = ViewCache::default();
-        assert!(!cache.menu.is_open());
-
-        press_menu(&mut cache, "burger");
-        assert!(cache.menu.is_open());
-        press_menu(&mut cache, "burger");
-        assert!(!cache.menu.is_open(), "the burger is also the way out");
-
-        press_menu(&mut cache, "burger");
-        press_menu(&mut cache, "pop");
-        assert!(
-            !cache.menu.is_open(),
-            "a press outside the surface dismisses"
-        );
-
-        press_menu(&mut cache, "burger");
-        press_menu(&mut cache, "header-close");
-        assert!(!cache.menu.is_open());
     }
 
     #[kithara::test]

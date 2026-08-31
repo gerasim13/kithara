@@ -387,7 +387,6 @@ fn bootstrap(
         _ => return Err(RingSessionError::Protocol("register anchor player reply")),
     };
     match state.exec(Cmd::StartPlayer {
-        master_volume: 1.0,
         player_id,
         sample_rate: session_rate.get(),
     }) {

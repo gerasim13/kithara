@@ -4,6 +4,8 @@ use firewheel::{FirewheelCtx, backend::AudioBackend};
 use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::{BytePool, SamplePool};
 use kithara_platform::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use kithara_play::player::PlayerControlSource;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
     SessionDuckingMode, player::PlayerMember,
@@ -116,16 +118,7 @@ pub(crate) fn attach_player<B: AudioBackend>(state: &mut SessionState<B>) -> Bea
 }
 
 fn attach_player_with_id<B: AudioBackend>(state: &mut SessionState<B>, grid_id: BeatGridId) {
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-    );
-    let player = PlayerImpl::new(
-        PlayerConfig::builder()
-            .grid_id(grid_id)
-            .worker(worker)
-            .session(Arc::new(FixtureSession))
-            .build(),
-    );
+    let member = fixture_member(grid_id);
     let base = state
         .root
         .topology()
@@ -138,11 +131,37 @@ fn attach_player_with_id<B: AudioBackend>(state: &mut SessionState<B>, grid_id: 
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
-                    group: Box::new(PlayerMember::new(player)),
+                    group: Box::new(member),
                 },
             }]),
         })
         .expect("fixture player attachment");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
     state.publish_root();
+}
+
+pub(crate) fn fixture_member(grid_id: BeatGridId) -> PlayerMember {
+    let worker = PlayWorker::new(
+        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
+    );
+    let player = PlayerImpl::new(
+        PlayerConfig::builder()
+            .grid_id(grid_id)
+            .worker(worker)
+            .session(Arc::new(FixtureSession))
+            .build(),
+    );
+    target_member(player)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn target_member(player: PlayerImpl) -> PlayerMember {
+    PlayerMember::new(player)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn target_member(mut player: PlayerImpl) -> PlayerMember {
+    player
+        .take_host_member()
+        .expect("fixture player synchronization member")
 }

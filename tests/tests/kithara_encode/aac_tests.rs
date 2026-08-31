@@ -4,7 +4,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
-use kithara_integration_tests::encode_test_pcm::SawtoothPcmFixture;
+use kithara_test_fixtures::signal::{Pcm, Wave};
 
 #[kithara::test]
 fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
@@ -14,14 +14,14 @@ fn encode_packaged_aac_happy_path_emits_monotonic_access_units() {
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc)
         .expect("BUG: AacLc must be supported by the packaged encoder");
     let total_frames = 4 * frame_samples;
-    let pcm = SawtoothPcmFixture::new(total_frames, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, total_frames, Wave::Sawtooth);
     let media_info = MediaInfo::builder()
         .codec(AudioCodec::AacLc)
         .container(ContainerFormat::Fmp4)
         .build();
 
     let encoded = EncoderFactory::encode_packaged(
-        PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
             .media_info(media_info)
             .pcm(&pcm)
             .timescale(SAMPLE_RATE)
@@ -76,11 +76,11 @@ fn encode_packaged_aac_he_reuses_injected_byte_pool() {
 
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacHe)
         .expect("BUG: AacHe must be supported by the packaged encoder");
-    let pcm = SawtoothPcmFixture::new(4 * frame_samples, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * frame_samples, Wave::Sawtooth);
     let byte_pool = BytePool::new(1, 0);
     let encode = || {
         EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(byte_pool.clone(), SamplePool::default())
+            &PackagedEncodeRequest::for_pools(byte_pool.clone(), SamplePool::default())
                 .pcm(&pcm)
                 .media_info(
                     MediaInfo::builder()
@@ -120,12 +120,12 @@ fn encode_packaged_aac_lc_reuses_injected_conversion_pools() {
 
     let frame_samples = EncoderFactory::frame_samples(AudioCodec::AacLc)
         .expect("BUG: AacLc must be supported by the packaged encoder");
-    let pcm = SawtoothPcmFixture::new(4 * frame_samples, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * frame_samples, Wave::Sawtooth);
     let byte_pool = BytePool::new(1, 0);
     let sample_pool = SamplePool::new(1, 0);
     let encode = || {
         EncoderFactory::encode_packaged(
-            PackagedEncodeRequest::for_pools(byte_pool.clone(), sample_pool.clone())
+            &PackagedEncodeRequest::for_pools(byte_pool.clone(), sample_pool.clone())
                 .pcm(&pcm)
                 .media_info(
                     MediaInfo::builder()

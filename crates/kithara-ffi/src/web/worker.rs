@@ -13,7 +13,7 @@ use kithara_platform::{
     tokio::task::spawn as task_spawn,
 };
 use kithara_play::{
-    ResourceConfig,
+    PlayError, ResourceConfig,
     policy::{DomainKeyPolicy, DomainKeyRule},
 };
 use kithara_queue::{Queue, QueueConfig, QueueControl, TrackId, TrackSource};
@@ -123,8 +123,11 @@ pub(crate) fn worker_main(cmd_rx: mpsc::Receiver<WorkerCmd>, host_sender: wasm::
             dispatch_cmd(cmd, &queue, &build_state);
         }
 
-        if let Err(error) = host.remove(&owner) {
-            clog!("[WORKER] host queue removal failed: {error}");
+        match host.remove(&owner) {
+            Ok(()) | Err(PlayError::SessionGone { .. }) => {}
+            Err(error) => {
+                clog!("[WORKER] host queue removal failed; resident retained: {error}");
+            }
         }
     });
 }

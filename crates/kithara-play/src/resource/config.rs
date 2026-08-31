@@ -71,11 +71,23 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker>,
-    /// Session-owned audio-consumer wake capability. This is populated by
-    /// `PlayerImpl::prepare_config`, not by callers, so resource configuration
-    /// does not become a second public source of session policy.
-    #[builder(skip)]
+    /// Audio-consumer wake capability for this resource's reader. The default
+    /// is safe for a consumer on the real-time render callback.
+    /// `PlayerImpl::prepare_config` always overwrites it with the session
+    /// policy, so a player-managed resource cannot carry a second source of
+    /// that policy. A direct reader off the real-time thread opts into
+    /// [`ConsumerWakeMode::ImmediateOffRt`] itself for immediate worker wakes
+    /// and inline reader-event delivery. Never declare `ImmediateOffRt` on a
+    /// resource headed into a player without `prepare_config`: its reads would
+    /// then publish inline on the render callback.
+    #[builder(default)]
     pub(crate) consumer_wake_mode: ConsumerWakeMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
+    /// here; a direct reader off the real-time thread may opt in itself.
+    /// Never set on a resource consumed by a real-time callback.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
@@ -112,6 +124,15 @@ mod tests {
         Ok(ResourceConfig::for_src(parse_src(input)?)
             .store(store())
             .build())
+    }
+
+    #[kithara::test]
+    fn a_config_that_never_passed_a_player_defaults_to_realtime_deferred() {
+        let config = test_config("https://example.com/track.mp3").expect("valid config");
+        assert_eq!(
+            config.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred
+        );
     }
 
     fn worker() -> PlayWorker {

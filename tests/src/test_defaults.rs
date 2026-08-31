@@ -1,6 +1,5 @@
 use kithara::platform::{sync::Arc, time::Duration};
-
-use crate::{audio_fixture::EmbeddedAudio, wav::create_test_wav};
+use kithara_test_fixtures::signal;
 
 /// Default audio parameters for generated WAV test fixtures.
 ///
@@ -13,13 +12,8 @@ pub struct SawWav {
 }
 
 impl SawWav {
-    /// Standard RIFF/WAVE header size.
-    const WAV_HEADER_SIZE: usize = 44;
     /// Bytes per mono PCM sample (16-bit signed).
     const BYTES_PER_SAMPLE: usize = 2;
-
-    /// Saw period in PCM frames (matches generated saw-tooth cycle length).
-    pub const SAW_PERIOD: usize = 65536;
 
     /// Standard defaults: 44.1 kHz stereo, 200 KB segments (native) / 32 KB (wasm).
     pub const DEFAULT: Self = Self {
@@ -48,15 +42,21 @@ impl SawWav {
     }
 
     /// Generate a WAV blob sized to `segments * segment_size` bytes.
-    ///
-    /// Uses [`create_test_wav`] with a sine wave; frame count is derived so
-    /// the header + PCM body fit within the total byte budget.
     pub fn build_wav(&self, segments: usize) -> Arc<Vec<u8>> {
-        let total = self.total_bytes(segments);
-        let bytes_per_frame = self.channels as usize * Self::BYTES_PER_SAMPLE;
-        let frames = (total - Self::WAV_HEADER_SIZE) / bytes_per_frame;
-        Arc::new(create_test_wav(frames, self.sample_rate, self.channels))
+        Arc::new(signal::wav_of_size(
+            self.sample_rate,
+            self.channels,
+            self.total_bytes(segments),
+            signal::TONE,
+        ))
     }
+}
+
+/// Frames of interleaved 16-bit PCM that fill `segments` segments of
+/// `segment_size` bytes.
+#[must_use]
+pub const fn frames_in_segments(segments: usize, segment_size: usize, channels: u16) -> usize {
+    segments * segment_size / (channels as usize * size_of::<i16>())
 }
 
 impl Default for SawWav {
@@ -68,7 +68,7 @@ impl Default for SawWav {
 /// Cross-module scalar constants.
 ///
 /// Items here were previously duplicated inline (`const SAMPLE_RATE`,
-/// `TEST_MP3_BYTES`, `EXPECTED_DURATION_SECS`, …) across `kithara_audio`,
+/// `SEGMENT_SIZE`, `EXPECTED_DURATION_SECS`, …) across `kithara_audio`,
 /// `kithara_play`, `kithara_file`, and `kithara_hls` tests. Centralising
 /// them keeps numeric drift impossible and makes it obvious which values
 /// are shared vs. test-local.
@@ -85,10 +85,10 @@ impl Consts {
     /// Default packaged HLS segment size (bytes).
     pub const SEGMENT_SIZE: usize = SawWav::DEFAULT.segment_size;
 
-    /// Bytes of the `assets/test.mp3` fixture.
-    pub const TEST_MP3_BYTES: &'static [u8] = EmbeddedAudio::TEST_MP3_BYTES;
-    /// Nominal duration of [`Self::TEST_MP3_BYTES`] in seconds.
-    pub const TEST_MP3_DURATION_SECS: f64 = EmbeddedAudio::MP3_EXPECTED_DURATION_SECS;
+    /// Nominal duration of `signal_mp3_track_sine440_187s`, the full-length
+    /// MPEG clip, in seconds. The generator renders exactly this many seconds;
+    /// decoders report it back within their own priming and tail slack.
+    pub const TEST_MP3_DURATION_SECS: f64 = 187.0;
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);

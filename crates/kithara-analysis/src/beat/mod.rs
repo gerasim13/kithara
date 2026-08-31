@@ -5,12 +5,12 @@ mod grid;
 mod pass;
 mod runs;
 
-pub(crate) use analyzer::BeatPassConfig;
+pub(crate) use analyzer::{BeatPassConfig, DetectOutput, DetectRequest};
 pub(crate) use detector::BeatDetector;
 #[cfg(feature = "beat-nn")]
 pub(crate) use detector::backend::{BeatDetectorKind, build_detector};
 #[cfg(test)]
-pub(crate) use detector::{BeatDetectorMock, BeatMark, RawBeats};
+pub(crate) use detector::{BeatDetectError, BeatDetectorMock, BeatMark, RawBeats};
 #[cfg(feature = "beat-nn")]
 pub(crate) use grid::GRID_SEMANTICS_TAG;
 pub(crate) use grid::GridParams;

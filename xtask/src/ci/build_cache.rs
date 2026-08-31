@@ -202,6 +202,19 @@ fn scan_directory(path: &Path) -> Result<DirectoryScan> {
                 locks: lock.into_iter().collect(),
             });
         }
+        // A lane names its own build directory below the one this scan starts
+        // from — on Linux the volume root is `/cache/target` and the lane
+        // builds into `/cache/target/flash-off` — so its claim is a lease file
+        // in a child. Asking only the root left the claim unseen and the live
+        // directory evictable, which is how an hourly pass removed the test
+        // binaries of a running job and 1642 of its tests failed to exec.
+        if metadata.file_type().is_file() && path.file_name() == Some(OsStr::new(lease::FILE)) {
+            return Ok(DirectoryScan {
+                bytes: allocated_bytes(&metadata),
+                active: lease_file_is_held(path, FileLock::try_exclusive),
+                locks: Vec::new(),
+            });
+        }
         return Ok(DirectoryScan {
             bytes: allocated_bytes(&metadata),
             active: false,
@@ -272,8 +285,13 @@ fn allocated_bytes(metadata: &fs::Metadata) -> u64 {
 /// invention. Target holders take the lease shared so several coexist, so only
 /// an exclusive request sees them at all.
 fn lease_is_held(directory: &Path, ask: fn(File) -> Result<FileLock, TryLockError>) -> bool {
-    let path = directory.join(lease::FILE);
-    let Ok(file) = OpenOptions::new().read(true).write(true).open(&path) else {
+    lease_file_is_held(&directory.join(lease::FILE), ask)
+}
+
+/// [`lease_is_held`] for a lease file the scan already found, rather than one
+/// named from the directory expected to hold it.
+fn lease_file_is_held(path: &Path, ask: fn(File) -> Result<FileLock, TryLockError>) -> bool {
+    let Ok(file) = OpenOptions::new().read(true).write(true).open(path) else {
         return false;
     };
     // Held by a live job, or unreadable — either way, not ours to remove.
@@ -378,6 +396,46 @@ mod tests {
         }
     }
 
+    /// The Linux volume root is scanned, and the lane builds one level down
+    /// and claims that level. The scan has to see the claim where the lane
+    /// makes it.
+    #[test]
+    fn a_lease_held_in_a_child_keeps_the_scanned_root() {
+        let root = tempfile::tempdir().unwrap();
+        let build = root.path().join("flash-off");
+        let lease = lease::hold(&build).expect("claim the directory the lane builds into");
+
+        let contents = candidate_entries(root.path()).unwrap();
+
+        assert!(
+            contents.active,
+            "the scan did not see the lease the lane holds in {}",
+            build.display()
+        );
+        drop(lease);
+    }
+
+    /// The same tree without a holder: the guard above must not answer "held"
+    /// about a directory that was merely left behind, or nothing is ever
+    /// reclaimed.
+    #[test]
+    fn an_unheld_lease_in_a_child_leaves_the_root_evictable() {
+        let root = tempfile::tempdir().unwrap();
+        let build = root.path().join("flash-off");
+        drop(lease::hold(&build).expect("claim and release"));
+
+        let contents = candidate_entries(root.path()).unwrap();
+
+        assert!(!contents.active, "an abandoned lease kept the root");
+    }
+
+    /// Nobody holds this lease, so every "held" answer is invented. Observers
+    /// must not invent one about each other, which is what asking for the
+    /// owner's own exclusive lock did.
+    ///
+    /// The invention needs `flock` to conflict between two descriptors of one
+    /// process. That is Linux behaviour and what CI runs on; on macOS the same
+    /// pair never conflicts, so this test cannot fail there.
     #[test]
     fn concurrent_observers_do_not_invent_a_checkout_holder() {
         let directory = tempfile::tempdir().unwrap();

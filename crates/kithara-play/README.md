@@ -17,6 +17,8 @@
 The playback orchestration crate behind Kithara. It provides concrete player,
 engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
 and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
+Enable `perf` on native profiling builds for permanent `hotpath` timing at the
+playback worker boundary; ordinary builds compile the probes out.
 
 ## Usage
 
@@ -44,8 +46,8 @@ to the single `decoder` field.
 
 ## Core Surface
 
-- `PlayWorker` owns the shared playback scheduler, pools, and task-registration
-  lifetime for one or many players.
+- `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
+  optional shared `kithara-worker` base.
 - `EngineImpl` owns session dispatch, slot registration, and master output
   state.
 - `PlayerImpl` owns playlist and parameter state, transport flow, status, item

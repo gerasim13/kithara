@@ -30,6 +30,7 @@ pub mod size;
 #[cfg(feature = "render")]
 pub(crate) mod solve;
 pub mod source;
+pub mod view;
 
 pub use doc::{envelope, layout, module, package, param, skin, text};
 

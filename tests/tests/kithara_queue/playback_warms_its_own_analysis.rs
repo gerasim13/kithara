@@ -4,7 +4,7 @@
 use std::num::NonZeroU32;
 
 use kithara::{
-    analysis::{AnalysisWorker, AnalyzerBuilder},
+    analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
     bufpool::Region,
     events::TrackStatus,
     net::{HttpClient, NetOptions},
@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     TestServerHelper, analysis_pass::stalled_reader, kithara, offline::OfflineSession, temp_dir,
     waits::wait_until,
 };
+use kithara_test_fixtures::SignalAsset;
 
 /// A handle left for a track must reach that track's decode path, so playing
 /// it warms its own analysis instead of leaving the pass to decode the same
@@ -31,7 +32,7 @@ use kithara_integration_tests::{
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let helper = TestServerHelper::new().await;
-    let url = helper.asset("track.mp3");
+    let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
 
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
@@ -86,9 +87,13 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let rate = NonZeroU32::new(queue.sample_rate()).expect("the engine runs at some rate");
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
-        &cancel,
-        AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
-    );
+        AnalysisWorkerConfig::for_builder(
+            AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
+        )
+        .cancel(cancel)
+        .build(),
+    )
+    .expect("analysis worker task is admitted");
     let (analysis, producer) = worker.analyze(
         stalled_reader(AudioSpec::new(2, rate)),
         "played-track".into(),
@@ -101,7 +106,7 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
         analysis
             .borrow()
             .as_ref()
-            .map_or(0, |snapshot| snapshot.coverage().frames())
+            .map_or(0, |progress| progress.analysis().coverage().frames())
     };
     wait_until(Duration::from_secs(60), "analysis coverage", || {
         covered() > 0

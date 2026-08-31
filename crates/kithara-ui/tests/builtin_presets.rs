@@ -9,6 +9,7 @@ use kithara_ui::{
     module::{IconName, WaveStyle},
     size::Dim,
     source::{SourceResolver, UiConfig},
+    view,
 };
 
 fn micro_preset() -> CompiledUi {
@@ -19,6 +20,7 @@ fn micro_preset() -> CompiledUi {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("the micro preset compiles")
 }
@@ -146,6 +148,7 @@ fn player_preset_compiles_against_player_registry() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
 }
@@ -159,6 +162,7 @@ fn player_deck_starts_with_one_hero_wave() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Split { children, .. } = &ui.root else {
@@ -201,6 +205,7 @@ fn player_deck_compiles_canonical_transport_row() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Split { children, .. } = &ui.root else {
@@ -294,6 +299,7 @@ fn player_preset_size_sums_global_deck_and_library_heights() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let CompiledNode::Split {

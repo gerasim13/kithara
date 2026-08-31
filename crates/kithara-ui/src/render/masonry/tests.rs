@@ -50,6 +50,7 @@ use crate::{
     shaping::{FontPolicy, TextContext},
     skin::parse_skin_over,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 struct FixtureReads;
@@ -57,7 +58,13 @@ struct FixtureReads;
 /// What the host hands the document for one frame, built from a fixture reader
 /// so a test drives the clock rather than waiting for one.
 fn ctx<'a>(ui: &'a CompiledUi, reads: &'a dyn Reads) -> Ctx<'a, 'a> {
-    Ctx::new(ui, reads, builtin::skin_doc(), Clock::default())
+    Ctx::new(
+        ui,
+        reads,
+        &view::EMPTY,
+        builtin::skin_doc(),
+        Clock::default(),
+    )
 }
 
 static CENSUS_PORTALS: [PortalTarget; 2] = [
@@ -667,6 +674,7 @@ fn masonry_layout_rects_equal_snapped_neutral_rects() {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("builtin layout must compile: {error}"));
         for (width, height) in [(1280, 720), (960, 600), (320, 240)] {
@@ -4104,6 +4112,7 @@ fn fixture_ui_with_options(
                     .collect(),
             )
             .build(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("Masonry contract fixture must compile: {error}"))
 }
@@ -4590,6 +4599,7 @@ fn seeking_wave_root(extra: &str, takes_drops: bool) -> MasonryRoot<TestAction> 
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the wave fixture must compile: {error}"));
     let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
@@ -4717,6 +4727,7 @@ fn studio_deck_root(reads: &DeckReads) -> (CompiledUi, MasonryRoot<TestAction>) 
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the studio fixture must compile: {error}"));
     let host = MasonryHost::map_actions(ctx(&ui, reads), builtin::skin(), TestAction::Document);
@@ -4936,6 +4947,7 @@ fn dragging_library_root() -> MasonryRoot<TestAction> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the drag fixture must compile: {error}"));
     let host = MasonryHost::map_actions(ctx(&ui, &reads), builtin::skin(), TestAction::Document);
@@ -5142,6 +5154,7 @@ fn chrome_ui(title: &str, registry: &dyn EndpointRegistry) -> CompiledUi {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the chrome fixture must compile: {error}"))
 }

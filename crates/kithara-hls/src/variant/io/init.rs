@@ -11,7 +11,7 @@ use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{
     HlsResult,
     handle::ResourceHandle,
-    playlist::{PlaylistAccess, PlaylistState},
+    playlist::PlaylistState,
     segment::{
         Downloading, FetchClaim, InitSegment, Segment, SegmentContent, SegmentSize,
         SegmentSlotState,
@@ -130,7 +130,7 @@ impl HlsVariant {
             || Ok(None),
             |seg| {
                 if seg.size().is_exact() {
-                    seg.read_at(&self.segments.scope, range, dst)
+                    self.segments.read_at(seg, range, dst)
                 } else {
                     Ok(None)
                 }

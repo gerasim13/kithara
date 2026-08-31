@@ -188,6 +188,7 @@ where
     ///
     /// Returns [`DecodeError`] when stream, probe, decoder, or runtime setup fails.
     #[doc(hidden)]
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "audio.prepare"))]
     pub async fn prepare<B>(
         config: AudioConfig<T, B>,
         wake: Arc<dyn WorkerWake>,

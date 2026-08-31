@@ -2,11 +2,12 @@
     schema: "kithara.module",
     version: 1,
     id: "gallery-nav-item",
-    parameters: ["icon", "label", "tab"],
+    parameters: ["icon", "label", "page"],
     root: NavItem(
         id: "item",
         label: "$label",
         icon: "$icon",
-        read: Model(id: "$tab"),
+        read: Page(id: "/page", name: "$page"),
+        write: Page(id: "/page", name: "$page"),
     ),
 )

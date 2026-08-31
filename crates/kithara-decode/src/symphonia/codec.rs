@@ -173,6 +173,7 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
+    #[cfg_attr(feature = "perf", hotpath::measure(label = "decode.symphonia.codec"))]
     fn decode_frame(
         &mut self,
         frame_data: &[u8],

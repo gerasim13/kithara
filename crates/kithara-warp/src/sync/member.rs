@@ -16,7 +16,7 @@ pub enum SyncMember<G: SyncGroup> {
         #[field(get, copy)]
         alignment: Option<BeatAlignment>,
         /// Live grid handle owned by the parent group.
-        grid: Box<dyn BeatGrid>,
+        grid: Box<dyn BeatGrid + Send + Sync>,
     },
     /// A live nested synchronization group.
     Group {

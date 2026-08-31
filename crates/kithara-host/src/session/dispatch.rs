@@ -108,10 +108,9 @@ pub(crate) fn run_cmd<B: AudioBackend>(state: &mut SessionState<B>, cmd: Cmd) ->
             Err(err) => Reply::Err(err),
         },
         Cmd::StartPlayer {
-            master_volume,
             player_id,
             sample_rate,
-        } => match lifecycle::start_player(state, player_id, sample_rate, master_volume) {
+        } => match lifecycle::start_player(state, player_id, sample_rate) {
             Ok(()) => Reply::Ok,
             Err(err) => Reply::Err(err),
         },
@@ -280,7 +279,7 @@ fn apply_mix<B: AudioBackend>(
     controls::set_player_master_volumes(state, &projected)?;
     for &HostLevel { grid_id, level } in levels {
         let updated = state.root.with_group(grid_id, |member| {
-            member.dispatch(|player| player.set_host_level(level));
+            member.commit_host_level(level);
         });
         if updated.is_none() {
             return Err(PlayError::MixForeignSession);
@@ -412,6 +411,7 @@ mod tests {
     use crate::{
         bridge::MixTapWriter,
         session::{
+            graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, MixTap, SessionState},
             testing::{attach_player, state as test_state},
@@ -621,7 +621,6 @@ mod tests {
                 Cmd::StartPlayer {
                     player_id,
                     sample_rate: SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
-                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -859,7 +858,6 @@ mod tests {
                 Cmd::StartPlayer {
                     player_id,
                     sample_rate: 48_000,
-                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -887,7 +885,6 @@ mod tests {
                 Cmd::StartPlayer {
                     player_id,
                     sample_rate: 0,
-                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -980,7 +977,6 @@ mod tests {
                 Cmd::StartPlayer {
                     player_id,
                     sample_rate: 0,
-                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -1049,7 +1045,6 @@ mod tests {
                 Cmd::StartPlayer {
                     player_id,
                     sample_rate: 44_100,
-                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -1103,7 +1098,6 @@ mod tests {
                 Cmd::StartPlayer {
                     player_id,
                     sample_rate: 44_100,
-                    master_volume: 1.0,
                 },
             ),
             Reply::Ok
@@ -1130,6 +1124,44 @@ mod tests {
             })
             .collect();
         run_host_cmd(state, HostCmd::ApplyMix { levels })
+    }
+
+    #[kithara::test]
+    fn host_mix_before_registration_becomes_the_start_level() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let grid_id = attach_player(&mut state);
+        assert!(matches!(
+            run_host_cmd(
+                &mut state,
+                HostCmd::ApplyMix {
+                    levels: Box::new([HostLevel::new(grid_id, 0.4)]),
+                },
+            ),
+            HostReply::Ok
+        ));
+        let Reply::PlayerRegistered(player_id) = run_cmd(
+            &mut state,
+            register_command(
+                grid_id,
+                SessionState::<RouteLossBackend>::DEFAULT_SAMPLE_RATE,
+            ),
+        ) else {
+            panic!("player registration must succeed")
+        };
+
+        start_player_cmd(&mut state, player_id);
+
+        assert_eq!(master_volume_of(&state, player_id), 0.4);
+        assert_eq!(
+            deck_by_player_id(&state, player_id)
+                .master_volume_memo
+                .as_ref()
+                .expect("started player has a volume node")
+                .volume,
+            master_gain(0.4),
+        );
     }
 
     #[kithara::test]

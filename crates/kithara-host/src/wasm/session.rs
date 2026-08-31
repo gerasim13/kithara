@@ -9,6 +9,11 @@ use crate::{
     session::{self as host_session, RootView, protocol::HostCmdMsg},
 };
 
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<HostCmdMsg>();
+};
+
 /// Worker-side endpoint for the canonical Host owned by the main thread.
 #[derive(Clone)]
 pub struct HostSender {

@@ -13,7 +13,8 @@ use crate::{
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
     player::{
-        PlayerConfig, PlayerControl, PlayerMember,
+        PlayerConfig, PlayerControl,
+        protocol::PlayerSync,
         state::{ItemQueue, PlayerParams, PlayerPhase},
     },
     sync::GroupState,
@@ -23,7 +24,7 @@ use crate::{
 /// Concrete Player implementation managing items queue.
 pub struct PlayerImpl {
     pub(crate) runtime: Arc<PlayerRuntime>,
-    pub(crate) sync: GroupState<PlayerMember>,
+    pub(crate) sync: PlayerSync,
 }
 
 impl Deref for PlayerImpl {
@@ -49,6 +50,8 @@ impl PlayerImpl {
             SessionEpoch::new(0),
             SyncMemberKind::Grid,
         );
+        #[cfg(target_arch = "wasm32")]
+        let sync = PlayerSync::new(sync);
 
         let bus = config.bus.clone().unwrap_or_default();
 
@@ -83,6 +86,7 @@ impl PlayerImpl {
             params,
             timestretch: config.timestretch,
             gapless_mode: config.gapless_mode,
+            block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
         };

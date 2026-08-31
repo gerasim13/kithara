@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bon::Builder;
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{SampleBuffer, SamplePool};
 use kithara_resampler::ResamplerBackend;
 use num_traits::cast::ToPrimitive;
 
@@ -10,9 +10,42 @@ use super::{
     grid::{GridParams, build_grid},
     runs::Runs,
 };
-use crate::{BeatArtifact, analyzer::BeatAnalysisConfig, coverage::FrameRange};
+use crate::{
+    BeatArtifact, BlobError,
+    analyzer::BeatAnalysisConfig,
+    blob::Writer,
+    coverage::FrameRange,
+    progress::{BeatMarkResume, BeatResume, RawBeatsResume},
+};
 
 const BUDGET_WINDOWS: usize = 4;
+
+#[derive(Clone, Copy)]
+struct WindowMeta {
+    full: bool,
+    index: usize,
+    keep_seconds: f32,
+    offset_seconds: f32,
+}
+
+pub(crate) struct DetectRequest {
+    input: SampleBuffer,
+    window: WindowMeta,
+}
+
+pub(crate) struct DetectOutput {
+    result: Result<RawBeats, BeatDetectError>,
+    window: WindowMeta,
+}
+
+impl DetectRequest {
+    pub(crate) fn detect(self, detector: &mut dyn BeatDetector) -> DetectOutput {
+        DetectOutput {
+            result: detector.detect(&self.input),
+            window: self.window,
+        }
+    }
+}
 
 #[derive(Builder)]
 pub(crate) struct BeatPassConfig<B>
@@ -102,13 +135,28 @@ where
         detector: &mut dyn BeatDetector,
         ending: bool,
     ) -> Result<BeatArtifact, BeatDetectError> {
-        if let Some(e) = self.failure.take() {
-            return Err(e);
-        }
         if ending {
             self.runs.flush();
         }
         self.detect(detector, ending)?;
+
+        self.build_artifact()
+    }
+
+    pub(crate) fn snapshot_deferred(
+        &mut self,
+        ending: bool,
+    ) -> Result<BeatArtifact, BeatDetectError> {
+        if ending {
+            self.runs.flush();
+        }
+        self.build_artifact()
+    }
+
+    fn build_artifact(&mut self) -> Result<BeatArtifact, BeatDetectError> {
+        if let Some(error) = self.failure.take() {
+            return Err(error);
+        }
 
         let mut raw = RawBeats {
             beats: Vec::new(),
@@ -132,6 +180,11 @@ where
         at: u64,
         detector: &mut dyn BeatDetector,
     ) {
+        self.push_interleaved_deferred(pcm, channels, at);
+        self.failure = self.detect(detector, false).err();
+    }
+
+    pub(crate) fn push_interleaved_deferred(&mut self, pcm: &[f32], channels: usize, at: u64) {
         if channels == 0 || self.failure.is_some() {
             return;
         }
@@ -149,32 +202,22 @@ where
         }
         self.runs.push(&mono[..], at);
         drop(mono);
-
-        self.failure = self.detect(detector, false).err();
     }
 
-    fn detect(
-        &mut self,
-        detector: &mut dyn BeatDetector,
-        trailing: bool,
-    ) -> Result<(), BeatDetectError> {
-        let Self {
-            runs,
-            windows,
-            short,
-            hop_frames,
-            min_frames,
-            ready_frames,
-            window_frames,
-            ..
-        } = self;
-        let rate = runs.target_rate().to_f32().unwrap_or(1.0);
+    pub(crate) fn prepare_detection(&mut self, trailing: bool) -> Option<DetectRequest> {
+        if self.failure.is_some() {
+            return None;
+        }
+        if trailing {
+            self.runs.flush();
+        }
+        let rate = self.runs.target_rate().to_f32().unwrap_or(1.0);
 
-        for (start, mono) in runs.spans() {
-            let base = runs.offset_in_run(0, start);
-            let mut index = base.div_ceil(*hop_frames);
+        for (start, mono) in self.runs.spans() {
+            let base = self.runs.offset_in_run(0, start);
+            let mut index = base.div_ceil(self.hop_frames);
             loop {
-                let span = index.saturating_mul(*hop_frames);
+                let span = index.saturating_mul(self.hop_frames);
                 let Some(offset) = span.checked_sub(base) else {
                     break;
                 };
@@ -183,43 +226,113 @@ where
                     break;
                 };
 
-                let full = available >= *ready_frames;
-                if !full && !trailing && available < *min_frames {
+                let full = available >= self.ready_frames;
+                if !full && !trailing && available < self.min_frames {
                     break;
                 }
-
-                let known = windows.contains_key(&index);
-                if !known || (full && short.contains(&index)) {
+                let known = self.windows.contains_key(&index);
+                if !known || (full && self.short.contains(&index)) {
                     let end = if full {
-                        offset.saturating_add(*window_frames)
+                        offset.saturating_add(self.window_frames)
                     } else {
                         mono.len()
                     };
-                    let keep = if full { *hop_frames } else { available };
-                    let Some(input) = mono.get(offset..end) else {
-                        break;
-                    };
-                    let raw = detector.detect(input)?;
-                    let offset_seconds = span.to_f32().unwrap_or(f32::MAX) / rate;
-                    let keep_seconds = keep.to_f32().unwrap_or(f32::MAX) / rate;
-                    windows.insert(
-                        index,
-                        RawBeats {
-                            beats: window_marks(raw.beats, offset_seconds, keep_seconds),
-                            downbeats: window_marks(raw.downbeats, offset_seconds, keep_seconds),
+                    let input = mono.get(offset..end)?;
+                    let mut owned = self
+                        .sample_pool
+                        .get_with(|buffer| buffer.resize(input.len(), 0.0));
+                    owned.copy_from_slice(input);
+                    let keep = if full { self.hop_frames } else { available };
+                    return Some(DetectRequest {
+                        input: owned,
+                        window: WindowMeta {
+                            full,
+                            index,
+                            keep_seconds: keep.to_f32().unwrap_or(f32::MAX) / rate,
+                            offset_seconds: span.to_f32().unwrap_or(f32::MAX) / rate,
                         },
-                    );
-                    if full {
-                        short.remove(&index);
-                    } else {
-                        short.insert(index);
-                    }
+                    });
                 }
                 if !full {
                     break;
                 }
                 index = index.saturating_add(1);
             }
+        }
+        None
+    }
+
+    pub(crate) fn apply_detection(&mut self, output: DetectOutput) {
+        match output.result {
+            Ok(raw) => self.apply_raw(output.window, raw),
+            Err(error) => self.failure = Some(error),
+        }
+    }
+
+    pub(crate) fn write_resume(&mut self, out: &mut Vec<u8>) {
+        self.runs.flush();
+        let mut writer = Writer::new(out);
+        self.runs.write_resume(&mut writer);
+        writer.write_len(self.windows.len());
+        for (index, raw) in &self.windows {
+            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
+            write_marks(&mut writer, &raw.beats);
+            write_marks(&mut writer, &raw.downbeats);
+        }
+        writer.write_len(self.short.len());
+        for index in &self.short {
+            writer.write_u64(u64::try_from(*index).unwrap_or(u64::MAX));
+        }
+    }
+
+    pub(crate) fn restore(&mut self, resume: BeatResume) -> Result<(), BlobError> {
+        let BeatResume {
+            runs,
+            dropped,
+            windows,
+            short,
+        } = resume;
+        self.runs.restore(runs, dropped)?;
+        self.windows = windows
+            .into_iter()
+            .map(|(index, raw)| (index, raw_beats(raw)))
+            .collect();
+        self.short = short;
+        if self
+            .short
+            .iter()
+            .any(|index| !self.windows.contains_key(index))
+        {
+            return Err(BlobError::Corrupt);
+        }
+        self.failure = None;
+        Ok(())
+    }
+
+    fn apply_raw(&mut self, window: WindowMeta, raw: RawBeats) {
+        self.windows.insert(
+            window.index,
+            RawBeats {
+                beats: window_marks(raw.beats, window.offset_seconds, window.keep_seconds),
+                downbeats: window_marks(raw.downbeats, window.offset_seconds, window.keep_seconds),
+            },
+        );
+        if window.full {
+            self.short.remove(&window.index);
+        } else {
+            self.short.insert(window.index);
+        }
+    }
+
+    fn detect(
+        &mut self,
+        detector: &mut dyn BeatDetector,
+        trailing: bool,
+    ) -> Result<(), BeatDetectError> {
+        while let Some(request) = self.prepare_detection(trailing) {
+            let DetectOutput { result, window } = request.detect(detector);
+            let raw = result?;
+            self.apply_raw(window, raw);
         }
         Ok(())
     }
@@ -234,6 +347,28 @@ fn window_marks(marks: Vec<BeatMark>, offset: f32, keep_until: f32) -> Vec<BeatM
             ..mark
         })
         .collect()
+}
+
+fn write_marks(writer: &mut Writer<'_>, marks: &[BeatMark]) {
+    writer.write_len(marks.len());
+    for mark in marks {
+        writer.write_f32(mark.at);
+        writer.write_f32(mark.confidence);
+    }
+}
+
+fn raw_beats(raw: RawBeatsResume) -> RawBeats {
+    RawBeats {
+        beats: raw.beats.into_iter().map(beat_mark).collect(),
+        downbeats: raw.downbeats.into_iter().map(beat_mark).collect(),
+    }
+}
+
+const fn beat_mark(mark: BeatMarkResume) -> BeatMark {
+    BeatMark {
+        at: mark.at,
+        confidence: mark.confidence,
+    }
 }
 
 fn frames_for_seconds(sample_rate: u32, seconds: u32) -> usize {
