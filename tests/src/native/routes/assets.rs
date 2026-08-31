@@ -9,7 +9,7 @@ use axum::{
 use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{
     assets::by_name,
-    hls::{HlsBundle, long_drm, long_plain, rss_plain},
+    hls::{HlsBundle, gapless_drm, gapless_plain, long_drm, long_plain, rss_plain},
 };
 
 use crate::test_server_state::TestServerState;
@@ -18,6 +18,8 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
     Router::new()
         .route("/assets/hls/{*path}", get(plain_hls))
         .route("/assets/drm/{*path}", get(drm_hls))
+        .route("/assets/hls-gapless/{*path}", get(plain_gapless_hls))
+        .route("/assets/drm-gapless/{*path}", get(drm_gapless_hls))
         .route("/assets/hls-rss/{*path}", get(rss_hls))
         .route("/streamhq", get(streamhq))
 }
@@ -28,6 +30,14 @@ async fn plain_hls(Path(path): Path<String>) -> Response {
 
 async fn drm_hls(Path(path): Path<String>) -> Response {
     serve_hls(long_drm(), &path)
+}
+
+async fn plain_gapless_hls(Path(path): Path<String>) -> Response {
+    serve_hls(gapless_plain(), &path)
+}
+
+async fn drm_gapless_hls(Path(path): Path<String>) -> Response {
+    serve_hls(gapless_drm(), &path)
 }
 
 async fn rss_hls(Path(path): Path<String>) -> Response {
