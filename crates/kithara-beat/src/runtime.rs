@@ -66,7 +66,7 @@ impl TryFrom<(&'static str, &[u8])> for RtenModel {
 impl RtenModel {
     /// Run inference with named inputs, return named outputs.
     pub(crate) fn run<S>(
-        &mut self,
+        &self,
         inputs: &[(&str, &Tensor)],
         pools: &PoolRegion<S>,
     ) -> Result<HashMap<String, Tensor>, BeatError>

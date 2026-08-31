@@ -46,6 +46,33 @@ pub(crate) fn order(nodes: &[Node<'_>]) -> Result<Vec<usize>, GraphError> {
     Ok(ordered)
 }
 
+pub(crate) fn levels(nodes: &[Node<'_>]) -> Result<Vec<Vec<usize>>, GraphError> {
+    let ordered = order(nodes)?;
+    let by_name: HashMap<_, _> = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.name, index))
+        .collect();
+    let mut depths = vec![0; nodes.len()];
+    let mut levels = Vec::<Vec<usize>>::new();
+
+    for index in ordered {
+        let depth = nodes[index]
+            .dependencies
+            .iter()
+            .filter_map(|dependency| by_name.get(dependency))
+            .map(|dependency| depths[*dependency] + 1)
+            .max()
+            .unwrap_or(0);
+        depths[index] = depth;
+        if levels.len() <= depth {
+            levels.resize_with(depth + 1, Vec::new);
+        }
+        levels[depth].push(index);
+    }
+    Ok(levels)
+}
+
 fn visit(
     index: usize,
     nodes: &[Node<'_>],
@@ -91,7 +118,7 @@ fn visit(
 mod tests {
     use kithara_test_utils::kithara;
 
-    use super::{GraphError, Node, order};
+    use super::{GraphError, Node, levels, order};
 
     #[kithara::test(native, flash(false))]
     fn dependencies_precede_their_consumers() {
@@ -114,6 +141,38 @@ mod tests {
         let names: Vec<_> = ordered.iter().map(|&index| nodes[index].name).collect();
 
         assert_eq!(names, ["audio", "score", "analysis"]);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn independent_nodes_share_a_level() {
+        let nodes = [
+            Node {
+                name: "analysis-a",
+                dependencies: &["audio-a"],
+            },
+            Node {
+                name: "audio-a",
+                dependencies: &[],
+            },
+            Node {
+                name: "analysis-b",
+                dependencies: &["audio-b"],
+            },
+            Node {
+                name: "audio-b",
+                dependencies: &[],
+            },
+        ];
+
+        let grouped = levels(&nodes).expect("valid graph");
+        let names: Vec<Vec<_>> = grouped
+            .iter()
+            .map(|level| level.iter().map(|&index| nodes[index].name).collect())
+            .collect();
+        assert_eq!(
+            names,
+            [vec!["audio-a", "audio-b"], vec!["analysis-a", "analysis-b"]]
+        );
     }
 
     #[kithara::test(native, flash(false))]

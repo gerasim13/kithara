@@ -1,4 +1,7 @@
-use std::{num::NonZeroU32, sync::OnceLock};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    sync::OnceLock,
+};
 
 use futures_lite::future::block_on;
 use kithara_analysis::{AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder};
@@ -8,7 +11,7 @@ use kithara_audio::{
 use kithara_bufpool::testing::{Pools, TestPools, pools};
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
-use kithara_platform::time::Duration;
+use kithara_platform::{thread, time::Duration};
 use kithara_resampler::rubato::RubatoBackend;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 
@@ -56,8 +59,12 @@ fn worker() -> &'static AnalysisWorker {
     static WORKER: OnceLock<AnalysisWorker> = OnceLock::new();
     WORKER.get_or_init(|| {
         let builder = AnalyzerBuilder::<RubatoBackend, TestPools>::new(pools()).with_beat();
-        AnalysisWorker::new(AnalysisWorkerConfig::for_builder(builder).build())
-            .unwrap_or_else(|error| panic!("rhythm analysis worker: {error}"))
+        let compute_tasks = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
+        AnalysisWorker::new(
+            AnalysisWorkerConfig::for_builder(builder)
+                .max_compute_tasks(compute_tasks)
+                .build(),
+        )
     })
 }
 

@@ -34,7 +34,9 @@ use std::{
     fmt::Write as _,
     fs,
     hash::{Hash, Hasher},
+    panic::resume_unwind,
     path::{Path, PathBuf},
+    thread,
 };
 
 use encoders::Lockfile;
@@ -155,70 +157,89 @@ fn materialize(
             dependencies: def.dependencies,
         })
         .collect();
-    let ordered =
-        graph::order(&nodes).unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
+    let levels =
+        graph::levels(&nodes).unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
+    let parallelism = thread::available_parallelism().map_or(1, usize::from);
 
-    for index in ordered {
-        let (name, id, def) = &resolved[index];
-        if store::read_entry(namespace, id, def.ext).is_some() {
-            continue;
-        }
-        if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
-            unavailable.insert(
-                name.clone(),
-                format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
-            );
-            continue;
-        }
-        let _lock = store::lock_entry(namespace, id)
-            .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
-        if store::read_entry(namespace, id, def.ext).is_some() {
-            continue;
-        }
-        let dependency_bytes: Vec<_> = def
-            .dependencies
-            .iter()
-            .map(|dependency| {
-                let (_, dependency_id, dependency_def) = resolved
+    for level in levels {
+        for batch in level.chunks(parallelism) {
+            let results = thread::scope(|scope| {
+                batch
                     .iter()
-                    .find(|(candidate, _, _)| candidate == dependency)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "kithara-test-fixtures: graph accepted missing dependency `{dependency}`"
-                        )
-                    });
-                store::read_entry(namespace, dependency_id, dependency_def.ext).unwrap_or_else(|| {
-                    panic!(
-                        "kithara-test-fixtures: dependency `{dependency}` of `{name}` was not materialized"
-                    )
-                })
-            })
-            .collect();
-        let inputs: Vec<_> = dependency_bytes.iter().map(Vec::as_slice).collect();
-        let context = context::BuildContext::new(namespace, id);
-        let bytes = match (def.build)(context, &inputs) {
-            AssetBuild::Ready(bytes) => bytes,
-            AssetBuild::Unavailable(reason) if def.optional => {
-                println!("cargo:warning=optional fixture `{name}` unavailable: {reason}");
-                println!(
-                    "cargo:rerun-if-changed={}",
-                    store::entry_path(namespace, id, def.ext).display()
-                );
-                unavailable.insert(name.clone(), reason);
-                continue;
-            }
-            AssetBuild::Unavailable(reason) => {
-                panic!("kithara-test-fixtures: required fixture `{name}` unavailable: {reason}")
-            }
-        };
-        assert!(
-            !bytes.is_empty(),
-            "kithara-test-fixtures: `{name}` produced no bytes"
-        );
-        store::write_entry(namespace, id, def.ext, &bytes)
-            .unwrap_or_else(|error| panic!("kithara-test-fixtures: write `{name}`: {error}"));
+                    .map(|&index| scope.spawn(move || materialize_one(namespace, resolved, index)))
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or_else(|panic| resume_unwind(panic)))
+                    .collect::<Vec<_>>()
+            });
+            unavailable.extend(results.into_iter().flatten());
+        }
     }
     unavailable
+}
+
+fn materialize_one(
+    namespace: &Path,
+    resolved: &[(String, String, &'static AssetDef)],
+    index: usize,
+) -> Option<(String, String)> {
+    let (name, id, def) = &resolved[index];
+    if store::read_entry(namespace, id, def.ext).is_some() {
+        return None;
+    }
+    if def.optional && std::env::var_os(REMOTE_FIXTURES_ENV).is_none() {
+        return Some((
+            name.clone(),
+            format!("remote hydration disabled; set {REMOTE_FIXTURES_ENV}"),
+        ));
+    }
+    let _lock = store::lock_entry(namespace, id)
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: lock for `{name}`: {error}"));
+    if store::read_entry(namespace, id, def.ext).is_some() {
+        return None;
+    }
+    let dependency_bytes: Vec<_> = def
+        .dependencies
+        .iter()
+        .map(|dependency| {
+            let (_, dependency_id, dependency_def) = resolved
+                .iter()
+                .find(|(candidate, _, _)| candidate == dependency)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "kithara-test-fixtures: graph accepted missing dependency `{dependency}`"
+                    )
+                });
+            store::read_entry(namespace, dependency_id, dependency_def.ext).unwrap_or_else(|| {
+                panic!(
+                    "kithara-test-fixtures: dependency `{dependency}` of `{name}` was not materialized"
+                )
+            })
+        })
+        .collect();
+    let inputs: Vec<_> = dependency_bytes.iter().map(Vec::as_slice).collect();
+    let context = context::BuildContext::new(namespace, id);
+    let bytes = match (def.build)(context, &inputs) {
+        AssetBuild::Ready(bytes) => bytes,
+        AssetBuild::Unavailable(reason) if def.optional => {
+            println!("cargo:warning=optional fixture `{name}` unavailable: {reason}");
+            println!(
+                "cargo:rerun-if-changed={}",
+                store::entry_path(namespace, id, def.ext).display()
+            );
+            return Some((name.clone(), reason));
+        }
+        AssetBuild::Unavailable(reason) => {
+            panic!("kithara-test-fixtures: required fixture `{name}` unavailable: {reason}")
+        }
+    };
+    assert!(
+        !bytes.is_empty(),
+        "kithara-test-fixtures: `{name}` produced no bytes"
+    );
+    store::write_entry(namespace, id, def.ext, &bytes)
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: write `{name}`: {error}"));
+    None
 }
 
 fn codegen(
