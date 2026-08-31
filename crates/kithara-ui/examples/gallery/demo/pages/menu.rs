@@ -95,7 +95,6 @@ pub(crate) struct MenuState {
     autogain: bool,
     casting: bool,
     mono: bool,
-    open: bool,
     recording: bool,
     wave_follow: bool,
     active: usize,
@@ -104,7 +103,6 @@ pub(crate) struct MenuState {
 impl Default for MenuState {
     fn default() -> Self {
         let mut state = Self {
-            open: true,
             group: MenuGroup::Win,
             windows: vec![
                 MenuWindow::new(0, 0, Consts::CLUB_MODULES),
@@ -144,10 +142,6 @@ impl MenuState {
             return self.apply_layout(number);
         }
         match instance {
-            // The widget publishes the dismissal on the popover's own path, so
-            // this handler sets false; the burger stays the only toggle.
-            "pop" | "header-close" => self.open = false,
-            "burger" => self.open = !self.open,
             "new-window" => self.open_window(),
             "modules-head" => self.toggle_group(MenuGroup::Mod),
             "layouts-head" => self.toggle_group(MenuGroup::Lay),
@@ -170,10 +164,6 @@ impl MenuState {
         self.windows[active].layout = index;
         self.rebuild();
         true
-    }
-
-    pub(crate) const fn set_open(&mut self, open: bool) {
-        self.open = open;
     }
 
     const fn can_open(&self) -> bool {
@@ -213,7 +203,6 @@ impl MenuState {
     pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let value = match id {
-            "ui.menu.open" => ReadValue::Bool(self.open),
             "ui.menu.group_open" => ReadValue::Bool(self.group_open(scope)),
             "ui.menu.group_hidden" => ReadValue::Bool(!self.group_open(scope)),
             "ui.window.count" => ReadValue::Text(&self.count_label),

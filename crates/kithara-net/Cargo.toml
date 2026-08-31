@@ -97,7 +97,6 @@ wasm-bindgen-test = { workspace = true }
 kithara-platform = { workspace = true, features = ["tokio-net"] }
 
 axum = { workspace = true }
-memory-stats = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,5 +1,5 @@
 use kithara::{self, stream::AudioCodec};
-use kithara_encode::{BytesEncodeTarget, EncodeError, EncoderFactory, InnerEncoder};
+use kithara_encode::{EncodeError, EncoderFactory};
 
 #[kithara::test]
 #[case::aac(AudioCodec::AacLc, 1024)]
@@ -18,10 +18,4 @@ fn frame_samples_reject_unknown_packaged_codec() {
         error,
         EncodeError::UnsupportedCodec(AudioCodec::Mp3)
     ));
-}
-
-#[kithara::test]
-fn create_bytes_returns_public_encoder_abstraction() {
-    let _encoder: Box<dyn InnerEncoder> = EncoderFactory::create_bytes(BytesEncodeTarget::Mp3)
-        .expect("BUG: mp3 encoder is supported on the test target");
 }

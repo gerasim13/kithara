@@ -190,6 +190,7 @@ mod tests {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         source::UiConfig,
+        view,
     };
 
     #[derive(Default)]
@@ -342,7 +343,6 @@ mod tests {
             self.add(
                 Model,
                 &[
-                    "ui.menu.open",
                     "ui.window.can_open",
                     "ui.prefs.wave_follow",
                     "ui.prefs.autogain",
@@ -391,8 +391,6 @@ mod tests {
             self.add(
                 Command,
                 &[
-                    "ui.menu.toggle",
-                    "ui.menu.close",
                     "ui.window.open",
                     "ui.window.toggle_full_screen",
                     "ui.prefs.toggle_wave_follow",
@@ -440,7 +438,6 @@ mod tests {
             self.add(
                 Model,
                 &[
-                    "clock.open",
                     "clock.family.step",
                     "clock.family.leap",
                     "clock.grid.quantize",
@@ -494,8 +491,6 @@ mod tests {
             self.add(
                 Command,
                 &[
-                    "clock.toggle",
-                    "clock.close",
                     "clock.nudge_up",
                     "clock.nudge_down",
                     "clock.family.step",
@@ -539,6 +534,7 @@ mod tests {
                 builtin::skin_doc(),
                 builtin::text_doc(),
                 &UiConfig::default(),
+                &view::EMPTY,
             )
             .unwrap_or_else(|error| panic!("{preset} must compile: {error}"));
             PreviewGeometry::new(&ui.root)

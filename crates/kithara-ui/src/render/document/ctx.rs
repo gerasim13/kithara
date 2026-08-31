@@ -10,6 +10,7 @@ use crate::{
     render::{ReadValue, Reads, custom::CustomKinds},
     size::Snapshot,
     skin::SkinDoc,
+    view::ViewState,
 };
 
 /// The host's reading of time for one frame.
@@ -73,6 +74,9 @@ pub struct Ctx<'a, 'r> {
     /// the same set was declared to `UiConfig`.
     #[field(with, option_set_some, vis = "pub")]
     pub kinds: Option<&'a CustomKinds>,
+    /// The state the screen keeps for itself, which the host owns and the
+    /// application is not asked for.
+    view: &'r ViewState,
     reads: &'r dyn Reads,
 }
 
@@ -81,6 +85,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
     pub const fn new(
         ui: &'a CompiledUi,
         reads: &'r dyn Reads,
+        view: &'r ViewState,
         skin: &'a SkinDoc,
         clock: Clock,
     ) -> Self {
@@ -89,6 +94,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             skin,
             clock,
             kinds: None,
+            view,
             reads,
         }
     }
@@ -109,6 +115,19 @@ impl<'a, 'r> Ctx<'a, 'r> {
     pub fn read(self, binding: &Binding) -> Option<ReadValue<'r>> {
         match binding.kind {
             BindingKind::Command => None,
+            // The screen's own state, which no application declares and none is
+            // asked for.
+            BindingKind::View { .. } => Some(ReadValue::Bool(
+                self.view.flag(self.ui.resolve(binding.key)),
+            )),
+            // Whether the page this binding names is the page standing, which
+            // is how a nav item lights the page it turns to.
+            BindingKind::Page { name } => Some(ReadValue::Bool(
+                self.ui
+                    .views()
+                    .standing(self.view, self.ui.resolve(binding.key))
+                    == Some(self.ui.resolve(name)),
+            )),
             _ => self.get(self.ui.resolve(binding.key)),
         }
     }
@@ -120,8 +139,13 @@ impl<'a, 'r> Ctx<'a, 'r> {
     /// a later frame without holding on to this one.
     #[must_use]
     pub fn endpoint(self, read: Option<&Binding>) -> Option<&'a str> {
-        read.filter(|binding| !matches!(binding.kind, BindingKind::Command))
-            .map(|binding| self.ui.resolve(binding.key))
+        read.filter(|binding| {
+            !matches!(
+                binding.kind,
+                BindingKind::Command | BindingKind::View { .. } | BindingKind::Page { .. }
+            )
+        })
+        .map(|binding| self.ui.resolve(binding.key))
     }
 
     /// What one text binding answers, or nothing when there is no binding, no
@@ -214,6 +238,7 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
         ids::EndpointId,
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry},
         source::UiConfig,
+        view,
     };
 
     struct Nothing;
@@ -242,9 +267,16 @@ pub(crate) fn probe(reads: &dyn Reads) -> Ctx<'_, '_> {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the probe document must compile: {error}"))
     });
 
-    Ctx::new(&EMPTY, reads, builtin::skin_doc(), Clock::default())
+    Ctx::new(
+        &EMPTY,
+        reads,
+        &view::EMPTY,
+        builtin::skin_doc(),
+        Clock::default(),
+    )
 }

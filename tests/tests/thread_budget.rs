@@ -12,7 +12,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir,
+    PackagedTestServer, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara, temp_dir,
     waits::wait_thread_count_quiesced,
@@ -80,7 +80,7 @@ fn thread_budget_audio_worker_is_one_thread() {
     hang_timeout_secs(3)
 )]
 async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+    let server = PackagedTestServer::new().await;
     let cancel = CancelToken::never();
 
     let before = active_named_thread_count();
@@ -91,7 +91,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
             root: temp_dir.path().into(),
         })
         .build();
-    let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
+    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(store)
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -131,7 +131,7 @@ async fn thread_budget_single_hls_pipeline(temp_dir: TestTempDir) {
     hang_timeout_secs(3)
 )]
 async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
-    let server = TestServerHelper::new().await;
+    let server = PackagedTestServer::new().await;
     let cancel = CancelToken::never();
     let pools = pools();
     let shared_worker = PlayWorker::new(
@@ -151,7 +151,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .flush_hub(shared_hub.clone())
         .build();
 
-    let hls_config = HlsConfig::for_url(server.asset("hls/master.m3u8"))
+    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -163,7 +163,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .await
         .expect("open first shared-worker track");
 
-    let hls_config2 = HlsConfig::for_url(server.asset("hls/master.m3u8"))
+    let hls_config2 = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(shared_store.clone())
         .pools(pools.clone())
         .cancel(cancel.clone())
@@ -175,7 +175,7 @@ async fn thread_budget_three_tracks_shared_worker(temp_dir: TestTempDir) {
         .await
         .expect("open second shared-worker track");
 
-    let drm_config = HlsConfig::for_url(server.asset("drm/master.m3u8"))
+    let drm_config = HlsConfig::for_url(server.url("/master-encrypted.m3u8"))
         .store(shared_store)
         .pools(pools)
         .cancel(cancel.clone())

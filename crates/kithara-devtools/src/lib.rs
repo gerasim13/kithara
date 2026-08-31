@@ -5,6 +5,7 @@ pub mod ast_grep;
 pub mod audit;
 pub mod audit_clippy;
 pub mod ci_report;
+pub mod clippy;
 pub mod common;
 pub mod ctx;
 pub mod format;
@@ -25,6 +26,7 @@ pub mod powerset;
 pub mod quality;
 pub mod quality_assessment;
 pub mod quality_lab;
+pub mod sccache;
 pub mod scope;
 pub mod semver;
 pub mod similarity;
@@ -35,6 +37,7 @@ mod stress_run;
 #[cfg(feature = "lint")]
 pub mod style;
 pub mod test;
+mod touched;
 pub mod typos;
 pub mod util;
 pub mod verdict;
@@ -58,6 +61,8 @@ pub enum CoreCommand {
     AuditClippy(audit_clippy::AuditClippyArgs),
     /// Thin wrapper around `typos` that pins the workspace config.
     Typos(typos::TyposArgs),
+    /// Workspace Clippy gate, cached the way the machine it runs on wants.
+    Clippy,
     /// Analyze structural and behavioral similarity, then run similarity-rs.
     Similarity(similarity::SimilarityArgs),
     /// Cargo manifest hygiene checks.
@@ -112,6 +117,7 @@ pub fn run(cmd: &CoreCommand, ctx: &Ctx) -> anyhow::Result<()> {
         CoreCommand::AstGrep(args) => ast_grep::run(args, ctx),
         CoreCommand::AuditClippy(args) => audit_clippy::run(args, ctx),
         CoreCommand::Typos(args) => typos::run(args, ctx),
+        CoreCommand::Clippy => clippy::run(),
         CoreCommand::Similarity(args) => similarity::run(args, ctx),
         CoreCommand::Manifest(args) => manifest::run(args, ctx),
         CoreCommand::Orphans(args) => orphans::run(args, ctx),

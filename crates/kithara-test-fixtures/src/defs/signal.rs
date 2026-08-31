@@ -36,7 +36,7 @@ fn encode(
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
     let pcm = Pcm::new(sample_rate, channels, total_frames, wave);
-    EncoderFactory::encode_bytes(BytesEncodeRequest {
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target,
         bit_rate,

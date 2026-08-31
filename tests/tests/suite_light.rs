@@ -29,7 +29,6 @@ mod kithara_encode {
     mod factory_tests;
     mod flac_tests;
     mod stream_tests;
-    mod traits_tests;
     mod types_tests;
 }
 

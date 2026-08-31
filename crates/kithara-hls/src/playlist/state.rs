@@ -132,37 +132,24 @@ impl PlaylistState {
             })
             .max()
     }
-}
 
-/// Crate-internal namespace bundle for cross-module read access to
-/// parsed playlist data. Not used polymorphically — the trait exists
-/// solely to group the visibility of N methods under a single
-/// `pub(crate)` marker rather than annotating each one individually.
-pub(crate) trait PlaylistAccess: Send + Sync {
-    fn init_url(&self, variant: VariantIndex) -> Option<Url>;
-    fn segment_byte_range_len(&self, variant: VariantIndex, index: usize) -> Option<u64>;
-    fn segment_decode_range(
-        &self,
-        variant: VariantIndex,
-        index: usize,
-    ) -> Option<(Duration, Duration)>;
-    fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url>;
-}
-
-impl PlaylistAccess for PlaylistState {
-    fn init_url(&self, variant: VariantIndex) -> Option<Url> {
+    pub(crate) fn init_url(&self, variant: VariantIndex) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
         state.init_url.clone()
     }
 
-    fn segment_byte_range_len(&self, variant: VariantIndex, index: usize) -> Option<u64> {
+    pub(crate) fn segment_byte_range_len(
+        &self,
+        variant: VariantIndex,
+        index: usize,
+    ) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
         state.segments.get(index)?.byte_range_len
     }
 
-    fn segment_decode_range(
+    pub(crate) fn segment_decode_range(
         &self,
         variant: VariantIndex,
         index: usize,
@@ -186,14 +173,12 @@ impl PlaylistAccess for PlaylistState {
         result
     }
 
-    fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url> {
+    pub(crate) fn segment_url(&self, variant: VariantIndex, index: usize) -> Option<Url> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
         state.segments.get(index).map(|s| s.url.clone())
     }
-}
 
-impl PlaylistState {
     /// Advertised variant bandwidth from the master playlist, in bits per
     /// second.
     pub(crate) fn variant_bandwidth_bps(&self, variant: VariantIndex) -> Option<u64> {

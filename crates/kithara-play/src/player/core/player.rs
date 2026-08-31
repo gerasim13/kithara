@@ -87,6 +87,7 @@ impl<S> PlayerImpl<S> {
             params,
             timestretch: config.timestretch,
             gapless_mode: config.gapless_mode,
+            block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),
             items: ItemQueue::new(bus),
         };

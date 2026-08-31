@@ -23,7 +23,8 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_test_fixtures::signal::{
-    FrameClass, Replay, ascending_phase_replays, classify_windows, goertzel_magnitude,
+    FrameClass, Replay, SAW_PERIOD, ascending_phase_replays, classify_windows, goertzel_magnitude,
+    phase,
 };
 
 use crate::bufpool_ext::TestPools;
@@ -51,6 +52,12 @@ const CROSSFADE_SECS: f32 = 5.0;
 const CROSSFADE_DURATION_WAIT_SECS: f64 = 12.0;
 const REAL_GEOMETRY_DURATION_WAIT_SECS: f64 = 30.0;
 const SEEK_OFFSET_SECS: f64 = 0.5;
+/// `SEEK_OFFSET_SECS` at `SAMPLE_RATE`: what a seek to `duration - 0.5s` leaves
+/// of track A.
+const EXPECTED_POST_SEEK_FRAMES: usize = 22_050;
+/// One phase unit is one frame, so this admits a landing anywhere inside the
+/// render block that carries it - the granularity post-seek audio starts at.
+const SEEK_PHASE_TOL_UNITS: usize = 512;
 const MIN_RENDER_PEAK: f32 = 1.0e-6;
 const TONE_A_FREQ_HZ: f64 = 440.0;
 const TONE_B_FREQ_HZ: f64 = 880.0;
@@ -708,7 +715,7 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     let server = TestServerHelper::new().await;
     let setup = setup_queue(&server, &temp_dir, true).await;
 
-    let (rendered, seek_issue_frame, seek_complete_frame) =
+    let (rendered, seek_issue_frame, seek_complete_frame, duration) =
         render_seek_near_end_until_b_with_postroll(&setup.queue, &setup.harness, SAMPLE_RATE).await;
     assert_provenance_headroom(&rendered, "FLAC seek near EOF");
     let left_raw = deinterleave_left(&rendered, usize::from(CHANNELS));
@@ -738,6 +745,20 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
     );
     let last_ascending_end_frame = frame_for_window(last_ascending_window + 1);
 
+    // Where the seek landed, read off the rendered audio rather than off the
+    // event. `SeekComplete` is published from a read, so its frame leads the
+    // audible position by the ring depth, and a length measured from it would
+    // carry that lead as a tolerance instead of stating a property. The last
+    // Ascending run before B is the post-seek tail itself: its first window is
+    // the landing, its length is what the seek left of track A.
+    let (_, landing_window, landing_windows) = require_run_containing(
+        &runs,
+        FrameClass::Ascending,
+        last_ascending_window,
+        &search_context,
+    );
+    let landing_frame = frame_for_window(landing_window);
+
     let phase_start_frame = seek_complete_frame.saturating_add(WINDOW_FRAMES);
     let replays = ascending_phase_replays(
         &left,
@@ -763,6 +784,23 @@ async fn seek_near_end_then_eof_advance_emits_only_b_flac(temp_dir: TestTempDir)
             Some(b_onset_window),
             setup.queue.current_index()
         )
+    );
+
+    let expected_phase = frames_from_secs(duration - SEEK_OFFSET_SECS, SAMPLE_RATE) % SAW_PERIOD;
+    let landing_phase_delta = phase::distance(phase::units(left[landing_frame]), expected_phase);
+    assert!(
+        landing_phase_delta <= SEEK_PHASE_TOL_UNITS,
+        "seek must land at the requested position in track A: \
+         landing_frame={landing_frame}; phase_delta={landing_phase_delta} units; {}",
+        context.dump()
+    );
+
+    assert_close_len(
+        landing_windows * WINDOW_FRAMES,
+        EXPECTED_POST_SEEK_FRAMES,
+        TRACK_FRAME_TOLERANCE,
+        "post-seek ascending length must be approximately 0.5s before B starts",
+        &context,
     );
 
     assert_no_ascending_after_b(&classes, &context);
@@ -1561,12 +1599,13 @@ async fn render_seek_near_end_until_b_with_postroll(
     queue: &Queue<TestPools>,
     harness: &OfflinePlayerHarness,
     render_sample_rate: u32,
-) -> (Vec<f32>, usize, usize) {
+) -> (Vec<f32>, usize, usize, f64) {
     let block_duration = render_block_duration(render_sample_rate);
     let mut progress = RenderProgress::new();
     let mut events = queue.subscribe();
     let mut seek_issue_frame: Option<usize> = None;
     let mut seek_complete_frame: Option<usize> = None;
+    let mut seek_duration: Option<f64> = None;
 
     for _ in 0..BLOCK_BUDGET {
         let _ = queue.tick();
@@ -1593,6 +1632,7 @@ async fn render_seek_near_end_until_b_with_postroll(
         {
             queue.seek(duration - SEEK_OFFSET_SECS).expect("seek");
             seek_issue_frame = Some(progress.rendered_frames());
+            seek_duration = Some(duration);
         }
 
         time::sleep(block_duration).await;
@@ -1606,6 +1646,7 @@ async fn render_seek_near_end_until_b_with_postroll(
         progress.rendered,
         seek_issue_frame.expect("seek must be issued after duration becomes available"),
         seek_complete_frame.expect("seek must complete before track B postroll"),
+        seek_duration.expect("seek must be issued after duration becomes available"),
     )
 }
 
@@ -1981,6 +2022,28 @@ fn require_last_class_window_before(
         .unwrap_or_else(|| {
             panic!(
                 "target class {target:?} must appear before window {before_window}; {}",
+                context.dump()
+            )
+        })
+}
+
+/// The run of `target` that covers `window`. A window says which class a moment
+/// belongs to; the run says where that stretch began and how long it lasted,
+/// which is what a length property is stated about.
+fn require_run_containing(
+    runs: &[ClassRun],
+    target: FrameClass,
+    window: usize,
+    context: &ProvenanceDumpContext<'_>,
+) -> ClassRun {
+    runs.iter()
+        .copied()
+        .find(|(class, start, len)| {
+            *class == target && *start <= window && window < start.saturating_add(*len)
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "window {window} must belong to a {target:?} run; {}",
                 context.dump()
             )
         })

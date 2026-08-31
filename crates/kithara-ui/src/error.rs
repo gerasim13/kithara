@@ -225,6 +225,21 @@ pub enum UiDocError {
         name: String,
         path: String,
     },
+    #[error("{origin}: view state {id:?} is written at {path} and read nowhere")]
+    UnreadState {
+        origin: SourceUri,
+        id: String,
+        path: String,
+    },
+    #[error("{origin}: view state {id:?} is not one this screen names")]
+    UnknownState { origin: SourceUri, id: String },
+    #[error("{origin}: {path} names page {page:?} of view state {id:?}, which has no such page")]
+    UnknownPage {
+        origin: SourceUri,
+        id: String,
+        page: String,
+        path: String,
+    },
     #[error("{origin}: unknown endpoint {category} {id:?} at {path}")]
     UnknownEndpoint {
         origin: SourceUri,

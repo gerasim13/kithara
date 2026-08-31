@@ -27,7 +27,7 @@ use super::{
 use crate::{
     HlsError, HlsResult,
     config::{DEFAULT_ACQUIRE_ATTEMPT_BUDGET, DEFAULT_DOWNLOAD_BATCH_SIZE, SizeProbeMethod},
-    playlist::{PlaylistAccess, PlaylistState},
+    playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };

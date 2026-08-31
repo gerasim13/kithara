@@ -2,5 +2,5 @@ mod backend;
 mod input;
 mod resampler;
 
-pub use backend::{AppleAudioConverterBackend, AppleAudioConverterConfig, AudioConverterFactory};
-pub use resampler::{AppleResampler, AudioToolboxConverterFactory};
+pub use backend::AppleAudioConverterBackend;
+pub use resampler::AppleResampler;

@@ -655,7 +655,7 @@ mod tests {
         sync::OnceLock,
     };
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState, PendingAbrClaim};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState, PendingAbrClaim};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, AbrReason, EventBus, RequestPriority, VariantIndex};
     use kithara_platform::{
@@ -666,6 +666,7 @@ mod tests {
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
         SeekControl,
     };
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
@@ -677,26 +678,6 @@ mod tests {
     type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
     type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
     type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
-
-    struct TestAbrPeer {
-        cancel: CancelToken,
-        state: Arc<AbrState>,
-        variants: Vec<kithara_events::VariantInfo>,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-
-        fn variants(&self) -> Vec<kithara_events::VariantInfo> {
-            self.variants.clone()
-        }
-    }
 
     fn switch_coord() -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
         switch_coord_with_reason(AbrReason::ManualOverride)
@@ -818,34 +799,14 @@ mod tests {
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let abr_publisher = abr_state.publisher();
-        let peer: Arc<dyn Abr> =
-            Arc::new(TestAbrPeer {
-                cancel: cancel.clone(),
-                state: Arc::clone(&abr_state),
-                variants: vec![
-                    kithara_events::VariantInfo {
-                        variant_index: VariantIndex::new(0),
-                        bandwidth_bps: Some(128_000),
-                        codecs: Some("mp4a.40.2".into()),
-                        container: Some("fmp4".into()),
-                        duration: kithara_events::VariantDuration::Segmented(vec![
-                        Duration::from_secs(2);
-                        v0_segments as usize
-                    ]),
-                        name: None,
-                    },
-                    kithara_events::VariantInfo {
-                        variant_index: VariantIndex::new(1),
-                        bandwidth_bps: Some(96_000),
-                        codecs: Some("mp3".into()),
-                        container: Some("mpeg-audio".into()),
-                        duration: kithara_events::VariantDuration::Segmented(vec![
-                            Duration::from_secs(2),
-                        ]),
-                        name: None,
-                    },
-                ],
-            });
+        let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(cancel.clone()),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(&abr_state))),
+        )));
         let settings = AbrSettings::builder().cancel(cancel.clone()).build();
         let controller = AbrController::new(settings);
         let handle = controller.register(&peer);

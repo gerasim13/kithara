@@ -30,6 +30,7 @@ use kithara_ui::{
     },
     shaping::{FontPolicy, GlyphFace, GlyphSegment, TextContext},
     source::{MemResolver, UiConfig},
+    view,
 };
 
 struct FixtureReads {
@@ -275,7 +276,15 @@ fn dump(
     renderer: &iced::Renderer,
     viewport: Size,
 ) -> String {
-    let mut element = tree::render(&ui.root, ui, reads, skin, Clock::default(), None);
+    let mut element = tree::render(
+        &ui.root,
+        ui,
+        reads,
+        &view::EMPTY,
+        skin,
+        Clock::default(),
+        None,
+    );
     let mut tree = Tree::new(element.as_widget());
     let node =
         element
@@ -861,6 +870,7 @@ fn builtin_layouts_match_rect_fixtures() {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .expect("builtin layout must compile");
         let mut actual = String::new();
@@ -927,6 +937,7 @@ fn split_weights_reach_layout_as_f32() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("fractional split document must compile");
     let actual = dump(
@@ -994,6 +1005,7 @@ fn a_padded_measuring_row_reads_its_bands_against_the_declared_box() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("banded document must compile");
     let laid_out = |width: f32| {
@@ -1116,11 +1128,20 @@ fn scene_placement(reads: &FixtureReads) -> (f32, f32) {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .expect("the scene document must compile");
     let skin = fixture_skin();
     let renderer = headless_renderer();
-    let mut element = tree::render(&ui.root, &ui, reads, &skin, Clock::default(), None);
+    let mut element = tree::render(
+        &ui.root,
+        &ui,
+        reads,
+        &view::EMPTY,
+        &skin,
+        Clock::default(),
+        None,
+    );
     let mut tree = Tree::new(element.as_widget());
     let node = element.as_widget_mut().layout(
         &mut tree,

@@ -5,27 +5,40 @@
 //! with.
 
 use kithara_ui::{
-    app::App,
+    app::{App, RunError, Ui},
+    module::ViewSet,
     render::{Reads, Skin, UiEvent},
+    view::ViewState,
 };
 
 use crate::{capture::Shot, demo, sections};
 
+/// Stands a mounted screen at the page a shot names, with the surface that
+/// page is about open.
+///
+/// Every page lives in one screen, so a harness opens one by turning the
+/// screen's own state rather than by mounting another document. The surface is
+/// turned after the page, because the state naming it belongs to a module the
+/// page mounts and the screen names nothing of a page it is not showing.
+///
+/// # Errors
+/// Returns whatever standing the screen at that page fails with.
+pub(super) fn stand<Application>(ui: &mut Ui<'_, Application>, shot: Shot) -> Result<(), RunError>
+where
+    Application: App,
+{
+    for (state, page) in shot.stands() {
+        ui.stand(state, page)?;
+    }
+    for state in shot.opens() {
+        ui.set(state, ViewSet::On)?;
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub(super) struct Gallery {
     reads: demo::DemoReads,
-}
-
-impl Gallery {
-    /// The gallery already turned to one page, for photographing it.
-    pub(super) fn at(shot: Shot) -> Self {
-        let mut reads = demo::DemoReads::default();
-        reads.select_tab(shot.tab);
-        if let Some(module) = shot.module {
-            reads.select_module(module);
-        }
-        Self { reads }
-    }
 }
 
 impl App for Gallery {
@@ -37,12 +50,7 @@ impl App for Gallery {
     }
 
     fn document(&self) -> &str {
-        let tab = self.reads.active_tab();
-        if tab == sections::MODULES {
-            sections::module_entry(self.reads.active_module())
-        } else {
-            sections::entry(tab)
-        }
+        sections::entry()
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
@@ -51,18 +59,20 @@ impl App for Gallery {
 
     fn update(&mut self, event: UiEvent) {
         match event {
-            UiEvent::Control { path, action } => {
-                if let Some(tab) = sections::pressed(&path) {
-                    self.reads.select_tab(tab);
-                } else {
-                    self.reads.apply(&path, &action);
-                }
-            }
+            UiEvent::Control { path, action } => self.reads.apply(&path, &action),
             UiEvent::LibraryQuery(query) => {
                 self.reads.set_library_query(query);
             }
             UiEvent::ToggleModule(module) => self.reads.toggle_module(module),
             _ => {}
+        }
+    }
+
+    /// The page on screen is the screen's own to say, so the feed behind a
+    /// page starts and stops with the page rather than with a press.
+    fn turned(&mut self, view: &ViewState) {
+        if let Some(page) = view.page(sections::PAGE).and_then(sections::named) {
+            self.reads.show(page);
         }
     }
 }
@@ -79,7 +89,7 @@ mod tests {
         render::ControlAction,
     };
 
-    use super::{App, Gallery, UiEvent, demo, sections};
+    use super::{App, Gallery, UiEvent, ViewState, demo, sections};
     use crate::{custom, fixture::resolver};
 
     /// Pressing a row on the skins page dresses the gallery in that skin.
@@ -100,12 +110,14 @@ mod tests {
         let mut gallery = Gallery::default();
         gallery.update(pressing("skins/kithara-light/item"));
 
-        for tab in sections::pages().iter().copied() {
-            gallery.reads.select_tab(tab);
+        for page in sections::pages().iter().copied() {
+            let mut view = ViewState::default();
+            view.stand(sections::PAGE, page);
+            gallery.turned(&view);
             assert_eq!(
                 gallery.skin().id(),
                 "kithara-light",
-                "the gallery undressed itself on {tab}"
+                "the gallery undressed itself on {page}"
             );
         }
     }
@@ -148,7 +160,11 @@ mod tests {
         ui.frame(Duration::from_millis(16));
         ui.render()
             .unwrap_or_else(|error| panic!("the gallery must draw: {error}"));
-        assert_eq!(ui.app().document(), "gallery-atoms.klayout.ron");
+        assert_eq!(
+            ui.view().page(sections::PAGE),
+            None,
+            "a screen pressed nowhere must stand at the page the document calls initial"
+        );
 
         let at = Pt { x: 60.0, y: 113.0 };
         ui.input(Input::Pointer(PointerInput::new(
@@ -160,8 +176,8 @@ mod tests {
         )));
 
         assert_eq!(
-            ui.app().document(),
-            "gallery-buttons.klayout.ron",
+            ui.view().page(sections::PAGE),
+            Some("buttons"),
             "a press on the BUTTONS nav item must turn the page at {scale}x"
         );
     }

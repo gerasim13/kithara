@@ -103,9 +103,9 @@
                 Include(id: "face-jetbrainsmono-semibold", source: "../catalog/font-row.kmodule.ron", with: { "family": "Mono", "weight": "Semibold", "name": "JETBRAINS MONO SEMIBOLD", "file": "JetBrainsMono-SemiBold.ttf" }),
                 Text(id: "specimen-heading", style: Section, label: "SPECIMEN", size: (w: Fill, h: Fixed(20.0))),
                 Row(gap: Some(12.0), size: (w: Fill, h: Shrink), children: [
-                    Include(id: "display", source: "../nav/item.kmodule.ron", with: { "icon": "Crown", "label": "DISPLAY", "tab": "gallery.font.display" }),
-                    Include(id: "sans", source: "../nav/item.kmodule.ron", with: { "icon": "Charts", "label": "SANS", "tab": "gallery.font.sans" }),
-                    Include(id: "mono", source: "../nav/item.kmodule.ron", with: { "icon": "Waveform", "label": "MONO", "tab": "gallery.font.mono" }),
+                    Include(id: "display", source: "../nav/choice.kmodule.ron", with: { "icon": "Crown", "label": "DISPLAY", "lit": "gallery.font.display" }),
+                    Include(id: "sans", source: "../nav/choice.kmodule.ron", with: { "icon": "Charts", "label": "SANS", "lit": "gallery.font.sans" }),
+                    Include(id: "mono", source: "../nav/choice.kmodule.ron", with: { "icon": "Waveform", "label": "MONO", "lit": "gallery.font.mono" }),
                 ]),
                 Optional(id: "specimen-display", hidden: Model(id: "gallery.font.display.hidden"), child: Include(id: "display-specimen", source: "../catalog/specimen.kmodule.ron", with: { "family": "Display" })),
                 Optional(id: "specimen-sans", hidden: Model(id: "gallery.font.sans.hidden"), child: Include(id: "sans-specimen", source: "../catalog/specimen.kmodule.ron", with: { "family": "Sans" })),

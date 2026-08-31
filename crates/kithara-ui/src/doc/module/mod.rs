@@ -6,7 +6,7 @@ mod style;
 
 pub(crate) use self::style::text_roles;
 pub use self::{
-    binding::BindingRef,
+    binding::{BindingRef, ViewSet},
     doc::{ChromeStyle, ModuleDoc, ModuleDrop, parse_module},
     motion::{Easing, Motion, Pose, Repeat},
     node::{AdaptiveStep, ControlNode, Magnet, Measure, MeasureAxis},

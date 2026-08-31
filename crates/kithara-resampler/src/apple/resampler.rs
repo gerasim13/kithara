@@ -9,59 +9,13 @@ use kithara_bufpool::{HasPool, PoolRegion};
 use num_traits::cast::ToPrimitive;
 use tracing::warn;
 
-use super::{AudioConverterFactory, input::AppleResamplerInputState};
+use super::input::AppleResamplerInputState;
 use crate::{
     Resampler, ResamplerBuildError, ResamplerCapabilities, ResamplerError, ResamplerMode,
-    ResamplerProcess, ResamplerSettings,
+    ResamplerProcess,
 };
 
 const BACKEND_APPLE: &str = "apple-audio-converter";
-
-/// Factory for `CoreAudio` PCM converters used by the resampler Apple backend.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-#[non_exhaustive]
-pub struct AudioToolboxConverterFactory {
-    _private: (),
-}
-
-impl AudioToolboxConverterFactory {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self { _private: () }
-    }
-}
-
-impl AudioConverterFactory for AudioToolboxConverterFactory {
-    type Resampler = AppleResampler;
-
-    fn build_resampler<S>(
-        &self,
-        settings: &ResamplerSettings<S>,
-    ) -> Result<Self::Resampler, ResamplerBuildError>
-    where
-        S: HasPool<f32>,
-    {
-        let ResamplerMode::FixedRatio {
-            source_sample_rate,
-            target_sample_rate,
-        } = settings.mode
-        else {
-            return Err(ResamplerBuildError::UnsupportedMode {
-                backend: BACKEND_APPLE,
-                mode: settings.mode.label(),
-            });
-        };
-
-        let resampler = AppleResampler::new(
-            source_sample_rate.get(),
-            target_sample_rate.get(),
-            settings.channels.get(),
-            settings.options.chunk_size,
-            &settings.pools,
-        )?;
-        Ok(resampler)
-    }
-}
 
 pub struct AppleResampler {
     converter: AudioConverter,
@@ -349,7 +303,6 @@ mod tests {
     use kithara_test_utils::kithara;
     use num_traits::cast::ToPrimitive;
 
-    use super::AudioToolboxConverterFactory;
     use crate::{
         Resampler, ResamplerConfig, ResamplerMode, ResamplerOptions, ResamplerQuality,
         ResamplerSettings,
@@ -520,9 +473,7 @@ mod tests {
     ) -> super::AppleResampler {
         let settings = test_settings(source_rate, target_rate, channels, frames);
         let config = ResamplerConfig::builder()
-            .backend(AppleAudioConverterBackend::with_config(
-                AudioToolboxConverterFactory::new().into(),
-            ))
+            .backend(AppleAudioConverterBackend::new())
             .settings(settings)
             .build();
         create_resampler(&config)

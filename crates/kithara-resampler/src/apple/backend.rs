@@ -1,53 +1,24 @@
 use kithara_bufpool::HasPool;
 
+use super::resampler::AppleResampler;
 use crate::{
-    Resampler, ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerSettings,
+    ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode, ResamplerSettings,
 };
 
 const BACKEND_APPLE: &str = "apple-audio-converter";
 
-pub trait AudioConverterFactory: Send + Sync + 'static {
-    type Resampler: Resampler;
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AppleAudioConverterBackend;
 
-    /// Build a standalone PCM-to-PCM converter for the requested settings.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ResamplerBuildError`] when the platform converter cannot be
-    /// constructed for the requested shape.
-    fn build_resampler<S>(
-        &self,
-        settings: &ResamplerSettings<S>,
-    ) -> Result<Self::Resampler, ResamplerBuildError>
-    where
-        S: HasPool<f32>;
-}
-
-#[derive(Clone, Debug, fieldwork::Fieldwork)]
-#[non_exhaustive]
-#[fieldwork(get)]
-pub struct AppleAudioConverterBackend<F> {
-    config: AppleAudioConverterConfig<F>,
-}
-
-#[derive(Clone, Debug, derive_more::From)]
-#[non_exhaustive]
-pub struct AppleAudioConverterConfig<F> {
-    pub factory: F,
-}
-
-impl<F> AppleAudioConverterBackend<F> {
+impl AppleAudioConverterBackend {
     #[must_use]
-    pub const fn with_config(config: AppleAudioConverterConfig<F>) -> Self {
-        Self { config }
+    pub const fn new() -> Self {
+        Self
     }
 }
 
-impl<F> ResamplerBackend for AppleAudioConverterBackend<F>
-where
-    F: AudioConverterFactory + Clone,
-{
-    type Resampler = F::Resampler;
+impl ResamplerBackend for AppleAudioConverterBackend {
+    type Resampler = AppleResampler;
 
     fn build<S>(
         &self,
@@ -57,7 +28,24 @@ where
         S: HasPool<f32>,
     {
         settings.validate(self)?;
-        self.config.factory.build_resampler(settings)
+        let ResamplerMode::FixedRatio {
+            source_sample_rate,
+            target_sample_rate,
+        } = settings.mode
+        else {
+            return Err(ResamplerBuildError::UnsupportedMode {
+                backend: BACKEND_APPLE,
+                mode: settings.mode.label(),
+            });
+        };
+
+        AppleResampler::new(
+            source_sample_rate.get(),
+            target_sample_rate.get(),
+            settings.channels.get(),
+            settings.options.chunk_size,
+            &settings.pools,
+        )
     }
 
     fn capabilities(&self) -> ResamplerCapabilities {

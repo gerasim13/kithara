@@ -77,6 +77,7 @@ where
             .preload_chunks(self.preload_chunks)
             .decoder(self.decoder)
             .consumer_wake_mode(self.consumer_wake_mode)
+            .block_on_underrun(self.block_on_underrun)
             .build()
     }
 
@@ -118,6 +119,7 @@ where
                 .preload_chunks(self.preload_chunks)
                 .decoder(self.decoder)
                 .consumer_wake_mode(self.consumer_wake_mode)
+                .block_on_underrun(self.block_on_underrun)
                 .build(),
         )
     }

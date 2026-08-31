@@ -26,7 +26,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{DefaultRetryPolicy, RetryNet},
+    retry::RetryNet,
     traits::Net,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec},
 };
@@ -342,7 +342,7 @@ impl RawHttp {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct HttpClient {
-    net: Arc<RetryNet<RawHttp, DefaultRetryPolicy>>,
+    net: Arc<RetryNet<RawHttp>>,
     cancel: CancelToken,
     inner: Client,
     connection_metrics: ConnectionMetrics,
@@ -377,7 +377,7 @@ impl HttpClient {
         };
         let net = Arc::new(RetryNet::new(
             raw,
-            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            options.retry_policy.clone(),
             cancel.clone(),
             options.observer.clone(),
         ));
@@ -405,7 +405,7 @@ impl HttpClient {
         };
         let net = Arc::new(RetryNet::new(
             raw,
-            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            options.retry_policy.clone(),
             self.cancel.clone(),
             options.observer.clone(),
         ));

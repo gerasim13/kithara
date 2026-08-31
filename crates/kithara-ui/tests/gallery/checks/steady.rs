@@ -314,7 +314,7 @@ mod retained {
     use crate::{
         custom, demo,
         fixture::{Consts, resolver},
-        host::Gallery,
+        host::{self, Gallery},
     };
 
     /// Mounts the page once and repaints it, reading back the scene it handed
@@ -332,8 +332,10 @@ mod retained {
             .kinds(&kinds)
             .build();
         let (width, height) = physical();
-        let mut ui = Ui::new(Gallery::at(page), config, (width, height), 1.0)
+        let mut ui = Ui::new(Gallery::default(), config, (width, height), 1.0)
             .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
+        host::stand(&mut ui, page)
+            .unwrap_or_else(|error| panic!("page {} must open: {error}", page));
 
         (0..draws)
             .map(|draw| {

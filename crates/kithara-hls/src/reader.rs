@@ -254,7 +254,7 @@ where
 mod tests {
     use std::sync::{OnceLock, atomic::AtomicU64};
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{Event, EventBus};
     use kithara_platform::{
@@ -263,6 +263,7 @@ mod tests {
     };
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
@@ -275,21 +276,6 @@ mod tests {
 
     type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
     type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
-
-    struct TestAbrPeer {
-        cancel: CancelToken,
-        state: Arc<AbrState>,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-    }
 
     fn test_ctx(bus: &EventBus) -> TestPlanCtx {
         let cancel = CancelToken::never();
@@ -380,10 +366,12 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
         let cancel = CancelToken::never();
-        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-            cancel: cancel.clone(),
-            state,
-        });
+        let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(cancel.clone()),
+            AbrMock::state.each_call(matching!()).returns(Some(state)),
+        )));
         let settings = AbrSettings::builder().cancel(cancel.clone()).build();
         let controller = AbrController::new(settings);
         let handle = controller.register(&peer);

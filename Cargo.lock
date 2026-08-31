@@ -4502,7 +4502,6 @@ version = "0.0.1-alpha4"
 dependencies = [
  "bitflags 2.13.0",
  "bon",
- "criterion",
  "dashmap",
  "delegate",
  "fieldwork",
@@ -4631,7 +4630,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "unimock",
  "url",
  "wasm-bindgen-test",
 ]
@@ -4744,7 +4742,6 @@ dependencies = [
  "bon",
  "core-foundation 0.10.1",
  "core-foundation-sys",
- "criterion",
  "delegate",
  "derive_more",
  "fdk-aac",
@@ -4910,7 +4907,6 @@ dependencies = [
 name = "kithara-file"
 version = "0.0.1-alpha4"
 dependencies = [
- "axum",
  "bon",
  "delegate",
  "derive_more",
@@ -4926,7 +4922,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "memory-stats",
  "re_mp4",
  "tempfile",
  "thiserror 2.0.18",
@@ -4984,6 +4979,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
+ "unimock",
  "url",
  "wasm-bindgen-test",
 ]
@@ -5104,7 +5100,6 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "memory-stats",
  "num-traits",
  "reqwest",
  "thiserror 2.0.18",
@@ -5224,7 +5219,6 @@ dependencies = [
  "bon",
  "criterion",
  "delegate",
- "derive_more",
  "fieldwork",
  "kithara-apple",
  "kithara-bufpool",
@@ -5297,7 +5291,6 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "kithara-workspace-hack",
- "memory-stats",
  "tempfile",
  "thiserror 2.0.18",
  "thunderdome",

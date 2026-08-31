@@ -4,7 +4,7 @@ use super::{
     binding::{BLOCK_HIDDEN, BindingSide, check_binding},
     measure::{Sibling, check_block_position, check_measured_box, check_reveal, check_thresholds},
     module::{claim, record_block},
-    path::{NodePath, check_id},
+    path::{NodePath, check_id, check_state_id},
 };
 use crate::{
     error::UiDocError,
@@ -106,6 +106,38 @@ pub(super) fn walk_layout(
                 origin,
                 seen,
             )
+        }
+        LayoutNode::Tabs {
+            state,
+            initial,
+            pages,
+        } => {
+            check_state_id(&state.0, origin)?;
+            let here = path.push(format!("Tabs({state})"));
+            if !pages.contains_key(initial) {
+                return Err(UiDocError::UnknownPage {
+                    origin: origin.clone(),
+                    id: state.0.clone(),
+                    page: initial.clone(),
+                    path: here.render(),
+                });
+            }
+            // Two pages never stand at once, so each claims its instances
+            // against what stood before the tabs rather than against its
+            // neighbours.
+            let taken = seen.clone();
+            for (page, node) in pages {
+                let mut claimed = taken.clone();
+                walk_layout(
+                    node,
+                    &here.push(format!("[{page}]")),
+                    origin,
+                    &mut claimed,
+                    Sibling::Only,
+                )?;
+                seen.extend(claimed);
+            }
+            Ok(())
         }
     }
 }

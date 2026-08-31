@@ -16,6 +16,7 @@ use crate::{
     draw::Rect,
     render::{Clock, ReadValue, Reads, Skin, UiEvent, tree},
     source::{MemResolver, UiConfig},
+    view,
 };
 
 /// A strip carrying one run wider than the room the window leaves it, so each
@@ -82,6 +83,7 @@ impl Squeeze {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the strip fixture must compile: {error}"));
         let renderer = renderer();
@@ -90,6 +92,7 @@ impl Squeeze {
             &ui.root,
             &ui,
             &Strip,
+            &view::EMPTY,
             builtin::skin(),
             Clock::default(),
             None,
