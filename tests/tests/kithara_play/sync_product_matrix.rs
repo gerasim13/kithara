@@ -16,8 +16,8 @@ use kithara::{
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     warp::{
-        AlignmentSource, BeatGrid, LoadGeneration, PresentationFrontier, SessionFrame, SyncGroup,
-        SyncIntent, SyncOperation,
+        AlignmentSource, BeatGrid, LoadGeneration, PresentationFrontier, SessionFrame,
+        SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
     },
 };
 use kithara_integration_tests::{
@@ -30,11 +30,12 @@ use kithara_test_fixtures::{
         rhythm_fmp4_init_deck_a_120bpm_48k, rhythm_fmp4_media_deck_a_120bpm_48k,
         rhythm_mp3_deck_a_120bpm_48k, rhythm_mp3_deck_b_120bpm_48k, rhythm_wav_deck_a_120bpm_48k,
         rhythm_wav_deck_b_120bpm_48k, rhythm_wav_deck_c_120bpm_48k, rhythm_wav_deck_d_120bpm_48k,
+        signal_mp3_sweep_up_60s,
     },
 };
 
-const BLOCK_FRAMES: usize = 512;
-const CHANNELS: u16 = 2;
+pub(super) const BLOCK_FRAMES: usize = 512;
+pub(super) const CHANNELS: u16 = 2;
 const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const START_BPM: f64 = 120.0;
 
@@ -97,10 +98,10 @@ impl TempoRide {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct SyncCase {
+pub(super) struct SyncCase {
     id: &'static str,
     decks: usize,
-    sample_rate: u32,
+    pub(super) sample_rate: u32,
     order: OperationOrder,
     paused: bool,
     ride: TempoRide,
@@ -134,6 +135,10 @@ impl SyncCase {
         self.ride = ride;
         self.updates_hz = updates_hz;
         self
+    }
+
+    pub(super) const fn final_bpm(self) -> f64 {
+        self.ride.final_bpm()
     }
 }
 
@@ -175,29 +180,67 @@ const TEMPO_UP_120: SyncCase =
 const TEMPO_DOWN_30: SyncCase =
     SyncCase::running("tempo-down-30hz", 2, 44_100, OperationOrder::PlaySyncSeek)
         .ride(TempoRide::Down, 30);
+pub(super) const ONE_DECK: SyncCase =
+    SyncCase::running("one-deck-runtime", 1, 48_000, OperationOrder::PlaySyncSeek);
+pub(super) const SHARED_DEADLINE: SyncCase = SyncCase::running(
+    "shared-worker-deadline",
+    4,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.ride(TempoRide::Up, 120);
+pub(super) const SHARED_DEADLINE_CONTROL: SyncCase = SyncCase::running(
+    "shared-worker-control",
+    1,
+    48_000,
+    OperationOrder::PlaySyncSeek,
+)
+.ride(TempoRide::Up, 120);
 
 #[derive(Clone, Copy, Debug)]
-enum Provider {
+pub(super) enum Provider {
     Synthetic,
     HlsSame,
     Library,
     Mp3Same,
     Mp3Distinct,
     HlsMp3,
+    Sweep,
 }
 
-struct ProductHarness {
-    decks: Vec<Queue>,
-    failures: Vec<String>,
+pub(super) struct ProductHarness {
+    pub(super) decks: Vec<Queue>,
+    pub(super) failures: Vec<String>,
+    block_frames: usize,
     output_frames: u64,
+    paced: bool,
     session: Arc<OfflineSession>,
 }
 
 impl ProductHarness {
-    async fn new(case: SyncCase, provider: Provider, audible_deck: usize) -> Self {
+    pub(super) async fn new(case: SyncCase, provider: Provider, audible_deck: usize) -> Self {
+        Self::build(case, provider, audible_deck, BLOCK_FRAMES, false).await
+    }
+
+    pub(super) async fn new_for_block(
+        case: SyncCase,
+        provider: Provider,
+        audible_deck: usize,
+        block_frames: usize,
+    ) -> Self {
+        Self::build(case, provider, audible_deck, block_frames, true).await
+    }
+
+    async fn build(
+        case: SyncCase,
+        provider: Provider,
+        audible_deck: usize,
+        block_frames: usize,
+        paced: bool,
+    ) -> Self {
         let server = TestServerHelper::new().await;
         let sources = sources(provider, case.decks, &server).await;
-        let session = Arc::new(OfflineSession::new_manual());
+        let session = Arc::new(OfflineSession::new_manual_with_block_frames(block_frames));
         let dispatcher: Arc<dyn SessionDispatcher> = session.clone();
         let worker = PlayWorker::new(
             PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
@@ -233,7 +276,9 @@ impl ProductHarness {
         let mut harness = Self {
             decks,
             failures: Vec::new(),
+            block_frames,
             output_frames: 0,
+            paced,
             session,
         };
         harness.wait_loaded(case, &ids).await;
@@ -242,7 +287,7 @@ impl ProductHarness {
                 .unwrap_or_else(|error| panic!("{}: select deck {index}: {error}", case.id));
         }
         harness.set_tempo(case, START_BPM, true);
-        let _ = harness.render(case, BLOCK_FRAMES).await;
+        let _ = harness.render(case, harness.block_frames).await;
         if !case.paused {
             harness.start_staggered(case).await;
         }
@@ -282,19 +327,27 @@ impl ProductHarness {
         }
     }
 
-    async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
+    pub(super) async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
+        let started = Instant::now();
         self.tick_all(case);
         let pcm = self.session.render(frames);
+        self.tick_all(case);
         self.output_frames = self
             .output_frames
             .saturating_add(u64::try_from(frames).expect("render frame count fits u64"));
-        time::sleep(Duration::from_millis(1)).await;
+        let delay = if self.paced {
+            Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
+                .saturating_sub(started.elapsed())
+        } else {
+            Duration::from_millis(1)
+        };
+        time::sleep(delay).await;
         pcm
     }
 
-    async fn settle(&mut self, case: SyncCase, blocks: usize) {
+    pub(super) async fn settle(&mut self, case: SyncCase, blocks: usize) {
         for _ in 0..blocks {
-            let _ = self.render(case, BLOCK_FRAMES).await;
+            let _ = self.render(case, self.block_frames).await;
         }
     }
 
@@ -325,22 +378,31 @@ impl ProductHarness {
         self.settle(case, 96).await;
     }
 
-    fn set_tempo(&mut self, case: SyncCase, bpm: f64, required: bool) {
+    pub(super) fn set_tempo(&mut self, case: SyncCase, bpm: f64, required: bool) {
         let tempo = Tempo::new(bpm).expect("fixture tempo");
         match self.session.exec(Cmd::SetSessionTempo { tempo }) {
             Ok(Reply::Ok) => {}
             Ok(Reply::Err(error)) if !required => self
-                .failures
-                .push(format!("tempo request {bpm:.6} BPM was rejected: {error}")),
+                .record_tempo_failure(format!("tempo request {bpm:.6} BPM was rejected: {error}")),
             Ok(Reply::Err(error)) => panic!("{}: set initial tempo: {error}", case.id),
-            Ok(_) if !required => self.failures.push(format!(
+            Ok(_) if !required => self.record_tempo_failure(format!(
                 "tempo request {bpm:.6} BPM returned an unexpected reply"
             )),
             Ok(_) => panic!("{}: initial tempo returned an unexpected reply", case.id),
-            Err(error) if !required => self.failures.push(format!(
+            Err(error) if !required => self.record_tempo_failure(format!(
                 "tempo request {bpm:.6} BPM could not reach Host: {error}"
             )),
             Err(error) => panic!("{}: initial tempo could not reach Host: {error}", case.id),
+        }
+    }
+
+    fn record_tempo_failure(&mut self, failure: String) {
+        if !self
+            .failures
+            .iter()
+            .any(|failure| failure.starts_with("tempo request"))
+        {
+            self.failures.push(failure);
         }
     }
 
@@ -353,7 +415,11 @@ impl ProductHarness {
         }
     }
 
-    async fn request_sync(&mut self, case: SyncCase) {
+    pub(super) async fn request_sync(&mut self, case: SyncCase) {
+        self.request_sync_intent(case, SyncIntent::Enable).await;
+    }
+
+    pub(super) async fn request_sync_intent(&mut self, case: SyncCase, intent: SyncIntent) {
         let transport = self.transport_revision(case);
         for index in 0..self.decks.len() {
             {
@@ -371,7 +437,7 @@ impl ProductHarness {
                 } else {
                     AlignmentSource::Prepared
                 };
-                let _ = deck
+                let admission = deck
                     .transact(SyncOperation::Sync {
                         target: deck.id(),
                         load: LoadGeneration::first(),
@@ -380,19 +446,24 @@ impl ProductHarness {
                         activation: SessionFrame::new(
                             i64::try_from(self.output_frames).unwrap_or(i64::MAX),
                         ),
-                        intent: SyncIntent::Enable,
+                        intent,
                     })
                     .unwrap_or_else(|rejected| {
                         panic!("{}: sync deck {index}: {rejected}", case.id)
                     });
+                if let SyncAdmission::Unavailable { capability, .. } = admission {
+                    self.failures.push(format!(
+                        "sync deck {index} admitted unavailable capability {capability:?}"
+                    ));
+                }
             }
             if matches!(case.order, OperationOrder::SequentialSync) {
-                let _ = self.render(case, BLOCK_FRAMES).await;
+                let _ = self.render(case, self.block_frames).await;
             }
         }
     }
 
-    async fn run_operations(&mut self, case: SyncCase) {
+    pub(super) async fn run_operations(&mut self, case: SyncCase) {
         for operation in case.order.operations() {
             match operation {
                 Operation::Play => {
@@ -405,7 +476,7 @@ impl ProductHarness {
         }
     }
 
-    async fn ride_tempo(&mut self, case: SyncCase) {
+    pub(super) async fn ride_tempo(&mut self, case: SyncCase) {
         let steps_per_leg = (case.updates_hz / 2).max(1);
         let mut start = START_BPM;
         let mut rendered = 0_u64;
@@ -434,11 +505,21 @@ impl ProductHarness {
         self.settle(case, 4).await;
         let capture_frames =
             (f64::from(case.sample_rate) * 60.0 / case.ride.final_bpm() * 6.0).round() as usize;
+        self.capture_frames(case, capture_frames, self.block_frames)
+            .await
+    }
+
+    pub(super) async fn capture_frames(
+        &mut self,
+        case: SyncCase,
+        capture_frames: usize,
+        block_frames: usize,
+    ) -> Vec<f32> {
         let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
         while pcm.len() < capture_frames * usize::from(CHANNELS) {
             let remaining_frames =
                 (capture_frames * usize::from(CHANNELS) - pcm.len()) / usize::from(CHANNELS);
-            let frames = remaining_frames.min(BLOCK_FRAMES);
+            let frames = remaining_frames.min(block_frames);
             let block = self.render(case, frames).await;
             assert!(
                 !block.is_empty(),
@@ -446,6 +527,30 @@ impl ProductHarness {
                 case.id,
             );
             pcm.extend(block);
+        }
+        pcm
+    }
+
+    pub(super) async fn capture_paced(
+        &mut self,
+        case: SyncCase,
+        capture_frames: usize,
+    ) -> Vec<f32> {
+        let mut pcm = Vec::with_capacity(capture_frames * usize::from(CHANNELS));
+        while pcm.len() < capture_frames * usize::from(CHANNELS) {
+            let remaining =
+                (capture_frames * usize::from(CHANNELS) - pcm.len()) / usize::from(CHANNELS);
+            let frames = remaining.min(self.block_frames);
+            let started = Instant::now();
+            let block = self.render(case, frames).await;
+            assert!(
+                !block.is_empty(),
+                "{}: paced capture stopped making PCM progress",
+                case.id,
+            );
+            pcm.extend(block);
+            let period = Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate));
+            time::sleep(period.saturating_sub(started.elapsed())).await;
         }
         pcm
     }
@@ -464,6 +569,7 @@ async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) ->
         ),
         Provider::Library => cycle_paths_from_strings(&library_paths(), decks),
         Provider::Mp3Same => cycle_paths(&[rhythm_mp3_deck_a_120bpm_48k()], decks),
+        Provider::Sweep => cycle_paths(&[signal_mp3_sweep_up_60s()], decks),
         Provider::Mp3Distinct => cycle_paths(
             &[
                 rhythm_mp3_deck_a_120bpm_48k(),
