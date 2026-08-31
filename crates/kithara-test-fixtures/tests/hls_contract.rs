@@ -2,7 +2,9 @@
 
 use hls_m3u8::{MasterPlaylist, MediaPlaylist, tags::VariantStream};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_test_fixtures::hls::{HlsBundle, gapless_drm, gapless_plain, long_drm, long_plain};
+use kithara_test_fixtures::hls::{
+    HlsBundle, gapless_drm, gapless_plain, long_drm, long_plain, rss_plain,
+};
 use kithara_test_utils::kithara;
 
 const LABELS: [&str; 4] = ["slq", "smq", "shq", "slossless"];
@@ -141,4 +143,9 @@ fn generated_gapless_bundles_have_the_live_segment_topology() {
             );
         }
     }
+}
+
+#[kithara::test(native, flash(false))]
+fn generated_rss_bundle_keeps_the_measured_workload() {
+    assert_bundle(rss_plain(), false, 25);
 }

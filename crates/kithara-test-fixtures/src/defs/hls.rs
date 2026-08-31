@@ -64,9 +64,19 @@ impl Consts {
 struct GaplessConsts;
 
 impl GaplessConsts {
-    const BOUNDARY_SECONDS: [u64; 8] = [4, 8, 18, 28, 38, 48, 58, 68];
+    const BOUNDARY_MILLIS: [u64; 9] = [
+        4_000, 8_000, 18_000, 28_000, 38_000, 48_000, 58_000, 68_000, 71_250,
+    ];
+    const MILLIS_PER_SECOND: u64 = 1_000;
     const TARGET_DURATION: u8 = 10;
-    const TOTAL_FRAMES: usize = 3_142_125;
+}
+
+struct RssConsts;
+
+impl RssConsts {
+    const SEGMENT_MILLIS: u64 = 4_000;
+    const SEGMENTS: usize = 25;
+    const TARGET_DURATION: u8 = 4;
 }
 
 #[derive(Clone, Copy)]
@@ -81,6 +91,11 @@ struct VariantSpec {
 struct Variant {
     package: Fmp4Package,
     spec: VariantSpec,
+}
+
+struct EncodedVariant {
+    spec: VariantSpec,
+    track: EncodedTrack,
 }
 
 fn encode_track(
@@ -119,7 +134,7 @@ fn encode_track(
     })
 }
 
-fn encode(spec: VariantSpec) -> Variant {
+fn encode(spec: VariantSpec) -> EncodedVariant {
     let frame_samples = EncoderFactory::frame_samples(spec.codec).unwrap_or_else(|error| {
         panic!(
             "kithara-test-fixtures: {:?} frame size failed: {error}",
@@ -140,17 +155,11 @@ fn encode(spec: VariantSpec) -> Variant {
         encoded_frames
     };
     let track = encode_track(spec, total_frames, packets_per_segment);
-    let package = mux_audio_track(&track, GaplessEncoding::None).unwrap_or_else(|error| {
-        panic!(
-            "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
-            spec.codec
-        )
-    });
-    Variant { package, spec }
+    EncodedVariant { spec, track }
 }
 
-fn variants() -> &'static [Variant] {
-    static ENCODED: OnceLock<Vec<Variant>> = OnceLock::new();
+fn encoded_variants() -> &'static [EncodedVariant] {
+    static ENCODED: OnceLock<Vec<EncodedVariant>> = OnceLock::new();
     ENCODED.get_or_init(|| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(Consts::ENCODERS)
@@ -160,16 +169,39 @@ fn variants() -> &'static [Variant] {
     })
 }
 
-fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
-    let mut boundaries = Vec::with_capacity(GaplessConsts::BOUNDARY_SECONDS.len());
-    let mut targets = GaplessConsts::BOUNDARY_SECONDS.iter().copied();
+fn variants() -> &'static [Variant] {
+    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
+    PACKAGED.get_or_init(|| {
+        encoded_variants()
+            .iter()
+            .map(|variant| {
+                let package = mux_audio_track(&variant.track, GaplessEncoding::None)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "kithara-test-fixtures: {:?} long HLS mux failed: {error}",
+                            variant.spec.codec
+                        )
+                    });
+                Variant {
+                    package,
+                    spec: variant.spec,
+                }
+            })
+            .collect()
+    })
+}
+
+fn boundaries_at(track: &EncodedTrack, target_millis: impl IntoIterator<Item = u64>) -> Vec<usize> {
+    let mut boundaries = Vec::new();
+    let mut targets = target_millis.into_iter();
     let mut target = targets.next();
     let mut duration = 0u64;
 
     for (index, unit) in track.access_units.iter().enumerate() {
         let next_duration = duration.saturating_add(u64::from(unit.duration));
-        while let Some(seconds) = target {
-            let target_duration = seconds * u64::from(track.timescale);
+        while let Some(millis) = target {
+            let target_duration =
+                millis * u64::from(track.timescale) / GaplessConsts::MILLIS_PER_SECOND;
             if next_duration < target_duration {
                 break;
             }
@@ -194,33 +226,65 @@ fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
     boundaries
 }
 
-fn encode_gapless(spec: VariantSpec) -> Variant {
-    let track = encode_track(spec, GaplessConsts::TOTAL_FRAMES, 1);
-    let boundaries = gapless_boundaries(&track);
-    let package =
-        mux_audio_track_at(&track, GaplessEncoding::Both, &boundaries).unwrap_or_else(|error| {
-            panic!(
-                "kithara-test-fixtures: {:?} gapless HLS mux failed: {error}",
-                spec.codec
-            )
-        });
-    Variant { package, spec }
+fn gapless_boundaries(track: &EncodedTrack) -> Vec<usize> {
+    boundaries_at(track, GaplessConsts::BOUNDARY_MILLIS)
+}
+
+fn rss_boundaries(track: &EncodedTrack) -> Vec<usize> {
+    boundaries_at(
+        track,
+        (1..=RssConsts::SEGMENTS).map(|index| {
+            u64::try_from(index).expect("invariant: RSS segment index fits u64")
+                * RssConsts::SEGMENT_MILLIS
+        }),
+    )
 }
 
 fn gapless_variants() -> &'static [Variant] {
-    static ENCODED: OnceLock<Vec<Variant>> = OnceLock::new();
-    ENCODED.get_or_init(|| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(Consts::ENCODERS)
-            .build()
-            .expect("invariant: fixture encoder pool builds")
-            .install(|| {
-                Consts::VARIANTS
-                    .par_iter()
-                    .copied()
-                    .map(encode_gapless)
-                    .collect()
+    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
+    PACKAGED.get_or_init(|| {
+        encoded_variants()
+            .iter()
+            .map(|variant| {
+                let boundaries = gapless_boundaries(&variant.track);
+                let package =
+                    mux_audio_track_at(&variant.track, GaplessEncoding::Both, &boundaries)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "kithara-test-fixtures: {:?} gapless HLS mux failed: {error}",
+                                variant.spec.codec
+                            )
+                        });
+                Variant {
+                    package,
+                    spec: variant.spec,
+                }
             })
+            .collect()
+    })
+}
+
+fn rss_variants() -> &'static [Variant] {
+    static PACKAGED: OnceLock<Vec<Variant>> = OnceLock::new();
+    PACKAGED.get_or_init(|| {
+        encoded_variants()
+            .iter()
+            .map(|variant| {
+                let boundaries = rss_boundaries(&variant.track);
+                let package =
+                    mux_audio_track_at(&variant.track, GaplessEncoding::None, &boundaries)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "kithara-test-fixtures: {:?} RSS HLS mux failed: {error}",
+                                variant.spec.codec
+                            )
+                        });
+                Variant {
+                    package,
+                    spec: variant.spec,
+                }
+            })
+            .collect()
     })
 }
 
@@ -382,4 +446,20 @@ fn gapless_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
         GaplessConsts::TARGET_DURATION,
     )
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: gapless HLS bundle failed: {error}"))
+}
+
+#[kithara::asset(
+    ext = "toml",
+    content_type = "application/x-kithara-hls-bundle",
+    context
+)]
+#[case::plain(false)]
+fn rss_hls(context: &BuildContext<'_>, encrypted: bool) -> Vec<u8> {
+    bundle(
+        context,
+        encrypted,
+        rss_variants(),
+        RssConsts::TARGET_DURATION,
+    )
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: RSS HLS bundle failed: {error}"))
 }

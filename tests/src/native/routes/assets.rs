@@ -9,7 +9,7 @@ use axum::{
 use kithara::platform::sync::Arc;
 use kithara_test_fixtures::{
     assets::by_name,
-    hls::{HlsBundle, long_drm, long_plain},
+    hls::{HlsBundle, long_drm, long_plain, rss_plain},
 };
 
 use crate::test_server_state::TestServerState;
@@ -18,6 +18,7 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
     Router::new()
         .route("/assets/hls/{*path}", get(plain_hls))
         .route("/assets/drm/{*path}", get(drm_hls))
+        .route("/assets/hls-rss/{*path}", get(rss_hls))
         .route("/streamhq", get(streamhq))
 }
 
@@ -27,6 +28,10 @@ async fn plain_hls(Path(path): Path<String>) -> Response {
 
 async fn drm_hls(Path(path): Path<String>) -> Response {
     serve_hls(long_drm(), &path)
+}
+
+async fn rss_hls(Path(path): Path<String>) -> Response {
+    serve_hls(rss_plain(), &path)
 }
 
 fn serve_hls(bundle: &HlsBundle, path: &str) -> Response {
