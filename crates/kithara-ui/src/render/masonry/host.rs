@@ -45,6 +45,8 @@ use crate::{
     solve,
 };
 
+type Windows = BTreeMap<String, Rc<RefCell<Window>>>;
+
 /// Mounts the toolkit-neutral document fold into a retained Masonry widget tree.
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
@@ -64,7 +66,7 @@ pub struct MasonryState {
     #[cfg(any(test, feature = "capture"))]
     paths: Rc<RefCell<BTreeMap<String, WidgetId>>>,
     popovers: Rc<RefCell<BTreeMap<String, Rc<PopoverState>>>>,
-    windows: Rc<RefCell<BTreeMap<String, Rc<RefCell<Window>>>>>,
+    windows: Rc<RefCell<Windows>>,
     pointer: Rc<Cell<Option<crate::draw::Pt>>>,
 }
 

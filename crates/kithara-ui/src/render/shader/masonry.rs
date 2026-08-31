@@ -17,7 +17,7 @@ pub struct ShaderDeclaration {
 
 impl ShaderDeclaration {
     pub(crate) const fn new(frame: ShaderFrame, image: ImageData) -> Self {
-        Self { frame, image }
+        Self { image, frame }
     }
 }
 

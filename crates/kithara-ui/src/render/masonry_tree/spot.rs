@@ -50,7 +50,7 @@ impl Grip {
 
 impl Spot {
     pub(crate) const fn new(at: Pt, grip: Option<Grip>) -> Self {
-        Self { at, grip }
+        Self { grip, at }
     }
 
     /// Offers one input to the grip, answering whether the grip took it.

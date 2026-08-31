@@ -1499,7 +1499,9 @@ mod tests {
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Reveal { child, .. }
-            | ExpandedNode::Scroll { child, .. } => {
+            | ExpandedNode::Scroll { child, .. }
+            | ExpandedNode::Placed { child, .. }
+            | ExpandedNode::Pressable { child, .. } => {
                 claimed_components(child, components);
             }
             ExpandedNode::Adaptive { base, steps, .. } => {
@@ -1555,9 +1557,6 @@ mod tests {
                 _ => {}
             },
             ExpandedNode::Popover { anchor, .. } => claimed_components(anchor, components),
-            ExpandedNode::Placed { child, .. } | ExpandedNode::Pressable { child, .. } => {
-                claimed_components(child, components);
-            }
         }
     }
 
@@ -4385,11 +4384,11 @@ mod tests {
                 drop(shell);
 
                 DraggedOut {
-                    armed,
-                    published,
                     at,
                     held,
                     other,
+                    published,
+                    armed,
                 }
             },
         )

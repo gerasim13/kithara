@@ -40,7 +40,7 @@ pub(crate) fn hosted_control_plan(
         read.and_then(|binding| ctx.read(binding)),
         read,
         ctx.scope(read),
-        Resolving { ctx, skin },
+        Resolving { skin, ctx },
     )
 }
 
@@ -380,10 +380,10 @@ impl TablePlan {
             picture.skin(),
         );
         Ok(Drawn {
-            columns,
-            horizontal,
             hovered,
             pressed,
+            columns,
+            horizontal,
             vertical,
         })
     }
@@ -473,9 +473,9 @@ impl TableSource {
         rows: Option<String>,
     ) -> Self {
         Self {
-            columns,
             columns_state,
             rows,
+            columns,
         }
     }
 

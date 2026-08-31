@@ -9,6 +9,7 @@ use kithara_ui::{
     },
     source::UiConfig,
 };
+use num_traits::cast::AsPrimitive;
 
 /// The kind the gallery document names, and the name this application
 /// registers its own widget under.
@@ -109,8 +110,9 @@ impl CustomWidget for Ladder {
         let bars = skin.number("bars").unwrap_or(Self::BARS).max(1.0);
         let span = (bounds.w - Self::PAD * 2.0 - Self::GAP * (bars - 1.0)).max(0.0) / bars;
         for index in 0..bars.whole() {
-            let step = (index + 1).as_f32() / bars;
-            let left = (bounds.x + Self::PAD + index.as_f32() * (span + Self::GAP)).round();
+            let step = AsPrimitive::<f32>::as_(index + 1) / bars;
+            let left = (bounds.x + Self::PAD + AsPrimitive::<f32>::as_(index) * (span + Self::GAP))
+                .round();
             let right = (left + span).round();
             let ceiling = (floor - room * step).round();
             list.fill_rounded_rect(
@@ -138,18 +140,6 @@ fn mix(low: Rgba, high: Rgba, step: f32) -> Rgba {
     }
 }
 
-/// The gallery counts in whole bars and draws in points, so the two meet here
-/// rather than at every use.
-trait AsF32 {
-    fn as_f32(self) -> f32;
-}
-
-impl AsF32 for usize {
-    fn as_f32(self) -> f32 {
-        num_traits::cast::AsPrimitive::as_(self)
-    }
-}
-
 /// How many bars a count written in points asks for.
 trait Whole {
     fn whole(self) -> usize;
@@ -157,6 +147,6 @@ trait Whole {
 
 impl Whole for f32 {
     fn whole(self) -> usize {
-        num_traits::cast::AsPrimitive::as_(self)
+        AsPrimitive::as_(self)
     }
 }

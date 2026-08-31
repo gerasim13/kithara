@@ -38,7 +38,7 @@ pub(crate) struct EngineTarget {
 
 impl EngineTarget {
     pub(super) fn new(area: Rc<Cell<MasonryRect>>, plan: HostedControlPlan) -> Option<Self> {
-        (!plan.descriptors().is_empty()).then_some(Self { area, plan })
+        (!plan.descriptors().is_empty()).then_some(Self { plan, area })
     }
 }
 
@@ -253,8 +253,8 @@ impl HostedEngine {
             .outcome
             .map(|event| (self.map_event)(engine_value(&path, child, event)));
         Routed {
-            focused,
             outcome,
+            focused,
             repaint,
         }
     }

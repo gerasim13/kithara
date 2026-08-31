@@ -39,7 +39,7 @@ impl From<&ReadRow<'_>> for TableRowData {
 impl TableRowData {
     #[cfg(test)]
     pub(crate) fn new(cells: Vec<(String, TableCell)>, selected: bool) -> Self {
-        Self { cells, selected }
+        Self { selected, cells }
     }
 
     pub(super) fn cell(&self, id: &str) -> TableCell {

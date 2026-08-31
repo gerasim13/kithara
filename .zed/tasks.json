@@ -7,41 +7,21 @@
 [
   {
     "label": "run: kithara · immediate (iced + wgpu)",
-    "command": "cargo run -p kithara-app --bin kithara -- --host immediate",
-    "use_new_terminal": true,
-  },
-  {
-    "label": "run: kithara · retained (masonry + vello)",
-    "command": "cargo run -p kithara-app --features masonry --bin kithara -- --host retained",
-    "use_new_terminal": true,
-  },
-  {
-    "label": "run: kithara · immediate (release)",
     "command": "cargo run -p kithara-app --release --bin kithara -- --host immediate",
     "use_new_terminal": true,
   },
   {
-    "label": "run: kithara · retained (release)",
+    "label": "run: kithara · retained (masonry + vello)",
     "command": "cargo run -p kithara-app --release --features masonry --bin kithara -- --host retained",
     "use_new_terminal": true,
   },
   {
     "label": "gallery: immediate (iced + wgpu)",
-    "command": "cargo run -p kithara-ui --features capture --example gallery -- --host immediate",
-    "use_new_terminal": true,
-  },
-  {
-    "label": "gallery: retained (masonry + vello)",
-    "command": "cargo run -p kithara-ui --features capture,masonry --example gallery -- --host retained",
-    "use_new_terminal": true,
-  },
-  {
-    "label": "gallery: immediate (release)",
     "command": "cargo run -p kithara-ui --release --features capture --example gallery -- --host immediate",
     "use_new_terminal": true,
   },
   {
-    "label": "gallery: retained (release)",
+    "label": "gallery: retained (masonry + vello)",
     "command": "cargo run -p kithara-ui --release --features capture,masonry --example gallery -- --host retained",
     "use_new_terminal": true,
   },
