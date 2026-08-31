@@ -164,9 +164,9 @@ impl Deadline {
     }
 
     fn remaining(self, url: &Url) -> Result<Duration, HydrateError> {
-        self.end
-            .checked_duration_since(Instant::now())
-            .filter(|remaining| !remaining.is_zero())
+        let remaining = self.end.saturating_duration_since(Instant::now());
+        (!remaining.is_zero())
+            .then_some(remaining)
             .ok_or_else(|| HydrateError::Timeout {
                 url: RedactedUrl::new(url),
             })
