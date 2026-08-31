@@ -81,6 +81,7 @@ where
                 self.consumer_wake_mode
                     .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
             )
+            .block_on_underrun(self.block_on_underrun)
             .build()
     }
 
@@ -126,6 +127,7 @@ where
                 self.consumer_wake_mode
                     .unwrap_or(ConsumerWakeMode::ImmediateOffRt),
             )
+            .block_on_underrun(self.block_on_underrun)
             .build())
     }
 }

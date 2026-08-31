@@ -372,6 +372,7 @@ pub(crate) fn write_dump<C: HangDump>(label: &str, ctx: &C, dir: Option<&Path>, 
     let file = dir.join(&filename);
     let temp = dir.join(format!(".{filename}.tmp"));
     let write = (|| {
+        fs::create_dir_all(&dir)?;
         let mut output = OpenOptions::new()
             .write(true)
             .create_new(true)

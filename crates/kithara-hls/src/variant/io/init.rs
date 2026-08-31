@@ -11,7 +11,7 @@ use super::{HlsVariant, PlanCtx, core::INIT_PLACEHOLDER_BYTES};
 use crate::{
     HlsResult,
     handle::ResourceHandle,
-    playlist::{PlaylistAccess, PlaylistState},
+    playlist::PlaylistState,
     segment::{
         Downloading, FetchClaim, InitSegment, Segment, SegmentContent, SegmentSize,
         SegmentSlotState,

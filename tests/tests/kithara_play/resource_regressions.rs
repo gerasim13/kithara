@@ -876,13 +876,18 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     let mut buf = [0.0f32; 4096];
     total_samples += read_audio_some(&mut progress_audio, "packaged_progress_warmup").await as u64;
     progress_probe.drain(&mut progress_rx);
-    let deadline = Instant::now() + Duration::from_secs(4);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(4);
+    let mut frame_reads = 0u64;
+    let mut pending_reads = 0u64;
+    let mut saw_eof = false;
     while Instant::now() < deadline && progress_probe.progress_events < 10 {
         progress_audio.preload().expect("preload must succeed");
         let read_count = match progress_audio.read(&mut buf) {
             Ok(ReadOutcome::Frames { count, .. }) => count.get(),
             Ok(ReadOutcome::Pending { .. }) => 0,
             Ok(ReadOutcome::Eof { .. }) => {
+                saw_eof = true;
                 progress_probe.drain(&mut progress_rx);
                 break;
             }
@@ -890,21 +895,28 @@ async fn packaged_hls_single_variant_continuity_is_stable(
         };
         progress_probe.drain(&mut progress_rx);
         if read_count == 0 {
+            pending_reads += 1;
             time::sleep(Duration::from_millis(10)).await;
             progress_probe.observe_idle();
             continue;
         }
+        frame_reads += 1;
         total_samples += read_count as u64;
     }
     progress_probe.drain(&mut progress_rx);
     progress_probe.observe_idle();
+    let elapsed = started.elapsed();
     assert!(
         total_samples > 0,
-        "{codec:?}: expected decoded output during progress tracking"
+        "{codec:?}: expected decoded output during progress tracking; \
+         frame_reads={frame_reads}, pending_reads={pending_reads}, saw_eof={saw_eof}, \
+         elapsed={elapsed:?}"
     );
     assert!(
         progress_probe.progress_events >= 4,
-        "{codec:?}: expected PlaybackProgress events, got {}",
+        "{codec:?}: expected PlaybackProgress events, got {}; total_samples={total_samples}, \
+         frame_reads={frame_reads}, pending_reads={pending_reads}, saw_eof={saw_eof}, \
+         elapsed={elapsed:?}",
         progress_probe.progress_events
     );
     assert_eq!(
@@ -913,8 +925,11 @@ async fn packaged_hls_single_variant_continuity_is_stable(
     );
     assert!(
         progress_probe.max_gap_between_events < Duration::from_millis(1_200),
-        "{codec:?}: PlaybackProgress stalled for {:?}",
-        progress_probe.max_gap_between_events
+        "{codec:?}: PlaybackProgress stalled for {:?}; total_samples={total_samples}, \
+         frame_reads={frame_reads}, pending_reads={pending_reads}, saw_eof={saw_eof}, \
+         progress_events={}, elapsed={elapsed:?}",
+        progress_probe.max_gap_between_events,
+        progress_probe.progress_events
     );
 
     let decode_audio = open_packaged_hls_audio(

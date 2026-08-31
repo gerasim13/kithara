@@ -617,6 +617,7 @@ mod tests {
         shaping::TextResources,
         solve::{Length as SolveLength, Size as SolveSize},
         source::{MemResolver, UiConfig},
+        view,
     };
 
     fn redraw_event() -> Event {
@@ -855,7 +856,13 @@ mod tests {
     /// What the host hands the document for one frame, built from a fixture
     /// reader so a test drives the clock rather than waiting for one.
     fn ctx<'a>(ui: &'a CompiledUi, reads: &'a dyn Reads) -> Ctx<'a, 'a> {
-        Ctx::new(ui, reads, builtin::skin_doc(), Clock::default())
+        Ctx::new(
+            ui,
+            reads,
+            &view::EMPTY,
+            builtin::skin_doc(),
+            Clock::default(),
+        )
     }
 
     struct FixtureReads {
@@ -956,6 +963,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("retained host fixture must compile: {error}"))
     }
@@ -985,6 +993,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("tree surface fixture must compile: {error}"))
     }
@@ -1007,6 +1016,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery library fixture must compile: {error}"))
     }
@@ -1034,6 +1044,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery {page} fixture must compile: {error}"))
     }
@@ -1077,6 +1088,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery buttons fixture must compile: {error}"))
     }
@@ -1099,6 +1111,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery cells fixture must compile: {error}"))
     }
@@ -1121,6 +1134,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery track-list fixture must compile: {error}"))
     }
@@ -1143,16 +1157,38 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery faders fixture must compile: {error}"))
+    }
+
+    /// A layout that stands `node` inside a `Tabs` offering `pages`.
+    ///
+    /// A control naming a page no `Tabs` offers is refused, so a module the
+    /// gallery reaches through the screen's own tabs is looked at through one
+    /// here too. Every page stands the same node, which is the one this looks
+    /// at.
+    fn tabs_over(state: &str, node: &str, pages: &[&str]) -> String {
+        let offered: String = pages
+            .iter()
+            .map(|page| format!(r#""{page}": {node},"#))
+            .collect();
+        let initial = pages[0];
+        format!(
+            r#"(schema: "kithara.layout", version: 1, id: "tabs-host",
+                root: Tabs(state: "{state}", initial: "{initial}", pages: {{{offered}}}))"#
+        )
     }
 
     fn compiled_gallery_tabs() -> CompiledUi {
         let mut resolver = MemResolver::default();
         resolver.insert(
             "gallery.klayout.ron",
-            r#"(schema: "kithara.layout", version: 1, id: "gallery-tabs-host",
-                root: Module(instance: "modules-tabs", source: "module-tabs.kmodule.ron"))"#,
+            &tabs_over(
+                "module",
+                r#"Module(instance: "modules-tabs", source: "module-tabs.kmodule.ron")"#,
+                &["deck", "deck-micro", "global-bar", "layout", "telemetry"],
+            ),
         );
         resolver.insert(
             "module-tabs.kmodule.ron",
@@ -1165,16 +1201,54 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery module tabs fixture must compile: {error}"))
     }
 
     fn compiled_gallery_nav() -> CompiledUi {
+        /// Every page the gallery's nav turns to, in the order it lists them.
+        const NAV_PAGES: &[&str] = &[
+            "atoms",
+            "buttons",
+            "faders",
+            "modules",
+            "typography",
+            "assets",
+            "cells",
+            "sizes",
+            "tokens",
+            "micro",
+            "mixer",
+            "vis",
+            "chrome",
+            "titlebars",
+            "table",
+            "tree",
+            "library2",
+            "stress",
+            "menu",
+            "clock",
+            "pivot",
+            "shader",
+            "objects",
+            "motion",
+            "sprites",
+            "lottie",
+            "scene",
+            "table-long",
+            "custom",
+            "skins",
+        ];
+
         let mut resolver = MemResolver::default();
         resolver.insert(
             "gallery.klayout.ron",
-            r#"(schema: "kithara.layout", version: 1, id: "gallery-nav-host",
-                root: Module(instance: "gallery", source: "modules/nav.kmodule.ron"))"#,
+            &tabs_over(
+                "page",
+                r#"Module(instance: "gallery", source: "modules/nav.kmodule.ron")"#,
+                NAV_PAGES,
+            ),
         );
         resolver.insert(
             "modules/nav.kmodule.ron",
@@ -1191,6 +1265,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("gallery nav fixture must compile: {error}"))
     }
@@ -1222,6 +1297,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the leaf nav fixture must compile: {error}"))
     }
@@ -1264,6 +1340,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the clipped scroll fixture must compile: {error}"))
     }
@@ -1309,6 +1386,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("the clipped drag fixture must compile: {error}"))
     }
@@ -1352,6 +1430,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("overview row fixture must compile: {error}"))
     }
@@ -4573,6 +4652,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("root include chain must compile: {error}"));
         let CompiledNode::Module { instance, .. } = &ui.root else {

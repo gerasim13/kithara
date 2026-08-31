@@ -356,6 +356,16 @@ pub(crate) mod tests {
 
     use super::*;
 
+    /// No queue test ever streams bytes, so the store is here to be wired, not
+    /// to hold anything. The default backend would map a file under the shared
+    /// temp root, which every parallel test process also owns and which Miri
+    /// cannot map at all.
+    pub(in crate::queue) fn make_store() -> AssetStore {
+        AssetStore::builder()
+            .backend(StorageBackend::Memory)
+            .build()
+    }
+
     pub(in crate::queue) fn make_queue() -> Queue {
         Queue::new(queue_config())
     }
@@ -395,7 +405,10 @@ pub(crate) mod tests {
     }
 
     fn queue_config() -> QueueConfig {
-        QueueConfig::builder().player(player()).build()
+        QueueConfig::builder()
+            .player(player())
+            .store(make_store())
+            .build()
     }
 
     fn player() -> PlayerImpl {
@@ -524,6 +537,7 @@ pub(crate) mod tests {
         let queue = Queue::new(
             QueueConfig::builder()
                 .player(player())
+                .store(make_store())
                 .prefetch_duration(8.0)
                 .build(),
         );

@@ -8,6 +8,7 @@ use kithara_ui::{
     capture::{Geometry, Photographer, Stage},
     compile::CompiledUi,
     render::{Clock, tree},
+    view,
 };
 
 use super::{
@@ -75,6 +76,7 @@ impl Stage for Immediate {
                 &compiled.root,
                 compiled,
                 reads,
+                &view::EMPTY,
                 skin,
                 Clock::default(),
                 None,

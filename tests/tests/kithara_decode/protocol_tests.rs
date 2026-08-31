@@ -320,7 +320,7 @@ fn synth_native_flac_1s() -> Vec<u8> {
         Consts::WAV_FRAMES / 2,
         Wave::Sawtooth,
     );
-    let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+    let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target: BytesEncodeTarget::Flac,
         bit_rate: None,

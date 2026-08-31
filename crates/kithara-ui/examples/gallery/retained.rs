@@ -20,7 +20,7 @@ use crate::{
     cli::{Args, Extent},
     custom, demo,
     fixture::resolver,
-    host::Gallery,
+    host::{self, Gallery},
 };
 
 /// A size in whole pixels, which is what this host opens a window at.
@@ -143,15 +143,18 @@ impl Stage for Masonry<'_> {
     }
 
     fn turn(&mut self, page: &Shot) -> Result<(), String> {
-        self.page = Some(
-            Ui::new(
-                Gallery::at(*page),
-                self.config,
-                (self.frame.width, self.frame.height),
-                self.frame.scale,
-            )
-            .map_err(|error| format!("mount {page}: {error}"))?,
-        );
+        // Mounted again per page rather than turned in place: this host builds
+        // a page its own, so a page opens here at nothing on the clock and
+        // nothing behind it, whichever page was photographed before.
+        let mut ui = Ui::new(
+            Gallery::default(),
+            self.config,
+            (self.frame.width, self.frame.height),
+            self.frame.scale,
+        )
+        .map_err(|error| format!("mount {page}: {error}"))?;
+        host::stand(&mut ui, *page).map_err(|error| format!("turn to {page}: {error}"))?;
+        self.page = Some(ui);
         Ok(())
     }
 

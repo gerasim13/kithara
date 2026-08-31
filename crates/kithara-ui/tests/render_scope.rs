@@ -12,6 +12,7 @@ use kithara_ui::{
     registry::{EndpointCategory, EndpointDesc, ValueKind},
     render::{Clock, ReadValue, Reads, tree},
     source::UiConfig,
+    view,
 };
 
 /// Records every endpoint the renderer asks for and answers nothing.
@@ -39,6 +40,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap();
     let reads = RecordingReads::default();
@@ -47,6 +49,7 @@ fn rendering_two_decks_reads_scoped_endpoints_for_both() {
         &ui.root,
         &ui,
         &reads,
+        &view::EMPTY,
         builtin::skin(),
         Clock::default(),
         None,
@@ -125,6 +128,7 @@ fn block_ui() -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 
@@ -134,6 +138,7 @@ fn rendered_endpoints(ui: &CompiledUi, truthy: BTreeSet<String>) -> BTreeSet<Str
         &ui.root,
         ui,
         &reads,
+        &view::EMPTY,
         builtin::skin(),
         Clock::default(),
         None,
@@ -204,6 +209,7 @@ fn menu_ui(module: &'static str) -> Result<CompiledUi, UiDocError> {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
 }
 

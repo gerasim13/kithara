@@ -1,0 +1,120 @@
+name: Run
+
+# One fan-out for every role. A caller names a role and a pipeline kind; the
+# catalog in `.config/xtask.toml` answers which lanes that is, and `lane.yml`
+# runs each of them. Five role workflows differing by one string is the
+# duplication this catalog exists to remove.
+on:
+  workflow_call:
+    inputs:
+      role:
+        description: >-
+          Which group of lanes to schedule: gate, platforms, deep, quality or
+          release.
+        required: true
+        type: string
+      kind:
+        description: >-
+          Pipeline kind the lanes run under. A lane's membership names the
+          kinds that schedule it, so this is what selects them.
+        required: true
+        type: string
+      only:
+        description: >-
+          Space-separated lane names to run instead of the role's whole
+          selection. This is how one subtask is run on its own. A name this
+          role owns that selects nothing fails the render rather than running
+          an empty matrix; a name another role owns leaves this one with
+          nothing to do, because the dispatcher hands the same list to each.
+        default: ''
+        type: string
+
+# Not inherited from the caller: a called workflow gets its own environment.
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Reading the catalog needs a checkout and the xtask binary, so the selection
+  # runs on the fleet rather than on a hosted machine. The image carries no
+  # `jq`, which is why `ci lanes` prints one member of the selection itself
+  # instead of a caller splitting the object in shell.
+  select:
+    name: Select ${{ inputs.role }} lanes
+    runs-on: ${{ fromJSON(vars.KITHARA_RUNNER_LABELS) }}
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.render.outputs.matrix }}
+      dependent: ${{ steps.render.outputs.dependent }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The inputs reach the script as environment variables rather than as
+      # interpolations: a workflow that pastes a caller's string into a shell
+      # command is a command the caller wrote.
+      - name: Render the jobs this role schedules
+        id: render
+        env:
+          ROLE: ${{ inputs.role }}
+          KIND: ${{ inputs.kind }}
+          ONLY: ${{ inputs.only }}
+        run: |
+          render() {
+            just ci lanes --role "$ROLE" --kind "$KIND" ${ONLY:+--only "$ONLY"} --field "$1"
+          }
+          echo "matrix=$(render matrix)" >> "$GITHUB_OUTPUT"
+          echo "dependent=$(render dependent)" >> "$GITHUB_OUTPUT"
+
+  # Every lane's verdict, not the first one's: these answer independent
+  # questions and a run that stops at the first red hides the rest.
+  #
+  # A static name here, and the lane's name from the callee. A `uses:` job
+  # renders the callee's name under its own, so the lane is named either way,
+  # and the caller has to be named at all only because an unnamed one falls
+  # back to the job id plus every matrix value - `run (deep-rtsan-file, 120,
+  # 0, rtsan-junit-file, target/nextest/rtsan/junit.xml, always)` for one
+  # lane. It must not be named from the matrix: a skipped job never expands
+  # one, and GitHub then prints the expression it could not evaluate, which
+  # is how a whole run tree came to end in a skipped `Gate / matrix.lane`.
+  # The callee is rendered only when the job runs, so this name is the whole
+  # name whenever it does not.
+  run:
+    name: lane
+    needs: select
+    if: ${{ needs.select.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    uses: ./.github/workflows/lane.yml
+    with:
+      lane: ${{ matrix.lane }}
+      kind: ${{ inputs.kind }}
+      timeout-minutes: ${{ matrix.timeout }}
+      fetch-depth: ${{ matrix.depth }}
+      artifact-name: ${{ matrix.artifact.name || '' }}
+      artifact-path: ${{ matrix.artifact.path || '' }}
+      artifact-when: ${{ matrix.artifact.when || 'always' }}
+
+  # A lane that reads what the matrix produced. It runs under `always()` so a
+  # report still describes a night in which one measurement failed - a report
+  # that only appears when everything passed is a report nobody needs. It does
+  # need the selection itself, though: a failed render leaves an empty output,
+  # and `always()` alone would hand `fromJSON` an empty string.
+  dependent:
+    name: dependent lane
+    needs: [select, run]
+    if: ${{ always() && needs.select.result == 'success' && needs.select.outputs.dependent != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.dependent) }}
+    uses: ./.github/workflows/lane.yml
+    with:
+      lane: ${{ matrix.lane }}
+      kind: ${{ inputs.kind }}
+      timeout-minutes: ${{ matrix.timeout }}
+      fetch-depth: ${{ matrix.depth }}
+      download: ${{ join(matrix.needs, ' ') }}

@@ -44,7 +44,6 @@ pub(crate) struct ClockState {
     bpm_label: String,
     source: usize,
     family_step: bool,
-    open: bool,
     quantize: bool,
     snap: bool,
     click: bool,
@@ -60,7 +59,6 @@ impl Default for ClockState {
             bpm_label: String::new(),
             source: 0,
             family_step: true,
-            open: true,
             quantize: true,
             snap: true,
             click: false,
@@ -75,10 +73,6 @@ impl Default for ClockState {
 }
 
 impl ClockState {
-    pub(crate) const fn set_open(&mut self, open: bool) {
-        self.open = open;
-    }
-
     pub(crate) fn activate(&mut self, path: &str) -> bool {
         if path.contains("key-lock/") {
             match path.rsplit('/').next() {
@@ -99,8 +93,6 @@ impl ClockState {
             return true;
         }
         match path.rsplit('/').next() {
-            Some("toggle") => self.open = !self.open,
-            Some("pop" | "close") => self.open = false,
             Some("up" | "nudge_up") => self.step(0.01),
             Some("down" | "nudge_down") => self.step(-0.01),
             Some("step") => self.family_step = true,
@@ -124,7 +116,6 @@ impl ClockState {
         let source = scope_value(scope, "source")
             .and_then(|id| SOURCES.iter().find(|source| source.id == id));
         let value = match id {
-            "clock.open" => ReadValue::Bool(self.open),
             "clock.bpm" => ReadValue::Text(&self.bpm_label),
             "clock.source" => ReadValue::Text(SOURCES[self.source].name),
             "clock.warning" => ReadValue::Text("ALL SOURCES STABLE"),

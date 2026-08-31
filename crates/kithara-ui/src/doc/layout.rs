@@ -6,7 +6,7 @@ use super::ron_io;
 use crate::{
     envelope::{self, DocKind},
     error::UiDocError,
-    ids::{DocId, InstanceId, NodeId, SourceUri},
+    ids::{DocId, InstanceId, NodeId, SourceUri, StateId},
     module::{BindingRef, MeasureAxis},
     size::SizeSpec,
 };
@@ -73,6 +73,21 @@ pub enum LayoutNode {
         /// module frame.
         #[serde(default)]
         corners: bool,
+    },
+    /// Shows the one page its state stands at, and compiles no other.
+    ///
+    /// The body alone: what turns the state is an ordinary control writing a
+    /// [`crate::doc::module::BindingRef::Page`], so a document keeps every say
+    /// over the chrome that offers the pages.
+    ///
+    /// A page is a layout of its own, so a page that is one module and a page
+    /// that is a split of nine each say so where they stand.
+    Tabs {
+        state: StateId,
+        /// The page a screen that has turned nothing stands at.
+        initial: String,
+        /// What each page shows, by the name a control writes.
+        pages: BTreeMap<String, Self>,
     },
 }
 

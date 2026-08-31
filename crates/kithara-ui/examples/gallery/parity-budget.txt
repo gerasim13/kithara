@@ -78,6 +78,14 @@ shader.png                  1
 # The two pages production PR #188 added, priced here for the first time.
 # Measured 2026-08-15 at the same geometry as the rest: clock 2.0%, pivot 2.5%.
 # Both are ordinary text-and-chip pages; neither hides a missing control.
+#
+# Clock's headroom did hide one, on 2026-08-30: the retained host photographed
+# this page with the master clock surface shut while the immediate host
+# photographed it open, and a whole popover of difference read 3.0% against
+# this 3. The menu page carries the same surface and the same defect, and only
+# that page failed, at 2.4% against its 2. Both read the edge-and-text band now
+# - clock 1.9%, menu 1.7% - and the numbers stay where they are rather than
+# being tightened onto a tenth of rasteriser drift.
 clock.png                   3
 pivot.png                   3
 

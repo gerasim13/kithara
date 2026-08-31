@@ -16,6 +16,7 @@ use kithara_ui::{
         WaveBucket, WaveformView, tree,
     },
     source::{Limits, MemResolver, UiConfig},
+    view,
 };
 use num_traits::cast::AsPrimitive;
 use ron::ser::to_string;
@@ -49,6 +50,7 @@ impl Fixture {
             builtin::skin_doc(),
             builtin::text_doc(),
             &self.config,
+            &view::EMPTY,
         )
         .unwrap_or_else(|error| panic!("benchmark fixture must compile: {error}"))
     }
@@ -174,6 +176,7 @@ fn bench_view_build(c: &mut Criterion) {
                 &ui.root,
                 &ui,
                 &reads,
+                &view::EMPTY,
                 builtin::skin(),
                 Clock::default(),
                 None,
@@ -192,6 +195,7 @@ fn bench_data_push(c: &mut Criterion) {
                 &ui.root,
                 &ui,
                 &reads,
+                &view::EMPTY,
                 builtin::skin(),
                 Clock::default(),
                 None,
@@ -216,6 +220,7 @@ fn bench_event_apply(c: &mut Criterion) {
                     &ui.root,
                     &ui,
                     &reads,
+                    &view::EMPTY,
                     builtin::skin(),
                     Clock::default(),
                     None,

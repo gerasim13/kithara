@@ -27,7 +27,7 @@ use crate::{
     capture::Shot,
     custom, demo,
     fixture::{Consts, resolver},
-    host::Gallery,
+    host::{self, Gallery},
 };
 
 #[kithara::test]
@@ -51,8 +51,10 @@ fn every_page_paints_over_the_whole_window() {
     let bare: Vec<String> = Shot::all()
         .into_iter()
         .filter_map(|page| {
-            let mut ui = Ui::new(Gallery::at(page), config, (width, height), 1.0)
+            let mut ui = Ui::new(Gallery::default(), config, (width, height), 1.0)
                 .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
+            host::stand(&mut ui, page)
+                .unwrap_or_else(|error| panic!("page {} must open: {error}", page));
             let frame = ui
                 .render()
                 .unwrap_or_else(|error| panic!("page {} must draw: {error}", page));

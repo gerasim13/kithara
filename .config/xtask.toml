@@ -438,10 +438,25 @@ loom_lane = "loom"
 # Features shared by every lane. UI renderer features belong to the dedicated
 # `ui` lane so the general workspace run does not build those test targets.
 features = []
+# Paths no single lane owns: the routing itself. A change here runs every lane
+# that declares `owns`, because a change to what belongs where has to be tested
+# by the routes it moves.
+shared_paths = [
+  ".config/xtask.toml",
+  ".config/nextest.toml",
+  "tests/Cargo.toml",
+]
 
+# `kithara/flash` reaches `kithara-platform` and `kithara-test-utils` through
+# the facade and stops there. The integration suite owns flash-gated code of
+# its own - the virtual time a rendered block advances by, the lexical
+# targets, the loom case - so it is named here too. Without it a lane runs a
+# virtual clock while the suite compiles as if the clock were real: the
+# targets under `#![cfg(feature = "flash")]` come out empty and the run
+# reports them green.
 [test.flash]
 default = true
-features = ["kithara/flash"]
+features = ["kithara/flash", "kithara-integration-tests/flash"]
 
 [test.no_block]
 default = false
@@ -497,6 +512,7 @@ prefix_args = [
 # and the generators that write the CI pipelines. None of it ships.
 [test.lanes.tooling]
 program = "cargo"
+owns = ["xtask/", "crates/kithara-devtools/"]
 prefix_args = [
   "nextest",
   "run",
@@ -528,6 +544,11 @@ default_flash = false
 # of the selected packages contains this feature`.
 [test.lanes.harness]
 program = "cargo"
+owns = [
+  "crates/kithara-test-utils/",
+  "crates/kithara-test-macros/",
+  "crates/kithara-platform/tests/flash_",
+]
 default_flash = false
 # `kithara-net` refuses to compile without an HTTP backend, and the backend in
 # turn refuses to compile without a TLS one; nothing in this package selection
@@ -563,6 +584,12 @@ prefix_args = [
 # dropped.
 [test.lanes.fixtures]
 program = "cargo"
+owns = [
+  "tests/src/",
+  "tests/tests/suite_harness.rs",
+  "tests/tests/flash_lexical.rs",
+  "tests/tests/timeout_guard.rs",
+]
 default_features = ["harness"]
 prefix_args = [
   "nextest",
@@ -654,6 +681,11 @@ default_features = ["kithara/loom"]
 default_flash = false
 suffix_args = ["-E", "test(/(^|::)loom_model_/)"]
 
+# `test-release` is the profile every other lane builds in, and this one ran in
+# `test`. `just test all` therefore built the whole workspace a second time to
+# reach the doc-tests: 1m15s on a warm runner and 3m26s on a cold one, on every
+# push, for a second set of artefacts nothing else reads. Naming the same
+# profile makes the doc lane reuse what the suite before it just built.
 [test.lanes.doc]
 program = "cargo"
 prefix_args = [
@@ -664,6 +696,8 @@ prefix_args = [
   "kithara-fuzz",
   "--exclude",
   "kithara-ui",
+  "--profile",
+  "test-release",
 ]
 default_flash = false
 
@@ -884,6 +918,10 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "deny"], label = "licence and advisory gate" }]
+role = "gate"
+kinds = ["weekly", "quarantine"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
 
 [ext.ci.lanes.deps-unused]
 cache_group = "linux"
@@ -891,16 +929,28 @@ label = "dependency audit"
 os = "linux"
 tools = ["cargo", "just"]
 program = "just"
-steps = [
-  { args = [
-    "deps",
-    "machete",
-  ], label = "unused manifest entries" },
-  { args = [
-    "deps",
-    "shear",
-  ], label = "unused crate dependencies" },
-]
+steps = [{ args = ["deps", "machete"], label = "unused manifest entries" }]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
+
+# Its own lane, and off the push gate: `cargo shear` reads what the source
+# actually imports, so a dependency reachable only under a `cfg` this build
+# does not enable reads as unused. The workspace has dozens - wasm-only and
+# bench-only entries - and every one of them would refuse every push. Weekly
+# on GitLab, nightly here, where the report is read rather than blocking.
+[ext.ci.lanes.deps-shear]
+cache_group = "linux"
+label = "dependency audit"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["deps", "shear"], label = "unused crate dependencies" }]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 30
 
 [ext.ci.lanes.deps-features]
 cache_group = "linux"
@@ -909,6 +959,26 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "hack"], label = "feature powerset check" }]
+role = "gate"
+kinds = ["weekly"]
+# Not on a branch push. This checks about 375 feature combinations - the count
+# moves as crates and features do - and the workspace is unpublished: the
+# configurations anyone actually builds are the ones the platform lanes name,
+# roughly a dozen. Paying 6.9 to 38.3 minutes of a one-host fleet on every push
+# of every branch to cover the rest is the wrong trade - 30.8 hours of runner time over 117 runs. On the default branch
+# it still gates what lands, and the nightly pass covers the days nothing
+# lands, which is where a dependency update would break a combination with no
+# push to blame. GitLab already said `weekly`; this is the same judgement.
+kinds_github = ["main", "nightly"]
+# The measurement, not a nap: over 117 runs on the fork's runners this lane took
+# 6.9 to 38.3 minutes green, with p95 at 29.5, and the six that failed all
+# failed inside eleven minutes - the shape of a check that stops at the first
+# broken combination, not of one that hangs. Three hours would let a wedged lane
+# hold a one-host fleet for the rest of an evening before anyone learned it was
+# stuck, which is what a backstop exists to prevent. Sixty is the next rung
+# above the worst run measured, and what every other gate lane of this weight
+# already says.
+timeout_minutes = 60
 
 [ext.ci.lanes.deps-semver]
 cache_group = "linux"
@@ -917,6 +987,11 @@ os = "linux"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["deps", "semver"], label = "public API compatibility" }]
+role = "gate"
+kinds = ["weekly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+fetch_depth = 0
 
 # One browser per job: the two engines fail for unrelated reasons, and Chromium
 # owns the WebCodecs target while Firefox keeps the full integration suite. Both
@@ -944,7 +1019,15 @@ steps = [
     "webcodecs",
   ], label = "Chromium WebCodecs tests" },
 ]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
 
+# Nightly here, not on the push gate: the full integration suite does not
+# compile for wasm32 today - `Queue` is not `Send` because `Box<dyn AudioReader>`
+# is not, and `BeatGrid` demands it. The lane reports the break every night
+# instead of refusing every push until the type is fixed.
 [ext.ci.lanes.web-firefox]
 cache_group = "linux"
 label = "Web browser"
@@ -952,6 +1035,10 @@ os = "linux"
 tools = ["firefox", "geckodriver", "just"]
 program = "just"
 steps = [{ args = ["test", "wasm", "firefox"], label = "Firefox WASM tests" }]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["nightly"]
+timeout_minutes = 60
 
 [ext.ci.lanes.web-size]
 cache_group = "linux"
@@ -966,7 +1053,21 @@ steps = [
     "size-check",
   ], label = "WASM size check" },
 ]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
+artifact = { name = "wasm-slim-report", path = "target/wasm-slim-result.json" }
 
+# Real-time correctness is what this product is for: an allocation or a lock
+# on the audio thread is a dropout, not a slow path. `deep-rtsan` is the full
+# suite - including `rtsan-async`, which the three Linux lanes below do not
+# cover - on the pinned nightly's instrumented sanitizer, on the platform that
+# ships it. The Linux lanes run the same file/HLS/tripwire suites under the
+# stable-toolchain standalone backend instead, so they can run on every push
+# rather than only nightly; `test.just` defaults an unset
+# `KITHARA_RTSAN_BACKEND` to instrumented, so they pin `standalone`
+# themselves. Same detector, two platforms, two backends - not duplication.
 [ext.ci.lanes.deep-rtsan]
 cache_group = "macos"
 label = "deep Apple"
@@ -991,6 +1092,63 @@ steps = [
     "rtsan-hls",
   ], label = "real-time sanitizer suite" },
 ]
+role = "gate"
+kinds = ["nightly"]
+timeout_minutes = 120
+
+[ext.ci.lanes.deep-rtsan-fast]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "rtsan-junit-fast", path = "target/nextest/rtsan/junit.xml", when = "always" }
+steps = [
+  { args = [
+    "test",
+    "rtsan",
+  ], label = "RTSan tripwire", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
+]
+role = "gate"
+kinds = []
+kinds_github = ["main", "branch", "nightly"]
+timeout_minutes = 120
+
+[ext.ci.lanes.deep-rtsan-file]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "rtsan-junit-file", path = "target/nextest/rtsan/junit.xml", when = "always" }
+steps = [
+  { args = [
+    "test",
+    "rtsan-file",
+  ], label = "RTSan file playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
+]
+role = "gate"
+kinds = []
+kinds_github = ["main", "branch", "nightly"]
+timeout_minutes = 120
+
+[ext.ci.lanes.deep-rtsan-hls]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "rtsan-junit-hls", path = "target/nextest/rtsan/junit.xml", when = "always" }
+steps = [
+  { args = [
+    "test",
+    "rtsan-hls",
+  ], label = "RTSan HLS playback", env = { KITHARA_RTSAN_BACKEND = "standalone" } },
+]
+role = "gate"
+kinds = []
+kinds_github = ["main", "branch", "nightly"]
+timeout_minutes = 120
 
 [ext.ci.lanes.deep-perf]
 cache_group = "macos"
@@ -1007,6 +1165,9 @@ steps = [
     "perf",
   ], label = "performance profile" },
 ]
+role = "deep"
+kinds = ["nightly"]
+timeout_minutes = 90
 
 [ext.ci.lanes.deep-bench]
 cache_group = "macos"
@@ -1015,6 +1176,82 @@ os = "macos"
 tools = ["cargo", "just"]
 program = "just"
 steps = [{ args = ["perf", "bench", "ci"], label = "benchmark suite" }]
+role = "deep"
+kinds = ["nightly"]
+timeout_minutes = 120
+
+# A shader that stopped reading what Rust writes it looks identical from the
+# outside until a frame is rendered and read back, so this is the one suite
+# that needs an attached graphics device rather than a software rasterizer.
+# Dispatched onto the ordinary fleet it would render on a software rasterizer
+# and report green on a gate that never ran, so it stays name-only here, the
+# same as `windows-x64`: `ui.yml` already schedules it onto
+# `KITHARA_GPU_RUNNER_LABELS` and skips when that variable is empty, and the
+# catalog has no field yet for naming a runner pool.
+[ext.ci.lanes.deep-ui]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["test", "ui"], label = "UI suite and host parity" }]
+role = "deep"
+kinds = []
+kinds_github = []
+timeout_minutes = 120
+
+# Miri cannot enter a C library, and every `unsafe` block that matters here is
+# an FFI call into one, so the selection is the crates that hold atomics and
+# forbid `unsafe` themselves. The interpreter runs a program hundreds of times
+# slower than the machine does, so this stays weekly rather than nightly.
+[ext.ci.lanes.deep-miri]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["test", "miri"], label = "Miri interpreter run" }]
+role = "deep"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+timeout_minutes = 240
+
+# Mutation testing, scoped by `.config/mutation-suites.toml` rather than by the
+# workspace: ten suites, each naming one package, the production files it may
+# mutate, and the `test()` filters that must kill the mutants, run against
+# `--lib` alone. A workspace-wide run was measured at three days and killed
+# nothing - integration suites cover behaviour, not lines, so a mutant either
+# survives every one of them or is caught by fifty at once.
+#
+# The four original suites are 88 mutants and took eight minutes. Six more,
+# added over the decision-dense files that carry their own unit tests, are 535:
+# `stream::coord` 132, `waveform::analyzer` 125, `size` 122, `worker::scheduler`
+# 76, `track` 42, `media` 38. Seven times the work, and six package baselines
+# instead of three, so this is an hour rather than a coffee. The timeout is
+# still headroom for a hung mutant, but it is now roughly double the expected
+# run rather than fifteen times it.
+[ext.ci.lanes.deep-mutants]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "mutants",
+    "run-all",
+    "--jobs",
+    "4",
+  ], label = "unit mutation suites" },
+]
+role = "deep"
+kinds = []
+kinds_github = ["weekly"]
+queue = "heavy-linux"
+artifact = { name = "mutants", path = "target/mutants-ci" }
+timeout_minutes = 120
 
 # The scan reports where it found something, not merely how many: without the
 # findings it announced "leaks found: 5" and stopped, which is a number nobody
@@ -1042,6 +1279,16 @@ steps = [
     "gitleaks-report.json",
   ], label = "repository secret scan" },
 ]
+role = "gate"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 15
 
 [ext.ci.lanes.linux-check]
 cache_group = "linux"
@@ -1050,6 +1297,16 @@ os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [{ args = ["check", "workspace"], label = "Linux workspace check" }]
+role = "gate"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 [ext.ci.lanes.linux-wasm]
 cache_group = "linux"
@@ -1058,13 +1315,24 @@ os = "linux"
 tools = ["cargo", "just", "sccache"]
 program = "just"
 steps = [{ args = ["platform", "wasm"], label = "WASM portability check" }]
+role = "gate"
+kinds_github = ["main", "branch"]
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 # Every Linux test lane caps Cargo at two build jobs. The container has five
 # CPUs and under eight gigabytes, so five compilations at once put the peak past
 # the cgroup limit: the kernel logged `Killed process (rustc) anon-rss:1727320kB`
 # twice in one second, and Cargo reported only "could not compile" with no
 # diagnostic, because the compiler never reached one.
-[ext.ci.lanes.linux-test]
+[ext.ci.lanes.linux-test-simulated-clock]
 cache_group = "linux"
 label = "Linux"
 os = "linux"
@@ -1078,6 +1346,10 @@ steps = [
     "ci",
   ], label = "Linux tests", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "gate"
+kinds = ["platforms", "main", "nightly"]
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
 
 [ext.ci.lanes.linux-doc]
 cache_group = "linux"
@@ -1092,6 +1364,10 @@ steps = [
     "--lane=doc",
   ], label = "Linux doc lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-loom]
 cache_group = "linux"
@@ -1106,6 +1382,69 @@ steps = [
     "--lane=loom",
   ], label = "Linux loom lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
+
+# `just test` runs neither the build tooling nor the harness the product tests
+# are written with, so a product change can break them from the other side and
+# no push notices. A push that touches their own sources runs them straight
+# away through `linux-support`; these three are the unattended sweep. GitLab
+# schedules none of them - its lane stage carries the product lanes only.
+[ext.ci.lanes.linux-tooling]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=tooling",
+  ], label = "Linux tooling lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 180
+
+[ext.ci.lanes.linux-harness]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=harness",
+  ], label = "Linux harness lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 180
+
+[ext.ci.lanes.linux-fixtures]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+tools = ["cargo", "just", "sccache"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--lane=fixtures",
+  ], label = "Linux fixtures lane", env = { CARGO_BUILD_JOBS = "2" } },
+]
+role = "deep"
+kinds = []
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-broadcast]
 cache_group = "linux"
@@ -1120,6 +1459,10 @@ steps = [
     "--lane=broadcast",
   ], label = "Linux broadcast lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 [ext.ci.lanes.linux-integration-regressions]
 cache_group = "linux"
@@ -1134,6 +1477,10 @@ steps = [
     "--lane=integration-regressions",
   ], label = "Linux integration-regressions lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 # The lane name is the only place the browser is decided; the harness lane it
 # calls carries that name into the run, so a run started here and a run started
@@ -1151,6 +1498,10 @@ steps = [
     "--lane=selenium-firefox",
   ], label = "Linux selenium-firefox lane", env = { CARGO_BUILD_JOBS = "2" } },
 ]
+role = "deep"
+kinds = ["weekly"]
+kinds_github = ["nightly"]
+timeout_minutes = 180
 
 # Instrumented test binaries are large and the workspace has twenty of them, so
 # Cargo reaches the link step with several `ld` processes at once. In a
@@ -1173,6 +1524,245 @@ steps = [
     "coverage",
   ], label = "Linux coverage", env = { CARGO_BUILD_JOBS = "2", COVERAGE_OUTPUT_DIR = "coverage" } },
 ]
+role = "deep"
+kinds = ["nightly"]
+timeout_minutes = 90
+
+# GitLab already runs its own equivalents of these six under other names; the
+# GitHub fleet's own gate has no such lane yet, so each is reachable only by
+# name until a kind schedules it.
+[ext.ci.lanes.linux-lint]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["lint", "full"], label = "workspace lint gate" }]
+role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
+[ext.ci.lanes.linux-arch]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["lint", "arch"], label = "architecture checks" }]
+role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 30
+
+# The image knows which toolchain is the minimum supported one, so the version
+# stays owned by the reviewed pins rather than repeated in a workflow.
+[ext.ci.lanes.linux-msrv]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "check",
+  ], label = "minimum supported toolchain", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
+]
+role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
+# Memory is the budget a player cannot overrun quietly: pool budgets,
+# allocation regressions, a zero-allocation audio hot path, and the resident
+# size of an HLS playback.
+[ext.ci.lanes.linux-perf-memory]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+steps = [{ args = ["perf", "memory"], label = "memory budgets" }]
+role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
+# The virtual clock collapses fixture delays, so order-of-service defects
+# cannot reproduce on the simulated-clock lane. Its own target directory: the
+# two builds differ. `{target}` keeps it inside the leased build-cache
+# directory rather than a fixed path under `{root}` that the lease eviction
+# and reclaim machinery would not know about.
+[ext.ci.lanes.linux-test-real-clock]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "hang-dumps-real-clock", path = "target/hang", when = "failure" }
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--flash=off",
+  ], label = "real-clock suite", env = { CARGO_TARGET_DIR = "{target}/flash-off", KITHARA_HANG_DUMP_DIR = "{root}/target/hang" } },
+]
+role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 120
+
+# `just test` no longer carries the build tooling or the harness it is written
+# with; three lanes do. A change to their own sources must not wait a night.
+[ext.ci.lanes.linux-support]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 0
+tools = ["cargo", "just"]
+program = "just"
+steps = [
+  { args = [
+    "test",
+    "run",
+    "--touched",
+  ], label = "suites this push touches" },
+]
+role = "gate"
+kinds_github = ["main", "branch"]
+timeout_minutes = 60
+
+# The repository's own analysis recipes: until now nothing ran them
+# unattended. The nightly run assesses the shallow profile; the weekly run
+# reruns the whole workflow with the deep profile, which is why only the
+# assessment's own args change with the kind. The workflow's own
+# `concurrency: group: heavy-linux-...` is declared once, workflow-wide, and
+# the six jobs inside it run concurrently - only this lane, the longest of the
+# six, carries the `heavy-linux` queue.
+[ext.ci.lanes.quality-assess]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 0
+queue = "heavy-linux"
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "quality-assessment", path = "target/quality-assessment/\ntarget/quality-report/\ntarget/quality-lab/" }
+steps = [
+  { args = [
+    "quality",
+    "assess",
+  ], label = "repository assessment", args_by_kind = { weekly = [
+    "quality",
+    "assess",
+    "--depth",
+    "deep",
+  ] } },
+]
+role = "quality"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+timeout_minutes = 360
+
+[ext.ci.lanes.quality-similarity]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "similarity-report", path = "target/similarity" }
+steps = [{ args = ["lint", "similarity"], label = "duplication report" }]
+role = "quality"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+timeout_minutes = 120
+
+[ext.ci.lanes.quality-architecture]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "architecture", path = "target/architecture" }
+steps = [
+  { args = [
+    "arch",
+    "viz",
+  ], label = "architecture diagram and metrics" },
+  { args = [
+    "arch",
+    "orphans",
+    "--deny",
+  ], label = "orphan sweep" },
+]
+role = "quality"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+timeout_minutes = 120
+
+[ext.ci.lanes.quality-coverage-risk]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "coverage-risk", path = "target/quality-lab/\ncoverage/" }
+steps = [{ args = ["quality", "coverage-risk"], label = "coverage risk" }]
+role = "quality"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+timeout_minutes = 240
+
+# `just ci health` fetches the `main` baseline itself with `git fetch
+# --depth=1`, so the checkout ahead of it only needs the tip.
+[ext.ci.lanes.quality-health]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "health-report", path = "target/health-report.md\ntarget/health-logs/" }
+steps = [{ args = ["ci", "health"], label = "workspace health" }]
+role = "quality"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+timeout_minutes = 120
+
+# The consolidated report is the sequence the quality jobs lacked: five
+# measurements, then one document that reads all five. `--artifacts` names
+# where the dispatcher's own download step lands them, not this workflow's
+# `target/quality-artifacts`.
+[ext.ci.lanes.quality-report]
+cache_group = "linux"
+label = "Linux"
+os = "linux"
+fetch_depth = 1
+tools = ["cargo", "just"]
+program = "just"
+artifact = { name = "quality-report", path = "target/quality-report.md" }
+steps = [
+  { args = [
+    "ci",
+    "report",
+    "--artifacts",
+    "{root}/artifacts",
+  ], label = "consolidated quality report" },
+]
+role = "quality"
+kinds = []
+kinds_github = ["nightly", "weekly"]
+needs = [
+  "quality-assess",
+  "quality-similarity",
+  "quality-architecture",
+  "quality-coverage-risk",
+  "quality-health",
+]
+timeout_minutes = 30
 
 # Every Windows lane sets the same two variables. `bungee-sys` builds through
 # the `cmake` crate, which asks for the Visual Studio generator and hard-codes
@@ -1213,7 +1803,14 @@ steps = [
     "aarch64-pc-windows-msvc",
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static", CFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h", CXXFLAGS_aarch64_pc_windows_msvc = "-FI{root}/.config/windows/fdk-msvc-shim.h" } },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 120
 
+# Off on this host, not gone: the guest is ARM64, so the suite ran under
+# emulation and reported on it as much as on the commit. No kind schedules it;
+# `just ci run windows-x64` still reaches it, and GitLab arms it with
+# KITHARA_WINDOWS_X64_SUITE.
 [ext.ci.lanes.windows-x64]
 cache_group = "windows"
 label = "Windows"
@@ -1234,6 +1831,9 @@ steps = [
     "x86_64-pc-windows-msvc",
   ], label = "Windows tests", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
+role = "platforms"
+kinds = []
+timeout_minutes = 120
 
 # The x86_64 suite used to run here too, on a host with no x86_64 in it: every
 # test reported on the emulator as much as on the commit, and took the time to
@@ -1266,7 +1866,15 @@ steps = [
     "x86_64-pc-windows-msvc",
   ], label = "Windows build", env = { CMAKE_GENERATOR = "Ninja", RUSTFLAGS = "-C target-feature=+crt-static" } },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 120
 
+# Both Android lanes name a Mac, so neither declares `kinds_github`: the GitHub
+# fan-out reaches one pool and that pool is Linux, and a lane declared into a
+# schedule that cannot reach it is a lane that never runs. GitHub starts the
+# emulator through `.github/workflows/android.yml`, which names the runner pool
+# the catalog cannot yet name.
 [ext.ci.lanes.android-build]
 cache_group = "host"
 label = "Android"
@@ -1280,6 +1888,9 @@ steps = [
     "build",
   ], label = "Android native build" },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 45
 
 # The emulator, the connected suite, and the shutdown are one job: the tests
 # only mean anything while the device this job booted is still alive, and a
@@ -1294,6 +1905,7 @@ steps = [
 [ext.ci.lanes.android-test]
 cache_group = "host"
 label = "Android"
+os = "macos"
 tools = ["adb", "cargo", "emulator", "java", "just", "sccache"]
 left_behind_by = "Android build"
 left_behind = [
@@ -1311,6 +1923,9 @@ steps = [
     "--skip-build",
   ], label = "Android connected tests" },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 90
 
 # Every Apple job repeats the preflight instead of inheriting it from a
 # predecessor. Each one is scheduled on its own and can be retried alone, so the
@@ -1348,6 +1963,17 @@ steps = [
     "fast",
   ] } },
 ]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 [ext.ci.lanes.apple-msrv]
 cache_group = "macos"
@@ -1366,6 +1992,9 @@ steps = [
     "workspace",
   ], label = "MSRV workspace check", env = { RUSTUP_TOOLCHAIN = "{pin.msrv_toolchain}" } },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 60
 
 # A review ref asks the same question the default branch asks: what a reviewer
 # would have to fix anyway is cheaper to learn before merge. Quarantine keeps
@@ -1397,6 +2026,17 @@ steps = [
     "ci",
   ] } },
 ]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 # The off-flash suite owns its own target directory: the two gates differ by
 # feature, and sharing one directory makes each run rebuild what the other just
@@ -1421,6 +2061,9 @@ steps = [
     "ci",
   ], label = "Apple flash-off gate", env = { CARGO_TARGET_DIR = "target-flash-off" } },
 ]
+role = "platforms"
+kinds = ["platforms", "main", "nightly"]
+timeout_minutes = 60
 
 # End-to-end playback across the resampler axis. Each lane pins one source-rate
 # conversion shape, and a change to decode, blending or output can break one of
@@ -1461,6 +2104,9 @@ steps = [
     "ci",
   ], label = "Apple end-to-end suite" },
 ]
+role = "platforms"
+kinds = ["branch", "merge-request", "nightly"]
+timeout_minutes = 90
 
 [ext.ci.lanes.apple-xcframework]
 cache_group = "macos"
@@ -1482,6 +2128,17 @@ steps = [
     "debug",
   ], label = "Apple XCFramework" },
 ]
+role = "platforms"
+kinds = [
+  "branch",
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 [ext.ci.lanes.apple-ios]
 cache_group = "macos"
@@ -1501,6 +2158,16 @@ steps = [
     "ios",
   ], label = "iOS Simulator build", env = { KITHARA_LOCAL_DEV = "1" } },
 ]
+role = "platforms"
+kinds = [
+  "merge-request",
+  "quarantine",
+  "platforms",
+  "main",
+  "nightly",
+  "release",
+]
+timeout_minutes = 60
 
 # Safari goes through the repository's own wasm recipe for the same reason the
 # other browsers do: the target rebuilds std for shared memory, and only the
@@ -1519,6 +2186,9 @@ steps = [
     "safari",
   ], label = "Safari WASM tests" },
 ]
+role = "platforms"
+kinds = ["nightly"]
+timeout_minutes = 60
 
 
 [ext.publish]
@@ -1619,7 +2289,7 @@ unimock_traits_dir = "crates/kithara-play/src/api"
 
 [[quality.assessment.not_applicable_tools]]
 tool = "cargo-mutants"
-reason = "Workspace-wide mutation testing is prohibitively expensive and does not provide actionable signal."
+reason = "Workspace-wide mutation testing was measured at three days and killed nothing; the `deep-mutants` lane runs the curated unit suites in `.config/mutation-suites.toml` instead."
 
 [[quality.assessment.deep_stages]]
 name = "extended-clippy"

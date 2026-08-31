@@ -5,16 +5,16 @@
     chrome: Plain,
     root: Popover(
         id: "pop",
-        open: Model(id: "ui.menu.open"),
+        open: View(id: "menu"),
         anchor: Pressable(
             id: "burger",
-            press: Command(id: "ui.menu.toggle"),
+            press: View(id: "menu"),
             child: Row(
                 size: (w: Fixed(36.0), h: Fill),
                 gap: 0.0,
                 frame: (top: false, right: true, bottom: false, left: false),
                 frame_color: LineInner,
-                active: Model(id: "ui.menu.open"),
+                active: View(id: "menu"),
                 active_background: BgSelect,
                 children: [
                     Row(size: (w: Fill, h: Fill), gap: 0.0, children: []),
@@ -45,7 +45,7 @@
                         Text(id: "version", style: MicroLabel, read: Model(id: "ui.app.version")),
                         Pressable(
                             id: "header-close",
-                            press: Command(id: "ui.menu.close"),
+                            press: View(id: "menu", set: Off),
                             child: Glyph(
                                 id: "header-close-icon",
                                 icon: X,

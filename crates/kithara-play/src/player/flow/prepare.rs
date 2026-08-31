@@ -34,6 +34,7 @@ impl ConfigPrep<'_> {
             cancel,
             worker: Some(self.player.core.worker.clone()),
             consumer_wake_mode: Some(self.player.core.engine.consumer_wake_mode()),
+            block_on_underrun: self.player.core.block_on_underrun,
             host_sample_rate,
             decoder,
             stretch,

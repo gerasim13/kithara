@@ -76,6 +76,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
+kithara-abr = { workspace = true, default-features = false, features = ["mock"] }
 kithara-hls = { path = ".", default-features = false, features = ["probe"] }
 kithara-net = { workspace = true, default-features = false, features = [
     "probe",
@@ -89,6 +90,7 @@ aes = { workspace = true }
 cbc = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

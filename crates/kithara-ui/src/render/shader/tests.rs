@@ -10,6 +10,7 @@ use crate::{
     render::{ReadValue, Reads, StereoLevels},
     shader::ShaderSpec,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 const FRAGMENT: &str = r"
@@ -103,6 +104,7 @@ fn bound(level: &str) -> CompiledUi {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|cause| panic!("the fixture document must compile: {cause}"))
 }

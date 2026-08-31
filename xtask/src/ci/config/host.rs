@@ -299,9 +299,17 @@ impl fmt::Display for BuildCacheSizeError {
 
 impl Error for BuildCacheSizeError {}
 
-/// Budget a profile inherits when it predates the field. Sized so the Linux
-/// host's two dozen runner caches fit its volume with room to spare, and so a
-/// single macOS cache root stays well inside its own.
+/// Budget a profile inherits when it predates the field, and a floor rather
+/// than a fleet's working set: it is one ceiling for every target directory
+/// the host holds, so a machine serving more than a couple of runners has to
+/// name its own.
+///
+/// It did not read that way, and the Linux host inherited it. Twenty-five
+/// runner caches whose natural total is 524 GB were held to 25 GB, so every
+/// hourly pass freed 470 GB and every job that followed compiled the workspace
+/// from `unicode-ident` — seven minutes of build in front of two minutes of
+/// tests. A profile that serves a fleet sets `build_cache_size` from what the
+/// fleet actually builds and what its volume can spare.
 pub(crate) fn default_build_cache_size() -> String {
     "25GB".to_owned()
 }
