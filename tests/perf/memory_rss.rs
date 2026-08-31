@@ -19,6 +19,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     temp_dir,
 };
+#[cfg(not(target_os = "linux"))]
 use memory_stats::memory_stats;
 use tracing::info;
 use url::Url;
@@ -46,6 +47,24 @@ impl Consts {
     const LEAK_TOLERANCE_MB: usize = 5;
 }
 
+#[cfg(target_os = "linux")]
+fn physical_memory() -> Option<usize> {
+    std::fs::read_to_string("/proc/self/smaps_rollup")
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("Rss:"))?
+        .split_ascii_whitespace()
+        .next()?
+        .parse::<usize>()
+        .ok()?
+        .checked_mul(1024)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn physical_memory() -> Option<usize> {
+    memory_stats().map(|stats| stats.physical_mem)
+}
+
 /// Why a drain stopped.
 ///
 /// Only [`Self::Eof`] leaves a complete measurement behind. The other two
@@ -71,13 +90,19 @@ impl Drain {
     /// numbers, and those numbers agree with any budget, so scoring one would
     /// leave the assertions below unable to fail.
     fn complete_samples(&self) -> &[usize] {
-        assert!(
-            matches!(self.end, DrainEnd::Eof),
-            "drain stopped short of the end of the stream after {:?} and {} reads: {:?}",
-            self.elapsed,
-            self.samples.len(),
-            self.end,
-        );
+        match &self.end {
+            DrainEnd::Eof => {}
+            DrainEnd::Failed(error) => panic!(
+                "drain failed after {:?} and {} reads: {error}",
+                self.elapsed,
+                self.samples.len(),
+            ),
+            DrainEnd::Deadline => panic!(
+                "drain reached its deadline after {:?} and {} reads",
+                self.elapsed,
+                self.samples.len(),
+            ),
+        }
         assert!(
             self.samples.len() / Consts::WARMUP_SHARE > Consts::SETTLE_READS,
             "drain produced {} reads, so its warmup share is {} and RSS needs {} \
@@ -120,8 +145,8 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
             Ok(_) => {}
             Err(error) => break DrainEnd::Failed(error),
         }
-        if let Some(stats) = memory_stats() {
-            samples.push(stats.physical_mem);
+        if let Some(rss) = physical_memory() {
+            samples.push(rss);
         }
     };
 
@@ -147,9 +172,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     let url = ladder_url(&server);
 
     for run in 0..Consts::BUDGET_RUNS {
-        let baseline_rss = memory_stats()
-            .expect("memory_stats unsupported")
-            .physical_mem;
+        let baseline_rss = physical_memory().expect("RSS measurement unsupported");
 
         let pools = pools();
         let store = AssetStore::builder(pools.clone())
