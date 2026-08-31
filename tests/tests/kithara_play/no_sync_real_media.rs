@@ -26,14 +26,16 @@ use kithara::{
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact, cochlea::CochleaReport,
-    memory_asset_store, offline::OfflineSession,
+    HlsFixtureBuilder, TestServerHelper, TestTempDir, audio_artifact::write_audio_artifact,
+    cochlea::CochleaReport, fixture_protocol::PackagedSignal, memory_asset_store,
+    offline::OfflineSession,
 };
 use kithara_test_fixtures::{SignalAsset, assets::by_name};
 use oracle::{AudioLevelReport, AudioRole, MatchedMixReport, SampleContinuityReport};
 use reference::capture_references;
 use runtime::{Deck, DeckObservation, EventPolicy};
 use serde::Serialize;
+use url::Url;
 
 const CHANNELS: u16 = 2;
 const SOURCE_RATE: u32 = 44_100;
@@ -54,6 +56,10 @@ const EXACT_ZERO_RUN_LIMIT_FRAMES: usize = 8;
 const MIN_BOUNDARY_JUMP: f32 = 0.05;
 const BOUNDARY_OUTLIER_RATIO: f32 = 6.0;
 const PRELOAD_TIMEOUT: Duration = Duration::from_secs(30);
+const HLS_LADDER_SEGMENTS: usize = 12;
+const HLS_LADDER_SEGMENT_SECS: f64 = 4.0;
+const HLS_SWEEP_START_HZ: f64 = 1_000.0;
+const HLS_SWEEP_END_HZ: f64 = 5_000.0;
 
 #[derive(Clone, Copy)]
 enum Media {
@@ -65,7 +71,7 @@ impl Media {
     const fn label(self) -> &'static str {
         match self {
             Self::Mp3(asset) => asset.name(),
-            Self::Hls => "hls/master.m3u8",
+            Self::Hls => "hls-sweep",
         }
     }
 }
@@ -190,12 +196,58 @@ async fn record_no_sync_real_media_artifacts() {
     run_real_media_matrix(true).await;
 }
 
+/// The one body every HLS deck reads.
+///
+/// It sweeps instead of holding a tone because `HLS_MP3_FOUR` puts two decks
+/// in this body `CAPTURE_START_STEP_SECS` apart, and the mix oracle solves a
+/// least-squares system over the deck stems: two windows of the same steady
+/// tone are near-collinear and leave that system singular. The sweep runs
+/// continuously across segments, so the two windows land in different bands,
+/// and its range clears the 440 Hz and 880 Hz tones the MP3 decks carry.
+async fn hls_ladder_url(server: &TestServerHelper) -> Url {
+    let deepest_capture = CAPTURE_START_SECS
+        + (CASES
+            .iter()
+            .map(|case| case.media.len())
+            .max()
+            .expect("the matrix has cases") as f64
+            - 1.0)
+            * CAPTURE_START_STEP_SECS
+        + f64::from(CAPTURE_SECS);
+    let ladder_secs = HLS_LADDER_SEGMENTS as f64 * HLS_LADDER_SEGMENT_SECS;
+    assert!(
+        ladder_secs > deepest_capture,
+        "the last deck captures through {deepest_capture} s but the ladder is only {ladder_secs} s",
+    );
+
+    server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(HLS_LADDER_SEGMENTS)
+                .segment_duration_secs(HLS_LADDER_SEGMENT_SECS)
+                .variant_bandwidths(vec![128_000])
+                .packaged_audio_signal_aac_lc(
+                    SOURCE_RATE,
+                    CHANNELS,
+                    PackagedSignal::Sweep {
+                        start_hz: HLS_SWEEP_START_HZ,
+                        end_hz: HLS_SWEEP_END_HZ,
+                    },
+                ),
+        )
+        .await
+        .expect("create the ladder the HLS decks read")
+        .master_url()
+}
+
 async fn run_real_media_matrix(record_artifacts: bool) {
     let server = TestServerHelper::new().await;
+    let hls = hls_ladder_url(&server).await;
     let mut failures = Vec::new();
     for case in CASES {
         failures.extend(
-            run_case(case, &server, record_artifacts)
+            run_case(case, &hls, record_artifacts)
                 .await
                 .into_iter()
                 .map(|failure| format!("{}: {failure}", case.label)),
@@ -208,14 +260,14 @@ async fn run_real_media_matrix(record_artifacts: bool) {
     );
 }
 
-async fn run_case(case: &Case, server: &TestServerHelper, record_artifacts: bool) -> Vec<String> {
+async fn run_case(case: &Case, hls: &Url, record_artifacts: bool) -> Vec<String> {
     let session = Arc::new(OfflineSession::new_manual());
     let mut failures = Vec::new();
 
     let media_dir = TestTempDir::new();
     let mut decks = Vec::with_capacity(case.media.len());
     for (deck_index, media) in case.media.iter().copied().enumerate() {
-        decks.push(prepare_deck(case, deck_index, media, server, &media_dir, &session).await);
+        decks.push(prepare_deck(case, deck_index, media, hls, &media_dir, &session).await);
     }
 
     load_decks(case, &decks, &mut failures);
@@ -799,7 +851,7 @@ async fn prepare_deck(
     case: &Case,
     deck_index: usize,
     media: Media,
-    server: &TestServerHelper,
+    hls: &Url,
     media_dir: &TestTempDir,
     session: &Arc<OfflineSession>,
 ) -> Deck {
@@ -828,7 +880,7 @@ async fn prepare_deck(
             .to_str()
             .expect("temporary media path is UTF-8")
             .to_owned(),
-        Media::Hls => server.asset("hls/master.m3u8").to_string(),
+        Media::Hls => hls.to_string(),
     };
     let playback_config =
         ResourceConfig::for_src(ResourceConfig::parse_src(&src).unwrap_or_else(|error| {
