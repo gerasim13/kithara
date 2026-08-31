@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use kithara_assets::{AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, StorageBackend};
-use kithara_bufpool::testing::pools;
+use kithara_bufpool::testing::{TestPools, pools};
 use kithara_file::File;
 use kithara_hls::Hls;
 use kithara_play::policy::{QueryIdentityLayout, QueryIdentityRule};
