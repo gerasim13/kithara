@@ -16,6 +16,8 @@ mod registry;
 // the same source files, reached from two roots.
 #[path = "src/fmp4/mod.rs"]
 pub mod fmp4;
+#[path = "src/graph.rs"]
+mod graph;
 #[path = "src/signal/mod.rs"]
 pub mod signal;
 #[path = "src/store.rs"]
@@ -133,7 +135,18 @@ fn resolve(defs: &[&'static AssetDef]) -> Vec<(String, String, &'static AssetDef
 }
 
 fn materialize(namespace: &Path, resolved: &[(String, String, &'static AssetDef)]) {
-    for (name, id, def) in resolved {
+    let nodes: Vec<_> = resolved
+        .iter()
+        .map(|(name, _, def)| graph::Node {
+            name,
+            dependencies: def.dependencies,
+        })
+        .collect();
+    let ordered =
+        graph::order(&nodes).unwrap_or_else(|error| panic!("kithara-test-fixtures: {error}"));
+
+    for index in ordered {
+        let (name, id, def) = &resolved[index];
         if store::read_entry(namespace, id, def.ext).is_some() {
             continue;
         }
@@ -142,7 +155,27 @@ fn materialize(namespace: &Path, resolved: &[(String, String, &'static AssetDef)
         if store::read_entry(namespace, id, def.ext).is_some() {
             continue;
         }
-        let bytes = (def.build)();
+        let dependency_bytes: Vec<_> = def
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                let (_, dependency_id, dependency_def) = resolved
+                    .iter()
+                    .find(|(candidate, _, _)| candidate == dependency)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "kithara-test-fixtures: graph accepted missing dependency `{dependency}`"
+                        )
+                    });
+                store::read_entry(namespace, dependency_id, dependency_def.ext).unwrap_or_else(|| {
+                    panic!(
+                        "kithara-test-fixtures: dependency `{dependency}` of `{name}` was not materialized"
+                    )
+                })
+            })
+            .collect();
+        let inputs: Vec<_> = dependency_bytes.iter().map(Vec::as_slice).collect();
+        let bytes = (def.build)(&inputs);
         assert!(
             !bytes.is_empty(),
             "kithara-test-fixtures: `{name}` produced no bytes"

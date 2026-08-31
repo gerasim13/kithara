@@ -25,6 +25,8 @@ pub mod fmp4;
 // integration suite's; declared here so its own tests keep running.
 #[cfg(test)]
 mod encoders;
+#[cfg(test)]
+mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 

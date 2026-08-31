@@ -1,11 +1,13 @@
 /// One registered asset case, submitted by `#[kithara::asset]`.
 pub(crate) struct AssetDef {
     /// Produces the asset's bytes.
-    pub(crate) build: fn() -> Vec<u8>,
+    pub(crate) build: fn(&[&[u8]]) -> Vec<u8>,
     /// Case name from `#[case::name(...)]`.
     pub(crate) case: &'static str,
     /// MIME type served with the asset.
     pub(crate) content_type: &'static str,
+    /// Accessor names that must be materialized before this asset.
+    pub(crate) dependencies: &'static [&'static str],
     /// Bake the bytes into the binary instead of reading them from the store.
     pub(crate) embed: bool,
     /// File extension inside the store.

@@ -24,17 +24,24 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let fn_name = func.sig.ident.clone();
     let fn_name_literal = fn_name.to_string();
     let content_type = &args.content_type;
+    let dependencies = &args.depends_on;
     let embed = args.embed;
     let ext = &args.ext;
 
     let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
         let values = &case.values;
+        let call = if dependencies.is_empty() {
+            quote! { #fn_name(#(#values),*) }
+        } else {
+            quote! { #fn_name(__inputs, #(#values),*) }
+        };
         quote! {
             ::inventory::submit! {
                 crate::registry::AssetDef {
-                    build: || #fn_name(#(#values),*),
+                    build: |__inputs| #call,
                     case: #case_literal,
                     content_type: #content_type,
+                    dependencies: &[#(#dependencies),*],
                     embed: #embed,
                     ext: #ext,
                     func: #fn_name_literal,

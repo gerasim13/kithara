@@ -1,6 +1,7 @@
 use syn::{
-    Ident, LitStr, Token,
+    Ident, LitStr, Token, bracketed,
     parse::{Parse, ParseStream},
+    punctuated::Punctuated,
 };
 
 use crate::test::case::Case;
@@ -43,6 +44,8 @@ pub(crate) fn case_names(fn_name: &Ident, cases: &[Case]) -> syn::Result<Vec<Str
 /// Parsed `#[kithara::asset(ext = "…", content_type = "…")]`.
 pub(crate) struct AssetArgs {
     pub(crate) content_type: LitStr,
+    /// Cached assets that must be materialized before this producer runs.
+    pub(crate) depends_on: Vec<LitStr>,
     /// Bake the asset into the binary instead of reading it from the store.
     pub(crate) embed: bool,
     pub(crate) ext: LitStr,
@@ -51,6 +54,7 @@ pub(crate) struct AssetArgs {
 impl Parse for AssetArgs {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut content_type: Option<LitStr> = None;
+        let mut depends_on: Option<Vec<LitStr>> = None;
         let mut embed = false;
         let mut ext: Option<LitStr> = None;
 
@@ -67,6 +71,22 @@ impl Parse for AssetArgs {
                 continue;
             }
             input.parse::<Token![=]>()?;
+            if key == "depends_on" {
+                if depends_on.is_some() {
+                    return Err(syn::Error::new(key.span(), "duplicate key `depends_on`"));
+                }
+                let content;
+                bracketed!(content in input);
+                let values = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?;
+                if values.is_empty() {
+                    return Err(content.error("`depends_on` needs at least one asset name"));
+                }
+                depends_on = Some(values.into_iter().collect());
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             let value = input.parse::<LitStr>()?;
             let slot = match key.to_string().as_str() {
                 "content_type" => &mut content_type,
@@ -107,6 +127,7 @@ impl Parse for AssetArgs {
 
         Ok(Self {
             content_type,
+            depends_on: depends_on.unwrap_or_default(),
             embed,
             ext,
         })
@@ -124,6 +145,22 @@ mod tests {
             .expect("valid attribute");
         assert_eq!(args.ext.value(), "wav");
         assert_eq!(args.content_type.value(), "audio/wav");
+    }
+
+    #[test]
+    fn dependencies_are_parsed_in_declaration_order() {
+        let args = syn::parse_str::<AssetArgs>(
+            r#"ext = "beat", content_type = "application/x-kithara-beat", depends_on = ["rhythm_wav_house_124", "rhythm_score_house_124"]"#,
+        )
+        .expect("valid attribute");
+
+        assert_eq!(
+            args.depends_on
+                .iter()
+                .map(syn::LitStr::value)
+                .collect::<Vec<_>>(),
+            ["rhythm_wav_house_124", "rhythm_score_house_124"],
+        );
     }
 
     #[test]
