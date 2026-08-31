@@ -65,10 +65,8 @@ struct KitharaPlayerTests {
             observed.append(item?.uuid)
         }
 
-        let assetURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent("assets/test.mp3")
         let item = KitharaPlayerItem(
-            url: assetURL.absoluteString,
+            url: "https://example.com/first.mp3",
             audioId: 42,
             uuid: 123
         )

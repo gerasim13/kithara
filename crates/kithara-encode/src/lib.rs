@@ -6,8 +6,7 @@
 //! ```ignore
 //! use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 //!
-//! let encoder = EncoderFactory::create_bytes(BytesEncodeTarget::Mp3)?;
-//! let encoded = encoder.encode_bytes(BytesEncodeRequest {
+//! let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
 //!     pcm: &pcm_source,
 //!     target: BytesEncodeTarget::Mp3,
 //!     bit_rate: None,
@@ -24,7 +23,6 @@ mod stream;
 mod test_pcm;
 #[cfg(test)]
 mod test_pools;
-mod traits;
 mod types;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "fdk-aac"))]
@@ -38,7 +36,6 @@ pub use factory::EncoderFactory;
 pub use ffmpeg::flac::normalize_flac_codec_config;
 #[cfg(not(target_arch = "wasm32"))]
 pub use stream::{StreamBackend, StreamEncoder};
-pub use traits::InnerEncoder;
 pub use types::{
     BytesEncodeRequest, BytesEncodeTarget, EncodedAccessUnit, EncodedBytes, EncodedTrack,
     PackagedEncodeRequest, PcmSource,

@@ -514,8 +514,8 @@ mod tests {
                        }\n\
                    }\n";
         let path = tmp.path().join(rel);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&path, src).expect("write fixture");
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, src).expect("write fixture");
 
         let mut report = Report::default();
         report.extend([
@@ -534,8 +534,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let rel = "crates/x/src/broken.rs";
         let path = tmp.path().join(rel);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&path, "this is not valid rust ::: {{{").expect("write fixture");
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, "this is not valid rust ::: {{{").expect("write fixture");
 
         let mut report = Report::default();
         report.extend([Violation::warn(
@@ -619,8 +619,8 @@ mod tests {
                        }\n\
                    }\n";
         let path = tmp.path().join(rel);
-        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&path, src).expect("write fixture");
+        fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        fs::write(&path, src).expect("write fixture");
 
         let mut report = Report::default();
         report.extend([

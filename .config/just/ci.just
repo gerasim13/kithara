@@ -6,6 +6,16 @@ set working-directory := "../.."
 run *ARGS:
     just _xtask ci run "$@"
 
+# Render the jobs a role schedules for one pipeline kind, as JSON.
+[positional-arguments]
+lanes *ARGS:
+    just _xtask ci lanes "$@"
+
+# Run one declared lane in an environment the executor already prepared.
+[positional-arguments]
+lane *ARGS:
+    just _xtask ci lane "$@"
+
 # Provision or maintain the dedicated CI host.
 [positional-arguments]
 host *ARGS:

@@ -27,14 +27,14 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
+    mixed_codec_ladder_url,
     reads::{read_to_eof, read_until_samples},
-    signal_pcm::{Finite, SignalPcm, signal},
     waits::{wait_for_event, wait_until},
-    wav::create_wav_header,
 };
+use kithara_test_fixtures::signal::{self, Pcm, Wave};
 use tracing::info;
 
-use crate::common::test_defaults::SawWav;
+use crate::common::test_defaults::{SawWav, frames_in_segments};
 
 const D: SawWav = SawWav::DEFAULT;
 
@@ -45,17 +45,16 @@ fn create_wav_init_segment(data_size: usize) -> Vec<u8> {
     // so it relies solely on the byte source EOF — and at a variant switch
     // that races into the decoder emitting one padded packet past the true
     // tail (`position > duration`). A concrete size pins the exact end.
-    create_wav_header(D.sample_rate, D.channels, Some(data_size))
+    signal::header(D.sample_rate, D.channels, Some(data_size))
 }
 
 fn create_pcm_segments(segment_count: usize) -> Vec<u8> {
-    SignalPcm::new(
-        signal::Sawtooth,
+    Vec::from(Pcm::new(
         D.sample_rate,
         D.channels,
-        Finite::from_segments(segment_count, D.segment_size, D.channels),
-    )
-    .into_vec()
+        frames_in_segments(segment_count, D.segment_size, D.channels),
+        Wave::Sawtooth,
+    ))
 }
 
 fn segment_duration_secs() -> f64 {
@@ -1317,9 +1316,9 @@ async fn runtime_manual_switch_via_handle_changes_playing_variant() {
 )]
 async fn runtime_cross_codec_manual_switch_no_hang() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: variants 0..2 are AAC (mp4a.40.2), variant 3
-    // is FLAC (fLaC). Manual(3) forces the cross-codec path.
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: variants 0..2 are AAC (mp4a.40.2), variant 3
+    // is FLAC. Manual(3) forces the cross-codec path.
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
@@ -1894,7 +1893,7 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 
     // Long segment duration (6 s in playlist EXTINF) so a full prefetch
     // pushes `buffer_ahead` over the default 10 s `min_buffer_for_up_switch`
-    // gate — same as the real assets/hls/ fixture. Without this the
+    // gate — same as the mixed-codec ladder. Without this the
     // buffer gate alone blocks ABR and the test reports a false GREEN.
     let server = HlsTestServer::new(HlsTestServerConfig {
         variant_count: 3,
@@ -2024,8 +2023,8 @@ async fn auto_does_not_up_switch_on_first_boundary_with_defaults() {
 #[ignore = "current implementation hits a separate same-codec byte_shift mismatch; needs deterministic timing setup to repro the cross→same race"]
 async fn rapid_cross_codec_then_same_codec_switch_no_false_eof() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: variants 0..2 AAC (mp4a.40.2), variant 3
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3
     // FLAC. We need Manual(3) (cross-codec) then Manual(1) (same-codec
     // AAC sibling of v=0) before v=3's decoder recreate fires.
 
@@ -2163,10 +2162,11 @@ async fn play_seek_back_then_same_codec_downswitch_no_premature_eof(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
-    // The duration of every variant ≈ 220 s. We start on shq (v=2) so we
-    // can downswitch to slq (v=0) for the same-codec scenario.
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: variants 0..2 AAC (mp4a.40.2), variant 3 FLAC.
+    // The duration of every variant ≈ 220 s. We start on the top AAC (v=2)
+    // so we can downswitch to the bottom one (v=0) for the same-codec
+    // scenario.
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
@@ -2395,9 +2395,9 @@ async fn seek_backwards_after_manual_switch_to_uncached_variant_does_not_hang(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // assets/hls/master.m3u8: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
-    // (fLaC, fmp4). Track ≈ 220 s, 37 segments each (~6 s).
+    let url = mixed_codec_ladder_url(&server, false).await;
+    // The mixed-codec ladder: v=0..2 AAC (mp4a.40.2, fmp4), v=3 FLAC
+    // (fmp4). Track ≈ 220 s, 37 segments each (~6 s).
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();

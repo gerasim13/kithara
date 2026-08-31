@@ -22,7 +22,7 @@ use crate::{
     observe::Observer,
     range_response::{accepts_response_status, validate_range_response},
     resumable::{Refetch, Resumed, resumable_body},
-    retry::{DefaultRetryPolicy, RetryNet},
+    retry::RetryNet,
     traits::Net,
     types::{AcceptEncodingPolicy, Headers, NetOptions, RangeSpec},
 };
@@ -179,7 +179,7 @@ impl RawAppleNet {
 #[fieldwork(opt_in, get)]
 pub struct AppleNet {
     session: AppleSession,
-    net: Arc<RetryNet<RawAppleNet, DefaultRetryPolicy>>,
+    net: Arc<RetryNet<RawAppleNet>>,
     cancel: CancelToken,
     connection_metrics: ConnectionMetrics,
     #[field(get)]
@@ -201,7 +201,7 @@ impl AppleNet {
         };
         let net = Arc::new(RetryNet::new(
             raw,
-            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            options.retry_policy.clone(),
             cancel.clone(),
             options.observer.clone(),
         ));
@@ -229,7 +229,7 @@ impl AppleNet {
         };
         let net = Arc::new(RetryNet::new(
             raw,
-            DefaultRetryPolicy::new(options.retry_policy.clone()),
+            options.retry_policy.clone(),
             self.cancel.clone(),
             options.observer.clone(),
         ));

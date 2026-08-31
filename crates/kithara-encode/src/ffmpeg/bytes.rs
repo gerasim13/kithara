@@ -3,10 +3,10 @@ use std::{fs, path::Path};
 use ffmpeg::{
     ChannelLayout, Dictionary, Error as FfmpegError, Packet,
     codec::{
-        context::Context as CodecContext, encoder::Audio as AudioEncoder, flag::Flags as CodecFlags,
+        Id, context::Context as CodecContext, encoder::Audio as AudioEncoder,
+        flag::Flags as CodecFlags,
     },
     format::{self as av_format, flag::Flags as FormatFlags},
-    media::Type as MediaType,
 };
 use ffmpeg_next as ffmpeg;
 
@@ -23,6 +23,7 @@ use crate::{
 
 struct EncodeTarget {
     option_pairs: &'static [(&'static str, &'static str)],
+    codec: Id,
     ext: &'static str,
     mime: &'static str,
     bit_rate: Option<usize>,
@@ -44,11 +45,13 @@ impl EncodeTarget {
         let target = match request.target {
             BytesEncodeTarget::Mp3 => Self {
                 bit_rate,
+                codec: Id::MP3,
                 ext: "mp3",
                 mime: "audio/mpeg",
                 option_pairs: &[],
             },
             BytesEncodeTarget::Flac => Self {
+                codec: Id::FLAC,
                 ext: "flac",
                 mime: "audio/flac",
                 bit_rate: None,
@@ -56,14 +59,23 @@ impl EncodeTarget {
             },
             BytesEncodeTarget::Aac => Self {
                 bit_rate,
+                codec: Id::AAC,
                 ext: "aac",
                 mime: "audio/aac",
                 option_pairs: &[],
             },
             BytesEncodeTarget::M4a => Self {
                 bit_rate,
+                codec: Id::AAC,
                 ext: "m4a",
                 mime: "audio/mp4",
+                option_pairs: &[],
+            },
+            BytesEncodeTarget::Alac => Self {
+                codec: Id::ALAC,
+                ext: "m4a",
+                mime: "audio/mp4",
+                bit_rate: None,
                 option_pairs: &[],
             },
         };
@@ -104,7 +116,6 @@ fn encode_direct_pcm(
     let mut encoder = DirectEncoder::new(
         &mut octx,
         DirectEncodeConfig {
-            output_path,
             target,
             sample_rate: pcm.sample_rate(),
             channels: pcm.channels(),
@@ -136,7 +147,6 @@ struct DirectEncoder {
 #[derive(Clone, Copy)]
 struct DirectEncodeConfig<'a> {
     target: &'a EncodeTarget,
-    output_path: &'a Path,
     channels: u16,
     sample_rate: u32,
 }
@@ -147,13 +157,11 @@ impl DirectEncoder {
         config: DirectEncodeConfig<'_>,
     ) -> Result<Self, EncodeError> {
         let DirectEncodeConfig {
-            output_path,
             target,
             sample_rate,
             channels,
         } = config;
-        let codec_id = octx.format().codec(output_path, MediaType::Audio);
-        let output_codec = find_encoder(codec_id)
+        let output_codec = find_encoder(target.codec)
             .ok_or_else(|| {
                 EncodeError::backend_message(format!(
                     "no output codec is registered for `{}`",

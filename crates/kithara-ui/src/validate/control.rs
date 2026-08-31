@@ -115,7 +115,14 @@ pub(crate) fn shader_uniform_kind(
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<ValueKind, UiDocError> {
-    let (category, id, with) = binding_parts(binding);
+    let Some((category, id, with)) = binding_parts(binding) else {
+        return Err(UiDocError::BindingDirection {
+            origin: origin.clone(),
+            id: view_id(binding).to_owned(),
+            path: path.to_owned(),
+            detail: "view state is not allowed on this side".to_owned(),
+        });
+    };
     if !matches!(
         category,
         EndpointCategory::Parameter | EndpointCategory::Telemetry | EndpointCategory::Model
@@ -180,7 +187,14 @@ pub(super) fn check_table(
     let Some(binding) = columns_state else {
         return Ok(());
     };
-    let (category, id, with) = binding_parts(binding);
+    let Some((category, id, with)) = binding_parts(binding) else {
+        return Err(UiDocError::BindingDirection {
+            origin: origin.clone(),
+            id: view_id(binding).to_owned(),
+            path: path.to_owned(),
+            detail: "view state is not allowed on this side".to_owned(),
+        });
+    };
     if !matches!(
         category,
         EndpointCategory::Parameter | EndpointCategory::Telemetry | EndpointCategory::Model
@@ -239,4 +253,13 @@ pub(super) fn check_scopes(
         }
     }
     Ok(())
+}
+
+/// The name a view binding carries, for the errors raised where one is not
+/// allowed at all.
+fn view_id(binding: &BindingRef) -> &str {
+    match binding {
+        BindingRef::View { id, .. } => &id.0,
+        _ => "",
+    }
 }

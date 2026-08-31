@@ -49,9 +49,7 @@ fn availability_bin(root: &Path) -> std::path::PathBuf {
     root.join("_index/availability.bin")
 }
 
-type TestAssetScope = AssetScope<support::pools::TestPools>;
-
-fn segment_path(root: &Path, scope: &TestAssetScope, key: &ResourceKey) -> std::path::PathBuf {
+fn segment_path(root: &Path, scope: &AssetScope, key: &ResourceKey) -> std::path::PathBuf {
     root.join(scope.asset_root())
         .join(key.rel_path().expect("relative test key"))
 }
@@ -60,8 +58,8 @@ fn segment_path(root: &Path, scope: &TestAssetScope, key: &ResourceKey) -> std::
 /// explicit `checkpoint()` so the on-disk state matches what a clean
 /// shutdown would produce. The closure runs *after* checkpoint and
 /// before drop — the place to inject a "crash" by mangling files.
-fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path, &TestAssetScope, &ResourceKey)) {
-    let store = AssetStore::builder(support::pools())
+fn seed_clean_state_then(dir: &Path, mangle: impl FnOnce(&Path, &AssetScope, &ResourceKey)) {
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk { root: (dir).into() })
         .build();
     let source = source(Consts::ASSET_ROOT);
@@ -82,7 +80,7 @@ fn truncated_pins_bin_is_treated_as_empty() {
         fs::write(pins_bin(root), b"").unwrap();
     });
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -102,7 +100,7 @@ fn garbage_pins_bin_is_treated_as_empty() {
         fs::write(pins_bin(root), b"NOT-RKYV-PAYLOAD-AT-ALL").unwrap();
     });
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -121,7 +119,7 @@ fn garbage_lru_bin_is_treated_as_empty() {
         fs::write(lru_bin(root), [0xff; 64]).unwrap();
     });
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -140,7 +138,7 @@ fn garbage_availability_bin_costs_a_refetch() {
         fs::write(availability_bin(root), b"corrupted-bytes-here").unwrap();
     });
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -164,13 +162,13 @@ fn garbage_availability_bin_costs_a_refetch() {
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
-fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
+fn segment_deleted_externally_after_checkpoint_is_refetched() {
     let dir = tempdir().unwrap();
     seed_clean_state_then(dir.path(), |root, scope, key| {
         fs::remove_file(segment_path(root, scope, key)).unwrap();
     });
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -180,23 +178,17 @@ fn segment_deleted_externally_after_checkpoint_degrades_gracefully() {
 
     assert_eq!(
         scope.store().final_len(&key),
-        Some(12),
-        "aggregate is not re-verified against disk on hydration"
+        None,
+        "hydration must not vouch for a file that is gone"
     );
+    assert!(!scope.store().contains_range(&key, 0..12));
+    assert!(scope.store().available_ranges(&key).is_empty());
 
-    match scope.store().acquire_resource(&key, None) {
-        Ok(acq) => {
-            let mut buf = support::pools().get::<u8>();
-            let _ = match acq {
-                AcquisitionResult::Pending(w) => w.reader().read_into(&mut buf),
-                AcquisitionResult::Ready(r) => r.read_into(&mut buf),
-                _ => Ok(0),
-            };
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "stale-claim resource correctly errored on acquire");
-        }
-    }
+    let acq = store.acquire_resource(&key, None).unwrap();
+    assert!(
+        matches!(acq, AcquisitionResult::Pending(_)),
+        "the acquire path reaches the same verdict and refetches"
+    );
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -204,7 +196,7 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
     let dir = tempdir().unwrap();
 
     {
-        let store = AssetStore::builder(support::pools())
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -216,7 +208,7 @@ fn partial_segment_with_no_commit_and_no_checkpoint_is_invisible_after_crash() {
         drop(res);
     }
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -233,7 +225,7 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
     let dir = tempdir().unwrap();
 
     {
-        let store = AssetStore::builder(support::pools())
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -251,7 +243,7 @@ fn partial_uncommitted_write_flushed_before_drop_is_invisible_after_crash() {
         drop(res);
     }
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -268,7 +260,7 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
     let dir = tempdir().unwrap();
 
     {
-        let store = AssetStore::builder(support::pools())
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -278,7 +270,7 @@ fn commit_then_crash_before_checkpoint_recovers_via_slow_path() {
         write_commit(store.acquire_resource(&key, None).unwrap(), b"durable-data");
     }
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -299,13 +291,13 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
     let dir_b = dir.path().join("b");
 
     {
-        let store_a = AssetStore::builder(support::pools())
+        let store_a = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (&dir_a).into(),
             })
             .flush_hub(hub.clone())
             .build();
-        let store_b = AssetStore::builder(support::pools())
+        let store_b = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (&dir_b).into(),
             })
@@ -329,12 +321,12 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
         store_a.checkpoint().unwrap();
     }
 
-    let rebuilt_a = AssetStore::builder(support::pools())
+    let rebuilt_a = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (&dir_a).into(),
         })
         .build();
-    let rebuilt_b = AssetStore::builder(support::pools())
+    let rebuilt_b = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (&dir_b).into(),
         })
@@ -357,7 +349,7 @@ fn crash_between_per_store_flushes_keeps_each_store_independently_consistent() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn red_segment_file_must_not_be_visible_at_canonical_path_before_commit() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -381,7 +373,7 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
     let dir = tempdir().unwrap();
     let canonical;
     {
-        let store = AssetStore::builder(support::pools())
+        let store = AssetStore::builder()
             .backend(StorageBackend::Disk {
                 root: (dir.path()).into(),
             })
@@ -405,7 +397,7 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
         );
     }
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -423,7 +415,7 @@ fn red_kill9_mid_write_must_not_leave_canonical_file_with_partial_bytes() {
 fn red_canonical_path_must_have_exact_bytes_after_commit_no_initial_mmap_padding() {
     let dir = tempdir().unwrap();
     let payload = b"exactly-12-b";
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -460,7 +452,7 @@ fn doubly_corrupted_indexes_do_not_panic_and_the_store_refetches() {
         fs::write(availability_bin(root), b"PARTIAL!").unwrap();
     });
 
-    let store = AssetStore::builder(support::pools())
+    let store = AssetStore::builder()
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

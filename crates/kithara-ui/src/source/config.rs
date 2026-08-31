@@ -49,6 +49,14 @@ impl Default for Limits {
     }
 }
 
+/// Compiled screens one host keeps while a document turns between its pages.
+///
+/// Measured against the gallery's own pages: seven of them cost more than two
+/// milliseconds to compile, which is a hitch on every return visit, and eight
+/// covers every page a document offers today without a package of hundreds
+/// growing the cache without bound.
+pub const SCREEN_CACHE: usize = 8;
+
 /// Canonical compile configuration and its resource limits.
 #[derive(Builder, Clone, Debug)]
 #[builder(state_mod(vis = "pub"))]
@@ -64,6 +72,13 @@ pub struct UiConfig {
     pub limits: Limits,
     #[builder(default = 64 * 1024)]
     pub max_arena_bytes: usize,
+    /// Compiled screens a host keeps while a document turns between its pages.
+    ///
+    /// A page is compiled when it is first shown, and kept so that turning
+    /// back to it costs nothing. The screen being shown counts as one of
+    /// these, so a depth of one keeps no page a host has left.
+    #[builder(default = SCREEN_CACHE)]
+    pub screen_cache: usize,
     /// The pools every document compiled against this configuration draws
     /// from.
     ///

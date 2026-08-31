@@ -7,13 +7,15 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
 use kithara_integration_tests::{
-    HlsFixtureBuilder, PackagedTestServer, SignalDirection, SignalFormat, SignalSpec,
-    SignalSpecLength, TestServerHelper,
-    audio_fixture::EmbeddedAudio,
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper,
     bufpool_ext::{TestPools, pools},
     decode_ext::DecoderChunkOutcomeTestExt,
-    detect_direction,
     fixture_protocol::PackagedSignal,
+};
+use kithara_test_fixtures::{
+    SignalAsset,
+    assets::signal_mp3_track_sine440_187s,
+    signal::{SignalDirection, detect_direction},
 };
 use reqwest::Client;
 
@@ -21,14 +23,15 @@ use reqwest::Client;
 async fn test_test_server_helper_serves_audio_fixture_urls() {
     let server = TestServerHelper::new().await;
 
-    let wav_url = server.sawtooth(&wav_spec()).await;
-    let mp3_url = server.asset("test.mp3");
+    let wav_url = server.signal(SignalAsset::WAV_SAW_1S);
+    let mp3_url = server.signal(SignalAsset::MP3_TRACK_SINE440_187S);
 
     assert!(wav_url.as_str().starts_with("http://127.0.0.1:"));
     assert!(mp3_url.as_str().starts_with("http://127.0.0.1:"));
-    assert!(wav_url.path().starts_with("/signal/sawtooth/"));
+    assert!(wav_url.path().starts_with("/signal/"));
     assert!(wav_url.path().ends_with(".wav"));
-    assert!(mp3_url.path().ends_with("test.mp3"));
+    assert!(mp3_url.path().starts_with("/signal/"));
+    assert!(mp3_url.path().ends_with(".mp3"));
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(5)), hang_timeout_secs(1))]
@@ -43,8 +46,8 @@ async fn test_test_server_helper_serves_format(
     let client = Client::new();
 
     let url = match format {
-        "wav" => server.sawtooth(&wav_spec()).await,
-        "mp3" => server.asset("test.mp3"),
+        "wav" => server.signal(SignalAsset::WAV_SAW_1S),
+        "mp3" => server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
         _ => panic!("Unknown format: {}", format),
     };
 
@@ -75,27 +78,20 @@ async fn test_test_server_helper_serves_format(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case(SignalFormat::Mp3, "mp3", "audio/mpeg")]
-#[case(SignalFormat::Flac, "flac", "audio/flac")]
-#[case(SignalFormat::Aac, "aac", "audio/aac")]
-#[case(SignalFormat::M4a, "m4a", "audio/mp4")]
+#[case(SignalAsset::MP3_SAW_1S, "audio/mpeg")]
+#[case(SignalAsset::FLAC_SAW_1S, "audio/flac")]
+#[case(SignalAsset::AAC_SAW_1S, "audio/aac")]
+#[case(SignalAsset::M4A_SAW_1S, "audio/mp4")]
 async fn test_signal_server_encoded_formats_are_decodable(
-    #[case] format: SignalFormat,
-    #[case] ext: &str,
+    #[case] asset: SignalAsset,
     #[case] content_type: &str,
 ) {
     let server = TestServerHelper::new().await;
     let client = Client::new();
-    let spec = SignalSpec {
-        sample_rate: 44_100,
-        channels: 2,
-        length: SignalSpecLength::Seconds(1.0),
-        format,
-        bit_rate: None,
-    };
+    let ext = asset.ext();
 
     let response = client
-        .get(server.sawtooth(&spec).await)
+        .get(server.signal(asset))
         .send()
         .await
         .unwrap_or_else(|error| panic!("Failed to fetch /signal encoded fixture: {error}"));
@@ -123,25 +119,19 @@ async fn test_signal_server_encoded_formats_are_decodable(
 }
 
 #[kithara::test(native, tokio, timeout(Duration::from_secs(10)), hang_timeout_secs(1))]
-#[case(SignalFormat::Aac, "aac", "audio/aac")]
-#[case(SignalFormat::Flac, "flac", "audio/flac")]
+#[case(SignalAsset::AAC_SAW_1S, "audio/aac")]
+#[case(SignalAsset::FLAC_SAW_1S, "audio/flac")]
 async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
-    #[case] format: SignalFormat,
-    #[case] ext: &str,
+    #[case] asset: SignalAsset,
     #[case] content_type: &str,
 ) {
     let server = TestServerHelper::new().await;
     let client = Client::new();
-    let spec = SignalSpec {
-        sample_rate: 44_100,
-        channels: 2,
-        length: SignalSpecLength::Seconds(1.0),
-        format,
-        bit_rate: None,
-    };
+    let ext = asset.ext();
+    let name = asset.name();
 
     let response = client
-        .get(server.sawtooth(&spec).await)
+        .get(server.signal(asset))
         .send()
         .await
         .unwrap_or_else(|error| panic!("Failed to fetch /signal round-trip fixture: {error}"));
@@ -160,7 +150,7 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
             .pools(pools())
             .build(),
     )
-    .unwrap_or_else(|error| panic!("probe {format:?} decode failed: {error}"));
+    .unwrap_or_else(|error| panic!("probe {name} decode failed: {error}"));
 
     let pcm_spec = decoder.spec();
     assert_eq!(pcm_spec.sample_rate.get(), 44_100);
@@ -169,18 +159,15 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
     let mut total_frames = 0usize;
     let mut ascending_chunks = 0usize;
     for chunk_idx in 0..8 {
-        let outcome = decoder.next_chunk().unwrap_or_else(|error| {
-            panic!("decode chunk {chunk_idx} failed for {format:?}: {error}")
-        });
+        let outcome = decoder
+            .next_chunk()
+            .unwrap_or_else(|error| panic!("decode chunk {chunk_idx} failed for {name}: {error}"));
         let Ok(chunk) = AudioChunk::try_from(outcome) else {
             break;
         };
         assert_eq!(chunk.spec().sample_rate.get(), 44_100);
         assert_eq!(chunk.spec().channels, 2);
-        assert_valid_pcm_samples(
-            &chunk.samples,
-            format!("{format:?} chunk {chunk_idx}").as_str(),
-        );
+        assert_valid_pcm_samples(&chunk.samples, format!("{name} chunk {chunk_idx}").as_str());
         total_frames += chunk.frames();
         if detect_direction(&chunk.samples, chunk.spec().channels as usize)
             == SignalDirection::Ascending
@@ -191,11 +178,11 @@ async fn test_signal_server_aac_and_flac_roundtrip_produce_expected_pcm(
 
     assert!(
         total_frames >= 4096,
-        "{format:?} should decode a meaningful amount of PCM, got {total_frames} frames"
+        "{name} should decode a meaningful amount of PCM, got {total_frames} frames"
     );
     assert!(
         ascending_chunks > 0,
-        "{format:?} round-trip should preserve the sawtooth direction"
+        "{name} round-trip should preserve the sawtooth direction"
     );
 }
 
@@ -522,26 +509,8 @@ async fn run_packaged_fmp4_decoder_check(label: &str, codec: AudioCodec, backend
 }
 
 #[kithara::test]
-fn test_embedded_audio_contains_data() {
-    let audio = EmbeddedAudio::get();
-
-    let wav_data = audio.wav();
-    assert!(!wav_data.is_empty());
-
-    let mp3_data = audio.mp3();
-    assert!(!mp3_data.is_empty());
-
-    assert!(mp3_data.len() > wav_data.len());
-}
-
-const fn wav_spec() -> SignalSpec {
-    SignalSpec {
-        sample_rate: 44_100,
-        channels: 2,
-        length: SignalSpecLength::Seconds(1.0),
-        format: SignalFormat::Wav,
-        bit_rate: None,
-    }
+fn embedded_mp3_contains_data() {
+    assert!(!signal_mp3_track_sine440_187s().bytes().is_empty());
 }
 
 fn assert_valid_pcm_samples(samples: &[f32], context: &str) {

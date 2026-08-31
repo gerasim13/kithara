@@ -1,7 +1,6 @@
 use kithara::encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
-use kithara_integration_tests::{
-    encode_ext::BytesEncodeTargetExt, encode_test_pcm::SawtoothPcmFixture,
-};
+use kithara_integration_tests::encode_ext::BytesEncodeTargetExt;
+use kithara_test_fixtures::signal::{Pcm, Wave};
 
 #[kithara::test]
 fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
@@ -9,16 +8,17 @@ fn encode_bytes_happy_paths_return_expected_metadata_and_container_markers() {
     const CHANNELS: u16 = 2;
     const AAC_FRAME_SAMPLES: usize = 1024;
 
-    let pcm = SawtoothPcmFixture::new(4 * AAC_FRAME_SAMPLES, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, 4 * AAC_FRAME_SAMPLES, Wave::Sawtooth);
     let cases = [
         BytesEncodeTarget::Mp3,
         BytesEncodeTarget::Flac,
         BytesEncodeTarget::Aac,
         BytesEncodeTarget::M4a,
+        BytesEncodeTarget::Alac,
     ];
 
     for target in cases {
-        let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+        let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
             target,
             pcm: &pcm,
             bit_rate: None,
@@ -42,7 +42,7 @@ fn encode_bytes_honors_explicit_bit_rate_across_lossy_range() {
     const CHANNELS: u16 = 2;
     const PCM_FRAMES: usize = SAMPLE_RATE as usize;
 
-    let pcm = SawtoothPcmFixture::new(PCM_FRAMES, SAMPLE_RATE, CHANNELS);
+    let pcm = Pcm::new(SAMPLE_RATE, CHANNELS, PCM_FRAMES, Wave::Sawtooth);
 
     let bit_rates = [96_000u64, 128_000, 192_000, 256_000, 320_000];
     let lossy_targets = [
@@ -53,7 +53,7 @@ fn encode_bytes_honors_explicit_bit_rate_across_lossy_range() {
 
     for target in lossy_targets {
         for bit_rate in bit_rates {
-            let encoded = EncoderFactory::encode_bytes(BytesEncodeRequest {
+            let encoded = EncoderFactory::encode_bytes(&BytesEncodeRequest {
                 target,
                 pcm: &pcm,
                 bit_rate: Some(bit_rate),
@@ -100,10 +100,22 @@ fn assert_container_marker(target: BytesEncodeTarget, bytes: &[u8]) {
             bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xF0) == 0xF0,
             "AAC output is missing an ADTS sync word"
         ),
-        BytesEncodeTarget::M4a => assert!(
-            bytes.windows(4).any(|window| window == b"ftyp")
-                && bytes.windows(4).any(|window| window == b"mdat"),
-            "M4A output is missing MP4 container boxes"
-        ),
+        BytesEncodeTarget::M4a => assert_mp4(bytes, b"mp4a", "M4A"),
+        BytesEncodeTarget::Alac => assert_mp4(bytes, b"alac", "ALAC"),
     }
+}
+
+/// MP4 container boxes plus the sample-entry fourcc that names the codec. The
+/// boxes alone cannot tell an AAC body from a lossless one — both are `.m4a`.
+fn assert_mp4(bytes: &[u8], sample_entry: &[u8; 4], label: &str) {
+    let has = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+    assert!(
+        has(b"ftyp") && has(b"mdat"),
+        "{label} output is missing MP4 container boxes"
+    );
+    assert!(
+        has(sample_entry),
+        "{label} output is missing its `{}` sample entry",
+        String::from_utf8_lossy(sample_entry)
+    );
 }

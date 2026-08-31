@@ -547,6 +547,14 @@ impl Registered<u8> for HandWrittenPools {
         );
         assert_eq!(
             rule_hits_at(
+                "perf.no-component-pool-construction.yml",
+                "crates/kithara-test-fixtures/src/defs/packaged.rs",
+                local
+            ),
+            0
+        );
+        assert_eq!(
+            rule_hits_at(
                 "perf.prefer-primitive-pool.yml",
                 "crates/kithara-host/src/session/testing.rs",
                 primitive

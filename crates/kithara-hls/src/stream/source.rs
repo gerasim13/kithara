@@ -182,12 +182,13 @@ where
 mod tests {
     use std::sync::OnceLock;
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, EventBus, VariantIndex};
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
@@ -203,21 +204,6 @@ mod tests {
     type TestHlsSource = HlsSource<crate::test_pools::TestPools>;
     type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
     type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
-
-    struct TestAbrPeer {
-        cancel: CancelToken,
-        state: Arc<AbrState>,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-    }
 
     /// One HLS track of equal-sized segments behind a real `HlsSource`, with the
     /// peer wake the source arms exposed so a test can observe it.
@@ -261,10 +247,12 @@ mod tests {
             .into_variant(0, ctx);
             let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
             let publisher = state.publisher();
-            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-                cancel: cancel.clone(),
-                state,
-            });
+            let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
+                AbrMock::cancel
+                    .each_call(matching!())
+                    .returns(cancel.clone()),
+                AbrMock::state.each_call(matching!()).returns(Some(state)),
+            )));
             let settings = AbrSettings::builder().cancel(cancel.clone()).build();
             let controller = AbrController::new(settings);
             let handle = controller.register(&peer);

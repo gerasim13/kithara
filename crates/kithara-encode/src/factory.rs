@@ -1,46 +1,33 @@
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 
-#[cfg(target_arch = "wasm32")]
-use crate::error::EncodeError;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::offline::OfflineEncoder;
 use crate::{
-    error::EncodeResult,
-    traits::InnerEncoder,
+    error::{EncodeError, EncodeResult},
     types::{BytesEncodeRequest, EncodedBytes, EncodedTrack, PackagedEncodeRequest},
 };
 
-/// Factory for creating encoded outputs with runtime codec selection.
+/// Entry point for encoded outputs with runtime codec selection.
 pub struct EncoderFactory;
 
 impl EncoderFactory {
-    /// Create an encoder backend for complete encoded bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when encoding is unavailable on the current target.
-    pub fn create_bytes(target: crate::BytesEncodeTarget) -> EncodeResult<Box<dyn InnerEncoder>> {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = target;
-            Ok(Box::new(OfflineEncoder))
-        }
-
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = target;
-            Self::wasm_unsupported()
-        }
-    }
-
     /// Encode a finite PCM source into complete encoded bytes.
     ///
     /// # Errors
     ///
     /// Returns an error when the target codec/backend rejects the request.
-    pub fn encode_bytes(request: BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
-        Self::create_bytes(request.target)?.encode_bytes(request)
+    pub fn encode_bytes(request: &BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            OfflineEncoder::encode_bytes(request)
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = request;
+            Err(Self::wasm_unsupported())
+        }
     }
 
     /// Encode a finite PCM source into packaged access units for downstream muxing.
@@ -58,15 +45,18 @@ impl EncoderFactory {
     {
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let codec = request
+                .media_info
+                .codec
+                .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
+            OfflineEncoder::packaged_frame_samples(codec)?;
             OfflineEncoder::encode_packaged(pools, request)
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             let _ = (pools, request);
-            Err(EncodeError::InvalidInput(
-                "encoding is not supported on wasm32".to_owned(),
-            ))
+            Err(Self::wasm_unsupported())
         }
     }
 
@@ -78,22 +68,18 @@ impl EncoderFactory {
     pub fn frame_samples(codec: AudioCodec) -> EncodeResult<usize> {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            OfflineEncoder::frame_samples(codec)
+            OfflineEncoder::packaged_frame_samples(codec)
         }
 
         #[cfg(target_arch = "wasm32")]
         {
             let _ = codec;
-            Err(EncodeError::InvalidInput(
-                "encoding is not supported on wasm32".to_owned(),
-            ))
+            Err(Self::wasm_unsupported())
         }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn wasm_unsupported() -> EncodeResult<Box<dyn InnerEncoder>> {
-        Err(EncodeError::InvalidInput(
-            "encoding is not supported on wasm32".to_owned(),
-        ))
+    fn wasm_unsupported() -> EncodeError {
+        EncodeError::InvalidInput("encoding is not supported on wasm32".to_owned())
     }
 }

@@ -19,6 +19,7 @@ fn bytes_target_maps_to_expected_media_info() {
 #[case::flac(BytesEncodeTarget::Flac, "flac", "audio/flac", None)]
 #[case::aac(BytesEncodeTarget::Aac, "aac", "audio/aac", Some(128_000))]
 #[case::m4a(BytesEncodeTarget::M4a, "m4a", "audio/mp4", Some(128_000))]
+#[case::alac(BytesEncodeTarget::Alac, "m4a", "audio/mp4", None)]
 fn bytes_target_defaults_match_route_contract(
     #[case] target: BytesEncodeTarget,
     #[case] ext: &str,

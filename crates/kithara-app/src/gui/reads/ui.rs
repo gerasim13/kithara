@@ -111,7 +111,6 @@ struct MenuNode<'a> {
 impl<'a> Node<'a> for MenuNode<'a> {
     fn child(&self, segment: &str, scope: Scope<'_>) -> Option<Box<dyn Node<'a> + 'a>> {
         let value = match segment {
-            "open" => ReadValue::Bool(self.menu.is_open()),
             "group_open" => ReadValue::Bool(self.group_open(scope)),
             "group_hidden" => ReadValue::Bool(!self.group_open(scope)),
             _ => return None,

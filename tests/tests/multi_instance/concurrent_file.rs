@@ -13,6 +13,7 @@ use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     reads::{ReadLimit, read_for_concurrency_check},
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 /// Create an `Audio<Stream<File>>` for a remote MP3 URL.
@@ -63,7 +64,11 @@ async fn run_concurrent_file(n: usize) {
     let mut temps = Vec::new();
     for i in 0..n {
         let temp = TestTempDir::new();
-        let audio = create_file_audio(server.asset("test.mp3"), temp.path()).await;
+        let audio = create_file_audio(
+            server.signal(SignalAsset::MP3_TRACK_SINE440_187S),
+            temp.path(),
+        )
+        .await;
         temps.push(temp);
         handles.push(spawn_blocking(move || {
             let mut audio = audio;

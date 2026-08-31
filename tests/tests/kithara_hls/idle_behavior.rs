@@ -13,7 +13,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir,
+    HlsFixtureBuilder, PackagedTestServer, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     temp_dir,
 };
@@ -61,11 +61,10 @@ fn arm_panic_marker(marker: &'static str) -> Arc<AtomicBool> {
 async fn idle_does_not_panic_hang_detector(temp_dir: TestTempDir) {
     let watchdog_fired = arm_panic_marker("HangDetector");
 
-    let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let server = PackagedTestServer::new().await;
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
-    let hls_config = HlsConfig::for_url(url)
+    let hls_config = HlsConfig::for_url(server.url("/master.m3u8"))
         .store(
             AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
@@ -147,11 +146,25 @@ fn count_files_recursive(root: &Path) -> usize {
 #[kithara::test(tokio, native, serial, timeout(Duration::from_secs(20)))]
 async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
-    // slq segments in the test fixture are ~50 KiB. 256 KiB ≈ 5
-    // segments worth of look-ahead — comfortably below the 37-segment
-    // variant length so a missing cap is unambiguously visible.
-    const LOOK_AHEAD_BYTES: u64 = 256 * 1024;
+    // A variant long enough that "stopped at the cap" and "drained the
+    // whole thing" cannot be confused. One variant at the encoder's
+    // default 128 kbit/s puts roughly 32 KiB in each 2 s segment, so the
+    // look-ahead below buys a handful of them out of SEGMENTS — the gap
+    // is wide enough that the exact segment size does not matter.
+    const SEGMENTS: usize = 24;
+    const LOOK_AHEAD_BYTES: u64 = 128 * 1024;
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(SEGMENTS)
+                .segment_duration_secs(2.0)
+                .variant_bandwidths(vec![128_000])
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the capped-prefetch fixture");
+    let url = created.master_url();
     // Shared bus so the downloader's per-fetch `DownloaderEvent`s reach a
     // root subscriber here — the real signal that prefetch is or is not
     // still running.
@@ -212,17 +225,17 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
 
     let files = count_files_recursive(temp_dir.path());
 
-    // Budget: ~5-7 media segs + init + 4 playlists + master. The `_index/`
-    // dir (availability.bin / lru.bin / pins.bin written by the asset
-    // store's flush hub) is bookkeeping, not prefetched media, so it is
-    // excluded from the count. 15 catches the "no cap" failure (which
-    // downloads all 37 segments + auxiliaries → 45+ files).
+    // Measured: the cap honored lands 10 files, and a look-ahead wide
+    // enough to cover the whole variant lands 28. The budget sits between
+    // them with room on both sides. The `_index/` dir (availability.bin /
+    // lru.bin / pins.bin written by the asset store's flush hub) is
+    // bookkeeping, not prefetched media, so it is excluded from the count.
     const PREFETCH_FILE_CAP: usize = 15;
     assert!(
         files <= PREFETCH_FILE_CAP,
         "expected idle prefetch capped at <={PREFETCH_FILE_CAP} files \
-         with look_ahead_bytes={LOOK_AHEAD_BYTES}, got {files} files on \
-         disk — HlsVariant::dispatch is draining the full segment queue \
-         without honoring the byte-ahead cap"
+         with look_ahead_bytes={LOOK_AHEAD_BYTES} over a {SEGMENTS}-segment \
+         variant, got {files} files on disk — HlsVariant::dispatch is \
+         draining the full segment queue without honoring the byte-ahead cap"
     );
 }

@@ -5,10 +5,8 @@ use kithara::{
     platform::time::Duration,
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
-use kithara_integration_tests::{
-    bufpool_ext::{Pools, pools},
-    signal_pcm::signal::{SignalFn, SineWave},
-};
+use kithara_integration_tests::bufpool_ext::{Pools, pools};
+use kithara_test_fixtures::signal::Wave;
 
 use crate::gapless_common::{
     AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY, GAPLESS_CHANNELS, GAPLESS_SAMPLE_RATE,
@@ -130,7 +128,7 @@ fn trim_track(
 fn sine_samples(start_frame: usize, frames: usize, spec: AudioSpec) -> Vec<f32> {
     let channels = usize::from(spec.channels);
     let mut samples = Vec::with_capacity(frames.saturating_mul(channels));
-    let signal = SineWave(SINE_FREQ_HZ);
+    let signal = Wave::sine(SINE_FREQ_HZ);
     for frame in start_frame..start_frame.saturating_add(frames) {
         let sample = f32::from(signal.sample(frame, spec.sample_rate.get())) / f32::from(i16::MAX);
         for _ in 0..channels {

@@ -38,7 +38,7 @@ impl AbrController {
         let mut ticked = false;
         while let Some(peer_id) = self.take_tick_request() {
             ticked = true;
-            self.run_tick(peer_id, Instant::now());
+            self.run_tick(peer_id, now);
         }
         ticked
     }

@@ -23,6 +23,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
+use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
 /// `PlaybackView::buffered` is the surface a progress bar reads: once the whole
 /// body is cached it must say so, not report only what the decoder has produced
@@ -92,13 +93,13 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
     let helper = TestServerHelper::new().await;
     let handle = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
-            bytes: Arc::new(EmbeddedAudio::TEST_MP3_BYTES.to_vec()),
+            bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
             content_type: Some("audio/mpeg"),
         },
         delivery: Delivery::Range,
     });
     let url = handle.child_url("progressive.mp3");
-    let body_len = EmbeddedAudio::TEST_MP3_BYTES.len() as u64;
+    let body_len = signal_mp3_track_sine440_187s().bytes().len() as u64;
 
     let pools = pools();
     let downloader = Downloader::new(

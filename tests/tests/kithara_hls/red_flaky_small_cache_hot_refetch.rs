@@ -10,7 +10,7 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig},
 };
 use kithara_integration_tests::{
-    TestServerHelper, auto,
+    HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
     flash_pace::virtual_pace,
 };
@@ -27,6 +27,13 @@ impl Consts {
     /// a hot-refetch livelock parks the reader forever and trips the test
     /// timeout instead.
     const DRAIN_CHUNKS: usize = 400;
+    /// The ladder the drain runs over: two variants, since the reader opens
+    /// in `auto` mode and a single one leaves it nothing to weigh, and 60 s
+    /// of media so the drain budget above runs out before the track does.
+    /// Measured: the drain ends on its 400th chunk with EOF still ahead.
+    const VARIANTS: usize = 2;
+    const SEGMENTS: usize = 20;
+    const SEGMENT_SECS: f64 = 3.0;
 }
 
 #[kithara::test(
@@ -37,7 +44,17 @@ impl Consts {
 )]
 async fn red_flaky_small_cache_hot_refetch_behind_reader() {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let created = server
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(Consts::VARIANTS)
+                .segments_per_variant(Consts::SEGMENTS)
+                .segment_duration_secs(Consts::SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the drain runs over");
+    let url = created.master_url();
 
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());

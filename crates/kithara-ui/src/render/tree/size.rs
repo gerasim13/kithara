@@ -14,6 +14,7 @@ mod tests {
         registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
         size::{DEFAULTS, Dim},
         source::{MemResolver, UiConfig},
+        view,
     };
 
     struct Registry {
@@ -82,6 +83,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap()
     }
@@ -264,6 +266,7 @@ mod tests {
             builtin::skin_doc(),
             builtin::text_doc(),
             &UiConfig::default(),
+            &view::EMPTY,
         )
         .unwrap();
 

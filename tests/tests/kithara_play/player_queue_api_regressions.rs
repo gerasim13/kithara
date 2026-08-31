@@ -8,10 +8,11 @@ use kithara::{
     play::{PlayerEvent, Resource, ResourceConfig, ResourceSrc, player::PlayerControl},
 };
 use kithara_integration_tests::{
-    SignalFormat, SignalSpec, SignalSpecLength, TestServerHelper, TestTempDir, kithara,
+    TestServerHelper, TestTempDir, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 
 use crate::bufpool_ext::TestPools;
 
@@ -31,9 +32,20 @@ async fn auto_advance_starts_next_track_without_explicit_play(temp_dir: TestTemp
     let first_id = TrackId::allocate();
     let second_id = TrackId::allocate();
 
-    let first = make_signal_resource(harness.player(), &server, temp_dir.path(), 440.0, 0.12).await;
-    let second =
-        make_signal_resource(harness.player(), &server, temp_dir.path(), 880.0, 0.24).await;
+    let first = make_signal_resource(
+        harness.player(),
+        &server,
+        temp_dir.path(),
+        SignalAsset::WAV_SINE440_120MS,
+    )
+    .await;
+    let second = make_signal_resource(
+        harness.player(),
+        &server,
+        temp_dir.path(),
+        SignalAsset::WAV_SINE880_240MS,
+    )
+    .await;
     harness.with_player(|player| {
         player.insert(first, first_id, None);
         player.insert(second, second_id, None);
@@ -114,17 +126,9 @@ async fn make_signal_resource(
     player: &PlayerControl<TestPools>,
     server: &TestServerHelper,
     cache_dir: &Path,
-    freq_hz: f64,
-    duration_secs: f64,
+    asset: SignalAsset,
 ) -> Resource {
-    let spec = SignalSpec {
-        sample_rate: 44_100,
-        channels: 2,
-        length: SignalSpecLength::Seconds(duration_secs),
-        format: SignalFormat::Wav,
-        bit_rate: None,
-    };
-    let url = server.sine(&spec, freq_hz).await;
+    let url = server.signal(asset);
     let mut config = ResourceConfig::<TestPools>::for_src(
         ResourceSrc::parse(url.as_str()).expect("valid signal fixture URL"),
     )

@@ -6,6 +6,7 @@ use crate::{
     render::{Reads, Skin, UiEvent, custom::CustomKinds},
     source::SourceResolver,
     text::TextDoc,
+    view::ViewState,
 };
 
 /// What a host needs from an application to show it and keep it fed.
@@ -37,6 +38,15 @@ pub trait App {
 
     /// Applies one event the document published.
     fn update(&mut self, event: UiEvent);
+
+    /// Told what the document turned for itself, after every turn.
+    ///
+    /// The host owns the screen's own state, so an application that feeds the
+    /// page on screen has no other way to learn which page that is. Reading
+    /// it is all this is for: writing it back is the host's business.
+    fn turned(&mut self, view: &ViewState) {
+        let _ = view;
+    }
 }
 
 /// Everything a host needs besides the application itself.

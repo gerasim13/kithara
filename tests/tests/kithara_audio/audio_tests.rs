@@ -18,9 +18,10 @@ use kithara::{
 use kithara_integration_tests::{
     TestTempDir,
     bufpool_ext::{TestPools, pools},
-    create_test_wav, kithara,
+    kithara,
     reads::blocking_audio,
 };
+use kithara_test_fixtures::signal;
 use tempfile::NamedTempFile;
 
 /// Polls `audio.read()` until it returns `Frames`, an unrelated `Eof`,
@@ -75,7 +76,7 @@ fn test_wav_config(
     NamedTempFile,
     AudioConfig<kithara::file::File<TestPools>>,
 ) {
-    let wav_data = create_test_wav(sample_count, 44100, 2);
+    let wav_data = signal::wav(44100, 2, sample_count, signal::TONE);
     let tmp = NamedTempFile::new().unwrap();
     File::create(tmp.path())
         .unwrap()

@@ -1,7 +1,10 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+};
 
 use bon::{Builder, bon};
-use kithara_assets::AssetResource;
+use kithara_assets::{AssetReader, AssetResource, ReadSide, ResourceKey};
 use kithara_bufpool::HasPool;
 use kithara_drm::DecryptContext;
 use kithara_events::EventBus;
@@ -10,7 +13,8 @@ use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve};
+use kithara_storage::ResourceStatus;
+use kithara_stream::{AudioCodec, ContainerFormat, SeekObserve, StreamError, StreamResult};
 
 use super::{
     cas_anchor::CasAnchorCell,
@@ -21,9 +25,9 @@ use super::{
     seqlock::{AtomicOptU64, AtomicSeekAlias},
 };
 use crate::{
-    HlsResult,
+    HlsError, HlsResult,
     config::{DEFAULT_ACQUIRE_ATTEMPT_BUDGET, DEFAULT_DOWNLOAD_BATCH_SIZE, SizeProbeMethod},
-    playlist::{PlaylistAccess, PlaylistState},
+    playlist::PlaylistState,
     segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
     signal::SizeSignal,
 };
@@ -181,6 +185,10 @@ where
     /// `init_handle`); the produce-core's disk read and acquire flow through
     /// that handle, and it is the home for the `WS5d` held-resource lease.
     pub(super) scope: kithara_assets::AssetScope<S>,
+    held: HeldReaders<S>,
+    /// Store opens the read path performed.
+    #[cfg(test)]
+    pub(super) opens: std::sync::atomic::AtomicUsize,
     /// Init slot: `Some(Segment::Init)` for a variant that advertises a
     /// separately fetched `#EXT-X-MAP` init, `None` otherwise. Its existence
     /// is keyed on the playlist `#EXT-X-MAP` URL, never on the known byte size
@@ -196,17 +204,116 @@ impl<S> VariantSegments<S>
 where
     S: HasPool<u8> + Send + Sync + 'static,
 {
-    const fn new(
+    fn new(
         scope: kithara_assets::AssetScope<S>,
         init: Option<Segment>,
         entries: Vec<Segment>,
     ) -> Self {
         Self {
             scope,
+            held: HeldReaders::default(),
+            #[cfg(test)]
+            opens: std::sync::atomic::AtomicUsize::new(0),
             init,
             entries,
         }
     }
+
+    /// Copy `range` of `seg` into `dst`. `Ok(None)` means the bytes are not on
+    /// disk yet.
+    pub(super) fn read_at(
+        &self,
+        seg: &Segment,
+        range: Range<u64>,
+        dst: &mut [u8],
+    ) -> StreamResult<Option<usize>> {
+        let Some(reader) = self.reader(seg)? else {
+            return Ok(None);
+        };
+        reader
+            .wait_range(range.clone())
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        let n = reader
+            .read_at(range.start, dst)
+            .map_err(|e| StreamError::Source(HlsError::from(e).into()))?;
+        Ok(Some(n))
+    }
+
+    /// Drop the held resource for `key`, so the next read opens it again.
+    pub(super) fn release(&self, key: &ResourceKey) {
+        for slot in [&self.held.init, &self.held.media] {
+            let mut held = slot.lock();
+            if held.as_ref().is_some_and(|h| h.key == *key) {
+                *held = None;
+            }
+        }
+    }
+
+    /// The slot's open resource, opened and held on first use.
+    fn reader(&self, seg: &Segment) -> StreamResult<Option<AssetReader<S>>> {
+        let mut held = match seg {
+            Segment::Init(_) => self.held.init.lock(),
+            Segment::Media(_) => self.held.media.lock(),
+        };
+        let key = seg.resource_id();
+        if let Some(hit) = held.as_ref().filter(|h| h.key == *key && serves(&h.reader)) {
+            return Ok(Some(hit.reader.clone()));
+        }
+        *held = None;
+
+        #[cfg(test)]
+        self.opens.fetch_add(1, Ordering::Relaxed);
+        let Some(reader) = seg.resource(&self.scope).open()? else {
+            return Ok(None);
+        };
+        *held = Some(Held {
+            key: key.clone(),
+            reader: reader.clone(),
+        });
+        drop(held);
+        Ok(Some(reader))
+    }
+}
+
+/// One slot for the init prefix and one for the media segment, which is what a
+/// single [`read_at`](HlsVariant::read_at) walks. A held reader pins its asset,
+/// so the count is bounded on purpose.
+struct HeldReaders<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    init: Mutex<Option<Held<S>>>,
+    media: Mutex<Option<Held<S>>>,
+}
+
+impl<S> Default for HeldReaders<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self {
+            init: Mutex::default(),
+            media: Mutex::default(),
+        }
+    }
+}
+
+struct Held<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    key: ResourceKey,
+    reader: AssetReader<S>,
+}
+
+fn serves<S>(reader: &AssetReader<S>) -> bool
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    !matches!(
+        reader.status(),
+        ResourceStatus::Failed(_) | ResourceStatus::Cancelled
+    )
 }
 
 impl VariantFlow {

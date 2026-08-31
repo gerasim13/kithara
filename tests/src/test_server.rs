@@ -584,27 +584,20 @@ pub(crate) async fn post_token(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use kithara_test_fixtures::SignalAsset;
+
     use super::*;
     use crate::{
         fixture_protocol::{DataMode, InitMode},
         kithara,
-        signal_url::{SignalFormat, SignalSpec, SignalSpecLength},
     };
 
     #[kithara::test(tokio)]
     async fn signal_helper_builds_expected_url() {
-        let spec = SignalSpec {
-            sample_rate: 44_100,
-            channels: 2,
-            length: SignalSpecLength::Seconds(1.0),
-            format: SignalFormat::Wav,
-            bit_rate: None,
-        };
         let helper = TestServerHelper::new().await;
-        let url = helper.sine(&spec, 440.0).await;
+        let url = helper.signal(SignalAsset::WAV_SINE440_120MS);
 
-        assert!(url.path().starts_with("/signal/sine/"));
-        assert!(url.path().ends_with(".wav"));
+        assert_eq!(url.path(), "/signal/signal_wav_sine440_120ms.wav");
     }
 
     #[kithara::test]

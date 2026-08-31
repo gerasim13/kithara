@@ -1,0 +1,88 @@
+name: Dispatch report
+
+# The source scheduled run keeps its own verdict. This GitHub-hosted collector
+# only makes that result visible without depending on repository Issues or the
+# self-hosted runner fleet being healthy.
+#
+# It fired 175 times a week when eleven crons each started a run of which one
+# job did anything. Two crons start a run that does everything, so this now
+# reports twice a week on a night that actually happened.
+on:
+  workflow_run:
+    workflows: ["Dispatch"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: dispatch-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Summarize the run
+    # A skipped source run has no verdict to make visible, and this collector
+    # exists only to show one. Where the scheduled workflow is skipped for want
+    # of runners, every completion still triggered this job, and on that same
+    # repository a GitHub-hosted job cannot start at all ("your account is
+    # locked due to a billing issue") — a red check about a run that never
+    # happened. Any other conclusion, failure included, is still reported.
+    if: github.event.workflow_run.conclusion != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Collect the source run jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p target
+
+          {
+            echo "# Dispatch result"
+            echo
+            echo "- Source run: [$RUN_ID]($RUN_URL)"
+            echo "- Source conclusion: \`$RUN_CONCLUSION\`"
+          } > target/dispatch-report.md
+
+          failing=$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/jobs" --paginate \
+            --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | "- [\(.name)](\(.html_url)) (`\(.conclusion)`)"')
+
+          {
+            echo
+            echo "## Unsuccessful jobs"
+            echo
+            if [[ -n "$failing" ]]; then
+              echo "$failing"
+            else
+              echo "No source jobs failed."
+            fi
+          } >> target/dispatch-report.md
+
+          # The quality lanes assemble their own consolidated report (`just ci
+          # report`) and archive it, so this collector carries the numbers
+          # rather than re-deriving them. A run that selected no quality lane
+          # leaves no such artifact, and that is a normal state, not a failure.
+          if gh run download "$RUN_ID" --repo "$REPOSITORY" --name quality-report --dir quality \
+              && [[ -f quality/quality-report.md ]]; then
+            {
+              echo
+              cat quality/quality-report.md
+            } >> target/dispatch-report.md
+          fi
+
+          cat target/dispatch-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the dispatch report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dispatch-report-${{ github.event.workflow_run.id }}
+          path: target/dispatch-report.md

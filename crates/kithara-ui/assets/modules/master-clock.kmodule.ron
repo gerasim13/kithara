@@ -5,13 +5,13 @@
     chrome: Plain,
     root: Popover(
         id: "pop",
-        open: Model(id: "clock.open"),
+        open: View(id: "clock"),
         align: End,
         anchor: Row(
             size: (w: Shrink, h: Fill),
             gap: 0.0,
             background: BgPanel,
-            active: Model(id: "clock.open"),
+            active: View(id: "clock"),
             active_background: BgSelect,
             children: [
                 Row(
@@ -76,7 +76,7 @@
                 ),
                 Pressable(
                     id: "toggle",
-                    press: Command(id: "clock.toggle"),
+                    press: View(id: "clock"),
                     child: Row(
                         id: "source-cell",
                         size: (w: Shrink, h: Fill),
@@ -92,7 +92,7 @@
                                 active_icon: ChevronUp,
                                 style: MenuSmall,
                                 color: Muted,
-                                active: Model(id: "clock.open"),
+                                active: View(id: "clock"),
                             ),
                         ],
                     ),

@@ -45,6 +45,10 @@ enum TestServerFixture {
         /// ``bytes(_:contentType:)`` for anything sizeable — uploading a
         /// multi-megabyte body is rejected by the request-body limit.
         case asset(name: String)
+        /// Serve one body the fixture generator produces, named the way
+        /// ``signal(_:)`` names it. Generated bodies have no path under
+        /// `assets/`, so they need their own case.
+        case signal(name: String)
 
         private enum CodingKeys: String, CodingKey {
             case kind
@@ -68,6 +72,9 @@ enum TestServerFixture {
                 try container.encodeIfPresent(contentType, forKey: .contentType)
             case let .asset(name):
                 try container.encode("asset", forKey: .kind)
+                try container.encode(name, forKey: .name)
+            case let .signal(name):
+                try container.encode("signal", forKey: .kind)
                 try container.encode(name, forKey: .name)
             }
         }
@@ -152,6 +159,11 @@ enum TestServerFixture {
 
     static func asset(_ name: String) throws -> URL {
         try url("assets/\(name.trimmingCharacters(in: CharacterSet(charactersIn: "/")))")
+    }
+
+    /// URL of one generated body, named `{accessor}.{ext}`.
+    static func signal(_ name: String) throws -> URL {
+        try url("signal/\(name.trimmingCharacters(in: CharacterSet(charactersIn: "/")))")
     }
 
     static func streamHQ(_ name: String) throws -> URL {

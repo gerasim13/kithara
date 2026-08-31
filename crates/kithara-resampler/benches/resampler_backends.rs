@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_resampler::apple::{AppleAudioConverterBackend, AudioToolboxConverterFactory};
+use kithara_resampler::apple::AppleAudioConverterBackend;
 #[cfg(feature = "resample-glide")]
 use kithara_resampler::glide::GlideBackend;
 #[cfg(feature = "resample-rubato")]
@@ -100,7 +100,7 @@ fn bench_compiled_backends<M>(
     bench_backend(
         group,
         "apple-audio-converter",
-        AppleAudioConverterBackend::with_config(AudioToolboxConverterFactory::new().into()),
+        AppleAudioConverterBackend::new(),
         source_rate,
         target_rate,
         channels,

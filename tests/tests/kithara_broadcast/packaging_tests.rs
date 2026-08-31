@@ -26,7 +26,7 @@ const SEGMENT_PRIMING_SKIP_FRAMES: usize = 2_048;
 const TONE_MARGIN: f64 = 50.0;
 
 fn sine(frames: usize) -> Vec<f32> {
-    let tone = SineWave(TONE_HZ);
+    let tone = Wave::sine(TONE_HZ);
     let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
     for frame in 0..frames {
         let value = f32::from(tone.sample(frame, SAMPLE_RATE)) / 32_768.0;

@@ -16,7 +16,7 @@
                 frame_color: LinePop,
                 children: [
                     Text(id: "header-label", style: MicroLabel, label: "@clock.title", size: (w: Fill, h: Fill)),
-                    Pressable(id: "close", press: Command(id: "clock.close"), child: Glyph(id: "close-icon", icon: X, style: MenuSmall, color: Muted, size: (w: Fixed(24.0), h: Fill))),
+                    Pressable(id: "close", press: View(id: "clock", set: Off), child: Glyph(id: "close-icon", icon: X, style: MenuSmall, color: Muted, size: (w: Fixed(24.0), h: Fill))),
                 ],
             ),
             Row(

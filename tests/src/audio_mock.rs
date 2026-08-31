@@ -23,8 +23,7 @@ use kithara::{
     platform::time::Duration,
     signal::AudioSpec,
 };
-
-use crate::signal_pcm::signal::SignalFn;
+use kithara_test_fixtures::signal::Wave;
 
 /// A stateful fixed-rate `AudioReader` for testing playback facades.
 pub struct TestPcmReader {
@@ -38,7 +37,7 @@ pub struct TestPcmReader {
 
 enum Source {
     Constant(f32),
-    Signal(Box<dyn SignalFn>),
+    Signal(Wave),
 }
 
 /// Default sample value emitted by [`TestPcmReader::new`].
@@ -61,8 +60,8 @@ impl TestPcmReader {
     }
 
     #[must_use]
-    pub fn with_signal<S: SignalFn>(spec: AudioSpec, duration_secs: f64, signal: S) -> Self {
-        Self::with_source(spec, duration_secs, Source::Signal(Box::new(signal)))
+    pub fn with_signal(spec: AudioSpec, duration_secs: f64, wave: Wave) -> Self {
+        Self::with_source(spec, duration_secs, Source::Signal(wave))
     }
 
     fn with_source(spec: AudioSpec, duration_secs: f64, source: Source) -> Self {
@@ -83,9 +82,9 @@ impl TestPcmReader {
     fn sample_at(&self, start: u64, output_frame: u64) -> f32 {
         match self.source {
             Source::Constant(value) => value,
-            Source::Signal(ref signal) => {
+            Source::Signal(wave) => {
                 let frame = start.saturating_add(output_frame);
-                f32::from(signal.sample(frame as usize, self.spec.sample_rate.get()))
+                f32::from(wave.sample(frame as usize, self.spec.sample_rate.get()))
                     / f32::from(i16::MAX)
             }
         }

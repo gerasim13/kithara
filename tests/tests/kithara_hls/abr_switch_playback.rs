@@ -23,9 +23,11 @@ use kithara_integration_tests::{
     bufpool_ext::{Pools, TestPools, pools},
     fixture_protocol::{DelayRule, PcmPattern},
     flash_pace::virtual_pace,
+    mixed_codec_ladder_url,
     offline::{OfflinePlayer, resource_from_reader},
     temp_dir,
 };
+use kithara_test_fixtures::SignalAsset;
 use tracing::info;
 
 use crate::continuity::{
@@ -141,7 +143,7 @@ async fn read_audio_some(
 /// Real fMP4/AAC HLS stream with ABR auto-switch must play without hanging.
 ///
 /// This is the exact scenario from the production crash:
-/// `kithara-app` plays track.mp3 + hls/master.m3u8 + drm/master.m3u8.
+/// `kithara-app` plays one MP3 plus the plain and encrypted HLS masters.
 /// ABR switches variant on HLS track → worker hangs → all tracks die.
 #[kithara::test(
     tokio,
@@ -150,9 +152,9 @@ async fn read_audio_some(
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(3)
 )]
-async fn abr_switch_real_assets_does_not_hang(temp_dir: TestTempDir) {
+async fn abr_switch_on_production_ladder_does_not_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let url = mixed_codec_ladder_url(&server, false).await;
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -444,29 +446,29 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::drm_abr_auto_sw("drm/master.m3u8", true, DecoderBackend::Symphonia)]
+#[case::drm_abr_auto_sw(true, true, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::drm_abr_auto_hw("drm/master.m3u8", true, DecoderBackend::Apple)
+    case::drm_abr_auto_hw(true, true, DecoderBackend::Apple)
 )]
-#[case::hls_abr_auto_sw("hls/master.m3u8", true, DecoderBackend::Symphonia)]
+#[case::hls_abr_auto_sw(false, true, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_abr_auto_hw("hls/master.m3u8", true, DecoderBackend::Apple)
+    case::hls_abr_auto_hw(false, true, DecoderBackend::Apple)
 )]
-#[case::drm_manual_v0_sw("drm/master.m3u8", false, DecoderBackend::Symphonia)]
+#[case::drm_manual_v0_sw(true, false, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::drm_manual_v0_hw("drm/master.m3u8", false, DecoderBackend::Apple)
+    case::drm_manual_v0_hw(true, false, DecoderBackend::Apple)
 )]
-#[case::hls_manual_v0_sw("hls/master.m3u8", false, DecoderBackend::Symphonia)]
+#[case::hls_manual_v0_sw(false, false, DecoderBackend::Symphonia)]
 #[cfg_attr(
     any(target_os = "macos", target_os = "ios"),
-    case::hls_manual_v0_hw("hls/master.m3u8", false, DecoderBackend::Apple)
+    case::hls_manual_v0_hw(false, false, DecoderBackend::Apple)
 )]
 async fn stream_continues_after_seek(
     temp_dir: TestTempDir,
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] abr_auto: bool,
     #[case] backend: DecoderBackend,
 ) {
@@ -474,7 +476,8 @@ async fn stream_continues_after_seek(
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let label = if encrypted { "DRM" } else { "HLS" };
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -523,7 +526,7 @@ async fn stream_continues_after_seek(
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
                 Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
-                Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[{label}] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
         }
@@ -549,7 +552,7 @@ async fn stream_continues_after_seek(
             }
             assert!(
                 samples > 0,
-                "[{path}] seek to {target_secs}s must produce samples, got 0"
+                "[{label}] seek to {target_secs}s must produce samples, got 0"
             );
         }
 
@@ -568,7 +571,7 @@ async fn stream_continues_after_seek(
         }
         assert!(
             post_seek_samples > 0,
-            "[{path}] playback after seeks must continue, got 0 samples"
+            "[{label}] playback after seeks must continue, got 0 samples"
         );
     })
     .await
@@ -583,9 +586,9 @@ async fn stream_continues_after_seek(
     timeout(Duration::from_secs(20)),
     hang_timeout_secs(3)
 )]
-async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
+async fn fixed_variant_on_production_ladder_plays_without_hang(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let url = mixed_codec_ladder_url(&server, false).await;
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -654,11 +657,12 @@ async fn fixed_variant_real_assets_plays_without_hang(temp_dir: TestTempDir) {
     hang_timeout_secs(5),
     tracing("kithara_audio=warn,kithara_hls=warn,symphonia_format_isomp4=warn")
 )]
-#[case::drm("drm/master.m3u8")]
-#[case::hls("hls/master.m3u8")]
-async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] path: &str) {
+#[case::drm(true)]
+#[case::hls(false)]
+async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] encrypted: bool) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
+    let url = mixed_codec_ladder_url(&server, encrypted).await;
+    let label = if encrypted { "DRM" } else { "HLS" };
 
     let cancel = CancelToken::never();
     let pools = pools();
@@ -698,7 +702,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
             match audio.read(&mut buf) {
                 Ok(ReadOutcome::Frames { count, .. }) => warmup_samples += count.get() as u64,
                 Ok(ReadOutcome::Pending { .. }) => virtual_pace(Duration::from_millis(5)),
-                Ok(ReadOutcome::Eof { .. }) => panic!("[{path}] unexpected EOF during warmup"),
+                Ok(ReadOutcome::Eof { .. }) => panic!("[{label}] unexpected EOF during warmup"),
                 Err(e) => panic!("decode error during warmup: {e}"),
             }
         }
@@ -711,7 +715,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
         for (idx, &target_secs) in seek_targets.iter().enumerate() {
             audio
                 .seek(Duration::from_secs_f64(target_secs))
-                .unwrap_or_else(|e| panic!("[{path}] seek #{idx} to {target_secs}s failed: {e}"));
+                .unwrap_or_else(|e| panic!("[{label}] seek #{idx} to {target_secs}s failed: {e}"));
 
             let mut samples = 0u64;
             while samples < samples_per_seek {
@@ -728,7 +732,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
             }
             assert!(
                 samples > 0,
-                "[{path}] seek #{idx} to {target_secs}s must produce samples, got 0"
+                "[{label}] seek #{idx} to {target_secs}s must produce samples, got 0"
             );
         }
     })
@@ -749,7 +753,7 @@ async fn seek_after_eof_mmap_produces_samples(temp_dir: TestTempDir, #[case] pat
 )]
 async fn mp3_stream_continues_after_seek(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("track.mp3");
+    let url = server.signal(SignalAsset::MP3_SINE880_48K_162S);
 
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -847,7 +851,7 @@ async fn abr_frozen_during_seek_resumes_after(temp_dir: TestTempDir) {
     use kithara::{audio::AudioRead, signal::AudioChunk};
 
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let url = mixed_codec_ladder_url(&server, false).await;
 
     let pools = pools();
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
@@ -1037,7 +1041,7 @@ fn read_manual_cross_codec_phase(
 /// then stalls; `decode_next_chunk` hangs ~10s later. User experience:
 /// "audio disappeared, the slider kept moving, then the app crashed".
 ///
-/// `abr_switch_real_assets_does_not_hang` and `runtime_cross_codec_manual_switch_no_hang`
+/// `abr_switch_on_production_ladder_does_not_hang` and `runtime_cross_codec_manual_switch_no_hang`
 /// already cover the cross-codec path but their assertions accept
 /// `total_samples > 0` / `> 1000` — a single post-init buffer satisfies
 /// them, masking a stall. Sustained playback requires a much higher bar.
@@ -1049,9 +1053,9 @@ fn read_manual_cross_codec_phase(
 /// the bandwidth estimator may or may not commit the switch within the
 /// test window.
 ///
-/// Real assets: `assets/hls/master.m3u8` carries variants 0-2 AAC
-/// (mp4a.40.2) and variant 3 FLAC (fLaC) — 37 segments × 4s each =
-/// 148 s of audio. Reading 15 s post-switch must produce at least
+/// The mixed-codec ladder carries variants 0-2 AAC (mp4a.40.2) and
+/// variant 3 FLAC — 37 segments × 6 s each, so about 220 s of audio.
+/// Reading 15 s post-switch must produce at least
 /// `15 × 44_100 × 2 × 0.5 = 661_500` samples (50 % of nominal rate).
 #[kithara::test(
     tokio,
@@ -1062,7 +1066,7 @@ fn read_manual_cross_codec_phase(
 )]
 async fn manual_cross_codec_switch_sustains_post_switch_playback(temp_dir: TestTempDir) {
     let server = TestServerHelper::new().await;
-    let url = server.asset("hls/master.m3u8");
+    let url = mixed_codec_ladder_url(&server, false).await;
 
     let cancel = CancelToken::never();
     let bus = EventBus::new(8192);

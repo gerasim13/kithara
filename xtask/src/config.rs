@@ -51,6 +51,27 @@ pub(crate) struct CiLaneConfig {
     /// scheduled in a pipeline never reaches this; one that is scheduled and
     /// declines has to say so where the schedule can be read against it.
     pub(crate) kinds_refused: BTreeMap<String, String>,
+    /// Which role workflow schedules this lane. Roles are a field rather than
+    /// a workflow each, because five workflows differing by one string is the
+    /// duplication this catalog exists to remove.
+    pub(crate) role: String,
+    /// Pipeline kinds this lane runs in. Empty means the lane is reachable
+    /// only by name, through a dispatch that asks for it.
+    pub(crate) kinds: Vec<String>,
+    /// The GitHub fleet's answer where it honestly differs from `kinds`: 25
+    /// runners on one host buy a check per push that a single Mac mini can
+    /// only afford weekly. Empty means both fleets agree.
+    pub(crate) kinds_github: Vec<String>,
+    pub(crate) timeout_minutes: u32,
+    /// Checkout depth. Zero is full history, which a lane comparing against a
+    /// base revision needs and a shallow clone does not carry.
+    pub(crate) fetch_depth: u32,
+    pub(crate) artifact: Option<CiLaneArtifact>,
+    /// The concurrency group a lane wanting the whole host queues in.
+    pub(crate) queue: Option<String>,
+    /// Lanes whose artifacts this one consumes. A lane with needs runs after
+    /// them and only when at least one of them was selected.
+    pub(crate) needs: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -61,7 +82,8 @@ pub(crate) struct CiLaneStep {
     /// What the step needs the executor to be, rather than to run: a build-job
     /// cap the container cannot exceed, a target directory a gate owns, the
     /// browser a harness would otherwise guess. A value may name the checkout
-    /// with `{root}`, which is the only thing a lane cannot spell for itself.
+    /// with `{root}`, or the leased build-cache directory with `{target}` -
+    /// the two things a lane cannot spell for itself.
     pub(crate) env: BTreeMap<String, String>,
     /// The program for this step alone. A lane that installs a target before
     /// using it runs two, so the lane's own `program` is only the default.
@@ -72,6 +94,41 @@ pub(crate) struct CiLaneStep {
     pub(crate) args_by_kind: BTreeMap<String, Vec<String>>,
 }
 
+/// What a lane leaves for a human or a later lane to read.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CiLaneArtifact {
+    pub(crate) name: String,
+    pub(crate) path: String,
+    #[serde(default)]
+    pub(crate) when: ArtifactWhen,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ArtifactWhen {
+    #[default]
+    Always,
+    Failure,
+}
+
+/// The pipeline kinds a lane may name. Kept beside the cache groups, which the
+/// catalog already validates by name for the same reason: the executor's enum
+/// lives in `ci::run`, and a lane is refused at configuration load, before any
+/// executor is consulted. `lane_config.rs` pins the two lists together.
+pub(crate) const PIPELINE_KINDS: [&str; 8] = [
+    "branch",
+    "platforms",
+    "merge-request",
+    "quarantine",
+    "main",
+    "nightly",
+    "weekly",
+    "release",
+];
+
+pub(crate) const LANE_ROLES: [&str; 5] = ["gate", "platforms", "deep", "quality", "release"];
+
 /// The lane's own executable. A Windows job runs the binary it started as
 /// rather than `cargo xtask`, which would rebuild it - and Windows refuses to
 /// replace a running image, so Cargo reported that as a failure to remove
@@ -81,6 +138,13 @@ pub(crate) const SELF_PROGRAM: &str = "<xtask>";
 /// The checkout a lane resolves in. A compiler flag that has to name a file in
 /// the repository needs an absolute path, and only the runner knows it.
 pub(crate) const ROOT_PLACEHOLDER: &str = "{root}";
+
+/// The build-cache directory the process leased, i.e. `CARGO_TARGET_DIR` as
+/// the executor set it, not `{root}/target`. A lane that writes its own build
+/// under a fixed `{root}`-relative path escapes the lease the eviction and
+/// reclaim machinery tracks; one that asks for `{target}` stays inside it the
+/// same way the process's own build does.
+pub(crate) const TARGET_PLACEHOLDER: &str = "{target}";
 
 /// A reviewed pin, by name: `{pin.msrv_toolchain}` is the value that key holds
 /// in `.config/ci-pins.toml`.
@@ -118,8 +182,28 @@ impl CiProjectConfig {
             if lane.steps.is_empty() {
                 bail!("ext.ci.lanes.{name} must declare at least one step");
             }
-            if lane.os.is_some() && lane.label.is_empty() {
-                bail!("ext.ci.lanes.{name} pins an OS, so it must carry a label to refuse under");
+            // Every lane names the machine it needs. The GitHub fan-out has one
+            // runner pool and it is Linux, so a lane that named none would be
+            // scheduled onto it by omission rather than by declaration, and run
+            // an emulator recipe with no emulator under it.
+            let Some(os) = lane.os.as_deref() else {
+                bail!("ext.ci.lanes.{name} must name the operating system it runs on");
+            };
+            if !matches!(os, "linux" | "macos" | "windows") {
+                bail!("ext.ci.lanes.{name}.os must be linux, macos or windows, got `{os}`");
+            }
+            // `kinds_github` is a statement that GitHub schedules this lane, and
+            // GitHub's fan-out reaches one pool. A lane naming another machine
+            // would be refused at selection and never run, which is a lane
+            // declared into a schedule it cannot reach - the failure this
+            // catalog exists to make impossible, not one to restate quietly.
+            if !lane.kinds_github.is_empty() && os != "linux" {
+                bail!(
+                    "ext.ci.lanes.{name}.kinds_github schedules a `{os}` lane, and the GitHub fleet is Linux"
+                );
+            }
+            if lane.label.is_empty() {
+                bail!("ext.ci.lanes.{name} must carry a label to refuse under");
             }
             for check in &lane.pinned {
                 if check.tool.is_empty() || check.pin.is_empty() {
@@ -136,6 +220,33 @@ impl CiProjectConfig {
                 let by_kind = step.args_by_kind.values().flatten();
                 for value in step.args.iter().chain(by_kind) {
                     validate_substitutions(name, "an argument", value)?;
+                }
+            }
+            if !LANE_ROLES.contains(&lane.role.as_str()) {
+                bail!(
+                    "ext.ci.lanes.{name}.role must be one of {}, got `{}`",
+                    LANE_ROLES.join(", "),
+                    lane.role
+                );
+            }
+            for (field, listed) in [("kinds", &lane.kinds), ("kinds_github", &lane.kinds_github)] {
+                for kind in listed {
+                    if !PIPELINE_KINDS.contains(&kind.as_str()) {
+                        bail!("ext.ci.lanes.{name}.{field} names unknown kind `{kind}`");
+                    }
+                }
+            }
+            if lane.timeout_minutes == 0 {
+                bail!("ext.ci.lanes.{name} must declare a non-zero timeout_minutes");
+            }
+        }
+        for (name, lane) in &self.lanes {
+            for needed in &lane.needs {
+                if !self.lanes.contains_key(needed) {
+                    bail!("ext.ci.lanes.{name}.needs names `{needed}`, which is not a lane");
+                }
+                if needed == name {
+                    bail!("ext.ci.lanes.{name} cannot need itself");
                 }
             }
         }
@@ -157,11 +268,14 @@ impl CiProjectConfig {
     }
 }
 
-/// `{root}` and `{pin.<key>}` are the whole substitution vocabulary. A typo
-/// that reached the runner would be passed through as a literal brace and fail
-/// as a missing header or an unknown toolchain rather than as a bad config.
+/// `{root}`, `{target}`, and `{pin.<key>}` are the whole substitution
+/// vocabulary. A typo that reached the runner would be passed through as a
+/// literal brace and fail as a missing header or an unknown toolchain rather
+/// than as a bad config.
 fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
-    let mut rest = value.replace(ROOT_PLACEHOLDER, "");
+    let mut rest = value
+        .replace(ROOT_PLACEHOLDER, "")
+        .replace(TARGET_PLACEHOLDER, "");
     while let Some(start) = rest.find(PIN_PREFIX) {
         let Some(end) = rest[start..].find('}') else {
             bail!("ext.ci.lanes.{lane} leaves {PIN_PREFIX} unclosed in {whose}: `{value}`");
@@ -170,8 +284,8 @@ fn validate_substitutions(lane: &str, whose: &str, value: &str) -> Result<()> {
     }
     if rest.contains('{') {
         bail!(
-            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER} or \
-             {PIN_PREFIX}<key>}} in {whose}: `{value}`"
+            "ext.ci.lanes.{lane} names something other than {ROOT_PLACEHOLDER}, \
+             {TARGET_PLACEHOLDER}, or {PIN_PREFIX}<key>}} in {whose}: `{value}`"
         );
     }
     Ok(())
@@ -661,6 +775,40 @@ steps = ["nightly_retained"]
         assert!(!nightly.require_all_assets);
         assert_eq!(nightly.tokens, ["GH_TOKEN", "GITLAB_TOKEN"]);
         assert_eq!(nightly.steps, vec![PublishStep::NightlyRetained]);
+    }
+
+    // A lane that names a machine and then declares GitHub schedules it is two
+    // statements that cannot both be true. Selection refuses the lane silently,
+    // so the catalog says the lane runs nightly and nothing ever runs it.
+    #[test]
+    fn a_lane_off_the_github_fleet_may_not_declare_a_github_schedule() {
+        let ctx = ctx_from_config(
+            r#"
+[ext.ci]
+pins = "ci-pins.toml"
+
+[ext.ci.lanes.apple-thing]
+cache_group = "macos"
+label = "Apple"
+os = "macos"
+program = "just"
+steps = [{ args = ["test"], label = "suite" }]
+role = "platforms"
+kinds = ["nightly"]
+kinds_github = ["nightly"]
+timeout_minutes = 30
+"#,
+        );
+
+        let error = KitharaExt::from_ctx(&ctx)
+            .expect("parse kithara extension")
+            .ci
+            .validate()
+            .expect_err("a macOS lane may not claim a GitHub schedule");
+        assert!(
+            error.to_string().contains("the GitHub fleet is Linux"),
+            "the error must name the fleet: {error}"
+        );
     }
 
     #[test]

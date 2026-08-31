@@ -1,4 +1,7 @@
-use kithara::platform::{sync::Arc, time::Duration};
+use kithara::{
+    platform::{sync::Arc, time::Duration},
+    stream::AudioCodec,
+};
 use url::Url;
 
 use crate::{
@@ -851,6 +854,56 @@ fn compat_fixed_encrypted_spec() -> HlsSpec {
         head_reported_segment_size: Some(aes128_plaintext_segment().len()),
         ..HlsSpec::default()
     }
+}
+
+/// Ladder mirroring the production master playlist: three AAC-LC variants
+/// under one FLAC lossless, at the bandwidths the real master advertises,
+/// over 37 × 6 s.
+///
+/// Both halves are load-bearing and neither is optional for the tests that
+/// take this ladder. The FLAC variant is the far side of the codec boundary
+/// an ABR move has to cross; the length is what lets a test seek deep into
+/// the track. `PackagedTestServer` stays the cheaper choice for anything
+/// that needs neither.
+#[must_use]
+pub fn mixed_codec_ladder() -> HlsFixtureBuilder {
+    HlsFixtureBuilder::new()
+        .variant_count(4)
+        .segments_per_variant(37)
+        .segment_duration_secs(6.0)
+        .variant_bandwidths(vec![66_005, 134_107, 269_930, 988_758])
+        .packaged_audio_aac_lc(44_100, 2)
+        .override_variant_codec(3, AudioCodec::Flac)
+}
+
+/// [`mixed_codec_ladder`] with AES-128 segments. The production DRM master
+/// advertises the same four variants at the same bandwidths, so the two
+/// differ only by encryption.
+#[must_use]
+pub fn mixed_codec_ladder_encrypted() -> HlsFixtureBuilder {
+    mixed_codec_ladder().encryption(EncryptionRequest {
+        key_hex: hex::encode(aes128_key_bytes()),
+        iv_hex: Some(hex::encode(aes128_iv())),
+    })
+}
+
+/// Serves [`mixed_codec_ladder`], plain or encrypted, and hands back its
+/// master URL.
+///
+/// The two trees this ladder replaces differed only by encryption, so the
+/// suites that read both of them take the axis as a flag rather than as two
+/// separate setup paths.
+pub async fn mixed_codec_ladder_url(server: &TestServerHelper, encrypted: bool) -> Url {
+    let ladder = if encrypted {
+        mixed_codec_ladder_encrypted()
+    } else {
+        mixed_codec_ladder()
+    };
+    server
+        .create_hls(ladder)
+        .await
+        .expect("create the mixed-codec ladder")
+        .master_url()
 }
 
 fn packaged_plain_builder() -> HlsFixtureBuilder {

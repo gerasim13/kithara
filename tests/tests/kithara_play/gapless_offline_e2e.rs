@@ -31,10 +31,10 @@ use kithara_integration_tests::{
     fixture_protocol::{
         GaplessEncoding, PackagedAudioRequest, PackagedAudioSource, PackagedSignal,
     },
-    goertzel::goertzel_magnitude,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
+use kithara_test_fixtures::signal::goertzel_magnitude;
 
 use crate::{
     bufpool_ext::{TestPools, pools},
@@ -108,6 +108,7 @@ async fn single_track_silence_trim_strips_leading_priming(temp_dir: TestTempDir)
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -167,6 +168,7 @@ async fn two_tracks_gapless_no_click_with_silence_trim_zero_crossfade(temp_dir: 
     let visible = expected_visible_frames(AAC_GAPLESS_ENCODER_DELAY, AAC_GAPLESS_TRAILING_DELAY);
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -248,6 +250,7 @@ async fn two_tracks_gapless_stitch_continuity_metric(temp_dir: TestTempDir) {
     let stitch_frame = crate::gapless_common::generated_aac_elst_visible_frames();
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -364,6 +367,7 @@ async fn apple_fused_gapless_fixture_keeps_device_rate_seam_metric(temp_dir: Tes
 
     let probe_harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -422,6 +426,7 @@ async fn render_apple_fused_deficit_seam(
     let source_stitch_frame = APPLE_FUSED_DEFICIT_SOURCE_FRAMES;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -491,6 +496,7 @@ async fn disabled_gapless_mode_keeps_full_decoded_length(temp_dir: TestTempDir) 
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(GaplessMode::Disabled)
             .build(),
@@ -538,6 +544,7 @@ async fn single_track_silence_trim_heuristic_strips_leading_when_no_gapless_meta
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -575,6 +582,7 @@ async fn two_tracks_silence_trim_heuristic_no_click_when_no_gapless_metadata(
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -665,6 +673,7 @@ async fn single_track_silence_trim_heuristic_fade_out_smooths_trailing_edge(temp
     let server = TestServerHelper::new().await;
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(silence_trim_with_trailing())
             .build(),
@@ -885,6 +894,7 @@ async fn render_synthetic_fused_deficit_seam(tail_compensation: bool) -> Synthet
 
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
+            .block_on_underrun(true)
             .crossfade_duration(0.0)
             .gapless_mode(GaplessMode::Disabled)
             .build(),

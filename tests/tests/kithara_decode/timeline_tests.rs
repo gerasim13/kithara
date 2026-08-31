@@ -6,17 +6,14 @@ use kithara::{
     resampler::NoResamplerBackend,
     signal::AudioChunk,
 };
-use kithara_integration_tests::{
-    audio_fixture::EmbeddedAudio,
-    bufpool_ext::{TestPools, pools},
-};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
+use kithara_test_fixtures::assets::signal_wav_sine440_1s;
 
 type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
 #[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
-    let audio = EmbeddedAudio::get();
-    let reader = Cursor::new(audio.wav());
+    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
@@ -63,8 +60,7 @@ fn test_progressive_file_timeline_monotonic() {
 
 #[kithara::test]
 fn test_progressive_file_seek_resets_frame_offset() {
-    let audio = EmbeddedAudio::get();
-    let reader = Cursor::new(audio.wav());
+    let reader = Cursor::new(signal_wav_sine440_1s().bytes());
 
     let mut decoder = DecoderFactory::create_with_probe(
         reader,
@@ -104,10 +100,9 @@ mod hls_timeline {
     use kithara_integration_tests::{
         TestTempDir,
         bufpool_ext::{TestPools, pools},
-        create_wav_exact_bytes,
         hls_server::{HlsTestServer, HlsTestServerConfig},
-        signal_pcm::signal,
     };
+    use kithara_test_fixtures::signal::{self, Wave};
 
     use crate::common::test_defaults::SawWav;
 
@@ -121,11 +116,11 @@ mod hls_timeline {
         const SEGMENT_COUNT: usize = 10;
         const TOTAL_BYTES: usize = SEGMENT_COUNT * SawWav::DEFAULT.segment_size;
 
-        let wav_data = create_wav_exact_bytes(
-            signal::Sawtooth,
+        let wav_data = signal::wav_of_size(
             SawWav::DEFAULT.sample_rate,
             SawWav::DEFAULT.channels,
             TOTAL_BYTES,
+            Wave::Sawtooth,
         );
 
         let segment_duration = SawWav::DEFAULT.segment_size as f64

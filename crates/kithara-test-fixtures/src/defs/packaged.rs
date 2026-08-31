@@ -1,0 +1,146 @@
+use std::sync::OnceLock;
+
+use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion, pool_schema};
+use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_test_macros as kithara;
+
+use crate::{
+    defs::wav::{RhythmControl, rhythm_pcm},
+    fmp4::{Fmp4Package, GaplessEncoding, mux_audio_track},
+    signal::{Pcm, Wave},
+};
+
+struct Consts;
+
+impl Consts {
+    const AAC_HE_BIT_RATE: u64 = 64_000;
+    const AAC_HE_V2_BIT_RATE: u64 = 32_000;
+    const CHANNELS: u16 = 2;
+    const ONE_SECOND_FRAMES: usize = 44_100;
+    const SAMPLE_RATE: u32 = 44_100;
+    const RHYTHM_BIT_RATE: u64 = 512_000;
+    const RHYTHM_FRAMES: usize = 576_000;
+    const RHYTHM_SAMPLE_RATE: u32 = 48_000;
+}
+
+static RHYTHM_FMP4: [OnceLock<Fmp4Package>; 2] = [OnceLock::new(), OnceLock::new()];
+
+pool_schema! {
+    FixturePools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+fn pools() -> PoolRegion<FixturePools> {
+    let config = || PoolConfig::builder().max_buffers(64).build();
+    FixturePools::builder(OverallBudget(64 * 1024 * 1024))
+        .bytes(config())
+        .samples(config())
+        .build()
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: pool region failed: {error}"))
+}
+
+fn rhythm_fmp4(index: usize, carrier_hz: f64) -> &'static Fmp4Package {
+    RHYTHM_FMP4[index].get_or_init(|| {
+        let codec = AudioCodec::Flac;
+        let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: FLAC frame size failed: {error}")
+        });
+        let packets = Consts::RHYTHM_FRAMES.div_ceil(frame_samples);
+        let pcm = rhythm_pcm(
+            Consts::RHYTHM_SAMPLE_RATE,
+            Consts::CHANNELS,
+            packets * frame_samples,
+            120.0,
+            carrier_hz,
+            0,
+            RhythmControl::Aligned,
+        );
+        let media_info = MediaInfo::builder()
+            .codec(codec)
+            .container(ContainerFormat::Fmp4)
+            .sample_rate(Consts::RHYTHM_SAMPLE_RATE)
+            .channels(Consts::CHANNELS)
+            .build();
+        let request = PackagedEncodeRequest::builder()
+            .pcm(&pcm)
+            .media_info(media_info)
+            .timescale(Consts::RHYTHM_SAMPLE_RATE)
+            .bit_rate(Consts::RHYTHM_BIT_RATE)
+            .packets_per_segment(packets)
+            .encoder_delay(0)
+            .trailing_delay(0)
+            .build();
+        let track = EncoderFactory::encode_packaged(&pools(), &request).unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: rhythmic FLAC encode failed: {error}")
+        });
+        mux_audio_track(&track, GaplessEncoding::None).unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: rhythmic fMP4 mux failed: {error}")
+        })
+    })
+}
+
+#[kithara::asset(ext = "mp4", content_type = "audio/mp4")]
+#[case::deck_a_120bpm_48k(0, 220.0)]
+#[case::deck_b_120bpm_48k(1, 880.0)]
+fn rhythm_fmp4_init(index: usize, carrier_hz: f64) -> Vec<u8> {
+    rhythm_fmp4(index, carrier_hz).init_segment.clone()
+}
+
+#[kithara::asset(ext = "m4s", content_type = "audio/mp4")]
+#[case::deck_a_120bpm_48k(0, 220.0)]
+#[case::deck_b_120bpm_48k(1, 880.0)]
+fn rhythm_fmp4_media(index: usize, carrier_hz: f64) -> Vec<u8> {
+    rhythm_fmp4(index, carrier_hz)
+        .media_segments
+        .first()
+        .cloned()
+        .expect("rhythmic fMP4 has one media segment")
+}
+
+/// A saw packaged as a single-segment fMP4 body, the shape a browser hands to
+/// `WebCodecs` when it opens an HE-AAC stream: init segment followed by the
+/// media segment, concatenated.
+///
+/// Embedded because the browser suite reads it and wasm has no store.
+#[kithara::asset(ext = "mp4", content_type = "audio/mp4", embed)]
+#[case::v1(AudioCodec::AacHe, Consts::AAC_HE_BIT_RATE)]
+#[case::v2(AudioCodec::AacHeV2, Consts::AAC_HE_V2_BIT_RATE)]
+fn he_aac(codec: AudioCodec, bit_rate: u64) -> Vec<u8> {
+    let frame_samples = EncoderFactory::frame_samples(codec).unwrap_or_else(|error| {
+        panic!("kithara-test-fixtures: {codec:?} has no packaged frame size: {error}")
+    });
+    let packets = Consts::ONE_SECOND_FRAMES.div_ceil(frame_samples);
+    let pcm = Pcm::new(
+        Consts::SAMPLE_RATE,
+        Consts::CHANNELS,
+        packets * frame_samples,
+        Wave::Sawtooth,
+    );
+    let media_info = MediaInfo::builder()
+        .codec(codec)
+        .container(ContainerFormat::Fmp4)
+        .sample_rate(Consts::SAMPLE_RATE)
+        .channels(Consts::CHANNELS)
+        .build();
+
+    let request = PackagedEncodeRequest::builder()
+        .pcm(&pcm)
+        .media_info(media_info)
+        .timescale(Consts::SAMPLE_RATE)
+        .bit_rate(bit_rate)
+        .packets_per_segment(packets)
+        .encoder_delay(0)
+        .trailing_delay(0)
+        .build();
+    let track = EncoderFactory::encode_packaged(&pools(), &request)
+        .unwrap_or_else(|error| panic!("kithara-test-fixtures: {codec:?} encode failed: {error}"));
+
+    Vec::from(
+        mux_audio_track(&track, GaplessEncoding::None).unwrap_or_else(|error| {
+            panic!("kithara-test-fixtures: {codec:?} fMP4 mux failed: {error}")
+        }),
+    )
+}

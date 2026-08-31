@@ -20,6 +20,7 @@ ignores:
   # constructor is the owner site, not a component reaching for storage.
   - crates/kithara-ui/src/draw/pool/**
   - crates/kithara-devtools/**
+  - crates/kithara-test-fixtures/**
   - crates/kithara-test-macros/**
   - crates/kithara-test-utils/**
   - crates/kithara-workspace-hack/**

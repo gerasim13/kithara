@@ -6,20 +6,18 @@ use crate::fdk::aac_he::{AacHeEncoder, AacHeProfile};
 #[cfg(feature = "ffmpeg")]
 use crate::ffmpeg::{aac::AacFFmpegEncoder, flac::FlacFFmpegEncoder};
 use crate::{
-    BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack, InnerEncoder,
+    BytesEncodeRequest, EncodeError, EncodeResult, EncodedBytes, EncodedTrack,
     PackagedEncodeRequest,
 };
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct OfflineEncoder;
 
-impl InnerEncoder for OfflineEncoder {
-    fn encode_bytes(&self, request: BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
-        super::bytes::encode(&request)
-    }
-}
-
 impl OfflineEncoder {
+    pub(crate) fn encode_bytes(request: &BytesEncodeRequest<'_>) -> EncodeResult<EncodedBytes> {
+        super::bytes::encode(request)
+    }
+
     pub(crate) fn encode_packaged<S>(
         pools: &PoolRegion<S>,
         request: &PackagedEncodeRequest<'_>,
@@ -44,7 +42,7 @@ impl OfflineEncoder {
         }
     }
 
-    pub(crate) fn frame_samples(codec: AudioCodec) -> EncodeResult<usize> {
+    pub(crate) fn packaged_frame_samples(codec: AudioCodec) -> EncodeResult<usize> {
         match codec {
             #[cfg(feature = "ffmpeg")]
             AudioCodec::AacLc => Ok(AacFFmpegEncoder::frame_samples()),

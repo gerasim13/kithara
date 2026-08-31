@@ -10,20 +10,18 @@ use kithara::{
     platform::sync::Arc,
     stream::MediaInfo,
 };
+use kithara_test_fixtures::signal::{self, Pcm, SweepMode, Wave};
 use num_traits::AsPrimitive;
 
 use crate::{
     bufpool_ext::pools,
-    fixture_protocol::{
-        HlsRouteKind, HttpErrorRule, create_wav_init_header, eval_http_error, generate_segment,
-    },
-    fmp4::{PackagedVariantData, mux_audio_track},
+    fixture_protocol::{HlsRouteKind, HttpErrorRule, eval_http_error, generate_segment},
+    fmp4::{PackagedVariantData, mux_packaged_variant},
     hls_spec::{
         HlsSpecError, ResolvedDataMode, ResolvedEncryption, ResolvedHlsSpec, ResolvedInitMode,
         ResolvedPackagedAudioSpec, ResolvedPackagedSignal, ResolvedPackagedVariant,
     },
-    signal_pcm::{Finite, SignalPcm, SweepMode, signal},
-    wav::create_wav_from_signal,
+    test_defaults::frames_in_segments,
 };
 
 pub(crate) type GeneratedHlsCache = RwLock<HashMap<String, Arc<GeneratedHls>>>;
@@ -77,31 +75,6 @@ struct DelayPaddedPcm<'a> {
     inner: &'a dyn PcmSource,
     encoder_delay_frames: usize,
     trailing_delay_frames: usize,
-}
-
-#[derive(Debug)]
-struct OffsetSignal<S> {
-    inner: S,
-    start_frame: usize,
-}
-
-impl<S> OffsetSignal<S> {
-    fn new(inner: S, start_frame: u64) -> Self {
-        Self {
-            inner,
-            start_frame: usize::try_from(start_frame).expect("start_frame must fit usize"),
-        }
-    }
-}
-
-impl<S> signal::SignalFn for OffsetSignal<S>
-where
-    S: signal::SignalFn,
-{
-    fn sample(&self, frame: usize, sample_rate: u32) -> i16 {
-        self.inner
-            .sample(frame.saturating_add(self.start_frame), sample_rate)
-    }
 }
 
 impl DelayPaddedPcm<'_> {
@@ -351,7 +324,7 @@ fn materialize_body(spec: &ResolvedHlsSpec) -> Result<MaterializedHlsBody, HlsSp
                         tracing::info!(key, "cold hls-variant fixture encode");
                         let track = encode_packaged_variant(packaged, variant, segment_frames)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
-                        let data = mux_audio_track(&track, packaged.gapless_encoding)
+                        let data = mux_packaged_variant(&track, packaged.gapless_encoding)
                             .map_err(|error| HlsSpecError::PackagedAudio(error.to_string()))?;
                         cache.store("hls-variant", key.as_bytes(), &encode_variant_blob(&data));
                         Ok(data)
@@ -526,143 +499,41 @@ fn encode_packaged_variant(
         .sample_rate(packaged.sample_rate)
         .channels(packaged.channels)
         .build();
-    let content_length = Finite::new(content_frames);
-    let pools = pools();
 
-    let encode = |pcm: &dyn PcmSource| {
-        EncoderFactory::encode_packaged(
-            &pools,
-            &PackagedEncodeRequest::builder()
-                .pcm(pcm)
-                .packets_per_segment(packets_per_segment)
-                .media_info(media_info.clone())
-                .timescale(packaged.timescale)
-                .bit_rate(variant.bit_rate)
-                .encoder_delay(packaged.encoder_delay)
-                .trailing_delay(aligned_trailing_delay)
-                .build(),
-        )
+    let start_frame = usize::try_from(variant.start_frame).expect("start_frame must fit usize");
+    let wave = match variant.signal {
+        ResolvedPackagedSignal::Sawtooth => Wave::Sawtooth,
+        ResolvedPackagedSignal::SawtoothDescending => Wave::SawtoothDescending,
+        ResolvedPackagedSignal::Silence => Wave::Silence,
+        ResolvedPackagedSignal::Sine { freq_hz } => Wave::sine(freq_hz),
+        ResolvedPackagedSignal::Sweep { start_hz, end_hz } => Wave::sweep(
+            start_hz,
+            end_hz,
+            nominal_content_frames.saturating_add(start_frame),
+            SweepMode::Linear,
+        ),
+        ResolvedPackagedSignal::Pattern(pattern) => pattern.into(),
+    };
+    let sample_rate = packaged.sample_rate;
+    let pcm = Pcm::from_fn(sample_rate, packaged.channels, content_frames, |frame| {
+        wave.sample(frame.saturating_add(start_frame), sample_rate)
+    });
+    let padded = DelayPaddedPcm {
+        inner: &pcm,
+        encoder_delay_frames: packaged.encoder_delay as usize,
+        trailing_delay_frames: aligned_trailing_delay as usize,
     };
 
-    let encode_signal = |pcm: &dyn PcmSource| {
-        let padded = DelayPaddedPcm {
-            inner: pcm,
-            encoder_delay_frames: packaged.encoder_delay as usize,
-            trailing_delay_frames: aligned_trailing_delay as usize,
-        };
-        encode(&padded)
-    };
-
-    match variant.signal {
-        ResolvedPackagedSignal::Sawtooth => {
-            if variant.start_frame == 0 {
-                let pcm = SignalPcm::new(
-                    signal::Sawtooth,
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            } else {
-                let pcm = SignalPcm::new(
-                    OffsetSignal::new(signal::Sawtooth, variant.start_frame),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            }
-        }
-        ResolvedPackagedSignal::SawtoothDescending => {
-            if variant.start_frame == 0 {
-                let pcm = SignalPcm::new(
-                    signal::SawtoothDescending,
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            } else {
-                let pcm = SignalPcm::new(
-                    OffsetSignal::new(signal::SawtoothDescending, variant.start_frame),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            }
-        }
-        ResolvedPackagedSignal::Silence => {
-            if variant.start_frame == 0 {
-                let pcm = SignalPcm::new(
-                    signal::Silence,
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            } else {
-                let pcm = SignalPcm::new(
-                    OffsetSignal::new(signal::Silence, variant.start_frame),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            }
-        }
-        ResolvedPackagedSignal::Sine { freq_hz } => {
-            if variant.start_frame == 0 {
-                let pcm = SignalPcm::new(
-                    signal::SineWave(freq_hz),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            } else {
-                let pcm = SignalPcm::new(
-                    OffsetSignal::new(signal::SineWave(freq_hz), variant.start_frame),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            }
-        }
-        ResolvedPackagedSignal::Sweep { start_hz, end_hz } => {
-            let sweep_frames = nominal_content_frames.saturating_add(
-                usize::try_from(variant.start_frame).expect("start_frame must fit usize"),
-            );
-            let sweep = || signal::Sweep::new(start_hz, end_hz, sweep_frames, SweepMode::Linear);
-            if variant.start_frame == 0 {
-                let pcm = SignalPcm::new(
-                    sweep(),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            } else {
-                let pcm = SignalPcm::new(
-                    OffsetSignal::new(sweep(), variant.start_frame),
-                    packaged.sample_rate,
-                    packaged.channels,
-                    content_length,
-                );
-                encode_signal(&pcm)
-            }
-        }
-        ResolvedPackagedSignal::Pattern(pattern) => {
-            let pcm = SignalPcm::new(
-                pattern,
-                packaged.sample_rate,
-                packaged.channels,
-                content_length,
-            );
-            encode_signal(&pcm)
-        }
-    }
+    let request = PackagedEncodeRequest::builder()
+        .pcm(&padded)
+        .packets_per_segment(packets_per_segment)
+        .media_info(media_info)
+        .timescale(packaged.timescale)
+        .bit_rate(variant.bit_rate)
+        .encoder_delay(packaged.encoder_delay)
+        .trailing_delay(aligned_trailing_delay)
+        .build();
+    EncoderFactory::encode_packaged(&pools(), &request)
 }
 
 fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
@@ -679,12 +550,12 @@ fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
             sample_rate,
             channels,
         } => {
-            let wav = create_wav_from_signal(SignalPcm::new(
-                signal::Sawtooth,
+            let wav = signal::wav(
                 *sample_rate,
                 *channels,
-                Finite::from_segments(spec.segments_per_variant, spec.segment_size, *channels),
-            ));
+                frames_in_segments(spec.segments_per_variant, spec.segment_size, *channels),
+                Wave::Sawtooth,
+            );
             MaterializedDataMode::SharedBytes(Arc::new(wav))
         }
         ResolvedDataMode::PerVariantPcm {
@@ -698,19 +569,12 @@ fn materialize_data_mode(spec: &ResolvedHlsSpec) -> MaterializedDataMode {
                         .get(variant)
                         .copied()
                         .unwrap_or(crate::fixture_protocol::PcmPattern::Ascending);
-                    Arc::new(
-                        SignalPcm::new(
-                            pattern,
-                            *sample_rate,
-                            *channels,
-                            Finite::from_segments(
-                                spec.segments_per_variant,
-                                spec.segment_size,
-                                *channels,
-                            ),
-                        )
-                        .into_vec(),
-                    )
+                    Arc::new(Vec::from(Pcm::new(
+                        *sample_rate,
+                        *channels,
+                        frames_in_segments(spec.segments_per_variant, spec.segment_size, *channels),
+                        pattern.into(),
+                    )))
                 })
                 .collect();
             MaterializedDataMode::PerVariantBytes(bytes)
@@ -747,7 +611,7 @@ fn materialize_init_mode(spec: &ResolvedHlsSpec) -> Vec<Arc<Vec<u8>>> {
             sample_rate,
             channels,
         } => {
-            let header = Arc::new(create_wav_init_header(*sample_rate, *channels));
+            let header = Arc::new(signal::header(*sample_rate, *channels, None));
             vec![header; spec.variant_count]
         }
         ResolvedInitMode::PerVariantBytes(data) => (0..spec.variant_count)

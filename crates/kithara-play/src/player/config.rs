@@ -43,6 +43,13 @@ pub struct PlayerConfig<S> {
     /// How resources created for this player trim leading/trailing audio.
     #[builder(default)]
     pub(crate) gapless_mode: GaplessMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
+    /// in so rendered output never stretches with inserted silence while the
+    /// decode worker catches up. Real-time hosts must keep the default
+    /// (`false`): the audio callback can never block.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Shared ABR controller. When `None`, a default one is created.
     pub(crate) abr: Option<Arc<AbrController>>,
     /// Root event bus for this player.
@@ -84,6 +91,7 @@ impl<S> Clone for PlayerConfig<S> {
             timestretch: Arc::clone(&self.timestretch),
             worker: self.worker.clone(),
             gapless_mode: self.gapless_mode,
+            block_on_underrun: self.block_on_underrun,
             abr: self.abr.clone(),
             bus: self.bus.clone(),
             cancel: self.cancel.clone(),
