@@ -166,7 +166,6 @@ probe = [
 ]
 mock = [
     "kithara-abr?/mock",
-    "kithara-assets?/mock",
     "kithara-audio/mock",
     "kithara-decode/mock",
     "kithara-net?/mock",

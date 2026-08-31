@@ -5,7 +5,10 @@ use bon::Builder;
 use kithara_bufpool::BytePool;
 use kithara_platform::{time::Duration, traits::FromWithParams};
 
-use crate::observe::Observer;
+use crate::{
+    error::{NetError, Retryability},
+    observe::Observer,
+};
 
 bitflags! {
     /// HTTP codings auto-decoded for whole-body native requests.
@@ -133,6 +136,16 @@ impl RetryPolicy {
         }
         let exponential_delay = self.base_delay * BACKOFF_BASE.pow(attempt.saturating_sub(1));
         min(exponential_delay, self.max_delay)
+    }
+
+    /// Whether `attempt` may be retried: budget left and the error is transient.
+    #[must_use]
+    pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
+        if attempt >= self.max_retries {
+            return false;
+        }
+
+        error.retryability() == Retryability::Transient
     }
 }
 

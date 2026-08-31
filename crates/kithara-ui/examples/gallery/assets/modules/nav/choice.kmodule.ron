@@ -1,0 +1,12 @@
+(
+    schema: "kithara.module",
+    version: 1,
+    id: "gallery-nav-choice",
+    parameters: ["icon", "label", "lit"],
+    root: NavItem(
+        id: "item",
+        label: "$label",
+        icon: "$icon",
+        read: Model(id: "$lit"),
+    ),
+)

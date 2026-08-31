@@ -646,6 +646,8 @@ impl Drop for NativeInner {
 
 #[cfg(test)]
 mod tests {
+    use unimock::Unimock;
+
     use super::*;
     use crate::observer::FfiKeyProcessor;
 
@@ -784,15 +786,10 @@ mod tests {
 
     #[kithara::test]
     fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
-        struct DummyProcessor;
-        impl FfiKeyProcessor for DummyProcessor {
-            fn process_key(&self, _key: Vec<u8>, _salt: String) -> Vec<u8> {
-                Vec::new()
-            }
-        }
-
         let inner = NativeInner::new(FfiPlayerConfig::default());
-        inner.setup_hls_aes(Arc::new(DummyProcessor));
+        // Registration must not run the processor: an unstubbed `Unimock`
+        // panics if `setup_hls_aes` calls it.
+        inner.setup_hls_aes(Arc::new(Unimock::new(())));
 
         let salt = inner
             .player_headers

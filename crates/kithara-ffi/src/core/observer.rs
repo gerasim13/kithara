@@ -13,14 +13,12 @@ mod kithara {
 ///
 /// All calls happen on an arbitrary background thread.
 /// Platform bindings must dispatch to the UI thread as needed.
-#[kithara::mock(api = PlayerObserverMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait PlayerObserver: Send + Sync {
     fn on_event(&self, event: FfiPlayerEvent);
 }
 
 /// Receives item-level state changes from Rust.
-#[kithara::mock(api = ItemObserverMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait ItemObserver: Send + Sync {
     fn on_event(&self, event: FfiItemEvent);
@@ -45,6 +43,7 @@ pub trait ItemLoadCallback: Send + Sync {
 /// [`SALT_HEADER`] — implementations that derive a per-session cipher
 /// from the salt should re-build it on every call. Implementations that
 /// hold a pre-built cipher (legacy behaviour) can ignore the argument.
+#[kithara::mock(api = FfiKeyProcessorMock)]
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait FfiKeyProcessor: Send + Sync {
     fn process_key(&self, key: Vec<u8>, salt: String) -> Vec<u8>;
@@ -61,8 +60,6 @@ pub const AUTH_TOKEN_HEADER: &str = "X-Auth-Token";
 
 #[cfg(test)]
 mod tests {
-    use unimock::Unimock;
-
     use super::*;
 
     fn assert_send_sync<T: Send + Sync + ?Sized>() {}
@@ -72,12 +69,5 @@ mod tests {
         assert_send_sync::<dyn PlayerObserver>();
         assert_send_sync::<dyn ItemObserver>();
         assert_send_sync::<dyn SeekCallback>();
-    }
-
-    #[kithara::test]
-    fn observer_mock_apis_are_generated() {
-        let _ = PlayerObserverMock::on_event;
-        let _ = ItemObserverMock::on_event;
-        let _ = Unimock::new(());
     }
 }

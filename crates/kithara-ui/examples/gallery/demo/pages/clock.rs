@@ -13,11 +13,11 @@ const SOURCES: [Source; 8] = [
 
 struct Source {
     id: &'static str,
-    mode: &'static str,
     name: &'static str,
+    tempo: &'static str,
+    mode: &'static str,
     pulse: &'static str,
     stretch: &'static str,
-    tempo: &'static str,
 }
 
 impl Source {
@@ -42,16 +42,15 @@ impl Source {
 
 pub(crate) struct ClockState {
     bpm_label: String,
-    click: bool,
+    source: usize,
     family_step: bool,
+    quantize: bool,
+    snap: bool,
+    click: bool,
     key_locked: bool,
     link: bool,
     midi_send: bool,
-    open: bool,
-    quantize: bool,
-    snap: bool,
     bpm: f64,
-    source: usize,
 }
 
 impl Default for ClockState {
@@ -60,7 +59,6 @@ impl Default for ClockState {
             bpm_label: String::new(),
             source: 0,
             family_step: true,
-            open: true,
             quantize: true,
             snap: true,
             click: false,
@@ -95,8 +93,6 @@ impl ClockState {
             return true;
         }
         match path.rsplit('/').next() {
-            Some("toggle") => self.open = !self.open,
-            Some("pop" | "close") => self.open = false,
             Some("up" | "nudge_up") => self.step(0.01),
             Some("down" | "nudge_down") => self.step(-0.01),
             Some("step") => self.family_step = true,
@@ -120,7 +116,6 @@ impl ClockState {
         let source = scope_value(scope, "source")
             .and_then(|id| SOURCES.iter().find(|source| source.id == id));
         let value = match id {
-            "clock.open" => ReadValue::Bool(self.open),
             "clock.bpm" => ReadValue::Text(&self.bpm_label),
             "clock.source" => ReadValue::Text(SOURCES[self.source].name),
             "clock.warning" => ReadValue::Text("ALL SOURCES STABLE"),
@@ -150,8 +145,8 @@ impl ClockState {
         Some(value)
     }
 
-    fn rebuild(&mut self) {
-        self.bpm_label = format!("{:.2}", self.bpm);
+    pub(crate) fn step(&mut self, steps: f64) {
+        self.set_bpm(self.bpm + steps);
     }
 
     fn set_bpm(&mut self, bpm: f64) {
@@ -159,12 +154,8 @@ impl ClockState {
         self.rebuild();
     }
 
-    pub(crate) const fn set_open(&mut self, open: bool) {
-        self.open = open;
-    }
-
-    pub(crate) fn step(&mut self, steps: f64) {
-        self.set_bpm(self.bpm + steps);
+    fn rebuild(&mut self) {
+        self.bpm_label = format!("{:.2}", self.bpm);
     }
 }
 

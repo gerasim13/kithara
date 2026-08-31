@@ -33,6 +33,10 @@ pub(super) struct Context<'a> {
     pub(super) set: &'a ModuleSet,
     pub(super) text: &'a TextDoc,
     pub(super) args: BTreeMap<String, String>,
+    /// The module instance this expansion belongs to, which every include
+    /// under it shares. State a document keeps is named under it, so a close
+    /// button an included surface carries turns the flag its includer reads.
+    pub(super) instance: String,
     pub(super) origin: SourceUri,
     pub(super) prefix: String,
 }
@@ -59,7 +63,7 @@ impl Context<'_> {
         binding: &BindingRef,
         path: &str,
     ) -> Result<BindingRef, UiDocError> {
-        substitute_binding(&self.args, &self.origin, binding, path)
+        substitute_binding(&self.args, &self.origin, binding, path, &self.instance)
     }
 }
 
@@ -115,12 +119,21 @@ impl<'m, 'v> Expander<'m, 'v> {
         })?;
         self.address.clear();
         self.includes.clear();
-        let root = expand_at(set, entry, args.clone(), prefix.to_owned(), 0, self)?;
+        let root = expand_at(
+            set,
+            entry,
+            args.clone(),
+            prefix.to_owned(),
+            prefix.to_owned(),
+            0,
+            self,
+        )?;
         let context = Context {
             set,
             text: self.text,
             origin: entry.clone(),
             args: args.clone(),
+            instance: prefix.to_owned(),
             prefix: prefix.to_owned(),
         };
         let footer = doc
@@ -188,6 +201,7 @@ pub(super) fn expand_at(
     uri: &SourceUri,
     args: BTreeMap<String, String>,
     prefix: String,
+    instance: String,
     depth: usize,
     machine: &mut Expander<'_, '_>,
 ) -> Result<ExpandedNode, UiDocError> {
@@ -214,6 +228,7 @@ pub(super) fn expand_at(
     let context = Context {
         set,
         args,
+        instance,
         prefix,
         text: machine.text,
         origin: uri.clone(),

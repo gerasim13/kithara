@@ -21,6 +21,7 @@ use crate::{
     },
     shaping::TextContext,
     source::{MemResolver, UiConfig},
+    view,
 };
 
 /// A document naming content the toolkit does not own, so both hosts have to
@@ -38,29 +39,8 @@ impl Extension {
     /// Padding the extension adds around what it shaped.
     const PAD: f32 = 4.0;
 
-    /// The size the extension asks for, shaped outside either host so a box
-    /// both hosts got wrong the same way cannot pass for agreement.
-    fn asked() -> Size2 {
-        let (width, height) = Self::CASE;
-        let mut context = TextContext::from(builtin::skin().text_resources());
-        Caption.measure(
-            &mut TextMeasurer::new(&mut context),
-            SizeLimits::new(Size2::default(), Size2::new(width.as_(), height.as_())),
-        )
-    }
-
-    fn compiled() -> CompiledUi {
-        compile(
-            "extension.klayout.ron",
-            &Self::document(),
-            &Endpoints::default(),
-            builtin::skin_doc(),
-            builtin::text_doc(),
-            &UiConfig::builder()
-                .custom_kinds([Self::KIND.to_owned()].into_iter().collect())
-                .build(),
-        )
-        .unwrap_or_else(|error| panic!("the extension fixture must compile: {error}"))
+    fn kinds() -> CustomKinds {
+        CustomKinds::default().with(Self::KIND, || Caption, |()| UiEvent::OpenSettings)
     }
 
     fn document() -> MemResolver {
@@ -82,40 +62,30 @@ impl Extension {
         resolver
     }
 
-    fn kinds() -> CustomKinds {
-        CustomKinds::default().with(Self::KIND, || Caption, |()| UiEvent::OpenSettings)
+    fn compiled() -> CompiledUi {
+        compile(
+            "extension.klayout.ron",
+            &Self::document(),
+            &Endpoints::default(),
+            builtin::skin_doc(),
+            builtin::text_doc(),
+            &UiConfig::builder()
+                .custom_kinds([Self::KIND.to_owned()].into_iter().collect())
+                .build(),
+            &view::EMPTY,
+        )
+        .unwrap_or_else(|error| panic!("the extension fixture must compile: {error}"))
     }
 
-    /// The box the immediate host measured the extension into.
-    fn neutral() -> Rect {
+    /// The size the extension asks for, shaped outside either host so a box
+    /// both hosts got wrong the same way cannot pass for agreement.
+    fn asked() -> Size2 {
         let (width, height) = Self::CASE;
-        let ui = Self::compiled();
-        let kinds = Self::kinds();
-        let renderer = renderer();
-        let viewport = Size::new(width.as_(), height.as_());
-        let mut element = tree::render(
-            &ui.root,
-            &ui,
-            &Page,
-            builtin::skin(),
-            Clock::default(),
-            Some(&kinds),
-        );
-        let mut state = Tree::new(element.as_widget());
-        let node = element.as_widget_mut().layout(
-            &mut state,
-            &renderer,
-            &Limits::new(Size::ZERO, viewport),
-        );
-        let mut rows = Vec::new();
-        collect_rows(Layout::new(&node), &mut rows);
-        let [drawn] = rows[..] else {
-            panic!(
-                "the extension page holds one leaf, and the immediate host laid out {}",
-                rows.len()
-            )
-        };
-        drawn
+        let mut context = TextContext::from(builtin::skin().text_resources());
+        Caption.measure(
+            &mut TextMeasurer::new(&mut context),
+            SizeLimits::new(Size2::default(), Size2::new(width.as_(), height.as_())),
+        )
     }
 
     /// The box the retained host measured the extension into.
@@ -139,7 +109,40 @@ impl Extension {
         ui.scene()
             .unwrap_or_else(|error| panic!("the retained host must draw the extension: {error}"));
         ui.rect_of("page/drawn")
-            .expect("the extension must be laid out")
+            .unwrap_or_else(|| panic!("the extension must be laid out"))
+    }
+
+    /// The box the immediate host measured the extension into.
+    fn neutral() -> Rect {
+        let (width, height) = Self::CASE;
+        let ui = Self::compiled();
+        let kinds = Self::kinds();
+        let renderer = renderer();
+        let viewport = Size::new(width.as_(), height.as_());
+        let mut element = tree::render(
+            &ui.root,
+            &ui,
+            &Page,
+            &view::EMPTY,
+            builtin::skin(),
+            Clock::default(),
+            Some(&kinds),
+        );
+        let mut state = Tree::new(element.as_widget());
+        let node = element.as_widget_mut().layout(
+            &mut state,
+            &renderer,
+            &Limits::new(Size::ZERO, viewport),
+        );
+        let mut rows = Vec::new();
+        collect_rows(Layout::new(&node), &mut rows);
+        let [drawn] = rows[..] else {
+            panic!(
+                "the extension page holds one leaf, and the immediate host laid out {}",
+                rows.len()
+            )
+        };
+        drawn
     }
 }
 
@@ -153,16 +156,16 @@ impl Reads for Page {
 }
 
 impl App for Page {
+    fn skin(&self) -> &Skin {
+        builtin::skin()
+    }
+
     fn document(&self) -> &str {
         "extension.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        builtin::skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}

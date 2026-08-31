@@ -21,6 +21,15 @@ pub struct InstanceId(pub String);
 #[serde(transparent)]
 pub struct EndpointId(pub String);
 
+/// The name of one piece of state the view keeps for itself.
+///
+/// A state is not an endpoint: no application declares it, answers it, or is
+/// told when it moves. It is named apart from [`EndpointId`] so that a document
+/// binding to one cannot be read as binding to the other.
+#[derive(Clone, Debug, Display, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StateId(pub String);
+
 /// What a screen is for, as the application asks for it and a package answers.
 ///
 /// A package names the file behind each role, so renaming a file inside a

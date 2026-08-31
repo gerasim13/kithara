@@ -176,6 +176,10 @@ pub struct CiReportConfig {
     pub crap_rows: usize,
     /// Contours listed under the architecture complexity index, worst first.
     pub top_contours: usize,
+    /// Lines of the duplication report carried into the report. It leads with
+    /// the crate-level map and the explainable candidates, which is the part
+    /// worth reading without opening the artifact.
+    pub similarity_rows: usize,
 }
 
 impl Default for CiReportConfig {
@@ -183,6 +187,7 @@ impl Default for CiReportConfig {
         Self {
             crap_rows: 120,
             top_contours: 10,
+            similarity_rows: 80,
         }
     }
 }
@@ -357,6 +362,9 @@ fn default_perf_nextest_profile() -> String {
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
     pub lanes: BTreeMap<String, TestLaneConfig>,
+    /// Paths that belong to no single lane: a change to one of them runs every
+    /// lane that declares `owns`, because the routing itself moved.
+    pub shared_paths: Vec<String>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,
     pub default_lane: String,
@@ -403,6 +411,10 @@ pub struct TestLaneConfig {
     /// the lane rather than by whatever the caller happened to export.
     pub env: BTreeMap<String, String>,
     pub default_flash: Option<bool>,
+    /// Source prefixes this lane is the test for. `just test run --touched`
+    /// runs the lane when the branch changed a path under one of them; a lane
+    /// that owns nothing is never selected that way.
+    pub owns: Vec<String>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,

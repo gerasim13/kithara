@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     env,
     fs::{File, create_dir_all},
     io::BufWriter,
@@ -14,6 +15,7 @@ use super::{App, Config, RunError, Ui, scenario::Scenario};
 use crate::{
     builtin,
     draw::{Pt, Rect, Rgba},
+    error::UiDocError,
     ids::{DocId, EndpointId, SourceUri},
     interact::{Input, Key, MOUSE, Modifiers, PointerInput, PointerPhase, Scroll},
     registry::{EndpointCategory, EndpointDesc, EndpointRegistry, ValueKind},
@@ -22,7 +24,8 @@ use crate::{
         document::{Clock, Ctx},
     },
     shaping::FontPolicy,
-    source::MemResolver,
+    source::{LoadedBytes, LoadedSource, MemResolver, SourceResolver},
+    view,
 };
 
 /// A registry that answers for the one endpoint the fixture binds to.
@@ -49,6 +52,10 @@ impl Reads for Swapper {
 }
 
 impl App for Swapper {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         if self.lit {
             "lit.klayout.ron"
@@ -59,10 +66,6 @@ impl App for Swapper {
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -79,17 +82,17 @@ impl App for Swapper {
 /// wears is the player's to decide, so switching one at runtime is this and
 /// nothing more.
 struct Dresser<'a> {
+    lit: bool,
     off: &'a Skin,
     on: &'a Skin,
-    lit: bool,
 }
 
 impl<'a> Dresser<'a> {
     const fn wearing(off: &'a Skin, on: &'a Skin) -> Self {
         Self {
+            lit: false,
             off,
             on,
-            lit: false,
         }
     }
 }
@@ -107,12 +110,12 @@ impl App for Dresser<'_> {
         "dim.klayout.ron"
     }
 
-    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
-        with(self)
-    }
-
     fn skin(&self) -> &Skin {
         if self.lit { self.on } else { self.off }
+    }
+
+    fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
+        with(self)
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -156,16 +159,16 @@ impl Reads for Dial {
 }
 
 impl App for Dial {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -189,16 +192,16 @@ impl Reads for TickingDial {
 }
 
 impl App for TickingDial {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn tick(&mut self) {
@@ -221,16 +224,16 @@ impl Reads for Typed {
 }
 
 impl App for Typed {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -250,16 +253,16 @@ impl Reads for Board {
 }
 
 impl App for Board {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "board.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}
@@ -309,16 +312,16 @@ impl Reads for InteractionBoard {
 }
 
 impl App for InteractionBoard {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "interactions.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -479,27 +482,19 @@ fn drag(control: &Draggable) -> Dragged {
 /// Counts every source the compiler read, so a test can see whether the
 /// document was compiled again at all.
 struct Counted<'a> {
-    inner: &'a dyn crate::source::SourceResolver,
-    loads: std::cell::Cell<usize>,
+    inner: &'a dyn SourceResolver,
+    loads: Cell<usize>,
 }
 
-impl crate::source::SourceResolver for Counted<'_> {
-    fn bytes(
-        &self,
-        base: Option<&SourceUri>,
-        rel: &str,
-    ) -> Result<crate::source::LoadedBytes, crate::error::UiDocError> {
-        self.loads.set(self.loads.get() + 1);
-        self.inner.bytes(base, rel)
-    }
-
-    fn load(
-        &self,
-        base: Option<&SourceUri>,
-        rel: &str,
-    ) -> Result<crate::source::LoadedSource, crate::error::UiDocError> {
+impl SourceResolver for Counted<'_> {
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
         self.loads.set(self.loads.get() + 1);
         self.inner.load(base, rel)
+    }
+
+    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
+        self.loads.set(self.loads.get() + 1);
+        self.inner.bytes(base, rel)
     }
 }
 
@@ -745,7 +740,7 @@ fn turning_to_another_skin_compiles_the_document_again() {
     let inner = resolver();
     let resolver = Counted {
         inner: &inner,
-        loads: std::cell::Cell::new(0),
+        loads: Cell::new(0),
     };
     let blue = page_skin("fixture-blue", "#123456");
     let mut scenario = Scenario::mount(
@@ -779,7 +774,7 @@ fn moving_a_control_does_not_compile_the_document_again() {
     );
     let resolver = Counted {
         inner: &inner,
-        loads: std::cell::Cell::new(0),
+        loads: Cell::new(0),
     };
     let mut ui = Ui::new(
         Dial::new(false),
@@ -975,9 +970,9 @@ fn a_hover_hands_the_runner_the_cursor_under_the_pointer() {
 /// reached the control the menu keeps inside itself.
 #[derive(Default)]
 struct Menu {
-    group: bool,
     open: bool,
     picked: bool,
+    group: bool,
 }
 
 impl Reads for Menu {
@@ -992,16 +987,16 @@ impl Reads for Menu {
 }
 
 impl App for Menu {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -1490,16 +1485,16 @@ impl Reads for Bare {
 }
 
 impl App for Bare {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}
@@ -1567,16 +1562,16 @@ impl Reads for Stepped {
 }
 
 impl App for Stepped {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -1645,16 +1640,16 @@ impl Reads for Carry {
 }
 
 impl App for Carry {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "carry.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -2262,9 +2257,16 @@ fn the_masonry_root_under_the_app_layer_publishes_the_same_press() {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("fixture must compile: {error}"));
-    let ctx = Ctx::new(&ui, &reads, builtin::skin_doc(), Clock::default());
+    let ctx = Ctx::new(
+        &ui,
+        &reads,
+        &view::EMPTY,
+        builtin::skin_doc(),
+        Clock::default(),
+    );
     let host = MasonryHost::new(ctx, skin());
     let node = document::render(&ui.root, ctx, host);
     let mut root = crate::render::masonry::MasonryRoot::new(
@@ -2377,16 +2379,16 @@ impl Reads for Pages {
 }
 
 impl App for Pages {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "pages.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -2471,8 +2473,8 @@ fn a_row_a_window_scrolled_into_view_answers_its_own_press() {
 /// An application showing one reading, which either keeps moving - the way a
 /// meter fed from somewhere else does - or settles and stays put.
 struct Reading {
-    shown: String,
     moves: bool,
+    shown: String,
 }
 
 impl Reading {
@@ -2492,16 +2494,16 @@ impl Reads for Reading {
 }
 
 impl App for Reading {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         "one.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn tick(&mut self) {
@@ -2587,6 +2589,10 @@ impl Reads for Pager {
 }
 
 impl App for Pager {
+    fn skin(&self) -> &Skin {
+        skin()
+    }
+
     fn document(&self) -> &str {
         if self.second {
             "second.klayout.ron"
@@ -2597,10 +2603,6 @@ impl App for Pager {
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
-    }
-
-    fn skin(&self) -> &Skin {
-        skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -2665,5 +2667,326 @@ fn a_list_scrolled_to_a_row_stays_there_when_the_row_turns_the_page() {
         scenario.rect_of(&last),
         Some(scrolled),
         "the page the list turned to must show the list where it was scrolled to"
+    );
+}
+
+/// A registry that declares nothing at all, so a document that mounts under it
+/// is one no endpoint of any application answers for.
+struct NoEndpoints;
+
+impl EndpointRegistry for NoEndpoints {
+    fn endpoint(&self, _category: EndpointCategory, _id: &EndpointId) -> Option<&EndpointDesc> {
+        None
+    }
+}
+
+/// A burger with a menu on it, opening and shutting on state the document names
+/// for itself. No application declares the state, answers it, or is asked.
+const VIEW_MENU: &str = r#"Popover(id: "menu", open: View(id: "menu"), align: Start,
+    anchor: Pressable(id: "burger", press: View(id: "menu"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0)))))"#;
+
+/// Mounts the view-state menu under a registry that declares nothing.
+fn view_menu(control: &str) -> (NoEndpoints, MemResolver) {
+    (NoEndpoints, one_control(control))
+}
+
+/// A popover is the standard piece of screen furniture that cost an application
+/// three endpoints to own: a flag to read and two commands to turn it. The
+/// document names the flag itself, and nothing of the application is involved.
+#[kithara::test]
+fn a_menu_opens_on_state_no_endpoint_declares() {
+    let (endpoints, resolver) = view_menu(VIEW_MENU);
+    let mut scenario = Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+
+    assert!(
+        !scenario.view().flag("demo/menu"),
+        "a screen that has been pressed nowhere must hold the menu shut"
+    );
+    assert_eq!(
+        scenario.rect_of("demo/content").map(|rect| rect.w),
+        Some(0.0),
+        "the shut menu must cover none of the screen"
+    );
+
+    // The press lands on the spacer the anchor wraps, which is the only part of
+    // a pressable that has a size of its own.
+    scenario.click("demo/anchor");
+
+    assert!(
+        scenario.view().flag("demo/menu"),
+        "the press must turn the state the document named for itself"
+    );
+    assert_eq!(
+        scenario.rect_of("demo/content").map(|rect| rect.w),
+        Some(100.0),
+        "the opened menu must cover the width its content asked for"
+    );
+
+    scenario.click("demo/anchor");
+
+    assert!(
+        !scenario.view().flag("demo/menu"),
+        "the second press must turn the same state back"
+    );
+}
+
+/// The state a press turns is told to the application all the same: what the
+/// document does for itself is not hidden from the host that owns it.
+#[kithara::test]
+fn a_view_press_is_still_published() {
+    let (endpoints, resolver) = view_menu(VIEW_MENU);
+    let mut scenario = Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    let mark = scenario.published().len();
+
+    scenario.click("demo/anchor");
+
+    assert_eq!(
+        &scenario.published()[mark..],
+        [UiEvent::Control {
+            path: "demo/burger".to_owned(),
+            action: ControlAction::Activate,
+        }],
+    );
+}
+
+/// A state written under one name and read under another leaves the one meant
+/// unwritten and the one typed unread, which is a misspelling rather than a
+/// screen. Nothing reads it, so nothing would show the mistake at runtime.
+#[kithara::test]
+fn a_state_written_and_never_read_is_refused() {
+    let (endpoints, resolver) = view_menu(
+        r#"Popover(id: "menu", open: View(id: "menu"), align: Start,
+    anchor: Pressable(id: "burger", press: View(id: "meun"),
+        child: Spacer(id: "anchor", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+    content: Spacer(id: "content", size: Some((w: Fixed(100.0), h: Fixed(60.0)))))"#,
+    );
+    let error = Ui::new(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+    .err()
+    .unwrap_or_else(|| panic!("a state written and never read must not compile"));
+
+    assert!(
+        matches!(
+            &error,
+            RunError::Document(UiDocError::UnreadState { id, path, .. })
+                if id == "demo/meun" && path == "demo/burger"
+        ),
+        "{error}"
+    );
+}
+
+/// A press away from an open popover is how a menu is dismissed, and the
+/// popover publishes that on its own path. The state it reads for whether it
+/// stands open is the state that dismissal shuts, without the document saying
+/// twice what a popover already is.
+#[kithara::test]
+fn a_press_away_shuts_a_menu_that_keeps_its_own_state() {
+    let (endpoints, resolver) = view_menu(VIEW_MENU);
+    let mut scenario = Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&endpoints)
+            .resolver(&resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    );
+    scenario.click("demo/anchor");
+    assert!(
+        scenario.view().flag("demo/menu"),
+        "the menu must open first"
+    );
+
+    // A press away from both the burger and the surface is the dismissal.
+    scenario.click_at(Pt { x: 200.0, y: 100.0 });
+
+    assert!(
+        !scenario.view().flag("demo/menu"),
+        "the dismissal must shut the state the popover reads"
+    );
+}
+
+/// A layout whose body is a `Tabs`: the nav that turns it and the pages it
+/// turns between are separate documents, and the state they share is the
+/// screen's rather than either instance's.
+fn tabbed() -> MemResolver {
+    let mut resolver = MemResolver::default();
+    resolver.insert(
+        "one.klayout.ron",
+        r#"(schema: "kithara.layout", version: 1, id: "tabbed",
+            root: Split(axis: Vertical, children: [
+                (weight: 1.0, node: Module(instance: "nav", source: "nav.kmodule.ron",
+                    size: (w: Fill, h: Fixed(20.0)))),
+                (weight: 1.0, node: Tabs(state: "shown", initial: "one", pages: {
+                    "one": Module(instance: "one", source: "one.kmodule.ron",
+                        size: (w: Fill, h: Fill)),
+                    "two": Module(instance: "two", source: "two.kmodule.ron",
+                        size: (w: Fill, h: Fill)),
+                })),
+            ]))"#,
+    );
+    resolver.insert(
+        "nav.kmodule.ron",
+        r#"(schema: "kithara.module", version: 1, id: "nav", chrome: Plain,
+            root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                Pressable(id: "one", press: Page(id: "/shown", name: "one"),
+                    child: Spacer(id: "one-hit", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+                Pressable(id: "two", press: Page(id: "/shown", name: "two"),
+                    child: Spacer(id: "two-hit", size: Some((w: Fixed(40.0), h: Fixed(20.0))))),
+            ]))"#,
+    );
+    for (source, id, width) in [
+        ("one.kmodule.ron", "page-one", 30.0_f32),
+        ("two.kmodule.ron", "page-two", 60.0_f32),
+    ] {
+        resolver.insert(
+            source,
+            &format!(
+                r#"(schema: "kithara.module", version: 1, id: "{id}", chrome: Plain,
+                    root: Row(size: (w: Fill, h: Fill), gap: 0.0, pad: 0.0, children: [
+                        Spacer(id: "body", size: Some((w: Fixed({width:.1}), h: Fixed(10.0)))),
+                    ]))"#
+            ),
+        );
+    }
+    resolver
+}
+
+/// Counts what a host asks for, so a test can tell a page compiled from a page
+/// shown again out of the screens the host kept.
+struct Counting<'a> {
+    inner: &'a MemResolver,
+    loads: Cell<usize>,
+}
+
+impl<'a> Counting<'a> {
+    fn new(inner: &'a MemResolver) -> Self {
+        Self {
+            inner,
+            loads: Cell::new(0),
+        }
+    }
+
+    fn loads(&self) -> usize {
+        self.loads.get()
+    }
+}
+
+impl SourceResolver for Counting<'_> {
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
+        self.loads.set(self.loads.get() + 1);
+        self.inner.load(base, rel)
+    }
+
+    fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
+        self.inner.bytes(base, rel)
+    }
+}
+
+fn tabbed_scenario<'a>(resolver: &'a Counting<'a>) -> Scenario<'a, Bare> {
+    Scenario::mount(
+        Bare,
+        Config::builder()
+            .endpoints(&NoEndpoints)
+            .resolver(resolver)
+            .text(builtin::text_doc())
+            .build(),
+        (240, 120),
+        1.0,
+    )
+}
+
+/// Turning a tab costs a document one node and no application code at all: the
+/// press names the page, the `Tabs` shows it, and nothing is asked of the
+/// application in between.
+#[kithara::test]
+fn a_press_turns_the_page_a_tabs_shows() {
+    let mem = tabbed();
+    let resolver = Counting::new(&mem);
+    let mut scenario = tabbed_scenario(&resolver);
+
+    assert_eq!(
+        scenario.rect_of("one/body").map(|rect| rect.w),
+        Some(30.0),
+        "a screen pressed nowhere must stand at the page the document calls initial"
+    );
+
+    scenario.click("nav/two-hit");
+
+    assert_eq!(
+        scenario.view().page("shown"),
+        Some("two"),
+        "the press must stand the screen's own state at the page it names"
+    );
+    assert_eq!(
+        scenario.rect_of("two/body").map(|rect| rect.w),
+        Some(60.0),
+        "the page standing must be the one on screen"
+    );
+    assert_eq!(
+        scenario.rect_of("one/body"),
+        None,
+        "the page left must be gone rather than mounted behind the one shown"
+    );
+}
+
+/// The pages a `Tabs` does not stand at are documents this screen never reads:
+/// only the one standing is compiled, and turning back to a page already
+/// visited compiles nothing at all.
+#[kithara::test]
+fn only_the_standing_page_is_compiled() {
+    let mem = tabbed();
+    let resolver = Counting::new(&mem);
+    let mut scenario = tabbed_scenario(&resolver);
+    let mark = resolver.loads();
+
+    scenario.click("nav/two-hit");
+    let turned = resolver.loads();
+    assert!(
+        turned > mark,
+        "the page turned to must be loaded when it is first shown"
+    );
+
+    scenario.click("nav/one-hit");
+    scenario.click("nav/two-hit");
+
+    assert_eq!(
+        resolver.loads(),
+        turned,
+        "a page already compiled must be shown again without being loaded again"
+    );
+    assert_eq!(
+        scenario.rect_of("two/body").map(|rect| rect.w),
+        Some(60.0),
+        "the screen kept must be the page it was compiled for"
     );
 }

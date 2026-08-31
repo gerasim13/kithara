@@ -36,10 +36,10 @@ fn encode(
     bit_rate: Option<u64>,
 ) -> Vec<u8> {
     let pcm = Pcm::new(sample_rate, channels, total_frames, wave);
-    EncoderFactory::encode_bytes(BytesEncodeRequest {
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
         target,
         bit_rate,
-        pcm: &pcm,
     })
     .unwrap_or_else(|error| panic!("kithara-test-fixtures: {target:?} encode failed: {error}"))
     .bytes
@@ -187,6 +187,10 @@ fn signal_wav(wave: Wave, sample_rate: u32, channels: u16, total_frames: usize) 
     Consts::FRAMES_162S_48K,
     None
 )]
+// A chirp reads differently at every position, which a steady tone does not.
+// The multi-deck mixing tests place several decks in one body at different
+// offsets and need their stems to stay independent; the two directions give
+// them a second such body that never matches the first.
 #[case::sweep_up_60s(
     Wave::sweep(200.0, 2_000.0, Consts::FRAMES_60S_44K1, SweepMode::Linear),
     Consts::RATE_44K1,

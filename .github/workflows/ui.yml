@@ -1,11 +1,10 @@
 name: UI
 
 # UI tests are isolated from the general workspace suite: unit and integration
-# targets, real GPU rendering, and host screenshots all run here. A fork push
-# is safe because only the repository owner may reach the self-hosted graphics
-# runner.
+# targets, real GPU rendering, and host screenshots all run here. Two hours of
+# a runner pool one machine deep is not a per-push cost, so the night starts it
+# through `dispatch.yml` and a hand can start it here.
 on:
-  push:
   workflow_call:
   workflow_dispatch:
 
@@ -28,8 +27,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Named directly rather than through the role fan-out: this lane wants a
+      # runner pool of its own, and `run.yml` schedules onto the one Linux pool
+      # every other lane shares. `deep-ui` therefore claims no pipeline kind -
+      # nothing selects it - and this is the one caller that runs it.
       - name: Run every UI test and photograph both hosts
-        run: just test ui
+        run: just ci lane deep-ui --kind nightly
 
       - name: Upload both hosts, shipped studios, and difference masks
         if: always()

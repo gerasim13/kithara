@@ -25,6 +25,7 @@ use kithara_ui::{
     },
     size::SizeSpec,
     source::UiConfig,
+    view,
 };
 
 /// One placement, as the host was handed it.
@@ -219,6 +220,7 @@ fn document(children: &str) -> CompiledUi {
         builtin::skin_doc(),
         builtin::text_doc(),
         &UiConfig::default(),
+        &view::EMPTY,
     )
     .unwrap_or_else(|error| panic!("the fixture must compile: {error}"))
 }
@@ -228,7 +230,13 @@ fn mounted(children: &str, reads: &Points) -> Vec<Mounted> {
 
     render(
         &ui.root,
-        Ctx::new(&ui, reads, builtin::skin_doc(), Clock::default()),
+        Ctx::new(
+            &ui,
+            reads,
+            &view::EMPTY,
+            builtin::skin_doc(),
+            Clock::default(),
+        ),
         Spy { ui: &ui },
     )
 }

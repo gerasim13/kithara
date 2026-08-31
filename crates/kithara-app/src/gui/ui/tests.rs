@@ -7,9 +7,10 @@ use kithara_ui::{
     error::UiDocError,
     expand::{ControlSpec, ExpandedNode},
     ids::SourceUri,
-    module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, WaveStyle},
+    module::{ButtonStyle, IconName, MeasureAxis, TextAlign, TextStyle, ViewSet, WaveStyle},
     render::{Clock, ReadValue, Reads, tree},
     size::{Dim, SizeSpec, control_size},
+    view,
 };
 
 use super::{
@@ -835,6 +836,7 @@ impl BandReads {
             &ui.root,
             &ui,
             &reads,
+            &view::EMPTY,
             builtin::skin(),
             Clock::default(),
             None,
@@ -1347,16 +1349,27 @@ fn every_air_control_hides_with_the_packager() {
 }
 
 /// The burger the bar carries as its first cell: one press target per command
-/// the menu offers, plus the popover that reads the state it dismisses.
+/// the menu offers, plus the surface it opens - which costs the application no
+/// endpoint at all, because whether a menu stands open is not its business.
 #[kithara::test]
 fn the_bar_carries_the_app_menu() {
     for layout in LAYOUTS {
         let ui = compile_ui(layout).unwrap();
         let pressed = pressables(&ui);
 
+        for (path, set) in [
+            ("bar/menu/burger", ViewSet::Toggle),
+            ("bar/menu/header-close", ViewSet::Off),
+            ("bar/menu/pop", ViewSet::Off),
+        ] {
+            assert_eq!(
+                ui.views().at(path),
+                Some(("bar/menu", view::ViewWrite::Flag(set))),
+                "{layout:?}: `{path}` must turn the menu's own state",
+            );
+        }
+
         for (path, key) in [
-            ("bar/menu/burger", "ui.menu.toggle"),
-            ("bar/menu/header-close", "ui.menu.close"),
             ("bar/menu/layouts-head", "ui.menu.toggle_group@group=lay"),
             ("bar/menu/layout-1/apply", "ui.layout.apply@layout=1"),
             ("bar/menu/layout-2/apply", "ui.layout.apply@layout=2"),
@@ -1368,11 +1381,6 @@ fn the_bar_carries_the_app_menu() {
                 "{layout:?}: `{path}` must press `{key}`, got {pressed:?}",
             );
         }
-
-        assert!(
-            controls(&ui).contains(&("bar/menu/pop", vec!["ui.menu.open"])),
-            "{layout:?}: the popover must read the state its dismissal writes",
-        );
     }
 }
 

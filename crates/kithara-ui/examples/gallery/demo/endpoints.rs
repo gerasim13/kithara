@@ -11,7 +11,6 @@ use super::{
     pages::{mixer, stress},
     reads::FONT_FAMILIES,
 };
-use crate::sections;
 
 #[derive(Default)]
 pub(crate) struct DemoRegistry {
@@ -107,7 +106,6 @@ fn insert_deck_endpoints(registry: &mut DemoRegistry) {
 
 fn insert_clock_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
-        ("clock.open", ValueKind::Bool),
         ("clock.bpm", ValueKind::Text),
         ("clock.source", ValueKind::Text),
         ("clock.warning", ValueKind::Text),
@@ -153,8 +151,6 @@ fn insert_clock_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for id in [
-        "clock.toggle",
-        "clock.close",
         "clock.nudge_up",
         "clock.nudge_down",
         "clock.family.step",
@@ -332,6 +328,8 @@ pub(crate) fn registry() -> impl EndpointRegistry {
             EndpointDesc::new(ValueKind::Scalar),
         );
     }
+    // The document shader binds these by name; the page is a capture fixture, so
+    // they hold still rather than animating.
     for id in ["shader.energy", "shader.level"] {
         registry.insert(
             EndpointCategory::Model,
@@ -442,6 +440,8 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
         "gallery.motion.clock",
         EndpointDesc::new(ValueKind::Scalar),
     );
+    // One second per frame of the sheet, held still, and the scrub the fader
+    // beside the played sprite writes.
     for id in [
         "gallery.sprite.frame.0",
         "gallery.sprite.frame.1",
@@ -478,21 +478,7 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
-    for id in sections::pages()
-        .iter()
-        .map(|tab| format!("gallery.tab.{tab}"))
-        .chain(
-            sections::modules()
-                .iter()
-                .map(|demo| format!("gallery.module.{demo}")),
-        )
-    {
-        registry.insert(
-            EndpointCategory::Model,
-            &id,
-            EndpointDesc::new(ValueKind::Bool),
-        );
-    }
+    // Named from the shipped skins themselves, for the same reason.
     for skin in builtin::skins() {
         registry.insert(
             EndpointCategory::Model,
@@ -500,6 +486,8 @@ fn insert_page_endpoints(registry: &mut DemoRegistry) {
             EndpointDesc::new(ValueKind::Bool),
         );
     }
+    // The specimen switch reads two answers per family: whether it is the one
+    // chosen, which lights its item, and whether its block stays folded away.
     for family in FONT_FAMILIES {
         for id in [
             format!("gallery.font.{family}"),
@@ -536,7 +524,6 @@ fn insert_table_endpoints(registry: &mut DemoRegistry) {
 
 fn insert_menu_endpoints(registry: &mut DemoRegistry) {
     for (id, kind) in [
-        ("ui.menu.open", ValueKind::Bool),
         ("ui.window.can_open", ValueKind::Bool),
         ("ui.prefs.wave_follow", ValueKind::Bool),
         ("ui.prefs.autogain", ValueKind::Bool),
@@ -577,8 +564,6 @@ fn insert_menu_endpoints(registry: &mut DemoRegistry) {
         );
     }
     for id in [
-        "ui.menu.toggle",
-        "ui.menu.close",
         "ui.window.open",
         "ui.window.toggle_full_screen",
         "ui.prefs.toggle_wave_follow",

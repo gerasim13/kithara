@@ -8,6 +8,7 @@ use kithara_ui::{
     ids::SourceUri,
     render::{Clock, Walk, tree},
     source::UiConfig,
+    view::ViewState,
 };
 
 use super::{
@@ -30,17 +31,22 @@ pub(crate) struct AppUi {
     clock: Clock,
     dual: CompiledUi,
     single: CompiledUi,
+    /// State the documents keep for themselves, which no endpoint of this
+    /// application declares or answers.
+    view: ViewState,
 }
 
 impl AppUi {
     pub(crate) fn new(package: Rc<Package>) -> Result<Self, UiDocError> {
         let doc = UiConfig::default();
+        let view = ViewState::default();
         Ok(Self {
-            single: compile_screen(&package, DeckLayout::Single, &doc)?,
-            dual: compile_screen(&package, DeckLayout::Dual, &doc)?,
+            single: compile_screen(&package, DeckLayout::Single, &doc, &view)?,
+            dual: compile_screen(&package, DeckLayout::Dual, &doc, &view)?,
             cache: ViewCache::default(),
             clock: Clock::default(),
             package,
+            view,
         })
     }
 
@@ -50,9 +56,23 @@ impl AppUi {
     }
 
     const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
-        match layout {
-            DeckLayout::Single => &self.single,
-            DeckLayout::Dual => &self.dual,
+        screen(&self.single, &self.dual, layout)
+    }
+
+    /// Applies whatever the press at `path` writes to the screen's own state.
+    ///
+    /// The application is told about the press all the same; this is only the
+    /// part of it no application declared an endpoint for.
+    pub(super) fn press(&mut self, path: &str) {
+        let Self {
+            dual,
+            single,
+            view,
+            cache,
+            ..
+        } = self;
+        if let Some((state, write)) = screen(single, dual, cache.layout()).views().at(path) {
+            view.apply(state, write);
         }
     }
 
@@ -64,15 +84,32 @@ impl AppUi {
     }
 }
 
+const fn screen<'a>(
+    single: &'a CompiledUi,
+    dual: &'a CompiledUi,
+    layout: DeckLayout,
+) -> &'a CompiledUi {
+    match layout {
+        DeckLayout::Single => single,
+        DeckLayout::Dual => dual,
+    }
+}
+
 #[cfg(test)]
 pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDocError> {
-    compile_screen(Package::load(None)?.as_ref(), layout, &UiConfig::default())
+    compile_screen(
+        Package::load(None)?.as_ref(),
+        layout,
+        &UiConfig::default(),
+        &kithara_ui::view::EMPTY,
+    )
 }
 
 fn compile_screen(
     package: &Package,
     layout: DeckLayout,
     doc: &UiConfig,
+    view: &ViewState,
 ) -> Result<CompiledUi, UiDocError> {
     let document = package.document(layout);
     let ui = compile(
@@ -82,6 +119,7 @@ fn compile_screen(
         package.skin().document(),
         package.text(),
         doc,
+        view,
     )?;
     ui.require_paths(Package::REQUIRED, &SourceUri(document.to_owned()))?;
     Ok(ui)
@@ -95,6 +133,7 @@ pub(crate) fn view(state: &Kithara) -> Element<'_, Message> {
         &compiled.root,
         compiled,
         &reads,
+        &state.ui.view,
         state.ui.package.skin(),
         state.ui.clock,
         None,

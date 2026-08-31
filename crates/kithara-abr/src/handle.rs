@@ -108,6 +108,45 @@ impl AbrHandle {
         }
     }
 
+    delegate::delegate! {
+        to self.inner.state {
+            /// `true` while the active variant is flagged non-delivering — see
+            /// [`AbrState::is_escaping`].
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_escaping()))]
+            #[call(as_ref)]
+            pub fn is_escaping(&self) -> bool;
+            #[must_use]
+            #[expr($.is_some_and(|s| s.is_locked()))]
+            #[call(as_ref)]
+            pub fn is_locked(&self) -> bool;
+            /// Current ABR mode (Auto / Manual). `None` for peers without state.
+            #[must_use]
+            #[expr($.map(|s| s.mode()))]
+            #[call(as_ref)]
+            pub fn mode(&self) -> Option<AbrMode>;
+        }
+        to self {
+            /// Side-effects after an exact transition promoted its incoming
+            /// generation: emits `VariantApplied` via bus and nothing else.
+            ///
+            /// The caller is the audio worker, which is not a runtime thread, so this
+            /// path must not schedule async work. The stuck-reader watchdog is a
+            /// boundary-switch diagnostic and does not apply here: exact promotion
+            /// already proved the incoming reader produced staged PCM.
+            #[kithara::probe(current_before)]
+            #[call(publish_variant_applied)]
+            pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize);
+            /// Read-only: peek at the pending boundary commit. Mirrors
+            /// [`AbrState::peek_pending_decision`].
+            #[must_use]
+            #[kithara::probe]
+            #[expr($.map(PendingAbrDecision::decision))]
+            #[call(claim_pending_decision)]
+            pub fn peek_pending_decision(&self) -> Option<AbrDecision>;
+        }
+    }
+
     #[must_use]
     pub fn peer_id(&self) -> AbrPeerId {
         self.inner.peer_id
@@ -220,45 +259,6 @@ impl AbrHandle {
         *self.inner.bus.write() = Some(bus);
         self
     }
-
-    delegate::delegate! {
-        to self.inner.state {
-            /// `true` while the active variant is flagged non-delivering — see
-            /// [`AbrState::is_escaping`].
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_escaping()))]
-            #[call(as_ref)]
-            pub fn is_escaping(&self) -> bool;
-            #[must_use]
-            #[expr($.is_some_and(|s| s.is_locked()))]
-            #[call(as_ref)]
-            pub fn is_locked(&self) -> bool;
-            /// Current ABR mode (Auto / Manual). `None` for peers without state.
-            #[must_use]
-            #[expr($.map(|s| s.mode()))]
-            #[call(as_ref)]
-            pub fn mode(&self) -> Option<AbrMode>;
-        }
-        to self {
-            /// Side-effects after an exact transition promoted its incoming
-            /// generation: emits `VariantApplied` via bus and nothing else.
-            ///
-            /// The caller is the audio worker, which is not a runtime thread, so this
-            /// path must not schedule async work. The stuck-reader watchdog is a
-            /// boundary-switch diagnostic and does not apply here: exact promotion
-            /// already proved the incoming reader produced staged PCM.
-            #[kithara::probe(current_before)]
-            #[call(publish_variant_applied)]
-            pub fn notify_exact_commit(&self, decision: AbrDecision, current_before: usize);
-            /// Read-only: peek at the pending boundary commit. Mirrors
-            /// [`AbrState::peek_pending_decision`].
-            #[must_use]
-            #[kithara::probe]
-            #[expr($.map(PendingAbrDecision::decision))]
-            #[call(claim_pending_decision)]
-            pub fn peek_pending_decision(&self) -> Option<AbrDecision>;
-        }
-    }
 }
 
 impl Drop for HandleInner {
@@ -278,10 +278,11 @@ mod tests {
         time::{Duration, Instant},
     };
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
-        Abr, AbrController, AbrSettings, ThroughputEstimator,
+        Abr, AbrController, AbrMock, AbrSettings, ThroughputEstimator,
         state::{AbrDecision, AbrState},
     };
 
@@ -321,21 +322,33 @@ mod tests {
             .build()
     }
 
-    struct StatefulPeer {
-        state: Arc<AbrState>,
-        cancel: CancelToken,
+    /// Peer that answers with the state it is given. `variants` keeps its
+    /// `Abr` default — unimock rejects a clause no test reaches, so the
+    /// variant-reading tests use [`abr_peer_with_variants`] instead.
+    fn abr_peer(state: &Arc<AbrState>) -> Arc<dyn Abr> {
+        Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(CancelToken::never()),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(state))),
+        )))
     }
-    impl Abr for StatefulPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
 
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-        fn variants(&self) -> Vec<VariantInfo> {
-            test_variants_3()
-        }
+    /// [`abr_peer`] plus the canonical 3-variant fixture.
+    fn abr_peer_with_variants(state: &Arc<AbrState>) -> Arc<dyn Abr> {
+        Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(CancelToken::never()),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(state))),
+            AbrMock::variants
+                .each_call(matching!())
+                .returns(test_variants_3()),
+        )))
     }
 
     #[kithara::test(tokio)]
@@ -346,10 +359,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -385,10 +395,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
         state.request_target(VariantIndex::new(2), AbrReason::UpSwitch);
@@ -408,10 +415,7 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
         let handle = controller.register(&peer);
 
         handle.lock();
@@ -432,10 +436,7 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(1)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer_with_variants(&state);
         let handle = controller.register(&peer);
 
         let variants = handle.variants();
@@ -469,10 +470,7 @@ mod tests {
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let handle = {
-            let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-                cancel: CancelToken::never(),
-                state: Arc::clone(&state),
-            });
+            let peer = abr_peer_with_variants(&state);
             let h = controller.register(&peer);
             assert_eq!(h.variants().len(), 3);
             h
@@ -493,10 +491,7 @@ mod tests {
             Arc::new(ThroughputEstimator::new()) as Arc<_>,
         );
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
-        let peer: Arc<dyn Abr> = Arc::new(StatefulPeer {
-            cancel: CancelToken::never(),
-            state: Arc::clone(&state),
-        });
+        let peer = abr_peer(&state);
 
         let bus = EventBus::new(DEFAULT_EVENT_BUS_CAPACITY);
         let mut rx = bus.subscribe();

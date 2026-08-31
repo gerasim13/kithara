@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use super::control::check_scopes;
 use crate::{
     error::UiDocError,
-    ids::{EndpointId, SourceUri},
+    ids::{EndpointId, SourceUri, StateId},
     module::{BindingRef, ControlNode},
     registry::{EndpointCategory, EndpointRegistry, ValueKind},
 };
@@ -78,14 +78,55 @@ pub(crate) const fn value_kinds(control: &ControlNode) -> (Option<ValueKind>, Op
     }
 }
 
-pub(super) const fn binding_parts(
-    binding: &BindingRef,
-) -> (EndpointCategory, &EndpointId, &BTreeMap<String, String>) {
+/// The endpoint one binding addresses: the vocabulary it belongs to, its name,
+/// and the scopes the document filled in.
+pub(super) type BindingParts<'a> = (
+    EndpointCategory,
+    &'a EndpointId,
+    &'a BTreeMap<String, String>,
+);
+
+/// The endpoint one binding addresses, or nothing when it addresses no
+/// endpoint at all.
+///
+/// A [`BindingRef::View`] and a [`BindingRef::Page`] name state the view keeps
+/// for itself, which no application declares and no registry can answer for, so
+/// they have no parts of this shape.
+pub(super) const fn binding_parts(binding: &BindingRef) -> Option<BindingParts<'_>> {
     match binding {
-        BindingRef::Command { id, with } => (EndpointCategory::Command, id, with),
-        BindingRef::Parameter { id, with } => (EndpointCategory::Parameter, id, with),
-        BindingRef::Telemetry { id, with } => (EndpointCategory::Telemetry, id, with),
-        BindingRef::Model { id, with } => (EndpointCategory::Model, id, with),
+        BindingRef::Command { id, with } => Some((EndpointCategory::Command, id, with)),
+        BindingRef::Parameter { id, with } => Some((EndpointCategory::Parameter, id, with)),
+        BindingRef::Telemetry { id, with } => Some((EndpointCategory::Telemetry, id, with)),
+        BindingRef::Model { id, with } => Some((EndpointCategory::Model, id, with)),
+        BindingRef::View { .. } | BindingRef::Page { .. } => None,
+    }
+}
+
+/// A view binding names no endpoint, so what is checked is the side it sits on:
+/// state reads as a bool, whether it is a flag standing on or a page the state
+/// stands at, and is written by a press.
+fn check_view(
+    id: &StateId,
+    side: BindingSide,
+    expected_kind: Option<ValueKind>,
+    path: &str,
+    origin: &SourceUri,
+) -> Result<(), UiDocError> {
+    let wrong = |detail: String| UiDocError::BindingDirection {
+        origin: origin.clone(),
+        id: id.0.clone(),
+        path: path.to_owned(),
+        detail,
+    };
+    let wanted = if matches!(side, BindingSide::Read) {
+        ValueKind::Bool
+    } else {
+        ValueKind::Trigger
+    };
+    match expected_kind {
+        Some(kind) if kind == wanted => Ok(()),
+        Some(kind) => Err(wrong(format!("view state reads as a bool, not {kind}"))),
+        None => Err(wrong("control does not support this side".to_owned())),
     }
 }
 
@@ -97,7 +138,12 @@ pub(super) fn check_binding(
     origin: &SourceUri,
     endpoints: &dyn EndpointRegistry,
 ) -> Result<(), UiDocError> {
-    let (category, id, with) = binding_parts(binding);
+    if let BindingRef::View { id, .. } | BindingRef::Page { id, .. } = binding {
+        return check_view(id, side, expected_kind, path, origin);
+    }
+    let Some((category, id, with)) = binding_parts(binding) else {
+        unreachable!("the view binding is answered above")
+    };
     let allowed = match side {
         BindingSide::Read => matches!(
             category,

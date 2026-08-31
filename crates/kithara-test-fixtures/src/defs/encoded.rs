@@ -1,7 +1,10 @@
 use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_test_macros as kithara;
 
-use crate::signal::{Pcm, Wave};
+use crate::{
+    defs::wav::{RhythmControl, rhythm_pcm},
+    signal::{Pcm, Wave},
+};
 
 struct Consts;
 
@@ -28,7 +31,36 @@ fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
             hz: Consts::TONE_HZ,
         },
     );
-    EncoderFactory::encode_bytes(BytesEncodeRequest {
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
+        pcm: &pcm,
+        target: BytesEncodeTarget::Mp3,
+        bit_rate: None,
+    })
+    .unwrap_or_else(|error| panic!("kithara-test-fixtures: MP3 encode failed: {error}"))
+    .bytes
+}
+
+/// Frame-addressable 120 BPM pulse tracks for encoded-file tests.
+#[kithara::asset(ext = "mp3", content_type = "audio/mpeg")]
+#[case::deck_a_120bpm_48k(48_000, 2, 576_000, 120.0, 220.0)]
+#[case::deck_b_120bpm_48k(48_000, 2, 576_000, 120.0, 880.0)]
+fn rhythm_mp3(
+    sample_rate: u32,
+    channels: u16,
+    total_frames: usize,
+    bpm: f64,
+    carrier_hz: f64,
+) -> Vec<u8> {
+    let pcm = rhythm_pcm(
+        sample_rate,
+        channels,
+        total_frames,
+        bpm,
+        carrier_hz,
+        0,
+        RhythmControl::Aligned,
+    );
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target: BytesEncodeTarget::Mp3,
         bit_rate: None,
@@ -54,7 +86,7 @@ fn flac_unknown_length(total_frames: usize) -> Vec<u8> {
         total_frames,
         Wave::Sawtooth,
     );
-    EncoderFactory::encode_bytes(BytesEncodeRequest {
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target: BytesEncodeTarget::Flac,
         bit_rate: None,
@@ -74,7 +106,7 @@ fn alac(total_frames: usize) -> Vec<u8> {
         total_frames,
         Wave::Silence,
     );
-    EncoderFactory::encode_bytes(BytesEncodeRequest {
+    EncoderFactory::encode_bytes(&BytesEncodeRequest {
         pcm: &pcm,
         target: BytesEncodeTarget::Alac,
         bit_rate: None,

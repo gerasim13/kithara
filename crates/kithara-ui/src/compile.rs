@@ -6,9 +6,9 @@ use crate::{
     error::UiDocError,
     expand::{
         Binding, BlockSpec, Budget, ControlSite, DropSpec, ExpandedInclude, ExpandedNode, Expander,
-        Unprompted, intern_binding, motion_of, substitute_binding, substitute_map,
+        Unprompted, intern_binding, motion_of, scoped_state, substitute_binding, substitute_map,
     },
-    ids::{InternId, Interner, SourceUri, StrArena},
+    ids::{InstanceId, InternId, Interner, SourceUri, StrArena},
     layout::{Axis, FrameCorners, FrameSides, LayoutNode, SplitChild, parse_layout},
     module::{ChromeStyle, MeasureAxis},
     registry::{BuiltinEndpoints, EndpointRegistry},
@@ -25,6 +25,7 @@ use crate::{
     source::{SourceResolver, UiConfig},
     text::TextDoc,
     validate::{self, NodePath},
+    view::{Census, Side, Tabs as ViewTabs, ViewState, ViewWrites},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +50,12 @@ pub struct CompiledUi {
     /// unrelated event keeps waking it — a mouse crossing the window, and
     /// nothing once the mouse stops.
     pub animates: bool,
+    /// Where each press of this screen writes the screen's own state.
+    ///
+    /// The host answers these itself: a document that turns its own state says
+    /// so here, and the application is neither asked nor required to have
+    /// declared anything for it.
+    views: ViewWrites,
     arena: StrArena,
     includes: Vec<IncludedModule>,
     #[cfg(feature = "render")]
@@ -56,17 +63,23 @@ pub struct CompiledUi {
 }
 
 impl CompiledUi {
-    /// Current allocation-reuse counters for this compiled document.
-    #[cfg(feature = "render")]
+    /// Where each press of this screen writes its own state.
     #[must_use]
-    pub fn draw_pool_stats(&self) -> PoolStats {
-        self.draw_pools.stats()
+    pub const fn views(&self) -> &ViewWrites {
+        &self.views
     }
 
     #[cfg(feature = "render")]
     #[must_use]
     pub(crate) const fn draw_pools(&self) -> &DrawPools {
         &self.draw_pools
+    }
+
+    /// Current allocation-reuse counters for this compiled document.
+    #[cfg(feature = "render")]
+    #[must_use]
+    pub fn draw_pool_stats(&self) -> PoolStats {
+        self.draw_pools.stats()
     }
 
     #[cfg(feature = "render")]
@@ -142,8 +155,8 @@ impl Address<'_> {
     /// The address one step further down, at `index` among this node's children.
     pub(crate) const fn child(&self, index: usize) -> Address<'_> {
         Address::Child {
-            index,
             parent: self,
+            index,
         }
     }
 
@@ -218,9 +231,9 @@ pub enum CompiledNode {
 #[non_exhaustive]
 pub struct SplitCell {
     pub node: CompiledNode,
-    pub until: Option<f32>,
-    pub from: f32,
     pub weight: f32,
+    pub from: f32,
+    pub until: Option<f32>,
 }
 
 impl CompiledNode {
@@ -253,7 +266,10 @@ pub fn compile(
     skin: &SkinDoc,
     text: &TextDoc,
     config: &UiConfig,
+    view: &ViewState,
 ) -> Result<CompiledUi, UiDocError> {
+    // Over the application's own declarations, so a document may bind to what
+    // the host answers for itself without every application registering it.
     let endpoints = &BuiltinEndpoints::new(endpoints);
     let loaded = resolver.load(None, entry)?;
     let bytes = loaded.text.len();
@@ -271,16 +287,19 @@ pub fn compile(
     let mut interner = Interner::new(config.max_arena_bytes);
     let mut includes = Vec::new();
     let mut shaders = ShaderCache::default();
+    let mut states = Census::default();
     let mut root = Compiler {
         resolver,
         endpoints,
         skin,
         text,
         config,
+        view,
         budget: &mut budget,
         interner: &mut interner,
         includes: &mut includes,
         shaders: &mut shaders,
+        states: &mut states,
     }
     .build(&document.root, &loaded.uri)?;
     round_corners(&mut root, FrameCorners::ALL);
@@ -294,6 +313,7 @@ pub fn compile(
     let unprompted = motion_of_layout(&root);
     let driven = unprompted.driven;
     let animates = driven || unprompted.continuous || interner.reads_clock();
+    let views = states.finish()?;
     let arena = interner.finish();
     Ok(CompiledUi {
         root,
@@ -304,6 +324,7 @@ pub fn compile(
         driven,
         includes,
         arena,
+        views,
         resize_edges: document.resize_edges,
         #[cfg(feature = "render")]
         draw_pools: config.draw_pools.clone(),
@@ -361,16 +382,30 @@ const fn cell_corners(
     }
 }
 
+/// Where one module stands in a layout: the same placement whether the
+/// document named the module itself or a page of a `Tabs`.
+#[derive(Clone, Copy)]
+struct ModuleAt<'a> {
+    instance: &'a InstanceId,
+    source: &'a str,
+    with: &'a BTreeMap<String, String>,
+    size: Option<SizeSpec>,
+    frame: FrameSides,
+    corners: bool,
+}
+
 struct Compiler<'a> {
     budget: &'a mut Budget,
     interner: &'a mut Interner,
-    shaders: &'a mut ShaderCache,
     skin: &'a SkinDoc,
     text: &'a TextDoc,
     config: &'a UiConfig,
+    view: &'a ViewState,
     includes: &'a mut Vec<IncludedModule>,
+    shaders: &'a mut ShaderCache,
     endpoints: &'a dyn EndpointRegistry,
     resolver: &'a dyn SourceResolver,
+    states: &'a mut Census,
 }
 
 impl Compiler<'_> {
@@ -388,8 +423,11 @@ impl Compiler<'_> {
                 children,
             } => self.build_split(*axis, *measure, *size, children, layout_uri),
             LayoutNode::Optional { id, hidden, node } => {
-                let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0)?;
+                // A layout node sits under no module instance, so a state it names is
+                // named at the top of the document rather than inside one.
+                let hidden = substitute_binding(&BTreeMap::new(), layout_uri, hidden, &id.0, "")?;
                 validate::check_layout_block(&hidden, &id.0, layout_uri, self.endpoints)?;
+                self.states.note(&id.0, &hidden, layout_uri, Side::Read);
                 let child = self.build(node, layout_uri)?;
                 Ok(CompiledNode::Optional {
                     block: BlockSpec {
@@ -433,82 +471,124 @@ impl Compiler<'_> {
                 size,
                 frame,
                 corners,
-            } => {
-                let args = substitute_map(&BTreeMap::new(), layout_uri, with, &instance.0)?;
-                let (module_uri, set) = load_module_graph(
-                    self.resolver,
-                    Some(layout_uri),
-                    source,
-                    &self.config.limits,
-                )?;
-                let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
-                    validate::check_controls(
-                        site,
-                        origin,
-                        self.endpoints,
-                        &self.config.custom_kinds,
-                    )
-                };
-                let document = set
-                    .defs
-                    .get(&module_uri)
-                    .ok_or_else(|| UiDocError::NotFound {
-                        origin: module_uri.clone(),
-                        rel: module_uri.0.clone(),
-                    })?;
-                validate::check_module_footer(document, &module_uri, self.endpoints)?;
-                validate::check_module_drop(document, &module_uri, self.endpoints)?;
-                let mut expanded = Expander::new(
-                    self.config.limits.max_depth,
-                    self.budget,
-                    self.interner,
-                    self.endpoints,
-                    self.shaders,
-                    self.text,
-                    &mut visitor,
-                )
-                .expand_module(&set, &module_uri, &args, &instance.0)?;
-                room::check_module(&expanded.root, self.skin, &module_uri)?;
-                let declared = *size;
-                room::check_box(
-                    declared,
-                    with_module_chrome(
-                        min_size(&expanded.root, self.skin),
-                        expanded.chrome,
-                        self.skin,
-                    ),
-                    &NodePath::default().push(format!("Module({instance})")),
-                    layout_uri,
-                )?;
-                let size = declared.unwrap_or_else(|| {
-                    module_size(&expanded.root, expanded.chrome, self.skin, DEFAULTS)
-                });
-                let blocks = declared.is_none() && has_blocks(&expanded.root);
-                let instance = self.interner.intern(&instance.0, layout_uri)?;
-                self.includes.extend(
-                    std::mem::take(&mut expanded.includes)
-                        .into_iter()
-                        .map(|include| included_module(instance, include)),
-                );
-                Ok(CompiledNode::Module {
+            } => self.build_module(
+                ModuleAt {
                     instance,
-                    size,
-                    blocks,
-                    module: expanded.module,
-                    title: expanded.title,
-                    chip: expanded.chip,
-                    assign: expanded.assign,
-                    chrome: expanded.chrome,
+                    source,
+                    with,
+                    size: *size,
                     frame: *frame,
                     corners: *corners,
-                    round: FrameCorners::EMPTY,
-                    footer: expanded.footer,
-                    drop: expanded.drop,
-                    collapsed: expanded.collapsed,
-                    root: Box::new(expanded.root),
-                })
+                },
+                layout_uri,
+            ),
+            LayoutNode::Tabs {
+                state,
+                initial,
+                pages,
+            } => {
+                let path = NodePath::default().push(format!("Tabs({state})")).render();
+                // The layout holds every instance, so a state named here is the
+                // screen's however the document wrote it.
+                let state = scoped_state("", &state.0);
+                // The page the screen stands at is the only one compiled: the
+                // rest are pages this screen never reads.
+                let standing = self.view.page(&state).unwrap_or(initial);
+                let node = pages.get(standing).ok_or_else(|| UiDocError::UnknownPage {
+                    origin: layout_uri.clone(),
+                    id: state.clone(),
+                    page: standing.to_owned(),
+                    path: path.clone(),
+                })?;
+                self.states.note_pages(ViewTabs {
+                    initial,
+                    origin: layout_uri,
+                    pages: pages.keys().cloned().collect(),
+                    path: &path,
+                    shown: standing,
+                    state: &state,
+                });
+                self.build(node, layout_uri)
             }
         }
+    }
+
+    fn build_module(
+        &mut self,
+        at: ModuleAt<'_>,
+        layout_uri: &SourceUri,
+    ) -> Result<CompiledNode, UiDocError> {
+        let args = substitute_map(&BTreeMap::new(), layout_uri, at.with, &at.instance.0)?;
+        let (module_uri, set) = load_module_graph(
+            self.resolver,
+            Some(layout_uri),
+            at.source,
+            &self.config.limits,
+        )?;
+        let endpoints = self.endpoints;
+        let kinds = &self.config.custom_kinds;
+        let states = &mut *self.states;
+        let mut visitor = |site: ControlSite<'_>, origin: &SourceUri| {
+            states.note_site(site, origin);
+            validate::check_controls(site, origin, endpoints, kinds)
+        };
+        let document = set
+            .defs
+            .get(&module_uri)
+            .ok_or_else(|| UiDocError::NotFound {
+                origin: module_uri.clone(),
+                rel: module_uri.0.clone(),
+            })?;
+        validate::check_module_footer(document, &module_uri, self.endpoints)?;
+        validate::check_module_drop(document, &module_uri, self.endpoints)?;
+        let mut expanded = Expander::new(
+            self.config.limits.max_depth,
+            self.budget,
+            self.interner,
+            self.endpoints,
+            self.shaders,
+            self.text,
+            &mut visitor,
+        )
+        .expand_module(&set, &module_uri, &args, &at.instance.0)?;
+        room::check_module(&expanded.root, self.skin, &module_uri)?;
+        let declared = at.size;
+        room::check_box(
+            declared,
+            with_module_chrome(
+                min_size(&expanded.root, self.skin),
+                expanded.chrome,
+                self.skin,
+            ),
+            &NodePath::default().push(format!("Module({})", at.instance)),
+            layout_uri,
+        )?;
+        let size = declared
+            .unwrap_or_else(|| module_size(&expanded.root, expanded.chrome, self.skin, DEFAULTS));
+        let blocks = declared.is_none() && has_blocks(&expanded.root);
+        let instance = self.interner.intern(&at.instance.0, layout_uri)?;
+        self.includes.extend(
+            std::mem::take(&mut expanded.includes)
+                .into_iter()
+                .map(|include| included_module(instance, include)),
+        );
+        Ok(CompiledNode::Module {
+            instance,
+            size,
+            blocks,
+            module: expanded.module,
+            title: expanded.title,
+            chip: expanded.chip,
+            assign: expanded.assign,
+            chrome: expanded.chrome,
+            frame: at.frame,
+            corners: at.corners,
+            round: FrameCorners::EMPTY,
+            footer: expanded.footer,
+            drop: expanded.drop,
+            collapsed: expanded.collapsed,
+            root: Box::new(expanded.root),
+        })
     }
 
     fn build_split(
@@ -568,6 +648,8 @@ fn motion_of_layout(node: &CompiledNode) -> Unprompted {
             .map(|cell| motion_of_layout(&cell.node))
             .fold(Unprompted::default(), Unprompted::or),
         CompiledNode::Optional { child, .. } => motion_of_layout(child),
+        // Which branch stands is settled by the room, which this side of the
+        // walk does not know, so the layout moves if any of them does.
         CompiledNode::Adaptive { base, steps, .. } => steps
             .iter()
             .map(|(_, branch)| motion_of_layout(branch))

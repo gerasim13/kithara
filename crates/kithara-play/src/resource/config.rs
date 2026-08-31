@@ -29,20 +29,12 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     /// Initial ABR mode passed to the HLS stream.
     #[builder(default)]
     pub(crate) initial_abr_mode: AbrMode,
-    /// Live time-stretch controls shared with the resident Warp chain.
-    #[builder(default = StretchControls::new(1.0))]
-    pub(crate) stretch: Arc<StretchControls>,
     /// Shared asset store used by playback and derived resources.
     pub(crate) store: AssetStore,
     /// Decoder construction settings: backend selection, gapless mode, and
     /// decoder-side resampling.
     #[builder(default)]
     pub(crate) decoder: AudioDecoderConfig<B>,
-    /// Consumer wake capability for this resource's reader. Player preparation
-    /// overwrites it with session policy; direct callers may select off-RT mode
-    /// only when reads stay off the render callback.
-    #[builder(default)]
-    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
@@ -73,9 +65,29 @@ pub struct ResourceConfig<B: Default = PlaybackResamplerBackend> {
     pub(crate) host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub(crate) look_ahead_bytes: Option<u64>,
+    /// Live time-stretch controls shared with the resident Warp chain.
+    #[builder(default = StretchControls::new(1.0))]
+    pub(crate) stretch: Arc<StretchControls>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker>,
+    /// Audio-consumer wake capability for this resource's reader. The default
+    /// is safe for a consumer on the real-time render callback.
+    /// `PlayerImpl::prepare_config` always overwrites it with the session
+    /// policy, so a player-managed resource cannot carry a second source of
+    /// that policy. A direct reader off the real-time thread opts into
+    /// [`ConsumerWakeMode::ImmediateOffRt`] itself for immediate worker wakes
+    /// and inline reader-event delivery. Never declare `ImmediateOffRt` on a
+    /// resource headed into a player without `prepare_config`: its reads would
+    /// then publish inline on the render callback.
+    #[builder(default)]
+    pub(crate) consumer_wake_mode: ConsumerWakeMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
+    /// here; a direct reader off the real-time thread may opt in itself.
+    /// Never set on a resource consumed by a real-time callback.
+    #[builder(default)]
+    pub(crate) block_on_underrun: bool,
     /// Method used by HLS size estimation to probe segment lengths.
     /// Default is [`SizeProbeMethod::Head`]; switch to
     /// [`SizeProbeMethod::RangeGet`] for upstreams that reject

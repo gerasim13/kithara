@@ -95,7 +95,6 @@ pub(crate) struct MenuState {
     autogain: bool,
     casting: bool,
     mono: bool,
-    open: bool,
     recording: bool,
     wave_follow: bool,
     active: usize,
@@ -104,7 +103,6 @@ pub(crate) struct MenuState {
 impl Default for MenuState {
     fn default() -> Self {
         let mut state = Self {
-            open: true,
             group: MenuGroup::Win,
             windows: vec![
                 MenuWindow::new(0, 0, Consts::CLUB_MODULES),
@@ -127,6 +125,9 @@ impl Default for MenuState {
 
 impl MenuState {
     pub(crate) fn activate(&mut self, path: &str) -> bool {
+        // The page mounts the menu the way the application does: a bar of its
+        // own, with the menu included in it, so the bar stands between the page
+        // and every control the menu names.
         let Some(id) = path.strip_prefix("app-menu/menu/") else {
             return false;
         };
@@ -141,8 +142,6 @@ impl MenuState {
             return self.apply_layout(number);
         }
         match instance {
-            "pop" | "header-close" => self.open = false,
-            "burger" => self.open = !self.open,
             "new-window" => self.open_window(),
             "modules-head" => self.toggle_group(MenuGroup::Mod),
             "layouts-head" => self.toggle_group(MenuGroup::Lay),
@@ -204,7 +203,6 @@ impl MenuState {
     pub(crate) fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         let (id, scope) = endpoint.split_once('@').unwrap_or((endpoint, ""));
         let value = match id {
-            "ui.menu.open" => ReadValue::Bool(self.open),
             "ui.menu.group_open" => ReadValue::Bool(self.group_open(scope)),
             "ui.menu.group_hidden" => ReadValue::Bool(!self.group_open(scope)),
             "ui.window.count" => ReadValue::Text(&self.count_label),
@@ -288,10 +286,6 @@ impl MenuState {
         self.modules_title = format!("Modules · WINDOW {active}");
         let on = self.windows[self.active].modules_on();
         self.modules_count = format!("{on} OF 11");
-    }
-
-    pub(crate) const fn set_open(&mut self, open: bool) {
-        self.open = open;
     }
 
     fn toggle_group(&mut self, group: MenuGroup) {

@@ -238,7 +238,7 @@ impl ReaderEventSink for HlsReaderEventSink {
 mod tests {
     use std::sync::{OnceLock, atomic::AtomicU64};
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{Event, EventBus};
     use kithara_platform::{
@@ -247,6 +247,7 @@ mod tests {
     };
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
@@ -256,21 +257,6 @@ mod tests {
         stream::HlsCoordEnv,
         variant::{PlanConfig, PlanCtx, VariantParts},
     };
-
-    struct TestAbrPeer {
-        state: Arc<AbrState>,
-        cancel: CancelToken,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-    }
 
     fn test_ctx(bus: &EventBus) -> PlanCtx {
         let cancel = CancelToken::never();
@@ -361,17 +347,19 @@ mod tests {
         let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let publisher = state.publisher();
         let cancel = CancelToken::never();
-        let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-            state,
-            cancel: cancel.clone(),
-        });
+        let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(cancel.clone()),
+            AbrMock::state.each_call(matching!()).returns(Some(state)),
+        )));
         let settings = AbrSettings::builder().cancel(cancel.clone()).build();
         let controller = AbrController::new(settings);
         let handle = controller.register(&peer);
         Arc::new(HlsCoord::new(
             HlsCoordEnv {
-                cancel,
                 scope: ctx.scope.clone(),
+                cancel,
                 headers: None,
                 emit: Arc::new(DeferredBus::new(bus.clone(), 8)),
                 signal: ctx.signal,

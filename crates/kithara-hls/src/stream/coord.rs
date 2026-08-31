@@ -229,8 +229,8 @@ impl HlsCoord {
         if !self.active().layout_seek_invariant() {
             self.reset_for_seek();
         }
-        // WHY: A seek repositioned the active variant: wake a reader parked on the pre-seek range so it re-probes against the new position /
-        // flush gate.
+        // A seek repositioned the active variant: wake a reader parked on the
+        // pre-seek range so it re-probes against the new position / flush gate.
         self.signal.fire();
     }
 
@@ -372,10 +372,12 @@ impl HlsCoord {
         timeout: Option<Duration>,
     ) -> StreamResult<WaitOutcome> {
         match timeout {
-            // WHY: RT / cooperative-yield probe path (`probe_read`): a single wake-free probe, unchanged - never parks on the gate.
+            // RT / cooperative-yield probe path (`probe_read`): a single
+            // wake-free probe, unchanged — never parks on the gate.
             Some(_) => self.probe_range(range, timeout),
-            // WHY: Off-RT consumer (`Stream::read` / `prime_seek_range`): block on the readiness gate until the range resolves, a segment fails,
-            // or cancel fires.
+            // Off-RT consumer (`Stream::read` / `prime_seek_range`): block on
+            // the readiness gate until the range resolves, a segment fails, or
+            // cancel fires. Event-driven — no wall-clock poll.
             None => Self::wait_range_blocking(&self.signal, &self.cancel, || {
                 self.probe_range(range.clone(), Some(Duration::ZERO))
             }),
@@ -397,29 +399,37 @@ impl HlsCoord {
         cancel: &CancelToken,
         mut probe: impl FnMut() -> StreamResult<WaitOutcome>,
     ) -> StreamResult<WaitOutcome> {
-        // WHY: Cancel is the one transition with no producer-side signal; register a waker that signals the gate so a parked wait observes
-        // it.
+        // Cancel is the one transition with no producer-side signal; register a
+        // waker that signals the gate so a parked wait observes it. The guard
+        // unregisters when this wait returns (mirror storage `wait.rs`).
         let _cancel_wake = {
             let ready = signal.ready_gate();
             cancel.on_cancel(move || ready.signal())
         };
         loop {
             hang_tick!();
-            // WHY: Snapshot the gate BEFORE the probe: a signal landing between the probe and the park advances the counter, so the park returns
-            // at once and we re-probe - no lost wakeup.
+            // Snapshot the gate BEFORE the probe: a signal landing between the
+            // probe and the park advances the counter, so the park returns at
+            // once and we re-probe — no lost wakeup.
             let since = signal.current();
             match probe() {
                 Ok(WaitOutcome::Ready) => return Ok(WaitOutcome::Ready),
                 Ok(WaitOutcome::Eof) => return Ok(WaitOutcome::Eof),
                 Ok(WaitOutcome::Interrupted) => return Ok(WaitOutcome::Interrupted),
                 Err(StreamError::Source(SourceError::WaitBudgetExceeded)) => {
-                    // WHY: Not ready: park on the gate until a signal advances it, bounded by the re-aim heartbeat.
+                    // Not ready: park on the gate until a signal advances it,
+                    // bounded by the re-aim heartbeat.
                 }
                 Err(e) => return Err(e),
             }
-            // WHY: Event-driven park: a write/commit/fence/seek/cancel signal wakes us at once to re-probe (the fact of a write, never a timer).
+            // Event-driven park: a write/commit/fence/seek/cancel signal wakes
+            // us at once to re-probe (the fact of a write, never a timer). If
+            // the gate stays quiet for the heartbeat the peer may be mis-aimed
+            // after a seek; yield so the off-RT reader re-asserts its prefetch
+            // aim and re-enters (mirrors the old per-iteration `notify_peer_wake`
+            // without the wall-clock data poll).
             if signal.wait_timeout(since, Self::READER_REAIM_INTERVAL) {
-                // WHY: Woke from a signal - activity, not a wedge: reset the watchdog.
+                // Woke from a signal — activity, not a wedge: reset the watchdog.
                 hang_reset!();
             } else {
                 return Err(StreamError::Source(SourceError::WaitBudgetExceeded));
@@ -491,15 +501,6 @@ impl HlsProbe {
 }
 
 impl SourceProbe for HlsProbe {
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
-    }
-
-    fn phase(&self) -> SourcePhase {
-        let pos = self.coord.position();
-        self.coord.phase_at(pos..pos.saturating_add(1))
-    }
-
     delegate! {
         to self.coord {
             fn phase_at(&self, range: Range<u64>) -> SourcePhase;
@@ -507,6 +508,15 @@ impl SourceProbe for HlsProbe {
             fn set_position(&self, pos: u64);
             fn len(&self) -> Option<u64>;
         }
+    }
+
+    fn phase(&self) -> SourcePhase {
+        let pos = self.coord.position();
+        self.coord.phase_at(pos..pos.saturating_add(1))
+    }
+
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.coord) as Arc<dyn ByteMap>)
     }
 }
 
@@ -546,34 +556,22 @@ impl VariantControl for HlsCoord {
         Self::selected_variant_for_seek(self)
     }
 
-    fn take_prepared_variant_reader(
-        &self,
-        transition: VariantTransition,
-    ) -> StreamResult<VariantReaderTake> {
-        Self::take_prepared_variant_reader(self, transition)
-    }
-
     fn transition_demand_in_flight(&self, transition: VariantTransition) -> bool {
         self.sessions.incoming_session().is_some_and(|session| {
             session.transition() == Some(transition)
                 && session.wait_phase() == SourcePhase::WaitingDemand
         })
     }
+
+    fn take_prepared_variant_reader(
+        &self,
+        transition: VariantTransition,
+    ) -> StreamResult<VariantReaderTake> {
+        Self::take_prepared_variant_reader(self, transition)
+    }
 }
 
 impl ByteMap for HlsCoord {
-    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
-        self.active().descriptor_after_byte(byte)
-    }
-
-    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
-        self.active().descriptor(segment_index as usize)
-    }
-
-    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
-        self.active().descriptor_at_time(t)
-    }
-
     delegate! {
         to self {
             #[call(seek_time_anchor)]
@@ -592,6 +590,18 @@ impl ByteMap for HlsCoord {
             #[call(active)]
             fn segment_count(&self) -> Option<u32>;
         }
+    }
+
+    fn segment_after_byte(&self, byte: u64) -> Option<SegmentDescriptor> {
+        self.active().descriptor_after_byte(byte)
+    }
+
+    fn segment_at_index(&self, segment_index: u32) -> Option<SegmentDescriptor> {
+        self.active().descriptor(segment_index as usize)
+    }
+
+    fn segment_at_time(&self, t: Duration) -> Option<SegmentDescriptor> {
+        self.active().descriptor_at_time(t)
     }
 }
 
@@ -612,7 +622,7 @@ mod tests {
         sync::OnceLock,
     };
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState, PendingAbrClaim};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState, PendingAbrClaim};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, AbrReason, EventBus, RequestPriority, VariantIndex};
     use kithara_platform::{
@@ -623,6 +633,7 @@ mod tests {
         AudioCodec, ContainerFormat, OutgoingDisposition, PlayheadWrite, ReaderInput, ReaderWarmup,
         SeekControl,
     };
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
@@ -630,26 +641,6 @@ mod tests {
         segment::{MediaSegment, Segment, SegmentContent, SegmentSize, SegmentSlotState},
         variant::{PlanConfig, PlanCtx, VariantParts},
     };
-
-    struct TestAbrPeer {
-        state: Arc<AbrState>,
-        cancel: CancelToken,
-        variants: Vec<kithara_events::VariantInfo>,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-
-        fn variants(&self) -> Vec<kithara_events::VariantInfo> {
-            self.variants.clone()
-        }
-    }
 
     fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
         switch_coord_with_reason(AbrReason::ManualOverride)
@@ -771,34 +762,14 @@ mod tests {
         ]);
         let abr_state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
         let abr_publisher = abr_state.publisher();
-        let peer: Arc<dyn Abr> =
-            Arc::new(TestAbrPeer {
-                cancel: cancel.clone(),
-                state: Arc::clone(&abr_state),
-                variants: vec![
-                    kithara_events::VariantInfo {
-                        variant_index: VariantIndex::new(0),
-                        bandwidth_bps: Some(128_000),
-                        codecs: Some("mp4a.40.2".into()),
-                        container: Some("fmp4".into()),
-                        duration: kithara_events::VariantDuration::Segmented(vec![
-                        Duration::from_secs(2);
-                        v0_segments as usize
-                    ]),
-                        name: None,
-                    },
-                    kithara_events::VariantInfo {
-                        variant_index: VariantIndex::new(1),
-                        bandwidth_bps: Some(96_000),
-                        codecs: Some("mp3".into()),
-                        container: Some("mpeg-audio".into()),
-                        duration: kithara_events::VariantDuration::Segmented(vec![
-                            Duration::from_secs(2),
-                        ]),
-                        name: None,
-                    },
-                ],
-            });
+        let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
+            AbrMock::cancel
+                .each_call(matching!())
+                .returns(cancel.clone()),
+            AbrMock::state
+                .each_call(matching!())
+                .returns(Some(Arc::clone(&abr_state))),
+        )));
         let settings = AbrSettings::builder().cancel(cancel.clone()).build();
         let controller = AbrController::new(settings);
         let handle = controller.register(&peer);

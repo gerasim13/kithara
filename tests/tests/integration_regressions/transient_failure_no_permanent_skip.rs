@@ -16,18 +16,24 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir, kithara,
+    Content, Delivery, FixtureBehavior, HlsFixtureBuilder, PrivateTestServer, TestTempDir, kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
 
-/// Bounded look-ahead over the 222 s packaged fixture: the downloader must
-/// still need further segments when the blip lands, otherwise the track is
-/// already fully cached and no fetch can fail. Kept narrow for the same
-/// reason as in the outage trap — a wide window makes the scenario depend on
-/// how much happened to be cached.
+/// The ladder the blip lands on. One variant, since playback pins variant 0
+/// below, and 72 s of it: the downloader must still need further segments
+/// when the network drops, or the track is already fully cached and no fetch
+/// can fail.
+const VARIANT_SEGMENTS: usize = 24;
+const SEGMENT_SECS: f64 = 3.0;
+/// Bounded look-ahead: kept narrow because a wide window makes the scenario
+/// depend on how much happened to be cached. At the encoder's default
+/// 128 kbit/s a segment above runs roughly 48 KiB, so this window holds
+/// about one of them — the ratio the captured tree gave, where a 64 KiB
+/// window sat against ~50 KiB segments.
 const LOOK_AHEAD_BYTES: u64 = 64 * 1024;
 const PLAY_BEFORE_FAILURE_SECS: f64 = 1.0;
 /// How far playback must carry on past the blip. Bounds the "no auto-skip"
@@ -59,7 +65,17 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
     // one with parallel siblings would fail them instead.
     let server = PrivateTestServer::start().await;
     let helper = server.helper();
-    let target_url = helper.asset("hls/master.m3u8");
+    let target = helper
+        .create_hls(
+            HlsFixtureBuilder::new()
+                .variant_count(1)
+                .segments_per_variant(VARIANT_SEGMENTS)
+                .segment_duration_secs(SEGMENT_SECS)
+                .packaged_audio_aac_lc(44_100, 2),
+        )
+        .await
+        .expect("create the ladder the blip lands on");
+    let target_url = target.master_url();
     let fallback_fixture = helper.register_behavior(FixtureBehavior {
         content: Content::StaticBytes {
             bytes: Arc::new(signal_mp3_track_sine440_187s().bytes().to_vec()),

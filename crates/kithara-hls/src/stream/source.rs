@@ -120,10 +120,6 @@ impl Source for HlsSource {
         self.peer_wake.clone()
     }
 
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
-    }
-
     fn seek_prepare(&self) -> Option<Arc<dyn SeekPrepare>> {
         Some(Arc::clone(&self.coord) as Arc<dyn SeekPrepare>)
     }
@@ -135,6 +131,10 @@ impl Source for HlsSource {
             self.coord.seek_epoch_handle(),
         );
         Some(Box::new(sink))
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(HlsProbe::new(Arc::clone(&self.coord)))
     }
 
     fn variant_control(&self) -> Option<Arc<dyn kithara_stream::VariantControl>> {
@@ -169,12 +169,13 @@ impl Source for HlsSource {
 mod tests {
     use std::sync::OnceLock;
 
-    use kithara_abr::{Abr, AbrController, AbrSettings, AbrState};
+    use kithara_abr::{Abr, AbrController, AbrMock, AbrSettings, AbrState};
     use kithara_assets::{AssetResource, AssetSource, AssetStore, StorageBackend};
     use kithara_events::{AbrMode, EventBus, VariantIndex};
     use kithara_platform::{CancelToken, sync::ThreadGate, time::Duration as PlatformDuration};
     use kithara_stream::{AudioCodec, ContainerFormat, PlayheadState, SeekState};
     use kithara_test_utils::kithara;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::{
@@ -185,21 +186,6 @@ mod tests {
         stream::HlsCoordEnv,
         variant::{DispatchTokens, HlsVariant, PlanConfig, PlanCtx, VariantParts},
     };
-
-    struct TestAbrPeer {
-        state: Arc<AbrState>,
-        cancel: CancelToken,
-    }
-
-    impl Abr for TestAbrPeer {
-        fn cancel(&self) -> CancelToken {
-            self.cancel.clone()
-        }
-
-        fn state(&self) -> Option<Arc<AbrState>> {
-            Some(Arc::clone(&self.state))
-        }
-    }
 
     /// One HLS track of equal-sized segments behind a real `HlsSource`, with the
     /// peer wake the source arms exposed so a test can observe it.
@@ -243,10 +229,12 @@ mod tests {
             .into_variant(0, ctx);
             let state = Arc::new(AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0)))));
             let publisher = state.publisher();
-            let peer: Arc<dyn Abr> = Arc::new(TestAbrPeer {
-                state,
-                cancel: cancel.clone(),
-            });
+            let peer: Arc<dyn Abr> = Arc::new(Unimock::new((
+                AbrMock::cancel
+                    .each_call(matching!())
+                    .returns(cancel.clone()),
+                AbrMock::state.each_call(matching!()).returns(Some(state)),
+            )));
             let settings = AbrSettings::builder().cancel(cancel.clone()).build();
             let controller = AbrController::new(settings);
             let handle = controller.register(&peer);

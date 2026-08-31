@@ -2,16 +2,8 @@ use std::future::Future;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::{
-    CancelToken,
-    time::{Duration, sleep},
-    tokio,
-};
+use kithara_platform::{CancelToken, time::sleep, tokio};
 use url::Url;
-
-mod kithara {
-    pub(crate) use kithara_test_macros::mock;
-}
 
 use crate::{
     ByteStream,
@@ -21,40 +13,18 @@ use crate::{
     types::{Headers, RangeSpec, RetryPolicy},
 };
 
-pub struct DefaultRetryPolicy {
-    policy: RetryPolicy,
-}
-
-impl DefaultRetryPolicy {
-    pub const fn new(policy: RetryPolicy) -> Self {
-        Self { policy }
-    }
-
-    pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
-        self.policy.delay_for_attempt(attempt)
-    }
-
-    pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
-        if attempt >= self.policy.max_retries {
-            return false;
-        }
-
-        error.retryability() == Retryability::Transient
-    }
-}
-
 /// Retry decorator for Net implementations
-pub struct RetryNet<N, P> {
+pub struct RetryNet<N> {
     cancel: CancelToken,
     inner: N,
     observer: Option<Observer>,
-    retry_policy: P,
+    retry_policy: RetryPolicy,
 }
 
-impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
+impl<N: Net> RetryNet<N> {
     pub const fn new(
         inner: N,
-        retry_policy: P,
+        retry_policy: RetryPolicy,
         cancel: CancelToken,
         observer: Option<Observer>,
     ) -> Self {
@@ -71,7 +41,7 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T, NetError>>,
     {
-        let max = self.retry_policy.max_attempts();
+        let max = self.retry_policy.max_retries;
         for attempt in 0..=max {
             let error = match op().await {
                 Ok(value) => return Ok(value),
@@ -115,7 +85,7 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
 
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
+impl<N: Net> Net for RetryNet<N> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         self.retry_loop(|| self.inner.get_bytes(url.clone(), headers.clone()))
             .await
@@ -158,26 +128,6 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     }
 }
 
-#[kithara::mock(api = RetryPolicyMock)]
-pub trait RetryPolicyTrait: Send + Sync {
-    fn delay_for_attempt(&self, attempt: u32) -> Duration;
-    fn max_attempts(&self) -> u32;
-    fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
-}
-
-impl RetryPolicyTrait for DefaultRetryPolicy {
-    fn max_attempts(&self) -> u32 {
-        self.policy.max_retries
-    }
-
-    delegate::delegate! {
-        to self {
-            fn delay_for_attempt(&self, attempt: u32) -> Duration;
-            fn should_retry(&self, error: &NetError, attempt: u32) -> bool;
-        }
-    }
-}
-
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
@@ -188,6 +138,7 @@ mod tests {
     use std::{num::NonZeroU16, task::Poll};
 
     use futures::{pin_mut, poll, stream};
+    use kithara_platform::time::Duration;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -217,24 +168,12 @@ mod tests {
         }
     }
 
-    fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock, DefaultRetryPolicy> {
-        RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancelToken::never(),
-            None,
-        )
+    fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock> {
+        RetryNet::new(mock, policy, CancelToken::never(), None)
     }
 
-    fn retry_net_default(mock: Unimock) -> RetryNet<Unimock, DefaultRetryPolicy> {
+    fn retry_net_default(mock: Unimock) -> RetryNet<Unimock> {
         retry_net(mock, RetryPolicy::default())
-    }
-
-    #[kithara::test]
-    fn test_default_retry_policy_new() {
-        let policy = RetryPolicy::default();
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.policy.max_retries, 3);
     }
 
     #[kithara::test]
@@ -249,17 +188,15 @@ mod tests {
         #[case] _desc: &str,
     ) {
         let policy = RetryPolicy::default();
-        let retry_policy = DefaultRetryPolicy::new(policy);
         let error = NetError::Timeout;
-        assert_eq!(retry_policy.should_retry(&error, attempt), expected);
+        assert_eq!(policy.should_retry(&error, attempt), expected);
     }
 
     #[kithara::test]
     fn test_default_retry_policy_should_not_retry_non_retryable() {
         let policy = RetryPolicy::default();
-        let retry_policy = DefaultRetryPolicy::new(policy);
         let error = status_404();
-        assert!(!retry_policy.should_retry(&error, 0));
+        assert!(!policy.should_retry(&error, 0));
     }
 
     #[kithara::test]
@@ -277,8 +214,7 @@ mod tests {
             max_delay: Duration::from_secs(10),
             max_retries: 5,
         };
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.delay_for_attempt(attempt), expected);
+        assert_eq!(policy.delay_for_attempt(attempt), expected);
     }
 
     #[kithara::test(tokio)]
@@ -514,29 +450,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[kithara::test]
-    fn test_retry_policy_trait_max_attempts() {
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(10),
-            max_retries: 5,
-        };
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.max_attempts(), 5);
-    }
-
-    #[kithara::test]
-    fn test_retry_policy_trait_delay() {
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(50),
-            max_delay: Duration::from_secs(10),
-            max_retries: 3,
-        };
-        let retry_policy = DefaultRetryPolicy::new(policy);
-        assert_eq!(retry_policy.delay_for_attempt(0), Duration::ZERO);
-        assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
-    }
-
     #[kithara::test(tokio)]
     async fn test_retry_net_cancel_interrupts_sleep() {
         let mock = Unimock::new(
@@ -550,7 +463,7 @@ mod tests {
             max_retries: 3,
         };
         let cancel = CancelToken::never();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone(), None);
+        let retry_net = RetryNet::new(mock, policy, cancel.clone(), None);
 
         let url = test_url();
         let result = retry_net.get_bytes(url, None);

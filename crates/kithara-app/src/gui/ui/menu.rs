@@ -1,4 +1,5 @@
-/// The app menu's own view state: the surface and the one group it expands.
+/// The one group the app menu expands. Whether the menu itself stands open is
+/// state the document keeps, which no application is asked for.
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(in crate::gui) struct MenuState {
@@ -6,19 +7,9 @@ pub(in crate::gui) struct MenuState {
     layouts_open: bool,
     #[field(get = are_modules_open, vis = "pub(in crate::gui)", copy)]
     modules_open: bool,
-    #[field(get = is_open, vis = "pub(in crate::gui)", copy)]
-    open: bool,
 }
 
 impl MenuState {
-    pub(in crate::gui) const fn close(&mut self) {
-        self.open = false;
-    }
-
-    pub(in crate::gui) const fn toggle(&mut self) {
-        self.open = !self.open;
-    }
-
     pub(in crate::gui) const fn toggle_layouts(&mut self) {
         self.layouts_open = !self.layouts_open;
     }

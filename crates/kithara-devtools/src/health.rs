@@ -10,10 +10,7 @@ use anyhow::{Context, Result};
 use cargo_metadata::{Metadata, MetadataCommand};
 use clap::Args;
 
-use crate::{
-    common::{project::ProjectConfig, timestamp::utc_timestamp},
-    stages::{SharedStage, StageCommand},
-};
+use crate::common::{project::ProjectConfig, timestamp::utc_timestamp};
 
 struct Consts;
 impl Consts {
@@ -103,19 +100,6 @@ impl Stage {
         self.args.extend(paths.iter().cloned());
         self
     }
-
-    fn shared(name: &'static str, stage: SharedStage) -> Self {
-        let StageCommand { program, args } = stage.health_command();
-        Self {
-            name,
-            program,
-            args,
-            advisory: false,
-            strict: false,
-            own_crates: None,
-        }
-    }
-
     /// A stage whose tool is not provisioned by this repository's own CI
     /// tooling (see `.config/ci-pins.toml` and `xtask/src/ci/image.rs`).
     /// `ENV_SKIP_MARKERS` exists for transient, environment-level noise on
@@ -247,6 +231,21 @@ fn manifest_of(metadata: &Metadata, package: &str) -> Result<String> {
         .with_context(|| format!("no workspace package named `{package}`"))
 }
 
+/// The checks with no job of their own.
+///
+/// This list used to open with the fast ratchets - format, Clippy, ast-grep,
+/// the xtask lints, typos - and close with the whole test suite and the
+/// doc-tests, every one of which the push gate had already run against the same
+/// commit before the nightly report started. Repeating them cost the run its
+/// bulk and told it nothing: `just lint full` owns the ratchets, `just test all`
+/// owns the suite, the `similarity` and `architecture` jobs beside this one own
+/// duplication and orphans.
+///
+/// What is left is what nothing else runs, or what health runs differently on
+/// purpose: the powerset here keeps dev-dependencies where `just deps hack`
+/// drops them, and semver compares against `origin/main` where `just deps
+/// semver` compares against the commit before. Both differences are stated at
+/// the stage below.
 fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
     let Resolved {
         machete_paths,
@@ -256,20 +255,13 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         lockbud_toolchain,
     } = resolved;
     vec![
-        Stage::shared("format-check", SharedStage::FmtCheck),
         Stage::new(
             "markdown-format-check",
             "cargo",
             &["xtask", "format", "--check", "--only", "markdown"],
         )
         .advisory(),
-        Stage::shared("clippy", SharedStage::Clippy),
-        Stage::shared("ast-grep-advisory", SharedStage::AstGrep).advisory(),
-        Stage::shared("xtask-lint", SharedStage::Lint),
         Stage::new("quality-report", "cargo", &["xtask", "quality", "report"]),
-        Stage::shared("typos", SharedStage::Typos),
-        Stage::shared("similarity-strict", SharedStage::Similarity).advisory(),
-        Stage::shared("orphans", SharedStage::Orphans),
         Stage::new("machete", "cargo", &["machete"]).paths(machete_paths),
         Stage::new("shear", "cargo", &["shear", "--deny-warnings"]),
         Stage::new("deny", "cargo", &["deny", "check"]),
@@ -351,12 +343,6 @@ fn build_stages_with(resolved: &Resolved) -> Vec<Stage> {
         .own_crates(own_crates)
         .strict(),
         Stage::new("workspace-unused-pub", "cargo", &["workspace-unused-pub"]),
-        Stage::new(
-            "workspace-tests",
-            "cargo",
-            &["xtask", "test", "--lane=workspace"],
-        ),
-        Stage::new("doc-tests", "cargo", &["xtask", "test", "--lane=doc"]),
     ]
 }
 
@@ -621,7 +607,7 @@ mod tests {
     use clap::Subcommand;
 
     use super::*;
-    use crate::CoreCommand;
+    use crate::{CoreCommand, stages::SharedStage};
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 

@@ -23,7 +23,14 @@ use crate::{
 /// come from the app documents and may contain nested include segments.
 pub(crate) fn translate(state: &mut Kithara, event: UiEvent) -> Option<Message> {
     match event {
-        UiEvent::Control { path, action } => control(state, &path, &action),
+        UiEvent::Control { path, action } => {
+            // What the document turns for itself is answered here, before the
+            // application is told the press happened at all.
+            if matches!(action, ControlAction::Activate) {
+                state.ui.press(&path);
+            }
+            control(state, &path, &action)
+        }
         UiEvent::ToggleModule(module) => {
             state.ui.cache.toggle_module(module);
             None
@@ -60,6 +67,7 @@ pub(super) fn route(instance: &str) -> Option<Route> {
 fn control(state: &mut Kithara, path: &str, action: &ControlAction) -> Option<Message> {
     let (instance, rest) = path.split_once('/')?;
     let target = route(instance)?;
+    // A match guard would read better, but `if let` guards are above the MSRV.
     if let Some(row) = rest.strip_prefix("menu/")
         && matches!(target, Route::MicroBar | Route::Bar)
     {
@@ -197,13 +205,13 @@ fn menu_control(cache: &mut ViewCache, control: &str, action: &ControlAction) ->
         return None;
     }
     match control {
-        "burger" => cache.menu.toggle(),
-        "pop" | "header-close" => cache.menu.close(),
         "layouts-head" => cache.menu.toggle_layouts(),
         "modules-head" => cache.menu.toggle_modules(),
         "full-screen" => return Some(Message::Window(WindowCommand::ToggleFullScreen)),
         "cast" => return Some(Message::BroadcastToggle),
         row => {
+            // A grid cell reaches the host through its own include, so the
+            // module is the first segment of the path.
             let (row, _) = row.split_once('/').unwrap_or((row, ""));
             if let Some(module) = row.strip_prefix("module-") {
                 cache.modules.toggle(module);
@@ -352,28 +360,6 @@ mod tests {
         let ceiling = press_zoom(&mut cache, "zoom-out");
         assert!(ceiling < 1.0, "the window never spans the whole track");
         assert_eq!(press_zoom(&mut cache, "zoom-out"), ceiling);
-    }
-
-    #[kithara::test]
-    fn the_burger_opens_the_menu_and_both_dismissals_close_it() {
-        let mut cache = ViewCache::default();
-        assert!(!cache.menu.is_open());
-
-        press_menu(&mut cache, "burger");
-        assert!(cache.menu.is_open());
-        press_menu(&mut cache, "burger");
-        assert!(!cache.menu.is_open(), "the burger is also the way out");
-
-        press_menu(&mut cache, "burger");
-        press_menu(&mut cache, "pop");
-        assert!(
-            !cache.menu.is_open(),
-            "a press outside the surface dismisses"
-        );
-
-        press_menu(&mut cache, "burger");
-        press_menu(&mut cache, "header-close");
-        assert!(!cache.menu.is_open());
     }
 
     #[kithara::test]

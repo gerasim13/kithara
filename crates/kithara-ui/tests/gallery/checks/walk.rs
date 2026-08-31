@@ -36,6 +36,7 @@
 //!
 //! The page list is [`Shot::all`], the same one the captures walk, so a page
 //! that is photographed is a page that is walked.
+
 use std::{borrow::Cow, mem};
 
 use iced::{
@@ -80,10 +81,10 @@ fn toolkit(host: Host) -> &'static str {
 
 /// What one page did when it was left alone.
 struct Walked {
-    /// Whether the page's document says it draws a different picture later.
-    animates: bool,
     /// Whether the window would still be drawing this page unprompted.
     asking: bool,
+    /// Whether the page's document says it draws a different picture later.
+    animates: bool,
 }
 
 /// Steps one page on the named host with nothing touching it.
@@ -181,13 +182,15 @@ mod retained {
         builtin,
         compile::compile,
         render::{Reads, Skin, UiEvent},
+        view::ViewState,
     };
 
     use super::{FRAMES, Shot, Walked};
     use crate::{
         custom, demo,
         fixture::{Consts, resolver},
-        host::Gallery,
+        host::{self, Gallery},
+        sections,
     };
 
     /// The gallery with its own clock held unless the page says it moves.
@@ -203,6 +206,15 @@ mod retained {
     }
 
     impl App for Still {
+        delegate::delegate! {
+            to self.gallery {
+                fn document(&self) -> &str;
+                fn skin(&self) -> &Skin;
+                fn turned(&mut self, view: &ViewState);
+                fn update(&mut self, event: UiEvent);
+            }
+        }
+
         fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
             self.gallery.reads(with)
         }
@@ -210,14 +222,6 @@ mod retained {
         fn tick(&mut self) {
             if self.ticks {
                 self.gallery.tick();
-            }
-        }
-
-        delegate::delegate! {
-            to self.gallery {
-                fn document(&self) -> &str;
-                fn skin(&self) -> &Skin;
-                fn update(&mut self, event: UiEvent);
             }
         }
     }
@@ -255,26 +259,28 @@ mod retained {
             num_traits::cast::AsPrimitive::<u32>::as_(Consts::WIDTH),
             num_traits::cast::AsPrimitive::<u32>::as_(Consts::HEIGHT),
         );
-        let at = Gallery::at(page);
         // Read from the document rather than from the host, so the two sides of
         // the comparison come from two places: what the page says, and what the
         // window then does about it.
         let animates = compile(
-            at.document(),
+            sections::entry(),
             &resolver,
             &endpoints,
             builtin::skin_doc(),
             builtin::text_doc(),
             custom::config(),
+            &page.standing(),
         )
         .unwrap_or_else(|error| panic!("page {} must compile: {error}", page))
         .animates;
         let still = Still {
-            gallery: at,
+            gallery: Gallery::default(),
             ticks: ticks || animates,
         };
         let mut ui = Ui::new(still, config, size, 1.0)
             .unwrap_or_else(|error| panic!("page {} must mount: {error}", page));
+        host::stand(&mut ui, page)
+            .unwrap_or_else(|error| panic!("page {} must open: {error}", page));
         // One frame at sixty a second, which is what the window tells the pass.
         let frame = Duration::from_millis(16);
         // The window asks for the first frame itself, once the surface is up.
