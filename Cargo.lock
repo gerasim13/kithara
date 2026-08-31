@@ -5327,20 +5327,29 @@ dependencies = [
 name = "kithara-test-fixtures"
 version = "0.0.1-alpha4"
 dependencies = [
+ "bytes",
  "delegate",
  "hex",
+ "hls_m3u8",
  "inventory",
  "kithara-bufpool",
+ "kithara-drm",
  "kithara-encode",
+ "kithara-platform",
  "kithara-stream",
  "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "num-traits",
+ "rayon",
+ "reqwest",
+ "serde",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.18",
+ "tiny_http",
  "toml 1.1.2+spec-1.1.0",
+ "url",
 ]
 
 [[package]]

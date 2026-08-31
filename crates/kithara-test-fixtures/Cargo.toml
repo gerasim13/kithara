@@ -16,7 +16,9 @@ test = false
 [dependencies]
 hex = { workspace = true }
 num-traits = { workspace = true }
+serde = { workspace = true }
 sha2 = { workspace = true }
+toml = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # `PcmSource` and `EncodedTrack`. The crate refuses to build with no backend,
@@ -33,25 +35,40 @@ thiserror = { workspace = true }
 
 [build-dependencies]
 kithara-bufpool = { workspace = true }
+kithara-drm = { workspace = true }
 kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
+kithara-platform = { workspace = true }
 kithara-stream = { workspace = true, features = ["client-reqwest", "tls-rustls"] }
 kithara-test-macros = { workspace = true }
 
+bytes = { workspace = true }
+
 delegate = { workspace = true }
 hex = { workspace = true }
+hls_m3u8 = { workspace = true }
 inventory = { workspace = true }
 num-traits = { workspace = true }
+rayon = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
+serde = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
+kithara-platform = { workspace = true }
 # The backend features are what lets `cargo test -p kithara-test-fixtures` stand on
 # its own: kithara-net, reached through test-utils, refuses to build without one.
 kithara-test-utils = { workspace = true, features = ["client-reqwest", "probe", "tls-rustls"] }
 
+hls_m3u8 = { workspace = true }
+rayon = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls"] }
 tempfile = { workspace = true }
+tiny_http = { workspace = true }
 toml = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

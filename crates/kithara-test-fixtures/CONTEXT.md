@@ -73,6 +73,36 @@ Consequences, in the order they matter:
 - rustc records `include_bytes!` paths in dep-info, so cargo rebuilds the
   accessor when the store entry it was built from changes.
 
+## Optional And Remote Assets
+
+`#[kithara::asset(..., optional)]` is the only asset shape allowed to fail
+without failing the build. It is reserved for opt-in remote hydration:
+
+- Normal builds stay offline. `KITHARA_REMOTE_FIXTURES` enables optional
+  producers; without it their generated accessors report that hydration is
+  disabled.
+- `env = ["NAME", ...]` records credential dependencies with
+  `cargo:rerun-if-env-changed`. Values are read only by the producer and are
+  never written to generated source, manifests, diagnostics, or the store.
+- A failed optional producer emits a redacted Cargo warning and leaves no final
+  entry. `Asset::try_bytes()` returns the recorded `AssetError::Unavailable`,
+  and the next enabled build retries because the entry is still absent.
+- Required producers retain the old fail-closed contract. `optional` cannot be
+  combined with `embed` because unavailable bytes cannot be compiled into a
+  binary.
+
+The HLS hydrator stores every fetched playlist, media resource, init section,
+and AES-128 key as an atomic child entry through `BuildContext`. It rewrites
+their URIs to stable local routes and returns one bundle manifest only after the
+complete VOD graph is valid and stored. The ordinary asset writer commits that
+manifest last. Child entries left by a storage failure are unreachable without
+the manifest and safe to reuse on a retry.
+
+`HlsBundle::try_from(&Asset)` is the runtime read side. It accepts only one-level
+store filenames, absolute routes, unique routes, and a master route present in
+the manifest, so a hydrated manifest cannot escape its fixture namespace when
+served by a test.
+
 ## Generators Stay Out Of The Library
 
 `src/defs/` is reached only through `#[path]` from `build.rs`. Two consequences,

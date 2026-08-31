@@ -48,7 +48,11 @@ pub(crate) struct AssetArgs {
     pub(crate) depends_on: Vec<LitStr>,
     /// Bake the asset into the binary instead of reading it from the store.
     pub(crate) embed: bool,
+    /// Environment variables that invalidate this producer.
+    pub(crate) env: Vec<LitStr>,
     pub(crate) ext: LitStr,
+    /// Keep the build green when this producer reports an unavailable asset.
+    pub(crate) optional: bool,
 }
 
 impl Parse for AssetArgs {
@@ -56,7 +60,9 @@ impl Parse for AssetArgs {
         let mut content_type: Option<LitStr> = None;
         let mut depends_on: Option<Vec<LitStr>> = None;
         let mut embed = false;
+        let mut env: Option<Vec<LitStr>> = None;
         let mut ext: Option<LitStr> = None;
+        let mut optional = false;
 
         while !input.is_empty() {
             let key = input.parse::<Ident>()?;
@@ -70,18 +76,36 @@ impl Parse for AssetArgs {
                 }
                 continue;
             }
+            if key == "optional" {
+                if optional {
+                    return Err(syn::Error::new(key.span(), "duplicate key `optional`"));
+                }
+                optional = true;
+                if !input.is_empty() {
+                    input.parse::<Token![,]>()?;
+                }
+                continue;
+            }
             input.parse::<Token![=]>()?;
-            if key == "depends_on" {
-                if depends_on.is_some() {
-                    return Err(syn::Error::new(key.span(), "duplicate key `depends_on`"));
+            if key == "depends_on" || key == "env" {
+                let slot = if key == "depends_on" {
+                    &mut depends_on
+                } else {
+                    &mut env
+                };
+                if slot.is_some() {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("duplicate key `{key}`"),
+                    ));
                 }
                 let content;
                 bracketed!(content in input);
                 let values = Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?;
                 if values.is_empty() {
-                    return Err(content.error("`depends_on` needs at least one asset name"));
+                    return Err(content.error(format!("`{key}` needs at least one name")));
                 }
-                depends_on = Some(values.into_iter().collect());
+                *slot = Some(values.into_iter().collect());
                 if !input.is_empty() {
                     input.parse::<Token![,]>()?;
                 }
@@ -96,7 +120,7 @@ impl Parse for AssetArgs {
                         key.span(),
                         format!(
                             "unknown asset key `{other}`; expected `ext`, `content_type`, \
-                             or `embed`"
+                             `depends_on`, `env`, `embed`, or `optional`"
                         ),
                     ));
                 }
@@ -124,12 +148,17 @@ impl Parse for AssetArgs {
                 "asset `ext` must be a bare file extension such as \"wav\"",
             ));
         }
+        if embed && optional {
+            return Err(input.error("an optional asset cannot be embedded"));
+        }
 
         Ok(Self {
             content_type,
             depends_on: depends_on.unwrap_or_default(),
             embed,
+            env: env.unwrap_or_default(),
             ext,
+            optional,
         })
     }
 }
@@ -160,6 +189,19 @@ mod tests {
                 .map(syn::LitStr::value)
                 .collect::<Vec<_>>(),
             ["rhythm_wav_house_124", "rhythm_score_house_124"],
+        );
+    }
+
+    #[test]
+    fn environment_dependencies_are_parsed_in_declaration_order() {
+        let args = syn::parse_str::<AssetArgs>(
+            r#"ext = "toml", content_type = "application/toml", env = ["TOKEN", "KEY"]"#,
+        )
+        .expect("valid attribute");
+
+        assert_eq!(
+            args.env.iter().map(syn::LitStr::value).collect::<Vec<_>>(),
+            ["TOKEN", "KEY"],
         );
     }
 
@@ -210,10 +252,33 @@ mod tests {
     }
 
     #[test]
+    fn optional_is_off_by_default_and_opt_in() {
+        let plain = syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav""#)
+            .expect("valid attribute");
+        assert!(!plain.optional);
+
+        let optional = syn::parse_str::<AssetArgs>(
+            r#"ext = "m3u8", content_type = "application/vnd.apple.mpegurl", optional"#,
+        )
+        .expect("valid attribute");
+        assert!(optional.optional);
+    }
+
+    #[test]
     fn embed_is_rejected_twice() {
         assert!(
             syn::parse_str::<AssetArgs>(r#"ext = "wav", content_type = "audio/wav", embed, embed"#)
                 .is_err(),
+        );
+    }
+
+    #[test]
+    fn optional_asset_cannot_be_embedded() {
+        assert!(
+            syn::parse_str::<AssetArgs>(
+                r#"ext = "m3u8", content_type = "application/vnd.apple.mpegurl", optional, embed"#
+            )
+            .is_err(),
         );
     }
 

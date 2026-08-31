@@ -26,25 +26,47 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let content_type = &args.content_type;
     let dependencies = &args.depends_on;
     let embed = args.embed;
+    let env = &args.env;
     let ext = &args.ext;
+    let optional = args.optional;
 
     let submissions = names.iter().zip(&cases).map(|(case_literal, case)| {
         let values = &case.values;
-        let call = if dependencies.is_empty() {
-            quote! { #fn_name(#(#values),*) }
+        let call = match (optional, dependencies.is_empty()) {
+            (true, true) => quote! { #fn_name(&__context, #(#values),*) },
+            (true, false) => {
+                quote! { #fn_name(&__context, __inputs, #(#values),*) }
+            }
+            (false, true) => quote! { #fn_name(#(#values),*) },
+            (false, false) => quote! { #fn_name(__inputs, #(#values),*) },
+        };
+        let build = if optional {
+            quote! {
+                match #call {
+                    Ok(bytes) => crate::registry::AssetBuild::Ready(bytes),
+                    Err(error) => crate::registry::AssetBuild::Unavailable(error.to_string()),
+                }
+            }
+        } else if dependencies.is_empty() {
+            quote! {
+                let _context = __context;
+                crate::registry::AssetBuild::Ready(#call)
+            }
         } else {
-            quote! { #fn_name(__inputs, #(#values),*) }
+            quote! { crate::registry::AssetBuild::Ready(#call) }
         };
         quote! {
             ::inventory::submit! {
                 crate::registry::AssetDef {
-                    build: |__inputs| #call,
+                    build: |__context, __inputs| { #build },
                     case: #case_literal,
                     content_type: #content_type,
                     dependencies: &[#(#dependencies),*],
                     embed: #embed,
+                    env: &[#(#env),*],
                     ext: #ext,
                     func: #fn_name_literal,
+                    optional: #optional,
                 }
             }
         }
