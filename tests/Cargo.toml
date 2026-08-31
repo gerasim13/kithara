@@ -87,7 +87,6 @@ apple-fused-src = ["kithara/apple-fused-src"]
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
 
 # Crypto (for HLS encryption tests)
@@ -204,6 +203,7 @@ kithara = { workspace = true, features = [
     "queue",
     "probe",
     "mock",
+    "test-utils",
     "symphonia",
     "stretch-signalsmith",
     "backend-cpal",
@@ -230,6 +230,7 @@ kithara = { workspace = true, default-features = false, features = [
     "queue",
     "probe",
     "mock",
+    "test-utils",
     "symphonia",
     "resample-rubato",
     "analysis-beat",

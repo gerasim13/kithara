@@ -1,5 +1,5 @@
-pub use kithara_bufpool::testing::TestPools;
-use kithara_bufpool::{OverallBudget, PoolConfig, PoolRegion};
+pub use kithara::bufpool::testing::TestPools;
+use kithara::bufpool::{OverallBudget, PoolConfig, PoolRegion};
 
 pub type Pools = PoolRegion<TestPools>;
 
