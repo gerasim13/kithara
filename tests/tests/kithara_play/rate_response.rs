@@ -1,6 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::num::NonZeroU32;
+use std::{f64::consts::TAU, num::NonZeroU32};
 
 #[cfg(feature = "perf")]
 use hotpath::HotpathGuardBuilder;
@@ -12,31 +12,59 @@ use kithara::{
     warp::{StretchControls, StretchKind},
 };
 use kithara_integration_tests::{
-    TestTempDir,
-    cochlea::{align_command_runs, first_sustained_delta},
-    disk_asset_store, kithara,
+    TestTempDir, disk_asset_store, kithara,
     offline::{OfflinePlayerHarness, OfflinePlayerOptions},
     temp_dir,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
+use num_traits::AsPrimitive;
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
 const BLOCK_FRAMES: usize = 512;
-const PRE_COMMAND_FRAMES: usize = BLOCK_FRAMES * 8;
+const PRE_COMMAND_FRAMES: usize = BLOCK_FRAMES * 16;
 const RESPONSE_OBSERVATION_FRAMES: usize = BLOCK_FRAMES * 32;
 const SLOW_RATE: f32 = 0.5;
 const INTERMEDIATE_RATE: f32 = 2.0;
 const FAST_RATE: f32 = 4.0;
-const SLOW_TONE_HZ: f64 = 440.0;
-const INTERMEDIATE_TONE_HZ: f64 = 1_760.0;
-const FAST_TONE_HZ: f64 = 3_520.0;
+const TONES_HZ: [f64; 3] = [440.0, 1_760.0, 3_520.0];
 const TONE_DOMINANCE_RATIO: f64 = 4.0;
+const TARGET_WINDOW_FRAMES: usize = 64;
 const RATE_COMMAND_BURST: usize = 64;
 const WARMUP_BLOCK_BUDGET: usize = 200;
 const RESPONSE_BUDGET: Duration = Duration::from_millis(10);
-const RESPONSE_DELTA_THRESHOLD: f32 = 0.002;
-const RESPONSE_SUSTAINED_FRAMES: usize = 32;
+
+const UP: RateCase = RateCase::new(SLOW_RATE, 0, INTERMEDIATE_RATE, 1, false);
+const DOWN: RateCase = RateCase::new(INTERMEDIATE_RATE, 1, SLOW_RATE, 0, false);
+const EXTREME: RateCase = RateCase::new(SLOW_RATE, 0, FAST_RATE, 2, false);
+const BURST: RateCase = RateCase::new(SLOW_RATE, 0, INTERMEDIATE_RATE, 1, true);
+
+#[derive(Clone, Copy, Debug)]
+struct RateCase {
+    initial_rate: f32,
+    initial_tone: usize,
+    target_rate: f32,
+    target_tone: usize,
+    burst: bool,
+}
+
+impl RateCase {
+    const fn new(
+        initial_rate: f32,
+        initial_tone: usize,
+        target_rate: f32,
+        target_tone: usize,
+        burst: bool,
+    ) -> Self {
+        Self {
+            initial_rate,
+            initial_tone,
+            target_rate,
+            target_tone,
+            burst,
+        }
+    }
+}
 
 struct RateRun {
     command_frame: usize,
@@ -73,11 +101,7 @@ fn tone_magnitudes(samples: &[f32]) -> [f64; 3] {
     {
         *sample = frame[0];
     }
-    [
-        goertzel_magnitude(&channel[..frames], SLOW_TONE_HZ, SAMPLE_RATE),
-        goertzel_magnitude(&channel[..frames], INTERMEDIATE_TONE_HZ, SAMPLE_RATE),
-        goertzel_magnitude(&channel[..frames], FAST_TONE_HZ, SAMPLE_RATE),
-    ]
+    TONES_HZ.map(|tone| goertzel_magnitude(&channel[..frames], tone, SAMPLE_RATE))
 }
 
 fn tone_is_dominant(samples: &[f32], target: usize) -> bool {
@@ -86,6 +110,22 @@ fn tone_is_dominant(samples: &[f32], target: usize) -> bool {
         && magnitudes.iter().enumerate().all(|(index, magnitude)| {
             index == target || magnitudes[target] > magnitude * TONE_DOMINANCE_RATIO
         })
+}
+
+fn first_target_window(samples: &[f32], command_frame: usize, target: usize) -> Option<usize> {
+    let channels = usize::from(CHANNELS);
+    let frames = samples.len() / channels;
+    (command_frame + TARGET_WINDOW_FRAMES..=frames).find_map(|end| {
+        let start = end - TARGET_WINDOW_FRAMES;
+        tone_is_dominant(&samples[start * channels..end * channels], target)
+            .then_some(end - command_frame)
+    })
+}
+
+fn command_window(run: &RateRun) -> &[f32] {
+    let channels = usize::from(CHANNELS);
+    let start = run.command_frame - TARGET_WINDOW_FRAMES;
+    &run.samples[start * channels..run.command_frame * channels]
 }
 
 async fn render_until_tone(harness: &OfflinePlayerHarness, target: usize) {
@@ -103,6 +143,7 @@ async fn render_until_tone(harness: &OfflinePlayerHarness, target: usize) {
 async fn playing_sine_queue(
     temp_dir: &TestTempDir,
     backend: StretchKind,
+    initial_rate: f32,
 ) -> (OfflinePlayerHarness, Queue) {
     let stretch = StretchControls::new(1.0);
     stretch.set_backend(backend);
@@ -133,7 +174,7 @@ async fn playing_sine_queue(
             .should_autoplay(false)
             .build(),
     );
-    queue.set_default_rate(SLOW_RATE);
+    queue.set_default_rate(initial_rate);
     let id = queue.insert_loaded_for_test(resource);
     queue
         .select(id, Transition::None)
@@ -156,35 +197,26 @@ async fn capture_frames(harness: &OfflinePlayerHarness, frames: usize) -> Vec<f3
 async fn response_run(
     temp_dir: &TestTempDir,
     backend: StretchKind,
-    two_step: bool,
-    burst: bool,
+    case: RateCase,
     issue_target: bool,
 ) -> RateRun {
-    let (harness, queue) = playing_sine_queue(temp_dir, backend).await;
-    render_until_tone(&harness, 0).await;
-    if two_step {
-        queue.set_rate(INTERMEDIATE_RATE);
-        render_until_tone(&harness, 1).await;
-    }
+    let (harness, queue) = playing_sine_queue(temp_dir, backend, case.initial_rate).await;
+    render_until_tone(&harness, case.initial_tone).await;
     time::sleep(Duration::from_millis(250)).await;
 
     let mut samples = capture_frames(&harness, PRE_COMMAND_FRAMES).await;
     let command_frame = samples.len() / usize::from(CHANNELS);
-    if burst {
-        let current_rate = if two_step {
-            INTERMEDIATE_RATE
-        } else {
-            SLOW_RATE
-        };
-        for _ in 0..RATE_COMMAND_BURST {
-            queue.set_rate(current_rate);
-        }
-        if !issue_target {
-            queue.set_rate(current_rate);
-        }
-    }
     if issue_target {
-        queue.set_rate(FAST_RATE);
+        if case.burst {
+            for command in 0..RATE_COMMAND_BURST {
+                queue.set_rate(if command.is_multiple_of(2) {
+                    FAST_RATE
+                } else {
+                    SLOW_RATE
+                });
+            }
+        }
+        queue.set_rate(case.target_rate);
     }
     samples.extend(capture_frames(&harness, RESPONSE_OBSERVATION_FRAMES).await);
 
@@ -194,54 +226,68 @@ async fn response_run(
     }
 }
 
-fn eventually_reaches_fast_tone(samples: &[f32], command_frame: usize) -> bool {
-    samples[command_frame * usize::from(CHANNELS)..]
-        .chunks_exact(BLOCK_FRAMES * usize::from(CHANNELS))
-        .any(|block| tone_is_dominant(block, 2))
-}
+fn assert_response(
+    backend: StretchKind,
+    label: &str,
+    case: RateCase,
+    candidate: &RateRun,
+    control: &RateRun,
+) {
+    assert!(
+        tone_is_dominant(command_window(candidate), case.initial_tone),
+        "{backend} {label} candidate was not playing the initial tone before set_rate"
+    );
+    assert!(
+        tone_is_dominant(command_window(control), case.initial_tone),
+        "{backend} {label} no-command control was not playing the initial tone"
+    );
+    assert!(
+        !tone_is_dominant(command_window(candidate), case.target_tone),
+        "{backend} {label} candidate already contained the target tone before set_rate"
+    );
+    assert!(
+        first_target_window(&control.samples, control.command_frame, case.initial_tone).is_some(),
+        "{backend} {label} no-command control stopped producing the initial tone"
+    );
+    assert!(
+        first_target_window(&control.samples, control.command_frame, case.target_tone).is_none(),
+        "{backend} {label} no-command control already contains the target tone"
+    );
 
-fn assert_response(backend: StretchKind, label: &str, candidate: &RateRun, control: &RateRun) {
-    let aligned = align_command_runs(
+    let target_end = first_target_window(
         &candidate.samples,
         candidate.command_frame,
-        &control.samples,
-        control.command_frame,
-        CHANNELS,
-    );
-    let frames = aligned.candidate.len() / usize::from(CHANNELS);
-    assert!(
-        first_sustained_delta(
-            &aligned.candidate,
-            &aligned.control,
-            CHANNELS,
-            0..aligned.command_frame,
-            RESPONSE_DELTA_THRESHOLD,
-            RESPONSE_SUSTAINED_FRAMES,
+        case.target_tone,
+    )
+    .unwrap_or_else(|| {
+        panic!(
+            "{backend} {label} command never produced dominant {} Hz PCM",
+            TONES_HZ[case.target_tone]
         )
-        .is_none(),
-        "{backend} {label} candidate diverged from its no-command control before set_rate"
-    );
-    assert!(
-        eventually_reaches_fast_tone(&aligned.candidate, aligned.command_frame),
-        "{backend} {label} command never produced dominant {FAST_TONE_HZ} Hz PCM"
-    );
-
-    let transition = first_sustained_delta(
-        &aligned.candidate,
-        &aligned.control,
-        CHANNELS,
-        aligned.command_frame..frames,
-        RESPONSE_DELTA_THRESHOLD,
-        RESPONSE_SUSTAINED_FRAMES,
-    );
-    let observed = transition.map(|frame| frame - aligned.command_frame);
+    });
     let budget = response_frame_budget();
     assert!(
-        observed.is_some_and(|frames| frames <= budget),
-        "{backend} {label} changed presented PCM at {observed:?} frames; hard budget is {budget} \
-         frames ({:.1} ms)",
+        target_end <= budget,
+        "{backend} {label} target {} Hz became dominant at {target_end} frames; hard budget is \
+         {budget} frames ({:.1} ms)",
+        TONES_HZ[case.target_tone],
         RESPONSE_BUDGET.as_secs_f64() * 1_000.0,
     );
+}
+
+async fn run_response_case(
+    temp_dir: &TestTempDir,
+    backend: StretchKind,
+    case: RateCase,
+    label: &str,
+) {
+    let control = response_run(temp_dir, backend, case, false).await;
+
+    #[cfg(feature = "perf")]
+    let _guard = HotpathGuardBuilder::new("live_rate_response").build();
+
+    let candidate = response_run(temp_dir, backend, case, true).await;
+    assert_response(backend, label, case, &candidate, &control);
 }
 
 #[kithara::test(
@@ -251,28 +297,27 @@ fn assert_response(backend: StretchKind, label: &str, candidate: &RateRun, contr
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
 )]
-#[case::signalsmith_direct(StretchKind::Signalsmith, false)]
-#[case::signalsmith_two_step(StretchKind::Signalsmith, true)]
+#[case::signalsmith_up(StretchKind::Signalsmith, UP)]
+#[case::signalsmith_down(StretchKind::Signalsmith, DOWN)]
+#[case::signalsmith_extreme(StretchKind::Signalsmith, EXTREME)]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_direct(StretchKind::Bungee, false)
+    case::bungee_up(StretchKind::Bungee, UP)
 )]
 #[cfg_attr(
     not(all(target_os = "windows", target_env = "msvc")),
-    case::bungee_two_step(StretchKind::Bungee, true)
+    case::bungee_down(StretchKind::Bungee, DOWN)
+)]
+#[cfg_attr(
+    not(all(target_os = "windows", target_env = "msvc")),
+    case::bungee_extreme(StretchKind::Bungee, EXTREME)
 )]
 async fn live_rate_change_reaches_presented_pcm_within_response_budget(
     temp_dir: TestTempDir,
     #[case] backend: StretchKind,
-    #[case] two_step: bool,
+    #[case] case: RateCase,
 ) {
-    let control = response_run(&temp_dir, backend, two_step, false, false).await;
-
-    #[cfg(feature = "perf")]
-    let _guard = HotpathGuardBuilder::new("live_rate_response").build();
-
-    let candidate = response_run(&temp_dir, backend, two_step, false, true).await;
-    assert_response(backend, "live rate change", &candidate, &control);
+    run_response_case(&temp_dir, backend, case, "live rate change").await;
 }
 
 #[kithara::test(
@@ -291,7 +336,36 @@ async fn latest_rate_wins_after_a_control_burst(
     temp_dir: TestTempDir,
     #[case] backend: StretchKind,
 ) {
-    let control = response_run(&temp_dir, backend, false, true, false).await;
-    let candidate = response_run(&temp_dir, backend, false, true, true).await;
-    assert_response(backend, "latest-wins burst", &candidate, &control);
+    run_response_case(&temp_dir, backend, BURST, "latest-wins burst").await;
+}
+
+#[kithara::test(native, flash(false))]
+fn target_window_distinguishes_every_rate_across_phase() {
+    let channels = usize::from(CHANNELS);
+    for (target, tone) in TONES_HZ.into_iter().enumerate() {
+        for phase_step in 0..128_u32 {
+            let phase = TAU * f64::from(phase_step) / 128.0;
+            let mut samples = Vec::with_capacity(TARGET_WINDOW_FRAMES * channels);
+            for frame in 0..TARGET_WINDOW_FRAMES {
+                let frame = f64::from(u32::try_from(frame).expect("tone window fits u32"));
+                let sample: f32 = (phase + TAU * tone * frame / f64::from(SAMPLE_RATE))
+                    .sin()
+                    .as_();
+                samples.extend(std::iter::repeat_n(sample, channels));
+            }
+            assert!(
+                tone_is_dominant(&samples, target),
+                "{tone} Hz target is ambiguous at phase step {phase_step}"
+            );
+            for other in 0..TONES_HZ.len() {
+                if other != target {
+                    assert!(
+                        !tone_is_dominant(&samples, other),
+                        "{tone} Hz was misclassified as {} Hz at phase step {phase_step}",
+                        TONES_HZ[other]
+                    );
+                }
+            }
+        }
+    }
 }

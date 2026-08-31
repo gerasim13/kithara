@@ -507,4 +507,56 @@ mod tests {
         assert_eq!(actual.sample_peak_dbfs, expected.loudness.sample_peak_dbfs);
         assert_eq!(actual.true_peak_dbtp, expected.loudness.true_peak_dbtp);
     }
+
+    #[kithara::test(native, flash(false))]
+    fn sustained_delta_requires_the_complete_span_and_reports_its_first_frame() {
+        const CHANNELS: u16 = 2;
+        const FRAMES: usize = 512;
+        const THRESHOLD: f32 = 0.002;
+        const SUSTAINED: usize = 32;
+
+        let control = vec![0.0; FRAMES * usize::from(CHANNELS)];
+        assert_eq!(
+            first_sustained_delta(
+                &control,
+                &control,
+                CHANNELS,
+                0..FRAMES,
+                THRESHOLD,
+                SUSTAINED
+            ),
+            None
+        );
+
+        let mut candidate = control.clone();
+        let onset = 442;
+        let short_end = onset + SUSTAINED - 1;
+        candidate[onset * usize::from(CHANNELS)..short_end * usize::from(CHANNELS)].fill(0.5);
+        assert_eq!(
+            first_sustained_delta(
+                &candidate,
+                &control,
+                CHANNELS,
+                0..FRAMES,
+                THRESHOLD,
+                SUSTAINED,
+            ),
+            None
+        );
+
+        candidate[short_end * usize::from(CHANNELS)..(short_end + 1) * usize::from(CHANNELS)]
+            .fill(0.5);
+        assert_eq!(
+            first_sustained_delta(
+                &candidate,
+                &control,
+                CHANNELS,
+                0..FRAMES,
+                THRESHOLD,
+                SUSTAINED,
+            ),
+            Some(onset)
+        );
+        assert!(onset > 441, "frame 442 is outside a 441-frame budget");
+    }
 }
