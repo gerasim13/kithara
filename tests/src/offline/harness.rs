@@ -32,6 +32,13 @@ pub struct OfflinePlayerOptions {
     eq_layout: Option<Vec<EqBandConfig>>,
     #[builder(default)]
     gapless_mode: GaplessMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. Only suites that measure absolute rendered length
+    /// (gapless) opt in: blocking trades an underrun for waiting on decode,
+    /// so under a tight `hang_timeout_secs` a slow decode becomes a hang
+    /// panic instead of inserted silence.
+    #[builder(default)]
+    block_on_underrun: bool,
     timestretch: Option<Arc<StretchControls>>,
 }
 
@@ -46,7 +53,7 @@ impl OfflinePlayerHarness {
         let player_config = PlayerConfig::builder()
             .crossfade_duration(options.crossfade_duration)
             .gapless_mode(options.gapless_mode)
-            .block_on_underrun(true)
+            .block_on_underrun(options.block_on_underrun)
             .sample_rate(
                 NonZeroU32::new(sample_rate).expect("offline player sample rate must be non-zero"),
             )
