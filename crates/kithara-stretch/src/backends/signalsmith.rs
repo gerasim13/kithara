@@ -111,6 +111,7 @@ impl ElasticEngine for SignalsmithElastic {
         Ok(())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(
         &mut self,
         request: ElasticRequest,
@@ -120,6 +121,11 @@ impl ElasticEngine for SignalsmithElastic {
         self.capabilities
             .validate(request, source.len(), output.len())?;
         let rate = request.source_frames_per_output()?;
+        #[cfg(feature = "perf")]
+        hotpath::measure_block!("signalsmith::Stretch::process", {
+            self.inner.process(source, output);
+        });
+        #[cfg(not(feature = "perf"))]
         self.inner.process(source, output);
         self.terminal = TerminalState::Armed { rate };
         Ok(())

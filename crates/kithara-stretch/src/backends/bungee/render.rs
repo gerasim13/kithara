@@ -262,6 +262,7 @@ impl StreamCore {
         Ok(())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn synthesise(
         &mut self,
         valid: bool,

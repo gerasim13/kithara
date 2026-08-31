@@ -199,6 +199,7 @@ impl<S> Audio<S> {
     /// # Errors
     ///
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         self.sync_seek();
         let recv = recv_ctx(&self.session, &self.runtime);

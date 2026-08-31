@@ -66,6 +66,7 @@ impl Fmp4SegmentDemuxer {
         EnsureCursor::Ready
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn fill_cursor(&mut self) -> DecodeResult<FillStatus> {
         let cursor = self
             .cursor
@@ -150,6 +151,7 @@ impl Demuxer for Fmp4SegmentDemuxer {
         self.track_info.duration
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         loop {

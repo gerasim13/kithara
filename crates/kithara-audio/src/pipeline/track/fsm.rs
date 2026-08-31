@@ -178,6 +178,7 @@ fn emit_failure_log(failure: &TrackFailure) {
     }
 }
 
+#[cfg_attr(feature = "perf", hotpath::measure)]
 pub(crate) fn dispatch<T: StreamType>(src: &mut StreamAudioSource<T>) -> TrackStep<AudioChunk> {
     if !matches!(src.state, CurrentFsm::RebuildingDecoder(_))
         && let Some(target) = preempt_target(&src.seek_engine, &src.state, src.seek_obs.as_ref())

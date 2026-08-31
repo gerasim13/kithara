@@ -337,6 +337,8 @@ fn vinyl_speed_scales_duration_and_pitch(#[case] backend: StretchKind) {
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn live_speed_change_updates_stretch_duration(#[case] backend: StretchKind) {
+    #[cfg(feature = "perf")]
+    let _guard = hotpath::HotpathGuardBuilder::new("live_speed_change").build();
     let controls = StretchControls::new(1.0);
     controls.set_keylock(true);
     controls.set_backend(backend);

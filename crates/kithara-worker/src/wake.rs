@@ -30,6 +30,7 @@ impl Wake {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn wait_timeout(&self, timeout: Duration) -> bool {
         if self.take_deferred() {
             return true;

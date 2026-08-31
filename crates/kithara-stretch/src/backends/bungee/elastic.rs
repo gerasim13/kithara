@@ -126,6 +126,7 @@ impl ElasticEngine for BungeeElastic {
         Ok(())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(
         &mut self,
         request: ElasticRequest,

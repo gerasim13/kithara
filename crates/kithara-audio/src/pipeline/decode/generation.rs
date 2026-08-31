@@ -171,6 +171,7 @@ impl DecoderGeneration {
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
             Ok(result) => result,

@@ -73,6 +73,7 @@ impl InputBuffer {
         })
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn append(
         &mut self,
         source: Option<&[f32]>,
@@ -179,12 +180,18 @@ impl InputBuffer {
             ))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn analyse(
         &mut self,
         native: &mut NativeStretcher,
         valid: bool,
         end_of_input: bool,
     ) -> Result<(), ElasticError> {
+        #[cfg(feature = "perf")]
+        hotpath::measure_block!("bungee::analysis::clear", {
+            self.analysis.as_samples_mut().fill(0.0);
+        });
+        #[cfg(not(feature = "perf"))]
         self.analysis.as_samples_mut().fill(0.0);
         if !valid {
             return native.analyse(AnalysisInput {
@@ -223,6 +230,17 @@ impl InputBuffer {
             )
             .map_err(|_| ElasticError::SampleCountOverflow)?;
             let channels = usize::from(self.audio.spec().channels);
+            #[cfg(feature = "perf")]
+            hotpath::measure_block!("bungee::analysis::copy", {
+                for channel in 0..channels {
+                    let source = &self.audio.channel(channel).map_err(signal_error)?
+                        [source_begin..source_begin + copied];
+                    self.analysis.channel_mut(channel).map_err(signal_error)?
+                        [destination_begin..destination_begin + copied]
+                        .copy_from_slice(source);
+                }
+            });
+            #[cfg(not(feature = "perf"))]
             for channel in 0..channels {
                 let source = &self.audio.channel(channel).map_err(signal_error)?
                     [source_begin..source_begin + copied];

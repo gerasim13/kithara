@@ -403,6 +403,7 @@ fn read_box_size(cursor: &mut Cursor<&[u8]>) -> DecodeResult<u64> {
 
 /// Walk a media segment's `(moof, mdat)` pairs and emit per-frame
 /// descriptors. The returned offsets are relative to `segment_bytes`.
+#[cfg_attr(feature = "perf", hotpath::measure)]
 pub(crate) fn parse_segment_frames(
     init: &Fmp4InitInfo,
     segment_bytes: &[u8],

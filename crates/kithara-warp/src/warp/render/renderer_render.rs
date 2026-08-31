@@ -232,6 +232,7 @@ impl WarpRenderer {
     /// The playback scheduler uses this workspace-internal seam to prepare an
     /// owning pooled subchunk outside the checked render core.
     #[doc(hidden)]
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn prepare_quantum(
         &mut self,
         meta: AudioChunkInfo,
@@ -251,6 +252,7 @@ impl WarpRenderer {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn render_active(
         &mut self,
         meta: AudioChunkInfo,

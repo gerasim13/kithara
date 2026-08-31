@@ -627,6 +627,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         Arc::clone(&self.seek_obs)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         track::dispatch(self)
     }

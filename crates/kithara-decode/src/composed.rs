@@ -132,6 +132,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
     /// invoking this — needed because `Frame<'_>` borrows into the
     /// demuxer state and would conflict with `&mut self` here.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::probe(timestamp, frames)]
     fn build_chunk(
         &mut self,
@@ -224,6 +225,7 @@ impl<D: Demuxer, C: FrameCodec> ComposedDecoder<D, C> {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {

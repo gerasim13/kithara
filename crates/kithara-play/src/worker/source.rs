@@ -374,6 +374,7 @@ where
         Arc::clone(&self.seek)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         self.sync_discontinuity();
         if self.cancel_stale_input() {
@@ -429,6 +430,7 @@ where
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn prepare_deferred(&mut self) -> Option<AudioSpec> {
         if let Some(chunk) = self.retired_input.take() {
             self.source.retire_chunk(chunk);

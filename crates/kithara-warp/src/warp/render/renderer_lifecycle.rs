@@ -107,6 +107,7 @@ impl WarpRenderer {
         Ok(drain.complete())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process_active(&mut self, chunk: AudioChunk, speed: f32) -> Option<AudioChunk> {
         if self.engine.is_none() || self.scratch.is_none() {
             warn!("time-stretch target was not prepared before rendering");
@@ -208,6 +209,7 @@ impl WarpRenderer {
     /// Render the source quantum paired with the speed sampled by
     /// [`Self::prepare_quantum`].
     #[doc(hidden)]
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
         let Some(speed) = self.prepared_quantum_speed.take() else {
             warn!("time-stretch quantum was not prepared before rendering");

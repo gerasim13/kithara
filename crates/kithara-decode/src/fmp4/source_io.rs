@@ -135,6 +135,7 @@ impl<'a> LiveRange<'a> {
 /// bytes from the next segment (or from the seg-0 moof after the init).
 /// `re_mp4` then parses the trailing splice as a malformed box and
 /// errors with "failed to fill whole buffer".
+#[cfg_attr(feature = "perf", hotpath::measure)]
 pub(crate) fn fill_segment_buffer(
     source: &mut BoxedSource,
     state: &mut SegmentReadState,

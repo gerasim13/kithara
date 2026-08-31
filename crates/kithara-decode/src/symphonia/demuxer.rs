@@ -234,6 +234,7 @@ impl Demuxer for SymphoniaDemuxer {
         self.track_info.duration
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::probe]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;

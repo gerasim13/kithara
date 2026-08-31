@@ -228,6 +228,7 @@ impl ActiveDecode {
         )
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[kithara::rtsan_allow_blocking]
     pub(crate) fn next_chunk(&mut self, stream_position: u64) -> DecodeResult<DecoderChunkOutcome> {
         let outcome = self.active.next_chunk();

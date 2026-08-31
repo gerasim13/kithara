@@ -88,6 +88,7 @@ impl NativeStretcher {
         stretcher::next(self.inner.as_ptr(), request);
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(super) fn analyse(&mut self, input: AnalysisInput<'_>) -> Result<(), ElasticError> {
         #[cfg(test)]
         if self.take_fault(NativeFault::Analyse) {
@@ -135,6 +136,7 @@ impl NativeStretcher {
         self.copy_native_output(&output, destination, destination_stride)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn synthesise_native(&mut self) -> OutputChunk {
         let mut output = OutputChunk {
             data: std::ptr::null_mut(),
@@ -146,6 +148,7 @@ impl NativeStretcher {
         output
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn copy_native_output(
         &self,
         output: &OutputChunk,

@@ -62,6 +62,11 @@ enum DrainEnd {
     Deadline,
 }
 
+#[hotpath::measure]
+fn physical_memory() -> Option<usize> {
+    memory_stats().map(|stats| stats.physical_mem)
+}
+
 /// RSS along one read of a stream to its end, and how that read finished.
 struct Drain {
     samples: Vec<usize>,
@@ -102,6 +107,7 @@ impl Drain {
 /// so `auto` is offered the same codec boundary to cross that it is offered in
 /// production, and a codec switch reallocates decoder state. Only the length is
 /// ours.
+#[hotpath::measure]
 async fn ladder_url(server: &TestServerHelper) -> Url {
     server
         .create_hls(
@@ -120,6 +126,7 @@ async fn ladder_url(server: &TestServerHelper) -> Url {
 /// drain itself rather than any wall-clock span: the whole track comes out in
 /// a few seconds. That is why the samples are indexed by read below and not by
 /// elapsed time.
+#[hotpath::measure]
 fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     let mut buf = vec![0f32; Consts::READ_FRAMES];
     let mut samples = Vec::new();
@@ -134,8 +141,8 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
             Ok(_) => {}
             Err(error) => break DrainEnd::Failed(error),
         }
-        if let Some(stats) = memory_stats() {
-            samples.push(stats.physical_mem);
+        if let Some(physical_mem) = physical_memory() {
+            samples.push(physical_mem);
         }
     };
 
@@ -159,9 +166,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     let mut run_deltas = Vec::with_capacity(Consts::BUDGET_RUNS);
 
     for run in 0..Consts::BUDGET_RUNS {
-        let baseline_rss = memory_stats()
-            .expect("memory_stats unsupported")
-            .physical_mem;
+        let baseline_rss = physical_memory().expect("memory_stats unsupported");
 
         let server = TestServerHelper::new().await;
         let url = ladder_url(&server).await;
