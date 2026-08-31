@@ -85,9 +85,10 @@ pub use assets_ext::memory_asset_store;
 pub use fixtures::*;
 pub use hls_server::{
     AbrTestServer, EncryptionConfig, HlsTestServer, HlsTestServerConfig, PackagedTestServer,
-    TestServer, abr, compat, master_playlist, packaged, packaged_test_server, test_master_playlist,
-    test_master_playlist_encrypted, test_master_playlist_with_init, test_media_playlist,
-    test_media_playlist_encrypted, test_media_playlist_with_init, test_segment_data, test_server,
+    TestServer, abr, compat, master_playlist, mixed_codec_ladder, mixed_codec_ladder_encrypted,
+    packaged, packaged_test_server, test_master_playlist, test_master_playlist_encrypted,
+    test_master_playlist_with_init, test_media_playlist, test_media_playlist_encrypted,
+    test_media_playlist_with_init, test_segment_data, test_server,
 };
 pub use hls_url::{
     HlsSpec, encode_hls_spec, hls_init_path, hls_key_path, hls_master_path, hls_media_path,

@@ -13,8 +13,12 @@ use kithara::{
     play::{PlayWorker, PlayWorkerConfig, RegisteredAudio},
     stream::Stream,
 };
-use kithara_integration_tests::{TestServerHelper, TestTempDir, abr_fast, auto, temp_dir};
+use kithara_integration_tests::{
+    TestServerHelper, TestTempDir, abr_fast, auto, mixed_codec_ladder,
+    mixed_codec_ladder_encrypted, temp_dir,
+};
 use tracing::info;
+use url::Url;
 
 fn warmup_until_first_frame(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f32]) -> u64 {
     let mut warmup_samples = 0u64;
@@ -74,6 +78,23 @@ fn run_rapid_random_seeks(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f
     stats
 }
 
+/// The ladder both tests below open: the production-shaped 3 AAC + 1 FLAC
+/// spread, plain or AES-128. The FLAC variant is the far side of the codec
+/// boundary these tests exist to cross, and the length is what makes the
+/// deepest seek position above land inside the track.
+async fn ladder_url(server: &TestServerHelper, encrypted: bool) -> Url {
+    let ladder = if encrypted {
+        mixed_codec_ladder_encrypted()
+    } else {
+        mixed_codec_ladder()
+    };
+    server
+        .create_hls(ladder)
+        .await
+        .expect("create the ladder the seek stress runs over")
+        .master_url()
+}
+
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
 ///
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
@@ -86,17 +107,17 @@ fn run_rapid_random_seeks(audio: &mut RegisteredAudio<Stream<Hls>>, buf: &mut [f
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(3)
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
 async fn stress_seek_during_abr_switch_real_decoder(
     temp_dir: TestTempDir,
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
-    info!(label, path, "Opening real stream");
+    let url = ladder_url(&server, encrypted).await;
+    info!(label, %url, "Opening generated stream");
 
     let region = Region::default();
     let worker = PlayWorker::new(
@@ -175,7 +196,7 @@ async fn stress_seek_during_abr_switch_real_decoder(
     .await;
 
     match result {
-        Ok(()) => info!(label, path, "Stress test passed"),
+        Ok(()) => info!(label, "Stress test passed"),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }
@@ -191,16 +212,16 @@ async fn stress_seek_during_abr_switch_real_decoder(
     timeout(Duration::from_secs(120)),
     hang_timeout_secs(5)
 )]
-#[case::hls("hls/master.m3u8", "HLS")]
-#[case::drm("drm/master.m3u8", "DRM")]
+#[case::hls(false, "HLS")]
+#[case::drm(true, "DRM")]
 async fn seek_sequence_from_log_real_stream(
     temp_dir: TestTempDir,
-    #[case] path: &str,
+    #[case] encrypted: bool,
     #[case] label: &str,
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let url = server.asset(path);
+    let url = ladder_url(&server, encrypted).await;
     let region = Region::default();
     let worker = PlayWorker::new(
         PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
@@ -257,7 +278,7 @@ async fn seek_sequence_from_log_real_stream(
     .await;
 
     match result {
-        Ok(()) => info!(label, path, "seek_sequence_from_log_real_stream passed"),
+        Ok(()) => info!(label, "seek_sequence_from_log_real_stream passed"),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }
