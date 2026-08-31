@@ -157,14 +157,13 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(Consts::BUDGET_RUNS);
+    let server = TestServerHelper::new().await;
+    let url = ladder_url(&server).await;
 
     for run in 0..Consts::BUDGET_RUNS {
         let baseline_rss = memory_stats()
             .expect("memory_stats unsupported")
             .physical_mem;
-
-        let server = TestServerHelper::new().await;
-        let url = ladder_url(&server).await;
 
         let region = Region::default();
         let byte_pool = region.byte_pool();
@@ -174,7 +173,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             })
             .pool(byte_pool.clone())
             .build();
-        let hls_config = HlsConfig::for_url(url)
+        let hls_config = HlsConfig::for_url(url.clone())
             .store(store)
             .pool(byte_pool.clone())
             .initial_abr_mode(auto(0))
@@ -205,8 +204,6 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             samples.len(),
             drain.elapsed,
         );
-
-        drop(server);
     }
 
     let min_delta = run_deltas.iter().copied().min().unwrap_or(0);

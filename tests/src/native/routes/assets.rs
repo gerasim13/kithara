@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use axum::{
     Router,
     body::Body,
@@ -13,7 +11,6 @@ use kithara_test_fixtures::{
     assets::by_name,
     hls::{HlsBundle, long_drm, long_plain},
 };
-use tower_http::services::ServeDir;
 
 use crate::test_server_state::TestServerState;
 
@@ -21,7 +18,6 @@ pub(crate) fn router() -> Router<Arc<TestServerState>> {
     Router::new()
         .route("/assets/hls/{*path}", get(plain_hls))
         .route("/assets/drm/{*path}", get(drm_hls))
-        .nest_service("/assets", ServeDir::new(assets_dir()))
         .route("/streamhq", get(streamhq))
 }
 
@@ -54,13 +50,6 @@ fn serve_hls(bundle: &HlsBundle, path: &str) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
-}
-
-pub(crate) fn assets_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root from tests/")
-        .join("assets")
 }
 
 /// Mirror the production `cdn-edge.zvq.me/track/streamhq?id=*` URL shape:
