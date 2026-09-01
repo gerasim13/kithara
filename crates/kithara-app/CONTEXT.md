@@ -299,3 +299,11 @@ type, one in `document::load` through the whole merge-expand-type pipeline.
 What is left of `network` is `size_probe_method`, which is not a `kithara-net` field at all — it is
 `kithara::hls::SizeProbeMethod`, and it belongs to the `hls` section. When that section arrives it takes the field and
 `network` goes with it. Until then `network` is a one-field holding pen, not a second source of truth.
+
+`assets_store` is `kithara::assets::AssetStoreSettings`, and it is the first section the application does not pass
+through whole. Seven of its eight knobs reach `AssetStore::open` unchanged through `maybe_*` setters, where an unset
+value is byte-identical to never calling the setter. `backend` cannot: `open`'s own fallback for an absent backend is a
+fresh unique temp directory per launch, so forwarding an unset value would move the on-disk cache every run. `main`
+therefore calls `Config::store_backend`, which resolves an unnamed backend to `StorageBackend::default` — a stable root
+under the system temp directory. That resolution lives in `document::load` rather than inline at the construction site
+so a test can reach it; two in `document::load` hold it, one for the silent document and one for a named backend.

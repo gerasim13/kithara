@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::{AssetLayoutRegistry, AssetStoreSettings},
+    assets::{AssetLayoutRegistry, AssetStoreSettings, StorageBackend},
     hls::SizeProbeMethod,
     net::NetSettings,
     play::policy::DomainKeyPolicy,
@@ -227,6 +227,21 @@ impl Config {
         self.document.assets_store.clone()
     }
 
+    /// Where the asset store keeps its resources. A document that names no
+    /// backend resolves to [`StorageBackend::default`] — a stable root under
+    /// the system temp directory — and deliberately not to
+    /// `AssetStore::open`'s own fallback, which is a fresh unique directory
+    /// per launch and would move the on-disk cache every run. The resolution
+    /// lives here rather than at the construction site so a test can reach it.
+    #[must_use]
+    pub fn store_backend(&self) -> StorageBackend {
+        self.document
+            .assets_store
+            .backend
+            .clone()
+            .unwrap_or_default()
+    }
+
     /// The compute pool the document names, when it names one. `None` leaves
     /// the pool the caller already installed standing.
     #[must_use]
@@ -287,7 +302,7 @@ mod tests {
     use struct_patch::Patch as _;
     use tempfile::TempDir;
 
-    use super::{BAKED_PATH, Config, LoadError};
+    use super::{BAKED_PATH, Config, LoadError, StorageBackend};
 
     fn tempdir() -> TempDir {
         tempfile::tempdir().expect("a temporary directory")
@@ -433,6 +448,36 @@ mod tests {
             settings.max_bytes.is_none(),
             "a knob the document does not name reaches the app empty"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_silent_document_leaves_the_store_on_the_stable_default_root() {
+        let dir = tempdir();
+        let path = write(&dir, "silent-store", "assets_store:\n  max_assets: 8\n");
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        assert_eq!(
+            config.store_backend(),
+            StorageBackend::default(),
+            "an unnamed backend must resolve to the stable default root, not \
+             to the fresh per-launch temp directory `AssetStore::open` falls \
+             back to on its own"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_that_names_a_backend_gets_that_one() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "named-store",
+            "assets_store:\n  backend:\n    kind: memory\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        assert_eq!(config.store_backend(), StorageBackend::Memory);
     }
 
     /// The proof the duplicate key is gone rather than merely unread: `network`

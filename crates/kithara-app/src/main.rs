@@ -139,14 +139,10 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
-    // `backend` is set explicitly rather than through `.maybe_backend(...)`:
-    // an unset document value must keep landing on this stable temp root, not
-    // on `AssetStore::open`'s own fallback (a fresh, unique temp dir per
-    // launch), which would silently move the on-disk cache every run.
     let store_settings = document.assets_store();
     let store = AppStore::builder(pools)
         .cancel(shutdown.child())
-        .backend(store_settings.backend.unwrap_or_default())
+        .backend(document.store_backend())
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
         .maybe_cache_capacity(store_settings.cache_capacity)

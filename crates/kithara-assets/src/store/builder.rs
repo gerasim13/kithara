@@ -101,14 +101,30 @@ impl<'de> Deserialize<'de> for StorageBackend {
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct AssetStoreSettings {
+    /// Where resources live. Unset means whatever the embedder resolves an
+    /// absent backend to; `AssetStore::open` itself falls back to a disk root
+    /// under a fresh temp directory, which is a different place on every
+    /// launch.
     pub backend: Option<StorageBackend>,
+    /// Resources the in-memory cache retains before it evicts the
+    /// least-recently-used one. Applies to both backends.
     pub cache_capacity: Option<NonZeroUsize>,
+    /// Assets the eviction policy keeps before it drops the coldest one.
     pub max_assets: Option<usize>,
+    /// Bytes the eviction policy keeps before it drops the coldest asset.
     pub max_bytes: Option<u64>,
+    /// Resources one in-memory asset holds. **Memory backend only** — the disk
+    /// backend never reads it, so naming it beside `backend: disk` (or beside
+    /// no backend at all, which resolves to disk) configures nothing.
     pub mem_resource_capacity: Option<usize>,
+    /// Bytes read, transformed, and written per pass when a resource is
+    /// processed on commit.
     pub processing_chunk_size: Option<usize>,
+    /// Recheck cadence for a reader blocked on the processing readiness gate.
     #[serde(with = "humantime_serde::option")]
     pub processing_gate_poll_interval: Option<Duration>,
+    /// Bytes a fresh segment's temp file is reserved at. **Disk backend
+    /// only** — the memory backend has no temp file to reserve.
     pub segment_reservation: Option<u64>,
 }
 
@@ -1063,7 +1079,7 @@ mod tests {
     /// just the settings struct that reports it.
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn a_store_built_from_the_documents_settings_reports_the_capacity_it_named() {
+    fn a_store_built_from_the_documents_settings_enforces_the_capacity_it_named() {
         let settings: AssetStoreSettings =
             serde_yaml_ng::from_str("cache_capacity: 1\n").expect("the document types");
 
@@ -1083,6 +1099,12 @@ mod tests {
             store.open_resource(&keys[0], None).is_err(),
             "the document's cache_capacity of 1 must evict the first \
              resource once a second one lands"
+        );
+        assert!(
+            store.open_resource(&keys[1], None).is_ok(),
+            "the resource that fits the capacity must still open -- without \
+             this the eviction assertion above would also pass if opening \
+             failed for some unrelated reason"
         );
     }
 }
