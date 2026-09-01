@@ -11,9 +11,10 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_document_text_survives_the_build_verbatim() {
-        assert!(
-            super::BAKED_DOCUMENT.contains("providers:"),
-            "the embedded document is the file, not a rendering of it"
+        assert_eq!(
+            super::BAKED_DOCUMENT,
+            include_str!("../app.yaml"),
+            "the embedded document must be the file byte-for-byte, not a rendering of it"
         );
     }
 }

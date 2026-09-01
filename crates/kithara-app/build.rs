@@ -4,7 +4,7 @@
 //!
 //! Reference resolution order for a given name, at run time:
 //! 1. The process environment.
-//! 2. This table, emitted as `kithara_app::baked::baked_env`.
+//! 2. This table, emitted as `crate::baked::baked_env`.
 //! 3. Nothing — the application refuses to start and names what is unset.
 //!
 //! Values read from an environment reference are emitted as `obfstr!("…")` so
@@ -116,8 +116,11 @@ fn collect_refs(value: &serde_yaml_ng::Value, path: &str, refs: &mut Vec<(String
 /// Embed the document verbatim. The application parses this same text at
 /// startup, so the build no longer decides what any field means.
 fn emit_document(code: &mut String, yaml_src: &str) {
-    writeln!(code, "pub const BAKED_DOCUMENT: &str = {yaml_src:?};")
-        .expect("write to String never fails");
+    writeln!(
+        code,
+        "pub(crate) const BAKED_DOCUMENT: &str = {yaml_src:?};"
+    )
+    .expect("write to String never fails");
 }
 
 /// Emit the second place a reference is resolved from. Values are wrapped with
@@ -130,7 +133,7 @@ fn emit_env_table(code: &mut String, refs: &[(String, String)], env_map: &HashMa
     names.dedup();
 
     code.push_str(
-        "#[must_use]\npub fn baked_env(name: &str) -> Option<String> {\n    match name {\n",
+        "#[must_use]\npub(crate) fn baked_env(name: &str) -> Option<String> {\n    match name {\n",
     );
     for name in names {
         match env_map.get(name).filter(|value| !value.is_empty()) {

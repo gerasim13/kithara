@@ -31,7 +31,8 @@ fn the_shipped_document_configures_the_application() {
     let dir = tempdir();
     let path = write(&dir, NEUTRAL_DRM);
 
-    let config = Config::load(Some(&path), None).expect("the baked document stands alone");
+    let config =
+        Config::load(Some(&path), None).expect("the baked document, overlaid with a neutral DRM");
 
     assert!(
         !config.tracks().is_empty(),

@@ -31,8 +31,9 @@ struct Args {
     tracks: Vec<String>,
 
     /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
-    /// Enabled by default during testing phase.
-    #[arg(long, default_value_t = true)]
+    /// An override on top of the document's `network.should_accept_invalid_certs`:
+    /// `true` here forces it on regardless of the document.
+    #[arg(long)]
     insecure: bool,
 
     /// Which host draws the studio. A build without the `masonry` feature has
@@ -100,7 +101,12 @@ fn main() -> AppResult {
         return Ok(());
     }
 
-    init_tracing(&["info"])?;
+    let settings = document.app_settings();
+    let directives = settings
+        .log_directives
+        .clone()
+        .unwrap_or_else(|| vec!["info".to_string()]);
+    init_tracing(&directives.iter().map(String::as_str).collect::<Vec<&str>>())?;
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
@@ -123,8 +129,9 @@ fn main() -> AppResult {
             .worker(base_worker.clone())
             .build(),
     );
+    let insecure = args.insecure || document.should_accept_invalid_certs();
     let net = NetOptions::builder()
-        .is_insecure(args.insecure || document.should_accept_invalid_certs())
+        .is_insecure(insecure)
         .compression(document.compression())
         .build();
     let downloader = Downloader::new(
@@ -137,8 +144,17 @@ fn main() -> AppResult {
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
         .build();
+    // `eprintln!`, not `tracing::error!`: tracing is up by now, but a startup
+    // refusal must not depend on `RUST_LOG` to be seen.
+    let drm_policy = match document.drm_policy() {
+        Ok(policy) => policy,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
     let mut config = AppConfig::builder()
-        .drm(AppDrm::new(document.drm_policy()?))
+        .drm(AppDrm::new(drm_policy))
         .downloader(downloader)
         .shutdown(shutdown.clone())
         .worker(worker)
@@ -151,10 +167,10 @@ fn main() -> AppResult {
         } else {
             args.tracks
         })
-        .should_accept_invalid_certs(args.insecure)
+        .should_accept_invalid_certs(insecure)
         .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
         .build();
-    config.apply(document.app_settings());
+    config.apply(settings);
 
     let mut host = AppHost::new(HostConfig::builder().build())?;
     let decks = vec![
