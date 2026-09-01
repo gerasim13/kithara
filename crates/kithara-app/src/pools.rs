@@ -1,4 +1,8 @@
-use kithara::bufpool::{OverallBudget, Percent, PoolConfig, PoolError, PoolRegion, pool_schema};
+use kithara::bufpool::{
+    OverallBudget, Percent, PoolConfig, PoolError, PoolRegion, PoolSettings, pool_schema,
+};
+use serde::Deserialize;
+use struct_patch::Patch as _;
 
 struct Consts;
 
@@ -41,30 +45,52 @@ pub type AppQueueControl = kithara::queue::QueueControl<AppPools>;
 /// App-owned track-source shape.
 pub type AppTrackSource = kithara::queue::TrackSource<AppPools>;
 
+/// What a document can say about this application's buffer pools. One field
+/// per pool the `pool_schema!` invocation below declares -- there is no shared
+/// region type to derive on, because a region is generated per consumer.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PoolsSection {
+    pub(crate) budget_bytes: Option<usize>,
+    pub(crate) bytes: PoolSettings,
+    pub(crate) samples: PoolSettings,
+}
+
 /// Build the application's single explicitly registered pool region.
 ///
 /// # Errors
 /// Returns an error when pool configuration or initial allocation fails.
-pub fn build() -> Result<Pools, PoolError> {
-    AppPools::builder(OverallBudget(Consts::OVERALL_BYTES))
-        .bytes(
-            PoolConfig::builder()
-                .initial_buffers(0)
-                .max_buffers(usize::MAX)
-                .max_share(Percent::FULL)
-                .trim_capacity(0)
-                .build(),
-        )
-        .samples(
-            PoolConfig::builder()
-                .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
-                .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
-                .max_buffers(128)
-                .max_share(Percent::FULL)
-                .trim_capacity(200_000)
-                .build(),
-        )
-        .build()
+pub fn build(section: &PoolsSection) -> Result<Pools, PoolError> {
+    AppPools::builder(OverallBudget(
+        section.budget_bytes.unwrap_or(Consts::OVERALL_BYTES),
+    ))
+    .bytes(bytes_config(section))
+    .samples(samples_config(section))
+    .build()
+}
+
+fn bytes_config(section: &PoolsSection) -> PoolConfig {
+    let mut config = PoolConfig::builder()
+        .initial_buffers(0)
+        .max_buffers(usize::MAX)
+        .max_share(Percent::FULL)
+        .trim_capacity(0)
+        .build();
+    config.apply(section.bytes.clone());
+    config
+}
+
+fn samples_config(section: &PoolsSection) -> PoolConfig {
+    let mut config = PoolConfig::builder()
+        .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
+        .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
+        .max_buffers(128)
+        .max_share(Percent::FULL)
+        .trim_capacity(200_000)
+        .build();
+    config.apply(section.samples.clone());
+    config
 }
 
 #[cfg(test)]
@@ -77,7 +103,8 @@ mod tests {
 
     #[kithara::test]
     fn initial_samples_are_ready_on_another_thread() {
-        let pools = build().unwrap_or_else(|error| panic!("app pool region: {error}"));
+        let pools = build(&PoolsSection::default())
+            .unwrap_or_else(|error| panic!("app pool region: {error}"));
         let initial_peak = pools.stats().peak_allocated_bytes;
         let worker_pools = pools.clone();
 
@@ -101,5 +128,37 @@ mod tests {
 
         assert!(all_ready);
         assert_eq!(peak, initial_peak);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_pools_document_names_the_bytes_pool_and_leaves_samples_untouched() {
+        let section: PoolsSection = serde_yaml_ng::from_str("bytes:\n  max_buffers: 64\n")
+            .expect("a valid pools document parses");
+
+        let bytes = bytes_config(&section);
+        let samples = samples_config(&section);
+
+        let expected_bytes = PoolConfig::builder()
+            .initial_buffers(0)
+            .max_buffers(64)
+            .max_share(Percent::FULL)
+            .trim_capacity(0)
+            .build();
+        let expected_samples = PoolConfig::builder()
+            .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
+            .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
+            .max_buffers(128)
+            .max_share(Percent::FULL)
+            .trim_capacity(200_000)
+            .build();
+
+        assert_eq!(
+            bytes, expected_bytes,
+            "the document's max_buffers reaches the bytes pool"
+        );
+        assert_eq!(
+            samples, expected_samples,
+            "a pool the document does not name keeps the crate default"
+        );
     }
 }

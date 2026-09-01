@@ -13,7 +13,7 @@ use kithara::{
 };
 use serde::Deserialize;
 
-use crate::config::AppSettings;
+use crate::{config::AppSettings, pools::PoolsSection};
 
 /// Everything one configuration document can say. Sections default to empty, so
 /// a document names only what it changes.
@@ -40,6 +40,7 @@ pub(crate) struct Document {
     pub(crate) network: Network,
     pub(crate) playback: Playback,
     pub(crate) playlist: Playlist,
+    pub(crate) pools: PoolsSection,
     pub(crate) worker: WorkerSettings,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
 }
@@ -169,6 +170,22 @@ mod tests {
         assert!(
             document.worker.max_compute_tasks.is_none(),
             "a document naming no worker section leaves the crate default standing"
+        );
+        assert!(
+            document.pools.budget_bytes.is_none(),
+            "a document naming no pools section leaves the region budget standing"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_pools_section_names_one_pool_without_touching_the_other() {
+        let document: Document = serde_yaml_ng::from_str("pools:\n  bytes:\n    max_buffers: 64\n")
+            .expect("a valid document");
+
+        assert_eq!(document.pools.bytes.max_buffers, Some(64));
+        assert!(
+            document.pools.samples.max_buffers.is_none(),
+            "naming one pool leaves the other empty"
         );
     }
 

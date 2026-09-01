@@ -48,10 +48,12 @@ mod tests {
     fn document_query_identity_separates_tracks_without_splitting_renewed_urls() {
         let document: Document =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document parses");
-        let store = AppStore::builder(pools::build().expect("valid app pool policy"))
-            .backend(StorageBackend::Memory)
-            .layouts(asset_layouts(&document.assets))
-            .build();
+        let store = AppStore::builder(
+            pools::build(&pools::PoolsSection::default()).expect("valid app pool policy"),
+        )
+        .backend(StorageBackend::Memory)
+        .layouts(asset_layouts(&document.assets))
+        .build();
         let first = source("27390231", "100");
         let renewed = source("27390231", "200");
         let second = source("151585912", "100");

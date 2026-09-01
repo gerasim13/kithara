@@ -111,7 +111,7 @@ fn main() -> AppResult {
     let _runtime_guard = runtime.enter();
 
     let shutdown = CancelToken::root();
-    let pools = pools::build()?;
+    let pools = pools::build(&document.pools())?;
     let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
     let mut worker_config = WorkerConfig::new()
         .with_cancel(shutdown.child())

@@ -17,7 +17,7 @@ use kithara::{
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
-    pools::build as app_pools,
+    pools::{PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{TestTempDir, kithara, offline::OfflinePlayer};
 use tracing::info;
@@ -182,7 +182,7 @@ async fn zvuk_prod_aac_to_flac_switch(#[case] backend: DecoderBackend) {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
-    let pools = app_pools().expect("build app pool region");
+    let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))

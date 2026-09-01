@@ -19,7 +19,7 @@ use kithara::{
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
-    pools::{AppPools, build as app_pools},
+    pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflineSession, waits::wait_for_position_at_least,
@@ -46,7 +46,7 @@ static CTX: OnceCell<Ctx> = OnceCell::const_new();
 
 async fn shared_ctx() -> &'static Ctx {
     CTX.get_or_init(|| async {
-        let pools = app_pools().expect("build app pool region");
+        let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
         let net = NetOptions::builder().is_insecure(true).build();
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))

@@ -3,6 +3,7 @@ mod pair;
 
 use counter::BudgetCounter;
 pub(crate) use pair::{BudgetPair, Reservation, ReserveFailure};
+use serde::{Deserialize, Deserializer, de};
 
 /// Hard byte limit shared by every pool in one region.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -18,6 +19,26 @@ impl Percent {
 
     pub(crate) const fn is_valid(self) -> bool {
         self.0 <= Self::FULL.0
+    }
+}
+
+impl<'de> Deserialize<'de> for Percent {
+    /// Rejects a value outside `0..=100` at parse time, naming the offending
+    /// value: not a `ranged!` type (that macro is float-only and its `From`
+    /// clamps instead of refusing), so the invariant is enforced here by hand.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u8::deserialize(deserializer)?;
+        let percent = Self(value);
+        if percent.is_valid() {
+            Ok(percent)
+        } else {
+            Err(de::Error::custom(format!(
+                "percent must be between 0 and 100, got {value}"
+            )))
+        }
     }
 }
 

@@ -346,7 +346,10 @@ mod tests {
 
     fn worker() -> AppWorker {
         AppWorker::new(
-            PlayWorkerConfig::builder(pools::build().expect("valid app pool policy")).build(),
+            PlayWorkerConfig::builder(
+                pools::build(&pools::PoolsSection::default()).expect("valid app pool policy"),
+            )
+            .build(),
         )
     }
 

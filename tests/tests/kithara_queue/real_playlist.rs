@@ -19,7 +19,7 @@ use kithara::{
 use kithara_app::{
     config::{AppConfig, AppDrm},
     document::Config,
-    pools::{AppPools, build as app_pools},
+    pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, kithara,
@@ -70,7 +70,7 @@ mod test_statics {
 async fn shared_test_ctx() -> &'static TestCtx {
     test_statics::TEST_CTX
         .get_or_init(|| async {
-            let pools = app_pools().expect("build app pool region");
+            let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
             let net = NetOptions::builder().is_insecure(true).build();
             let downloader = Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(

@@ -17,7 +17,7 @@ use kithara::{
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},
-    pools::{AppPools, build as app_pools},
+    pools::{AppPools, PoolsSection, build as app_pools},
 };
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, Xorshift64,
@@ -137,7 +137,7 @@ async fn drive_queue_ticks(queue: Arc<Queue<AppPools>>) {
 }
 
 async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, temp: TestTempDir) {
-    let pools = app_pools().expect("build app pool region");
+    let pools = app_pools(&PoolsSection::default()).expect("build app pool region");
     let net = NetOptions::builder().is_insecure(true).build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))

@@ -559,7 +559,7 @@ mod tests {
     }
 
     fn test_pools() -> Pools {
-        pools::build().expect("valid app pool policy")
+        pools::build(&pools::PoolsSection::default()).expect("valid app pool policy")
     }
 
     fn sample_rate() -> NonZeroU32 {

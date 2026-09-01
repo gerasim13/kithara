@@ -22,6 +22,7 @@ use super::{
 use crate::{
     baked::{BAKED_DOCUMENT, baked_env},
     config::AppSettings,
+    pools::PoolsSection,
 };
 
 /// Path the baked document is reported under in parse errors.
@@ -214,6 +215,12 @@ impl Config {
         self.document.worker.clone()
     }
 
+    /// Knobs the document sets on the application's buffer pools.
+    #[must_use]
+    pub fn pools(&self) -> PoolsSection {
+        self.document.pools.clone()
+    }
+
     /// The compute pool the document names, when it names one. `None` leaves
     /// the pool the caller already installed standing.
     #[must_use]
@@ -380,6 +387,26 @@ mod tests {
         assert!(
             matches!(config.worker_pool(), Some(ComputePoolSettings::Disabled {})),
             "the accessor hands the application the mode the document named"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_pools_section_survives_the_load_pipeline() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "pools",
+            "pools:\n  budget_bytes: 1048576\n  bytes:\n    max_buffers: 64\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let section = config.pools();
+
+        assert_eq!(section.budget_bytes, Some(1_048_576));
+        assert_eq!(section.bytes.max_buffers, Some(64));
+        assert!(
+            section.samples.max_buffers.is_none(),
+            "a pool the document does not name reaches the builder empty"
         );
     }
 
