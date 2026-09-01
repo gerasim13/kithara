@@ -57,7 +57,8 @@ pub enum LoadError {
         path: PathBuf,
         source: serde_yaml_ng::Error,
     },
-    /// The merged document does not match the schema.
+    /// A document does not match the schema -- either the merged tree, or an
+    /// overlay whose root is not a mapping, refused before any merge.
     Schema { resource: String, detail: String },
     /// A reference the document names resolved nowhere.
     Env(MissingEnv),
@@ -223,7 +224,8 @@ impl Config {
     ///
     /// # Errors
     /// Returns an error when a provider declares a policy that cannot be
-    /// honoured -- a reserved header, or a hex salt of odd length.
+    /// honoured -- a reserved header, a salt of zero length, or a hex salt
+    /// of odd length.
     pub fn drm_policy(&self) -> Result<DomainKeyPolicy, PolicyError> {
         drm_policy(&self.document.drm)
     }

@@ -275,6 +275,6 @@ it an operator cannot tell which of the two documents to fix.
 `build.rs` emits that second resolution table as the crate-private `baked::baked_env`. It carries only the
 names this build found a value for, wrapping each in `obfstr!()` so a shipped secret is not a plain run of
 bytes in `strings` output; a name it had no value for is answered `None` and refused at startup. Builds that
-talk to a real key server — the CI `network*` lanes, release pipelines — set `KITHARA_DRM_REQUIRE` (any
+talk to a real key server — today the CI `network*` lanes — set `KITHARA_DRM_REQUIRE` (any
 non-empty value): an upfront pass then validates every reference in the document, the whole tree rather than
 the DRM providers alone, and fails the build listing all missing names with their positions.
