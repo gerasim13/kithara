@@ -1,6 +1,10 @@
-use kithara::{abr::AbrMode, events::AdvanceReason, play::effects::eq::GainDb};
-use kithara_platform::sync::Arc;
-use kithara_queue::{TrackId, Transition};
+use kithara::{
+    abr::AbrMode,
+    events::AdvanceReason,
+    platform::sync::Arc,
+    play::effects::eq::GainDb,
+    queue::{TrackId, Transition},
+};
 use tracing::{debug, error};
 
 use crate::{

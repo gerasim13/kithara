@@ -7,11 +7,11 @@ use std::{
     rc::Rc,
 };
 
-use kithara_test_utils::kithara;
-use kithara_ui::{
+use ::kithara::ui::{
     app::Config,
     capture::{Film, shoot_set},
 };
+use kithara_test_utils::kithara;
 
 use super::{
     immediate::Immediate,

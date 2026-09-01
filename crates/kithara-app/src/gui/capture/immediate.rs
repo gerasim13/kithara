@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use iced::Theme;
-use kithara_ui::{
+use kithara::ui::{
     builtin,
     capture::{Geometry, Photographer, Stage},
     compile::CompiledUi,

@@ -51,6 +51,8 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 <tr><td><code>analysis-waveform</code></td><td>yes</td><td>RealFFT waveform analyzer in <code>kithara-analysis</code>; waveform/blob types remain unconditional</td></tr>
 
+<tr><td><code>analysis</code></td><td>via analyzer defaults</td><td>Analysis module without selecting an analyzer backend</td></tr>
+
 <tr><td><code>stretch-signalsmith</code></td><td>yes</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Signalsmith engine lives in <code>kithara-stretch</code></td></tr>
 
 <tr><td><code>stretch-bungee</code></td><td>no</td><td>Feature forwarded by <code>kithara-play</code> to the <code>kithara-warp</code> renderer; the Bungee engine lives in <code>kithara-stretch</code></td></tr>
@@ -76,6 +78,14 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 <tr><td><code>bufpool</code></td><td>no</td><td>Aggregator flag used by <code>full</code>; the <code>kithara::bufpool</code> module is always re-exported</td></tr>
 
 <tr><td><code>queue</code></td><td>no</td><td>Queue module (<code>kithara-queue</code>) exposed as <code>kithara::queue</code></td></tr>
+
+<tr><td><code>encode</code> / <code>ffmpeg</code></td><td>no</td><td>Encoding API exposed as <code>kithara::encode</code>; FFmpeg remains opt-in</td></tr>
+
+<tr><td><code>ui</code> / <code>ui-iced</code> / <code>ui-masonry</code> / <code>ui-capture</code></td><td>no</td><td>UI document and renderer APIs exposed as <code>kithara::ui</code></td></tr>
+
+<tr><td><code>worker</code></td><td>no</td><td>Prioritized worker API exposed as <code>kithara::worker</code></td></tr>
+
+<tr><td><code>signal</code></td><td>no</td><td>Process signal handling forwarded to <code>kithara-platform</code></td></tr>
 
 <tr><td><code>backend-cpal</code></td><td>no</td><td>Native CPAL backend forwarded to play and queue when <code>queue</code> is enabled</td></tr>
 
@@ -123,10 +133,11 @@ progress, buffering, HLS variant switches — and never sits in the audio path.
 
 ## Re-exports
 
-Each engine layer is re-exported as a module: `kithara::analysis`, `kithara::audio`, `kithara::bufpool`,
+Each enabled engine layer is re-exported as a module: `kithara::audio`, `kithara::bufpool`,
 `kithara::decode`, `kithara::events`, `kithara::platform`, `kithara::play`,
-`kithara::stream`, `kithara::warp`. The `file`/`hls`/`assets`/`net`/`storage`/`queue` modules are
-feature-gated; `kithara::abr` and `kithara::drm` are exposed with `hls`. For
+`kithara::stream`, `kithara::warp`. The `file`/`hls`/`assets`/`net`/`storage`/`queue`/`encode`/`ui`/`worker`
+modules are feature-gated; `kithara::analysis` is exposed with `analysis`, `kithara::abr` and `kithara::drm` are exposed with `hls`, while
+`kithara::stretch` is exposed with either stretch backend. For
 advanced control — multi-slot engine, crossfade, EQ — reach into
 `kithara::play` (`Engine`, `Player`, `CrossfadeConfig`, `Equalizer`). The
 speed-control type `StretchControls` is re-exported even when no stretch backend

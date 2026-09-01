@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara::host::HostConfig;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::{
+    host::HostConfig,
+    platform::{CancelToken, time::Duration},
+};
 
 use super::{
     BroadcastResult, Packager,

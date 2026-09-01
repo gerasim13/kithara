@@ -2,9 +2,11 @@ use iced::{
     Task, window,
     window::{Direction, Mode},
 };
-use kithara::play::effects::eq::{EqBandConfig, GainDb};
-use kithara_platform::time::Duration;
-use kithara_ui::render::{WindowCommand, WindowEdge};
+use kithara::{
+    platform::time::Duration,
+    play::effects::eq::{EqBandConfig, GainDb},
+    ui::render::{WindowCommand, WindowEdge},
+};
 use tracing::{error, warn};
 
 use super::{

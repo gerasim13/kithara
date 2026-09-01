@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
-use kithara::analysis::Waveform;
-use kithara_ui::render::WaveBucket;
+use kithara::{analysis::Waveform, ui::render::WaveBucket};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};

@@ -1,6 +1,6 @@
 use std::{path::Path, rc::Rc};
 
-use kithara_ui::{
+use kithara::ui::{
     builtin,
     error::UiDocError,
     ids::{ScreenRole, SourceUri},

@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use kithara_ui::{
+use kithara::ui::{
     app::{Config, Ui},
     capture::{Geometry, Offscreen, Stage},
 };

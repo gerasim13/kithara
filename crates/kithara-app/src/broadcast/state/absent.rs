@@ -1,4 +1,4 @@
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::platform::{CancelToken, time::Duration};
 
 use super::{BroadcastResult, Packager, fixture::Stream};
 use crate::pools::AppHost;

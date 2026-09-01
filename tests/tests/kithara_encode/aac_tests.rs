@@ -1,8 +1,8 @@
 use kithara::{
     self,
+    encode::{EncoderFactory, PackagedEncodeRequest},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::{EncoderFactory, PackagedEncodeRequest};
 use kithara_integration_tests::bufpool_ext::pools;
 use kithara_test_fixtures::signal::{Pcm, Wave};
 

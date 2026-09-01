@@ -1,5 +1,7 @@
-use kithara::play::effects::eq::GainDb;
-use kithara_ui::render::{Node, ReadValue, Scope, WaveformView};
+use kithara::{
+    play::effects::eq::GainDb,
+    ui::render::{Node, ReadValue, Scope, WaveformView},
+};
 use num_traits::cast::AsPrimitive;
 
 use super::value::Value;

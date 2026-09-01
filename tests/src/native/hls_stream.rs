@@ -5,8 +5,11 @@ use cbc::{
     Encryptor,
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::{platform::sync::Arc, stream::MediaInfo};
-use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
+use kithara::{
+    encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource},
+    platform::sync::Arc,
+    stream::MediaInfo,
+};
 use kithara_test_fixtures::signal::{self, Pcm, SweepMode, Wave};
 use num_traits::AsPrimitive;
 

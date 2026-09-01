@@ -1,5 +1,7 @@
 use std::io::Cursor;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use kithara::encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara::{
     self,
     decode::{Decoder, DecoderConfig, DecoderFactory},
@@ -7,8 +9,6 @@ use kithara::{
     signal::AudioChunk,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_integration_tests::{
     bufpool_ext::{TestPools, pools},
     decode_ext::DecoderChunkOutcomeTestExt,

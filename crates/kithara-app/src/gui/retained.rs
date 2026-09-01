@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use iced::window;
-use kithara_ui::{
+use kithara::ui::{
     app::{App, Config, RunError},
     render::{Reads, Skin, UiEvent, Walk},
 };
@@ -87,7 +87,7 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
     let package = Rc::clone(&app.state.ui.package);
     let endpoints = endpoints::Registry::default();
     let (size, min_size) = (window_size(), window_min(app.state.ui.window_min()));
-    kithara_ui::app::run(
+    kithara::ui::app::run(
         app,
         Config::builder()
             .endpoints(&endpoints)
@@ -103,11 +103,11 @@ pub(crate) fn run(app: Studio) -> Result<(), RunError> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_test_utils::kithara;
-    use kithara_ui::{
+    use ::kithara::ui::{
         app::Ui,
         render::{ReadValue, Reads},
     };
+    use kithara_test_utils::kithara;
 
     use super::{App, Config, Rc, Skin, endpoints, ui, ui::package::Package};
 
@@ -137,7 +137,7 @@ mod tests {
             self.package.skin()
         }
 
-        fn update(&mut self, _event: kithara_ui::render::UiEvent) {}
+        fn update(&mut self, _event: ::kithara::ui::render::UiEvent) {}
     }
 
     /// The studio's own documents draw under the retained host. The control

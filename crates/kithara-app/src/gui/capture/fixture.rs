@@ -4,7 +4,7 @@
 //! differ in how they draw and never in what they were given to draw.
 use std::rc::Rc;
 
-use kithara_ui::{
+use kithara::ui::{
     app::App,
     module::IconName,
     registry::ValueKind,

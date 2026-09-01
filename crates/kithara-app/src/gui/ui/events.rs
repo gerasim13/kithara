@@ -1,6 +1,8 @@
-use kithara::play::effects::eq::GainDb;
-use kithara_ui::render::{
-    ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
+use kithara::{
+    play::effects::eq::GainDb,
+    ui::render::{
+        ControlAction, DEFAULT_ZOOM, DragPhase, UiEvent, WindowCommand, zoom_in, zoom_out,
+    },
 };
 use num_traits::cast::AsPrimitive;
 
