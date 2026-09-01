@@ -2493,6 +2493,8 @@ rust = "FfiPlayerSnapshot"
 # show production debt only. `#[cfg(test)]` blocks (inline `mod tests {}`, test
 # `fn`/`impl`) are stripped automatically via AST on top of these globs.
 # build.rs is compile-time, never a production-runtime path, so it is excluded too.
+# Only crate paths belong here: the source walker's default scope is the `crates`
+# tree, so the top-level `tests` and `tests/fuzz` packages never reach a glob.
 paths = [
   "**/tests/**",
   "**/tests.rs",
@@ -2503,8 +2505,6 @@ paths = [
   "**/build.rs",
   "crates/kithara-test-utils/**",
   "crates/kithara-test-macros/**",
-  "crates/kithara-integration-tests/**",
-  "crates/kithara-fuzz/**",
 ]
 # Build tooling. It is not a runtime path, so the runtime-architecture rules do
 # not apply: `arch`, `idioms`, and ast-grep drop these on top of `paths`. Its
