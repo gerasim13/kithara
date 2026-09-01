@@ -1,9 +1,28 @@
 use kithara_bufpool::{HasPool, SampleBuffer};
 use kithara_signal::{AudioChunk, AudioSpec, FrameCount, SampleCount};
 use kithara_stretch::ElasticError;
+#[cfg(feature = "probe")]
+use kithara_test_utils::kithara;
 use tracing::warn;
 
 use super::renderer::{PreparedQuantum, WarpRenderer};
+
+#[cfg(feature = "probe")]
+#[kithara::probe(
+    request_revision,
+    target_rate_bits,
+    applied_rate_bits,
+    session_epoch,
+    session_frame
+)]
+fn rate_applied(
+    request_revision: u64,
+    target_rate_bits: u32,
+    applied_rate_bits: u32,
+    session_epoch: u64,
+    session_frame: i64,
+) {
+}
 
 impl<S> WarpRenderer<S>
 where
@@ -185,13 +204,13 @@ where
             PreparedQuantum::Exact(exact) => {
                 self.render_prepared_exact(meta, &samples, channels, exact, direct)
             }
-            PreparedQuantum::Legacy { speed, target, .. } => {
+            PreparedQuantum::Legacy { rate, speed, .. } => {
                 self.exact_cursor = None;
                 self.render_active(meta, &samples, speed, channels, frames)
                     .and_then(|()| {
                         let output_frames =
                             self.scratch.as_deref().map_or(0, <[f32]>::len) / channels;
-                        Self::advance_speed(self.applied_speed, target, output_frames)
+                        Self::advance_speed(self.applied_speed, rate.speed(), output_frames)
                             .map(|next_speed| (next_speed, None))
                     })
             }
@@ -265,18 +284,18 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
-        if let PreparedQuantum::Legacy { speed, target, .. } = &prepared
+        if let PreparedQuantum::Legacy { rate, speed, .. } = &prepared
             && self.can_passthrough(*speed)
         {
-            let next_speed = match Self::advance_speed(self.applied_speed, *target, chunk.frames())
-            {
-                Ok(next_speed) => next_speed,
-                Err(error) => {
-                    warn!(%error, "time-stretch speed smoothing failed");
-                    self.defer_scratch(Some(chunk.samples));
-                    return None;
-                }
-            };
+            let next_speed =
+                match Self::advance_speed(self.applied_speed, rate.speed(), chunk.frames()) {
+                    Ok(next_speed) => next_speed,
+                    Err(error) => {
+                        warn!(%error, "time-stretch speed smoothing failed");
+                        self.defer_scratch(Some(chunk.samples));
+                        return None;
+                    }
+                };
             self.record_rendered_source_end(chunk.meta, 0, chunk.meta.end_timestamp);
             self.applied_speed = next_speed;
             self.exact_cursor = None;
@@ -340,11 +359,29 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
+        #[cfg(feature = "probe")]
+        let rate = prepared.rate();
+        #[cfg(feature = "probe")]
+        let applied_speed = prepared.speed();
         let output = self.render_prepared(chunk, prepared, false);
-        if let (Some(snapshot), Some(output)) = (snapshot, output.as_ref())
-            && !self.commit_snapshot(snapshot, output.frames())
-        {
-            warn!("time-stretch quantum produced an invalid presentation frontier");
+        if let (Some(snapshot), Some(output)) = (snapshot, output.as_ref()) {
+            #[cfg(feature = "probe")]
+            let session_epoch = snapshot.context().session_epoch();
+            if let Some(_session_frame) = self.commit_snapshot(snapshot, output.frames()) {
+                #[cfg(feature = "probe")]
+                if self.last_committed_rate_revision != rate.revision() {
+                    self.last_committed_rate_revision = rate.revision();
+                    rate_applied(
+                        rate.revision(),
+                        rate.speed().to_bits(),
+                        applied_speed.to_bits(),
+                        u64::from(session_epoch),
+                        i64::from(_session_frame),
+                    );
+                }
+            } else {
+                warn!("time-stretch quantum produced an invalid presentation frontier");
+            }
         }
         output
     }

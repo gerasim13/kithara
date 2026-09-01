@@ -4,6 +4,7 @@ mod live;
 mod region;
 
 pub use context::RenderContext;
+pub(crate) use controls::RateTarget;
 pub use controls::StretchControls;
 #[cfg(all(
     not(target_arch = "wasm32"),

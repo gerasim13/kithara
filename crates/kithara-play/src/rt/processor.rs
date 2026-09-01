@@ -406,6 +406,9 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_with_context(context, &mut buffers, info.frames, is_playing);
+        if let Some(context) = context {
+            self.playback.publish_render_boundary(context);
+        }
 
         self.update_position_duration(leading_outcome_pos_dur);
         self.refresh_effective_rate();

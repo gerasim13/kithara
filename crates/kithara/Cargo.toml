@@ -164,6 +164,7 @@ probe = [
     "kithara-storage?/probe",
     "kithara-stream/probe",
     "kithara-test-utils/probe",
+    "kithara-warp/probe",
 ]
 mock = [
     "kithara-abr?/mock",

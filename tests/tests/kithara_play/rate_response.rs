@@ -16,6 +16,7 @@ use kithara_integration_tests::{
     temp_dir,
 };
 use kithara_test_fixtures::{assets::signal_mp3_sine880_30s, signal::goertzel_magnitude};
+use kithara_test_utils::probe::capture::{self as probe_capture, ProbeEvent};
 use num_traits::AsPrimitive;
 
 use crate::bufpool_ext::TestPools;
@@ -73,6 +74,7 @@ impl RateCase {
 
 struct RateRun {
     command_frame: usize,
+    probes: Vec<ProbeEvent>,
     samples: Vec<f32>,
 }
 
@@ -206,6 +208,7 @@ async fn response_run(
 
     let mut samples = capture_frames(&harness, PRE_COMMAND_FRAMES).await;
     let command_frame = samples.len() / usize::from(CHANNELS);
+    let recorder = issue_target.then(probe_capture::install);
     if issue_target {
         if case.burst {
             for command in 0..RATE_COMMAND_BURST {
@@ -219,9 +222,11 @@ async fn response_run(
         queue.set_rate(case.target_rate);
     }
     samples.extend(capture_frames(&harness, RESPONSE_OBSERVATION_FRAMES).await);
+    let probes = recorder.map_or_else(Vec::new, |recorder| recorder.snapshot());
 
     RateRun {
         command_frame,
+        probes,
         samples,
     }
 }
@@ -265,13 +270,67 @@ fn assert_response(
             TONES_HZ[case.target_tone]
         )
     });
-    let budget = RESPONSE_BUDGET_FRAMES;
+    let requested = candidate
+        .probes
+        .iter()
+        .filter(|event| event.probe_name() == Some("rate_requested"))
+        .max_by_key(|event| event.seq().unwrap_or(0))
+        .unwrap_or_else(|| panic!("{backend} {label} emitted no rate_requested probe"));
+    let revision = requested
+        .u64("request_revision")
+        .unwrap_or_else(|| panic!("{backend} {label} request probe has no revision"));
+    let target_rate_bits = requested
+        .u64("target_rate_bits")
+        .unwrap_or_else(|| panic!("{backend} {label} request probe has no target rate"));
+    let session_epoch = requested
+        .u64("session_epoch")
+        .unwrap_or_else(|| panic!("{backend} {label} request probe has no session epoch"));
+    let request_frame = requested
+        .u64("presentation_frame")
+        .and_then(|frame| i64::try_from(frame).ok())
+        .unwrap_or_else(|| panic!("{backend} {label} request probe has no presentation frame"));
+    assert_eq!(
+        target_rate_bits,
+        u64::from(case.target_rate.to_bits()),
+        "{backend} {label} correlated the wrong final rate request"
+    );
+
+    let applied = candidate
+        .probes
+        .iter()
+        .filter(|event| event.probe_name() == Some("rate_applied"))
+        .filter(|event| event.u64("request_revision") == Some(revision))
+        .filter(|event| event.u64("target_rate_bits") == Some(target_rate_bits))
+        .filter(|event| event.u64("session_epoch") == Some(session_epoch))
+        .filter_map(|event| {
+            event
+                .u64("session_frame")
+                .and_then(|frame| i64::try_from(frame).ok())
+        })
+        .min()
+        .unwrap_or_else(|| {
+            panic!(
+                "{backend} {label} emitted no successful rate_applied probe for revision \
+                 {revision}"
+            )
+        });
+    let response_frames = applied.checked_sub(request_frame).unwrap_or_else(|| {
+        panic!(
+            "{backend} {label} applied revision {revision} at frame {applied} before its request \
+             boundary {request_frame}"
+        )
+    });
     assert!(
-        target_end <= budget,
-        "{backend} {label} target {} Hz became dominant at {target_end} frames; hard budget is \
-         {budget} frames ({:.1} ms)",
+        response_frames <= i64::try_from(RESPONSE_BUDGET_FRAMES).unwrap_or(i64::MAX),
+        "{backend} {label} applied revision {revision} after {response_frames} presented frames; \
+         hard budget is {RESPONSE_BUDGET_FRAMES} frames"
+    );
+    assert!(
+        target_end <= RESPONSE_BUDGET_FRAMES,
+        "{backend} {label} target {} Hz became dominant at {target_end} frames after revision \
+         {revision} first applied at {response_frames} frames; hard budget is \
+         {RESPONSE_BUDGET_FRAMES} frames",
         TONES_HZ[case.target_tone],
-        budget as f64 * 1_000.0 / f64::from(SAMPLE_RATE),
     );
 }
 
@@ -293,6 +352,7 @@ async fn run_response_case(
 #[kithara::test(
     tokio,
     multi_thread,
+    serial,
     flash(false),
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)
@@ -323,6 +383,7 @@ async fn live_rate_change_reaches_presented_pcm_within_response_budget(
 #[kithara::test(
     tokio,
     multi_thread,
+    serial,
     flash(false),
     timeout(Duration::from_secs(30)),
     hang_timeout_secs(5)

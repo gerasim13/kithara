@@ -6,7 +6,10 @@ use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
 use kithara_stretch::{ElasticCursor, ElasticEngine, ElasticError, ElasticSpanPlan, StretchKind};
 
-use crate::{ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig};
+use crate::{
+    ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
+    temporal::RateTarget,
+};
 
 #[cfg(test)]
 mod tests;
@@ -14,6 +17,7 @@ mod tests;
 pub(super) struct PreparedExact {
     pub(super) next_speed: SmoothedParam,
     pub(super) plan: ElasticSpanPlan,
+    pub(super) rate: RateTarget,
     pub(super) snapshot: Option<RenderSnapshot>,
     pub(super) speed: f32,
 }
@@ -22,9 +26,9 @@ pub(super) enum PreparedQuantum {
     Exact(PreparedExact),
     Legacy {
         source_frames: usize,
+        rate: RateTarget,
         snapshot: Option<RenderSnapshot>,
         speed: f32,
-        target: f32,
     },
 }
 
@@ -42,6 +46,22 @@ impl PreparedQuantum {
         match self {
             Self::Exact(exact) => exact.snapshot.as_ref(),
             Self::Legacy { snapshot, .. } => snapshot.as_ref(),
+        }
+    }
+
+    #[cfg(feature = "probe")]
+    pub(super) const fn rate(&self) -> RateTarget {
+        match self {
+            Self::Exact(exact) => exact.rate,
+            Self::Legacy { rate, .. } => *rate,
+        }
+    }
+
+    #[cfg(feature = "probe")]
+    pub(super) const fn speed(&self) -> f32 {
+        match self {
+            Self::Exact(exact) => exact.speed,
+            Self::Legacy { speed, .. } => *speed,
         }
     }
 }
@@ -68,6 +88,8 @@ pub struct WarpRenderer<S> {
     pub(super) region: Option<ActiveRegion>,
     /// Exact rate plan paired with the source quantum prepared by the scheduler.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
+    #[cfg(feature = "probe")]
+    pub(super) last_committed_rate_revision: u64,
     /// Renderer-owned applied speed. Shared controls contain only the target.
     pub(super) applied_speed: SmoothedParam,
     /// Exact source coordinate committed with the applied speed after rendering.
@@ -142,6 +164,8 @@ where
             spec,
             render_quantum_frames: config.render_quantum_frames(),
             prepared_quantum: None,
+            #[cfg(feature = "probe")]
+            last_committed_rate_revision: 0,
             applied_speed: SmoothedParam::new(
                 speed,
                 SmootherConfig {
@@ -317,16 +341,13 @@ where
         &mut self,
         snapshot: RenderSnapshot,
         output_frames: usize,
-    ) -> bool {
-        let Some((source, _, _)) = self.rendered_source_end else {
-            return false;
-        };
-        let Some(committed) = snapshot.advance(self.committed.as_ref(), source, output_frames)
-        else {
-            return false;
-        };
+    ) -> Option<crate::SessionFrame> {
+        let (source, _, _) = self.rendered_source_end?;
+        let committed = snapshot.advance(self.committed.as_ref(), source, output_frames)?;
+        let output_frames = i64::try_from(output_frames).ok()?;
+        let output_start = i64::from(committed.frontier().output()).checked_sub(output_frames)?;
         self.committed = Some(committed);
-        true
+        Some(crate::SessionFrame::new(output_start))
     }
 
     /// Last context and frontier committed by a successful worker quantum.

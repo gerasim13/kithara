@@ -1,4 +1,6 @@
 use kithara_events::RouteDescription;
+#[cfg(feature = "probe")]
+use kithara_test_utils::kithara;
 
 use super::super::core::PlayerRuntime;
 use crate::{
@@ -7,6 +9,16 @@ use crate::{
     error::PlayError,
     player::state::phase::PlayerPhaseKind,
 };
+
+#[cfg(feature = "probe")]
+#[kithara::probe(request_revision, target_rate_bits, session_epoch, presentation_frame)]
+fn rate_requested(
+    request_revision: u64,
+    target_rate_bits: u32,
+    session_epoch: u64,
+    presentation_frame: i64,
+) {
+}
 
 impl<S> PlayerRuntime<S> {
     /// Ensure we have an active slot, allocating one if needed.
@@ -66,9 +78,10 @@ impl<S> PlayerRuntime<S> {
     /// not a resume. The new value takes effect on the next `play()`.
     pub fn set_default_rate(&self, rate: f32) {
         let target = self.core.params.set_default_rate(rate);
-        self.core.warp.stretch().set_speed(target);
         if self.phase_kind() == PlayerPhaseKind::Playing {
             self.set_rate(target);
+        } else {
+            self.core.warp.stretch().set_speed(target);
         }
     }
 
@@ -127,7 +140,23 @@ impl<S> PlayerRuntime<S> {
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        self.core.warp.stretch().set_speed(rate);
+        #[cfg(feature = "probe")]
+        let boundary = self
+            .slot()
+            .and_then(|slot| self.core.engine.slot_playback(slot))
+            .and_then(|playback| playback.render_boundary());
+
+        let _revision = self.core.warp.stretch().set_speed(rate);
+
+        #[cfg(feature = "probe")]
+        if let Some((session_epoch, presentation_frame)) = boundary {
+            rate_requested(
+                _revision,
+                rate.max(kithara_warp::StretchControls::MIN_SPEED).to_bits(),
+                u64::from(session_epoch),
+                i64::from(presentation_frame),
+            );
+        }
     }
 
     /// Set volume, clamped to `0.0..=1.0`.

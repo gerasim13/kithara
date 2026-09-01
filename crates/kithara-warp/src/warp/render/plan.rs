@@ -5,6 +5,7 @@ use kithara_stretch::{ElasticCursor, ElasticError, ElasticSpan, ElasticSpanConfi
 use num_traits::ToPrimitive;
 
 use super::renderer::{PreparedExact, PreparedQuantum, WarpRenderer};
+use crate::temporal::RateTarget;
 
 impl<S> WarpRenderer<S>
 where
@@ -66,8 +67,9 @@ where
         output_frames: usize,
         applied_speed: SmoothedParam,
         cursor: Option<ElasticCursor>,
-        target: f32,
+        rate: RateTarget,
     ) -> Result<PreparedExact, ElasticError> {
+        let target = rate.speed();
         let (source_advance, speed, next_speed) =
             Self::preview_speed_from(applied_speed, target, output_frames)?;
         let source_start = cursor.map_or_else(
@@ -90,6 +92,7 @@ where
         Ok(PreparedExact {
             next_speed,
             plan,
+            rate,
             snapshot: None,
             speed,
         })
@@ -122,13 +125,13 @@ where
         remaining: usize,
         applied_speed: SmoothedParam,
         cursor: Option<ElasticCursor>,
-        target: f32,
+        rate: RateTarget,
     ) -> Result<Option<PreparedExact>, ElasticError> {
         if remaining == 0 {
             return Err(ElasticError::EmptySource);
         }
         let output_limit = self.output_quantum_limit();
-        let full = self.build_exact_plan(meta, output_limit, applied_speed, cursor, target)?;
+        let full = self.build_exact_plan(meta, output_limit, applied_speed, cursor, rate)?;
         if Self::exact_source_frames(&full)? <= remaining {
             return Ok(Some(full));
         }
@@ -139,7 +142,7 @@ where
         while low <= high {
             let output_frames = low + (high - low) / 2;
             let candidate =
-                self.build_exact_plan(meta, output_frames, applied_speed, cursor, target)?;
+                self.build_exact_plan(meta, output_frames, applied_speed, cursor, rate)?;
             let source_frames =
                 candidate
                     .plan
@@ -175,16 +178,17 @@ where
         meta: AudioChunkInfo,
         remaining: usize,
         applied_speed: SmoothedParam,
+        rate: RateTarget,
     ) -> Result<PreparedQuantum, ElasticError> {
-        let target = self.controls.speed();
+        let target = rate.speed();
         let (_, speed, _) =
             Self::preview_speed_from(applied_speed, target, self.output_quantum_limit())?;
         let source_frames = self.source_frames_for_quantum(meta, remaining, speed)?;
         Ok(PreparedQuantum::Legacy {
             source_frames,
+            rate,
             snapshot: None,
             speed,
-            target,
         })
     }
 
@@ -193,7 +197,8 @@ where
         meta: AudioChunkInfo,
         frames: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
-        let target = self.controls.speed();
+        let rate = self.controls.rate_target();
+        let target = rate.speed();
         if frames > 0
             && self.exact_plan_enabled(target)
             && let Some(exact) = self.exact_plan_for_remaining(
@@ -201,7 +206,7 @@ where
                 frames,
                 self.applied_speed,
                 self.exact_cursor,
-                target,
+                rate,
             )?
         {
             return Ok(PreparedQuantum::Exact(exact));
@@ -210,9 +215,9 @@ where
             Self::preview_speed_from(self.applied_speed, target, self.output_quantum_limit())?;
         Ok(PreparedQuantum::Legacy {
             source_frames: frames,
+            rate,
             snapshot: None,
             speed,
-            target,
         })
     }
 
@@ -221,19 +226,20 @@ where
         meta: AudioChunkInfo,
         remaining: usize,
     ) -> Result<PreparedQuantum, ElasticError> {
-        let target = self.controls.speed();
+        let rate = self.controls.rate_target();
+        let target = rate.speed();
         if self.exact_plan_enabled(target)
             && let Some(exact) = self.exact_plan_for_remaining(
                 meta,
                 remaining,
                 self.applied_speed,
                 self.exact_cursor,
-                target,
+                rate,
             )?
         {
             return Ok(PreparedQuantum::Exact(exact));
         }
-        self.legacy_quantum(meta, remaining, self.applied_speed)
+        self.legacy_quantum(meta, remaining, self.applied_speed, rate)
     }
 
     pub(super) fn source_block_limit(

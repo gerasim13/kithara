@@ -160,13 +160,14 @@ where
                 )
                 .ok_or(ElasticError::SpanArithmeticOverflow)?;
             let next_meta = Self::meta_at_frame(meta, frame_offset);
-            let target = self.controls.speed();
+            let rate = self.controls.rate_target();
+            let target = rate.speed();
             if let Some(exact) = self.exact_plan_for_remaining(
                 next_meta,
                 frames - consumed,
                 applied_speed,
                 cursor,
-                target,
+                rate,
             )? {
                 next = Some(exact);
                 continue;
