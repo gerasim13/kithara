@@ -9,6 +9,7 @@ use dashmap::DashMap;
 use kithara_bufpool::{ByteBuffer, HasPool, PoolRegion};
 use kithara_events::EventBus;
 use kithara_platform::{CancelScope, CancelToken, sync::Arc, time::Duration};
+use serde::{Deserialize, Deserializer};
 
 use super::{
     OnInvalidatedFn,
@@ -64,6 +65,51 @@ impl Default for StorageBackend {
             Self::Memory
         }
     }
+}
+
+/// Wire shape a configuration document spells `backend` in: `{kind: memory}`
+/// or `{kind: disk, root: /tmp/kithara}`. `StorageBackend::Memory` is a unit
+/// variant, so a derived `#[serde(tag = "kind")]` on `StorageBackend` itself
+/// would check `deny_unknown_fields` against that variant's own (empty) field
+/// list and silently drop a stray `root` next to `kind: memory`. Spelling
+/// `Memory {}` on the real type would fix that but churns every call site
+/// that writes `StorageBackend::Memory`. This mirror type carries the
+/// `deny_unknown_fields` check instead, and `StorageBackend` stays untouched.
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum BackendDoc {
+    Memory {},
+    Disk { root: PathBuf },
+}
+
+impl<'de> Deserialize<'de> for StorageBackend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Ok(match BackendDoc::deserialize(deserializer)? {
+            BackendDoc::Memory {} => Self::Memory,
+            BackendDoc::Disk { root } => Self::Disk { root },
+        })
+    }
+}
+
+/// What a document can say about the asset store. Mirrors the knob parameters
+/// of [`AssetStore::open`], which is a `#[bon]` builder function and so has no
+/// struct to derive on. An unset field leaves the layer below it deciding.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
+pub struct AssetStoreSettings {
+    pub backend: Option<StorageBackend>,
+    pub cache_capacity: Option<NonZeroUsize>,
+    pub max_assets: Option<usize>,
+    pub max_bytes: Option<u64>,
+    pub mem_resource_capacity: Option<usize>,
+    pub processing_chunk_size: Option<usize>,
+    #[serde(with = "humantime_serde::option")]
+    pub processing_gate_poll_interval: Option<Duration>,
+    pub segment_reservation: Option<u64>,
 }
 
 #[bon]
@@ -948,6 +994,95 @@ mod tests {
             store.final_len(&key_b),
             None,
             "final_len(key_b) must be None after delete_asset"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_cache_capacity_and_leaves_the_rest() {
+        let settings: AssetStoreSettings =
+            serde_yaml_ng::from_str("cache_capacity: 32\n").expect("the document types");
+
+        assert_eq!(
+            settings.cache_capacity,
+            Some(NonZeroUsize::new(32).expect("nonzero"))
+        );
+        assert_eq!(settings.max_bytes, None, "a silent knob stays unset");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_document_reads_the_processing_gate_poll_interval_as_humantime() {
+        let settings: AssetStoreSettings =
+            serde_yaml_ng::from_str("processing_gate_poll_interval: 250ms\n")
+                .expect("the document types");
+
+        assert_eq!(
+            settings.processing_gate_poll_interval,
+            Some(Duration::from_millis(250))
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_document_types_a_memory_backend() {
+        let settings: AssetStoreSettings =
+            serde_yaml_ng::from_str("backend:\n  kind: memory\n").expect("the document types");
+
+        assert_eq!(settings.backend, Some(StorageBackend::Memory));
+    }
+
+    /// Pins ruling 108: `StorageBackend::Memory` is a unit variant, so
+    /// `deny_unknown_fields` only bites if the mirror type actually spells it
+    /// `Memory {}` rather than deriving on `StorageBackend` directly.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_memory_backend_with_a_stray_root_is_refused_and_names_it() {
+        let error = serde_yaml_ng::from_str::<StorageBackend>("kind: memory\nroot: /tmp/x\n")
+            .expect_err("a memory backend has no root to accept");
+
+        assert!(error.to_string().contains("root"), "{error}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(native, flash(false))]
+    fn a_disk_backend_types_its_root() {
+        let backend: StorageBackend =
+            serde_yaml_ng::from_str("kind: disk\nroot: /tmp/x\n").expect("a valid disk backend");
+
+        assert_eq!(
+            backend,
+            StorageBackend::Disk {
+                root: PathBuf::from("/tmp/x")
+            }
+        );
+    }
+
+    /// The plumbing end to end: a document's `cache_capacity` reaches the
+    /// builder through `maybe_cache_capacity` and the store enforces it, not
+    /// just the settings struct that reports it.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn a_store_built_from_the_documents_settings_reports_the_capacity_it_named() {
+        let settings: AssetStoreSettings =
+            serde_yaml_ng::from_str("cache_capacity: 1\n").expect("the document types");
+
+        let store = AssetStore::builder(crate::test_pools::pools())
+            .backend(StorageBackend::Memory)
+            .maybe_cache_capacity(settings.cache_capacity)
+            .build();
+
+        let keys: Vec<ResourceKey> = (0..2)
+            .map(|i| ResourceKey::relative(ROOT, format!("seg_{i}.m4s")))
+            .collect();
+        for key in &keys {
+            write_commit(store.acquire_resource(key, None).unwrap(), b"data");
+        }
+
+        assert!(
+            store.open_resource(&keys[0], None).is_err(),
+            "the document's cache_capacity of 1 must evict the first \
+             resource once a second one lands"
         );
     }
 }

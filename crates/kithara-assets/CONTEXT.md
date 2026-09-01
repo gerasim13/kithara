@@ -344,3 +344,36 @@ clones via `Arc`, so one store serves file and HLS with no protocol-owned wrappe
   bytes, and dormant for durable disk backings, where displaced bytes survive — the disk path wires
   no hook at all. There is no public callback and no builder field; the router reaches the cache
   only through the ephemeral path.
+
+## Configuration document entry point
+
+`AssetStoreSettings` is the second way in: a configuration document types into it and names a
+subset of what `AssetStore::open` accepts. It mirrors `open`'s optional knobs one field per
+parameter — `backend`, `cache_capacity`, `max_assets`, `max_bytes`, `mem_resource_capacity`,
+`processing_chunk_size`, `processing_gate_poll_interval`, `segment_reservation` — and nothing
+else. `cancel`, `event_bus`, `flush_hub`, and `layouts` are absent: each carries a live value only
+code can hand over (a token, a bus handle, a shared hub, a registry), and a document has no way to
+name one. It is a plain `Deserialize` struct, not a `struct-patch` type: `open` is a `#[bon]`
+builder function rather than a struct, so there is no built value for `Patch::apply` to write into
+— every field is already `Option<T>`, and the builder itself already treats an unset field as
+"leave the layer below deciding". Adding a patch wrapper on top would double that optionality for
+no reason.
+
+There is deliberately no `AssetStoreBuilder::settings(...)` method. Naming that typestate
+transition on the generated builder means writing all eight `asset_store_builder::Set*<...>`
+wrappers into one return type, which breaks on every knob added to `open` afterward. Instead the
+caller (`kithara-app`) applies each field individually through bon's own `maybe_*` setters at the
+construction site. `backend` is the one field that is not passed through
+`.maybe_backend(...)`: `open`'s own fallback for an unset `backend` is a fresh, uniquely-named temp
+directory per call (`fresh_temp_root`, `store/builder.rs`), which would silently relocate an
+application's on-disk cache every launch if the document named nothing. A caller that wants a
+stable default when the document is silent must resolve `Option<StorageBackend>` to a concrete
+value itself (`.unwrap_or_default()` or its own default) and pass that through `.backend(...)`.
+
+`StorageBackend` carries a hand-written `Deserialize`, not a derive. `Memory` is a unit variant,
+and serde's `deny_unknown_fields` is checked against a variant's own field list — a unit variant
+declares none, so a derived `#[serde(tag = "kind", deny_unknown_fields)]` directly on
+`StorageBackend` would let `{kind: memory, root: /x}` parse and silently drop `root`. Spelling it
+`Memory {}` would fix that but churns every call site across the workspace that writes
+`StorageBackend::Memory`. The private `BackendDoc` mirror type in `store/builder.rs` carries the
+`deny_unknown_fields` check instead, and `StorageBackend` itself is untouched.

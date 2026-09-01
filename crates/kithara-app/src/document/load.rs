@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::AssetLayoutRegistry,
+    assets::{AssetLayoutRegistry, AssetStoreSettings},
     hls::SizeProbeMethod,
     net::NetSettings,
     play::policy::DomainKeyPolicy,
@@ -221,6 +221,12 @@ impl Config {
         self.document.pools.clone()
     }
 
+    /// Knobs the document sets on the asset store.
+    #[must_use]
+    pub fn assets_store(&self) -> AssetStoreSettings {
+        self.document.assets_store.clone()
+    }
+
     /// The compute pool the document names, when it names one. `None` leaves
     /// the pool the caller already installed standing.
     #[must_use]
@@ -407,6 +413,25 @@ mod tests {
         assert!(
             section.samples.max_buffers.is_none(),
             "a pool the document does not name reaches the builder empty"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn the_assets_store_section_survives_the_load_pipeline() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "assets-store",
+            "assets_store:\n  cache_capacity: 32\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let settings = config.assets_store();
+
+        assert_eq!(settings.cache_capacity.map(NonZeroUsize::get), Some(32));
+        assert!(
+            settings.max_bytes.is_none(),
+            "a knob the document does not name reaches the app empty"
         );
     }
 

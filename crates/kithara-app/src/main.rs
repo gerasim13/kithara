@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 
 use clap::Parser;
 use kithara::{
-    assets::{FlushHub, FlushPolicy, StorageBackend},
+    assets::{FlushHub, FlushPolicy},
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, thread, tokio},
@@ -139,11 +139,23 @@ fn main() -> AppResult {
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
     );
     let flush_hub = FlushHub::new(shutdown.child(), FlushPolicy::default());
+    // `backend` is set explicitly rather than through `.maybe_backend(...)`:
+    // an unset document value must keep landing on this stable temp root, not
+    // on `AssetStore::open`'s own fallback (a fresh, unique temp dir per
+    // launch), which would silently move the on-disk cache every run.
+    let store_settings = document.assets_store();
     let store = AppStore::builder(pools)
         .cancel(shutdown.child())
-        .backend(StorageBackend::default())
+        .backend(store_settings.backend.unwrap_or_default())
         .flush_hub(flush_hub)
         .layouts(document.asset_layouts())
+        .maybe_cache_capacity(store_settings.cache_capacity)
+        .maybe_max_assets(store_settings.max_assets)
+        .maybe_max_bytes(store_settings.max_bytes)
+        .maybe_mem_resource_capacity(store_settings.mem_resource_capacity)
+        .maybe_processing_chunk_size(store_settings.processing_chunk_size)
+        .maybe_processing_gate_poll_interval(store_settings.processing_gate_poll_interval)
+        .maybe_segment_reservation(store_settings.segment_reservation)
         .build();
     // `eprintln!`, not `tracing::error!`: tracing is up by now, but a startup
     // refusal must not depend on `RUST_LOG` to be seen.

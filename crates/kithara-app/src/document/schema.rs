@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use kithara::broadcast::BroadcastSettings;
 use kithara::{
     analysis::BeatAnalysisSettingsPatch,
-    assets::FlushSettings,
+    assets::{AssetStoreSettings, FlushSettings},
     hls::SizeProbeMethod,
     host::HostSettings,
     net::NetSettings,
@@ -29,6 +29,7 @@ use crate::{config::AppSettings, pools::PoolsSection};
 pub(crate) struct Document {
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
+    pub(crate) assets_store: AssetStoreSettings,
     pub(crate) beat: BeatAnalysisSettingsPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
@@ -174,6 +175,25 @@ mod tests {
         assert!(
             document.pools.budget_bytes.is_none(),
             "a document naming no pools section leaves the region budget standing"
+        );
+        assert!(
+            document.assets_store.cache_capacity.is_none(),
+            "a document naming no assets_store section leaves the crate default standing"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_assets_store_section_names_the_cache_capacity() {
+        let document: Document = serde_yaml_ng::from_str("assets_store:\n  cache_capacity: 32\n")
+            .expect("a valid document");
+
+        assert_eq!(
+            document.assets_store.cache_capacity.map(NonZeroUsize::get),
+            Some(32)
+        );
+        assert!(
+            document.assets_store.max_bytes.is_none(),
+            "naming the cache capacity does not name the byte cap"
         );
     }
 

@@ -38,5 +38,6 @@ pub use resource::{
     RequestIdentity, WriteSide,
 };
 pub use store::{
-    AssetReader, AssetStore, AssetStoreBuilder, AssetWriter, ResourceAcquisition, StorageBackend,
+    AssetReader, AssetStore, AssetStoreBuilder, AssetStoreSettings, AssetWriter,
+    ResourceAcquisition, StorageBackend,
 };
