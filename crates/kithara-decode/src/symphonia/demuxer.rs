@@ -235,7 +235,7 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     #[kithara::probe]
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "decode.symphonia.demux"))]
+    #[kithara::measure(label = "decode.symphonia.demux")]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
         // A previous read stranded bytes inside `MediaSourceStream` at a

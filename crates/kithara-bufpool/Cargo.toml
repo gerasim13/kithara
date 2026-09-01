@@ -15,6 +15,7 @@ test-utils = []
 
 [dependencies]
 kithara-platform = { workspace = true }
+kithara-test-macros = { workspace = true }
 
 bon = { workspace = true }
 crossbeam-queue = { workspace = true }
@@ -31,7 +32,6 @@ hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { path = ".", default-features = false, features = ["test-utils"] }
-kithara-test-macros = { path = "../kithara-test-macros" }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["probe", "hang"] }
 wasm-bindgen-test = { workspace = true }
 

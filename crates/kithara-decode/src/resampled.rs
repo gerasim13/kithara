@@ -10,6 +10,7 @@ use kithara_signal::{
     AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, PlanarBuffer, sanitize_sample,
 };
 use kithara_stream::AudioCodec;
+use kithara_test_utils::kithara;
 use smallvec::SmallVec;
 
 use crate::{
@@ -362,7 +363,7 @@ where
         )
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "decode.resampled.next"))]
+    #[kithara::measure(label = "decode.resampled.next")]
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             match self.decoder.next_chunk()? {

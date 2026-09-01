@@ -4,6 +4,7 @@ use iced::{
     Element, Length, Rectangle, wgpu,
     widget::{Space, shader},
 };
+use kithara_test_macros as kithara;
 use num_traits::cast::AsPrimitive as _;
 
 use super::{ShaderFrame, logical_extent};
@@ -79,7 +80,7 @@ impl shader::Primitive for Primitive {
     /// pastes the offscreen image [`Self::prepare`] filled. The retained host
     /// has no counterpart - it hands Vello the same image and Vello composites
     /// it - so this cost belongs to the split, not to either host being slower.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.shader.composite"))]
+    #[kithara::measure(label = "iced.shader.composite")]
     fn draw(&self, pipeline: &Self::Pipeline, render_pass: &mut wgpu::RenderPass<'_>) -> bool {
         let Some(slot) = pipeline.slots.get(self.0.image()) else {
             return true;
@@ -98,7 +99,7 @@ impl shader::Primitive for Primitive {
     /// itself. Folding them together would report a slow shader for a slow
     /// lookup. The outer label encloses the inner one, so the bookkeeping is
     /// their difference, not the outer number.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.shader.prepare"))]
+    #[kithara::measure(label = "iced.shader.prepare")]
     fn prepare(
         &self,
         pipeline: &mut Self::Pipeline,
@@ -156,7 +157,7 @@ impl shader::Primitive for Primitive {
 }
 
 /// Runs one document fragment into the slot's own texture, on its own submit.
-#[cfg_attr(feature = "perf", hotpath::measure(label = "iced.shader.offscreen"))]
+#[kithara::measure(label = "iced.shader.offscreen")]
 fn offscreen(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

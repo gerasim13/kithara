@@ -4,7 +4,7 @@ use kithara_bufpool::HasPool;
 use kithara_platform::sync::{Arc, Mutex};
 use kithara_play::{
     PlayError,
-    player::{Player, PlayerControlSource, PlayerMember},
+    player::{PlayerControlSource, PlayerMember},
 };
 use kithara_warp::{
     BeatGridId, SyncAdmission, SyncCapability, SyncError, SyncOperation, SyncRejected,
@@ -16,10 +16,12 @@ use crate::{
     wasm::HostRoute,
 };
 
+type Resident = Box<dyn FnMut() -> Result<(), PlayError>>;
+
 pub(in crate::host) struct Platform<S> {
     web_state: Option<WebSessionState<S>>,
     remote_routes: Mutex<Vec<Arc<HostRoute<S>>>>,
-    remote_residents: Option<HashMap<BeatGridId, Box<dyn Player>>>,
+    remote_residents: Option<HashMap<BeatGridId, Resident>>,
 }
 
 impl<S> Platform<S> {
@@ -48,28 +50,26 @@ impl<S> Platform<S> {
         ))
     }
 
-    fn insert_resident<P>(
+    fn insert_resident(
         &mut self,
         id: BeatGridId,
-        player: P,
-    ) -> Result<Option<Box<dyn Player>>, PlayError>
-    where
-        P: Player,
-    {
+        resident: Resident,
+    ) -> Result<Option<Resident>, PlayError> {
         self.remote_residents
             .as_mut()
             .ok_or_else(|| {
                 PlayError::Internal("wasm Worker resident registry is unavailable".into())
             })
-            .map(|residents| residents.insert(id, Box::new(player)))
+            .map(|residents| residents.insert(id, resident))
     }
 
     fn close_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
-        self.remote_residents
+        let resident = self
+            .remote_residents
             .as_mut()
             .and_then(|residents| residents.get_mut(&id))
-            .ok_or_else(|| PlayError::Internal("attached wasm player lost its owner".into()))?
-            .close()
+            .ok_or_else(|| PlayError::Internal("attached wasm player lost its owner".into()))?;
+        resident()
     }
 
     fn release_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
@@ -197,7 +197,8 @@ where
         let (grid_id, control) = self.bind_player(&mut player)?;
         let member = player.take_host_member()?;
         self.attach_member(member)?;
-        if let Some(replaced) = self.platform.insert_resident(grid_id, player)? {
+        let resident: Resident = Box::new(move || player.close());
+        if let Some(replaced) = self.platform.insert_resident(grid_id, resident)? {
             mem::forget(replaced);
             return Err(PlayError::Internal(
                 "wasm player residence changed during insertion".into(),
@@ -216,7 +217,10 @@ where
         P: PlayerControlSource<Schema = S>,
     {
         self.validate_removal(player)?;
-        let id = player.id();
+        self.remove_resident(player.id())
+    }
+
+    fn remove_resident(&mut self, id: BeatGridId) -> Result<(), PlayError> {
         let close_result = self.platform.close_resident(id);
         self.platform.release_on_session_gone(id, close_result)?;
         let detach_result = self.detach_member(id);

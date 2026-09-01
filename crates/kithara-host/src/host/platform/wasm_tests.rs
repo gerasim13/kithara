@@ -1,26 +1,21 @@
-use std::{cell::RefCell, num::NonZeroU32, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
-use kithara_audio::{ConsumerWakeMode, SeekOutcome};
+use delegate::delegate;
+use kithara_audio::ConsumerWakeMode;
 use kithara_bufpool::testing::TestPools;
 use kithara_platform::sync::Arc;
-use kithara_play::{
-    GroupState, PlayError, SessionBinding, SessionDispatcher,
-    player::{PlaybackView, Player, PlayerControlSource, PlayerMember},
-};
+use kithara_play::{GroupState, PlayError, SessionDispatcher, player::PlayerMember};
 use kithara_test_utils::kithara;
 use kithara_warp::{
-    BeatGrid, BeatGridId, BeatGridSnapshot, SessionEpoch, SyncAdmission, SyncApplied, SyncError,
-    SyncGroup, SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected,
-    SyncStatusSnapshot, TopologyOperation,
+    BeatGridId, SyncAdmission, SyncGroup, SyncMember, SyncOperation, TopologyOperation,
 };
 
-use super::{Host, HostOwned, Platform};
+use super::{Host, HostConfig, Platform, Resident, SessionRoot};
 use crate::session::{
-    HostCmd, HostDispatcher, HostReply, Reply, RootView,
+    HostCmd, HostDispatcher, HostReply, Reply,
     protocol::{HostDispatchError, SyncCmd},
+    testing::{FixtureSession, fixture_member},
 };
-
-const SAMPLE_RATE: u32 = 44_100;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -29,84 +24,18 @@ enum Outcome {
     OtherError,
 }
 
-struct Resident {
-    sync: GroupState<PlayerMember>,
+struct ResidentProbe {
     close: Outcome,
     drops: Rc<RefCell<usize>>,
 }
 
-impl Resident {
-    fn new(id: BeatGridId, close: Outcome, drops: Rc<RefCell<usize>>) -> Self {
-        Self {
-            sync: group(id),
-            close,
-            drops,
-        }
-    }
-}
-
-impl Drop for Resident {
+impl Drop for ResidentProbe {
     fn drop(&mut self) {
         *self.drops.borrow_mut() += 1;
     }
 }
 
-impl BeatGrid for Resident {
-    fn id(&self) -> BeatGridId {
-        self.sync.id()
-    }
-
-    fn snapshot(&self) -> BeatGridSnapshot {
-        self.sync.snapshot()
-    }
-}
-
-impl SyncGroup for Resident {
-    type NestedGroup = PlayerMember;
-
-    fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
-        self.sync.topology()
-    }
-
-    fn transact(
-        &mut self,
-        operation: SyncOperation<PlayerMember>,
-    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
-        self.sync.transact(operation)
-    }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        self.sync.status()
-    }
-
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        self.sync.acknowledge(applied)
-    }
-}
-
-impl Player for Resident {
-    fn play(&self) {}
-
-    fn pause(&self) {}
-
-    fn seek_seconds(&self, _seconds: f64) -> Result<SeekOutcome, PlayError> {
-        Err(PlayError::Internal("fixture seek is unavailable".into()))
-    }
-
-    fn tick(&self) -> Result<(), PlayError> {
-        Ok(())
-    }
-
-    fn playback_view(&self) -> PlaybackView {
-        PlaybackView::default()
-    }
-
-    fn set_host_level(&self, _level: f32) {}
-
-    fn host_level(&self) -> f32 {
-        1.0
-    }
-
+impl ResidentProbe {
     fn close(&mut self) -> Result<(), PlayError> {
         match self.close {
             Outcome::Ok => Ok(()),
@@ -118,39 +47,25 @@ impl Player for Resident {
     }
 }
 
-impl PlayerControlSource for Resident {
-    type Schema = TestPools;
-    type Control = ();
-
-    fn control(&self) -> Self::Control {}
-
-    fn attach_session(&mut self, _binding: SessionBinding<TestPools>) -> Result<(), PlayError> {
-        Ok(())
-    }
-
-    fn close_control(_control: &Self::Control) -> Result<(), PlayError> {
-        Ok(())
-    }
-
-    fn take_host_member(&mut self) -> Result<PlayerMember, PlayError> {
-        Err(PlayError::Internal(
-            "fixture synchronization ownership is unavailable".into(),
-        ))
-    }
+fn resident(close: Outcome, drops: Rc<RefCell<usize>>) -> Resident {
+    let mut probe = ResidentProbe { close, drops };
+    Box::new(move || probe.close())
 }
 
 struct Dispatcher {
+    session: FixtureSession,
     root: RefCell<GroupState<PlayerMember>>,
     detach: Outcome,
 }
 
 impl SessionDispatcher<TestPools> for Dispatcher {
-    fn exec(&self, _cmd: kithara_play::Cmd<TestPools>) -> Result<Reply, PlayError> {
-        Ok(Reply::Ok)
-    }
-
-    fn consumer_wake_mode(&self) -> ConsumerWakeMode {
-        ConsumerWakeMode::RealtimeDeferred
+    delegate! {
+        to &self.session {
+            #[through(SessionDispatcher::<TestPools>)]
+            fn exec(&self, cmd: kithara_play::Cmd<TestPools>) -> Result<Reply, PlayError>;
+            #[through(SessionDispatcher::<TestPools>)]
+            fn consumer_wake_mode(&self) -> ConsumerWakeMode;
+        }
     }
 }
 
@@ -183,22 +98,15 @@ impl HostDispatcher<TestPools> for Dispatcher {
     }
 }
 
-fn group(id: BeatGridId) -> GroupState<PlayerMember> {
-    GroupState::unavailable(
-        id,
-        NonZeroU32::new(SAMPLE_RATE).expect("fixture sample rate"),
-        SessionEpoch::new(0),
-        SyncMemberKind::Group,
-    )
-}
-
-fn fixture(
-    close: Outcome,
-    detach: Outcome,
-) -> (Host<TestPools>, HostOwned<Resident>, Rc<RefCell<usize>>) {
-    let host_id = BeatGridId::allocate().expect("fixture Host grid id");
+fn fixture(close: Outcome, detach: Outcome) -> (Host<TestPools>, BeatGridId, Rc<RefCell<usize>>) {
+    let SessionRoot {
+        id: host_id,
+        sample_rate,
+        group: mut root,
+        view: root_view,
+    } = Host::<TestPools>::session_root(HostConfig::builder().build())
+        .expect("fixture Host session");
     let resident_id = BeatGridId::allocate().expect("fixture resident grid id");
-    let mut root = group(host_id);
     let base = root.topology().expect("fixture root topology").stamp();
     let admission = root
         .transact(SyncOperation::Topology {
@@ -206,25 +114,22 @@ fn fixture(
             operations: Box::new([TopologyOperation::Attach {
                 member: SyncMember::Group {
                     alignment: None,
-                    group: Box::new(crate::session::testing::fixture_member(resident_id)),
+                    group: Box::new(fixture_member(resident_id, sample_rate)),
                 },
             }]),
         })
         .expect("fixture resident attachment");
     assert!(matches!(admission, SyncAdmission::TopologyChanged { .. }));
 
-    let root_view = RootView::new(&root);
     let dispatcher: Arc<dyn HostDispatcher<TestPools>> = Arc::new(Dispatcher {
+        session: FixtureSession,
         root: RefCell::new(root),
         detach,
     });
     let drops = Rc::new(RefCell::new(0));
     let mut platform = Platform::remote();
     let replaced = platform
-        .insert_resident(
-            resident_id,
-            Resident::new(resident_id, close, Rc::clone(&drops)),
-        )
+        .insert_resident(resident_id, resident(close, Rc::clone(&drops)))
         .expect("fixture resident registry");
     assert!(replaced.is_none());
     let host = Host {
@@ -234,25 +139,24 @@ fn fixture(
         dispatcher,
         platform,
     };
-    let owner = host.owned::<Resident>(resident_id, ());
-    (host, owner, drops)
+    (host, resident_id, drops)
 }
 
 #[kithara::test(wasm, flash(false))]
 fn successful_remove_releases_resident() {
-    let (mut host, owner, drops) = fixture(Outcome::Ok, Outcome::Ok);
+    let (mut host, resident, drops) = fixture(Outcome::Ok, Outcome::Ok);
 
-    host.remove(&owner).expect("remove resident");
+    host.remove_resident(resident).expect("remove resident");
 
     assert_eq!(*drops.borrow(), 1);
 }
 
 #[kithara::test(wasm, flash(false))]
 fn session_gone_while_closing_releases_resident() {
-    let (mut host, owner, drops) = fixture(Outcome::SessionGone, Outcome::Ok);
+    let (mut host, resident, drops) = fixture(Outcome::SessionGone, Outcome::Ok);
 
     assert!(matches!(
-        host.remove(&owner),
+        host.remove_resident(resident),
         Err(PlayError::SessionGone { .. })
     ));
     assert_eq!(*drops.borrow(), 1);
@@ -260,10 +164,10 @@ fn session_gone_while_closing_releases_resident() {
 
 #[kithara::test(wasm, flash(false))]
 fn session_gone_while_detaching_releases_resident() {
-    let (mut host, owner, drops) = fixture(Outcome::Ok, Outcome::SessionGone);
+    let (mut host, resident, drops) = fixture(Outcome::Ok, Outcome::SessionGone);
 
     assert!(matches!(
-        host.remove(&owner),
+        host.remove_resident(resident),
         Err(PlayError::SessionGone { .. })
     ));
     assert_eq!(*drops.borrow(), 1);
@@ -275,15 +179,18 @@ fn other_errors_retain_resident() {
         (Outcome::OtherError, Outcome::Ok),
         (Outcome::Ok, Outcome::OtherError),
     ] {
-        let (mut host, owner, drops) = fixture(close, detach);
+        let (mut host, resident, drops) = fixture(close, detach);
 
-        assert!(matches!(host.remove(&owner), Err(PlayError::Internal(_))));
+        assert!(matches!(
+            host.remove_resident(resident),
+            Err(PlayError::Internal(_))
+        ));
         assert_eq!(*drops.borrow(), 0);
         assert!(
             host.platform
                 .remote_residents
                 .as_ref()
-                .is_some_and(|residents| residents.contains_key(&owner.id()))
+                .is_some_and(|residents| residents.contains_key(&resident))
         );
         drop(host);
         assert_eq!(*drops.borrow(), 0);

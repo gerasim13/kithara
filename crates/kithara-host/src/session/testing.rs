@@ -86,7 +86,7 @@ where
     }
 }
 
-struct FixtureSession;
+pub(crate) struct FixtureSession;
 
 impl<S> SessionDispatcher<S> for FixtureSession {
     fn exec(&self, _cmd: Cmd<S>) -> Result<Reply, PlayError> {
@@ -170,11 +170,12 @@ fn attach_player_with_id<B, S>(
 }
 
 #[cfg(test)]
-pub(crate) fn fixture_member(grid_id: BeatGridId) -> PlayerMember {
+pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .grid_id(grid_id)
+            .sample_rate(sample_rate)
             .worker(worker)
             .session(Arc::new(FixtureSession))
             .build(),

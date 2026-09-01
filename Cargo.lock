@@ -5417,6 +5417,7 @@ dependencies = [
  "iced_wgpu",
  "kithara-bufpool",
  "kithara-platform",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "kurbo 0.12.0",

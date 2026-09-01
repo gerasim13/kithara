@@ -16,6 +16,7 @@ use kithara_platform::{
 use kithara_resampler::ResamplerBackend;
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::{MediaInfo, OpenedReader, PlayheadWrite, Stream, StreamType, WorkerWake};
+use kithara_test_utils::kithara;
 use tracing::{debug, info, warn};
 
 use super::{
@@ -197,7 +198,7 @@ where
     ///
     /// Returns [`DecodeError`] when stream, probe, decoder, or runtime setup fails.
     #[doc(hidden)]
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "audio.prepare"))]
+    #[kithara::measure(label = "audio.prepare")]
     pub async fn prepare<B, S>(
         config: AudioConfig<T, B>,
         wake: Arc<dyn WorkerWake>,

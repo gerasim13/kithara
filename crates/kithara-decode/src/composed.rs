@@ -221,7 +221,7 @@ where
         }
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "decode.composed.next"))]
+    #[kithara::measure(label = "decode.composed.next")]
     #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
