@@ -89,6 +89,7 @@ fn mark(mark: kithara_beat::BeatMark) -> BeatMark {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use num_traits::cast::AsPrimitive;
 
     use super::{BeatConfig, BeatDetectorKind, build_detector};
     use crate::test_pools::pools;
@@ -101,9 +102,13 @@ mod tests {
     }
 
     fn tone() -> Vec<f32> {
-        let step = std::f32::consts::TAU * 220.0 / Consts::SAMPLE_RATE as f32;
+        let rate: f32 = Consts::SAMPLE_RATE.as_();
+        let step = std::f32::consts::TAU * 220.0 / rate;
         (0..Consts::SECONDS * Consts::SAMPLE_RATE)
-            .map(|n| 0.5 * (step * n as f32).sin())
+            .map(|n| {
+                let t: f32 = n.as_();
+                0.5 * (step * t).sin()
+            })
             .collect()
     }
 

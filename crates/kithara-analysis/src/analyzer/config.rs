@@ -1,6 +1,7 @@
 use std::fmt;
 
 use bon::Builder;
+#[cfg(feature = "beat-nn")]
 use kithara_beat::{BeatConfig, BeatSettings};
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
 use struct_patch::Patch;
@@ -41,6 +42,7 @@ pub struct BeatAnalysisSettings {
     block_frames: usize,
     /// Reaches the detector's peak-picking policy. Nested rather than
     /// flattened so a document can patch `beat:` on its own.
+    #[cfg(feature = "beat-nn")]
     #[builder(default)]
     #[field(get(copy))]
     #[patch(name = "BeatSettings")]
@@ -74,6 +76,14 @@ impl<B> BeatAnalysisConfig<B> {
             pub(crate) fn detector_window_seconds(&self) -> u32;
             pub(crate) fn target_rate(&self) -> u32;
             pub(crate) fn block_frames(&self) -> usize;
+        }
+    }
+}
+
+#[cfg(feature = "beat-nn")]
+impl<B> BeatAnalysisConfig<B> {
+    delegate::delegate! {
+        to self.settings {
             pub(crate) fn beat(&self) -> BeatConfig;
         }
     }
@@ -98,24 +108,26 @@ where
     B: ResamplerBackend,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BeatAnalysisConfig")
-            .field("block_frames", &self.settings.block_frames)
-            .field("target_rate", &self.settings.target_rate)
-            .field("resampler_quality", &self.settings.resampler_quality)
-            .field("resampler_backend", &self.resampler_backend_name())
-            .field(
-                "detector_min_window_seconds",
-                &self.settings.detector_min_window_seconds,
-            )
-            .field(
-                "detector_window_seconds",
-                &self.settings.detector_window_seconds,
-            )
-            .field(
-                "detector_overlap_seconds",
-                &self.settings.detector_overlap_seconds,
-            )
-            .finish()
+        let mut out = f.debug_struct("BeatAnalysisConfig");
+        out.field("block_frames", &self.settings.block_frames);
+        out.field("target_rate", &self.settings.target_rate);
+        out.field("resampler_quality", &self.settings.resampler_quality);
+        out.field("resampler_backend", &self.resampler_backend_name());
+        out.field(
+            "detector_min_window_seconds",
+            &self.settings.detector_min_window_seconds,
+        );
+        out.field(
+            "detector_window_seconds",
+            &self.settings.detector_window_seconds,
+        );
+        out.field(
+            "detector_overlap_seconds",
+            &self.settings.detector_overlap_seconds,
+        );
+        #[cfg(feature = "beat-nn")]
+        out.field("beat", &self.settings.beat);
+        out.finish()
     }
 }
 
@@ -130,10 +142,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "beat-nn")]
+    use kithara_beat::BeatConfig;
     use kithara_resampler::rubato::RubatoBackend;
     use kithara_test_utils::kithara;
 
     use super::BeatAnalysisConfig;
+    #[cfg(feature = "beat-nn")]
+    use super::BeatAnalysisSettings;
 
     #[kithara::test(native, flash(false))]
     fn default_beat_config_reports_configured_backend() {
@@ -159,11 +175,32 @@ mod tests {
             "a grid carrying per-marker confidence is not the grid v1 cached"
         );
     }
+
+    #[cfg(feature = "beat-nn")]
+    #[kithara::test(native, flash(false))]
+    fn a_moved_picking_policy_changes_the_cache_tag() {
+        let tag = |beat: BeatConfig| {
+            BeatAnalysisConfig::builder()
+                .resampler_backend(RubatoBackend::default())
+                .settings(BeatAnalysisSettings::builder().beat(beat).build())
+                .build()
+                .cache_tag()
+                .expect("beat NN has a cache tag")
+        };
+
+        assert_ne!(
+            tag(BeatConfig::default()),
+            tag(BeatConfig::builder().peak_threshold(0.25).build()),
+            "a moved peak-picking policy must not share a cached grid"
+        );
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod settings_tests {
+    #[cfg(feature = "beat-nn")]
     use kithara_beat::BeatConfig;
+    use kithara_resampler::ResamplerQuality;
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
@@ -185,6 +222,24 @@ mod settings_tests {
         );
     }
 
+    #[kithara::test(native, flash(false))]
+    fn a_named_resampler_quality_arrives_as_its_variant() {
+        let patch: BeatAnalysisSettingsPatch =
+            serde_yaml_ng::from_str("resampler_quality: fast\n").expect("the document types");
+        let mut settings = BeatAnalysisSettings::builder()
+            .resampler_quality(ResamplerQuality::Normal)
+            .build();
+
+        settings.apply(patch);
+
+        assert_eq!(
+            settings.resampler_quality(),
+            ResamplerQuality::Fast,
+            "the document's snake_case name must reach the variant"
+        );
+    }
+
+    #[cfg(feature = "beat-nn")]
     #[kithara::test(native, flash(false))]
     fn a_nested_beat_patch_reaches_the_inner_field() {
         let patch: BeatAnalysisSettingsPatch =

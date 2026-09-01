@@ -133,12 +133,18 @@ The worker drains the transport on its own tick, where DSP is allowed, and folds
 one at every push boundary, so beat-resampler segmentation is a pure function of
 the producer's own chunk boundaries.
 
-`BeatAnalysisConfig<B>` owns beat tunables and a standalone resampler backend.
+`BeatAnalysisConfig<B>` pairs a standalone resampler backend with the
+`BeatAnalysisSettings` that owns the backend-independent beat tunables; a
+configuration document reaches those through `BeatAnalysisSettingsPatch`.
 Defaults are 1024-frame mono resampler blocks, 22 050 Hz detector input,
 30-second detector windows with 2 seconds of overlap, and
-`ResamplerQuality::High`. The analyzer never stores whole-track source PCM: it
-downmixes to mono and keeps covered spans at detector rate in buffers borrowed
-from the caller's typed region.
+`ResamplerQuality::High`. Behind `beat-nn` the settings also carry the
+detector's `BeatConfig` peak-picking policy: that field, its `beat()`
+forwarder, and the `beat:` document key exist only under that feature, and the
+policy is printed by the hand-written `Debug` so `cache_tag()` cannot hand a
+moved policy the grid cached for the frozen parity values. The analyzer never
+stores whole-track source PCM: it downmixes to mono and keeps covered spans at
+detector rate in buffers borrowed from the caller's typed region.
 
 The contiguous run, not the pass, owns the sequential `MonoStream`. A range
 decoded later cannot be pushed through the stream that produced an earlier one:
