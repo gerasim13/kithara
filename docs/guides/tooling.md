@@ -32,6 +32,11 @@ report - it prints the file count before the report for that reason.
 - `just ci audit --autofix` runs the whole chain - fmt, Clippy twice, typos,
   ast-grep, xtask lint - before the read-only audit.
 
+A reordering fix can leave the crate not compiling: sorting a struct's fields
+does not follow through to its literals, and `clippy::inconsistent_struct_constructor`
+then rejects what the ratchet calls a fixpoint. Compile after a `--fix` that
+touched declarations; a second lint pass will not tell you.
+
 Every `--fix` refuses to run on a dirty tree. Commit first, so the diff holds
 only what the tool did; `--allow-dirty` mixes its edits into yours. The three
 lint namespaces scope with `--crate <name>` or `--path <path>`, which takes a
