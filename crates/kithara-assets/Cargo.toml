@@ -39,10 +39,13 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 hex = { workspace = true }
+humantime-serde = { workspace = true }
 lru = { workspace = true }
 rangemap = { workspace = true }
 rkyv = { workspace = true }
+serde = { workspace = true }
 sha2 = { workspace = true }
+struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
@@ -64,6 +67,9 @@ cbc = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
 
 [lints]
 workspace = true

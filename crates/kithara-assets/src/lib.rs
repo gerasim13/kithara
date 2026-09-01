@@ -26,7 +26,7 @@ pub use index::pending_resource::{
     PendingResourceCleanupError, ResourceAttachment, ResourceLease, WriterEpoch, WriterHandle,
     WriterOutcome,
 };
-pub use index::persistence::{FlushHub, FlushPolicy};
+pub use index::persistence::{FlushHub, FlushPolicy, FlushSettings};
 #[cfg(test)]
 pub(crate) use kithara_bufpool::testing as test_pools;
 pub use layout::{

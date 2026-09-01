@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use kithara::{
+    assets::FlushSettings,
     hls::SizeProbeMethod,
+    host::HostSettings,
     net::{Compression, NetSettings},
 };
 use serde::Deserialize;
@@ -23,6 +25,8 @@ pub(crate) struct Document {
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
     pub(crate) drm: Drm,
+    pub(crate) flush: FlushSettings,
+    pub(crate) host: HostSettings,
     pub(crate) net: NetSettings,
     pub(crate) network: Network,
     pub(crate) playback: Playback,
