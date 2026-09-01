@@ -14,10 +14,12 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- `comment_hygiene` reports nothing for `kithara-devtools` although the crate
-  holds unmarked comment blocks, and 292 `WHY:` prefixes satisfy the rule
-  without removing a comment. Both need a fix before the check can be trusted.
-- Clear the 18 stale identifiers `doc_staleness` reports, then promote it to
+- `comment_hygiene` cannot be trusted yet, for three separate reasons.
+  `[lint_exclude]` hides whole crates from it, 292 `WHY:` prefixes satisfy the
+  rule without removing anything, and its autofix now reaches nothing: all 138
+  category violations are longer than the 30-character guard. Only the density
+  check resists a marker, and it has no autofix by construction.
+- Clear the 12 stale identifiers `doc_staleness` reports, then promote it to
   deny.
 - Work through the 16 warn-level documents.
 
