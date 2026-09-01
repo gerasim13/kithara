@@ -330,7 +330,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{HostConfig, HostSettings};
+    use super::{HostConfig, HostSettings, NonZeroU32};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_the_sample_rate() {
@@ -341,5 +341,21 @@ mod tests {
         config.apply(settings);
 
         assert_eq!(config.sample_rate().get(), 48_000);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_empty_patch_keeps_the_value_the_config_was_built_with() {
+        let settings: HostSettings =
+            serde_yaml_ng::from_str("{}\n").expect("an empty document types");
+        let seeded = NonZeroU32::new(96_000).expect("96000 is not zero");
+        let mut config = HostConfig::builder().sample_rate(seeded).build();
+
+        config.apply(settings);
+
+        assert_eq!(
+            config.sample_rate(),
+            seeded,
+            "a document that names nothing must not reset the built value"
+        );
     }
 }

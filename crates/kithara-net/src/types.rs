@@ -626,23 +626,22 @@ mod settings_tests {
 
     use struct_patch::Patch as _;
 
-    use super::{Compression, Duration, NetOptions, NetSettings};
+    use super::{Compression, Duration, NetOptions, NetSettings, RetryPolicy};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_fields_it_names() {
         let settings: NetSettings =
             serde_yaml_ng::from_str("inactivity_timeout: 90s\npool_idle_timeout: 250ms\n")
                 .expect("the document types");
-        let mut options = NetOptions::builder().build();
-        let before = options.body_queue_capacity;
+        let mut options = NetOptions::builder().body_queue_capacity(7).build();
 
         options.apply(settings);
 
         assert_eq!(options.inactivity_timeout, Duration::from_secs(90));
         assert_eq!(options.pool_idle_timeout, Duration::from_millis(250));
         assert_eq!(
-            options.body_queue_capacity, before,
-            "a silent field must keep its built value"
+            options.body_queue_capacity, 7,
+            "a silent field must keep the value it already had"
         );
     }
 
@@ -651,16 +650,22 @@ mod settings_tests {
         let settings: NetSettings =
             serde_yaml_ng::from_str("retry_policy:\n  max_retries: 7\n  base_delay: 250ms\n")
                 .expect("the document types");
-        let mut options = NetOptions::builder().build();
-        let max_delay = options.retry_policy.max_delay;
+        let mut options = NetOptions::builder()
+            .retry_policy(
+                RetryPolicy::builder()
+                    .max_delay(Duration::from_secs(11))
+                    .build(),
+            )
+            .build();
 
         options.apply(settings);
 
         assert_eq!(options.retry_policy.max_retries, 7);
         assert_eq!(options.retry_policy.base_delay, Duration::from_millis(250));
         assert_eq!(
-            options.retry_policy.max_delay, max_delay,
-            "a silent inner field must keep its value"
+            options.retry_policy.max_delay,
+            Duration::from_secs(11),
+            "a silent inner field must keep the value it already had"
         );
     }
 

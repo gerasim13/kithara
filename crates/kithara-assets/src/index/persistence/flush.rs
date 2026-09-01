@@ -342,14 +342,17 @@ mod tests {
         let settings: FlushSettings =
             serde_yaml_ng::from_str("force_every_n_ops: 512\n").expect("the document types");
         let mut policy = FlushPolicy::default();
-        let debounce_before = policy.debounce;
+        // Seeded away from the default of 50ms, so the assertion below can tell
+        // "left alone" from "reset to the default".
+        policy.debounce = Duration::from_millis(250);
 
         policy.apply(settings);
 
         assert_eq!(policy.force_every_n_ops.get(), 512);
         assert_eq!(
-            policy.debounce, debounce_before,
-            "a silent field must keep its default value"
+            policy.debounce,
+            Duration::from_millis(250),
+            "a silent field must keep the value it already had"
         );
     }
 
