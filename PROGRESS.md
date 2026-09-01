@@ -14,10 +14,11 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- Work the comment queue down: 426 comments carry prose outside a doc comment
-  and 99 doc blocks run past a dozen lines. Only 76 sit above an item, where
-  `--fix` moves them; the rest are inside bodies, where the answer is usually a
-  named function rather than a sentence.
+- Work the comment queue down by hand. `--fix` is exhausted - a second run on a
+  clean tree changes nothing - so all 557 warnings are decisions: 426 comments
+  carrying prose outside a doc comment, 99 doc blocks past a dozen lines, 24
+  oversized inline comments, 8 dense functions. A body comment has no mechanical
+  destination, and the answer there is usually a named function, not a sentence.
 - `[lint_exclude]` still hides `kithara-devtools` from every style check, so
   446 of those comments are invisible to the ratchet. Narrow the exemption to
   the check files that carry lint patterns.

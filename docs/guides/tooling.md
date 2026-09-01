@@ -40,18 +40,25 @@ paths positionally.
 
 | Namespace | Check | Rewrite |
 | --- | --- | --- |
-| `style` | `comment_hygiene` | deletes comments carrying no marker |
+| `style` | `comment_hygiene` | promotes a comment above an item to `///`, deletes short unmarked prose |
 | `style` | `struct_field_order`, `struct_init_order`, `trait_item_order` | reorders declarations and literals |
 | `idioms` | `derivable_from`, `derivable_display`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto the repo macro |
 | `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
 
-`comment_hygiene --fix` deletes conservatively: one `//` line, at most 30
-characters, no digit, backtick, bracket, `=`, `:`, or second capital. Longer
-prose is left alone because a deleted sentence is irreversible. A clean fix run
-therefore is not a clean file - what remains is a decision you owe, and adding a
-marker to silence the check is the worse of the two answers. `comment_hygiene`
-reports size and density separately for exactly that reason, and neither has an
-autofix.
+`comment_hygiene --fix` makes the two rewrites that cannot be wrong. A standalone
+`//` block directly above an item becomes that item's `///`: the comment already
+documents the item and only the marker was missing. A single `//` line of at most
+30 characters with no digit, backtick, bracket, `=`, `:`, or second capital is
+deleted; prose that small carries nothing a reader loses. Longer prose is never
+deleted, because a deleted sentence is irreversible.
+
+Everything else is a decision you owe. A comment inside a function body has no
+mechanical destination: being the only comment there does not make it the
+function's documentation - far more often it annotates the first statement of a
+long body, and a fix that hoisted it would publish a wrong contract. So a clean
+fix run is not a clean file, and adding a marker to silence the check is the
+worse of the two answers. `comment_hygiene` reports size and density separately
+for the same reason, and neither has an autofix.
 
 ## Architecture Analysis
 
@@ -152,14 +159,10 @@ autofix.
 
 ## Dependency Policy
 
-- Declare dependency versions only in the root `Cargo.toml` under
-  `[workspace.dependencies]`, and reference them from crates with
-  `{ workspace = true }`.
-- Do not add duplicate or overlapping crates when the workspace or standard
-  library already covers the need, and do not pull in a heavy crate for a small
-  utility without checking cost first.
-- If a new dependency is unavoidable, justify it in the task, plan, or PR
-  description and add it to `[workspace.dependencies]` first.
+`AGENTS.md` owns the workspace-first rule. Beyond it: a crate reaches a version
+with `{ workspace = true }` and never spells one out itself, a heavy crate taken
+for a small utility has its cost checked first, and a new dependency is justified
+in the task, plan, or PR description.
 
 ## Dependency And Surface Tools
 
