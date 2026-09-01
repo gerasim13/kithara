@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 #[cfg(feature = "broadcast")]
 use kithara::broadcast::BroadcastSettings;
 use kithara::{
-    abr::AbrSettingsPatch, analysis::BeatAnalysisSettingsPatch, assets::FlushSettings,
-    hls::SizeProbeMethod, host::HostSettings, net::NetSettings, stream::dl::DownloaderSettings,
+    analysis::BeatAnalysisSettingsPatch, assets::FlushSettings, hls::SizeProbeMethod,
+    host::HostSettings, net::NetSettings, stream::dl::DownloaderSettings,
 };
 use serde::Deserialize;
 
@@ -22,7 +22,6 @@ use crate::config::AppSettings;
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Document {
-    pub(crate) abr: AbrSettingsPatch,
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
     pub(crate) beat: BeatAnalysisSettingsPatch,

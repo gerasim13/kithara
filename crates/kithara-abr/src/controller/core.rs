@@ -131,19 +131,39 @@ pub struct AbrSettings {
 /// comparing the pre-patch and post-patch values.
 impl PartialEq for AbrSettings {
     fn eq(&self, other: &Self) -> bool {
-        self.bandwidth_emit_min_interval == other.bandwidth_emit_min_interval
-            && self.buffer_emit_min_delta == other.buffer_emit_min_delta
-            && self.buffer_emit_min_interval == other.buffer_emit_min_interval
-            && self.min_buffer_for_up_switch == other.min_buffer_for_up_switch
-            && self.min_switch_interval == other.min_switch_interval
-            && self.throughput_sample_min_interval == other.throughput_sample_min_interval
-            && self.urgent_downswitch_buffer == other.urgent_downswitch_buffer
-            && self.initial_throughput_bps == other.initial_throughput_bps
-            && self.max_bandwidth_bps == other.max_bandwidth_bps
-            && self.bandwidth_emit_min_delta_ratio == other.bandwidth_emit_min_delta_ratio
-            && self.down_hysteresis_ratio == other.down_hysteresis_ratio
-            && self.throughput_safety_factor == other.throughput_safety_factor
-            && self.up_hysteresis_ratio == other.up_hysteresis_ratio
+        // Destructured without `..` deliberately: a field added to this
+        // `#[non_exhaustive]` struct must not slip out of equality silently.
+        // The compiler names it here first.
+        let Self {
+            bandwidth_emit_min_interval,
+            buffer_emit_min_delta,
+            buffer_emit_min_interval,
+            min_buffer_for_up_switch,
+            min_switch_interval,
+            throughput_sample_min_interval,
+            urgent_downswitch_buffer,
+            cancel: _,
+            initial_throughput_bps,
+            max_bandwidth_bps,
+            bandwidth_emit_min_delta_ratio,
+            down_hysteresis_ratio,
+            throughput_safety_factor,
+            up_hysteresis_ratio,
+        } = self;
+
+        *bandwidth_emit_min_interval == other.bandwidth_emit_min_interval
+            && *buffer_emit_min_delta == other.buffer_emit_min_delta
+            && *buffer_emit_min_interval == other.buffer_emit_min_interval
+            && *min_buffer_for_up_switch == other.min_buffer_for_up_switch
+            && *min_switch_interval == other.min_switch_interval
+            && *throughput_sample_min_interval == other.throughput_sample_min_interval
+            && *urgent_downswitch_buffer == other.urgent_downswitch_buffer
+            && *initial_throughput_bps == other.initial_throughput_bps
+            && *max_bandwidth_bps == other.max_bandwidth_bps
+            && *bandwidth_emit_min_delta_ratio == other.bandwidth_emit_min_delta_ratio
+            && *down_hysteresis_ratio == other.down_hysteresis_ratio
+            && *throughput_safety_factor == other.throughput_safety_factor
+            && *up_hysteresis_ratio == other.up_hysteresis_ratio
     }
 }
 
