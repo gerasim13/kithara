@@ -75,30 +75,31 @@ exclude_paths = [
   "docs/superpowers/**",
 ]
 
+# Limits are bytes: a document costs an agent its size, not its line count.
 [[doc_size.limits]]
 globs = ["AGENTS.md"]
-warn = 150
-deny = 170
+warn = 8000
+deny = 10000
 
 [[doc_size.limits]]
 globs = ["PROGRESS.md"]
-warn = 60
-deny = 120
+warn = 2000
+deny = 4000
 
 [[doc_size.limits]]
 globs = ["**/CONTEXT.md"]
-warn = 300
-deny = 600
+warn = 24000
+deny = 48000
 
 [[doc_size.limits]]
 globs = ["docs/guides/**/*.md"]
-warn = 200
-deny = 400
+warn = 10000
+deny = 24000
 
 [[doc_size.limits]]
 globs = ["**/README.md"]
-warn = 150
-deny = 300
+warn = 8000
+deny = 16000
 
 [doc_staleness]
 # Platform, upstream, and illustrative names the workspace sources never define.

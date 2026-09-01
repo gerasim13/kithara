@@ -46,28 +46,28 @@ fn scan_content(cfg: &DocSizeConfig, rel: &str, src: &str) -> Vec<Violation> {
     if matches_any(&excludes, Path::new(rel)) {
         return Vec::new();
     }
-    let lines = src.lines().count();
+    let bytes = src.len();
     for limit in &cfg.limits {
         let globs = compile_globs(&limit.globs);
         if !matches_any(&globs, Path::new(rel)) {
             continue;
         }
-        if lines > limit.deny {
+        if bytes > limit.deny {
             return vec![Violation::deny(
                 ID,
                 rel.to_string(),
                 format!(
-                    "{rel} is {lines} lines, above the {} line limit",
+                    "{rel} is {bytes} bytes, above the {} byte limit",
                     limit.deny
                 ),
             )];
         }
-        if lines > limit.warn {
+        if bytes > limit.warn {
             return vec![Violation::warn(
                 ID,
                 rel.to_string(),
                 format!(
-                    "{rel} is {lines} lines, above the {} line limit",
+                    "{rel} is {bytes} bytes, above the {} byte limit",
                     limit.warn
                 ),
             )];
@@ -86,9 +86,9 @@ mod tests {
         DocSizeConfig {
             exclude_paths: Vec::new(),
             limits: vec![DocSizeLimit {
-                deny: 600,
+                deny: 3000,
                 globs: vec!["**/CONTEXT.md".to_string()],
-                warn: 300,
+                warn: 1500,
             }],
         }
     }
@@ -98,14 +98,14 @@ mod tests {
             exclude_paths: Vec::new(),
             limits: vec![
                 DocSizeLimit {
-                    deny: 600,
+                    deny: 3000,
                     globs: vec!["**/CONTEXT.md".to_string()],
-                    warn: 300,
+                    warn: 1500,
                 },
                 DocSizeLimit {
-                    deny: 300,
+                    deny: 1500,
                     globs: vec!["**/README.md".to_string()],
-                    warn: 150,
+                    warn: 750,
                 },
             ],
         }
@@ -137,7 +137,7 @@ mod tests {
         let violations = scan_content(&two_class_limits(), "crates/demo/README.md", &src);
 
         assert_eq!(violations.len(), 1);
-        assert!(violations[0].message.contains("150"));
+        assert!(violations[0].message.contains("750"));
     }
 
     #[test]
