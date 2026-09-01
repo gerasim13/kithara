@@ -155,9 +155,10 @@ mod tests {
         },
         thread,
     };
+    use struct_patch::Patch as _;
 
     use super::*;
-    use crate::pools::AppPools;
+    use crate::{document::schema::Document, pools::AppPools};
 
     /// The lead every test that does not measure the ring starts on air with.
     const TAP_LEAD: Duration = Duration::from_secs(2);
@@ -326,5 +327,24 @@ mod tests {
         let config = BroadcastConfig::builder().build();
 
         assert!(ring_capacity(&config, Duration::ZERO).is_err());
+    }
+
+    /// A document that names `broadcast: {bit_rate: ...}` must parse under
+    /// the real configuration document schema, and the patch it carries must
+    /// reach a `BroadcastConfig` without disturbing fields the document left
+    /// unnamed.
+    #[kithara::test]
+    fn the_broadcast_section_parses_and_reaches_the_config() {
+        let document: Document = serde_yaml_ng::from_str("broadcast:\n  bit_rate: 256000\n")
+            .expect("the document types");
+        let mut config = BroadcastConfig::builder().channels(4).build();
+
+        config.apply(document.broadcast);
+
+        assert_eq!(config.bit_rate, 256_000);
+        assert_eq!(
+            config.channels, 4,
+            "a document naming only bit_rate must not reset the seeded channel count"
+        );
     }
 }

@@ -3,7 +3,7 @@ mod layouts;
 mod load;
 mod merge;
 mod policy;
-mod schema;
+pub(crate) mod schema;
 
 pub use env::MissingEnv;
 pub use load::{Config, LoadError};

@@ -2,11 +2,16 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use bon::Builder;
 use kithara_platform::time::Duration;
+use struct_patch::Patch;
 
 use crate::{BroadcastError, BroadcastResult};
 
 /// Audio, segmentation, retention, and origin settings for a live broadcast.
-#[derive(Debug, Clone, Builder)]
+#[derive(Clone, Debug, Builder, Patch)]
+#[patch(name = "BroadcastSettings")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct BroadcastConfig {
     /// Sample rate of the mix.
@@ -20,6 +25,7 @@ pub struct BroadcastConfig {
     pub bit_rate: u64,
     /// Media duration a segment is cut at.
     #[builder(default = Duration::from_secs(4))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub segment_target: Duration,
     /// Segments a client sees in the playlist.
     #[builder(default = 6)]
@@ -34,6 +40,7 @@ pub struct BroadcastConfig {
     /// after it found no samples. The floor on how promptly a segment is cut
     /// once audio resumes, paid for in wake-ups on an idle broadcast.
     #[builder(default = Duration::from_millis(2))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub poll_interval: Duration,
 }
 
@@ -94,8 +101,9 @@ impl BroadcastConfig {
 mod tests {
     use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
 
-    use super::BroadcastConfig;
+    use super::{BroadcastConfig, BroadcastError, BroadcastSettings};
 
     #[kithara::test(native, flash(false))]
     fn the_default_configuration_serves_a_long_enough_playlist() {
@@ -156,5 +164,34 @@ mod tests {
                 .validate()
                 .is_err()
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_the_bit_rate_and_keeps_the_seeded_channel_count() {
+        let settings: BroadcastSettings =
+            serde_yaml_ng::from_str("bit_rate: 256000\n").expect("the document types");
+        let mut config = BroadcastConfig::builder().channels(4).build();
+
+        config.apply(settings);
+
+        assert_eq!(config.bit_rate, 256_000);
+        assert_eq!(
+            config.channels, 4,
+            "a document naming only bit_rate must not reset the seeded channel count"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_can_compose_a_playlist_the_builder_would_have_refused() {
+        let settings: BroadcastSettings =
+            serde_yaml_ng::from_str("window: 1\n").expect("the document types");
+        let mut config = BroadcastConfig::builder().build();
+
+        config.apply(settings);
+
+        assert!(matches!(
+            config.validate(),
+            Err(BroadcastError::PlaylistTooShort { .. })
+        ));
     }
 }

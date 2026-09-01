@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+#[cfg(feature = "broadcast")]
+use kithara::broadcast::BroadcastSettings;
 use kithara::{
     assets::FlushSettings,
     hls::SizeProbeMethod,
@@ -24,6 +26,8 @@ use crate::config::AppSettings;
 pub(crate) struct Document {
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
+    #[cfg(feature = "broadcast")]
+    pub(crate) broadcast: BroadcastSettings,
     pub(crate) drm: Drm,
     pub(crate) flush: FlushSettings,
     pub(crate) host: HostSettings,
