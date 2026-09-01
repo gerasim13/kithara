@@ -343,6 +343,7 @@ obfstr = "0.4.5"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false }
 parking_lot = "0.12"
+parking_lot_core = "0.9"
 parley = { version = "0.6", default-features = false, features = ["std", "system"] }
 pin-project-lite = "0.2"
 plist = "1"

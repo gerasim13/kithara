@@ -199,6 +199,7 @@ where
         self.port.flush_wake();
     }
 
+    #[kithara::measure(label = "play.decoder.tick")]
     #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();

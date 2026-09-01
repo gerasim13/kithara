@@ -17,6 +17,8 @@
 The playback orchestration crate behind Kithara. It provides concrete player,
 engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
 and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
+Enable `perf` on native profiling builds for permanent `hotpath` timing at the
+playback worker boundary; ordinary builds compile the probes out.
 
 ## Usage
 

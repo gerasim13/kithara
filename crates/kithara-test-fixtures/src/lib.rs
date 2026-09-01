@@ -20,10 +20,8 @@ pub mod hls;
 pub(crate) use hls::manifest as hls_manifest;
 pub mod signal;
 pub mod signal_asset;
-// fMP4 packaging: the build script muxes the packaged bodies it embeds, and the
-// integration suite's HLS server muxes its variants on demand. It reads an
-// `EncodedTrack`, so it stays off wasm with the encoder that produces one.
-#[cfg(not(target_arch = "wasm32"))]
+// The gapless request shape is shared with wasm; the native-only fMP4 muxer is
+// gated inside the module with the encoder types it consumes.
 pub mod fmp4;
 // Read by this crate's build script through `#[path]`, and still by the
 // integration suite's; declared here so its own tests keep running.

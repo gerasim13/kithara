@@ -4,6 +4,7 @@ use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
+use kithara_test_utils::kithara;
 use symphonia::core::{
     audio::Channels,
     codecs::{
@@ -173,6 +174,7 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
+    #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,
         frame_data: &[u8],

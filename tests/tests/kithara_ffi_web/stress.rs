@@ -15,7 +15,7 @@ use kithara::{
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
     bufpool_ext::{TestPools, pools},
-    fixture_protocol::{DataMode, InitMode},
+    fixture_protocol::DataMode,
 };
 use kithara_test_fixtures::signal;
 use tracing::{info, warn};
@@ -92,11 +92,12 @@ async fn init() {
         .segments_per_variant(48)
         .segment_size(200_000)
         .segment_duration_secs(200_000.0 / bytes_per_second)
+        // `SawWav` is a whole WAV file cut into segments, so segment 0 already
+        // carries the 44-byte header. An `EXT-X-MAP` header on top of it is a
+        // second copy: the reader parses the init one and the segment's own
+        // lands in the data chunk, where 44 bytes read back as 11 frames of
+        // noise. The two are alternative fixture shapes, not layers.
         .data_mode(DataMode::SawWav {
-            sample_rate: 44_100,
-            channels: 2,
-        })
-        .init_mode(InitMode::WavHeader {
             sample_rate: 44_100,
             channels: 2,
         });
@@ -959,7 +960,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
 
     let mut audio = create_pipeline().await;
-    let mut events_rx = audio.events();
+    let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let mut buf = vec![0.0f32; 4096];

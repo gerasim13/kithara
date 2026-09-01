@@ -13,6 +13,10 @@ renderer contract stays resident as an exact identity stage.
 
 Host-axis values describe an ephemeral musical clock; they do not make this
 crate the owner of the live Host, playback session, audio graph, or worker.
+`SyncMember::Grid` accepts only `Send + Sync` leaf grids because an owning
+topology operation may cross the wasm Worker-to-Host route. Nested group owners
+remain `MaybeSend + MaybeSync`; the platform owner must split worker-bound
+runtime state before transferring such a group.
 
 ## Boundaries
 

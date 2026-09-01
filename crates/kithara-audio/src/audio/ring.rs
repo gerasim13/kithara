@@ -185,6 +185,7 @@ impl RingConsumer {
     }
 
     #[kithara::flash(true)]
+    #[kithara::measure(label = "audio.ring.wait")]
     #[kithara::hang_watchdog(ctx = ConsumerHangCtx)]
     fn recv_outcome_blocking(&mut self, ctx: RecvCtx<'_>) -> RecvOutcome {
         loop {

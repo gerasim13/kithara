@@ -28,6 +28,7 @@ Attribute macros:
 - `#[kithara::probe(...)]` — USDT probe-point emitter consumed by `kithara-test-utils::probes`
 - `#[kithara::mock(...)]` — wraps trait or impl with `unimock` mock generation
 - `#[kithara::hang_watchdog(...)]` — wraps test bodies with the hang-detector watchdog
+- `#[kithara::measure(...)]` — `hotpath` measurement gated by the caller's `perf` feature
 - `#[kithara::flash]` / `#[kithara::flash(true|false)]` — dynamic-flash guard for production functions
 - `#[kithara::facade_flash]` — facade-path variant of `flash`, re-exported by the `kithara` crate
 - `#[kithara::rtsan_forbid_blocking]` — mark a function as an RTSan nonblocking entry point

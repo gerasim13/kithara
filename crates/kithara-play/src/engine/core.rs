@@ -113,7 +113,7 @@ impl<S> EngineImpl<S> {
         self.bus.publish(event);
     }
 
-    fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
+    pub(super) fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
         let mut player_id = self.player_id.lock();
         if let Some(id) = *player_id {
             return Ok(id);
@@ -324,11 +324,6 @@ impl<S> EngineImpl<S> {
     #[cfg(any(test, feature = "probe"))]
     pub(super) const fn session_handle(&self) -> &SessionHandle<S> {
         &self.session
-    }
-
-    #[cfg(any(test, feature = "probe"))]
-    pub(super) fn registered_player_id(&self) -> Option<PlayerId> {
-        *self.player_id.lock()
     }
 
     pub fn release_slot(&self, slot: SlotId) -> Result<(), PlayError> {

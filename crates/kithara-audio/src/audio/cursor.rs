@@ -93,7 +93,7 @@ impl ChunkCursor {
         Ok(CopyOutcome { finished, samples })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::hang_watchdog]
     pub(super) fn read(
         &mut self,

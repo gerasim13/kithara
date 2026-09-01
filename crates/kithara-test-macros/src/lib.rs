@@ -17,6 +17,7 @@ mod asset;
 mod fixture;
 mod flash;
 mod hang_watchdog;
+mod measure;
 mod mock;
 mod no_block;
 mod probe;
@@ -48,6 +49,13 @@ pub fn test(attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn hang_watchdog(attr: TokenStream, item: TokenStream) -> TokenStream {
     hang_watchdog::expand(attr, item)
+}
+
+/// `#[kithara::measure]` - permanent hotpath measurement gated by the caller's
+/// `perf` feature.
+#[proc_macro_attribute]
+pub fn measure(attr: TokenStream, item: TokenStream) -> TokenStream {
+    measure::expand(attr, item)
 }
 
 /// `#[kithara::fixture]` — rstest-fixture replacement.

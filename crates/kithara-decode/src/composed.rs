@@ -221,6 +221,7 @@ where
         }
     }
 
+    #[kithara::measure(label = "decode.composed.next")]
     #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {

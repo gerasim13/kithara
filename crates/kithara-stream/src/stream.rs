@@ -393,7 +393,7 @@ impl<T: StreamType> Stream<T> {
         self.try_read_with(buf, WaitMode::Probe)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::hang_watchdog]
     fn try_read_with(
         &mut self,
@@ -727,7 +727,7 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Seek for Stream<T> {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let current = self.source.position();
 

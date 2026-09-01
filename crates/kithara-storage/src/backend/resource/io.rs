@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara_platform::sync::Arc;
+use kithara_test_utils::kithara;
 
 use crate::{
     StorageError, StorageResult,
@@ -8,7 +9,7 @@ use crate::{
 };
 
 impl<D: DriverIo> ResourceCore<D> {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn read_at_inner(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -94,7 +95,7 @@ impl<D: DriverIo> ResourceCore<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
             return Ok(());

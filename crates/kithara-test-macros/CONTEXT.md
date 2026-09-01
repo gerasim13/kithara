@@ -2,6 +2,9 @@
 
 Contracts and invariants for the kithara-test-macros crate; the README is the overview.
 
+`#[kithara::measure(...)]` expands to `hotpath::measure` only when the caller
+enables `perf`.
+
 ## `#[kithara::test]` flags
 
 A bare `#[kithara::test]` is a sync test emitted for native + wasm; flags combine (e.g.
