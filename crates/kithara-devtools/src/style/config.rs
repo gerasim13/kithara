@@ -143,9 +143,11 @@ const fn default_shorthand_first() -> bool {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommentHygieneConfig {
-    /// Prefixes that mark an inline `//` comment as intentional and
-    /// exempt from the `category` check. Match is case-sensitive on the
-    /// trimmed comment body.
+    /// Prefixes that keep an inline `//` comment. These are machine and
+    /// language markup, not prose: a tool directive, or the safety note the
+    /// compiler's own convention puts on an `unsafe` block. Prose belongs in a
+    /// doc comment, so no prose marker is listed here. Match is case-sensitive
+    /// on the trimmed comment body.
     #[serde(default = "default_allowed_inline_markers")]
     pub(crate) allowed_inline_markers: Vec<String>,
     /// Workspace-relative glob patterns that opt files out of every
@@ -157,8 +159,9 @@ pub(crate) struct CommentHygieneConfig {
     #[serde(default = "default_fn_density_threshold_pct")]
     pub(crate) fn_density_threshold_pct: u32,
     /// Maximum number of consecutive lines a `///` or `//!` doc-block may
-    /// span before flagging `size:doc`. Long contracts belong in the
-    /// owning crate `README.md` per AGENTS.md.
+    /// span before flagging `size:doc`. Documentation earns its place by being
+    /// dense; past a dozen lines it is a document, and a document belongs in
+    /// the owning crate `README.md` per AGENTS.md.
     #[serde(default = "default_doc_block_max_lines")]
     pub(crate) doc_block_max_lines: usize,
     /// Functions with body shorter than this many lines are exempt from
@@ -191,7 +194,7 @@ const fn default_inline_max_lines() -> usize {
 }
 
 const fn default_doc_block_max_lines() -> usize {
-    20
+    12
 }
 
 const fn default_fn_density_threshold_pct() -> u32 {
@@ -203,20 +206,10 @@ const fn default_fn_density_min_body_lines() -> usize {
 }
 
 fn default_allowed_inline_markers() -> Vec<String> {
-    [
-        "SAFETY:",
-        "TODO:",
-        "FIXME:",
-        "XXX:",
-        "NOTE:",
-        "WHY:",
-        "HACK:",
-        "ast-grep-ignore:",
-        "xtask-lint-ignore:",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect()
+    ["SAFETY:", "ast-grep-ignore:", "xtask-lint-ignore:"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 fn default_exclude_paths() -> Vec<String> {

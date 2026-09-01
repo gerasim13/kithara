@@ -4,21 +4,12 @@
 
 [comment_hygiene]
 inline_max_lines = 3
-doc_block_max_lines = 20
+doc_block_max_lines = 12
 fn_density_threshold_pct = 30
 fn_density_min_body_lines = 6
-allowed_inline_markers = [
-  "SAFETY:",
-  "TODO:",
-  "FIXME:",
-  "XXX:",
-  "NOTE:",
-  "WHY:",
-  "HACK:",
-  "kithara:",
-  "ast-grep-ignore:",
-  "xtask-lint-ignore:",
-]
+# Machine and language markup only. Prose belongs in a doc comment, so a prose
+# marker never appears here - it would only legitimise the comment it labels.
+allowed_inline_markers = ["SAFETY:", "ast-grep-ignore:", "xtask-lint-ignore:"]
 exclude_paths = ["**/build.rs", "**/tests/**/fixtures/**"]
 
 [non_english_text]

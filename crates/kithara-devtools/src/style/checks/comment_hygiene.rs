@@ -530,8 +530,10 @@ fn detect_category(
             CommentKind::Block => "block",
         };
         let msg = format!(
-            "{kind} comment without allowed marker (`{preview}`); add a marker \
-             ({}) or remove the comment",
+            "{kind} comment carrying prose (`{preview}`); a comment survives only \
+             as a doc comment on the item it documents - move it to `///`, fold it \
+             into the code's shape, or remove it. Inline `//` is reserved for \
+             machine markup ({})",
             cfg.allowed_inline_markers.join(", "),
         );
         out.push(Violation::warn(ID, key, msg));
@@ -838,6 +840,42 @@ mod tests {
     }
 
     #[test]
+    fn a_prose_marker_no_longer_excuses_an_inline_comment() {
+        let src = "fn f() {\n    // WHY: the queue drains before the flush\n    g();\n}\n";
+
+        let found = run_all(src);
+
+        assert_eq!(keys(&found), vec!["fixture.rs:2:category".to_owned()]);
+    }
+
+    #[test]
+    fn a_safety_note_stays_allowed() {
+        let src = "fn f() {\n    // SAFETY: the pointer is owned by the caller\n    g();\n}\n";
+
+        assert!(run_all(src).is_empty());
+    }
+
+    #[test]
+    fn a_tool_directive_stays_allowed() {
+        let src = "fn f() {\n    // xtask-lint-ignore: generated\n    g();\n}\n";
+
+        assert!(run_all(src).is_empty());
+    }
+
+    #[test]
+    fn the_message_names_the_documentation_rule() {
+        let src = "fn f() {\n    // the queue drains first\n    g();\n}\n";
+
+        let found = run_all(src);
+
+        assert!(
+            found[0].message.contains("doc comment"),
+            "message should route to documentation, got: {}",
+            found[0].message
+        );
+    }
+
+    #[test]
     fn line_comment_doc_style_recognized() {
         let src = "/// outer\n//! inner\n// plain\n";
         let comments = scan_comments(src);
@@ -934,7 +972,7 @@ mod tests {
 
     #[test]
     fn category_marker_on_first_standalone_line_covers_continuations() {
-        for marker in ["WHY: the state is shared", "SAFETY: the guard is held"] {
+        for marker in ["SAFETY: the guard is held", "xtask-lint-ignore: generated"] {
             let src = format!("fn f() {{\n    // {marker}\n    // continuation\n}}\n");
             let vs = run_all(&src);
             assert!(vs.is_empty(), "marker {marker}: {vs:?}");
@@ -1035,7 +1073,7 @@ mod tests {
     #[test]
     fn size_doc_block_at_limit_ok() {
         let mut src = String::new();
-        for i in 0..20 {
+        for i in 0..12 {
             src.push_str(&format!("/// line {i}\n"));
         }
         src.push_str("struct S;\n");

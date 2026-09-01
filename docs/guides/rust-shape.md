@@ -76,13 +76,20 @@ let session = Session::new(SessionConfig {
 
 ## Comments And Documentation
 
-- A comment carries one of the allowed markers (`SAFETY:`, `WHY:`, `NOTE:`,
-  `TODO:`, `FIXME:`, `HACK:`) or it is removed. `comment_hygiene` enforces this.
-  `just lint style --check comment_hygiene --fix` removes the trivial ones for
-  you; what it leaves is a judgement, not a licence to prefix a marker.
-- Prose does not fix unclear code. If a comment is needed to follow the logic,
-  rename, split, or retype the code until it is not.
-- No large comment blocks at the top of files, no separator or banner comments.
+- A comment lives as a doc comment on the item it documents, or it does not
+  live. Inline `//` is reserved for machine markup: `SAFETY:` on an `unsafe`
+  block, and the `ast-grep-ignore:` / `xtask-lint-ignore:` directives. There is
+  no prose marker, because a prose marker only labels the comment it should have
+  removed. `comment_hygiene` enforces this.
+- So an explanation has three honest destinations and no fourth: the item's
+  `///`, the shape of the code, or a test. Prose does not fix unclear code - if
+  a comment is needed to follow the logic, rename, split, or retype until it is
+  not, and a comment inside a function body almost always means the body wanted
+  a named function.
+- Documentation earns its place by being dense. A doc block runs to a dozen
+  lines at most; past that it is a document, and a document belongs in the
+  owning crate `README.md`. No banner or separator comments, and no comment
+  block at the top of a file.
 - An invariant is pinned by a test, not by a paragraph: a test fails when the
   invariant breaks, and a paragraph silently starts lying. Only what neither the
   code shape nor a test can carry belongs in the owning crate `CONTEXT.md`, and

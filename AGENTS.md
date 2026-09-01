@@ -38,7 +38,7 @@ Every fact below has one owner. Link to the owner; do not restate it.
 - Code is the only source of truth. An entry in `CONTEXT.md` is admissible only
   when it cannot be expressed in the shape of the code or pinned by a test. An
   explanation that exists because the code is unclear means the code is wrong,
-  and a comment without a marker is removed rather than kept.
+  and a comment survives only as documentation of the item it sits on.
 
 ## Non-Negotiables
 
