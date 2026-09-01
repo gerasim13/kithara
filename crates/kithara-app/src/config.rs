@@ -117,7 +117,7 @@ pub struct AppConfig {
     /// out a longer packager stall and pays for it in the memory those
     /// interleaved samples occupy.
     #[builder(default = Duration::from_secs(2))]
-    #[patch(attribute(serde(default, with = "humantime_serde::option")))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub broadcast_tap_lead: Duration,
     /// Upper bound on waveform buckets (native = one per FFT window). Only
     /// caps very long tracks, to bound the cached blob.

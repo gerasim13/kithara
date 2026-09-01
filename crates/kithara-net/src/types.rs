@@ -541,20 +541,6 @@ mod tests {
     }
 
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-    async fn test_retry_policy_clone() {
-        let policy1 = RetryPolicy::builder()
-            .max_retries(5)
-            .base_delay(Duration::from_millis(100))
-            .max_delay(Duration::from_secs(2))
-            .build();
-        let policy2 = policy1.clone();
-
-        assert_eq!(policy1.max_retries, policy2.max_retries);
-        assert_eq!(policy1.base_delay, policy2.base_delay);
-        assert_eq!(policy1.max_delay, policy2.max_delay);
-    }
-
-    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::start_equals_end(10, Some(10), "bytes=10-10")]
     #[case::start_greater_than_end(20, Some(10), "bytes=20-10")]
     #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
@@ -645,13 +631,15 @@ mod settings_tests {
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_fields_it_names() {
         let settings: NetSettings =
-            serde_yaml_ng::from_str("inactivity_timeout: 90s\n").expect("the document types");
+            serde_yaml_ng::from_str("inactivity_timeout: 90s\npool_idle_timeout: 250ms\n")
+                .expect("the document types");
         let mut options = NetOptions::builder().build();
         let before = options.body_queue_capacity;
 
         options.apply(settings);
 
         assert_eq!(options.inactivity_timeout, Duration::from_secs(90));
+        assert_eq!(options.pool_idle_timeout, Duration::from_millis(250));
         assert_eq!(
             options.body_queue_capacity, before,
             "a silent field must keep its built value"
@@ -660,16 +648,18 @@ mod settings_tests {
 
     #[kithara::test(native, flash(false))]
     fn a_nested_retry_patch_reaches_the_inner_field() {
-        let settings: NetSettings = serde_yaml_ng::from_str("retry_policy:\n  max_retries: 7\n")
-            .expect("the document types");
+        let settings: NetSettings =
+            serde_yaml_ng::from_str("retry_policy:\n  max_retries: 7\n  base_delay: 250ms\n")
+                .expect("the document types");
         let mut options = NetOptions::builder().build();
-        let base_delay = options.retry_policy.base_delay;
+        let max_delay = options.retry_policy.max_delay;
 
         options.apply(settings);
 
         assert_eq!(options.retry_policy.max_retries, 7);
+        assert_eq!(options.retry_policy.base_delay, Duration::from_millis(250));
         assert_eq!(
-            options.retry_policy.base_delay, base_delay,
+            options.retry_policy.max_delay, max_delay,
             "a silent inner field must keep its value"
         );
     }

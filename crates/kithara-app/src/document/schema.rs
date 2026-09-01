@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use kithara::{
     hls::SizeProbeMethod,
-    net::{Compression, CompressionAlgorithm, NetSettings},
+    net::{Compression, NetSettings},
 };
 use serde::Deserialize;
 
@@ -35,24 +35,25 @@ pub(crate) struct Playback {
     pub(crate) crossfade_seconds: Option<f32>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Network {
-    pub(crate) compression: Vec<CompressionAlgorithm>,
+    /// Read as the list of algorithm names `kithara-net` names its flags by.
+    pub(crate) compression: Compression,
     pub(crate) should_accept_invalid_certs: Option<bool>,
     pub(crate) size_probe_method: SizeProbeMethod,
 }
 
-impl Network {
-    /// Fold the declared algorithms into the flags the HTTP client offers. An
-    /// empty list is `Compression::empty()` -- negotiation off.
-    #[must_use]
-    pub(crate) fn compression(&self) -> Compression {
-        self.compression
-            .iter()
-            .fold(Compression::empty(), |flags, &algorithm| {
-                flags.union(algorithm.into())
-            })
+impl Default for Network {
+    /// A document that names no coding offers none. `Compression` has no
+    /// `Default` of its own because the option's built default is every
+    /// coding, and that is not what a silent document asks for.
+    fn default() -> Self {
+        Self {
+            compression: Compression::empty(),
+            should_accept_invalid_certs: None,
+            size_probe_method: SizeProbeMethod::default(),
+        }
     }
 }
 
@@ -163,22 +164,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn compression_algorithms_map_to_their_flags() {
-        let document: Document =
-            serde_yaml_ng::from_str("network:\n  compression: [gzip, deflate]\n")
-                .expect("valid document");
-
-        assert_eq!(
-            document.network.compression(),
-            Compression::GZIP.union(Compression::DEFLATE)
-        );
-    }
-
-    #[kithara::test(native, flash(false))]
     fn an_empty_compression_list_disables_negotiation() {
         let document: Document =
             serde_yaml_ng::from_str("network:\n  compression: []\n").expect("valid document");
 
-        assert_eq!(document.network.compression(), Compression::empty());
+        assert_eq!(document.network.compression, Compression::empty());
     }
 }

@@ -190,7 +190,7 @@ impl Config {
     /// `Accept-Encoding` algorithms the HTTP client offers.
     #[must_use]
     pub fn compression(&self) -> Compression {
-        self.document.network.compression()
+        self.document.network.compression
     }
 
     /// HLS size-probe strategy.
@@ -333,6 +333,11 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
+        assert_eq!(
+            config.document.net.compression,
+            Some(Compression::ZSTD),
+            "the overlay's value reaches the typed `net` section"
+        );
         assert_eq!(
             config.compression(),
             Compression::GZIP.union(Compression::DEFLATE),
