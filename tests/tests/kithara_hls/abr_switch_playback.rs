@@ -4,7 +4,7 @@ use kithara::{
     decode::DecoderBackend,
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig, HlsSettings},
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -97,7 +97,7 @@ async fn open_packaged_hls_audio(
         .store(store)
         .pools(pools.clone())
         .initial_abr_mode(abr)
-        .download_batch_size(1)
+        .settings(HlsSettings::builder().download_batch_size(1).build())
         .cancel(cancel)
         .downloader(downloader)
         .maybe_events(bus.clone())
@@ -361,7 +361,7 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
                 .store(store.clone())
                 .pools(pools.clone())
                 .initial_abr_mode(AbrMode::manual(variant))
-                .download_batch_size(1)
+                .settings(HlsSettings::builder().download_batch_size(1).build())
                 .build(),
         )
         .block_on_underrun(true)

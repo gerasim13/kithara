@@ -11,7 +11,7 @@ use kithara::{
         AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
         EventReceiver, HlsEvent, RequestId,
     },
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig, HlsSettings},
     platform::{
         CancelToken,
         sync::{Arc, Mutex},
@@ -1470,7 +1470,11 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .download_batch_size(segment_count * 2)
+        .settings(
+            HlsSettings::builder()
+                .download_batch_size(segment_count * 2)
+                .build(),
+        )
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -1612,7 +1616,11 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .download_batch_size(segment_count * 2)
+        .settings(
+            HlsSettings::builder()
+                .download_batch_size(segment_count * 2)
+                .build(),
+        )
         .build();
 
     let wav_info = MediaInfo::builder()
@@ -1753,7 +1761,11 @@ async fn runtime_manual_switch_works_after_cache_and_seek() {
         .cancel(cancel)
         .events(bus.clone())
         .initial_abr_mode(AbrMode::manual(0))
-        .download_batch_size(segment_count * 2)
+        .settings(
+            HlsSettings::builder()
+                .download_batch_size(segment_count * 2)
+                .build(),
+        )
         .build();
 
     let wav_info = MediaInfo::builder()

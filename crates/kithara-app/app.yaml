@@ -13,7 +13,7 @@
 # `obfstr!()` so it does not appear as a plain run of bytes in
 # `strings` output.
 
-network:
+hls:
   size_probe_method: range_get
 
 net:

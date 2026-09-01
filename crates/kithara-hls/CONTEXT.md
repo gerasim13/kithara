@@ -18,14 +18,54 @@ AES-128-CBC decryption (kithara-drm); `HlsSource<S>` (`impl Source`) reads throu
 same closed schema `S: HasPool<u8>`; `HlsConfig<S>` keeps cheap clones of both. The HTTP client,
 playlist cache, key store, segment storage, and temporary byte buffers therefore share one facade
 and one hard overall budget, with no global or per-component fallback pool.
+`settings: HlsSettings` groups the nine streaming knobs that do not depend on `S`: `net_options`,
+`size_probe_method`, `download_batch_size`, `acquire_attempt_budget`, the three ephemeral-cache
+bounds, `event_channel_capacity`, and `look_ahead_bytes`.
 `look_ahead_bytes: None` resolves to
-`HlsConfig::DEFAULT_LOOK_AHEAD_BYTES` (2 MiB) at the consumer site; `Some(0)` disables the cap.
-`net_options` builds the internal HTTP client only when no `downloader` is injected; an injected
-downloader carries its own. The ephemeral media prefetch window is `capacity - non_media_reserve`,
-clamped to `[min_media_window, max(max_media_window, min_media_window)]` and capped by the store's
-capacity. `cancel` is the master token: `Hls::create` wraps it in a `CancelScope` reaching
-`HlsCoord`'s lock-free `is_cancelled()` on the produce core, downloader / net / asset paths derive
-children, and dropping `HlsSource` cancels the scope and tears the peer down.
+`HlsSettings::DEFAULT_LOOK_AHEAD_BYTES` (2 MiB) at the consumer site; `Some(0)` disables the cap.
+`settings.net_options` builds the internal HTTP client only when no `downloader` is injected; an
+injected downloader carries its own. The ephemeral media prefetch window is `capacity -
+non_media_reserve`, clamped to `[min_media_window, max(max_media_window, min_media_window)]` and
+capped by the store's capacity. `cancel` is the master token: `Hls::create` wraps it in a
+`CancelScope` reaching `HlsCoord`'s lock-free `is_cancelled()` on the produce core, downloader / net
+/ asset paths derive children, and dropping `HlsSource` cancels the scope and tears the peer down.
+
+## Configuration document entry point
+
+`HlsSettings` is the second way in: a configuration document types into the generated
+`HlsSettingsPatch` — `kithara-app`'s `hls:` section — and `apply` writes only the fields the
+document names, leaving the rest of `HlsConfig::settings` standing. `look_ahead_bytes: Option<u64>` carries `#[patch(skip_wrap)]` so a
+document names a bare number under `hls.look_ahead_bytes`, not `Some(number)` — the same mechanism
+`kithara-abr`'s `AbrSettings` uses for its own already-optional knob.
+
+`net_options` is the one knob inside `HlsSettings` a document may *not* name: it carries
+`#[patch(skip)]`, so `hls.net_options` is refused by `deny_unknown_fields` rather than parsed and
+dropped. The field builds the internal HTTP client only when no `downloader` is injected, and an
+embedder that reaches a configuration document also owns a downloader — `kithara-app` builds one
+from its own top-level `net:` section and injects it through `ResourceConfig`, so a value under
+`hls.net_options` would configure nothing. Two spellings of the same options, one of them dead, is
+the shape a configuration document exists to prevent; the live one is `net:`. Skipping it also keeps
+`NetOptions` free of a `PartialEq` it has no honest meaning for: `struct-patch` demands `PartialEq`
+of every nested, renamed field, and `NetOptions` holds an `Observer` trait object whose only
+available equality is pointer identity.
+
+`initial_abr_mode` did not move even though its type does not depend on `S`: it names which variant
+a *particular stream* starts on, not a crate-wide default, and all 112 of its builder-setter call
+sites across the workspace construct it per-stream — a document field would have no single value to
+write. `url` and `base_url` are per-resource identity, not tunable policy. `discriminator` is the
+per-session ABR/ladder cache key. `headers` are per-request HTTP headers, closer to per-call wiring
+than a document-level default. `store`, `pools`, `keys`, `bus`, `cancel`, and `downloader` are live
+handles or `S`-typed values a document has no way to name, the same reasoning
+`kithara-assets::AssetStoreSettings` applies to its own `cancel` / `event_bus` / `layouts`.
+
+The six `DEFAULT_*` associated consts (`DEFAULT_DOWNLOAD_BATCH_SIZE`,
+`DEFAULT_ACQUIRE_ATTEMPT_BUDGET`, `DEFAULT_EPHEMERAL_CACHE_MAX_MEDIA_WINDOW`,
+`DEFAULT_EPHEMERAL_CACHE_MIN_MEDIA_WINDOW`, `DEFAULT_EPHEMERAL_CACHE_NON_MEDIA_RESERVE`,
+`DEFAULT_LOOK_AHEAD_BYTES`) moved from `impl<S> HlsConfig<S>` to a plain `impl HlsSettings`: they
+describe `HlsSettings`'s own builder defaults now, not `HlsConfig<S>`'s, and the move drops the
+turbofish every external reader previously needed (`HlsConfig::<S>::DEFAULT_LOOK_AHEAD_BYTES` in
+`stream/hls.rs`, `HlsConfig::<...>::DEFAULT_ACQUIRE_ATTEMPT_BUDGET` in `variant/io/dispatch.rs`) to
+pick an `S` it does not otherwise care about.
 
 ## Sessions and Variant Switching
 

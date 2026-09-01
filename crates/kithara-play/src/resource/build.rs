@@ -2,7 +2,7 @@ use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
 use kithara_file::{FileConfig, FileSrc};
-use kithara_hls::HlsConfig;
+use kithara_hls::{HlsConfig, HlsSettings};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -101,14 +101,18 @@ where
             .keys(self.keys)
             .maybe_downloader(self.downloader)
             .initial_abr_mode(self.initial_abr_mode)
-            .maybe_look_ahead_bytes(self.look_ahead_bytes)
             .maybe_headers(self.headers)
             .maybe_discriminator(self.discriminator)
             .maybe_base_url(self.hls_base_url)
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
-            .size_probe_method(self.size_probe_method)
+            .settings(
+                HlsSettings::builder()
+                    .maybe_look_ahead_bytes(self.look_ahead_bytes)
+                    .size_probe_method(self.size_probe_method)
+                    .build(),
+            )
             .build();
         Ok(
             AudioConfig::<kithara_hls::Hls<S>, B>::for_stream(hls_config)

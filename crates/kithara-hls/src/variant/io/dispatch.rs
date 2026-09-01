@@ -37,7 +37,7 @@ enum AcquireSettle {
 /// much for any other error — but a momentary one, a descriptor the host was
 /// briefly short of or a parent directory a concurrent eviction was removing,
 /// must not cost the whole segment either. Those retry against `budget`
-/// ([`crate::HlsConfig::acquire_attempt_budget`]) and settle `Fail` once it is spent,
+/// ([`crate::HlsSettings::acquire_attempt_budget`]) and settle `Fail` once it is spent,
 /// because a requeue that never resolves is invisible: the slot stays planned,
 /// so `range_wait_phase` answers `WaitingDemand` and `range_has_failed` stays
 /// false while the decode gate parks for good.
@@ -330,7 +330,7 @@ mod tests {
     use std::{io, path::PathBuf};
 
     use super::*;
-    use crate::config::HlsConfig;
+    use crate::config::HlsSettings;
 
     fn tmp_claimed() -> AssetsError {
         AssetsError::Storage(StorageError::TmpClaimed(PathBuf::from("seg.m4s.tmp")))
@@ -340,7 +340,7 @@ mod tests {
         AssetsError::Io(io::Error::from(io::ErrorKind::IsADirectory))
     }
 
-    const BUDGET: u8 = HlsConfig::<crate::test_pools::TestPools>::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
+    const BUDGET: u8 = HlsSettings::DEFAULT_ACQUIRE_ATTEMPT_BUDGET;
 
     /// The holder of a claimed tmp always settles and releases it, so this
     /// retry resolves on its own however long it takes.

@@ -188,10 +188,11 @@ impl Config {
         self.document.net.clone()
     }
 
-    /// HLS size-probe strategy.
+    /// HLS size-probe strategy. A document that names no `hls.size_probe_method`
+    /// leaves the crate default standing.
     #[must_use]
     pub fn size_probe_method(&self) -> SizeProbeMethod {
-        self.document.network.size_probe_method
+        self.document.hls.size_probe_method.unwrap_or_default()
     }
 
     /// Crossfade length, when the document sets one.
@@ -345,7 +346,7 @@ mod tests {
         let path = write(
             &dir,
             "overrides-one-field",
-            "network:\n  size_probe_method: head\n",
+            "hls:\n  size_probe_method: head\n",
         );
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
@@ -480,24 +481,27 @@ mod tests {
         assert_eq!(config.store_backend(), StorageBackend::Memory);
     }
 
-    /// The proof the duplicate key is gone rather than merely unread: `network`
-    /// no longer declares `compression`, so naming it there is refused by
-    /// `deny_unknown_fields` instead of silently parsing and being ignored.
+    /// The proof the section is gone rather than merely unread: `network` no
+    /// longer exists on `Document` at all (`size_probe_method` moved to `hls`,
+    /// `compression` moved to `net` earlier), so naming `network` at the top
+    /// level is refused by `deny_unknown_fields` through the whole
+    /// merge-expand-type pipeline instead of silently parsing and being
+    /// ignored.
     #[kithara::test(native, flash(false))]
-    fn a_network_compression_key_is_rejected() {
+    fn a_network_section_is_rejected() {
         let dir = tempdir();
         let path = write(
             &dir,
-            "network-compression-stale",
-            "network:\n  compression: [zstd]\n",
+            "network-section-stale",
+            "network:\n  size_probe_method: head\n",
         );
 
         let error =
-            Config::load_with(Some(&path), None, &env).expect_err("compression moved to `net`");
+            Config::load_with(Some(&path), None, &env).expect_err("network was renamed to hls");
 
         let report = error.to_string();
         assert!(matches!(error, LoadError::Schema { .. }), "{report}");
-        assert!(report.contains("compression"), "{report}");
+        assert!(report.contains("network"), "{report}");
     }
 
     #[kithara::test(native, flash(false))]
@@ -584,7 +588,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn a_malformed_file_names_its_path() {
         let dir = tempdir();
-        let path = write(&dir, "malformed", "network: [not, a, mapping]\n");
+        let path = write(&dir, "malformed", "hls: [not, a, mapping]\n");
 
         let error = Config::load_with(Some(&path), None, &env).expect_err("the shape is wrong");
 

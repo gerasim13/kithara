@@ -11,6 +11,7 @@ use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
 use kithara_platform::CancelToken;
 use kithara_stream::dl::Downloader;
+use struct_patch::Patch;
 use url::Url;
 
 pub(crate) const DEFAULT_ACQUIRE_ATTEMPT_BUDGET: u8 = 3;
@@ -57,29 +58,19 @@ pub enum SizeProbeMethod {
     RangeGet,
 }
 
-/// Configuration for HLS streaming.
-///
-/// Used with `Stream::<Hls<S>>::new(config)`.
-#[derive(Builder)]
-#[builder(start_fn = for_url)]
+/// Streaming knobs a configuration document can override. Extracted out of
+/// [`HlsConfig`] so a document reaches exactly these tunables and never the
+/// per-call wiring (`store`, `pools`, `downloader`, ...) or per-stream input
+/// (`url`, `base_url`, `discriminator`, `headers`, `initial_abr_mode`) that
+/// stay on [`HlsConfig`] itself.
+#[derive(Clone, Debug, Builder, Patch)]
+#[builder(state_mod(vis = "pub"))]
+#[patch(name = "HlsSettingsPatch")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
-pub struct HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    /// Master playlist URL.
-    #[builder(start_fn)]
-    pub url: Url,
-    /// Initial ABR mode.
-    #[builder(default)]
-    pub initial_abr_mode: AbrMode,
-    /// Shared asset store.
-    pub store: AssetStore<S>,
-    /// Buffer-pool facade shared across all components.
-    pub pools: PoolRegion<S>,
-    /// Encryption key handling configuration.
-    #[builder(default)]
-    pub keys: KeyOptions,
+pub struct HlsSettings {
     /// Net options (idle/stall `inactivity_timeout`, `retry_policy`,
     /// compression) for the HTTP client built when no [`downloader`] is
     /// injected. Ignored when [`downloader`] is provided — the injected
@@ -88,31 +79,14 @@ where
     /// withheld-body fetch sooner (the net resilient body owns the stall
     /// and retries, then settles the segment terminally).
     ///
-    /// [`downloader`]: Self::downloader
+    /// A document cannot name this: an embedder that reaches a document also
+    /// injects a downloader, so the value would configure nothing. It carries
+    /// `#[patch(skip)]` for that reason.
+    ///
+    /// [`downloader`]: HlsConfig::downloader
     #[builder(default)]
+    #[patch(skip)]
     pub net_options: NetOptions,
-    /// Base URL for resolving relative playlist/segment URLs.
-    pub base_url: Option<Url>,
-    /// Event bus (optional - if not provided, one is created internally).
-    #[builder(name = events)]
-    pub bus: Option<EventBus>,
-    /// Cancellation token for graceful shutdown. The master `CancelToken` whose
-    /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
-    /// lock-free `is_cancelled()` read on the produce-core; the async-only
-    /// downloader / net / asset paths derive children from its inner
-    /// [`CancelToken`](kithara_platform::CancelToken).
-    pub cancel: Option<CancelToken>,
-    /// Optional cache discriminator.
-    pub discriminator: Option<String>,
-    /// Shared downloader (created lazily if not provided).
-    pub downloader: Option<Downloader>,
-    /// Additional HTTP headers to include in all requests.
-    pub headers: Option<Headers>,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    /// `None` falls back to [`HlsConfig::DEFAULT_LOOK_AHEAD_BYTES`] (~2 `MiB`)
-    /// at the consumer site — production HLS streams need a downloader
-    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
-    pub look_ahead_bytes: Option<u64>,
     /// Method used by on-demand exact-size probes. Segment-aware fMP4 decode
     /// never issues these probes; file-like paths use them after a seek needs
     /// exact prefix offsets.
@@ -144,79 +118,21 @@ where
     /// Capacity of the event bus channel (used when `bus` is not provided).
     #[builder(default = kithara_events::DEFAULT_EVENT_BUS_CAPACITY)]
     pub event_channel_capacity: usize,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    /// `None` falls back to [`Self::DEFAULT_LOOK_AHEAD_BYTES`] (~2 `MiB`)
+    /// at the consumer site — production HLS streams need a downloader
+    /// backpressure cap. Pass `Some(0)` to disable the cap explicitly.
+    #[patch(skip_wrap)]
+    pub look_ahead_bytes: Option<u64>,
 }
 
-impl<S> Clone for HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            url: self.url.clone(),
-            initial_abr_mode: self.initial_abr_mode,
-            store: self.store.clone(),
-            pools: self.pools.clone(),
-            keys: self.keys.clone(),
-            net_options: self.net_options.clone(),
-            base_url: self.base_url.clone(),
-            bus: self.bus.clone(),
-            cancel: self.cancel.clone(),
-            discriminator: self.discriminator.clone(),
-            downloader: self.downloader.clone(),
-            headers: self.headers.clone(),
-            look_ahead_bytes: self.look_ahead_bytes,
-            size_probe_method: self.size_probe_method,
-            download_batch_size: self.download_batch_size,
-            acquire_attempt_budget: self.acquire_attempt_budget,
-            ephemeral_cache_max_media_window: self.ephemeral_cache_max_media_window,
-            ephemeral_cache_min_media_window: self.ephemeral_cache_min_media_window,
-            ephemeral_cache_non_media_reserve: self.ephemeral_cache_non_media_reserve,
-            event_channel_capacity: self.event_channel_capacity,
-        }
+impl Default for HlsSettings {
+    fn default() -> Self {
+        Self::builder().build()
     }
 }
 
-impl<S> fmt::Debug for HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HlsConfig")
-            .field("initial_abr_mode", &self.initial_abr_mode)
-            .field("keys", &self.keys)
-            .field("base_url", &self.base_url)
-            .field("bus", &self.bus)
-            .field("cancel", &self.cancel)
-            .field("headers", &self.headers)
-            .field("look_ahead_bytes", &self.look_ahead_bytes)
-            .field(
-                "ephemeral_cache_non_media_reserve",
-                &self.ephemeral_cache_non_media_reserve,
-            )
-            .field(
-                "ephemeral_cache_min_media_window",
-                &self.ephemeral_cache_min_media_window,
-            )
-            .field(
-                "ephemeral_cache_max_media_window",
-                &self.ephemeral_cache_max_media_window,
-            )
-            .field("discriminator", &self.discriminator)
-            .field("pools", &self.pools)
-            .field("store", &self.store)
-            .field("url", &self.url)
-            .field("download_batch_size", &self.download_batch_size)
-            .field("event_channel_capacity", &self.event_channel_capacity)
-            .field("size_probe_method", &self.size_probe_method)
-            .field("net_options", &self.net_options)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<S> HlsConfig<S>
-where
-    S: HasPool<u8> + Send + Sync + 'static,
-{
+impl HlsSettings {
     /// Default [`Self::acquire_attempt_budget`]. Enough rounds for an
     /// obstruction another task is already clearing to disappear, few enough
     /// that a standing one reaches the reader instead of parking it.
@@ -237,4 +153,178 @@ where
     /// need a downloader backpressure cap so an idle reader does not
     /// drain the whole playlist into cache.
     pub const DEFAULT_LOOK_AHEAD_BYTES: u64 = DEFAULT_LOOK_AHEAD_BYTES;
+}
+
+/// Configuration for HLS streaming.
+///
+/// Used with `Stream::<Hls<S>>::new(config)`.
+#[derive(Builder)]
+#[builder(start_fn = for_url)]
+#[non_exhaustive]
+pub struct HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    /// Master playlist URL.
+    #[builder(start_fn)]
+    pub url: Url,
+    /// Initial ABR mode.
+    #[builder(default)]
+    pub initial_abr_mode: AbrMode,
+    /// Shared asset store.
+    pub store: AssetStore<S>,
+    /// Buffer-pool facade shared across all components.
+    pub pools: PoolRegion<S>,
+    /// Encryption key handling configuration.
+    #[builder(default)]
+    pub keys: KeyOptions,
+    /// Streaming knobs a configuration document can override. See
+    /// [`HlsSettings`] for what a document may say.
+    #[builder(default)]
+    pub settings: HlsSettings,
+    /// Base URL for resolving relative playlist/segment URLs.
+    pub base_url: Option<Url>,
+    /// Event bus (optional - if not provided, one is created internally).
+    #[builder(name = events)]
+    pub bus: Option<EventBus>,
+    /// Cancellation token for graceful shutdown. The master `CancelToken` whose
+    /// shared atomic mirror reaches [`HlsCoord`](crate::stream::HlsCoord)'s
+    /// lock-free `is_cancelled()` read on the produce-core; the async-only
+    /// downloader / net / asset paths derive children from its inner
+    /// [`CancelToken`](kithara_platform::CancelToken).
+    pub cancel: Option<CancelToken>,
+    /// Optional cache discriminator.
+    pub discriminator: Option<String>,
+    /// Shared downloader (created lazily if not provided).
+    pub downloader: Option<Downloader>,
+    /// Additional HTTP headers to include in all requests.
+    pub headers: Option<Headers>,
+}
+
+impl<S> Clone for HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            initial_abr_mode: self.initial_abr_mode,
+            store: self.store.clone(),
+            pools: self.pools.clone(),
+            keys: self.keys.clone(),
+            settings: self.settings.clone(),
+            base_url: self.base_url.clone(),
+            bus: self.bus.clone(),
+            cancel: self.cancel.clone(),
+            discriminator: self.discriminator.clone(),
+            downloader: self.downloader.clone(),
+            headers: self.headers.clone(),
+        }
+    }
+}
+
+impl<S> fmt::Debug for HlsConfig<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HlsConfig")
+            .field("initial_abr_mode", &self.initial_abr_mode)
+            .field("keys", &self.keys)
+            .field("settings", &self.settings)
+            .field("base_url", &self.base_url)
+            .field("bus", &self.bus)
+            .field("cancel", &self.cancel)
+            .field("headers", &self.headers)
+            .field("discriminator", &self.discriminator)
+            .field("pools", &self.pools)
+            .field("store", &self.store)
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara_assets::StorageBackend;
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::{AssetStore, HlsConfig, HlsSettings, HlsSettingsPatch};
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_sets_the_batch_size_and_leaves_the_window() {
+        let patch: HlsSettingsPatch =
+            serde_yaml_ng::from_str("download_batch_size: 6\n").expect("the document types");
+        let mut settings = HlsSettings::default();
+        let window = settings.ephemeral_cache_max_media_window;
+
+        settings.apply(patch);
+
+        assert_eq!(settings.download_batch_size, 6);
+        assert_eq!(settings.ephemeral_cache_max_media_window, window);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
+        let patch: HlsSettingsPatch =
+            serde_yaml_ng::from_str("look_ahead_bytes: 5000000\n").expect("the document types");
+        let mut settings = HlsSettings::builder().event_channel_capacity(4_096).build();
+
+        settings.apply(patch);
+
+        assert_eq!(
+            settings.look_ahead_bytes,
+            Some(5_000_000),
+            "an `Option<u64>` field carries `skip_wrap`, so the document names the number bare"
+        );
+        assert_eq!(
+            settings.event_channel_capacity, 4_096,
+            "a silent field must keep its value"
+        );
+    }
+
+    /// The proof `net_options` is absent from the document rather than parsed
+    /// and dropped: an embedder that reaches a document injects its own
+    /// downloader, which makes the field dead, so naming it must fail loudly.
+    #[kithara::test(native, flash(false))]
+    fn a_net_options_key_is_refused() {
+        let error =
+            serde_yaml_ng::from_str::<HlsSettingsPatch>("net_options:\n  is_insecure: true\n")
+                .expect_err("net options belong to the embedder's own `net` section");
+
+        assert!(error.to_string().contains("net_options"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_document_knob_reaches_the_built_config() {
+        let patch: HlsSettingsPatch =
+            serde_yaml_ng::from_str("download_batch_size: 7\n").expect("the document types");
+        let mut settings = HlsSettings::default();
+        settings.apply(patch);
+
+        let config = HlsConfig::<crate::test_pools::TestPools>::for_url(
+            "https://example.com/master.m3u8"
+                .parse()
+                .expect("master url"),
+        )
+        .store(
+            AssetStore::builder(crate::test_pools::pools())
+                .backend(StorageBackend::Memory)
+                .build(),
+        )
+        .pools(crate::test_pools::pools())
+        .settings(settings)
+        .build();
+
+        assert_eq!(config.settings.download_batch_size, 7);
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<HlsSettingsPatch>("dwnload_batch_size: 6\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("dwnload_batch_size"), "{error}");
+    }
 }

@@ -5,7 +5,7 @@ use kithara::broadcast::BroadcastSettings;
 use kithara::{
     analysis::BeatAnalysisSettingsPatch,
     assets::{AssetStoreSettings, FlushSettings},
-    hls::SizeProbeMethod,
+    hls::HlsSettingsPatch,
     host::HostSettings,
     net::NetSettings,
     stream::dl::DownloaderSettings,
@@ -36,9 +36,9 @@ pub(crate) struct Document {
     pub(crate) downloader: DownloaderSettings,
     pub(crate) drm: Drm,
     pub(crate) flush: FlushSettings,
+    pub(crate) hls: HlsSettingsPatch,
     pub(crate) host: HostSettings,
     pub(crate) net: NetSettings,
-    pub(crate) network: Network,
     pub(crate) playback: Playback,
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
@@ -50,12 +50,6 @@ pub(crate) struct Document {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Playback {
     pub(crate) crossfade_seconds: Option<f32>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct Network {
-    pub(crate) size_probe_method: SizeProbeMethod,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -126,8 +120,6 @@ pub(crate) enum SeedAlphabet {
 mod tests {
     use std::num::NonZeroUsize;
 
-    use kithara::hls::SizeProbeMethod;
-
     use super::{ComputePoolSettings, Document};
     use crate::baked::BAKED_DOCUMENT;
 
@@ -162,7 +154,10 @@ mod tests {
     fn an_empty_document_is_all_defaults() {
         let document: Document = serde_yaml_ng::from_str("{}").expect("an empty document is valid");
 
-        assert_eq!(document.network.size_probe_method, SizeProbeMethod::Head);
+        assert!(
+            document.hls.size_probe_method.is_none(),
+            "a document naming no hls section leaves the crate default standing"
+        );
         assert!(document.playlist.tracks.is_empty());
         assert!(
             document.worker_pool.is_none(),
@@ -241,10 +236,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_network_compression_key_is_rejected() {
-        let error = serde_yaml_ng::from_str::<Document>("network:\n  compression: []\n")
-            .expect_err("compression moved to the net section");
+    fn a_network_section_is_rejected() {
+        let error = serde_yaml_ng::from_str::<Document>("network:\n  size_probe_method: head\n")
+            .expect_err("network was renamed to hls");
 
-        assert!(error.to_string().contains("compression"), "{error}");
+        assert!(error.to_string().contains("network"), "{error}");
     }
 }

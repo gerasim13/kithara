@@ -8,7 +8,7 @@ use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl},
     events::{Event, EventBus},
-    hls::{AbrMode, Hls, HlsConfig},
+    hls::{AbrMode, Hls, HlsConfig, HlsSettings},
     platform::{sync::Arc, time::Duration},
     play::{PlayWorker, PlayWorkerConfig},
 };
@@ -136,7 +136,7 @@ fn count_files_recursive(root: &Path) -> usize {
 /// position, so an idle `Audio` handle would download an entire
 /// variant into the on-disk asset cache.
 ///
-/// Verifies the `HlsConfig::look_ahead_bytes` cap is honored: with an
+/// Verifies the `HlsSettings::look_ahead_bytes` cap is honored: with an
 /// explicit small budget, idle prefetch must stop after roughly
 /// `look_ahead_bytes / segment_size` media segments. Manual mode pins
 /// variant 0 so the cache hit count reflects one variant's prefetch
@@ -182,8 +182,12 @@ async fn idle_prefetch_is_capped(temp_dir: TestTempDir) {
         )
         .pools(pools)
         .initial_abr_mode(AbrMode::manual(0))
-        .download_batch_size(1)
-        .look_ahead_bytes(LOOK_AHEAD_BYTES)
+        .settings(
+            HlsSettings::builder()
+                .download_batch_size(1)
+                .look_ahead_bytes(LOOK_AHEAD_BYTES)
+                .build(),
+        )
         .events(bus.clone())
         .build();
 

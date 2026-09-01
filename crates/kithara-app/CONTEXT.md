@@ -291,14 +291,22 @@ region shape is local. `net` is the first of them: it is `kithara::net::NetSetti
 section, and only then lets `--insecure` force verification off; the flag is an override that can turn verification
 off and never back on.
 
-`network` predates that shape and is most of the way out. `compression` and `is_insecure` have moved to `net`, and
-naming either under `network` is now refused by `deny_unknown_fields` rather than parsed and ignored — that refusal is
-what makes the move a move rather than a second reader going quiet. Two tests hold it: one in `document::schema` at the
-type, one in `document::load` through the whole merge-expand-type pipeline.
+`network` predated that shape and is now gone. `compression` and `is_insecure` moved to `net` first; `size_probe_method`
+was the field left behind, and it has now moved to `hls` — `kithara::hls::HlsSettingsPatch`, generated from
+`kithara-hls`'s own `HlsSettings`. Naming `network` at all is refused by `deny_unknown_fields` rather than parsed and
+ignored, which is what makes the move a move rather than a second reader going quiet. Two tests hold that refusal: one
+in `document::schema` at the type, one in `document::load` through the whole merge-expand-type pipeline.
 
-What is left of `network` is `size_probe_method`, which is not a `kithara-net` field at all — it is
-`kithara::hls::SizeProbeMethod`, and it belongs to the `hls` section. When that section arrives it takes the field and
-`network` goes with it. Until then `network` is a one-field holding pen, not a second source of truth.
+`hls` is `HlsSettingsPatch` whole, so a document may name any of the seven knobs that patch declares. This
+application reads exactly one of them today: `Config::size_probe_method` resolves `document.hls.size_probe_method`,
+an `Option<SizeProbeMethod>`, to `SizeProbeMethod::default()` when unnamed, and hands it to `AppConfig`. The other six
+(`download_batch_size`, `acquire_attempt_budget`, the three ephemeral-cache bounds, `event_channel_capacity`,
+`look_ahead_bytes`) parse and are then dropped, because this application builds its `HlsConfig` per stream through
+`kithara-play::ResourceConfig`, which takes `size_probe_method` and `look_ahead_bytes` as separate arguments rather
+than an `HlsSettings`. **That is a staged transfer, not a resting state**: the task that gives `ResourceConfig` an
+`HlsSettings` by value closes it, and until it lands a document naming any of those six is silently ineffective. The
+seventh knob, `net_options`, is refused outright rather than dropped — see `kithara-hls`'s `CONTEXT.md` for why, and
+for why `initial_abr_mode`, `url`, `base_url`, `discriminator` and `headers` were never document candidates.
 
 `assets_store` is `kithara::assets::AssetStoreSettings`, and it is the first section the application does not pass
 through whole. Seven of its eight knobs reach `AssetStore::open` unchanged through `maybe_*` setters, where an unset
