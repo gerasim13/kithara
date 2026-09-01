@@ -56,9 +56,9 @@ impl DecoderGeneration {
             self.staged.reserve_exact(slots - self.staged.len());
         }
         let holdback = Holdback {
-            spec,
             join_frames,
             slots,
+            spec,
         };
         if let Some(failure) = self.validate_staged_holdback(holdback) {
             return StageResult::Invalid(Box::new(failure));
