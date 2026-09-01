@@ -99,8 +99,8 @@ fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
     }
 }
 
-// Waits for the build, not for a number of yields: on a real clock the build
-// takes milliseconds while sixty-four yields take microseconds.
+/// Waits for the build, not for a number of yields: on a real clock the build
+/// takes milliseconds while sixty-four yields take microseconds.
 #[kithara::hang_watchdog]
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
     loop {

@@ -155,8 +155,8 @@ fn scoped_path_match(workspace_root: &Path, scope: &Scope, path: &Path) -> bool 
     scope.key_in_scope(&rel)
 }
 
-// Symlinked docs are pointers; their content is scanned at the real path,
-// and relative links only resolve there.
+/// Symlinked docs are pointers; their content is scanned at the real path,
+/// and relative links only resolve there.
 fn is_symlink(path: &Path) -> bool {
     path.symlink_metadata()
         .is_ok_and(|m| m.file_type().is_symlink())

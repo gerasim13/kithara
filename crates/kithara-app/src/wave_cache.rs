@@ -212,7 +212,7 @@ mod tests {
     use std::num::NonZeroU32;
 
     use ::kithara::platform::sync::Arc;
-    // The test macro import shadows the `kithara` crate name; use absolute path.
+    /// The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
             AnalysisFingerprint, AnalysisProgress, BeatArtifact, BeatSnapshot, BeatState, Coverage,

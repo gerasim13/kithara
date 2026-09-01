@@ -16,7 +16,10 @@ These are suitable for local pre-commit feedback.
 ## Autofix
 
 Every ratchet that can rewrite code does so under `--fix`. Prefer it to editing
-by hand: it changes exactly what the check flagged, and the diff is the review.
+by hand: it applies the check's own rule mechanically, and the diff is the
+review. It rewrites everything in the scope you give it, including the test code
+the report leaves out of the production baseline, so the diff is wider than the
+report - it prints the file count before the report for that reason.
 
 - `just lint style --fix`, `just lint idioms --fix`, and `just lint all --fix`
   (both namespaces at once) rewrite in place, then re-run the checks so the
