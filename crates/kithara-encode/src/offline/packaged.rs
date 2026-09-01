@@ -19,7 +19,7 @@ impl OfflineEncoder {
     }
 
     pub(crate) fn encode_packaged<S>(
-        pools: &PoolRegion<S>,
+        _pools: &PoolRegion<S>,
         request: &PackagedEncodeRequest<'_>,
     ) -> EncodeResult<EncodedTrack>
     where
@@ -31,11 +31,11 @@ impl OfflineEncoder {
             .ok_or(EncodeError::InvalidMediaInfo("codec"))?;
         match codec {
             #[cfg(feature = "ffmpeg")]
-            AudioCodec::AacLc => AacFFmpegEncoder::encode(pools, request),
+            AudioCodec::AacLc => AacFFmpegEncoder::encode(_pools, request),
             #[cfg(feature = "fdk-aac")]
-            AudioCodec::AacHe => AacHeEncoder::encode(pools, request, AacHeProfile::V1),
+            AudioCodec::AacHe => AacHeEncoder::encode(_pools, request, AacHeProfile::V1),
             #[cfg(feature = "fdk-aac")]
-            AudioCodec::AacHeV2 => AacHeEncoder::encode(pools, request, AacHeProfile::V2),
+            AudioCodec::AacHeV2 => AacHeEncoder::encode(_pools, request, AacHeProfile::V2),
             #[cfg(feature = "ffmpeg")]
             AudioCodec::Flac => FlacFFmpegEncoder::encode(request),
             codec => Err(EncodeError::UnsupportedCodec(codec)),

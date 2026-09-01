@@ -1,8 +1,9 @@
 //! # Kithara Encode
 //!
-//! Audio encoding library with a thin facade and FFmpeg-backed implementations.
+//! Portable PCM/WAV sessions and optional native audio encoders.
 //!
-//! Use [`EncoderFactory`] for runtime codec selection:
+//! Use [`EncodeConfig`], [`EncoderSession`], and [`ContainerSession`] for a
+//! continuous output, or [`EncoderFactory`] for finite native encoding:
 //! ```ignore
 //! use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 //!
@@ -13,11 +14,16 @@
 //! })?;
 //! ```
 
+mod config;
 mod error;
 mod factory;
 #[cfg(not(target_arch = "wasm32"))]
 mod offline;
-#[cfg(not(target_arch = "wasm32"))]
+mod session;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "ffmpeg", feature = "fdk-aac")
+))]
 mod stream;
 #[cfg(test)]
 mod test_pcm;
@@ -30,11 +36,16 @@ mod fdk;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
 mod ffmpeg;
 
+pub use config::EncodeConfig;
 pub use error::{EncodeError, EncodeResult};
 pub use factory::EncoderFactory;
 #[cfg(all(not(target_arch = "wasm32"), feature = "ffmpeg"))]
 pub use ffmpeg::flac::normalize_flac_codec_config;
-#[cfg(not(target_arch = "wasm32"))]
+pub use session::{ContainerFinish, ContainerSession, ContainerWrite, EncoderSession};
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "ffmpeg", feature = "fdk-aac")
+))]
 pub use stream::{StreamBackend, StreamEncoder};
 pub use types::{
     BytesEncodeRequest, BytesEncodeTarget, EncodedAccessUnit, EncodedBytes, EncodedTrack,

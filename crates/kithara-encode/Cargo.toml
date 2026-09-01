@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Synchronous audio encoding with packaged and byte outputs"
+description = "Portable and native audio encoding with continuous and finite outputs"
 publish = false
 
 [features]
@@ -45,6 +45,9 @@ tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = { workspace = true }
 
 [lints]
 workspace = true
