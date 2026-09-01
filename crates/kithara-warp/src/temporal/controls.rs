@@ -14,35 +14,7 @@ use kithara_platform::sync::Arc;
 use kithara_stretch::StretchKind;
 use portable_atomic::AtomicU64;
 
-use super::RegionPlan;
-
-#[derive(Clone, Copy, Debug, fieldwork::Fieldwork)]
-#[fieldwork(get)]
-pub(crate) struct RateTarget {
-    #[field(get, copy)]
-    speed: f32,
-    #[field(get, copy)]
-    revision: u64,
-}
-
-impl RateTarget {
-    fn pack(speed: f32, revision: u32) -> u64 {
-        (u64::from(revision) << 32) | u64::from(speed.to_bits())
-    }
-
-    fn revision_from(packed: u64) -> u32 {
-        let [a, b, c, d, _, _, _, _] = packed.to_be_bytes();
-        u32::from_be_bytes([a, b, c, d])
-    }
-
-    fn unpack(packed: u64) -> Self {
-        let [a, b, c, d, e, f, g, h] = packed.to_be_bytes();
-        Self {
-            speed: f32::from_bits(u32::from_be_bytes([e, f, g, h])),
-            revision: u64::from(u32::from_be_bytes([a, b, c, d])),
-        }
-    }
-}
+use super::{RateTarget, RegionPlan};
 
 #[cfg(all(
     not(target_arch = "wasm32"),

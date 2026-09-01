@@ -92,6 +92,7 @@ where
         Ok(PreparedExact {
             next_speed,
             plan,
+            #[cfg(feature = "probe")]
             rate,
             snapshot: None,
             speed,
@@ -253,8 +254,7 @@ where
         let output_limit = max_output_frames
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
-        let output_budget = (output_limit - Self::OUTPUT_ROUNDING_MARGIN).max(1.0);
-        let source_limit = (output_budget / stretch)
+        let source_limit = (output_limit / stretch)
             .floor()
             .to_usize()
             .ok_or(ElasticError::SampleCountOverflow)?;

@@ -17,6 +17,7 @@ mod tests;
 pub(super) struct PreparedExact {
     pub(super) next_speed: SmoothedParam,
     pub(super) plan: ElasticSpanPlan,
+    #[cfg(feature = "probe")]
     pub(super) rate: RateTarget,
     pub(super) snapshot: Option<RenderSnapshot>,
     pub(super) speed: f32,
@@ -136,7 +137,6 @@ where
 {
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
-    pub(super) const OUTPUT_ROUNDING_MARGIN: f64 = 0.5;
     pub(super) const RATE_SMOOTH_SECONDS: f32 = 0.002;
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;

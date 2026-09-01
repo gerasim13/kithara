@@ -1,4 +1,4 @@
-use std::num::{NonZero, NonZeroU32};
+use std::num::{NonZero, NonZeroU32, NonZeroUsize};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
@@ -9,6 +9,7 @@ use super::{
     Consts, StretchControls, WarpRenderer, chunk, chunk_at, dominant_bin, expected_bin, f64_of,
     flush_serviced, render_serviced, renderer, sine, spec,
 };
+use crate::{Warp, WarpConfig, test_pools::pools};
 
 fn keylocked(kind: StretchKind, speed: f32) -> WarpRenderer {
     let controls = StretchControls::new(speed);
@@ -94,6 +95,39 @@ fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64
     }
     fx.prepare(spec());
     rendered
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn short_tail_then_four_x_quantums_stay_inside_the_rate_envelope(#[case] backend: StretchKind) {
+    const QUANTUM_FRAMES: usize = 128;
+    const FULL_SOURCE_FRAMES: usize = QUANTUM_FRAMES * 4;
+
+    let controls = StretchControls::new(4.0);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(
+            NonZeroUsize::new(QUANTUM_FRAMES).expect("fixture quantum is non-zero"),
+        )
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    let short_tail = sine(3);
+    assert_eq!(render_quantum_frames(&mut renderer, &short_tail, 0), 0);
+
+    let source = sine(FULL_SOURCE_FRAMES * 2);
+    assert!(render_quantum_frames(&mut renderer, &source, 3) > 0);
+    assert!(renderer.accepts_input(), "{backend:?}: engine retired");
+    assert_eq!(
+        renderer.source_frames_admitted,
+        u64::try_from(3 + FULL_SOURCE_FRAMES * 2).expect("fixture frame count fits u64"),
+        "{backend:?}: source progress reset at the declared 4x edge"
+    );
 }
 
 fn run_keylocked_with_tail(kind: StretchKind, speed: f32, in_frames: usize) -> (Vec<f32>, usize) {
