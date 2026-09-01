@@ -96,7 +96,9 @@ deny = 16000
 # Platform, upstream, and illustrative names the workspace sources never define.
 allow_terms = [
   "Constraints",
+  "FuturesUnordered",
   "HTTPMaximumConnectionsPerHost",
+  "JoinSet",
   "LICENSE",
   "LOOM_MAX_PREEMPTIONS",
   "LockFileEx",
@@ -107,7 +109,10 @@ allow_terms = [
   "SetGlobalDefault",
   "StateFlow",
   "Stretcher",
+  "inconsistent_struct_constructor",
+  "is_write_vectored",
   "set_default",
+  "simd",
   "unused_self",
 ]
 exclude_paths = [
@@ -120,4 +125,4 @@ exclude_paths = [
   "docs/specs/**",
   "docs/superpowers/**",
 ]
-include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md"]
+include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md", "docs/**/*.md"]
