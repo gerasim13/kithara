@@ -64,6 +64,7 @@ derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures = { workspace = true }
 hls_m3u8 = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

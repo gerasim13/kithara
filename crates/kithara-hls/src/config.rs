@@ -42,7 +42,8 @@ pub struct KeyOptions {
 /// happily serving `GET`s, so callers can switch the probe to a
 /// single-byte ranged `GET` whose `Content-Range` header carries the
 /// resource total.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SizeProbeMethod {
     /// Issue `HEAD` requests (RFC-correct, what almost every CDN

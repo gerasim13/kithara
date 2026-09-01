@@ -99,11 +99,8 @@ struct DrmProvider {
     /// per-provider header.
     #[serde(default)]
     headers: std::collections::BTreeMap<String, String>,
-    /// Env reference of the form `$KITHARA_...`; resolved at build
-    /// time and wrapped with `obfstr!()`.
-    cipher_env: Option<String>,
-    /// Inline non-secret cipher key (ships verbatim in the binary).
-    cipher_key: Option<String>,
+    /// Cipher key for this provider, as written in `app.yaml`.
+    cipher_key: String,
     /// Per-provider X-Encrypted-Key salt shape. Defaults to the iOS
     /// prod format (8-char lowercase hex). Override per provider when
     /// the upstream WAF expects a different alphabet/length — zvq.me
@@ -206,6 +203,7 @@ fn main() {
     }
 
     let mut code = String::new();
+    emit_document(&mut code, &yaml_src);
     emit_scalars(&mut code, &app);
     emit_tracks(&mut code, &app.playlist.tracks);
     emit_asset_layouts(&mut code, &app.assets.cache_identity);
@@ -269,6 +267,13 @@ fn collect_documents(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
             .to_owned();
         out.push((named, read));
     }
+}
+
+/// Embed the document verbatim. The application parses this same text at
+/// startup, so the build no longer decides what any field means.
+fn emit_document(code: &mut String, yaml_src: &str) {
+    writeln!(code, "pub const BAKED_DOCUMENT: &str = {yaml_src:?};")
+        .expect("write to String never fails");
 }
 
 fn emit_scalars(code: &mut String, app: &AppConfig) {
@@ -405,8 +410,8 @@ fn emit_drm_policy(
 
 fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, String>) {
     let cipher_expr = resolve_secret(
-        p.cipher_key.as_deref(),
-        p.cipher_env.as_deref(),
+        Some(p.cipher_key.as_str()),
+        None,
         env_map,
         &format!("provider `{}` cipher", p.name),
     );
@@ -472,7 +477,7 @@ fn parse_env_ref(value: &str) -> Option<&str> {
 fn collect_env_refs(providers: &[DrmProvider]) -> Vec<(String, String)> {
     let mut refs = Vec::new();
     for p in providers {
-        if let Some(name) = p.cipher_env.as_deref().and_then(parse_env_ref) {
+        if let Some(name) = parse_env_ref(&p.cipher_key) {
             refs.push((format!("provider `{}` cipher", p.name), name.to_string()));
         }
         for (header, value) in &p.headers {

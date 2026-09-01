@@ -53,17 +53,17 @@ playlist:
 # key URL lives on a bare host but media is served from subdomains (e.g.
 # `zvuk.com/keyserver/...` plus `cdn-hls-slicer.zvuk.com/...`).
 #
-# Each provider must define exactly one of `cipher_key` (inline
-# non-secret literal) or `cipher_env` (`$KITHARA_...` env reference).
+# Each provider declares one `cipher_key`, whose value may be a
+# `$KITHARA_...` env reference or an inline non-secret literal.
 # Everything else goes through `headers` — values starting with `$`
-# are env references (obfuscated like `cipher_env`); literal values
+# are env references (obfuscated like `cipher_key`); literal values
 # pass through unchanged. `X-Encrypted-Key` is reserved (generated
 # per request from the cipher_key).
 drm:
   providers:
     - name: zvuk-prod
       domains: [zvuk.com, "*.zvuk.com"]
-      cipher_env: $KITHARA_DRM_PROD_KEY
+      cipher_key: $KITHARA_DRM_PROD_KEY
       # iOS `HLSAes128Service.AES128ResourceLoader` ships
       # `randomString(of: 8)` — 8-char lowercase hex. The zvuk.com WAF
       # validates alphabet + length; deviation triggers HTTP 418.
