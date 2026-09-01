@@ -31,14 +31,6 @@ pub trait CustomWidget: 'static {
     /// Consumer-owned action emitted by this component.
     type Action: std::fmt::Debug + Send + 'static;
 
-    /// Returns the content's intrinsic logical extent under the supplied limits.
-    fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
-
-    /// Handles one neutral input event in the component's local hit space.
-    fn input(&mut self, _input: Input<'_>, _hit: Hit) -> Outcome<Self::Action> {
-        Outcome::IGNORED
-    }
-
     /// Whether focusing this component should start a platform input-method
     /// session. Only the retained host opens one; iced owns that session in the
     /// immediate host, so the question is asked there.
@@ -55,6 +47,14 @@ pub trait CustomWidget: 'static {
     fn frame(&mut self, _elapsed: Duration) -> Option<Self::Action> {
         None
     }
+
+    /// Handles one neutral input event in the component's local hit space.
+    fn input(&mut self, _input: Input<'_>, _hit: Hit) -> Outcome<Self::Action> {
+        Outcome::IGNORED
+    }
+
+    /// Returns the content's intrinsic logical extent under the supplied limits.
+    fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
 
     /// Appends drawing commands for the resolved local rectangle.
     ///

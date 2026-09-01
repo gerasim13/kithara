@@ -52,6 +52,12 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) decoder: AudioDecoderConfig<B>,
+    /// Consumer wake capability for ring pops and reader-event delivery.
+    /// `block_on_underrun` always resolves the effective mode to
+    /// [`ConsumerWakeMode::ImmediateOffRt`].
+    #[builder(default)]
+    #[field(get, copy)]
+    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = NonZeroUsize::new(Consts::PRELOAD_CHUNKS).expect("preload chunk count is non-zero"))]
     #[field(get, copy)]
@@ -81,14 +87,6 @@ pub struct AudioConfig<T: StreamType, B = NoResamplerBackend> {
     #[builder(default)]
     #[field(get)]
     pub(crate) block_on_underrun: bool,
-    /// Consumer wake capability for ring pops and reader-event delivery. The
-    /// default is safe for real-time callbacks; known off-RT consumers may
-    /// request an immediate worker signal and inline reader-event publishes.
-    /// `block_on_underrun` remains independent and always resolves the
-    /// effective mode to [`ConsumerWakeMode::ImmediateOffRt`].
-    #[builder(default)]
-    #[field(get, copy)]
-    pub(crate) consumer_wake_mode: ConsumerWakeMode,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s).
     /// Default: 10 on native, 32 on wasm32.
     #[builder(default = Consts::PCM_BUFFER_CHUNKS)]

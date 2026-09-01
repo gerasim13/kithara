@@ -34,8 +34,8 @@ pub(super) fn make_tmp_path(canonical: &Path) -> Option<PathBuf> {
 /// sibling writer from an orphan a `kill -9` left behind; the file's mere
 /// existence cannot.
 struct TmpClaim {
-    path: PathBuf,
     file: File,
+    path: PathBuf,
 }
 
 impl TmpClaim {
@@ -63,7 +63,7 @@ impl TmpClaim {
         match file.try_lock() {
             Ok(()) => {
                 file.set_len(0)?;
-                Ok(Self { path, file })
+                Ok(Self { file, path })
             }
             Err(TryLockError::WouldBlock) => Err(StorageError::TmpClaimed(path)),
             Err(TryLockError::Error(e)) => Err(StorageError::Io(e)),
@@ -128,6 +128,7 @@ pub struct AtomicChunked<D: DriverIo> {
     /// The current writer. Swapped (not cloned) on the commit-rename.
     /// Read/wait paths mint a cheap `ResourceReader` from the current snapshot.
     inner: ArcSwap<ResourceWriter<D>>,
+    barrier: Barrier,
     /// `Some(claim on <path>.tmp)` while writes are in flight; cleared on
     /// successful `commit`. `Drop` / `fail` use a still-set value to remove
     /// the orphaned temp file. Dropping the claim releases its lock.
@@ -135,7 +136,6 @@ pub struct AtomicChunked<D: DriverIo> {
     /// Factory to reopen the inner on the canonical path post-rename.
     /// `None` when the wrapper was constructed in passthrough mode.
     factory: Option<FactoryFn<D>>,
-    barrier: Barrier,
     #[field(get(
         deref = Path,
         doc = "Path the resource will land at on a successful commit."
@@ -158,6 +158,15 @@ impl<D: DriverIo> std::fmt::Debug for AtomicChunked<D> {
 }
 
 impl<D: DriverIo> AtomicChunked<D> {
+    /// Release the writer without failing the resource, keeping the temp file.
+    ///
+    /// The caller owns the refill, so the partial bytes belong to the successor
+    /// now — removing them, as [`fail`](Self::fail) does, would delete work in
+    /// flight.
+    pub fn abandon(&self) {
+        self.inner.load().abandon();
+    }
+
     /// Commit the accumulated chunks: durably flush + atomically rename the
     /// temp file to the canonical path + reopen the inner on the canonical
     /// path. Rewrites in place (the writer commits without being consumed).
@@ -170,10 +179,8 @@ impl<D: DriverIo> AtomicChunked<D> {
         };
         let TmpClaim { path: tmp, file } = &claim;
 
-        // Sealing skips the driver's snapshot: it would map the temp file
-        // that the rename below retires. The claim's own handle then trims
-        // the surplus reservation and forces the bytes down, so the canonical
-        // path can only ever appear fully durable.
+        // WHY: Sealing skips the driver's snapshot: it would map the temp file that the rename below retires. The claim's own handle then
+        // trims the surplus reservation and forces the bytes down, so the canonical path can only ever appear fully durable.
         self.inner.load().seal_in_place(final_len)?;
 
         if let Some(len) = final_len
@@ -205,15 +212,6 @@ impl<D: DriverIo> AtomicChunked<D> {
     /// Whether the given range is fully covered by available data.
     pub fn contains_range(&self, range: Range<u64>) -> bool {
         self.read_view().contains_range(range)
-    }
-
-    /// Release the writer without failing the resource, keeping the temp file.
-    ///
-    /// The caller owns the refill, so the partial bytes belong to the successor
-    /// now — removing them, as [`fail`](Self::fail) does, would delete work in
-    /// flight.
-    pub fn abandon(&self) {
-        self.inner.load().abandon();
     }
 
     /// Mark the resource failed and remove the orphaned temp file.

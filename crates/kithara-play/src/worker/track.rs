@@ -21,13 +21,13 @@ where
     #[builder(start_fn)]
     #[field(get)]
     pub(crate) audio: AudioConfig<T, B>,
+    /// Optional live cost meter for this play-owned producer lane.
+    #[field(get)]
+    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Playback effects after the resident Warp stage.
     #[builder(default)]
     #[field(get)]
     pub(crate) effects: Vec<Box<dyn AudioEffect>>,
-    /// Optional live cost meter for this play-owned producer lane.
-    #[field(get)]
-    pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Resident Warp resources and live temporal controls.
     #[builder(default = WarpConfig::builder().build())]
     #[field(get)]

@@ -29,8 +29,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct CrossfaderLabels {
-    pub left: String,
     pub center: String,
+    pub left: String,
     pub right: String,
 }
 
@@ -154,11 +154,52 @@ impl Skin {
         self.overrides.get(path).unwrap_or(self)
     }
 
+    /// What this skin dresses one extension kind in.
+    ///
+    /// A kind this skin never names is dressed in nothing rather than refused:
+    /// an extension is registered by the application, and a skin is written
+    /// without knowing which build will wear it. What an extension draws when
+    /// it is dressed in nothing is its own business.
+    #[must_use]
+    pub fn custom(&self, kind: &str) -> &CustomSkin {
+        self.custom.kind(kind).unwrap_or(&EMPTY_DRESS)
+    }
+
     /// What the skin's own document calls it, which is how anything offering a
     /// choice of skins tells one from another.
     #[must_use]
     pub fn id(&self) -> &str {
         &self.document.id.0
+    }
+
+    /// Resolves a parsed document into neutral colors, render metrics and the
+    /// pictures it names, pulling the crossfader, tree search and table footer
+    /// captions from `catalog`.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError`] when a palette value, embedded font or named
+    /// picture is invalid, or [`UiDocError::UnknownTextKey`] when `catalog` is
+    /// missing one of those captions.
+    pub fn resolve(
+        document: SkinDoc,
+        catalog: &TextDoc,
+        origin: &SourceUri,
+        resolver: &dyn SourceResolver,
+    ) -> Result<Self, UiDocError> {
+        Self::resolve_with_font_policy(document, catalog, origin, resolver, FontPolicy::System)
+    }
+
+    pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
+        self.palette[role]
+    }
+
+    /// The picture one name means in this skin, cut into its frames.
+    ///
+    /// A name this skin carries nothing for draws nothing, which is what an
+    /// unbound control does everywhere else.
+    #[must_use]
+    pub fn sheet(&self, name: &str) -> Option<&Arc<Sheet>> {
+        self.pictures.sheet(name)
     }
 
     /// The typography one document text style names, with the tone already
@@ -184,51 +225,10 @@ impl Skin {
         }
     }
 
-    pub(crate) fn rgba(&self, role: ColorRole) -> Rgba {
-        self.palette[role]
-    }
-
     /// Resolves one state of a [`StateColors`]: a state naming no role paints
     /// nothing.
     pub(crate) fn tint(&self, role: Option<ColorRole>) -> Rgba {
         role.map_or(TRANSPARENT, |role| self.rgba(role))
-    }
-
-    /// Resolves a parsed document into neutral colors, render metrics and the
-    /// pictures it names, pulling the crossfader, tree search and table footer
-    /// captions from `catalog`.
-    ///
-    /// # Errors
-    /// Returns [`UiDocError`] when a palette value, embedded font or named
-    /// picture is invalid, or [`UiDocError::UnknownTextKey`] when `catalog` is
-    /// missing one of those captions.
-    pub fn resolve(
-        document: SkinDoc,
-        catalog: &TextDoc,
-        origin: &SourceUri,
-        resolver: &dyn SourceResolver,
-    ) -> Result<Self, UiDocError> {
-        Self::resolve_with_font_policy(document, catalog, origin, resolver, FontPolicy::System)
-    }
-
-    /// The picture one name means in this skin, cut into its frames.
-    ///
-    /// A name this skin carries nothing for draws nothing, which is what an
-    /// unbound control does everywhere else.
-    #[must_use]
-    pub fn sheet(&self, name: &str) -> Option<&Arc<Sheet>> {
-        self.pictures.sheet(name)
-    }
-
-    /// What this skin dresses one extension kind in.
-    ///
-    /// A kind this skin never names is dressed in nothing rather than refused:
-    /// an extension is registered by the application, and a skin is written
-    /// without knowing which build will wear it. What an extension draws when
-    /// it is dressed in nothing is its own business.
-    #[must_use]
-    pub fn custom(&self, kind: &str) -> &CustomSkin {
-        self.custom.kind(kind).unwrap_or(&EMPTY_DRESS)
     }
 }
 

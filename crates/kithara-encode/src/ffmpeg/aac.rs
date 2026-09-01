@@ -44,13 +44,13 @@ impl AacFFmpegEncoder {
 
         Ok(EncodedTrack {
             media_info,
+            access_units,
             timescale: request.timescale,
             bit_rate: request.bit_rate,
             codec_config: Vec::new(),
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
             trailing_delay: request.trailing_delay,
-            access_units,
         })
     }
 

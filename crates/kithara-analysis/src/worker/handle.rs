@@ -23,15 +23,15 @@ use crate::{
 };
 
 pub struct AnalysisWorker {
-    active: bool,
-    chunk_seconds: NonZeroU32,
-    dispatcher: Dispatcher,
-    fingerprint: AnalysisFingerprint,
     resume_shape: (bool, bool),
+    fingerprint: AnalysisFingerprint,
+    dispatcher: Dispatcher,
+    chunk_seconds: NonZeroU32,
     scope: CancelScope,
     start_job: StartJob,
     tasks: Mutex<Vec<ActiveTask>>,
     _base: Worker,
+    active: bool,
 }
 
 type StartJob =
@@ -48,12 +48,12 @@ struct ActiveTask {
 /// therefore attach the producer to playback before it asynchronously opens
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
-    cancel: CancelToken,
-    ingest: ring::Reader,
-    rate: NonZeroU32,
     token: AnalysisToken,
-    tx: watch::Sender<Option<AnalysisProgress>>,
+    cancel: CancelToken,
+    rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
+    ingest: ring::Reader,
+    tx: watch::Sender<Option<AnalysisProgress>>,
 }
 
 /// Output of opening an analysis pass before its fallback reader starts.
@@ -163,16 +163,31 @@ impl AnalysisWorker {
         }
     }
 
-    /// Whether detector initialization left at least one effective analyzer.
+    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
+    /// another axis is refused. Returns where its snapshots arrive and the
+    /// producer another component may contribute decoded ranges through.
     #[must_use]
-    pub const fn is_active(&self) -> bool {
-        self.active
+    pub fn analyze(
+        &self,
+        reader: Box<dyn AudioReader>,
+        token: AnalysisToken,
+        rate: NonZeroU32,
+    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
+        let (rx, producer, pass) = self.open(token, rate);
+        self.start(pass, reader);
+        (rx, producer)
     }
 
     /// Identity of the analyzers that survived worker initialization.
     #[must_use]
     pub const fn fingerprint(&self) -> &AnalysisFingerprint {
         &self.fingerprint
+    }
+
+    /// Whether detector initialization left at least one effective analyzer.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active
     }
 
     /// Open a pass and its bounded playback producer without waiting for the
@@ -199,50 +214,6 @@ impl AnalysisWorker {
             resume: None,
         };
         (rx, producer, pass)
-    }
-
-    /// Start an already-open pass with its fallback reader.
-    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        if pass.resume.is_some() {
-            warn!("analysis resume pass requires extent validation");
-            return;
-        }
-        self.submit_pass(pass, reader);
-    }
-
-    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        let AnalysisPass {
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        } = pass;
-        self.submit(Job {
-            reader,
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        });
-    }
-
-    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
-    /// another axis is refused. Returns where its snapshots arrive and the
-    /// producer another component may contribute decoded ranges through.
-    #[must_use]
-    pub fn analyze(
-        &self,
-        reader: Box<dyn AudioReader>,
-        token: AnalysisToken,
-        rate: NonZeroU32,
-    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate);
-        self.start(pass, reader);
-        (rx, producer)
     }
 
     /// Open a validated partial publication before its fallback reader is
@@ -293,6 +264,15 @@ impl AnalysisWorker {
         Ok((rx, producer, pass))
     }
 
+    /// Start an already-open pass with its fallback reader.
+    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+        if pass.resume.is_some() {
+            warn!("analysis resume pass requires extent validation");
+            return;
+        }
+        self.submit_pass(pass, reader);
+    }
+
     /// Start a resume pass only after its opened reader confirms the persisted
     /// source extent.
     ///
@@ -334,6 +314,26 @@ impl AnalysisWorker {
                 warn!(?error, "analysis job was not admitted");
             }
         }
+    }
+
+    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+        let AnalysisPass {
+            cancel,
+            ingest,
+            rate,
+            token,
+            tx,
+            resume,
+        } = pass;
+        self.submit(Job {
+            reader,
+            cancel,
+            ingest,
+            rate,
+            token,
+            tx,
+            resume,
+        });
     }
 }
 

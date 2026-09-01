@@ -57,27 +57,27 @@ impl Track {
 
 #[derive(bon::Builder)]
 pub(crate) struct Scalar {
-    track: Track,
     hover: Hover,
     reset: Option<f32>,
     wheel: Option<WheelStep>,
+    track: Track,
 }
 
 /// Opt-in wheel stepping: the current normalized value plus the per-tick step.
 #[derive(Clone, Copy)]
 pub(crate) struct WheelStep {
-    pub(crate) value: f32,
     pub(crate) step: f32,
+    pub(crate) value: f32,
 }
 
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ScalarState {
+    double_click: DoubleClick,
     #[field(get = captures_pointer, vis = "pub(crate)")]
     active: bool,
     start_position: f32,
     start_value: f32,
-    double_click: DoubleClick,
     wheel_accum: f32,
 }
 
@@ -96,6 +96,10 @@ impl Scalar {
     #[cfg(test)]
     pub(crate) const fn accepts_wheel(&self) -> bool {
         self.wheel.is_some()
+    }
+
+    pub(crate) fn cursor(&self, state: &ScalarState, hit: &Hit) -> CursorShape {
+        self.hover.cursor(state.active, hit)
     }
 
     pub(crate) fn on_input(
@@ -190,10 +194,6 @@ impl Scalar {
             | Input::Wheel(_) => Outcome::IGNORED,
         }
     }
-
-    pub(crate) fn cursor(&self, state: &ScalarState, hit: &Hit) -> CursorShape {
-        self.hover.cursor(state.active, hit)
-    }
 }
 
 fn seek_down(position: Pt, area: Rect) -> Outcome {
@@ -247,8 +247,8 @@ mod tests {
     fn drag(value: f32) -> Scalar {
         Scalar::builder()
             .track(Track::RelativeVertical {
-                range: 128.0,
                 value,
+                range: 128.0,
             })
             .hover(Hover::new(CursorShape::ResizeV))
             .build()

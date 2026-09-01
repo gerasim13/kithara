@@ -8,8 +8,8 @@ use crate::{
 pub(crate) struct Meter {
     background: Rgba,
     border: Rgba,
-    border_width: f32,
     fill: Rgba,
+    border_width: f32,
 }
 
 impl Meter {
@@ -26,8 +26,6 @@ impl Meter {
     pub(crate) fn paint(&self, list: &mut DrawListBuilder, level: f32, bounds: Rect) {
         list.fill_rect(bounds, self.background);
 
-        // The bar sits inside the hairline, so the track is inset by the whole
-        // border width rather than half of it.
         let width = self.border_width;
         let track = Rect {
             h: (bounds.h - width * 2.0).max(0.0),

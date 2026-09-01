@@ -30,31 +30,31 @@ pub(super) const MAX_SIGNATURE_EXAMPLES: usize = 5;
 
 #[derive(Debug, Default)]
 struct SignatureCluster {
+    details: BTreeSet<String>,
     failed_attempts: BTreeSet<String>,
     passed_attempts: BTreeSet<String>,
-    unattributed_attempts: BTreeSet<String>,
     tests: BTreeSet<String>,
-    details: BTreeSet<String>,
+    unattributed_attempts: BTreeSet<String>,
 }
 
 #[derive(Debug, Default)]
 struct AttemptDossier {
-    display: String,
-    test: String,
-    symptom: String,
-    backtrace: String,
-    wait_graph: BTreeSet<String>,
-    lines: BTreeSet<String>,
+    co_runners: BTreeSet<String>,
     envelopes: BTreeSet<String>,
+    lines: BTreeSet<String>,
+    wait_graph: BTreeSet<String>,
+    backtrace: String,
+    display: String,
+    pressure: String,
+    symptom: String,
+    test: String,
+    /// Newest run-length groups of the attempt envelope's DEBUG-event tail,
+    /// oldest first — the state transitions immediately preceding the failure.
+    event_tail: Vec<String>,
     /// Newest run-length groups of the attempt envelope's probe tail, oldest
     /// first. Ordered evidence, not a set: the last firing before the dump is
     /// the verdict, and its `(xN)` count is the starvation streak.
     flight_tail: Vec<String>,
-    /// Newest run-length groups of the attempt envelope's DEBUG-event tail,
-    /// oldest first — the state transitions immediately preceding the failure.
-    event_tail: Vec<String>,
-    pressure: String,
-    co_runners: BTreeSet<String>,
 }
 
 impl SignatureCluster {
@@ -693,11 +693,11 @@ mod tests {
 
     fn case(name: &str, iteration: usize, failed: bool, secs: f64) -> CaseTiming {
         CaseTiming {
+            failed,
+            secs,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),
-            failed,
-            secs,
             timestamp: None,
             output: String::new(),
             output_truncated: false,

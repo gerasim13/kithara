@@ -38,7 +38,6 @@
 //!      pinned at 0, the buffer-too-low gate bars every normal up-switch, so
 //!      the ONLY decision that can move off variant 0 is `EscapeStalled` —
 //!      `current_variant != 0` therefore pins the fix specifically.
-
 use std::num::NonZeroUsize;
 
 use kithara::{

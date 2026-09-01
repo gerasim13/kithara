@@ -187,19 +187,6 @@ where
         slot.attach(observer);
     }
 
-    /// Create the decoder half before resource opening and install its
-    /// control half in canonical per-track state. Any observer attached before
-    /// admission is transferred into the same bounded relay.
-    pub(crate) fn observer_relay(&self, id: TrackId) -> AudioObserverRelay {
-        let slot = self
-            .lock()
-            .iter()
-            .find(|record| record.id == id)
-            .map(|record| record.observer.clone())
-            .unwrap_or_default();
-        slot.relay()
-    }
-
     /// Register a fresh attempt. Dedupes against a live attempt; replaces
     /// one that is already cancelled but still unwinding.
     pub(crate) fn begin_attempt(&self, id: TrackId, cancel: CancelToken) -> Option<Ticket> {
@@ -280,6 +267,19 @@ where
         claimed
     }
 
+    /// Create the decoder half before resource opening and install its
+    /// control half in canonical per-track state. Any observer attached before
+    /// admission is transferred into the same bounded relay.
+    pub(crate) fn observer_relay(&self, id: TrackId) -> AudioObserverRelay {
+        let slot = self
+            .lock()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.observer.clone())
+            .unwrap_or_default();
+        slot.relay()
+    }
+
     /// Move a track's pending load into the interactive lane: replace a
     /// still-waiting (or cancelled-but-unwinding) attempt. An attempt
     /// already holding a permit is kept - its download is progressing.
@@ -335,7 +335,7 @@ where
     S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
 {
     let generation = generations.fetch_add(1, Ordering::Relaxed);
-    // Replacing the guard drops the old one armed, cancelling the
+    // WHY: Replacing the guard drops the old one armed, cancelling the
     record.load = Some(AttemptGuard::new(generation, cancel));
     Ticket {
         generation,

@@ -1,10 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use bon::Builder;
-use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::sync::Mutex;
 use kithara_play::{
     GroupState, PlayError, SessionBinding, SessionDispatcher,
     player::{PlayerControlSource, PlayerMember},
@@ -16,6 +13,10 @@ use kithara_warp::{
 };
 use struct_patch::Patch;
 
+mod platform;
+
+use platform::Platform;
+
 #[cfg(any(test, feature = "probe"))]
 use crate::api::SessionDuckingMode;
 use crate::{
@@ -25,9 +26,6 @@ use crate::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
     },
 };
-
-#[cfg(target_arch = "wasm32")]
-mod web;
 
 const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
     Some(sample_rate) => sample_rate,
@@ -84,81 +82,83 @@ pub struct Host<S> {
     owns_session: bool,
     root_view: RootView,
     dispatcher: Arc<dyn HostDispatcher<S>>,
-    #[cfg(target_arch = "wasm32")]
-    web_state: Option<crate::session::web::WebSessionState<S>>,
-    #[cfg(target_arch = "wasm32")]
-    remote_routes: Mutex<Vec<Arc<crate::wasm::HostRoute<S>>>>,
+    platform: Platform<S>,
+}
+
+struct SessionRoot {
+    id: BeatGridId,
+    sample_rate: NonZeroU32,
+    group: GroupState<PlayerMember>,
+    view: RootView,
 }
 
 impl<S> Host<S> {
-    /// Creates the platform session and its canonical synchronization root.
-    ///
-    /// # Errors
-    /// Returns an error when a canonical grid identity cannot be allocated.
-    pub fn new(config: HostConfig) -> Result<Self, PlayError>
-    where
-        S: HasPool<f32> + Send + Sync + 'static,
-    {
+    fn session_root(config: HostConfig) -> Result<SessionRoot, PlayError> {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let sample_rate = config.sample_rate;
-        let root = GroupState::unavailable(
+        let group = GroupState::unavailable(
             grid_id,
             sample_rate,
             SessionEpoch::new(0),
             SyncMemberKind::Group,
         );
-        let root_view = RootView::new(&root);
-        #[cfg(not(target_arch = "wasm32"))]
-        let dispatcher = crate::session::native::spawn(root, root_view.clone(), sample_rate);
-        #[cfg(target_arch = "wasm32")]
-        let (dispatcher, web_state) =
-            crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
-        Ok(Self {
+        let view = RootView::new(&group);
+        Ok(SessionRoot {
             id: grid_id,
-            owns_session: true,
-            root_view,
-            dispatcher,
-            #[cfg(target_arch = "wasm32")]
-            web_state: Some(web_state),
-            #[cfg(target_arch = "wasm32")]
-            remote_routes: Mutex::default(),
+            sample_rate,
+            group,
+            view,
         })
     }
 
-    /// Attaches and transfers one fully configured player or decorator into
-    /// this Host before it can register its lower graph projection.
-    ///
-    /// # Errors
-    /// Returns an error when session binding or canonical attachment fails.
-    pub fn insert<P>(&mut self, mut player: P) -> Result<HostOwned<P>, PlayError>
+    fn owner(
+        id: BeatGridId,
+        root_view: RootView,
+        dispatcher: Arc<dyn HostDispatcher<S>>,
+        platform: Platform<S>,
+    ) -> Self {
+        Self {
+            id,
+            owns_session: true,
+            root_view,
+            dispatcher,
+            platform,
+        }
+    }
+
+    fn bind_player<P>(&self, player: &mut P) -> Result<(BeatGridId, P::Control), PlayError>
     where
         P: PlayerControlSource<Schema = S>,
     {
         let grid_id = player.id();
         let dispatcher: Arc<dyn SessionDispatcher<S>> = self.dispatcher.clone();
         player.attach_session(SessionBinding::new(dispatcher))?;
-        let control = player.control();
+        Ok((grid_id, player.control()))
+    }
+
+    fn attach_member(&self, member: PlayerMember) -> Result<(), PlayError> {
         let operations = Box::new([TopologyOperation::Attach {
             member: SyncMember::Group {
                 alignment: None,
-                group: Box::new(PlayerMember::new(player)),
+                group: Box::new(member),
             },
         }]);
-        require_topology_change(self.dispatcher.transact_current(operations))?;
-        Ok(HostOwned {
-            host_id: self.id,
-            id: grid_id,
-            control,
-            marker: PhantomData,
-        })
+        require_topology_change(self.dispatcher.transact_current(operations))
     }
 
-    /// Closes the lower runtime on the caller thread, then detaches its
-    /// canonical member after graph unregistration has completed.
-    ///
-    /// # Errors
-    /// Returns an error when close or canonical detachment fails.
-    pub fn remove<P>(&mut self, player: &HostOwned<P>) -> Result<(), PlayError>
+    fn owned<P>(&self, id: BeatGridId, control: P::Control) -> HostOwned<P>
+    where
+        P: PlayerControlSource,
+    {
+        HostOwned {
+            host_id: self.id,
+            id,
+            control,
+            marker: PhantomData,
+        }
+    }
+
+    fn validate_removal<P>(&self, player: &HostOwned<P>) -> Result<(), PlayError>
     where
         P: PlayerControlSource<Schema = S>,
         S: Send + Sync + 'static,
@@ -167,21 +167,22 @@ impl<S> Host<S> {
             return Err(PlayError::ForeignSession);
         }
         let topology = self.topology().map_err(SessionError::from)?;
-        if !topology
+        if topology
             .members()
             .iter()
             .any(|member| member.grid().id() == player.id())
         {
-            return Err(SessionError::from(SyncError::MemberNotFound {
-                group_id: self.id,
-                member_id: player.id(),
-            })
-            .into());
+            return Ok(());
         }
-        P::close_control(player.control())?;
-        let operations = Box::new([TopologyOperation::Detach {
-            member: player.id(),
-        }]);
+        Err(SessionError::from(SyncError::MemberNotFound {
+            group_id: self.id,
+            member_id: player.id(),
+        })
+        .into())
+    }
+
+    fn detach_member(&self, member: BeatGridId) -> Result<(), PlayError> {
+        let operations = Box::new([TopologyOperation::Detach { member }]);
         require_topology_change(self.dispatcher.transact_current(operations))
     }
 
@@ -275,10 +276,7 @@ impl<S> Host<S> {
 
 impl<S> Drop for Host<S> {
     fn drop(&mut self) {
-        #[cfg(target_arch = "wasm32")]
-        for route in std::mem::take(&mut *self.remote_routes.lock()) {
-            route.close();
-        }
+        Platform::close(&mut self.platform, self.id);
         if self.owns_session
             && let Err(error) = self.dispatcher.exec_host(HostCmd::Shutdown)
         {
@@ -306,12 +304,15 @@ impl<S: Send + Sync + 'static> SyncGroup for Host<S> {
             fn status(&self) -> SyncStatusSnapshot;
         }
         to self.dispatcher {
-            fn transact(
-                &mut self,
-                operation: SyncOperation<PlayerMember>,
-            ) -> Result<SyncAdmission, SyncRejected<PlayerMember>>;
             fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
         }
+    }
+
+    fn transact(
+        &mut self,
+        operation: SyncOperation<PlayerMember>,
+    ) -> Result<SyncAdmission, SyncRejected<PlayerMember>> {
+        Platform::transact(&self.dispatcher, operation)
     }
 }
 

@@ -14,40 +14,44 @@ use crate::{BroadcastError, BroadcastResult};
 #[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct BroadcastConfig {
-    /// Sample rate of the mix.
-    #[builder(default = 48_000)]
-    pub sample_rate: u32,
-    /// Channel count of the mix.
-    #[builder(default = 2)]
-    pub channels: u16,
-    /// AAC-LC bit rate the encoder targets.
-    #[builder(default = 128_000)]
-    pub bit_rate: u64,
-    /// Media duration a segment is cut at.
-    #[builder(default = Duration::from_secs(4))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
-    pub segment_target: Duration,
-    /// Segments a client sees in the playlist.
-    #[builder(default = 6)]
-    pub window: usize,
-    /// Segments kept fetchable past the playlist window.
-    #[builder(default = 3)]
-    pub grace: usize,
-    /// Loopback on an ephemeral port.
-    #[builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
-    pub bind: SocketAddr,
     /// How long the packager thread waits before polling the mix tap again
     /// after it found no samples. The floor on how promptly a segment is cut
     /// once audio resumes, paid for in wake-ups on an idle broadcast.
     #[builder(default = Duration::from_millis(2))]
     #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub poll_interval: Duration,
+    /// Media duration a segment is cut at.
+    #[builder(default = Duration::from_secs(4))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    pub segment_target: Duration,
+    /// Loopback on an ephemeral port.
+    #[builder(default = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))]
+    pub bind: SocketAddr,
+    /// Channel count of the mix.
+    #[builder(default = 2)]
+    pub channels: u16,
+    /// Sample rate of the mix.
+    #[builder(default = 48_000)]
+    pub sample_rate: u32,
+    /// AAC-LC bit rate the encoder targets.
+    #[builder(default = 128_000)]
+    pub bit_rate: u64,
+    /// Segments kept fetchable past the playlist window.
+    #[builder(default = 3)]
+    pub grace: usize,
+    /// Segments a client sees in the playlist.
+    #[builder(default = 6)]
+    pub window: usize,
 }
 
 impl BroadcastConfig {
     const MILLIS_PER_SECOND: u64 = 1_000;
 
     const MIN_TARGETS: u64 = 3;
+
+    pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {
+        Ok(self.target_ticks()?.div_ceil(u64::from(self.sample_rate)))
+    }
 
     pub(crate) fn target_ticks(&self) -> BroadcastResult<u64> {
         u64::try_from(self.segment_target.as_millis())
@@ -58,10 +62,6 @@ impl BroadcastConfig {
             .ok_or(BroadcastError::InvalidConfig {
                 field: "segment_target",
             })
-    }
-
-    pub(crate) fn target_seconds(&self) -> BroadcastResult<u64> {
-        Ok(self.target_ticks()?.div_ceil(u64::from(self.sample_rate)))
     }
 
     pub(crate) fn validate(&self) -> BroadcastResult<()> {
@@ -88,9 +88,9 @@ impl BroadcastConfig {
         let minimum_ts = Self::MIN_TARGETS * self.target_seconds()? * u64::from(self.sample_rate);
         if span_ts < minimum_ts {
             return Err(BroadcastError::PlaylistTooShort {
-                window: self.window,
                 span_ts,
                 minimum_ts,
+                window: self.window,
             });
         }
         Ok(())

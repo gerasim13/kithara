@@ -12,9 +12,9 @@ use crate::{
 /// What a document asks a button to be, before a skin resolves it.
 #[derive(bon::Builder, Clone, Copy)]
 pub(crate) struct ButtonConfig {
+    style: ButtonStyle,
     frame: Option<FrameSides>,
     mark: Option<Mark>,
-    style: ButtonStyle,
 }
 
 /// The word a button shows, and the word it swaps in while it is active. A
@@ -47,14 +47,14 @@ enum Width {
 /// repaint rather than a reason to rebuild the control.
 #[derive(Clone, PartialEq)]
 struct Face {
-    active: bool,
-    art: Option<Art>,
-    content: Rgba,
     fill: Fill,
     frame: Frame,
+    art: Option<Art>,
+    content: Rgba,
+    role: TextRoleSkin,
+    active: bool,
     gap: f32,
     padding_x: f32,
-    role: TextRoleSkin,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -153,18 +153,8 @@ impl Button {
         Size::new(width, Length::Fill)
     }
 
-    pub(crate) fn paint<Words>(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        label: &ButtonLabel<Words>,
-        active: bool,
-        bounds: Rect,
-        state: VisualState,
-    ) where
-        Words: AsRef<str>,
-    {
-        self.face(active).paint(list, text, label, bounds, state);
+    const fn face(&self, active: bool) -> &Face {
+        if active { &self.active } else { &self.idle }
     }
 
     pub(crate) fn intrinsic_width<Words>(
@@ -179,8 +169,18 @@ impl Button {
         self.face(active).intrinsic_width(text, label)
     }
 
-    const fn face(&self, active: bool) -> &Face {
-        if active { &self.active } else { &self.idle }
+    pub(crate) fn paint<Words>(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &ButtonLabel<Words>,
+        active: bool,
+        bounds: Rect,
+        state: VisualState,
+    ) where
+        Words: AsRef<str>,
+    {
+        self.face(active).paint(list, text, label, bounds, state);
     }
 }
 
@@ -223,13 +223,7 @@ impl Face {
             style,
             ButtonStyle::Transport | ButtonStyle::TransportPrimary
         );
-        // The accent fill follows the read value alone: the micro play button
-        // is a cell in a bar, not a lamp that is always lit, so it dims with
-        // the rest of the bar while the deck is stopped.
         let highlighted = active;
-        // The word is shaped by the face the style asks for, but coloured by
-        // whether the button is currently the one being read: a primary
-        // button that is not lit still wears the plain text colour.
         let role: TextRoleSkin = if style == ButtonStyle::VisNav {
             skin.vis.nav_text
         } else if primary(style) || active {
@@ -279,21 +273,6 @@ impl Face {
         }
     }
 
-    fn paint<Words>(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        label: &ButtonLabel<Words>,
-        bounds: Rect,
-        state: VisualState,
-    ) where
-        Words: AsRef<str>,
-    {
-        list.fill_rounded_rect(bounds, self.frame.radius(), self.fill.pick(state));
-        self.frame.paint(list, bounds);
-        self.paint_content(list, text, self.label(label), bounds);
-    }
-
     fn intrinsic_width<Words>(&self, text: &mut TextContext, label: &ButtonLabel<Words>) -> f32
     where
         Words: AsRef<str>,
@@ -312,6 +291,35 @@ impl Face {
             None => self.shape(text, label).width(),
         };
         content + self.padding_x * 2.0
+    }
+
+    fn label<'a, Words>(&self, label: &'a ButtonLabel<Words>) -> &'a str
+    where
+        Words: AsRef<str>,
+    {
+        if self.active {
+            label
+                .active
+                .as_ref()
+                .map_or_else(|| label.label.as_ref(), AsRef::as_ref)
+        } else {
+            label.label.as_ref()
+        }
+    }
+
+    fn paint<Words>(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        label: &ButtonLabel<Words>,
+        bounds: Rect,
+        state: VisualState,
+    ) where
+        Words: AsRef<str>,
+    {
+        list.fill_rounded_rect(bounds, self.frame.radius(), self.fill.pick(state));
+        self.frame.paint(list, bounds);
+        self.paint_content(list, text, self.label(label), bounds);
     }
 
     fn paint_content(
@@ -378,20 +386,6 @@ impl Face {
     fn shape(&self, text: &mut TextContext, label: &str) -> GlyphRun {
         text.shape(label, self.role, None)
     }
-
-    fn label<'a, Words>(&self, label: &'a ButtonLabel<Words>) -> &'a str
-    where
-        Words: AsRef<str>,
-    {
-        if self.active {
-            label
-                .active
-                .as_ref()
-                .map_or_else(|| label.label.as_ref(), AsRef::as_ref)
-        } else {
-            label.label.as_ref()
-        }
-    }
 }
 
 impl Fill {
@@ -405,13 +399,6 @@ impl Fill {
 }
 
 impl Frame {
-    const fn radius(&self) -> f32 {
-        match self {
-            Self::Border { radius, .. } => *radius,
-            Self::Seams { .. } => 0.0,
-        }
-    }
-
     fn paint(&self, list: &mut DrawListBuilder, bounds: Rect) {
         match self {
             Self::Border {
@@ -494,6 +481,13 @@ impl Frame {
                 },
                 color,
             );
+        }
+    }
+
+    const fn radius(&self) -> f32 {
+        match self {
+            Self::Border { radius, .. } => *radius,
+            Self::Seams { .. } => 0.0,
         }
     }
 }
@@ -583,8 +577,8 @@ mod tests {
 
     fn plain(label: &str) -> ButtonLabel<&str> {
         ButtonLabel {
-            active: None,
             label,
+            active: None,
         }
     }
 

@@ -13,6 +13,7 @@ use iced::{
         stroke::{LineCap as IcedCap, LineJoin as IcedJoin},
     },
 };
+use kithara_test_macros as kithara;
 use skrifa::{
     FontRef, GlyphId,
     instance::{LocationRef, NormalizedCoord, Size as FontSize},
@@ -172,8 +173,8 @@ impl Backend for IcedBackend<'_> {
             self.frame.fill(
                 &path(geom),
                 Fill {
-                    rule: rule(geom),
                     style,
+                    rule: rule(geom),
                 },
             );
         } else {
@@ -200,7 +201,7 @@ impl Backend for IcedBackend<'_> {
         self.frame.stroke(&path(geom), stroke(color, pen));
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.text.run"))]
+    #[kithara::measure(label = "iced.text.run")]
     fn text(&mut self, run: &GlyphRun, _content: &str, transform: Transform, color: Rgba) {
         let resources = self.resources;
         let path = Path::new(|builder| {
@@ -236,7 +237,7 @@ impl Backend for IcedBackend<'_> {
     }
 }
 
-#[cfg_attr(feature = "perf", hotpath::measure(label = "iced.text.outline"))]
+#[kithara::measure(label = "iced.text.outline")]
 fn draw_segment(
     builder: &mut Builder,
     segment: &GlyphSegment,
@@ -256,11 +257,11 @@ fn draw_segment(
         };
         let mut pen = IcedOutline {
             builder,
+            transform,
             glyph: Pt {
                 x: glyph.x,
                 y: glyph.y,
             },
-            transform,
         };
         let settings = DrawSettings::unhinted(FontSize::new(size), location);
         if let Err(error) = outline.draw(settings, &mut pen) {
@@ -283,8 +284,8 @@ pub(crate) const fn font(family: FontFamily, weight: FontWeight) -> Font {
         FontWeight::Bold => Weight::Bold,
     };
     Font {
-        family: Family::Name(face.family_name()),
         weight,
+        family: Family::Name(face.family_name()),
         stretch: Stretch::Normal,
         style: Style::Normal,
     }

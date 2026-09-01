@@ -14,21 +14,21 @@ use crate::{
 #[fieldwork(opt_in, get)]
 pub(crate) struct Tree {
     #[field(get, vis = "pub(crate)")]
+    skin: Skin,
+    #[field(get, vis = "pub(crate)")]
     query: String,
     rows: Vec<Row>,
-    #[field(get, vis = "pub(crate)")]
-    skin: Skin,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct Row {
-    count: Option<String>,
-    depth: u8,
-    expanded: Option<bool>,
     icon: IconName,
+    count: Option<String>,
+    expanded: Option<bool>,
     label: String,
     muted: bool,
     selected: bool,
+    depth: u8,
 }
 
 impl Tree {
@@ -38,22 +38,6 @@ impl Tree {
             rows: rows.iter().copied().map(Row::new).collect(),
             skin: skin.clone(),
         }
-    }
-
-    pub(crate) fn row_count(&self) -> usize {
-        self.rows.len()
-    }
-
-    pub(crate) fn row_commands(
-        &self,
-        text: &mut TextContext,
-        viewport: Rect,
-        offset: f32,
-        hovered: Option<usize>,
-    ) -> DrawList {
-        let mut list = DrawListBuilder::default();
-        self.paint_rows(&mut list, text, viewport, offset, hovered);
-        list.finish()
     }
 
     pub(super) fn paint_rows(
@@ -81,10 +65,10 @@ impl Tree {
                 &mut contents,
                 text,
                 Rect {
+                    y,
                     h: self.skin.tree.row_height,
                     w: viewport.w,
                     x: viewport.x,
-                    y,
                 },
                 hovered == Some(index),
                 &self.skin,
@@ -93,6 +77,22 @@ impl Tree {
 
         list.clip(viewport, contents.finish());
         paint_scrollbar(list, self.rows.len(), &self.skin, viewport, offset);
+    }
+
+    pub(crate) fn row_commands(
+        &self,
+        text: &mut TextContext,
+        viewport: Rect,
+        offset: f32,
+        hovered: Option<usize>,
+    ) -> DrawList {
+        let mut list = DrawListBuilder::default();
+        self.paint_rows(&mut list, text, viewport, offset, hovered);
+        list.finish()
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.rows.len()
     }
 }
 
@@ -300,9 +300,9 @@ fn paint_scrollbar(
     let width = skin.tree.scrollbar_width.min(viewport.w.max(0.0));
     let x = (viewport.x + viewport.w - skin.tree.scrollbar_margin - width).max(viewport.x);
     let rail = Rect {
+        x,
         h: viewport.h,
         w: width,
-        x,
         y: viewport.y,
     };
     let thumb_height = (viewport.h * viewport.h / content_height)
@@ -310,9 +310,9 @@ fn paint_scrollbar(
         .min(viewport.h);
     let travel = viewport.h - thumb_height;
     let thumb = Rect {
+        x,
         h: thumb_height,
         w: width,
-        x,
         y: viewport.y + offset.clamp(0.0, max_offset) / max_offset * travel,
     };
     list.fill_rect(rail, skin.rgba(skin.tree.scrollbar_background));
@@ -329,9 +329,9 @@ fn paint_zvuk(list: &mut DrawListBuilder, bounds: Rect, x: f32, color: Rgba, ico
     let width = (icon_size * 0.08).max(0.75);
     list.stroke_rounded_rect(
         Rect {
+            x,
             h: icon_size,
             w: icon_size,
-            x,
             y: top,
         },
         icon_size * 0.22,

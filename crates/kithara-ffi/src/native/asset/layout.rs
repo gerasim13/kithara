@@ -1,6 +1,8 @@
-use kithara_assets::AssetLayout;
-use kithara_platform::sync::Arc;
-use kithara_play::policy::{QueryIdentityLayout, QueryIdentityRule};
+use kithara::{
+    assets::AssetLayout,
+    platform::sync::Arc,
+    play::policy::{QueryIdentityLayout, QueryIdentityRule},
+};
 
 use crate::{
     layout::{FfiAssetLayout, FfiCacheIdentityRule},

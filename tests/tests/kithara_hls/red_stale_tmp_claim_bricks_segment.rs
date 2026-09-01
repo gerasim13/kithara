@@ -22,7 +22,6 @@
 //! `WaitingDemand`, `range_has_failed` stayed false, and the decode gate parked
 //! for good. Only a live-writer `TmpClaimed` requeues now; anything else
 //! settles as failed.
-
 use std::{
     fs,
     io::{self, Read},

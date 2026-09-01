@@ -10,11 +10,11 @@ use serde::Deserialize;
 struct DemoData {
     vis_indices: (String, String, String),
     vis_presets: (String, String, String),
+    pivot: PivotCopy,
     artist: String,
     breadcrumb: String,
     footer_tokens_anatomy: String,
     title: String,
-    pivot: PivotCopy,
     tracks: Vec<DemoTrack>,
     tree: Vec<DemoTreeRow>,
 }
@@ -23,11 +23,11 @@ struct DemoData {
 /// filled by `demo::pivot`.
 #[derive(Deserialize)]
 pub(crate) struct PivotCopy {
-    pub(crate) pulse: String,
-    pub(crate) pulse_empty: String,
     pub(crate) duration: String,
     pub(crate) hint: String,
     pub(crate) hint_empty: String,
+    pub(crate) pulse: String,
+    pub(crate) pulse_empty: String,
     pub(crate) tracks: String,
     pub(crate) tracks_empty: String,
 }
@@ -62,28 +62,28 @@ struct DemoTrack {
 }
 
 pub(crate) struct Catalog {
-    pub(crate) rows: &'static [TableRow<'static>],
+    pub(crate) pivot: &'static PivotCopy,
     /// The same tracks, played through enough times that the table overflows
     /// its viewport. Nothing else in the gallery makes a table scroll, and a
     /// table that never scrolls hides what a file list actually costs.
     pub(crate) long_rows: &'static [TableRow<'static>],
+    pub(crate) rows: &'static [TableRow<'static>],
     pub(crate) tree: &'static [TreeRow<'static>],
     pub(crate) artist: &'static str,
     pub(crate) breadcrumb: &'static str,
     pub(crate) footer_tokens_anatomy: &'static str,
     pub(crate) title: &'static str,
-    pub(crate) pivot: &'static PivotCopy,
     pub(crate) vis_indices: [&'static str; 3],
     pub(crate) vis_presets: [&'static str; 3],
 }
 
 pub(crate) static CATALOG: LazyLock<Catalog> = LazyLock::new(load_catalog);
 
-/// How many rows the long table carries: a little over four screens at the
-/// gallery's size, which is enough to scroll and short of the stress page.
-const LONG_ROWS: usize = 120;
-
 fn load_catalog() -> Catalog {
+    /// How many rows the long table carries: a little over four screens at the
+    /// gallery's size, which is enough to scroll and short of the stress page.
+    const LONG_ROWS: usize = 120;
+
     let data: DemoData = ron::from_str(include_str!("../assets/demo-data.ron"))
         .expect("embedded gallery demo data must parse");
     let data: &'static DemoData = Box::leak(Box::new(data));

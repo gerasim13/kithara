@@ -50,8 +50,10 @@ pub(crate) struct Span {
 }
 
 impl Span {
-    pub(crate) const fn recognizer(self) -> recognizers::Span {
-        recognizers::Span::new(Hover::new(self.cursor), self.value.min, self.value.max)
+    /// The same drag measured against the interval the control now draws.
+    #[cfg(feature = "masonry")]
+    pub(crate) const fn at(self, value: ScalarRange) -> Self {
+        Self { value, ..self }
     }
 
     /// The interval that results from moving one of its ends.
@@ -73,10 +75,8 @@ impl Span {
         }
     }
 
-    /// The same drag measured against the interval the control now draws.
-    #[cfg(feature = "masonry")]
-    pub(crate) const fn at(self, value: ScalarRange) -> Self {
-        Self { value, ..self }
+    pub(crate) const fn recognizer(self) -> recognizers::Span {
+        recognizers::Span::new(Hover::new(self.cursor), self.value.min, self.value.max)
     }
 }
 
@@ -89,37 +89,16 @@ impl Span {
 #[derive(Clone, Copy, bon::Builder)]
 pub(crate) struct Drag {
     cursor: CursorShape,
-    track: Track,
     reset: Option<f32>,
     /// What the published value is rounded to while the hand is on it. A fader
     /// walks in steps the skin names; every other control publishes what the
     /// pointer says.
     step: Option<f64>,
     wheel: Option<WheelStep>,
+    track: Track,
 }
 
 impl Drag {
-    pub(crate) fn recognizer(self) -> Scalar {
-        Scalar::builder()
-            .track(self.track)
-            .hover(Hover::new(self.cursor))
-            .maybe_reset(self.reset)
-            .maybe_wheel(self.wheel)
-            .build()
-    }
-
-    /// What this drag publishes for a value the recognizer produced.
-    pub(crate) fn published(self, input: Input<'_>, value: f32) -> f64 {
-        scalar_value(input, value, self.step)
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn gestures(self) -> Gestures {
-        Gestures::DRAG
-            .with(Gestures::DOUBLE_CLICK, self.reset.is_some())
-            .with(Gestures::WHEEL, self.wheel.is_some())
-    }
-
     /// The same drag counting from the value the control now draws. Only a
     /// host that keeps its widgets needs this; the other builds a fresh drag
     /// with every frame.
@@ -131,19 +110,40 @@ impl Drag {
             ..self
         }
     }
+
+    #[cfg(test)]
+    pub(crate) const fn gestures(self) -> Gestures {
+        Gestures::DRAG
+            .with(Gestures::DOUBLE_CLICK, self.reset.is_some())
+            .with(Gestures::WHEEL, self.wheel.is_some())
+    }
+
+    /// What this drag publishes for a value the recognizer produced.
+    pub(crate) fn published(self, input: Input<'_>, value: f32) -> f64 {
+        scalar_value(input, value, self.step)
+    }
+
+    pub(crate) fn recognizer(self) -> Scalar {
+        Scalar::builder()
+            .track(self.track)
+            .hover(Hover::new(self.cursor))
+            .maybe_reset(self.reset)
+            .maybe_wheel(self.wheel)
+            .build()
+    }
 }
 
 pub(crate) type IndexEvent<Data> = fn(&Data, usize) -> Option<UiEvent>;
 
 pub(crate) struct Indexing<'a, Data> {
     data: &'a Data,
-    map: Option<IndexEvent<Data>>,
     path: &'a str,
+    map: Option<IndexEvent<Data>>,
 }
 
 impl<'a, Data> Indexing<'a, Data> {
     pub(crate) const fn new(data: &'a Data, path: &'a str, map: Option<IndexEvent<Data>>) -> Self {
-        Self { data, map, path }
+        Self { data, path, map }
     }
 
     pub(crate) fn on_input(
@@ -177,13 +177,6 @@ pub(crate) struct IndexPress {
 }
 
 impl IndexPress {
-    pub(crate) const fn visual(&self) -> IndexedVisual {
-        IndexedVisual {
-            hovered: self.hovered,
-            pressed_origin: self.pressed_origin,
-        }
-    }
-
     fn follow(
         &mut self,
         input: Input<'_>,
@@ -268,5 +261,12 @@ impl IndexPress {
         }
         self.hovered = None;
         true
+    }
+
+    pub(crate) const fn visual(&self) -> IndexedVisual {
+        IndexedVisual {
+            hovered: self.hovered,
+            pressed_origin: self.pressed_origin,
+        }
     }
 }

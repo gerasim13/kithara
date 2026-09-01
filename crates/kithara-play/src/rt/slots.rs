@@ -18,20 +18,6 @@ impl<const CAPACITY: usize> Default for TrackSlots<CAPACITY> {
 }
 
 impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
-    delegate::delegate! {
-        to self.slots {
-            #[expr($?.as_mut())]
-            #[call(get_mut)]
-            pub(crate) fn at_mut(&mut self, #[newtype] slot: TrackSlot) -> Option<&mut PlayerTrack>;
-            #[expr($.all(Option::is_some))]
-            #[call(iter)]
-            pub(crate) fn is_full(&self) -> bool;
-            #[expr($?.take())]
-            #[call(get_mut)]
-            pub(crate) fn remove_at(&mut self, #[newtype] slot: TrackSlot) -> Option<PlayerTrack>;
-        }
-    }
-
     pub(crate) fn get(&self, item_id: TrackId) -> Option<&PlayerTrack> {
         self.iter()
             .find_map(|(_, track)| (track.item_id() == item_id).then_some(track))
@@ -40,6 +26,18 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
     pub(crate) fn get_mut(&mut self, item_id: TrackId) -> Option<&mut PlayerTrack> {
         self.iter_mut()
             .find_map(|(_, track)| (track.item_id() == item_id).then_some(track))
+    }
+
+    /// Place a track in a free slot, handing it back when every slot is taken — a `PlayerTrack`
+    /// must not be freed on the audio thread.
+    pub(crate) fn insert(&mut self, track: PlayerTrack) -> Option<PlayerTrack> {
+        match self.slots.iter_mut().find(|slot| slot.is_none()) {
+            Some(slot) => {
+                *slot = Some(track);
+                None
+            }
+            None => Some(track),
+        }
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (TrackSlot, &PlayerTrack)> {
@@ -60,21 +58,23 @@ impl<const CAPACITY: usize> TrackSlots<CAPACITY> {
         self.slots.iter().flatten().count()
     }
 
-    /// Place a track in a free slot, handing it back when every slot is taken — a `PlayerTrack`
-    /// must not be freed on the audio thread.
-    pub(crate) fn insert(&mut self, track: PlayerTrack) -> Option<PlayerTrack> {
-        match self.slots.iter_mut().find(|slot| slot.is_none()) {
-            Some(slot) => {
-                *slot = Some(track);
-                None
-            }
-            None => Some(track),
-        }
-    }
-
     pub(crate) fn slot_of(&self, item_id: TrackId) -> Option<TrackSlot> {
         self.iter()
             .find_map(|(slot, track)| (track.item_id() == item_id).then_some(slot))
+    }
+
+    delegate::delegate! {
+        to self.slots {
+            #[expr($?.as_mut())]
+            #[call(get_mut)]
+            pub(crate) fn at_mut(&mut self, #[newtype] slot: TrackSlot) -> Option<&mut PlayerTrack>;
+            #[expr($.all(Option::is_some))]
+            #[call(iter)]
+            pub(crate) fn is_full(&self) -> bool;
+            #[expr($?.take())]
+            #[call(get_mut)]
+            pub(crate) fn remove_at(&mut self, #[newtype] slot: TrackSlot) -> Option<PlayerTrack>;
+        }
     }
 }
 

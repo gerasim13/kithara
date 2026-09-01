@@ -19,8 +19,8 @@ const MPEG_FRAME_DUR: i64 = 1152;
 const MAX_SEEK_RETRIES: usize = 32;
 
 struct SourceState {
-    bytes: Vec<u8>,
     interrupt_at: Option<usize>,
+    bytes: Vec<u8>,
     interrupts_remaining: usize,
     pos: usize,
 }
@@ -107,12 +107,12 @@ impl Seek for InterruptingSource {
 }
 
 impl MediaSource for InterruptingSource {
-    fn is_seekable(&self) -> bool {
-        false
-    }
-
     fn byte_len(&self) -> Option<u64> {
         None
+    }
+
+    fn is_seekable(&self) -> bool {
+        false
     }
 }
 

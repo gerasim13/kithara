@@ -27,8 +27,8 @@ fn sine_mp3(total_frames: usize, peak: i16) -> Vec<u8> {
         Consts::CHANNELS,
         total_frames,
         Wave::Sine {
-            hz: Consts::TONE_HZ,
             peak,
+            hz: Consts::TONE_HZ,
         },
     );
     EncoderFactory::encode_bytes(&BytesEncodeRequest {

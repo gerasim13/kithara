@@ -157,6 +157,16 @@ impl DiskAssetStore {
         self.availability.flush()
     }
 
+    /// Whether `key`'s bytes are known durable. The file existing is not
+    /// enough: it becomes visible at `rename`, while the barrier that puts
+    /// its blocks on the medium lands later, so an unconfirmed file may be
+    /// the right length over unwritten blocks. The availability manifest is
+    /// written only after that barrier, and is therefore the authority.
+    fn is_confirmed(&self, key: &ResourceKey, path: &Path) -> bool {
+        self.availability.final_len(key).is_some()
+            && path.metadata().is_ok_and(|meta| meta.len() > 0)
+    }
+
     fn lru_index_path(&self) -> PathBuf {
         self.root_dir.join("_index").join("lru.bin")
     }
@@ -236,16 +246,6 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("pins.bin")
     }
 
-    /// Whether `key`'s bytes are known durable. The file existing is not
-    /// enough: it becomes visible at `rename`, while the barrier that puts
-    /// its blocks on the medium lands later, so an unconfirmed file may be
-    /// the right length over unwritten blocks. The availability manifest is
-    /// written only after that barrier, and is therefore the authority.
-    fn is_confirmed(&self, key: &ResourceKey, path: &Path) -> bool {
-        self.availability.final_len(key).is_some()
-            && path.metadata().is_ok_and(|meta| meta.len() > 0)
-    }
-
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
         match key.kind() {
             ResourceKeyKind::Relative {
@@ -310,8 +310,8 @@ impl DiskAssetStore {
             cancel,
             availability,
             deleter,
-            root_dir: root_dir.into(),
             segment_reservation,
+            root_dir: root_dir.into(),
         }
     }
 }
@@ -341,9 +341,8 @@ impl Assets for DiskAssetStore {
             }
             return Ok(AcquisitionResult::Pending(BaseWriter::new(storage)));
         }
-        // Unconfirmed leftovers are indistinguishable from a torn write, so
-        // they are refetched rather than trusted. Clear the path so the fresh
-        // acquisition can claim its temp file.
+        // WHY: Unconfirmed leftovers are indistinguishable from a torn write, so they are refetched rather than trusted. Clear the path so
+        // the fresh acquisition can claim its temp file.
         if path.exists() {
             let _ = fs::remove_file(&path);
         }

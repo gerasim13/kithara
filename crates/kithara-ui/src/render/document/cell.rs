@@ -9,8 +9,8 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Band {
-    pub from: f32,
     pub until: Option<f32>,
+    pub from: f32,
 }
 
 impl Band {
@@ -22,7 +22,7 @@ impl Band {
 
     #[must_use]
     pub const fn new(from: f32, until: Option<f32>) -> Self {
-        Self { from, until }
+        Self { until, from }
     }
 
     /// Whether this cell stands in the room its flow turned out to have.
@@ -41,11 +41,11 @@ pub struct SplitMount<T> {
     /// block at all. A host that mounts a hidden cell keeps the binding and
     /// reads it again; one that leaves it out never sees the cell.
     pub block: Option<Binding>,
-    /// Its share of the room among the cells standing beside it.
-    pub weight: f32,
     /// The box it composes to.
     pub size: SizeSpec,
     pub output: T,
+    /// Its share of the room among the cells standing beside it.
+    pub weight: f32,
 }
 
 /// One child of a row or column, as its host mounts it.
@@ -72,10 +72,10 @@ pub struct GroupMount<T> {
 pub struct Measured {
     /// The axis whose room decides.
     pub axis: MeasureAxis,
-    /// The room each branch after the first stands from, in document order.
-    pub steps: Vec<f32>,
     /// The box the node itself asks for.
     pub size: SizeSpec,
+    /// The room each branch after the first stands from, in document order.
+    pub steps: Vec<f32>,
 }
 
 impl Measured {

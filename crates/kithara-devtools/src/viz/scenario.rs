@@ -68,16 +68,18 @@ pub(crate) struct RuntimeSummary {
 }
 
 impl RuntimeSummary {
-    pub(crate) const fn has_runtime(&self) -> bool {
-        !self.scenarios.is_empty()
-    }
-
-    pub(crate) fn is_degraded(&self) -> bool {
-        self.scenarios.iter().any(ScenarioSummary::is_degraded)
-    }
-
-    pub(crate) fn is_truncated(&self) -> bool {
-        self.scenarios.iter().any(ScenarioSummary::is_truncated)
+    delegate::delegate! {
+        to self.scenarios {
+            #[expr(!$)]
+            #[call(is_empty)]
+            pub(crate) const fn has_runtime(&self) -> bool;
+            #[expr($.any(ScenarioSummary::is_degraded))]
+            #[call(iter)]
+            pub(crate) fn is_degraded(&self) -> bool;
+            #[expr($.any(ScenarioSummary::is_truncated))]
+            #[call(iter)]
+            pub(crate) fn is_truncated(&self) -> bool;
+        }
     }
 }
 

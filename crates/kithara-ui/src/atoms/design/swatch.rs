@@ -13,9 +13,9 @@ use crate::{
 pub(crate) struct Swatch {
     border: Rgba,
     fill: Rgba,
-    hex: String,
     hex_color: Rgba,
     label_color: Rgba,
+    hex: String,
     metrics: SwatchSkin,
 }
 

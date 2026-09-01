@@ -59,10 +59,6 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    const fn scratch_frames(sample_rate: u32) -> FrameCount {
-        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
-    }
-
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
     /// Allocates two per-channel scratch buffers through the given pool facade,
@@ -88,6 +84,10 @@ impl PlayerResource {
             eof_seen: false,
             failed: false,
         })
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no
@@ -143,12 +143,6 @@ impl PlayerResource {
         eof_reached
     }
 
-    fn prefetch_target(&self, callback_frames: usize) -> usize {
-        self.write_len
-            .saturating_add(callback_frames)
-            .min(self.channel_buffers[0].len())
-    }
-
     /// Remaining buffered frames when the wrapped reader has reached EOF.
     ///
     /// `Some(0)` means the current read drained the last buffered frame exactly;
@@ -156,6 +150,16 @@ impl PlayerResource {
     #[must_use]
     pub fn frames_until_eof(&self) -> Option<usize> {
         self.eof_seen.then_some(self.write_len)
+    }
+
+    pub(crate) fn playback_rate(&self) -> f32 {
+        self.resource.get().playback_rate()
+    }
+
+    fn prefetch_target(&self, callback_frames: usize) -> usize {
+        self.write_len
+            .saturating_add(callback_frames)
+            .min(self.channel_buffers[0].len())
     }
 
     /// Read audio frames into the output buffers for the given range.
@@ -251,6 +255,10 @@ impl PlayerResource {
         self.failed = false;
     }
 
+    const fn scratch_frames(sample_rate: u32) -> FrameCount {
+        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+    }
+
     /// Control-plane handle used to begin a seek off the audio thread.
     #[must_use]
     pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
@@ -268,14 +276,6 @@ impl PlayerResource {
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
-    }
-
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
-    pub(crate) fn playback_rate(&self) -> f32 {
-        self.resource.get().playback_rate()
     }
 }
 

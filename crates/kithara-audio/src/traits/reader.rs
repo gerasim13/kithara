@@ -106,15 +106,15 @@ pub trait AudioSession {
     /// Access the unified event bus for subscribing to all pipeline events.
     fn event_bus(&self) -> &EventBus;
 
-    /// Get track metadata.
-    fn metadata(&self) -> &TrackMetadata;
-
     /// Whether this reader has crossed its one-way playback preload latch.
     ///
     /// Readers without worker-backed preload keep the default `false`.
     fn is_preloaded(&self) -> bool {
         false
     }
+
+    /// Get track metadata.
+    fn metadata(&self) -> &TrackMetadata;
 
     /// Decoder epoch whose preload gate should be observed by async callers.
     ///
@@ -186,14 +186,14 @@ pub trait AudioControl {
         None
     }
 
-    /// Adopt a seek epoch begun through [`seek_handle`](Self::seek_handle). Must be lock-free —
-    /// this is the only half an audio callback may run.
-    fn sync_seek(&mut self) {}
-
     /// Set the target sample rate of the audio host.
     ///
     /// Used for dynamic updates when the host sample rate changes at runtime.
     fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
+
+    /// Adopt a seek epoch begun through [`seek_handle`](Self::seek_handle). Must be lock-free —
+    /// this is the only half an audio callback may run.
+    fn sync_seek(&mut self) {}
 }
 
 /// Primary interface for reading and controlling decoded audio.

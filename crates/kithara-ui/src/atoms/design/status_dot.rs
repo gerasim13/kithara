@@ -12,37 +12,20 @@ use crate::{
 pub(crate) struct StatusDot {
     active_dot: Option<Rgba>,
     dot: Rgba,
-    dot_size: f32,
+    text: Rgba,
     metrics: StatusDotSkin,
     role: TextRoleSkin,
-    text: Rgba,
+    dot_size: f32,
 }
 
 /// The caption and whether the document marks this dot active.
 #[derive(Clone, PartialEq)]
 pub(crate) struct StatusDotData {
-    pub(crate) active: bool,
     pub(crate) label: String,
+    pub(crate) active: bool,
 }
 
 impl StatusDot {
-    pub(crate) fn with_active_tone(
-        tone: Tone,
-        active_tone: Option<Tone>,
-        dot_size: Option<f32>,
-        skin: &Skin,
-    ) -> Self {
-        let metrics = skin.status_dot;
-        Self {
-            active_dot: active_tone.map(|tone| skin.rgba(tone_color(tone, metrics.tones))),
-            dot: skin.rgba(tone_color(tone, metrics.tones)),
-            dot_size: dot_size.unwrap_or(metrics.dot_size),
-            metrics,
-            role: metrics.text,
-            text: skin.rgba(metrics.text.color),
-        }
-    }
-
     /// How wide this dot needs to be to show what it draws: the dot itself, and
     /// the gap and the shaped word when it captions one.
     ///
@@ -86,6 +69,23 @@ impl StatusDot {
             }),
             self.text,
         );
+    }
+
+    pub(crate) fn with_active_tone(
+        tone: Tone,
+        active_tone: Option<Tone>,
+        dot_size: Option<f32>,
+        skin: &Skin,
+    ) -> Self {
+        let metrics = skin.status_dot;
+        Self {
+            active_dot: active_tone.map(|tone| skin.rgba(tone_color(tone, metrics.tones))),
+            dot: skin.rgba(tone_color(tone, metrics.tones)),
+            dot_size: dot_size.unwrap_or(metrics.dot_size),
+            metrics,
+            role: metrics.text,
+            text: skin.rgba(metrics.text.color),
+        }
     }
 }
 

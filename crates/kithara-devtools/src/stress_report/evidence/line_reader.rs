@@ -7,10 +7,10 @@ use std::{
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(super) struct ReadSummary {
+    pub(super) record_limit_exceeded: bool,
+    pub(super) stopped_early: bool,
     pub(super) invalid_utf8_lines: usize,
     pub(super) oversized_lines: usize,
-    pub(super) stopped_early: bool,
-    pub(super) record_limit_exceeded: bool,
 }
 
 pub(super) fn for_each_bounded_line(

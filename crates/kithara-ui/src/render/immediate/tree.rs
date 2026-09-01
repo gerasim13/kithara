@@ -15,8 +15,8 @@ pub(crate) struct Tree<'path, 'query, 'value, 'data, 'skin> {
     skin: &'skin Skin,
     path: &'path str,
     query: &'query str,
-    value: Option<&'value ReadValue<'data>>,
     owner: InputOwner,
+    value: Option<&'value ReadValue<'data>>,
 }
 
 impl<'a, 'skin: 'a> Widget<'a> for Tree<'_, '_, '_, '_, 'skin> {

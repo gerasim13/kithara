@@ -12,9 +12,8 @@ message: |
       // ❌  let cfg = lookup(key).unwrap_or_else(|| panic!("missing config"));
       // ✅  let cfg = lookup(key).expect("missing config");
 
-  Suppress with `// ast-grep-ignore: style.prefer-expect` when the
-  message contains formatted captures that depend on the closure
-  binding — `.unwrap_or_else(|err| panic!("io failed: {err}"))`.
+  Formatted messages stay as closures because `.expect()` does not
+  interpolate captured values.
 severity: warning
 language: Rust
 files:
@@ -30,10 +29,10 @@ rule:
     - pattern: $X.unwrap_or_else(|| panic!($MSG))
     - pattern: $X.unwrap_or_else(|_| panic!($MSG))
 constraints:
-  # Only auto-fix a bare string-literal message. `panic!` with format
-  # arguments (`panic!("{err}", err)`) is not a drop-in `.expect(...)`
-  # rewrite — `.expect` takes exactly one `&str`, not a format string plus
-  # arguments — so those stay reporting-only for a human to rephrase.
+  # Only auto-fix a bare string-literal message without captures.
   MSG:
-    kind: string_literal
+    all:
+      - kind: string_literal
+      - not:
+          regex: '\{'
 fix: $X.expect($MSG)

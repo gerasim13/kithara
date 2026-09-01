@@ -52,13 +52,13 @@ impl TmpClaimProgress {
 }
 
 struct RemoteFileOpen {
+    coord: Arc<FileCoord>,
     cancel: CancelToken,
     downloader: Downloader,
     bus: EventBus,
-    coord: Arc<FileCoord>,
     headers: Option<Headers>,
-    reader_event_capacity: usize,
     url: Url,
+    reader_event_capacity: usize,
 }
 
 fn local_key(path: PathBuf) -> Result<ResourceKey, SourceError> {
@@ -198,10 +198,10 @@ impl RemoteFileOpen {
 
         let inner = Arc::new(FileInner::new(
             FileSourceCtx {
-                coord: Arc::clone(&coord),
                 cancel,
-                bus: bus.clone(),
                 reader_event_capacity,
+                coord: Arc::clone(&coord),
+                bus: bus.clone(),
             },
             FileAssetCtx {
                 reader,
@@ -324,13 +324,13 @@ where
                 ))
             }
             AcquisitionResult::Pending(attachment) => Ok(RemoteFileOpen {
+                coord,
                 cancel,
                 downloader,
                 bus,
-                coord,
                 headers,
-                reader_event_capacity,
                 url,
+                reader_event_capacity,
             }
             .into_source(attachment)),
             _ => Err(SourceError::UnexpectedAcquisitionState),

@@ -38,9 +38,9 @@ impl PendingNextState {
 /// `Playlist` owns the current index; `PendingNext` only tracks the
 /// already-enqueued successor and whether it has been activated.
 pub(crate) struct PendingNext {
-    pub(crate) item_id: TrackId,
     pub(crate) src: Arc<str>,
     pub(crate) state: PendingNextState,
+    pub(crate) item_id: TrackId,
     pub(crate) duration_seconds: f64,
     pub(crate) index: usize,
 }
@@ -226,6 +226,10 @@ impl PlayerPhase {
         *self = Self::Stopped { slot, abr_handle };
     }
 
+    const fn is_paused(&self) -> bool {
+        matches!(self, Self::Paused { .. })
+    }
+
     /// Shared read access to the armed-next slot, if any.
     pub(crate) const fn pending(&self) -> Option<&PendingNext> {
         match self {
@@ -244,10 +248,6 @@ impl PlayerPhase {
             | Self::Paused { pending, .. } => Some(pending),
             Self::Idle | Self::Stopped { .. } => None,
         }
-    }
-
-    const fn is_paused(&self) -> bool {
-        matches!(self, Self::Paused { .. })
     }
 
     /// Replace the ABR handle on the active phase (no-op from `Idle`).
@@ -367,8 +367,6 @@ mod tests {
 
     #[kithara::test]
     fn pending_next_state_maps_activated_bool() {
-        // `Armed` mirrors the pre-split `activated == false`,
-        // `ActivatedReady` mirrors `activated == true`.
         assert!(!PendingNextState::Armed.activated());
         assert!(PendingNextState::ActivatedReady.activated());
     }

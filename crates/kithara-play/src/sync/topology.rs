@@ -42,10 +42,10 @@ fn validate_incoming_member<G: SyncGroup<NestedGroup = G>>(
     let given = member.kind();
     if given != expected {
         return Err(SyncError::InvalidMemberKind {
-            group_id: parent.id(),
-            member_id: member.id(),
             expected,
             given,
+            group_id: parent.id(),
+            member_id: member.id(),
         });
     }
     let snapshot = member.snapshot_for(parent)?;

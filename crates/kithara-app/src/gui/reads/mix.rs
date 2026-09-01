@@ -1,4 +1,4 @@
-use kithara_ui::render::{Node, ReadValue, Scope, StereoLevels};
+use kithara::ui::render::{Node, ReadValue, Scope, StereoLevels};
 
 use super::value::Value;
 use crate::{gui::ui::scope::deck_index, mix::MixState};

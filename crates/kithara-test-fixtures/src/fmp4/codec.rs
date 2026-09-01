@@ -73,7 +73,6 @@ fn aac_esds(sample_rate: u32, channels: u16, bit_rate: u64) -> Vec<u8> {
 
     let dec_specific = descriptor(0x05, &audio_specific_config);
 
-    // The descriptor carries max and average bit rate as 32-bit fields.
     let bit_rate = u32::try_from(bit_rate).unwrap_or(u32::MAX);
 
     let mut decoder_config = Mp4Bytes::new();
@@ -140,7 +139,6 @@ fn aac_he_sample_entry(
 fn aac_esds_with_asc(bit_rate: u64, audio_specific_config: &[u8]) -> Vec<u8> {
     let dec_specific = descriptor(0x05, audio_specific_config);
 
-    // The descriptor carries max and average bit rate as 32-bit fields.
     let bit_rate = u32::try_from(bit_rate).unwrap_or(u32::MAX);
 
     let mut decoder_config = Mp4Bytes::new();

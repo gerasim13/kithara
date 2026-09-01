@@ -1,6 +1,5 @@
 //! Runtime lines whose presence or repetition separates failing attempts
 //! from passing attempts of the same test.
-
 use std::{collections::BTreeMap, fmt::Write as _, sync::LazyLock};
 
 use regex::Regex;
@@ -34,16 +33,16 @@ impl Kind {
 
 #[derive(Clone, Copy, Debug)]
 struct Presence {
-    attempts: usize,
-    min_reps: u64,
     max_reps: u64,
+    min_reps: u64,
+    attempts: usize,
 }
 
 #[derive(Debug, Default)]
 struct Side {
-    total: usize,
-    stored: usize,
     presence: BTreeMap<String, Presence>,
+    stored: usize,
+    total: usize,
 }
 
 impl Side {
@@ -79,14 +78,14 @@ struct Group {
 #[derive(Debug)]
 struct Row {
     kind: Kind,
-    test: String,
+    failed_reps: Option<(u64, u64)>,
+    passed_reps: Option<(u64, u64)>,
     template: String,
+    test: String,
     failed_attempts: usize,
     failed_stored: usize,
     passed_attempts: usize,
     passed_stored: usize,
-    failed_reps: Option<(u64, u64)>,
-    passed_reps: Option<(u64, u64)>,
 }
 
 pub(super) fn append(out: &mut String, cases: &[CaseTiming]) -> bool {
@@ -185,10 +184,10 @@ fn collect_pass_only_rows(test: &str, group: &Group, rows: &mut Vec<Row>) -> usi
         }
         kept += 1;
         rows.push(Row {
+            failed_attempts,
             kind: Kind::OnlyPasses,
             test: test.to_owned(),
             template: template.clone(),
-            failed_attempts,
             failed_stored: group.failed.stored,
             passed_attempts: passed.attempts,
             passed_stored: group.passed.stored,
@@ -292,10 +291,10 @@ mod tests {
 
     fn case(name: &str, iteration: usize, failed: bool, output: &str) -> CaseTiming {
         CaseTiming {
+            failed,
             name: name.to_owned(),
             suite: "demo::tests".to_owned(),
             iteration: Some(iteration),
-            failed,
             secs: 1.0,
             timestamp: None,
             output: output.to_owned(),

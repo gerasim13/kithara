@@ -73,10 +73,8 @@ where
     )]
     pub(crate) fn rebuild(&self, _ctx: &PlanCtx<S>, from_seg: u32) {
         if self.queue_matches_plan(from_seg) {
-            // Nothing to re-plan, but the rebuild still claims plan
-            // ownership: a fetch the triggering rearm cancelled in flight
-            // must settle into a foreign plan, not resurrect a prefix
-            // behind the target (see `PlanGuard::supersede`).
+            // WHY: Nothing to re-plan, but the rebuild still claims plan ownership: a fetch the triggering rearm cancelled in flight must settle
+            // into a foreign plan, not resurrect a prefix behind the target (see `PlanGuard::supersede`).
             self.flow.queue.lock().supersede();
             return;
         }
@@ -95,30 +93,6 @@ where
             self.rebuild_queue(fetch_start, None);
         }
         Some(seg)
-    }
-
-    /// Put a fetch that failed recoverably back on the plan.
-    ///
-    /// Freeing the slot is only half of it: dispatch popped the entry when it
-    /// sent the fetch, so a slot returned to `Missing` describes work nobody
-    /// holds. The peer then wakes to an empty plan and asks for nothing, and
-    /// the segment is never fetched again — playback stops at that gap even
-    /// once the network is back. In plan order, not at the front: dispatch
-    /// bounds read the queue head, and a retired look-ahead entry parked
-    /// there would wall off every nearer segment behind it. Only work from
-    /// the current plan revision may return, and only when absent, so a seek
-    /// cannot resurrect an obsolete prefix or duplicate a fetch that its
-    /// replacement plan already contains.
-    pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
-        let requeued = self.flow.queue.lock().requeue_if_current(planned, revision);
-        if !requeued {
-            debug!(
-                variant = self.variant,
-                ?planned,
-                "requeue refused: plan superseded or entry already queued"
-            );
-        }
-        requeued
     }
 
     #[kithara::probe]
@@ -156,5 +130,29 @@ where
         let from_seg = self.seek_readahead_start_segment(from_seg);
         self.set_segment_aware_seek_tail(from_seg);
         self.rebuild_queue(from_seg, (from_seg > 0).then_some(0));
+    }
+
+    /// Put a fetch that failed recoverably back on the plan.
+    ///
+    /// Freeing the slot is only half of it: dispatch popped the entry when it
+    /// sent the fetch, so a slot returned to `Missing` describes work nobody
+    /// holds. The peer then wakes to an empty plan and asks for nothing, and
+    /// the segment is never fetched again — playback stops at that gap even
+    /// once the network is back. In plan order, not at the front: dispatch
+    /// bounds read the queue head, and a retired look-ahead entry parked
+    /// there would wall off every nearer segment behind it. Only work from
+    /// the current plan revision may return, and only when absent, so a seek
+    /// cannot resurrect an obsolete prefix or duplicate a fetch that its
+    /// replacement plan already contains.
+    pub(crate) fn requeue_planned(&self, planned: PlannedFetch, revision: PlanRevision) -> bool {
+        let requeued = self.flow.queue.lock().requeue_if_current(planned, revision);
+        if !requeued {
+            debug!(
+                variant = self.variant,
+                ?planned,
+                "requeue refused: plan superseded or entry already queued"
+            );
+        }
+        requeued
     }
 }

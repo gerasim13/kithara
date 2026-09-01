@@ -18,13 +18,13 @@ pub(super) struct ArtifactSet {
 
 #[derive(Deserialize, Serialize)]
 struct Manifest {
-    revision: String,
-    scope: String,
     status: AnalysisStatus,
-    verdict: Verdict,
     depth: super::AssessmentDepth,
     profile: super::AssessmentProfile,
     files: BTreeMap<String, String>,
+    revision: String,
+    scope: String,
+    verdict: Verdict,
     schema_version: u32,
 }
 

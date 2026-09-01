@@ -27,7 +27,6 @@
 //! callee (or re-entering through recursion) stays correct regardless of
 //! whether the runtime's own `disable` is refcounted. Off `rtsan` every guard
 //! here is a zero-cost ZST.
-
 #[cfg(all(rtsan, not(rtsan_standalone)))]
 unsafe extern "C" {
     fn __rtsan_disable();

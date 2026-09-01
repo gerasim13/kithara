@@ -6,11 +6,6 @@ use crate::{
     ids::{DocId, SourceUri},
 };
 
-pub(crate) const LAYOUT_SCHEMA: &str = "kithara.layout";
-pub(crate) const MODULE_SCHEMA: &str = "kithara.module";
-pub(crate) const PACKAGE_SCHEMA: &str = "kithara.package";
-pub(crate) const SKIN_SCHEMA: &str = "kithara.skin";
-pub(crate) const TEXT_SCHEMA: &str = "kithara.text";
 pub const LAYOUT_VERSION: u32 = 1;
 pub const MODULE_VERSION: u32 = 1;
 pub const PACKAGE_VERSION: u32 = 1;
@@ -58,6 +53,12 @@ pub struct Envelope {
 /// # Errors
 /// Returns [`UiDocError`] when the RON, schema, or version is invalid.
 pub fn probe(text: &str, origin: &SourceUri) -> Result<Envelope, UiDocError> {
+    const LAYOUT_SCHEMA: &str = "kithara.layout";
+    const MODULE_SCHEMA: &str = "kithara.module";
+    const PACKAGE_SCHEMA: &str = "kithara.package";
+    const SKIN_SCHEMA: &str = "kithara.skin";
+    const TEXT_SCHEMA: &str = "kithara.text";
+
     let raw: EnvelopeProbe =
         ron_io::options()
             .from_str(text)

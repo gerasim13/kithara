@@ -1,4 +1,4 @@
-use kithara_encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
+use kithara::encode::{BytesEncodeRequest, BytesEncodeTarget, EncoderFactory};
 use kithara_integration_tests::encode_ext::BytesEncodeTargetExt;
 use kithara_test_fixtures::signal::{Pcm, Wave};
 

@@ -16,15 +16,15 @@ use crate::{
 /// taken from the skin here, because a layer outlives the borrow the document
 /// walk had.
 pub(crate) struct PickerMenu {
+    face: Picker,
     background: Rgba,
     border: Rgba,
-    border_width: f32,
-    face: Picker,
-    item_height: f32,
-    radius: f32,
     selected_background: Rgba,
     selected_text: Rgba,
     text: Rgba,
+    border_width: f32,
+    item_height: f32,
+    radius: f32,
 }
 
 impl PickerMenu {
@@ -41,29 +41,6 @@ impl PickerMenu {
             selected_text: skin.rgba(metrics.scope_selected_text),
             text: skin.rgba(metrics.scope_menu_text),
         }
-    }
-
-    /// The menu hanging off `anchor`: its own unclipped frame, and one hit per
-    /// option.
-    pub(crate) fn layer<'a>(
-        &self,
-        text: &mut TextContext,
-        anchor: Rect,
-        items: impl IntoIterator<Item = &'a str>,
-        highlighted: Option<usize>,
-    ) -> HostLayer<usize> {
-        let items: Vec<&str> = items.into_iter().collect();
-        let bounds = Rect {
-            h: self.item_height * AsPrimitive::<f32>::as_(items.len()),
-            w: anchor.w,
-            x: anchor.x,
-            y: anchor.y + anchor.h,
-        };
-        HostLayer::new(
-            bounds,
-            self.commands(text, bounds.w, &items, highlighted),
-            picker_hits(anchor, self.item_height, items.len()),
-        )
     }
 
     fn commands(
@@ -107,24 +84,47 @@ impl PickerMenu {
         list.stroke_rounded_rect(bounds, self.radius, self.border, self.border_width);
         list.finish()
     }
+
+    /// The menu hanging off `anchor`: its own unclipped frame, and one hit per
+    /// option.
+    pub(crate) fn layer<'a>(
+        &self,
+        text: &mut TextContext,
+        anchor: Rect,
+        items: impl IntoIterator<Item = &'a str>,
+        highlighted: Option<usize>,
+    ) -> HostLayer<usize> {
+        let items: Vec<&str> = items.into_iter().collect();
+        let bounds = Rect {
+            h: self.item_height * AsPrimitive::<f32>::as_(items.len()),
+            w: anchor.w,
+            x: anchor.x,
+            y: anchor.y + anchor.h,
+        };
+        HostLayer::new(
+            bounds,
+            self.commands(text, bounds.w, &items, highlighted),
+            picker_hits(anchor, self.item_height, items.len()),
+        )
+    }
 }
 
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct PickerPaint<'a> {
-    items: Vec<&'a str>,
-    #[field(get, vis = "pub(super)")]
-    selected: Option<usize>,
     #[field(get, vis = "pub(super)", copy)]
     skin: &'a Skin,
+    #[field(get, vis = "pub(super)")]
+    selected: Option<usize>,
+    items: Vec<&'a str>,
 }
 
 impl<'a> PickerPaint<'a> {
     pub(super) const fn new(items: Vec<&'a str>, selected: Option<usize>, skin: &'a Skin) -> Self {
         Self {
-            items,
-            selected,
             skin,
+            selected,
+            items,
         }
     }
 

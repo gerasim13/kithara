@@ -2,12 +2,15 @@ use std::{fmt, num::NonZeroU32, path::PathBuf};
 
 use bon::Builder;
 use kithara::{
-    analysis::BeatAnalysisConfig, hls::SizeProbeMethod, play::policy::DomainKeyPolicy,
-    prelude::PlaybackResamplerBackend, stream::dl::Downloader,
+    analysis::BeatAnalysisConfig,
+    drm::KeyProcessorRegistry,
+    hls::SizeProbeMethod,
+    platform::{CancelToken, sync::Arc, time::Duration},
+    play::policy::DomainKeyPolicy,
+    prelude::PlaybackResamplerBackend,
+    stream::dl::Downloader,
+    worker::Worker,
 };
-use kithara_drm::KeyProcessorRegistry;
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_worker::Worker;
 use struct_patch::Patch;
 use url::Url;
 

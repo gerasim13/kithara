@@ -19,16 +19,16 @@ pub struct ComputeContext {
 }
 
 impl ComputeContext {
-    /// Derived child token for this compute job.
-    #[must_use]
-    pub const fn token(&self) -> &CancelToken {
-        &self.token
-    }
-
     /// Cancellation group containing only this compute job's derived token.
     #[must_use]
     pub const fn cancel_group(&self) -> &CancelGroup {
         &self.cancel
+    }
+
+    /// Derived child token for this compute job.
+    #[must_use]
+    pub const fn token(&self) -> &CancelToken {
+        &self.token
     }
 }
 
@@ -51,13 +51,13 @@ pub enum ComputeSubmitError {
 #[non_exhaustive]
 #[derive(Debug)]
 pub struct ComputeRejected<T> {
-    payload: T,
     reason: ComputeSubmitError,
+    payload: T,
 }
 
 impl<T> ComputeRejected<T> {
     fn new(reason: ComputeSubmitError, payload: T) -> Self {
-        Self { payload, reason }
+        Self { reason, payload }
     }
 
     /// Return why the compute job was rejected.

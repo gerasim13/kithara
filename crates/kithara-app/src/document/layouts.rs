@@ -1,8 +1,8 @@
 use kithara::{
     assets::{AssetLayout, AssetLayoutRegistry},
+    platform::sync::Arc,
     play::policy::{QueryIdentityLayout, QueryIdentityRule},
 };
-use kithara_platform::sync::Arc;
 
 use super::schema::Assets;
 use crate::pools::AppPools;

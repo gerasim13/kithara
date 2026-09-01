@@ -15,11 +15,11 @@ use crate::{
 pub(crate) struct Summary {
     #[field(get, vis = "pub(crate)", copy)]
     metrics: DeckSkin,
+    style: DeckSummaryStyle,
     panel: Rgba,
     source: Rgba,
-    source_role: TextRoleSkin,
-    style: DeckSummaryStyle,
     title: Rgba,
+    source_role: TextRoleSkin,
     title_role: TextRoleSkin,
 }
 
@@ -81,8 +81,6 @@ impl Summary {
         } else {
             self.metrics.readout_gap
         };
-        // The compact deck names where the track came from first and the track
-        // under it; the full one leads with the track.
         let [upper, lower] = if compact {
             [
                 (&source, &data.source, self.source),
@@ -100,7 +98,7 @@ impl Summary {
         content.text(
             upper.0,
             upper.1,
-            Transform::translate(Pt { x: inner.x, y }),
+            Transform::translate(Pt { y, x: inner.x }),
             upper.2,
         );
         content.text(

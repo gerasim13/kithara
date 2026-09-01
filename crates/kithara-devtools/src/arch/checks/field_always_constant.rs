@@ -5,7 +5,6 @@
 //! cause a false negative, which is safer for this warning than suggesting
 //! removal of a live field. Mutations through calls such as `mem::take` and
 //! `mem::replace` are not tracked.
-
 use anyhow::Result;
 
 use super::{

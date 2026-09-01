@@ -14,11 +14,11 @@ const CHEVRON: &str = "\u{2304}";
 pub(crate) struct Select {
     background: Rgba,
     chevron: Rgba,
-    chevron_role: TextRoleSkin,
-    metrics: SelectSkin,
-    role: TextRoleSkin,
     stroke: Rgba,
     text: Rgba,
+    metrics: SelectSkin,
+    chevron_role: TextRoleSkin,
+    role: TextRoleSkin,
 }
 
 impl Select {

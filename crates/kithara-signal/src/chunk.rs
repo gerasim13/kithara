@@ -8,6 +8,8 @@ use crate::AudioSpec;
 /// Position and provenance facts for one decoded-audio chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioChunkInfo {
+    /// Decoded-audio format.
+    pub spec: AudioSpec,
     /// Media-timeline position after this chunk's frames have played out.
     pub end_timestamp: Duration,
     /// Media-timeline position of the first frame in this chunk.
@@ -18,8 +20,6 @@ pub struct AudioChunkInfo {
     pub source_byte_offset: Option<u64>,
     /// Opaque source variant index reported by the decoder, when available.
     pub variant_index: Option<usize>,
-    /// Decoded-audio format.
-    pub spec: AudioSpec,
     /// Number of interleaved audio frames represented by this chunk.
     pub frames: u32,
     /// Decoder generation, incremented on decoder recreation.
@@ -30,13 +30,13 @@ pub struct AudioChunkInfo {
     pub source_bytes: u64,
 }
 
-const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
-    Some(rate) => rate,
-    None => unreachable!(),
-};
-
 impl Default for AudioChunkInfo {
     fn default() -> Self {
+        const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
+            Some(rate) => rate,
+            None => unreachable!(),
+        };
+
         Self {
             spec: AudioSpec::new(0, PLACEHOLDER_RATE),
             end_timestamp: Duration::ZERO,
@@ -55,14 +55,14 @@ impl Default for AudioChunkInfo {
 /// One owning chunk of interleaved decoded samples and timeline information.
 #[derive(Debug)]
 pub struct AudioChunk {
-    pub samples: SampleBuffer,
     pub meta: AudioChunkInfo,
+    pub samples: SampleBuffer,
 }
 
 impl AudioChunk {
     #[must_use]
     pub const fn new(meta: AudioChunkInfo, samples: SampleBuffer) -> Self {
-        Self { samples, meta }
+        Self { meta, samples }
     }
 
     /// Number of complete audio frames in this chunk.

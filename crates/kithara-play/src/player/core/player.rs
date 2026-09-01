@@ -14,17 +14,17 @@ use crate::{
     engine::{EngineConfig, EngineImpl},
     error::PlayError,
     player::{
-        PlayerConfig, PlayerControl, PlayerMember,
+        PlayerConfig, PlayerControl,
+        protocol::PlayerSync,
         state::{ItemQueue, PlayerParams, PlayerPhase},
     },
-    sync::GroupState,
     worker::EngineLoad,
 };
 
 /// Concrete Player implementation managing items queue.
 pub struct PlayerImpl<S> {
     pub(crate) runtime: Arc<PlayerRuntime<S>>,
-    pub(crate) sync: GroupState<PlayerMember>,
+    pub(crate) sync: PlayerSync,
 }
 
 impl<S> Deref for PlayerImpl<S> {
@@ -47,7 +47,7 @@ impl<S> PlayerImpl<S> {
     #[must_use]
     pub fn new(mut config: PlayerConfig<S>) -> Self {
         let pools = config.worker.pools().clone();
-        let sync = GroupState::unavailable(
+        let sync = PlayerSync::unavailable(
             config.grid_id,
             config.sample_rate,
             SessionEpoch::new(0),

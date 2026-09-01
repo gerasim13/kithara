@@ -64,10 +64,10 @@ where
             #[call(tick_player)]
             fn tick(&self) -> Result<(), PlayError>;
         }
-    }
-
-    fn set_host_level(&self, level: f32) {
-        Player::set_host_level(&self.player, level);
+        to self.player {
+            fn set_host_level(&self, level: f32);
+            fn host_level(&self) -> f32;
+        }
     }
 }
 
@@ -82,11 +82,15 @@ where
         self.control.clone()
     }
 
-    fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError> {
-        self.player.attach_session(binding)
-    }
-
     fn close_control(control: &Self::Control) -> Result<(), PlayError> {
         control.close()
+    }
+
+    delegate::delegate! {
+        to self.player {
+            fn attach_session(&mut self, binding: SessionBinding<S>) -> Result<(), PlayError>;
+            #[cfg(target_arch = "wasm32")]
+            fn take_host_member(&mut self) -> Result<PlayerMember, PlayError>;
+        }
     }
 }

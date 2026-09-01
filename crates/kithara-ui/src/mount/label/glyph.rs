@@ -11,12 +11,12 @@ use crate::{
 /// A single icon, drawn as a text glyph.
 #[derive(Builder)]
 pub(crate) struct Glyph<'a> {
+    pub(crate) style: GlyphStyle,
+    pub(crate) icon: IconName,
     pub(crate) active: Option<&'a Binding>,
     pub(crate) active_color: Option<ColorRole>,
     pub(crate) active_icon: Option<IconName>,
     pub(crate) color: Option<ColorRole>,
-    pub(crate) icon: IconName,
-    pub(crate) style: GlyphStyle,
 }
 
 impl Control for Glyph<'_> {
@@ -57,17 +57,6 @@ mod host {
     impl Draws for Glyph<'_> {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            let base = base(self.style, skin);
-            Face::new(
-                self.color.map_or(base, |role| skin.rgba(role)),
-                self.active_color
-                    .or(self.color)
-                    .map_or(base, |role| skin.rgba(role)),
-                size(self.style, skin),
-            )
-        }
-
         /// A glyph is nothing but its art, so one whose art could not be read
         /// draws nothing rather than a hole in the row.
         ///
@@ -81,6 +70,17 @@ mod host {
                 active_mark: self.active_icon.and_then(IconName::mark),
                 mark: self.icon.mark()?,
             })
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            let base = base(self.style, skin);
+            Face::new(
+                self.color.map_or(base, |role| skin.rgba(role)),
+                self.active_color
+                    .or(self.color)
+                    .map_or(base, |role| skin.rgba(role)),
+                size(self.style, skin),
+            )
         }
     }
 
@@ -214,7 +214,7 @@ mod host {
                     active_mark: None,
                     mark: IconName::Play
                         .mark()
-                        .unwrap_or_else(|| panic!("the play icon must have a mark")),
+                        .expect("the play icon must have a mark"),
                 },
                 BOUNDS,
             );

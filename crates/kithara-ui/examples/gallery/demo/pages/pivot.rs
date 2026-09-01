@@ -8,20 +8,6 @@ use crate::demo::data::CATALOG;
 struct PivotConsts;
 
 impl PivotConsts {
-    const RANGE_LOW: f32 = 60.0;
-    const RANGE_HIGH: f32 = 200.0;
-    const RANGE_GAP: f32 = 8.0;
-    const STEP: [(u16, u16); 9] = [
-        (3, 4),
-        (4, 5),
-        (5, 6),
-        (6, 7),
-        (7, 8),
-        (8, 9),
-        (9, 10),
-        (10, 11),
-        (11, 12),
-    ];
     const LEAP: [(u16, u16); 9] = [
         (5, 7),
         (7, 9),
@@ -33,6 +19,20 @@ impl PivotConsts {
         (11, 15),
         (11, 16),
     ];
+    const RANGE_GAP: f32 = 8.0;
+    const RANGE_HIGH: f32 = 200.0;
+    const RANGE_LOW: f32 = 60.0;
+    const STEP: [(u16, u16); 9] = [
+        (3, 4),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (7, 8),
+        (8, 9),
+        (9, 10),
+        (10, 11),
+        (11, 12),
+    ];
 }
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -43,44 +43,44 @@ enum Family {
 }
 
 struct Portal {
+    bpm_label: String,
+    loop_label: String,
+    pulse_label: String,
+    ratio: String,
+    stretch_label: String,
+    bpm: f32,
+    duration: f32,
+    pulse: f32,
     loop_master: u16,
     loop_target: u16,
-    bpm: f32,
-    pulse: f32,
-    duration: f32,
-    ratio: String,
-    bpm_label: String,
-    pulse_label: String,
-    loop_label: String,
-    stretch_label: String,
 }
 
 #[derive(Default)]
 struct SelectedView {
-    ratio: String,
-    master: String,
-    target: String,
-    pulse: String,
     duration: String,
+    hint: String,
     loop_a: String,
     loop_b: String,
-    hint: String,
+    master: String,
     none: String,
+    pulse: String,
+    ratio: String,
+    target: String,
 }
 
 pub(crate) struct PivotState {
-    portals: Vec<Portal>,
-    targets: Vec<PortalTarget>,
+    family: Family,
     selected: Option<usize>,
     selected_view: SelectedView,
-    family: Family,
-    min: f32,
-    max: f32,
-    master: f32,
-    multiplier: usize,
-    min_label: String,
-    max_label: String,
     master_label: String,
+    max_label: String,
+    min_label: String,
+    portals: Vec<Portal>,
+    targets: Vec<PortalTarget>,
+    master: f32,
+    max: f32,
+    min: f32,
+    multiplier: usize,
 }
 
 impl Default for PivotState {
@@ -132,23 +132,6 @@ impl PivotState {
             Some("mul-4") => self.set_multiplier(2),
             _ => return false,
         }
-        true
-    }
-
-    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
-        if !path.contains("pivot") || !value.is_finite() {
-            return false;
-        }
-        let norm: f32 = value.clamp(0.0, 1.0).as_();
-        let bpm =
-            PivotConsts::RANGE_LOW + norm * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
-        let bpm = (bpm / 2.0).round() * 2.0;
-        match path.rsplit('/').next() {
-            Some("min") => self.min = bpm.min(self.max - PivotConsts::RANGE_GAP),
-            Some("max") => self.max = bpm.max(self.min + PivotConsts::RANGE_GAP),
-            _ => return false,
-        }
-        self.rebuild(Selection::Current);
         true
     }
 
@@ -208,6 +191,39 @@ impl PivotState {
         Some(value)
     }
 
+    fn portal(&self, numerator: u16, denominator: u16) -> Option<Portal> {
+        let bpm =
+            (self.master * f32::from(numerator) / f32::from(denominator) * 100.0).round() / 100.0;
+        if bpm < self.min || bpm > self.max || distance(bpm, self.master) < 0.05 {
+            return None;
+        }
+        let mut pulse = self.master / f32::from(denominator);
+        while pulse < 40.0 {
+            pulse *= 2.0;
+        }
+        while pulse > 170.0 {
+            pulse /= 2.0;
+        }
+        let duration = f32::from(denominator) * 4.0 * 60.0 / self.master;
+        let stretch = (bpm / self.master - 1.0) * 100.0;
+        Some(Portal {
+            bpm,
+            pulse,
+            duration,
+            loop_master: denominator,
+            loop_target: numerator,
+            ratio: format!("{denominator}:{numerator}"),
+            bpm_label: format!("{bpm:.2}"),
+            pulse_label: format!("{pulse:.2}"),
+            loop_label: format!("{denominator} / {numerator}"),
+            stretch_label: format!(
+                "{}{:.2}%",
+                if stretch >= 0.0 { "+" } else { "−" },
+                stretch.abs()
+            ),
+        })
+    }
+
     fn rebuild(&mut self, selection: Selection) {
         let pairs = match self.family {
             Family::Step => &PivotConsts::STEP,
@@ -250,52 +266,6 @@ impl PivotState {
         self.rebuild_selected();
     }
 
-    fn portal(&self, numerator: u16, denominator: u16) -> Option<Portal> {
-        let bpm =
-            (self.master * f32::from(numerator) / f32::from(denominator) * 100.0).round() / 100.0;
-        if bpm < self.min || bpm > self.max || distance(bpm, self.master) < 0.05 {
-            return None;
-        }
-        let mut pulse = self.master / f32::from(denominator);
-        while pulse < 40.0 {
-            pulse *= 2.0;
-        }
-        while pulse > 170.0 {
-            pulse /= 2.0;
-        }
-        let duration = f32::from(denominator) * 4.0 * 60.0 / self.master;
-        let stretch = (bpm / self.master - 1.0) * 100.0;
-        Some(Portal {
-            loop_master: denominator,
-            loop_target: numerator,
-            bpm,
-            pulse,
-            duration,
-            ratio: format!("{denominator}:{numerator}"),
-            bpm_label: format!("{bpm:.2}"),
-            pulse_label: format!("{pulse:.2}"),
-            loop_label: format!("{denominator} / {numerator}"),
-            stretch_label: format!(
-                "{}{:.2}%",
-                if stretch >= 0.0 { "+" } else { "−" },
-                stretch.abs()
-            ),
-        })
-    }
-
-    fn select(&mut self, index: usize) {
-        self.selected = Some(index);
-        for (target_index, target) in self.targets.iter_mut().enumerate() {
-            target.is_selected = target_index == index;
-        }
-        self.rebuild_selected();
-    }
-
-    fn set_multiplier(&mut self, multiplier: usize) {
-        self.multiplier = multiplier;
-        self.rebuild_selected();
-    }
-
     fn rebuild_selected(&mut self) {
         let copy = CATALOG.pivot;
         let Some(portal) = self.selected.and_then(|index| self.portals.get(index)) else {
@@ -333,6 +303,36 @@ impl PivotState {
             loop_a,
             loop_b,
         };
+    }
+
+    fn select(&mut self, index: usize) {
+        self.selected = Some(index);
+        for (target_index, target) in self.targets.iter_mut().enumerate() {
+            target.is_selected = target_index == index;
+        }
+        self.rebuild_selected();
+    }
+
+    fn set_multiplier(&mut self, multiplier: usize) {
+        self.multiplier = multiplier;
+        self.rebuild_selected();
+    }
+
+    pub(crate) fn set_scalar(&mut self, path: &str, value: f64) -> bool {
+        if !path.contains("pivot") || !value.is_finite() {
+            return false;
+        }
+        let norm: f32 = value.clamp(0.0, 1.0).as_();
+        let bpm =
+            PivotConsts::RANGE_LOW + norm * (PivotConsts::RANGE_HIGH - PivotConsts::RANGE_LOW);
+        let bpm = (bpm / 2.0).round() * 2.0;
+        match path.rsplit('/').next() {
+            Some("min") => self.min = bpm.min(self.max - PivotConsts::RANGE_GAP),
+            Some("max") => self.max = bpm.max(self.min + PivotConsts::RANGE_GAP),
+            _ => return false,
+        }
+        self.rebuild(Selection::Current);
+        true
     }
 
     fn track(&self, index: usize) -> Option<&'static TableRow<'static>> {

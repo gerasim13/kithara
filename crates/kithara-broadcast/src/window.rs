@@ -28,13 +28,13 @@ impl PlaylistSnapshot {
 /// Owner of the live playlist window and grace retention.
 #[derive(Debug)]
 pub struct LiveWindow {
-    window: usize,
-    retention: usize,
-    timescale: u32,
-    target_seconds: u64,
-    discontinuity_sequence: u64,
     segments: VecDeque<Segment>,
     finished: bool,
+    timescale: u32,
+    discontinuity_sequence: u64,
+    target_seconds: u64,
+    retention: usize,
+    window: usize,
 }
 
 impl LiveWindow {
@@ -57,6 +57,11 @@ impl LiveWindow {
         })
     }
 
+    /// End the stream: the playlist gains `EXT-X-ENDLIST`.
+    pub fn finish(&mut self) {
+        self.finished = true;
+    }
+
     /// Append a closed segment, evicting whatever falls past the retention.
     pub fn push(&mut self, segment: Segment) {
         self.segments.push_back(segment);
@@ -69,21 +74,6 @@ impl LiveWindow {
         }
         while self.segments.len() > self.retention {
             self.segments.pop_front();
-        }
-    }
-
-    /// End the stream: the playlist gains `EXT-X-ENDLIST`.
-    pub fn finish(&mut self) {
-        self.finished = true;
-    }
-
-    /// Snapshot the playlist and retained segments.
-    #[must_use]
-    pub fn snapshot(&self) -> PlaylistSnapshot {
-        PlaylistSnapshot {
-            playlist: Arc::from(self.render()),
-            segments: self.segments.iter().cloned().collect(),
-            is_finished: self.finished,
         }
     }
 
@@ -112,6 +102,16 @@ impl LiveWindow {
             playlist.push_str("#EXT-X-ENDLIST\n");
         }
         playlist
+    }
+
+    /// Snapshot the playlist and retained segments.
+    #[must_use]
+    pub fn snapshot(&self) -> PlaylistSnapshot {
+        PlaylistSnapshot {
+            playlist: Arc::from(self.render()),
+            segments: self.segments.iter().cloned().collect(),
+            is_finished: self.finished,
+        }
     }
 }
 

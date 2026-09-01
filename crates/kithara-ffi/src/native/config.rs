@@ -1,4 +1,4 @@
-use kithara_platform::sync::Arc;
+use kithara::platform::sync::Arc;
 
 use crate::{asset::FfiAssetStore, types::FfiKeyOptions};
 

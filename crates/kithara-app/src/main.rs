@@ -8,8 +8,10 @@ use kithara::{
     assets::{FlushHub, FlushPolicy, StorageBackend},
     host::HostConfig,
     net::{HttpClient, NetOptions},
+    platform::{CancelToken, thread, tokio},
     play::PlayWorkerConfig,
     stream::dl::{Downloader, DownloaderConfig},
+    worker::{RayonConfig, Worker, WorkerConfig},
 };
 use kithara_app::{
     config::{AppConfig, AppDrm},
@@ -19,23 +21,12 @@ use kithara_app::{
     pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
-use kithara_platform::{CancelToken, thread, tokio};
-use kithara_worker::{RayonConfig, Worker, WorkerConfig};
 use struct_patch::Patch as _;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
 #[command(name = "kithara", about = "Audio player")]
 struct Args {
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
-
-    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
-    /// An override on top of the document's `net.is_insecure`: `true` here
-    /// forces it on regardless of the document.
-    #[arg(long)]
-    insecure: bool,
-
     /// Which host draws the studio. A build without the `masonry` feature has
     /// only the immediate one.
     #[arg(long, value_enum, default_value_t)]
@@ -54,6 +45,15 @@ struct Args {
     /// Print the effective configuration and exit.
     #[arg(long)]
     dump_config: bool,
+
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
+
+    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
+    /// An override on top of the document's `net.is_insecure`: `true` here
+    /// forces it on regardless of the document.
+    #[arg(long)]
+    insecure: bool,
 }
 
 /// Where a release lays its UI documents out: beside the executable.
@@ -110,9 +110,6 @@ fn main() -> AppResult {
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
-    // App master root held for the whole process: it goes into `AppConfig` and
-    // every subsystem derives from `shutdown.child()`, so a frontend
-    // `config.shutdown.cancel()` propagates through the whole app subtree.
     let shutdown = CancelToken::root();
     let pools = pools::build()?;
     let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);

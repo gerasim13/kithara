@@ -40,8 +40,8 @@ fn sine_wav(total_frames: usize, peak: i16) -> Vec<u8> {
         Consts::CHANNELS,
         total_frames,
         Wave::Sine {
-            hz: Consts::TONE_HZ,
             peak,
+            hz: Consts::TONE_HZ,
         },
     )
 }
@@ -60,8 +60,8 @@ fn marked_sine_wav(total_frames: usize, peak: i16, marker_peak: i16) -> Vec<u8> 
                 .any(|start| frame >= *start && frame < start + Consts::MARKER_FRAMES);
             let peak = if in_marker { marker_peak } else { peak };
             Wave::Sine {
-                hz: Consts::TONE_HZ,
                 peak,
+                hz: Consts::TONE_HZ,
             }
             .sample(frame, Consts::SAMPLE_RATE)
         },

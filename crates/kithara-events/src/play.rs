@@ -30,20 +30,20 @@ pub enum PlayerStatus {
 #[display("{id}@slot{} {src}", slot.value())]
 #[non_exhaustive]
 pub struct TrackRef {
-    /// The queue's identity for this item, set when it was handed to the
-    /// player. The same value the FFI reports as `audioId`.
-    pub id: TrackId,
-    /// The processor slot the item is loaded into.
-    pub slot: SlotId,
     /// The rendered resource behind the item. Not an identity: a playlist
     /// may repeat one URL.
     pub src: Arc<str>,
+    /// The processor slot the item is loaded into.
+    pub slot: SlotId,
+    /// The queue's identity for this item, set when it was handed to the
+    /// player. The same value the FFI reports as `audioId`.
+    pub id: TrackId,
 }
 
 impl TrackRef {
     #[must_use]
     pub const fn new(id: TrackId, slot: SlotId, src: Arc<str>) -> Self {
-        Self { id, slot, src }
+        Self { src, slot, id }
     }
 }
 
@@ -75,14 +75,6 @@ pub enum ItemRole {
 }
 
 impl ItemRole {
-    /// The item this role is about.
-    #[must_use]
-    pub const fn track(&self) -> &TrackRef {
-        match self {
-            Self::Leading(track) | Self::Outgoing(track) | Self::Background(track) => track,
-        }
-    }
-
     /// The queue's identity for this item.
     #[must_use]
     pub const fn id(&self) -> TrackId {
@@ -94,6 +86,14 @@ impl ItemRole {
     #[must_use]
     pub const fn is_leading(&self) -> bool {
         matches!(self, Self::Leading(_))
+    }
+
+    /// The item this role is about.
+    #[must_use]
+    pub const fn track(&self) -> &TrackRef {
+        match self {
+            Self::Leading(track) | Self::Outgoing(track) | Self::Background(track) => track,
+        }
     }
 }
 

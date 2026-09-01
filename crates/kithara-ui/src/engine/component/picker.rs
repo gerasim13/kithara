@@ -8,18 +8,18 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct PickerSnapshot {
-    pub(crate) open: bool,
     pub(crate) highlighted: Option<usize>,
+    pub(crate) open: bool,
 }
 
 pub(in crate::engine) struct PickerComponent {
-    enter_held: bool,
     highlighted: Option<usize>,
-    item_count: usize,
-    open: bool,
-    path: String,
     selected: Option<usize>,
+    path: String,
+    enter_held: bool,
+    open: bool,
     space_held: bool,
+    item_count: usize,
 }
 
 impl PickerComponent {
@@ -34,66 +34,6 @@ impl PickerComponent {
             selected,
             space_held: false,
         }
-    }
-
-    pub(super) fn reconcile(mut self, next: Self) -> Self {
-        self.highlighted = clamp(self.highlighted, next.item_count);
-        self.item_count = next.item_count;
-        self.path = next.path;
-        self.selected = next.selected;
-        self
-    }
-
-    pub(super) const fn snapshot(&self) -> PickerSnapshot {
-        PickerSnapshot {
-            open: self.open,
-            highlighted: self.highlighted,
-        }
-    }
-
-    fn open(&mut self) {
-        self.open = true;
-        if self.highlighted.is_none() {
-            self.highlighted = self.selected.or_else(|| (self.item_count > 0).then_some(0));
-        }
-    }
-
-    fn pointer_down(&mut self, hit: &Hit, index: Option<usize>) -> Outcome<EngineEvent> {
-        if self.open
-            && let Some(index) = index.filter(|index| *index < self.item_count)
-            && hit.over()
-        {
-            self.highlighted = Some(index);
-            self.open = false;
-            return Outcome::set(EngineEvent::Index(index));
-        }
-        if index.is_some() {
-            return Outcome::IGNORED;
-        }
-        if hit.over() {
-            if self.open {
-                self.open = false;
-            } else {
-                self.open();
-            }
-            return Outcome::captured();
-        }
-        if self.open {
-            self.open = false;
-            return Outcome::captured();
-        }
-        Outcome::IGNORED
-    }
-
-    fn pointer_moved(&mut self, hit: &Hit, index: Option<usize>) -> Outcome<EngineEvent> {
-        if !self.open || !hit.over() {
-            return Outcome::IGNORED;
-        }
-        let Some(index) = index.filter(|index| *index < self.item_count) else {
-            return Outcome::IGNORED;
-        };
-        self.highlighted = Some(index);
-        Outcome::captured()
     }
 
     fn key_pressed(&mut self, key: Key<'_>, _modifiers: Modifiers) -> Outcome<EngineEvent> {
@@ -164,15 +104,88 @@ impl PickerComponent {
         }
         Outcome::captured()
     }
+
+    fn open(&mut self) {
+        self.open = true;
+        if self.highlighted.is_none() {
+            self.highlighted = self.selected.or_else(|| (self.item_count > 0).then_some(0));
+        }
+    }
+
+    fn pointer_down(&mut self, hit: &Hit, index: Option<usize>) -> Outcome<EngineEvent> {
+        if self.open
+            && let Some(index) = index.filter(|index| *index < self.item_count)
+            && hit.over()
+        {
+            self.highlighted = Some(index);
+            self.open = false;
+            return Outcome::set(EngineEvent::Index(index));
+        }
+        if index.is_some() {
+            return Outcome::IGNORED;
+        }
+        if hit.over() {
+            if self.open {
+                self.open = false;
+            } else {
+                self.open();
+            }
+            return Outcome::captured();
+        }
+        if self.open {
+            self.open = false;
+            return Outcome::captured();
+        }
+        Outcome::IGNORED
+    }
+
+    fn pointer_moved(&mut self, hit: &Hit, index: Option<usize>) -> Outcome<EngineEvent> {
+        if !self.open || !hit.over() {
+            return Outcome::IGNORED;
+        }
+        let Some(index) = index.filter(|index| *index < self.item_count) else {
+            return Outcome::IGNORED;
+        };
+        self.highlighted = Some(index);
+        Outcome::captured()
+    }
+
+    pub(super) fn reconcile(mut self, next: Self) -> Self {
+        self.highlighted = clamp(self.highlighted, next.item_count);
+        self.item_count = next.item_count;
+        self.path = next.path;
+        self.selected = next.selected;
+        self
+    }
+
+    pub(super) const fn snapshot(&self) -> PickerSnapshot {
+        PickerSnapshot {
+            open: self.open,
+            highlighted: self.highlighted,
+        }
+    }
 }
 
 impl Component for PickerComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn blur(&mut self) {
+        self.enter_held = false;
+        self.space_held = false;
     }
 
-    fn kind(&self) -> Kind {
-        Kind::Picker
+    fn captures_pointer(&self) -> bool {
+        false
+    }
+
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        if hit.over() {
+            CursorShape::Pointer
+        } else {
+            CursorShape::None
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        true
     }
 
     fn handle(
@@ -211,25 +224,12 @@ impl Component for PickerComponent {
         (outcome, None)
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        if hit.over() {
-            CursorShape::Pointer
-        } else {
-            CursorShape::None
-        }
+    fn kind(&self) -> Kind {
+        Kind::Picker
     }
 
-    fn captures_pointer(&self) -> bool {
-        false
-    }
-
-    fn focusable(&self) -> bool {
-        true
-    }
-
-    fn blur(&mut self) {
-        self.enter_held = false;
-        self.space_held = false;
+    fn path(&self) -> &str {
+        &self.path
     }
 }
 

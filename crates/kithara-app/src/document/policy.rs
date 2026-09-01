@@ -1,9 +1,11 @@
 use std::{collections::HashMap, fmt};
 
 use bytes::Bytes;
-use kithara::play::policy::{DomainKeyPolicy, DomainKeyRule};
-use kithara_drm::{KeyProcessor, KeyRequest, KeyRequestFactory, UniqueBinaryCipher};
-use kithara_platform::sync::Arc;
+use kithara::{
+    drm::{KeyProcessor, KeyRequest, KeyRequestFactory, UniqueBinaryCipher},
+    platform::sync::Arc,
+    play::policy::{DomainKeyPolicy, DomainKeyRule},
+};
 use rand::{Rng as _, RngExt as _, distr::Alphanumeric};
 
 use super::schema::{Drm, DrmProvider, SeedAlphabet, SeedSpec};
@@ -119,8 +121,7 @@ fn salt(seed: &SeedSpec) -> String {
 
 #[cfg(test)]
 mod tests {
-    use kithara::play::policy::DomainKeyPolicy;
-    use kithara_drm::KeyRequestResolver as _;
+    use kithara::{drm::KeyRequestResolver as _, play::policy::DomainKeyPolicy};
     use url::Url;
 
     use super::{PolicyError, drm_policy};

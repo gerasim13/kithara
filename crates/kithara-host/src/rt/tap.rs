@@ -55,8 +55,8 @@ impl AudioNode for TapNode {
 }
 
 struct TapProcessor {
-    writer: Option<(HeapProd<f32>, Arc<AtomicU64>)>,
     sample_rate: NonZeroU32,
+    writer: Option<(HeapProd<f32>, Arc<AtomicU64>)>,
 }
 
 impl TapProcessor {
@@ -64,8 +64,8 @@ impl TapProcessor {
 
     fn new(writer: Option<MixTapWriter>, sample_rate: NonZeroU32) -> Self {
         Self {
-            writer: writer.map(Into::into),
             sample_rate,
+            writer: writer.map(Into::into),
         }
     }
 

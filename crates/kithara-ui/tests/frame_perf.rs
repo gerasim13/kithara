@@ -143,8 +143,8 @@ fn contains(rect: Rect, at: Pt) -> bool {
 /// only presses is measured pressing, and the rest are measured redrawing after
 /// their reading moved.
 struct Scenario {
-    name: &'static str,
     control: &'static str,
+    name: &'static str,
     interaction: Interaction,
 }
 
@@ -602,8 +602,8 @@ fn models(registry: &mut CensusRegistry) {
 /// Everything a host is handed that is not the host: the documents, the
 /// endpoints they may bind to, and nothing that differs between the two.
 struct Fixture {
-    kinds: CustomKinds,
     registry: CensusRegistry,
+    kinds: CustomKinds,
     resolver: MemResolver,
 }
 
@@ -659,19 +659,10 @@ impl Fixture {
             resolver.insert(name, body);
         }
         Self {
+            resolver,
             kinds: census_kinds(),
             registry: census_registry(),
-            resolver,
         }
-    }
-
-    fn config(&self) -> Config<'_> {
-        Config::builder()
-            .endpoints(&self.registry)
-            .resolver(&self.resolver)
-            .text(builtin::text_doc())
-            .kinds(&self.kinds)
-            .build()
     }
 
     fn compiled(&self) -> CompiledUi {
@@ -686,45 +677,54 @@ impl Fixture {
         )
         .unwrap_or_else(|error| panic!("the frame-perf fixture must compile: {error}"))
     }
+
+    fn config(&self) -> Config<'_> {
+        Config::builder()
+            .endpoints(&self.registry)
+            .resolver(&self.resolver)
+            .text(builtin::text_doc())
+            .kinds(&self.kinds)
+            .build()
+    }
 }
 
 /// One frame's worth of work on one host, from the input applied to the draw
 /// output produced. Nothing here rasterises: the measurement stops at the
 /// commands, so a GPU on the machine cannot change the number.
 trait FrameHost {
-    /// Applies one neutral step in this host's own event vocabulary.
-    fn interact(&mut self, step: Step);
-
     /// Produces one frame and returns a size taken from its output, so the
     /// frame cannot be optimised away. The unit is the host's own: see
     /// [`Host::unit`].
     fn frame(&mut self) -> usize;
+
+    /// Applies one neutral step in this host's own event vocabulary.
+    fn interact(&mut self, step: Step);
+
+    /// What the control did with the gesture, in whatever this host can see: a
+    /// captured event, a published document event. Reported, never judged - a
+    /// control may legitimately take a gesture and publish nothing.
+    fn receipts(&self) -> usize;
 
     /// Whether this host asked for the frame [`Self::frame`] has just produced.
     ///
     /// A host that can decline to draw is a host whose lag is a count of
     /// frames, not a cost per frame, and the two hosts differ here.
     fn scheduled(&self) -> bool;
-
-    /// What the control did with the gesture, in whatever this host can see: a
-    /// captured event, a published document event. Reported, never judged - a
-    /// control may legitimately take a gesture and publish nothing.
-    fn receipts(&self) -> usize;
 }
 
 /// The immediate host: every frame rebuilds the element tree from the compiled
 /// document, lays it out, applies the queued events and draws.
 struct Immediate {
     cache: Cache,
-    captured: usize,
+    ui: CompiledUi,
     cursor: Cursor,
     kinds: CustomKinds,
-    pending: Vec<(Event, Cursor)>,
     reads: Rc<CensusReads>,
     renderer: iced::Renderer,
-    scheduled: bool,
     theme: Theme,
-    ui: CompiledUi,
+    pending: Vec<(Event, Cursor)>,
+    scheduled: bool,
+    captured: usize,
 }
 
 impl Immediate {
@@ -733,12 +733,12 @@ impl Immediate {
     /// and their frame times are times for work that did not happen.
     fn new(fixture: &Fixture, reads: Rc<CensusReads>, engine: &Engine) -> Self {
         Self {
+            reads,
             cache: Cache::default(),
             captured: 0,
             cursor: Cursor::Unavailable,
             kinds: census_kinds(),
             pending: Vec::new(),
-            reads,
             renderer: FallbackRenderer::Primary(WgpuRenderer::new(
                 engine.clone(),
                 SANS,
@@ -752,28 +752,6 @@ impl Immediate {
 }
 
 impl FrameHost for Immediate {
-    fn interact(&mut self, step: Step) {
-        match step {
-            Step::Move(at) => {
-                let position = Point::new(at.x, at.y);
-                self.cursor = Cursor::Available(position);
-                self.pending.push((
-                    Event::Mouse(MouseEvent::CursorMoved { position }),
-                    self.cursor,
-                ));
-            }
-            Step::Press => self.pending.push((
-                Event::Mouse(MouseEvent::ButtonPressed(Button::Left)),
-                self.cursor,
-            )),
-            Step::Release => self.pending.push((
-                Event::Mouse(MouseEvent::ButtonReleased(Button::Left)),
-                self.cursor,
-            )),
-            Step::Data => self.reads.bump(),
-        }
-    }
-
     fn frame(&mut self) -> usize {
         let bounds = Size::new(f32::from(WIDTH), f32::from(HEIGHT));
         let element = tree::render(
@@ -820,16 +798,38 @@ impl FrameHost for Immediate {
         acquisitions(&self.ui)
     }
 
+    fn interact(&mut self, step: Step) {
+        match step {
+            Step::Move(at) => {
+                let position = Point::new(at.x, at.y);
+                self.cursor = Cursor::Available(position);
+                self.pending.push((
+                    Event::Mouse(MouseEvent::CursorMoved { position }),
+                    self.cursor,
+                ));
+            }
+            Step::Press => self.pending.push((
+                Event::Mouse(MouseEvent::ButtonPressed(Button::Left)),
+                self.cursor,
+            )),
+            Step::Release => self.pending.push((
+                Event::Mouse(MouseEvent::ButtonReleased(Button::Left)),
+                self.cursor,
+            )),
+            Step::Data => self.reads.bump(),
+        }
+    }
+
+    fn receipts(&self) -> usize {
+        self.captured
+    }
+
     /// The immediate host has no seam at which it can decline to draw: it
     /// rebuilds the element tree and draws every time it is asked. What it can
     /// report is what iced's runtime would have been told - an event arrived,
     /// or a widget asked for another frame.
     fn scheduled(&self) -> bool {
         self.scheduled
-    }
-
-    fn receipts(&self) -> usize {
-        self.captured
     }
 }
 
@@ -914,8 +914,8 @@ fn only_child<'layout>(layout: Layout<'layout>, what: &str) -> Layout<'layout> {
 struct Retained<'fixture> {
     published: Rc<Cell<usize>>,
     reads: Rc<CensusReads>,
-    scheduled: bool,
     ui: Ui<'fixture, CensusApp>,
+    scheduled: bool,
 }
 
 impl<'fixture> Retained<'fixture> {
@@ -931,22 +931,13 @@ impl<'fixture> Retained<'fixture> {
         Self {
             published,
             reads,
-            scheduled: false,
             ui,
+            scheduled: false,
         }
     }
 }
 
 impl FrameHost for Retained<'_> {
-    fn interact(&mut self, step: Step) {
-        match step {
-            Step::Move(at) => self.ui.input(packet(PointerPhase::Move, Some(at))),
-            Step::Press => self.ui.input(packet(PointerPhase::Down, None)),
-            Step::Release => self.ui.input(packet(PointerPhase::Up, None)),
-            Step::Data => self.reads.bump(),
-        }
-    }
-
     /// The seam the window runner draws through: settle, ask whether the
     /// picture would change, paint. The frame is painted either way here so
     /// there is always a cost to report, and whether it was wanted is
@@ -964,12 +955,21 @@ impl FrameHost for Retained<'_> {
         size
     }
 
-    fn scheduled(&self) -> bool {
-        self.scheduled
+    fn interact(&mut self, step: Step) {
+        match step {
+            Step::Move(at) => self.ui.input(packet(PointerPhase::Move, Some(at))),
+            Step::Press => self.ui.input(packet(PointerPhase::Down, None)),
+            Step::Release => self.ui.input(packet(PointerPhase::Up, None)),
+            Step::Data => self.reads.bump(),
+        }
     }
 
     fn receipts(&self) -> usize {
         self.published.get()
+    }
+
+    fn scheduled(&self) -> bool {
+        self.scheduled
     }
 }
 
@@ -981,16 +981,16 @@ struct CensusApp {
 }
 
 impl App for CensusApp {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         LAYOUT
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self.reads.as_ref())
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn update(&mut self, _event: UiEvent) {
@@ -1005,16 +1005,6 @@ enum Host {
 }
 
 impl Host {
-    /// What one unit of this host's frame output is. The two are different
-    /// quantities of different things: comparing them across hosts says
-    /// nothing, and this exists so a report cannot forget that.
-    const fn unit(self) -> &'static str {
-        match self {
-            Self::Immediate => "draw-pool acquisitions",
-            Self::Retained => "scene-encoding bytes",
-        }
-    }
-
     /// Everything the host needs before it can be built. The immediate host
     /// draws through wgpu, which needs a device; the retained host encodes a
     /// scene and needs nothing.
@@ -1022,6 +1012,16 @@ impl Host {
         match self {
             Self::Immediate => engine().map(Box::new).map(Backend::Immediate),
             Self::Retained => Ok(Backend::Retained),
+        }
+    }
+
+    /// What one unit of this host's frame output is. The two are different
+    /// quantities of different things: comparing them across hosts says
+    /// nothing, and this exists so a report cannot forget that.
+    const fn unit(self) -> &'static str {
+        match self {
+            Self::Immediate => "draw-pool acquisitions",
+            Self::Retained => "scene-encoding bytes",
         }
     }
 }
@@ -1176,12 +1176,12 @@ fn the_scenario_table_names_no_control_the_document_cannot() {
 /// What one control's frame cost, and everything the harness had to be sure of
 /// before that cost means anything.
 struct Reading {
-    gestured: bool,
     name: &'static str,
-    points: Vec<Pt>,
-    receipts: usize,
     rect: Rect,
+    points: Vec<Pt>,
+    gestured: bool,
     scheduled: bool,
+    receipts: usize,
     size: usize,
 }
 
@@ -1231,6 +1231,8 @@ fn measure(backend: &Backend) -> Vec<Reading> {
             driver.frame()
         });
         readings.push(Reading {
+            rect,
+            size,
             gestured: matches!(
                 scenario.interaction,
                 Interaction::Drag | Interaction::Press | Interaction::PressLeading
@@ -1244,9 +1246,7 @@ fn measure(backend: &Backend) -> Vec<Reading> {
                 })
                 .collect(),
             receipts: driver.receipts(),
-            rect,
             scheduled: driver.scheduled(),
-            size,
         });
     }
     readings

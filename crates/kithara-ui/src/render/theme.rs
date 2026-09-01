@@ -7,8 +7,6 @@ use crate::{
     skin::{ColorRole, PaletteDoc, color_roles, parse_color},
 };
 
-const CHANNEL_MAX: f32 = 255.0;
-
 macro_rules! define_render_palette {
     ($($field:ident => $role:ident),* $(,)?) => {
         /// Resolved color palette consumed by renderers.
@@ -49,6 +47,8 @@ macro_rules! define_render_palette {
 color_roles!(define_render_palette);
 
 pub(crate) fn color(value: &str, origin: &SourceUri) -> Result<Rgba, UiDocError> {
+    const CHANNEL_MAX: f32 = 255.0;
+
     let [red, green, blue, alpha] = parse_color(value, origin)?;
     Ok(Rgba {
         r: f32::from(red) / CHANNEL_MAX,

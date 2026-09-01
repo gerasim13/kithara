@@ -31,8 +31,8 @@ use crate::{
 /// sees the press, so a second recognizer here would be a second owner of the
 /// same gesture.
 pub(crate) struct PickerLayer {
-    engine: Rc<HostedEngine>,
     menu: PickerMenu,
+    engine: Rc<HostedEngine>,
     text: TextContext,
 }
 
@@ -49,15 +49,33 @@ impl PickerLayer {
 impl Widget for PickerLayer {
     type Action = HostAction;
 
-    fn on_pointer_event(
+    fn accepts_pointer_interaction(&self) -> bool {
+        false
+    }
+
+    fn accessibility(
         &mut self,
-        _ctx: &mut EventCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        _event: &PointerEvent,
+        _ctx: &mut AccessCtx<'_>,
+        _props: &PropertiesRef<'_>,
+        _node: &mut AccessNode,
     ) {
     }
 
-    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
+    fn accessibility_role(&self) -> Role {
+        Role::GenericContainer
+    }
+
+    fn children_ids(&self) -> ChildrenIds {
+        ChildrenIds::new()
+    }
+
+    fn find_widget_under_pointer<'ctx>(
+        &'ctx self,
+        _ctx: QueryCtx<'ctx>,
+        _pos: Point,
+    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
+        None
+    }
 
     fn layout(
         &mut self,
@@ -66,6 +84,18 @@ impl Widget for PickerLayer {
         constraints: &BoxConstraints,
     ) -> Size {
         constraints.max()
+    }
+
+    fn make_trace_span(&self, id: WidgetId) -> Span {
+        trace_span!("KitharaPickerLayer", id = id.trace())
+    }
+
+    fn on_pointer_event(
+        &mut self,
+        _ctx: &mut EventCtx<'_>,
+        _props: &mut PropertiesMut<'_>,
+        _event: &PointerEvent,
+    ) {
     }
 
     fn paint(&mut self, _ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
@@ -78,9 +108,6 @@ impl Widget for PickerLayer {
             open.items.iter().map(String::as_str),
             open.highlighted,
         );
-        // A host layer is drawn at its own origin and placed by its bounds, the
-        // same contract the immediate host translates by, so the menu is one
-        // list on both hosts rather than two that agree until one is edited.
         let bounds = layer.bounds();
         let mut menu = Scene::new();
         replay(layer.draw(), &mut VelloBackend::new(&mut menu));
@@ -93,35 +120,5 @@ impl Widget for PickerLayer {
         );
     }
 
-    fn accessibility_role(&self) -> Role {
-        Role::GenericContainer
-    }
-
-    fn accessibility(
-        &mut self,
-        _ctx: &mut AccessCtx<'_>,
-        _props: &PropertiesRef<'_>,
-        _node: &mut AccessNode,
-    ) {
-    }
-
-    fn children_ids(&self) -> ChildrenIds {
-        ChildrenIds::new()
-    }
-
-    fn accepts_pointer_interaction(&self) -> bool {
-        false
-    }
-
-    fn find_widget_under_pointer<'ctx>(
-        &'ctx self,
-        _ctx: QueryCtx<'ctx>,
-        _pos: Point,
-    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
-        None
-    }
-
-    fn make_trace_span(&self, id: WidgetId) -> Span {
-        trace_span!("KitharaPickerLayer", id = id.trace())
-    }
+    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
 }

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use kithara_events::TrackId;
-use kithara_platform::sync::Arc;
+use kithara::{events::TrackId, platform::sync::Arc};
 
 use crate::item::AudioPlayerItem;
 

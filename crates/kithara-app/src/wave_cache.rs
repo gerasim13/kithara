@@ -7,8 +7,8 @@ use kithara::{
     analysis::{AnalysisFile, AnalysisFingerprint, AnalysisProgress, AnalysisToken},
     assets::{AssetResource, AssetResourceState, ReadSide, ResourceKey},
     decode::DecodeError,
+    platform::time::Duration,
 };
-use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
 use crate::pools::{AppResourceConfig, AppStore, Pools};
@@ -211,6 +211,7 @@ pub(crate) fn token_for(key: &ResourceKey) -> AnalysisToken {
 mod tests {
     use std::num::NonZeroU32;
 
+    use ::kithara::platform::sync::Arc;
     // The test macro import shadows the `kithara` crate name; use absolute path.
     use ::kithara::{
         analysis::{
@@ -221,7 +222,6 @@ mod tests {
         file::File,
         prelude::ResourceSrc,
     };
-    use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
     use super::{AnalysisTarget, Consts, TrackAnalysisCache};

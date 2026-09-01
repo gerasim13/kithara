@@ -1,4 +1,4 @@
-use kithara_platform::sync::Arc;
+use kithara::platform::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::config::FfiPlayerConfig;

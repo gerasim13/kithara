@@ -5,7 +5,6 @@
 //! Each hung track is a throttled body that never delivers a byte, so the
 //! probe read parks inside `Resource::new` and keeps the permit; a freshly
 //! selected, reachable track then can never acquire one.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

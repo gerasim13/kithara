@@ -24,10 +24,6 @@ mod host {
     impl Draws for Settings {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// The gear is the button: art that cannot be read leaves an empty box
         /// rather than a frame with a hole in it.
         fn data(&self, _read: Reading<'_>) -> Option<Mark> {
@@ -39,6 +35,10 @@ mod host {
         /// instead.
         fn grip(&self, _skin: &Skin, _data: &Mark) -> Grip {
             Grip::Command(|| UiEvent::OpenSettings)
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

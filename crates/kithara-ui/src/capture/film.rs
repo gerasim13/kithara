@@ -14,16 +14,6 @@ pub struct Film<Page> {
 }
 
 impl<Page> Film<Page> {
-    /// Every page once, which is what a capture with no film asked for takes.
-    #[must_use]
-    pub fn stills(pages: Vec<Page>) -> Self {
-        Self {
-            pages,
-            photos: 1,
-            steps: 0,
-        }
-    }
-
     /// Several photographs of each page, with the host's own clock running
     /// between them.
     ///
@@ -43,6 +33,16 @@ impl<Page> Film<Page> {
             photos,
             steps,
         })
+    }
+
+    /// Every page once, which is what a capture with no film asked for takes.
+    #[must_use]
+    pub fn stills(pages: Vec<Page>) -> Self {
+        Self {
+            pages,
+            photos: 1,
+            steps: 0,
+        }
     }
 }
 

@@ -9,6 +9,7 @@ use std::{fs, num::NonZeroUsize, path::Path};
 use kithara_assets::{
     AcquisitionResult, AssetStore, FlushHub, FlushPolicy, ResourceKey, StorageBackend, WriteSide,
 };
+use kithara_bufpool::testing::TestPools;
 use kithara_platform::{
     CancelToken, thread,
     time::{Duration, Instant},
@@ -56,10 +57,7 @@ fn wait_for_snapshot_naming(path: &Path, key_name: &str) {
 /// Rebuild a store on `root` until its hydrated availability index has dropped
 /// `key`, then hand that store back. A snapshot that still carries the resource
 /// wins over the on-disk scan, so this only clears once the deletion is durable.
-fn wait_for_persisted_deletion(
-    root: &Path,
-    key: &ResourceKey,
-) -> AssetStore<support::pools::TestPools> {
+fn wait_for_persisted_deletion(root: &Path, key: &ResourceKey) -> AssetStore<TestPools> {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let reopened = AssetStore::builder(support::pools())

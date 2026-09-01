@@ -40,6 +40,10 @@ impl<P> MasonryControl for ProjectedLeaf<P>
 where
     P: Projected,
 {
+    fn accepts_input(&self) -> bool {
+        false
+    }
+
     /// A projection hands back a list it already finished, so no pose reaches
     /// what it drew. The document refuses to put one on a `Table` or a `Tree`
     /// for exactly that reason, rather than moving the box and not the picture.
@@ -49,10 +53,6 @@ where
 
     fn input(&mut self, _input: Input<'_>, _hit: &Hit) -> Outcome<HostAction> {
         Outcome::IGNORED
-    }
-
-    fn accepts_input(&self) -> bool {
-        false
     }
 
     fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {

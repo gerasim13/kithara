@@ -59,13 +59,8 @@ impl<N: Net> RetryNet<N> {
                 }
                 continue;
             }
-            // Not retrying. A transient error after a NON-ZERO budget was
-            // spent is promoted to a terminal `RetryExhausted` (Fatal) so
-            // downstream (HLS settle, readers) treats it as a give-up, not a
-            // transient retry signal. A genuinely fatal error (4xx, decode,
-            // cancel) surfaces as-is; so does a transient error under
-            // `max_retries == 0`, where the decorator is a deliberate
-            // pass-through (no retries were promised, none were exhausted).
+            // WHY: Not retrying. A transient error after a NON-ZERO budget was spent is promoted to a terminal `RetryExhausted` (Fatal) so
+            // downstream (HLS settle, readers) treats it as a give-up, not a transient retry signal.
             return Err(
                 if max > 0 && error.retryability() == Retryability::Transient {
                     if let Some(observer) = self.observer.as_ref() {
@@ -80,8 +75,7 @@ impl<N: Net> RetryNet<N> {
                 },
             );
         }
-        // The `0..=max` loop always returns on its final iteration; this is an
-        // unreachable terminal safety net.
+        // WHY: The `0..=max` loop always returns on its final iteration; this is an unreachable terminal safety net.
         Err(NetError::RetryExhausted {
             max_retries: max,
             source: Box::new(NetError::Unimplemented),

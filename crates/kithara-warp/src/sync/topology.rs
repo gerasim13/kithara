@@ -10,12 +10,12 @@ use crate::{BeatGridId, BeatGridSnapshot, BeatGridStamp};
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncMemberSnapshot {
-    /// Returns the alignment edge from the direct parent.
-    #[field(get, copy)]
-    alignment: Option<BeatAlignment>,
     /// Returns the direct member's frozen grid.
     #[field(get)]
     grid: BeatGridSnapshot,
+    /// Returns the alignment edge from the direct parent.
+    #[field(get, copy)]
+    alignment: Option<BeatAlignment>,
     /// Returns the frozen nested topology when this member is a group.
     #[field(get = group_topology)]
     group: Option<SyncGroupSnapshot>,
@@ -48,15 +48,15 @@ impl SyncMemberSnapshot {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct SyncGroupSnapshot {
+    /// Returns the direct members frozen into this topology revision.
+    #[field(get)]
+    members: Arc<[SyncMemberSnapshot]>,
     /// Returns the group's authoritative musical-coordinate snapshot.
     #[field(get)]
     group_grid: BeatGridSnapshot,
     /// Returns the topology identity and revision.
     #[field(get, copy)]
     stamp: TopologyStamp,
-    /// Returns the direct members frozen into this topology revision.
-    #[field(get)]
-    members: Arc<[SyncMemberSnapshot]>,
 }
 
 impl SyncGroupSnapshot {

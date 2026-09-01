@@ -10,20 +10,15 @@ use crate::{
 };
 
 pub(in crate::engine) struct ScalarComponent {
-    path: String,
     kind: Kind,
-    scalar: Scalar,
-    drag_step: Option<f64>,
     current: Option<f32>,
+    drag_step: Option<f64>,
+    scalar: Scalar,
     state: ScalarState,
+    path: String,
 }
 
 impl ScalarComponent {
-    #[cfg(feature = "masonry")]
-    pub(super) const fn current(&self) -> Option<f32> {
-        self.current
-    }
-
     pub(super) fn new(
         path: String,
         kind: Kind,
@@ -41,6 +36,11 @@ impl ScalarComponent {
         }
     }
 
+    #[cfg(feature = "masonry")]
+    pub(super) const fn current(&self) -> Option<f32> {
+        self.current
+    }
+
     pub(super) fn reconcile(mut self, next: Self) -> Self {
         if self.kind != next.kind {
             return next;
@@ -56,12 +56,8 @@ impl ScalarComponent {
 }
 
 impl Component for ScalarComponent {
-    fn path(&self) -> &str {
-        &self.path
-    }
-
-    fn kind(&self) -> Kind {
-        self.kind
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        self.scalar.cursor(&self.state, hit)
     }
 
     fn handle(
@@ -83,8 +79,12 @@ impl Component for ScalarComponent {
         )
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.scalar.cursor(&self.state, hit)
+    fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    fn path(&self) -> &str {
+        &self.path
     }
 
     delegate::delegate! {

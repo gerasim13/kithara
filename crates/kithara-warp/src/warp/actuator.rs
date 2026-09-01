@@ -19,10 +19,10 @@ use crate::StretchControls;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct Warp<S> {
-    #[field(get, get_mut)]
-    source: S,
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
+    #[field(get, get_mut)]
+    source: S,
 }
 
 impl<S> Warp<S> {

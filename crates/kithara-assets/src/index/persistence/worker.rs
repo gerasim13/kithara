@@ -77,15 +77,8 @@ fn run(weak: &Weak<FlushHub>, wait: &HubWait, cancel: &CancelToken, policy: &Flu
                 final_flush(weak);
                 return;
             }
-            // Event-driven idle wait (no bounded poll). `signal()` sets `pending`
-            // and notifies; shutdown cancels and `notify_all`s — both wake this
-            // wait, so a periodic re-check is unnecessary. The old
-            // `wait_timeout(now + poll_interval)` re-registered a near-term
-            // deadline every iteration; on a DEDICATED virtual-time pacer that
-            // pins the engine's `active` credit and forces the virtual clock to
-            // crawl `poll_interval` at a time (never the big jump a flash test
-            // needs) — and on the real clock it is just a redundant wakeup. An
-            // indefinite wait parks until a real flush/shutdown event.
+            // WHY: Event-driven idle wait (no bounded poll). `signal()` sets `pending` and notifies; shutdown cancels and `notify_all`s - both
+            // wake this wait, so a periodic re-check is unnecessary.
             #[cfg(test)]
             if let Some(sender) = wait.idle_park.lock().take() {
                 sender.send(()).ok();

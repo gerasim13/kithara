@@ -16,6 +16,16 @@ pub struct CustomKinds {
 }
 
 impl CustomKinds {
+    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn MountedCustom<UiEvent>>> {
+        self.kinds.get(kind).map(|make| make())
+    }
+
+    /// The names this registry answers for, which is what a document may name.
+    #[must_use]
+    pub fn names(&self) -> std::collections::BTreeSet<String> {
+        self.kinds.keys().cloned().collect()
+    }
+
     /// Registers `make` under `kind`, mapping what its widget recognises into
     /// the document event vocabulary.
     #[must_use]
@@ -31,15 +41,5 @@ impl CustomKinds {
             Box::new(move || Box::new(MappedCustom::new(make(), map.clone()))),
         );
         self
-    }
-
-    /// The names this registry answers for, which is what a document may name.
-    #[must_use]
-    pub fn names(&self) -> std::collections::BTreeSet<String> {
-        self.kinds.keys().cloned().collect()
-    }
-
-    pub(crate) fn make(&self, kind: &str) -> Option<Box<dyn MountedCustom<UiEvent>>> {
-        self.kinds.get(kind).map(|make| make())
     }
 }

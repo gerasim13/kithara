@@ -7,16 +7,6 @@ mod kithara {
 /// Audio processing effect in the chain (transforms decoded-audio chunks).
 #[kithara::mock(api = AudioEffectMock)]
 pub trait AudioEffect: Send + 'static {
-    /// Service work deferred by the checked audio-production path.
-    ///
-    /// The dispatcher shell calls this after lifecycle transitions, outside
-    /// the checked decoder tick, using the active
-    /// decoder specification. Effects without deferred work can keep the
-    /// default no-op implementation.
-    fn service_deferred(&mut self, spec: AudioSpec) {
-        let _ = spec;
-    }
-
     /// Flush one remaining buffered chunk at end of stream.
     ///
     /// Repeated calls must reach `None` after a finite number of chunks and
@@ -47,4 +37,14 @@ pub trait AudioEffect: Send + 'static {
     /// Allocation, destruction, and backend rebuilding belong in
     /// [`service_deferred`](Self::service_deferred).
     fn reset(&mut self);
+
+    /// Service work deferred by the checked audio-production path.
+    ///
+    /// The dispatcher shell calls this after lifecycle transitions, outside
+    /// the checked decoder tick, using the active
+    /// decoder specification. Effects without deferred work can keep the
+    /// default no-op implementation.
+    fn service_deferred(&mut self, spec: AudioSpec) {
+        let _ = spec;
+    }
 }

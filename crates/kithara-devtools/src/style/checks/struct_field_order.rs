@@ -1,7 +1,8 @@
 use std::{cmp::Ordering, ops::Range};
 
 use anyhow::Result;
-use syn::{Field, Fields, Item, Type, Visibility, spanned::Spanned};
+use proc_macro2::TokenTree;
+use syn::{Attribute, Field, Fields, Item, Type, Visibility, spanned::Spanned};
 
 use super::{Check, Context};
 use crate::{
@@ -147,6 +148,7 @@ fn fix_field_block<'src>(
         .enumerate()
         .map(|(idx, f)| FieldKey {
             idx,
+            builder_bucket: builder_bucket(&f.attrs),
             vis_bucket: vis_bucket(&order, &f.vis),
             type_key: type_sort_key(&f.ty),
             name: f
@@ -204,7 +206,7 @@ fn has_heterogeneous_cfg(fields: &[&Field]) -> bool {
     cfgs.iter().any(|c| !c.is_empty()) && cfgs.windows(2).any(|w| w[0] != w[1])
 }
 
-fn cfg_signature(attrs: &[syn::Attribute]) -> String {
+fn cfg_signature(attrs: &[Attribute]) -> String {
     let mut sigs: Vec<String> = attrs
         .iter()
         .filter(|a| a.path().is_ident("cfg"))
@@ -295,6 +297,7 @@ fn check_field_block(
         .enumerate()
         .map(|(idx, f)| FieldKey {
             idx,
+            builder_bucket: builder_bucket(&f.attrs),
             vis_bucket: vis_bucket(&order, &f.vis),
             type_key: type_sort_key(&f.ty),
             name: f
@@ -343,15 +346,39 @@ fn check_field_block(
 struct FieldKey {
     name: String,
     type_key: String,
+    builder_bucket: usize,
     idx: usize,
     vis_bucket: usize,
 }
 
 fn cmp_field_key(a: &FieldKey, b: &FieldKey) -> Ordering {
-    a.vis_bucket
-        .cmp(&b.vis_bucket)
+    a.builder_bucket
+        .cmp(&b.builder_bucket)
+        .then_with(|| a.vis_bucket.cmp(&b.vis_bucket))
         .then_with(|| a.type_key.cmp(&b.type_key))
         .then_with(|| a.name.cmp(&b.name))
+}
+
+fn builder_bucket(attrs: &[Attribute]) -> usize {
+    attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("builder"))
+        .filter_map(|attr| match &attr.meta {
+            syn::Meta::List(list) => list.tokens.clone().into_iter().find_map(|token| {
+                let TokenTree::Ident(ident) = token else {
+                    return None;
+                };
+                match ident.to_string().as_str() {
+                    "start_fn" => Some(0),
+                    "field" => Some(1),
+                    "finish_fn" => Some(2),
+                    _ => None,
+                }
+            }),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(3)
 }
 
 /// Map each visibility token in config to its bucket index.
@@ -383,7 +410,7 @@ fn vis_token(vis: &Visibility) -> &'static str {
     }
 }
 
-fn has_exempt_attr(attrs: &[syn::Attribute], names: &[String]) -> bool {
+fn has_exempt_attr(attrs: &[Attribute], names: &[String]) -> bool {
     attrs.iter().any(|a| {
         a.path()
             .get_ident()
@@ -504,6 +531,29 @@ struct Layout {
 ";
         let (out, _) = run_fix(src);
         assert_eq!(out, src, "repr layout must not change");
+    }
+
+    #[test]
+    fn bon_role_order_precedes_style_order() {
+        let src = "\
+struct S {
+    #[builder(default)]
+    a: u32,
+    #[builder(finish_fn)]
+    z: u32,
+    #[builder(field)]
+    y: u32,
+    #[builder(start_fn)]
+    x: u32,
+}
+";
+        let (out, skipped) = run_fix(src);
+        assert!(skipped.is_empty(), "skipped: {skipped:?}");
+        let start = out.find("x: u32").unwrap();
+        let field = out.find("y: u32").unwrap();
+        let finish = out.find("z: u32").unwrap();
+        let other = out.find("a: u32").unwrap();
+        assert!(start < field && field < finish && finish < other, "{out}");
     }
 
     #[test]
@@ -663,5 +713,18 @@ struct S {
             1,
             "uniform `#[cfg(test)]` on every field is safe to reorder — must still flag"
         );
+    }
+
+    #[test]
+    fn bon_role_order_is_accepted() {
+        let src = "\
+struct S {
+    #[builder(start_fn)]
+    z: u32,
+    #[builder(default)]
+    a: u32,
+}
+";
+        assert!(detect(src).is_empty());
     }
 }

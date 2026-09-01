@@ -175,10 +175,8 @@ impl FlushHub {
         for src in &alive {
             let key = Arc::as_ptr(src).cast::<()>().addr();
             let was_dirty = src.dirty().swap(false, Ordering::AcqRel);
-            // The durable (checkpoint) path also flushes a source the worker
-            // last wrote non-durably, so an explicit checkpoint always lands a
-            // durable, current snapshot — even though that worker flush cleared
-            // `dirty` after persisting a possibly-stale pre-commit state.
+            // WHY: The durable (checkpoint) path also flushes a source the worker last wrote non-durably, so an explicit checkpoint always lands
+            // a durable, current snapshot - even though that worker flush cleared `dirty` after persisting a possibly-stale pre-commit state.
             let needs_flush = was_dirty || durable && self.non_durable.contains(&key);
             if !needs_flush {
                 continue;
@@ -378,6 +376,14 @@ mod tests {
             })
         }
 
+        fn durable_flush_count(&self) -> usize {
+            self.durable_flushes.load(Ordering::Acquire)
+        }
+
+        fn flush_count(&self) -> usize {
+            self.flushes.load(Ordering::Acquire)
+        }
+
         fn with_completion(name: &'static str, flushed: Sender<()>) -> Arc<Self> {
             Arc::new(Self {
                 name,
@@ -386,14 +392,6 @@ mod tests {
                 durable_flushes: AtomicUsize::new(0),
                 flushed: Some(flushed),
             })
-        }
-
-        fn durable_flush_count(&self) -> usize {
-            self.durable_flushes.load(Ordering::Acquire)
-        }
-
-        fn flush_count(&self) -> usize {
-            self.flushes.load(Ordering::Acquire)
         }
     }
 

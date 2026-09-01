@@ -90,13 +90,19 @@ receives structured events through `setObserver` / `setItemObserver`. Generated 
 definitions ship with the wasm-bindgen output.
 
 The main-thread bridge builds one `PoolRegion<FfiPools>` and passes that same facade to the
-WebCodecs probe and the Web Worker. The worker owns the `Queue` and builds its in-memory `AssetStore`
-(`StorageBackend::Memory`) from that facade, using the default layout registry - native foreign
-layout callbacks are not bridged into JavaScript. The main-thread `WasmInner` owns
-the `WorkerCmd` channel plus a local cache so the infallible facade getters can answer without a
-round trip. Wasm builds use the web-audio backend and link no stretch backend; playback rate is
-retained as main-thread control state only — no `WorkerCmd` carries it — so PCM speed stays 1.0
-until a wasm-capable stretch backend exists.
+WebCodecs probe and the Web Worker. The worker owns the `Queue` and builds its in-memory
+`AssetStore` (`StorageBackend::Memory`) from that facade, using the default layout registry;
+native foreign layout callbacks are not bridged into JavaScript. `Host::insert` moves only the
+Queue's sendable synchronization state and current desired level to the main-thread Host; the
+remote Worker Host retains the resident Queue and every reader or JS handle. The main-thread
+`WasmInner` owns the `WorkerCmd` channel plus a local cache so the infallible facade getters can
+answer without a round trip. Wasm builds use the web-audio backend and link no stretch backend;
+playback rate is retained as main-thread control state only - no `WorkerCmd` carries it - so PCM
+speed stays 1.0 until a wasm-capable stretch backend exists.
+
+When the worker command channel closes, teardown attempts Host removal once. A permanent removal
+error is not retried: the Host reports the invariant failure and retains the still-attached Queue
+runtime rather than dropping Worker-owned resources behind the main-thread topology.
 
 Wasm does link a resampler: the wasm32 dependency arm re-adds `resample-rubato` on top of
 `default-features = false`. A web-audio context runs at the one rate the browser gives it, and any

@@ -183,18 +183,6 @@ impl AudioCodec {
         }
     }
 
-    /// Whether padding meets audio inside a transform window, leaving the
-    /// frame next to a trim tapered rather than exact.
-    #[must_use]
-    pub const fn transform_padded(codec: Self) -> bool {
-        match codec {
-            Self::AacLc | Self::AacHe | Self::AacHeV2 | Self::Mp3 | Self::Vorbis | Self::Opus => {
-                true
-            }
-            Self::Flac | Self::Alac | Self::Pcm | Self::Adpcm => false,
-        }
-    }
-
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:
@@ -251,6 +239,18 @@ impl AudioCodec {
         ]
         .into_iter()
         .find_map(|(matches, codec)| matches.then_some(codec))
+    }
+
+    /// Whether padding meets audio inside a transform window, leaving the
+    /// frame next to a trim tapered rather than exact.
+    #[must_use]
+    pub const fn transform_padded(codec: Self) -> bool {
+        match codec {
+            Self::AacLc | Self::AacHe | Self::AacHeV2 | Self::Mp3 | Self::Vorbis | Self::Opus => {
+                true
+            }
+            Self::Flac | Self::Alac | Self::Pcm | Self::Adpcm => false,
+        }
     }
 }
 

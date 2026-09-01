@@ -11,72 +11,36 @@ use crate::{
 #[non_exhaustive]
 pub struct Group<'a> {
     pub(super) axis: Axis,
-    /// The axis whose room decides which of its children stand, when the
-    /// document says its children come and go with the room.
-    pub(super) measure: Option<MeasureAxis>,
-    pub(super) alignment: TextAlign,
-    pub(super) gap: f32,
-    pub(super) padding_x: f32,
-    pub(super) padding_y: f32,
-    pub(super) frame: Option<FrameSides>,
+    pub(super) frame_color: ColorRole,
     /// The window corners this group stands at, which only the root of a module
     /// with no shell of its own ever has.
     pub(super) round: FrameCorners,
     pub(super) background: Option<ColorRole>,
     pub(super) background_alpha: Option<f32>,
-    pub(super) frame_color: ColorRole,
-    pub(super) frame_width: f32,
-    pub(super) surface: Option<&'a SurfaceSpec>,
+    pub(super) frame: Option<FrameSides>,
+    /// The axis whose room decides which of its children stand, when the
+    /// document says its children come and go with the room.
+    pub(super) measure: Option<MeasureAxis>,
     pub(super) size: Option<SizeSpec>,
+    pub(super) surface: Option<&'a SurfaceSpec>,
+    pub(super) alignment: TextAlign,
+    pub(super) frame_width: f32,
+    pub(super) gap: f32,
+    pub(super) padding_x: f32,
+    pub(super) padding_y: f32,
 }
 
 impl Group<'_> {
-    /// Main layout axis.
-    #[must_use]
-    pub const fn axis(&self) -> Axis {
-        self.axis
-    }
-
-    /// The axis whose room decides which children stand, when they do.
-    #[must_use]
-    pub const fn measure(&self) -> Option<MeasureAxis> {
-        self.measure
-    }
-
     /// Cross-axis child alignment.
     #[must_use]
     pub const fn alignment(&self) -> TextAlign {
         self.alignment
     }
 
-    /// Gap between adjacent visible children.
+    /// Main layout axis.
     #[must_use]
-    pub const fn gap(&self) -> f32 {
-        self.gap
-    }
-
-    /// Resolved horizontal padding.
-    #[must_use]
-    pub const fn padding_x(&self) -> f32 {
-        self.padding_x
-    }
-
-    /// Resolved vertical padding.
-    #[must_use]
-    pub const fn padding_y(&self) -> f32 {
-        self.padding_y
-    }
-
-    /// Sides carrying the document frame.
-    #[must_use]
-    pub const fn frame(&self) -> Option<FrameSides> {
-        self.frame
-    }
-
-    /// The window corners this group stands at.
-    #[must_use]
-    pub const fn round(&self) -> FrameCorners {
-        self.round
+    pub const fn axis(&self) -> Axis {
+        self.axis
     }
 
     /// Resolved background role.
@@ -91,6 +55,12 @@ impl Group<'_> {
         self.background_alpha
     }
 
+    /// Sides carrying the document frame.
+    #[must_use]
+    pub const fn frame(&self) -> Option<FrameSides> {
+        self.frame
+    }
+
     /// Resolved frame colour role.
     #[must_use]
     pub const fn frame_color(&self) -> ColorRole {
@@ -103,15 +73,45 @@ impl Group<'_> {
         self.frame_width
     }
 
-    /// Optional wheel surface attached to the group.
+    /// Gap between adjacent visible children.
     #[must_use]
-    pub const fn surface(&self) -> Option<&SurfaceSpec> {
-        self.surface
+    pub const fn gap(&self) -> f32 {
+        self.gap
+    }
+
+    /// The axis whose room decides which children stand, when they do.
+    #[must_use]
+    pub const fn measure(&self) -> Option<MeasureAxis> {
+        self.measure
+    }
+
+    /// Resolved horizontal padding.
+    #[must_use]
+    pub const fn padding_x(&self) -> f32 {
+        self.padding_x
+    }
+
+    /// Resolved vertical padding.
+    #[must_use]
+    pub const fn padding_y(&self) -> f32 {
+        self.padding_y
+    }
+
+    /// The window corners this group stands at.
+    #[must_use]
+    pub const fn round(&self) -> FrameCorners {
+        self.round
     }
 
     /// Effective document size, when one is declared or intrinsic.
     #[must_use]
     pub const fn size(&self) -> Option<SizeSpec> {
         self.size
+    }
+
+    /// Optional wheel surface attached to the group.
+    #[must_use]
+    pub const fn surface(&self) -> Option<&SurfaceSpec> {
+        self.surface
     }
 }

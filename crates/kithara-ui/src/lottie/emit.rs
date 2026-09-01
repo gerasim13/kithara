@@ -19,10 +19,6 @@ use crate::draw::{
     Verb,
 };
 
-/// What a miter join carries when an artwork does not say, which is the only
-/// limit this list's pen has a word for.
-const MITER: f64 = 4.0;
-
 /// Draws one frame of an artwork into a list, in the neutral vocabulary.
 ///
 /// Nothing reaches `into` unless the whole frame is drawable: an artwork that
@@ -63,9 +59,9 @@ pub(crate) fn emit(
 /// resolves both the points and the pen width the way it does for every other
 /// drawing rather than by arithmetic written a second time here.
 struct Part {
-    verbs: Vec<Verb>,
-    transform: Transform,
     ink: Ink,
+    transform: Transform,
+    verbs: Vec<Verb>,
 }
 
 /// What one draw does to the contours it claimed.
@@ -148,27 +144,76 @@ fn chained(layers: &[Layer], layer: &Layer, parent: Affine, frame: f64) -> Affin
 /// on top, which is what its author sees in the tool that wrote it.
 #[derive(Default)]
 struct Batch {
-    elements: Vec<PathEl>,
     contours: Vec<Contour>,
     draws: Vec<Claim>,
+    elements: Vec<PathEl>,
     /// How many contours the most recent draw claimed, so a run already spoken
     /// for is never merged into.
     claimed: usize,
 }
 
 struct Contour {
-    elements: Range<usize>,
     transform: Affine,
+    elements: Range<usize>,
 }
 
 struct Claim {
-    stroke: Option<fixed::Stroke>,
     brush: fixed::Brush,
-    alpha: f64,
+    stroke: Option<fixed::Stroke>,
     contours: Range<usize>,
+    alpha: f64,
 }
 
 impl Batch {
+    /// Merges into the run before it only when that run is not yet spoken for
+    /// and sits under the same transform, which is what decides how many
+    /// contours one draw fills.
+    fn contour(&mut self, geometry: &Geometry, transform: Affine, frame: f64) {
+        let mergeable = self.claimed < self.contours.len()
+            && self.contours.last().map(|last| last.transform) == Some(transform);
+        let start = self.elements.len();
+        geometry.evaluate(frame, &mut self.elements);
+        if let Some(last) = self.contours.last_mut().filter(|_| mergeable) {
+            last.elements.end = self.elements.len();
+        } else {
+            self.contours.push(Contour {
+                transform,
+                elements: start..self.elements.len(),
+            });
+        }
+    }
+
+    fn draw(&mut self, draw: &Draw, alpha: f64, opened: usize, frame: f64) {
+        self.draws.push(Claim {
+            stroke: draw
+                .stroke
+                .as_ref()
+                .map(|stroke| stroke.evaluate(frame).into_owned()),
+            brush: draw.brush.evaluate(1.0, frame).into_owned(),
+            alpha: alpha * draw.opacity.evaluate(frame) / 100.0,
+            contours: opened..self.contours.len(),
+        });
+        self.claimed = self.contours.len();
+    }
+
+    fn paint(self, layer: &str, painted: &mut Vec<Part>) -> Result<(), LottieError> {
+        for draw in self.draws.iter().rev() {
+            let ink = ink(draw, layer)?;
+            for contour in self.contours.get(draw.contours.clone()).unwrap_or_default() {
+                painted.push(Part {
+                    ink,
+                    verbs: verbs(
+                        self.elements
+                            .get(contour.elements.clone())
+                            .unwrap_or_default(),
+                    ),
+                    transform: affine(contour.transform),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn shapes(
         &mut self,
         shapes: &[Shape],
@@ -203,55 +248,6 @@ impl Batch {
         }
         Ok(())
     }
-
-    /// Merges into the run before it only when that run is not yet spoken for
-    /// and sits under the same transform, which is what decides how many
-    /// contours one draw fills.
-    fn contour(&mut self, geometry: &Geometry, transform: Affine, frame: f64) {
-        let mergeable = self.claimed < self.contours.len()
-            && self.contours.last().map(|last| last.transform) == Some(transform);
-        let start = self.elements.len();
-        geometry.evaluate(frame, &mut self.elements);
-        if let Some(last) = self.contours.last_mut().filter(|_| mergeable) {
-            last.elements.end = self.elements.len();
-        } else {
-            self.contours.push(Contour {
-                elements: start..self.elements.len(),
-                transform,
-            });
-        }
-    }
-
-    fn draw(&mut self, draw: &Draw, alpha: f64, opened: usize, frame: f64) {
-        self.draws.push(Claim {
-            stroke: draw
-                .stroke
-                .as_ref()
-                .map(|stroke| stroke.evaluate(frame).into_owned()),
-            brush: draw.brush.evaluate(1.0, frame).into_owned(),
-            alpha: alpha * draw.opacity.evaluate(frame) / 100.0,
-            contours: opened..self.contours.len(),
-        });
-        self.claimed = self.contours.len();
-    }
-
-    fn paint(self, layer: &str, painted: &mut Vec<Part>) -> Result<(), LottieError> {
-        for draw in self.draws.iter().rev() {
-            let ink = ink(draw, layer)?;
-            for contour in self.contours.get(draw.contours.clone()).unwrap_or_default() {
-                painted.push(Part {
-                    verbs: verbs(
-                        self.elements
-                            .get(contour.elements.clone())
-                            .unwrap_or_default(),
-                    ),
-                    transform: affine(contour.transform),
-                    ink,
-                });
-            }
-        }
-        Ok(())
-    }
 }
 
 /// What one draw puts on the contours it claimed, with its own opacity folded
@@ -279,6 +275,10 @@ fn ink(draw: &Claim, layer: &str) -> Result<Ink, LottieError> {
 /// it hands over is `kurbo::Stroke::new` with a cap and a join set on it, so
 /// this list's pen having no pattern is not a gap an artwork can fall into.
 fn pen(stroke: &fixed::Stroke, layer: &str) -> Result<Pen, LottieError> {
+    /// What a miter join carries when an artwork does not say, which is the only
+    /// limit this list's pen has a word for.
+    const MITER: f64 = 4.0;
+
     if stroke.miter_limit != MITER {
         return Err(LottieError::MiteredStroke {
             layer: layer.to_owned(),
@@ -327,22 +327,22 @@ fn ramp(gradient: &Gradient, alpha: f64, layer: &str) -> Result<Paint, LottieErr
         })
         .collect::<Vec<Stop>>();
     let stops = Stops::new(&stops).map_err(|source| LottieError::Ramp {
-        layer: layer.to_owned(),
         source,
+        layer: layer.to_owned(),
     })?;
     match gradient.kind {
         GradientKind::Linear(line) => Ok(Paint::Linear {
-            from: point(line.start),
             stops,
+            from: point(line.start),
             to: point(line.end),
         }),
         GradientKind::Radial(circles)
             if circles.start_radius == 0.0 && circles.start_center == circles.end_center =>
         {
             Ok(Paint::Radial {
+                stops,
                 center: point(circles.end_center),
                 radius: circles.end_radius,
-                stops,
             })
         }
         GradientKind::Radial(_) | GradientKind::Sweep(_) => Err(LottieError::Brush {
@@ -355,10 +355,10 @@ fn faded(color: AlphaColor<Srgb>, alpha: f64) -> Rgba {
     let [r, g, b, a] = color.components;
     let alpha: f32 = alpha.as_();
     Rgba {
-        a: a * alpha,
         b,
         g,
         r,
+        a: a * alpha,
     }
 }
 
@@ -534,7 +534,8 @@ mod refusals {
     /// A trim rather than a repeater because velato imports only the first of
     /// the two: its repeater arm is commented out, so no document can put a
     /// `Shape::Repeater` in front of this emitter.
-    const TRIMMED: &str = r#"{
+    fn refused() -> (Result<(), LottieError>, usize) {
+        const TRIMMED: &str = r#"{
         "v": "5.7.0", "fr": 60, "ip": 0, "op": 60, "w": 100, "h": 100, "nm": "trimmed",
         "ddd": 0, "assets": [],
         "layers": [{
@@ -556,9 +557,8 @@ mod refusals {
                  "s": {"a": 0, "k": [100, 100]}, "r": {"a": 0, "k": 0}, "o": {"a": 0, "k": 100}}
             ]}]
         }]
-    }"#;
+        }"#;
 
-    fn refused() -> (Result<(), LottieError>, usize) {
         let artwork = Composition::from_slice(TRIMMED.as_bytes())
             .unwrap_or_else(|error| panic!("the trimmed artwork must read: {error}"));
         let mut list = DrawListBuilder::default();

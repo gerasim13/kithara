@@ -2,13 +2,13 @@
 use kithara::play::effects::eq::{EqBandConfig, GainDb};
 use kithara::{
     host::HostOwned,
+    platform::{CancelToken, sync::Arc},
     play::{
         PlayError, PlayerConfig, PlayerImpl, StretchControls,
         effects::eq::generate_log_spaced_bands,
     },
+    queue::QueueConfig,
 };
-use kithara_platform::{CancelToken, sync::Arc};
-use kithara_queue::QueueConfig;
 
 use crate::{
     config::AppConfig,
@@ -305,8 +305,7 @@ impl Drop for DeckSet {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{host::HostConfig, play::PlayWorkerConfig};
-    use kithara_queue::QueueConfig;
+    use kithara::{host::HostConfig, play::PlayWorkerConfig, queue::QueueConfig};
 
     use super::*;
     use crate::pools::{self, AppWorker};

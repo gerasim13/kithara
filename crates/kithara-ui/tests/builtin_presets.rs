@@ -12,6 +12,8 @@ use kithara_ui::{
     view,
 };
 
+type Blocks<'a> = Vec<((f32, Option<f32>), &'a str)>;
+
 fn micro_preset() -> CompiledUi {
     compile(
         builtin::MICRO_PRESET,
@@ -35,7 +37,7 @@ fn micro_bar(ui: &CompiledUi) -> &ExpandedNode {
     children.first().expect("the bar stands at every height")
 }
 
-fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option<f32>), &'a str)> {
+fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Blocks<'a> {
     let ExpandedNode::Row { children, .. } = bar else {
         panic!("a bar is one row");
     };
@@ -48,7 +50,7 @@ fn bar_cells<'a>(ui: &'a CompiledUi, bar: &'a ExpandedNode) -> Vec<((f32, Option
         .collect()
 }
 
-fn micro_blocks(ui: &CompiledUi) -> Vec<((f32, Option<f32>), &str)> {
+fn micro_blocks(ui: &CompiledUi) -> Blocks<'_> {
     let CompiledNode::Module { root, .. } = &ui.root else {
         panic!("the micro preset is one module");
     };

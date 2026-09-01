@@ -6,7 +6,6 @@
 //! the demo host and the harnesses examined here are the ones the gallery
 //! itself opens with. The example beside this file is therefore only the
 //! program, and every assertion about it lives in one place.
-
 #[path = "../examples/gallery/app.rs"]
 mod app;
 #[path = "../examples/gallery/capture.rs"]
@@ -806,10 +805,10 @@ mod tests {
 
     /// One object the motion page declares, with the track it travels along.
     struct Travel<'a> {
-        pose: Pose,
-        to: Option<Pose>,
-        phase: Option<&'a str>,
         motion: Option<Motion<&'a str>>,
+        phase: Option<&'a str>,
+        to: Option<Pose>,
+        pose: Pose,
     }
 
     fn motion_objects(ui: &CompiledUi) -> Vec<Travel<'_>> {
@@ -1291,9 +1290,9 @@ mod tests {
     /// One placement of the scene page, as the document declared it.
     struct Placement<'a> {
         path: &'a str,
+        magnet: Option<(Vec<&'a str>, f32)>,
         read: Option<&'a str>,
         write: Option<&'a str>,
-        magnet: Option<(Vec<&'a str>, f32)>,
     }
 
     /// A placement the pointer may carry has to read its point back, or the

@@ -12,6 +12,7 @@ use kithara_stream::{
     SourceError as StreamSourceError, SourcePhase, SourceProbe, StreamError, StreamResult,
     WorkerWake, dl::PeerHandle,
 };
+use kithara_test_utils::kithara;
 use tracing::trace;
 use url::Url;
 
@@ -313,7 +314,7 @@ where
         })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
         self.ensure_not_cancelled()?;
         let n = self
@@ -347,7 +348,7 @@ where
         Some(Box::new(hooks))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn wait_range(
         &mut self,
         range: Range<u64>,

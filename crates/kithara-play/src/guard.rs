@@ -1,7 +1,5 @@
-// A web-audio context runs at whatever rate the browser hands it, and nothing
-// on wasm resamples on the way out, so a build without a backend resolves
-// `PlaybackResamplerBackend` to `NoResamplerBackend` and every off-rate track
-// fails to open.
+// WHY: A web-audio context runs at whatever rate the browser hands it, and nothing on wasm resamples on the way out, so a build
+// without a backend resolves `PlaybackResamplerBackend` to `NoResamplerBackend` and every off-rate track fails to open.
 #[cfg(all(
     target_arch = "wasm32",
     not(any(feature = "resample-rubato", feature = "resample-glide"))

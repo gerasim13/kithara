@@ -112,8 +112,8 @@ struct Lockfile {
 
 #[derive(Debug, Deserialize)]
 struct LockPackage {
-    name: String,
     source: Option<String>,
+    name: String,
 }
 
 #[cfg(test)]

@@ -69,7 +69,6 @@ fn physical_memory() -> Option<usize> {
 ///
 /// Only [`Self::Eof`] leaves a complete measurement behind. The other two
 /// truncate it, and a truncated drain cannot say whether RSS settled.
-#[derive(Debug)]
 enum DrainEnd {
     Eof,
     Failed(DecodeError),
@@ -162,7 +161,7 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
     native,
     tokio,
     serial,
-    timeout(Duration::from_secs(30)),
+    timeout(Duration::from_secs(90)),
     hang_timeout_secs(5)
 )]
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {

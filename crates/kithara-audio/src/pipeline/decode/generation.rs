@@ -11,6 +11,7 @@ use kithara_decode::{
 };
 use kithara_signal::{AudioChunk, AudioSpec};
 use kithara_stream::MediaInfo;
+use kithara_test_utils::kithara;
 use tracing::warn;
 
 use crate::pipeline::{gapless::GaplessStage, seek::ResumeState};
@@ -171,6 +172,7 @@ impl DecoderGeneration {
         self.staged.pop_front().or_else(|| self.gapless.next())
     }
 
+    #[kithara::measure(label = "audio.decoder.next")]
     pub(crate) fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
             Ok(result) => result,

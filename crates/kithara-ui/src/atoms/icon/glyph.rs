@@ -25,9 +25,9 @@ pub(crate) struct Glyph {
 /// once, where it can still answer "nothing to draw".
 #[derive(Clone, PartialEq)]
 pub(crate) struct GlyphData {
-    pub(crate) active: bool,
-    pub(crate) active_mark: Option<Mark>,
     pub(crate) mark: Mark,
+    pub(crate) active_mark: Option<Mark>,
+    pub(crate) active: bool,
 }
 
 impl Glyph {

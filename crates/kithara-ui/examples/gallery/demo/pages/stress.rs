@@ -196,8 +196,8 @@ fn stress_waveform(index: usize, buckets: u16) -> Vec<WaveBucket> {
 
 const fn waveform_value(waveform: &[WaveBucket], revision: u64) -> ReadValue<'_> {
     ReadValue::Waveform(WaveformView {
-        buckets: waveform,
         revision,
+        buckets: waveform,
         beats: &[],
         downbeats: &[],
         unready: &[],

@@ -13,7 +13,6 @@
 //! The claim holds for this gallery's skin, whose window corners are square. A
 //! skin that rounds them buys those corners from the desktop on purpose, and
 //! would have to be asked a shape-aware question instead of this one.
-
 use kithara_test_utils::kithara;
 use kithara_ui::{
     app::{Config, Ui},

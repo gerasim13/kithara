@@ -128,10 +128,10 @@ fn transact_local<G: SyncGroup<NestedGroup = G>>(
             };
             *unavailable = None;
             Ok(SyncAdmission::Accepted {
-                operation: operation_id,
-                topology: TopologyStamp::new(grid.id(), *topology_revision),
                 load,
                 transport,
+                operation: operation_id,
+                topology: TopologyStamp::new(grid.id(), *topology_revision),
             })
         }
         SyncOperation::Sync { .. } => preserve_rejected(

@@ -41,7 +41,7 @@ fn platform_mutex_is_explored_by_loom() {
 /// parameter and drops on return — same hold window as an in-line loop, but
 /// keeps clippy's `significant_drop_tightening` from mis-suggesting an early
 /// drop inside the loop. Mirrors
-/// `kithara_platform::flash::system::wake::wait_set`.
+/// `kithara::platform::flash::system::wake::wait_set`.
 fn wait_until_ready(condvar: &Condvar, mut ready: MutexGuard<'_, bool>) {
     while !*ready {
         ready = condvar.wait(ready);

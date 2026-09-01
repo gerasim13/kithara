@@ -167,7 +167,6 @@ pub(super) mod lifecycle {
         }
         let master_eq_memo = Memo::new(master_eq.clone());
         let master_eq_id = fw_ctx.add_node(master_eq, None);
-        player.master_volume = master_volume.clamp(0.0, 1.0);
         let master_volume = VolumeNode {
             volume: master_gain(player.master_volume),
             ..VolumeNode::default()
@@ -666,6 +665,7 @@ mod tests {
     use firewheel::{
         StreamInfo, backend::BackendProcessInfo, node::StreamStatus, processor::FirewheelProcessor,
     };
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_platform::time::{Duration, Instant};
     use kithara_test_utils::kithara;
@@ -681,7 +681,7 @@ mod tests {
         session::{
             dispatch::{invalidate_audio_route, run_cmd},
             protocol::Cmd,
-            testing::{HostTestPools, attach_player, pools, state as test_state},
+            testing::{attach_player, state as test_state},
         },
     };
 
@@ -709,7 +709,7 @@ mod tests {
         stream: u64,
     }
 
-    type TestState = SessionState<TestBackend, HostTestPools>;
+    type TestState = SessionState<TestBackend, TestPools>;
 
     impl Drop for TestBackend {
         fn drop(&mut self) {
@@ -855,9 +855,9 @@ mod tests {
         match run_cmd(
             state,
             Cmd::StartPlayer {
+                master_volume: 1.0,
                 player_id,
                 sample_rate,
-                master_volume: 1.0,
             },
         ) {
             Reply::Ok => {}

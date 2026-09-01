@@ -4,8 +4,6 @@ use crate::{
     solve,
 };
 
-const FRAME_OVERHANG: f32 = 1.0;
-
 pub(crate) fn place_popover(
     anchor: Rect,
     pointer: Option<Pt>,
@@ -13,6 +11,8 @@ pub(crate) fn place_popover(
     viewport: solve::Size,
     align: PopoverAlign,
 ) -> Pt {
+    const FRAME_OVERHANG: f32 = 1.0;
+
     let from = pointer.map_or(anchor, |point| Rect {
         x: point.x,
         y: point.y,

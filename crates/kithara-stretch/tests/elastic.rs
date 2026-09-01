@@ -4,18 +4,15 @@
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
-
 use std::{f32::consts::TAU, ops::RangeInclusive};
 
+use kithara_bufpool::testing::{pools as default_pools, pools_with_budget as pools};
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
     ElasticSpanConfig, StretchKind, build_engine,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
-
-mod common;
-use common::{default_pools, pools};
 
 const CHANNELS: usize = 2;
 const CONTROL_QUANTUM: usize = 64;
@@ -1223,6 +1220,13 @@ mod facade {
 mod priming {
     use super::*;
 
+    type PrimedPair = (
+        Box<dyn ElasticEngine>,
+        Box<dyn ElasticEngine>,
+        ElasticCapabilities,
+        usize,
+    );
+
     fn indexed_markers(frames: usize, offset: usize) -> Vec<f32> {
         marker_signal(frames, offset, |index| {
             let marker_index = u16::try_from(index.wrapping_mul(73) % 997)
@@ -1255,14 +1259,7 @@ mod priming {
             .expect("invariant: warmup request is valid")
     }
 
-    fn primed_playing_pair(
-        backend: StretchKind,
-    ) -> (
-        Box<dyn ElasticEngine>,
-        Box<dyn ElasticEngine>,
-        ElasticCapabilities,
-        usize,
-    ) {
+    fn primed_playing_pair(backend: StretchKind) -> PrimedPair {
         const MAX_FRAMES: usize = 65_536;
 
         let mut reference = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);

@@ -34,7 +34,6 @@
 //! the gate's in-process counter, measures the spin RATE off the probe (a
 //! real metric, not a sleep that masks a hang), then releases. No real-time
 //! pacing, no codec timers.
-
 use std::{
     num::NonZeroUsize,
     sync::atomic::{AtomicBool, Ordering},

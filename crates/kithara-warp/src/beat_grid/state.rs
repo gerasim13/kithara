@@ -42,18 +42,18 @@ pub enum BeatGridRegion {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatEstimate<T> {
-    /// Returns the resolved value.
-    #[field(get)]
-    value: T,
     /// Returns how the value was established.
     #[field(get, copy)]
     evidence: BeatEvidence,
-    /// Returns maximum absolute error in grid-native frames.
-    #[field(get, copy)]
-    uncertainty: FrameUncertainty,
     /// Returns the snapshot identity and revision used by the estimate.
     #[field(get, copy)]
     stamp: BeatGridStamp,
+    /// Returns maximum absolute error in grid-native frames.
+    #[field(get, copy)]
+    uncertainty: FrameUncertainty,
+    /// Returns the resolved value.
+    #[field(get)]
+    value: T,
 }
 
 impl<T> BeatEstimate<T> {
@@ -66,10 +66,10 @@ impl<T> BeatEstimate<T> {
         stamp: BeatGridStamp,
     ) -> Self {
         Self {
-            value,
             evidence,
-            uncertainty,
             stamp,
+            uncertainty,
+            value,
         }
     }
 }

@@ -24,10 +24,6 @@ mod host {
     impl Draws for VuStereo {
         type Painter = StereoMeter;
 
-        fn painter(&self, skin: &Skin) -> StereoMeter {
-            StereoMeter::new(skin)
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<StereoLevels> {
             match read.value {
                 Some(ReadValue::Stereo(levels)) => Some(*levels),
@@ -42,6 +38,10 @@ mod host {
                     .track(Track::AbsoluteHorizontal)
                     .build(),
             )
+        }
+
+        fn painter(&self, skin: &Skin) -> StereoMeter {
+            StereoMeter::new(skin)
         }
     }
 }

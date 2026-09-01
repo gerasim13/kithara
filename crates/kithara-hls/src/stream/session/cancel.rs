@@ -21,16 +21,8 @@ impl SessionCancel {
         let lookahead = RwLock::new(fetch.child());
         Self {
             root,
-            fetch: RwLock::new(fetch),
             lookahead,
-        }
-    }
-
-    delegate::delegate! {
-        to self.root {
-            #[call(cancel)]
-            pub(super) fn abort(&self);
-            pub(super) fn is_cancelled(&self) -> bool;
+            fetch: RwLock::new(fetch),
         }
     }
 
@@ -41,16 +33,24 @@ impl SessionCancel {
         }
     }
 
+    pub(super) fn rearm(&self) {
+        self.fetch.read().cancel();
+        let fetch = self.root.child();
+        *self.fetch.write() = fetch.clone();
+        *self.lookahead.write() = fetch.child();
+    }
+
     pub(super) fn retire_lookahead(&self) {
         self.lookahead.read().cancel();
         let next = self.fetch.read().child();
         *self.lookahead.write() = next;
     }
 
-    pub(super) fn rearm(&self) {
-        self.fetch.read().cancel();
-        let fetch = self.root.child();
-        *self.fetch.write() = fetch.clone();
-        *self.lookahead.write() = fetch.child();
+    delegate::delegate! {
+        to self.root {
+            #[call(cancel)]
+            pub(super) fn abort(&self);
+            pub(super) fn is_cancelled(&self) -> bool;
+        }
     }
 }

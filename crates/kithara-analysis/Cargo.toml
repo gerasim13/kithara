@@ -27,6 +27,7 @@ webcodecs = ["kithara-audio/webcodecs"]
 fdk-aac = ["kithara-audio/fdk-aac"]
 
 [dependencies]
+kithara-bufpool = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-signal = { workspace = true }
 
@@ -43,7 +44,6 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 kithara-audio = { workspace = true, default-features = false }
 kithara-beat = { workspace = true, optional = true }
-kithara-bufpool = { workspace = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-test-utils = { workspace = true }
 kithara-worker = { workspace = true }

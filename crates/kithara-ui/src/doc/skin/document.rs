@@ -315,15 +315,15 @@ mod tests {
     use super::*;
     use crate::{builtin, skin::ColorRole, source::MemResolver};
 
-    const GOLD: &str = r##"(
+    fn gold() -> SkinDoc {
+        const GOLD: &str = r##"(
         schema: "kithara.skin",
         version: 1,
         id: "kithara-gold",
         palette: (accent: "#ff0000"),
         button: (icon_size: 42.0),
-    )"##;
+        )"##;
 
-    fn gold() -> SkinDoc {
         parse_skin_over(builtin::skin_doc(), GOLD, &origin())
             .expect("a patch over the builtin skin parses")
     }
@@ -579,8 +579,8 @@ fn load_over(
     let loaded = resolver.load(base, rel)?;
     if depth > limits.max_depth {
         return Err(UiDocError::DepthExceeded {
-            origin: loaded.uri,
             depth,
+            origin: loaded.uri,
             max: limits.max_depth,
         });
     }

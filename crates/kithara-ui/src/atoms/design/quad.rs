@@ -110,8 +110,8 @@ mod tests {
 
     const fn framed(border_width: f32) -> FrameSkin {
         FrameSkin {
-            border: ColorRole::Line,
             border_width,
+            border: ColorRole::Line,
             radius: 0.0,
         }
     }

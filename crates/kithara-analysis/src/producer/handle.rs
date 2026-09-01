@@ -11,20 +11,14 @@ use crate::analyzer::AnalysisToken;
 /// The producer side of one analysis pass, named once when the handle is made
 /// so offering costs no lookup. A track with no open pass has no handle.
 pub struct AnalysisProducer {
-    ring: Writer,
-    rate: NonZeroU32,
     token: AnalysisToken,
+    rate: NonZeroU32,
+    ring: Writer,
 }
 
 impl AnalysisProducer {
     pub(crate) const fn new(ring: Writer, rate: NonZeroU32, token: AnalysisToken) -> Self {
-        Self { ring, rate, token }
-    }
-
-    /// The pass this handle feeds.
-    #[must_use]
-    pub const fn token(&self) -> &AnalysisToken {
-        &self.token
+        Self { token, rate, ring }
     }
 
     /// Offer one interleaved range starting at source frame `at`, downmixed to
@@ -65,6 +59,12 @@ impl AnalysisProducer {
             .push(at, frames, mono)
             .then_some(())
             .ok_or(AudioObserveError::Full)
+    }
+
+    /// The pass this handle feeds.
+    #[must_use]
+    pub const fn token(&self) -> &AnalysisToken {
+        &self.token
     }
 }
 

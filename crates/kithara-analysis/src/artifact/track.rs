@@ -71,18 +71,18 @@ impl AnalysisFingerprint {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct TrackAnalysis {
-    token: AnalysisToken,
-    revision: u64,
-    source_sample_rate: NonZeroU32,
-    extent: Option<u64>,
-    #[builder(default)]
-    coverage: Coverage,
     #[builder(default)]
     fingerprint: AnalysisFingerprint,
+    token: AnalysisToken,
+    #[builder(default)]
+    coverage: Coverage,
+    source_sample_rate: NonZeroU32,
+    beat: Option<BeatSnapshot>,
+    extent: Option<u64>,
+    waveform: Option<Waveform>,
     #[builder(default)]
     settled: bool,
-    waveform: Option<Waveform>,
-    beat: Option<BeatSnapshot>,
+    revision: u64,
 }
 
 impl TrackAnalysis {

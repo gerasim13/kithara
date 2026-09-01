@@ -41,7 +41,7 @@ unsafe impl<T> Send for Mutex<T> {}
 // SAFETY: same — no concurrent access on the single browser thread.
 unsafe impl<T> Sync for Mutex<T> {}
 
-// crate-internal: condvar needs the raw guard
+// WHY: crate-internal: condvar needs the raw guard
 pub struct MutexGuard<'a, T>(pub(crate) wasm_safe_thread::guard::Guard<'a, T>);
 
 impl<T> Deref for MutexGuard<'_, T> {

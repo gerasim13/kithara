@@ -30,10 +30,10 @@ pub struct BeatAnalysisSettings {
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     #[field(get(copy))]
     resampler_quality: ResamplerQuality,
-    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
-    detector_overlap_seconds: u32,
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_MIN_WINDOW_SECONDS)]
     detector_min_window_seconds: u32,
+    #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_OVERLAP_SECONDS)]
+    detector_overlap_seconds: u32,
     #[builder(default = Consts::DEFAULT_BEAT_DETECTOR_WINDOW_SECONDS)]
     detector_window_seconds: u32,
     #[builder(default = Consts::DEFAULT_BEAT_TARGET_RATE)]

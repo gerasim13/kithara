@@ -1,11 +1,9 @@
+use kithara_bufpool::testing::pools as default_pools;
 use kithara_stretch::{
     ElasticCapabilities, ElasticConfig, ElasticCursor, ElasticError, ElasticSpan,
     ElasticSpanConfig, ElasticSpanPlan, build_engine,
 };
 use kithara_test_utils::kithara;
-
-mod common;
-use common::default_pools;
 
 const CONTINUITY_EPSILON: f64 = 1.0e-6;
 const MAX_OUTPUT_FRAMES: usize = 480;

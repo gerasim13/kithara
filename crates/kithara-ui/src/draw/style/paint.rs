@@ -35,8 +35,8 @@ pub enum StopsError {
 /// inside `0..=1`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Stops {
-    len: usize,
     stops: [Stop; MAX_STOPS],
+    len: usize,
 }
 
 impl Stops {
@@ -84,10 +84,11 @@ impl Stops {
 /// Gradient geometry is in the same pixels as the shape it fills, so every
 /// backend resolves the same colour at the same place without applying a
 /// transform of its own.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, derive_more::From)]
 #[non_exhaustive]
 pub enum Paint {
     /// One colour across the whole shape.
+    #[from]
     Solid(Rgba),
     /// A ramp along the segment `from` to `to`.
     Linear { from: Pt, stops: Stops, to: Pt },
@@ -97,12 +98,6 @@ pub enum Paint {
         radius: f32,
         stops: Stops,
     },
-}
-
-impl From<Rgba> for Paint {
-    fn from(color: Rgba) -> Self {
-        Self::Solid(color)
-    }
 }
 
 #[cfg(test)]
@@ -120,8 +115,8 @@ mod tests {
 
     fn stop(offset: f32) -> Stop {
         Stop {
-            color: BLACK,
             offset,
+            color: BLACK,
         }
     }
 

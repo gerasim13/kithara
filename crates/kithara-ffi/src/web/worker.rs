@@ -1,21 +1,23 @@
 use std::{cell::RefCell, collections::HashMap, num::NonZeroUsize, rc::Rc};
 
-use kithara_abr::AbrMode;
-use kithara_assets::StorageBackend;
-use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_hls::KeyOptions;
-use kithara_host::wasm;
-use kithara_platform::{
-    sync::{Arc, mpsc},
-    thread::{assert_not_main_thread, keep_worker_alive},
-    time::{Duration, sleep},
-    tokio::task::spawn as task_spawn,
+use kithara::{
+    abr::AbrMode,
+    assets::StorageBackend,
+    drm::{KeyRequest, KeyRequestFactory},
+    hls::KeyOptions,
+    host::wasm,
+    platform::{
+        sync::{Arc, mpsc},
+        thread::{assert_not_main_thread, keep_worker_alive},
+        time::{Duration, sleep},
+        tokio::task::spawn as task_spawn,
+    },
+    play::{
+        PlayError, ResourceSrc,
+        policy::{DomainKeyPolicy, DomainKeyRule},
+    },
+    queue::{QueueConfig, TrackId},
 };
-use kithara_play::{
-    ResourceSrc,
-    policy::{DomainKeyPolicy, DomainKeyRule},
-};
-use kithara_queue::{QueueConfig, TrackId};
 
 use crate::{
     observer::{AUTH_TOKEN_HEADER, SALT_HEADER},
@@ -84,20 +86,20 @@ pub(crate) fn worker_main(
     const CROSSFADE_SECONDS: f32 = 5.0;
 
     assert_not_main_thread(concat!(module_path!(), "::worker_main"));
-    // Without this the Worker's spawn closure returns immediately (it only
-    // spawns async tasks) and `wasm_safe_thread` `close()`s the Worker, killing
-    // the command + tick loops. Keeps the Worker's event loop pumping for the
-    // page's lifetime so the spawned futures keep running.
+    // WHY: Without this the Worker's spawn closure returns immediately (it only spawns async tasks) and `wasm_safe_thread` `close()`s
+    // the Worker, killing the command + tick loops.
     keep_worker_alive();
 
     task_spawn(async move {
         let mut host = wasm::remote_host(host_sender);
         let state = BuildState::new(pools);
         let worker =
-            FfiWorker::new(kithara_play::PlayWorkerConfig::builder(state.pools.clone()).build());
+            FfiWorker::new(kithara::play::PlayWorkerConfig::builder(state.pools.clone()).build());
         let queue_store = state.store.clone();
-        let player = kithara_play::PlayerImpl::new(
-            kithara_play::PlayerConfig::builder().worker(worker).build(),
+        let player = kithara::play::PlayerImpl::new(
+            kithara::play::PlayerConfig::builder()
+                .worker(worker)
+                .build(),
         );
         let queue = FfiQueue::new(
             QueueConfig::builder()
@@ -123,8 +125,11 @@ pub(crate) fn worker_main(
             dispatch_cmd(cmd, &queue, &build_state);
         }
 
-        if let Err(error) = host.remove(&owner) {
-            clog!("[WORKER] host queue removal failed: {error}");
+        match host.remove(&owner) {
+            Ok(()) | Err(PlayError::SessionGone { .. }) => {}
+            Err(error) => {
+                clog!("[WORKER] host queue removal failed; resident retained: {error}");
+            }
         }
     });
 }
@@ -293,10 +298,10 @@ fn apply_peak_bitrate(queue: &FfiQueueControl, wifi_bps: f64, cellular_bps: f64)
 }
 
 struct SetupHlsAesArgs {
-    salt: String,
-    domains: Vec<String>,
     headers: Option<HashMap<String, String>>,
     query_params: Option<HashMap<String, String>>,
+    salt: String,
+    domains: Vec<String>,
 }
 
 /// Fold a DRM rule into the worker's [`BuildState`]. Builds the
@@ -369,9 +374,9 @@ fn build_source(state: &BuildState, url: String) -> FfiTrackSource {
 }
 
 struct ReplaceTrackArgs {
-    index: u32,
-    id: TrackId,
     url: String,
+    id: TrackId,
+    index: u32,
 }
 
 /// Mirror of [`NativeInner::replace_item`](crate::native::inner::NativeInner::replace_item):

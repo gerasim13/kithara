@@ -1,5 +1,7 @@
-use kithara::prelude::ResourceSrc;
-use kithara_queue::{QueueError, Transition};
+use kithara::{
+    prelude::ResourceSrc,
+    queue::{QueueError, Transition},
+};
 
 use crate::{config::AppConfig, pools::AppQueueControl, sources::build_source};
 

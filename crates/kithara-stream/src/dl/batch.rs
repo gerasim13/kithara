@@ -485,9 +485,8 @@ async fn deliver(request_id: RequestId, ctx: DeliveryContext<'_>) {
     } = ctx;
     match target {
         ResponseTarget::Channel(tx) => {
-            // Collect the body here, on the downloader's (possibly separate)
-            // worker, so only `Send` bytes cross back to the caller — the raw
-            // HTTP body stream is `!Send` on wasm.
+            // WHY: Collect the body here, on the downloader's (possibly separate) worker, so only `Send` bytes cross back to the caller - the
+            // raw HTTP body stream is `!Send` on wasm.
             let collected = match result {
                 Ok(resp) => {
                     let headers = resp.headers.clone();

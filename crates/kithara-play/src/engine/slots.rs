@@ -10,21 +10,6 @@ pub(super) struct SlotTable {
 }
 
 impl SlotTable {
-    delegate::delegate! {
-        to self.slots {
-            pub(super) fn clear(&mut self);
-            pub(super) const fn len(&self) -> usize;
-        }
-        to self {
-            #[expr($.map(|control| Arc::clone(&control.playback)))]
-            #[call(get)]
-            pub(super) fn playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
-            #[expr($.map(|control| control.eq.clone()))]
-            #[call(get)]
-            pub(super) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
-        }
-    }
-
     pub(super) fn contains(&self, slot: SlotId) -> bool {
         self.slots.iter().any(|(id, _)| *id == slot)
     }
@@ -61,6 +46,21 @@ impl SlotTable {
     pub(super) fn with_capacity(capacity: usize) -> Self {
         Self {
             slots: Vec::with_capacity(capacity),
+        }
+    }
+
+    delegate::delegate! {
+        to self.slots {
+            pub(super) fn clear(&mut self);
+            pub(super) const fn len(&self) -> usize;
+        }
+        to self {
+            #[expr($.map(|control| Arc::clone(&control.playback)))]
+            #[call(get)]
+            pub(super) fn playback(&self, slot: SlotId) -> Option<Arc<PlaybackShared>>;
+            #[expr($.map(|control| control.eq.clone()))]
+            #[call(get)]
+            pub(super) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq>;
         }
     }
 }

@@ -39,10 +39,10 @@ where
         config: <P::State as RetainedCanvasState>::Config,
     ) -> Self {
         Self {
+            config,
             canvas: Canvas::new(program)
                 .width(Length::Fill)
                 .height(Length::Fill),
-            config,
             path: path.to_owned(),
         }
     }
@@ -60,6 +60,42 @@ where
     P: Program<UiEvent, Theme, Renderer>,
     P::State: RetainedCanvasState,
 {
+    fn diff(&self, tree: &mut Tree) {
+        self.canvas.diff(tree);
+        tree.state
+            .downcast_mut::<P::State>()
+            .reconcile_canvas(&self.path, &self.config);
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let node = self.canvas.layout(tree, renderer, limits);
+        tree.state
+            .downcast_mut::<P::State>()
+            .set_canvas_viewport(node.size(), &self.config);
+        node
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.custom(None, layout.bounds(), tree.state.downcast_mut::<P::State>());
+    }
+
+    fn state(&self) -> iced::advanced::widget::tree::State {
+        let mut state = P::State::default();
+        state.reconcile_canvas(&self.path, &self.config);
+        iced::advanced::widget::tree::State::new(state)
+    }
+
     delegate::delegate! {
         to self.canvas {
             fn tag(&self) -> iced::advanced::widget::tree::Tag;
@@ -95,41 +131,5 @@ where
                 viewport: &Rectangle,
             );
         }
-    }
-
-    fn state(&self) -> iced::advanced::widget::tree::State {
-        let mut state = P::State::default();
-        state.reconcile_canvas(&self.path, &self.config);
-        iced::advanced::widget::tree::State::new(state)
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        self.canvas.diff(tree);
-        tree.state
-            .downcast_mut::<P::State>()
-            .reconcile_canvas(&self.path, &self.config);
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let node = self.canvas.layout(tree, renderer, limits);
-        tree.state
-            .downcast_mut::<P::State>()
-            .set_canvas_viewport(node.size(), &self.config);
-        node
-    }
-
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        _renderer: &Renderer,
-        operation: &mut dyn Operation,
-    ) {
-        operation.custom(None, layout.bounds(), tree.state.downcast_mut::<P::State>());
     }
 }

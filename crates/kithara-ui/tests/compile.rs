@@ -2444,7 +2444,8 @@ fn stacked_resolver() -> MemResolver {
 /// The window corners the module in cell `index` of the stacked layout stands
 /// at.
 fn stacked_round(index: usize) -> FrameCorners {
-    let ui = compile_blocks(&stacked_resolver(), "stacked.klayout.ron").unwrap();
+    let ui = compile_blocks(&stacked_resolver(), "stacked.klayout.ron")
+        .expect("the stacked fixture compiles");
     let CompiledNode::Split { children, .. } = &ui.root else {
         panic!("expected a split root");
     };
@@ -2735,7 +2736,7 @@ fn tabbed_error(tabs: &str) -> UiDocError {
         &UiConfig::default(),
         &view::EMPTY,
     )
-    .unwrap_err()
+    .expect_err("the invalid tabs fixture is rejected")
 }
 
 /// A nav in one module turns a `Tabs` in another, which the two can only do

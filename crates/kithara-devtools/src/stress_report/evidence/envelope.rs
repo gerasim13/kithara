@@ -39,10 +39,10 @@ pub(super) struct FlightClusters {
 
 #[derive(Debug, Deserialize)]
 struct AttemptEnvelope {
-    schema: String,
-    label: String,
-    diagnostic: String,
     nextest: EnvelopeNextest,
+    diagnostic: String,
+    label: String,
+    schema: String,
     context: Value,
     /// Flight-recorder tails; absent in envelopes written before the recorder
     /// existed, so they default to empty rather than invalidating the record.
@@ -54,25 +54,25 @@ struct AttemptEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct EnvelopeNextest {
-    run_id: Option<String>,
-    binary_id: Option<String>,
     attempt_id: Option<String>,
-    test_name: Option<String>,
+    binary_id: Option<String>,
+    run_id: Option<String>,
     stress_current: Option<String>,
+    test_name: Option<String>,
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct Input<'a> {
     outcomes: &'a BTreeMap<AttemptKey, AttemptOutcome>,
     expected: &'a BTreeSet<AttemptKey>,
-    run_id: Option<&'a str>,
     evidence: &'a StressEvidenceConfig,
+    run_id: Option<&'a str>,
 }
 
 struct EnvelopeFiles {
     paths: Vec<PathBuf>,
-    invalid: usize,
     limit_exceeded: bool,
+    invalid: usize,
 }
 
 impl<'a> Input<'a> {
@@ -85,8 +85,8 @@ impl<'a> Input<'a> {
         Self {
             outcomes,
             expected,
-            run_id,
             evidence,
+            run_id,
         }
     }
 }
@@ -276,8 +276,8 @@ fn envelope_files(dir: &Path) -> Option<EnvelopeFiles> {
     paths.sort();
     Some(EnvelopeFiles {
         paths,
-        invalid,
         limit_exceeded,
+        invalid,
     })
 }
 

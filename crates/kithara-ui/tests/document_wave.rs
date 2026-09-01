@@ -82,13 +82,35 @@ impl<'a> WaveHost<'a> {
 impl Host for WaveHost<'_> {
     type Output = Vec<MountedWave>;
 
-    fn split(
+    fn control(
         &mut self,
-        _axis: Axis,
-        _measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
+        path: InternId,
+        spec: &ControlSpec,
+        _read: Option<&Binding>,
+        owner: InputOwner,
+        _size: Option<SizeSpec>,
+        _transform: Transform,
+    ) -> Self::Output {
+        match spec {
+            ControlSpec::Wave { style, .. } => vec![MountedWave {
+                owner,
+                path: self.ui.resolve(path).to_owned(),
+                style: *style,
+            }],
+            _ => Vec::new(),
+        }
+    }
+
+    fn group(
+        &mut self,
+        _group: Group<'_>,
+        children: Vec<GroupMount<Self::Output>>,
     ) -> Self::Output {
         Self::flatten(children.into_iter().map(|cell| cell.output))
+    }
+
+    fn hosted(&mut self, _node: &ExpandedNode, child: Self::Output) -> Self::Output {
+        child
     }
 
     fn measured(&mut self, _plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
@@ -99,12 +121,8 @@ impl Host for WaveHost<'_> {
         content.unwrap_or_default()
     }
 
-    fn group(
-        &mut self,
-        _group: Group<'_>,
-        children: Vec<GroupMount<Self::Output>>,
-    ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|cell| cell.output))
+    fn placed(&mut self, _placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        child
     }
 
     /// Counts what the document shows, so a shut surface contributes nothing.
@@ -118,10 +136,6 @@ impl Host for WaveHost<'_> {
             anchor.extend(content(self));
         }
         anchor
-    }
-
-    fn placed(&mut self, _placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
-        child
     }
 
     fn pressable(
@@ -146,31 +160,17 @@ impl Host for WaveHost<'_> {
         Self::flatten(children)
     }
 
+    fn split(
+        &mut self,
+        _axis: Axis,
+        _measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
+        Self::flatten(children.into_iter().map(|cell| cell.output))
+    }
+
     fn stage(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
         Self::flatten(children)
-    }
-
-    fn control(
-        &mut self,
-        path: InternId,
-        spec: &ControlSpec,
-        _read: Option<&Binding>,
-        owner: InputOwner,
-        _size: Option<SizeSpec>,
-        _transform: Transform,
-    ) -> Self::Output {
-        match spec {
-            ControlSpec::Wave { style, .. } => vec![MountedWave {
-                owner,
-                path: self.ui.resolve(path).to_owned(),
-                style: *style,
-            }],
-            _ => Vec::new(),
-        }
-    }
-
-    fn hosted(&mut self, _node: &ExpandedNode, child: Self::Output) -> Self::Output {
-        child
     }
 
     fn window(

@@ -227,6 +227,16 @@ pub struct NetOptions {
     #[builder(default = Duration::from_secs(30))]
     #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub inactivity_timeout: Duration,
+    /// How long a pooled connection may sit idle before it is dropped.
+    /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
+    /// caps how many idle connections survive, this caps how long. The
+    /// default matches the keep-alive window CDNs commonly advertise, so a
+    /// segment burst reuses connections while a paused player does not hold
+    /// sockets open. Ignored by the Apple backend, whose `URLSession`
+    /// configuration exposes no idle-pool timeout.
+    #[builder(default = Duration::from_secs(5))]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
+    pub pool_idle_timeout: Duration,
     /// Browser TLS+HTTP2 fingerprint the native `client-wreq` backend
     /// impersonates. Defaults to `Safari`. Ignored by the `client-reqwest`
     /// backend and on wasm32 (no emulation there).
@@ -256,16 +266,6 @@ pub struct NetOptions {
     /// Set to 0 to disable pooling.
     #[builder(default = 8)]
     pub pool_max_idle_per_host: usize,
-    /// How long a pooled connection may sit idle before it is dropped.
-    /// Governs the same pool as [`Self::pool_max_idle_per_host`]: the count
-    /// caps how many idle connections survive, this caps how long. The
-    /// default matches the keep-alive window CDNs commonly advertise, so a
-    /// segment burst reuses connections while a paused player does not hold
-    /// sockets open. Ignored by the Apple backend, whose `URLSession`
-    /// configuration exposes no idle-pool timeout.
-    #[builder(default = Duration::from_secs(5))]
-    #[patch(attribute(serde(with = "humantime_serde::option")))]
-    pub pool_idle_timeout: Duration,
 }
 
 impl NetOptions {

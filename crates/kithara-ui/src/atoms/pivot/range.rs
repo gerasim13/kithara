@@ -46,10 +46,10 @@ impl Range {
         for x in [min_x, max_x] {
             list.fill_rect(
                 Rect {
+                    y,
                     h: self.metrics.thumb_height,
                     w: self.metrics.thumb_width,
                     x: x - self.metrics.thumb_width / 2.0,
-                    y,
                 },
                 self.thumb,
             );

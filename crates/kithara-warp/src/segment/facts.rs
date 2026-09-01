@@ -54,10 +54,10 @@ pub struct BeatsPerMinuteError;
 #[fieldwork(opt_in, get, with)]
 #[non_exhaustive]
 pub struct Meter {
-    beats_per_bar: NonZeroU16,
     /// Returns the beat ordinal defining bar phase for this meter region.
     #[field(get, copy, with)]
     downbeat: BeatOrdinal,
+    beats_per_bar: NonZeroU16,
 }
 
 impl Meter {
@@ -93,14 +93,14 @@ pub struct MeterError;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct BeatMarker {
+    pub(super) evidence: BeatEvidence,
+    pub(super) uncertainty: FrameUncertainty,
     /// Returns the grid-native marker position.
     #[field(get, copy)]
     pub(super) position: MapPosition,
     /// Returns the explicit musical ordinal, when known.
     #[field(get, copy)]
     pub(super) ordinal: Option<BeatOrdinal>,
-    pub(super) evidence: BeatEvidence,
-    pub(super) uncertainty: FrameUncertainty,
 }
 
 impl BeatMarker {
@@ -116,10 +116,10 @@ impl BeatMarker {
         uncertainty: FrameUncertainty,
     ) -> Self {
         Self {
-            position,
-            ordinal,
             evidence,
             uncertainty,
+            position,
+            ordinal,
         }
     }
 }
@@ -137,9 +137,9 @@ pub struct SegmentFacts {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct MeterFacts {
-    pub(super) meter: Meter,
     pub(super) evidence: BeatEvidence,
     pub(super) uncertainty: FrameUncertainty,
+    pub(super) meter: Meter,
 }
 
 impl SegmentFacts {
@@ -166,9 +166,9 @@ impl MeterFacts {
     #[must_use]
     pub const fn new(meter: Meter, evidence: BeatEvidence, uncertainty: FrameUncertainty) -> Self {
         Self {
-            meter,
             evidence,
             uncertainty,
+            meter,
         }
     }
 

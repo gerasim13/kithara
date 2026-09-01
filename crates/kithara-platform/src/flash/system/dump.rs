@@ -80,22 +80,15 @@ impl fmt::Display for FlashInner {
             },
             s.sched.yielders.len(),
         )?;
-        // Name WHO pins quiescence instead of leaving bare counters. Async: the
-        // spawn site of every task in a non-quiescent gate state (a task mid
-        // bridged-wait has released its slot, so `active_async` may be < the
-        // listed count — those are not pinning). Sync: every dedicated pacer
-        // currently `Running` (`active` may exceed the list by a reserved-but-
-        // unclaimed slot or an in-flight wake bump, which carry no thread yet).
+        // WHY: Name WHO pins quiescence instead of leaving bare counters. Async: the spawn site of every task in a non-quiescent gate state
+        // (a task mid bridged-wait has released its slot, so `active_async` may be < the listed count - those are not pinning).
         for (id, loc) in &s.registry.active_async_holders {
             write!(f, "  active_async holder task={id} spawned_at={loc}")?;
-            // The gate state and poll count say HOW the task pins the clock: a
-            // climbing count is a task spinning through wake-poll-park, while a
-            // `Runnable` gate whose count stopped is a task the runtime never
-            // re-polled after a wake.
+            // WHY: The gate state and poll count say HOW the task pins the clock: a climbing count is a task spinning through wake-poll-park,
+            // while a `Runnable` gate whose count stopped is a task the runtime never re-polled after a wake.
             if let Some(diag) = s.registry.task_diag.get(id) {
                 write!(f, " state={:?} polls={}", diag.state.load(), diag.polls())?;
-                // WHICH thread owes this task its next poll. Against `bridged`
-                // below it says whether that thread can currently give it one.
+                // WHY: WHICH thread owes this task its next poll. Against `bridged` below it says whether that thread can currently give it one.
                 if let Some(driver) = diag.driver() {
                     write!(f, " driver={driver:?}")?;
                 }
@@ -124,12 +117,8 @@ impl fmt::Display for FlashInner {
         for (id, entry) in &s.sched.indef {
             write!(f, "  indef id={id:?} kind={:?}", entry.kind)?;
             write_waiter_detail(f, &entry.kind, &entry.wake, &s.registry)?;
-            // WHICH thread parked this deadline-less waiter — for a SYNC waiter
-            // only, where it is the parked thread itself (an async waiter prints
-            // `task=` above instead, its poller being incidental). Against
-            // `bridged` below it separates a wait taken by a dedicated thread
-            // (harmless: it polls nothing) from one taken mid-poll, which
-            // strands every task that thread drives.
+            // WHY: WHICH thread parked this deadline-less waiter - for a SYNC waiter only, where it is the parked thread itself (an async waiter
+            // prints `task=` above instead, its poller being incidental).
             if let Some(parked) = entry
                 .parked
                 .as_ref()
@@ -137,26 +126,23 @@ impl fmt::Display for FlashInner {
             {
                 write!(f, " thread={:?}", parked.thread)?;
             }
-            // A dump lists every parked waiter; this marks the ones the clock is
-            // actually waiting on, so the reader does not have to re-derive the
-            // pin from the counters. Printed in EVERY lane — it needs no env var.
+            // WHY: A dump lists every parked waiter; this marks the ones the clock is actually waiting on, so the reader does not have to
+            // re-derive the pin from the counters.
             let pins = pins_quiescence(entry, &s.registry);
             if pins {
                 write!(f, " pins_clock")?;
             }
             writeln!(f)?;
-            // The stack that parked, only for a waiter that pins the clock and
-            // only when `KITHARA_FLASH_SYNC_BT` was set: for that waiter it is
-            // the whole diagnosis, and for every other one it is noise.
+            // WHY: The stack that parked, only for a waiter that pins the clock and only when `KITHARA_FLASH_SYNC_BT` was set: for that waiter
+            // it is the whole diagnosis, and for every other one it is noise.
             if let Some(bt) = entry.parked.as_ref().and_then(|p| p.stack.as_ref())
                 && pins
             {
                 writeln!(f, "    parked at:\n{bt}")?;
             }
         }
-        // Every engine-backed async primitive that recorded its provenance
-        // (`describe_cvid`, under `KITHARA_FLASH_SYNC_TRACE`), so async primitives
-        // land in the dump even when no waiter is currently parked on them.
+        // WHY: Every engine-backed async primitive that recorded its provenance (`describe_cvid`, under `KITHARA_FLASH_SYNC_TRACE`), so
+        // async primitives land in the dump even when no waiter is currently parked on them.
         if !s.registry.cv_desc.is_empty() {
             writeln!(f, "  engine primitives ({}):", s.registry.cv_desc.len())?;
             for (cvid, d) in &s.registry.cv_desc {
@@ -169,9 +155,8 @@ impl fmt::Display for FlashInner {
                 )?;
             }
         }
-        // Threads blocked on the engine from inside an async poll: they poll
-        // nothing while listed, so a task whose `driver` is here is waiting for
-        // a poll that cannot come until the wait returns.
+        // WHY: Threads blocked on the engine from inside an async poll: they poll nothing while listed, so a task whose `driver` is here is
+        // waiting for a poll that cannot come until the wait returns.
         if !s.registry.bridged.is_empty() {
             writeln!(f, "  bridged={:?}", s.registry.bridged)?;
         }

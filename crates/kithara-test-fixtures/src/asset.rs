@@ -6,14 +6,14 @@ use thiserror::Error;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct AssetEntry {
-    /// Accessor name, `{func}_{case}`.
-    pub name: &'static str,
-    /// Content address inside the build fingerprint's namespace.
-    pub id: &'static str,
-    /// Absolute path in the store.
-    pub path: &'static str,
     /// MIME type declared by the generator.
     pub content_type: &'static str,
+    /// Content address inside the build fingerprint's namespace.
+    pub id: &'static str,
+    /// Accessor name, `{func}_{case}`.
+    pub name: &'static str,
+    /// Absolute path in the store.
+    pub path: &'static str,
     /// Redacted build-time reason an optional asset is unavailable.
     pub unavailable: Option<&'static str>,
 }

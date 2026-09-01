@@ -1,5 +1,8 @@
-use kithara::{self, stream::AudioCodec};
-use kithara_encode::{EncodeError, EncoderFactory};
+use kithara::{
+    self,
+    encode::{EncodeError, EncoderFactory},
+    stream::AudioCodec,
+};
 
 #[kithara::test]
 #[case::aac(AudioCodec::AacLc, 1024)]

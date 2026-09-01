@@ -3,7 +3,6 @@
 
 //! Proves a forward seek is served by a range request from the seek target
 //! instead of waiting for the sequential fetch to walk the skipped span.
-
 use std::{
     convert::Infallible,
     io::{Read, Seek, SeekFrom},

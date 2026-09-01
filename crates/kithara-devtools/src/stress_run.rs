@@ -19,16 +19,16 @@ use crate::{
 
 #[derive(Debug)]
 pub(crate) struct StressRunSpec {
+    pub(crate) runner: ConfiguredLane,
+    pub(crate) config_file: PathBuf,
     pub(crate) inventory: PathBuf,
     pub(crate) junit: PathBuf,
-    pub(crate) config_file: PathBuf,
     pub(crate) filter: String,
-    pub(crate) count: usize,
-    pub(crate) test_threads: String,
     pub(crate) profile: String,
+    pub(crate) test_threads: String,
+    pub(crate) count: usize,
     pub(crate) max_count: usize,
     pub(crate) max_test_threads: usize,
-    pub(crate) runner: ConfiguredLane,
 }
 
 /// Lists the exact selection, validates it, then runs every selected test.

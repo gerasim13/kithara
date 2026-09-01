@@ -1,6 +1,3 @@
-//! Translates pointer, keyboard, IME, and modifier events between Masonry and
-//! the neutral input contract, so no widget has to speak the toolkit's dialect.
-
 use masonry::{
     core::{Ime, TextEvent},
     dpi::PhysicalPosition,
