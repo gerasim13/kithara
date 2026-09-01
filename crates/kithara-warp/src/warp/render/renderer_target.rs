@@ -80,7 +80,6 @@ where
         let capabilities = engine.capabilities();
         capabilities
             .max_output_frames()
-            .max(capabilities.terminal_chunk_frames().saturating_add(1))
             .checked_mul(usize::from(spec.channels.max(1)))
             .map(SampleCount::new)
             .ok_or(ElasticError::SampleCountOverflow)

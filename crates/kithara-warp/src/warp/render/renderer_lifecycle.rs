@@ -156,17 +156,16 @@ where
         if !self.active {
             return Ok(true);
         }
-        let tail_frames = self
+        let frame_limit = self
             .engine
             .as_ref()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
             .capabilities()
-            .terminal_chunk_frames();
-        let tail_samples = SampleCount::new(
-            tail_frames
-                .checked_mul(channels)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        );
+            .latency()
+            .output_frames();
+        let sample_limit = frame_limit
+            .checked_mul(channels)
+            .ok_or(ElasticError::SampleCountOverflow)?;
         let scratch = self
             .scratch
             .as_mut()
@@ -174,28 +173,23 @@ where
                 "output scratch is unavailable",
             ))?;
         let start = scratch.len();
-        let end = start
-            .checked_add(tail_samples.get())
-            .ok_or(ElasticError::SampleCountOverflow)?;
-        if end > scratch.capacity() {
-            return Err(ElasticError::OutputFrameLimit {
-                frames: end / channels,
-                limit: scratch.capacity() / channels,
-            });
+        if start >= sample_limit {
+            return Ok(false);
         }
         scratch
-            .ensure_len(end)
+            .ensure_len(sample_limit)
             .map_err(|_| ElasticError::PoolCapacity)?;
         let drain = self
             .engine
             .as_mut()
             .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?
-            .flush(&mut scratch[start..end])?;
+            .flush(&mut scratch[start..sample_limit])?;
         let rendered_frames = FrameCount::new(drain.frames());
-        if rendered_frames.get() > tail_frames {
+        let available_frames = (sample_limit - start) / channels;
+        if rendered_frames.get() > available_frames {
             return Err(ElasticError::EngineOutputFrameCount {
                 actual: rendered_frames.get(),
-                expected: tail_frames,
+                expected: available_frames,
             });
         }
         let rendered_samples = rendered_frames

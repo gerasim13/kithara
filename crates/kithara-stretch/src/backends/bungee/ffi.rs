@@ -39,6 +39,8 @@ pub(super) enum NativeFault {
 unsafe impl Send for NativeStretcher {}
 
 impl NativeStretcher {
+    // New controls cross three grains; -3 keeps that transition inside the live-response SLA.
+    const LOG2_SYNTHESIS_HOP_ADJUST: i32 = -3;
     const OUTPUT_ENDPOINT_COUNT: usize = 2;
 
     pub(super) fn new(sample_rate: u32, channels: usize) -> Result<Self, ElasticError> {
@@ -52,7 +54,7 @@ impl NativeStretcher {
                 output: input,
             },
             channels,
-            0,
+            Self::LOG2_SYNTHESIS_HOP_ADJUST,
         );
         Ok(Self {
             inner: NonNull::new(inner).ok_or(ElasticError::EnginePreparation(
