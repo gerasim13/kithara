@@ -5,10 +5,12 @@ use std::{
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
+use serde::Deserialize;
 
 use crate::{ResamplerBackend, ResamplerBuildError, ResamplerCapabilities, ResamplerMode};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum ResamplerQuality {
     Fast,
     Normal,

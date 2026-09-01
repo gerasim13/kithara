@@ -1,7 +1,9 @@
 use std::fmt;
 
 use bon::Builder;
+use kithara_beat::{BeatConfig, BeatSettings};
 use kithara_resampler::{ResamplerBackend, ResamplerQuality};
+use struct_patch::Patch;
 
 struct Consts;
 
@@ -14,13 +16,16 @@ impl Consts {
     const DEFAULT_BEAT_TARGET_RATE: u32 = 22_050;
 }
 
-/// Beat-analysis tunables used by [`super::AnalyzerBuilder`].
-#[derive(Clone, Builder, fieldwork::Fieldwork)]
+/// Beat-analysis tunables that do not depend on the resampler backend type.
+#[derive(Clone, Builder, fieldwork::Fieldwork, Patch)]
 #[builder(state_mod(vis = "pub"))]
+#[patch(name = "BeatAnalysisSettingsPatch")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 #[fieldwork(get)]
-pub struct BeatAnalysisConfig<B> {
-    resampler_backend: B,
+pub struct BeatAnalysisSettings {
     #[builder(default = Consts::DEFAULT_BEAT_RESAMPLER_QUALITY)]
     #[field(get(copy))]
     resampler_quality: ResamplerQuality,
@@ -34,6 +39,44 @@ pub struct BeatAnalysisConfig<B> {
     target_rate: u32,
     #[builder(default = Consts::DEFAULT_BEAT_BLOCK_FRAMES)]
     block_frames: usize,
+    /// Reaches the detector's peak-picking policy. Nested rather than
+    /// flattened so a document can patch `beat:` on its own.
+    #[builder(default)]
+    #[field(get(copy))]
+    #[patch(name = "BeatSettings")]
+    beat: BeatConfig,
+}
+
+impl Default for BeatAnalysisSettings {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+/// Beat-analysis tunables used by [`super::AnalyzerBuilder`].
+#[derive(Clone, Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
+#[non_exhaustive]
+#[fieldwork(get)]
+pub struct BeatAnalysisConfig<B> {
+    resampler_backend: B,
+    #[builder(default)]
+    settings: BeatAnalysisSettings,
+}
+
+#[cfg(feature = "analysis-beat")]
+impl<B> BeatAnalysisConfig<B> {
+    delegate::delegate! {
+        to self.settings {
+            pub(crate) fn resampler_quality(&self) -> ResamplerQuality;
+            pub(crate) fn detector_overlap_seconds(&self) -> u32;
+            pub(crate) fn detector_min_window_seconds(&self) -> u32;
+            pub(crate) fn detector_window_seconds(&self) -> u32;
+            pub(crate) fn target_rate(&self) -> u32;
+            pub(crate) fn block_frames(&self) -> usize;
+            pub(crate) fn beat(&self) -> BeatConfig;
+        }
+    }
 }
 
 impl<B> BeatAnalysisConfig<B>
@@ -56,16 +99,22 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BeatAnalysisConfig")
-            .field("block_frames", &self.block_frames)
-            .field("target_rate", &self.target_rate)
-            .field("resampler_quality", &self.resampler_quality)
+            .field("block_frames", &self.settings.block_frames)
+            .field("target_rate", &self.settings.target_rate)
+            .field("resampler_quality", &self.settings.resampler_quality)
             .field("resampler_backend", &self.resampler_backend_name())
             .field(
                 "detector_min_window_seconds",
-                &self.detector_min_window_seconds,
+                &self.settings.detector_min_window_seconds,
             )
-            .field("detector_window_seconds", &self.detector_window_seconds)
-            .field("detector_overlap_seconds", &self.detector_overlap_seconds)
+            .field(
+                "detector_window_seconds",
+                &self.settings.detector_window_seconds,
+            )
+            .field(
+                "detector_overlap_seconds",
+                &self.settings.detector_overlap_seconds,
+            )
             .finish()
     }
 }
@@ -109,5 +158,56 @@ mod tests {
             !tag.contains(":grid_bpm_from_beats_v1:"),
             "a grid carrying per-marker confidence is not the grid v1 cached"
         );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod settings_tests {
+    use kithara_beat::BeatConfig;
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::{BeatAnalysisSettings, BeatAnalysisSettingsPatch};
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_fields_it_names() {
+        let patch: BeatAnalysisSettingsPatch =
+            serde_yaml_ng::from_str("target_rate: 48000\n").expect("the document types");
+        let mut settings = BeatAnalysisSettings::builder().block_frames(2048).build();
+
+        settings.apply(patch);
+
+        assert_eq!(settings.target_rate(), 48_000);
+        assert_eq!(
+            settings.block_frames(),
+            2048,
+            "a silent field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_nested_beat_patch_reaches_the_inner_field() {
+        let patch: BeatAnalysisSettingsPatch =
+            serde_yaml_ng::from_str("beat:\n  peak_half_width: 5\n").expect("the document types");
+        let mut settings = BeatAnalysisSettings::builder()
+            .beat(BeatConfig::builder().dedup_width(4).build())
+            .build();
+
+        settings.apply(patch);
+
+        assert_eq!(settings.beat().peak_half_width, 5);
+        assert_eq!(
+            settings.beat().dedup_width,
+            4,
+            "a silent inner field must keep the value it already had"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<BeatAnalysisSettingsPatch>("target_ratee: 1\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(format!("{error}").contains("target_ratee"), "{error}");
     }
 }

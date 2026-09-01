@@ -63,8 +63,9 @@ where
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let source = self.0.as_mut()?.detector.clone()?;
+        let beat_config = self.0.as_ref()?.resampler.beat();
         let detector = match source {
-            DetectorConfig::Default => default_beat_detector(pools),
+            DetectorConfig::Default => default_beat_detector(pools, beat_config),
             DetectorConfig::Ready(detector) => Some(detector.clone()),
         };
         if let Some(detector) = &detector {

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 #[cfg(feature = "broadcast")]
 use kithara::broadcast::BroadcastSettings;
 use kithara::{
+    analysis::BeatAnalysisSettingsPatch,
     assets::FlushSettings,
     hls::SizeProbeMethod,
     host::HostSettings,
@@ -26,6 +27,7 @@ use crate::config::AppSettings;
 pub(crate) struct Document {
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
+    pub(crate) beat: BeatAnalysisSettingsPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
     pub(crate) drm: Drm,
