@@ -52,7 +52,7 @@ fn report(kind: &str, s: &Score) {
 #[kithara::test(native, flash(false))]
 fn python_parity_small_model() {
     let pcm = load_pcm_fixture();
-    let mut bt = BeatThis::builder()
+    let bt = BeatThis::builder()
         .mel_model(MEL_MODEL_BYTES)
         .beat_model(BEAT_MODEL_BYTES)
         .pools(pools())
