@@ -10,29 +10,14 @@ use crate::{
     session::SessionDispatcher,
 };
 
-struct Consts;
-
-impl Consts {
-    const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(441) {
-        Some(frames) => frames,
-        None => unreachable!(),
-    };
-    const DEFAULT_RENDER_QUANTUM_FRAMES: NonZeroUsize = match NonZeroUsize::new(64) {
-        Some(frames) => frames,
-        None => unreachable!(),
-    };
-}
-
 /// Configuration for the audio engine.
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
-    /// Internal copy of the player-owned response contract.
-    #[builder(skip = Consts::DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    /// Player-owned response contract used to validate session geometry.
     pub(crate) response_budget_frames: NonZeroUsize,
-    /// Internal copy of the resident Warp render quantum.
-    #[builder(skip = Consts::DEFAULT_RENDER_QUANTUM_FRAMES)]
+    /// Resident Warp render quantum supplied by the owning player.
     pub(crate) render_quantum_frames: NonZeroUsize,
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,

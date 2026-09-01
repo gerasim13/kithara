@@ -23,7 +23,7 @@ impl Consts {
         Some(sample_rate) => sample_rate,
         None => unreachable!(),
     };
-    const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(441) {
+    const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(448) {
         Some(frames) => frames,
         None => unreachable!(),
     };
@@ -148,10 +148,10 @@ mod tests {
     use crate::{PlayWorker, PlayWorkerConfig, test_pools::pools};
 
     #[kithara::test(native)]
-    fn default_response_budget_matches_the_industry_contract() {
+    fn default_response_budget_matches_product_contract() {
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let config = PlayerConfig::builder().worker(worker).build();
 
-        assert_eq!(config.response_budget_frames().get(), 441);
+        assert_eq!(config.response_budget_frames().get(), 448);
     }
 }
