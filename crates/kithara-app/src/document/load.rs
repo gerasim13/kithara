@@ -22,7 +22,7 @@ use crate::baked::{BAKED_DOCUMENT, baked_env};
 const BAKED_PATH: &str = "<baked app.yaml>";
 
 /// The configuration this process runs on, and the document it came from.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct Config {
     document: Document,
@@ -31,20 +31,32 @@ pub struct Config {
     source: Value,
 }
 
+impl fmt::Debug for Config {
+    /// Renders the pre-expansion document: the typed one holds resolved
+    /// values, and a `Debug` that prints them defeats [`Config::dump`].
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Why a document could not be turned into a configuration.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum LoadError {
     /// A path the operator named does not exist.
     Missing(PathBuf),
-    Read {
-        path: PathBuf,
-        source: io::Error,
-    },
+    /// A document could not be read from disk.
+    Read { path: PathBuf, source: io::Error },
+    /// A document's text is not YAML.
     Parse {
         path: PathBuf,
         source: serde_yaml_ng::Error,
     },
+    /// The merged document does not match the schema.
+    Schema { resource: String, detail: String },
+    /// A reference the document names resolved nowhere.
     Env(MissingEnv),
 }
 
@@ -54,6 +66,7 @@ impl fmt::Display for LoadError {
             Self::Missing(path) => write!(f, "configuration file not found: {}", path.display()),
             Self::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             Self::Parse { path, source } => write!(f, "cannot parse {}: {source}", path.display()),
+            Self::Schema { resource, detail } => write!(f, "cannot parse {resource}: {detail}"),
             Self::Env(missing) => write!(f, "{missing}"),
         }
     }
@@ -65,7 +78,7 @@ impl std::error::Error for LoadError {
             Self::Read { source, .. } => Some(source),
             Self::Parse { source, .. } => Some(source),
             Self::Env(missing) => Some(missing),
-            Self::Missing(_) => None,
+            Self::Schema { .. } | Self::Missing(_) => None,
         }
     }
 }
@@ -105,10 +118,13 @@ impl Config {
         let mut expanded = source.clone();
         expand(&mut expanded, lookup).map_err(LoadError::Env)?;
 
-        let reported = overlay_path.unwrap_or_else(|| PathBuf::from(BAKED_PATH));
-        let document = serde_yaml_ng::from_value(expanded).map_err(|source| LoadError::Parse {
-            path: reported,
-            source,
+        let resource = overlay_path.as_deref().map_or_else(
+            || BAKED_PATH.to_string(),
+            |path| format!("{BAKED_PATH} merged with {}", path.display()),
+        );
+        let document = serde_yaml_ng::from_value(expanded).map_err(|_| LoadError::Schema {
+            resource,
+            detail: schema_detail(&source),
         })?;
 
         Ok(Self { document, source })
@@ -196,16 +212,37 @@ impl Config {
     }
 }
 
+/// The message for a schema failure, taken from the pre-expansion tree: the
+/// offending position still names its `$KITHARA_...` reference there, which is
+/// both what the operator has to fix and safe to log. A failure the expanded
+/// tree alone has is reported without the value that caused it.
+///
+/// This is an error-*reporting* rule, not a state-resolution fallback chain:
+/// the loader's value path stays single and unchanged -- `document` above is
+/// always built from `expanded`. This second, throwaway deserialization only
+/// runs on the error path, to find a safe-to-log message.
+fn schema_detail(source: &Value) -> String {
+    serde_yaml_ng::from_value::<Document>(source.clone()).map_or_else(
+        |error| error.to_string(),
+        |_| "a resolved environment value does not match the schema".to_string(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
 
     use kithara::hls::SizeProbeMethod;
+    use tempfile::TempDir;
 
     use super::{Config, LoadError};
 
-    fn write(name: &str, contents: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("kithara-config-{name}.yaml"));
+    fn tempdir() -> TempDir {
+        tempfile::tempdir().expect("a temporary directory")
+    }
+
+    fn write(dir: &TempDir, name: &str, contents: &str) -> PathBuf {
+        let path = dir.path().join(format!("{name}.yaml"));
         fs::write(&path, contents).expect("write the test document");
         path
     }
@@ -237,7 +274,9 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_file_overrides_only_what_it_names() {
+        let dir = tempdir();
         let path = write(
+            &dir,
             "overrides-one-field",
             "network:\n  size_probe_method: head\n",
         );
@@ -253,7 +292,8 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_path_named_explicitly_must_exist() {
-        let missing = std::env::temp_dir().join("kithara-config-absent.yaml");
+        let dir = tempdir();
+        let missing = dir.path().join("absent.yaml");
 
         let error = Config::load(Some(&missing), None).expect_err("the operator named this file");
 
@@ -262,14 +302,17 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_file_beside_the_binary_may_be_absent() {
-        let absent = std::env::temp_dir().join("kithara-config-not-there.yaml");
+        let dir = tempdir();
+        let absent = dir.path().join("not-there.yaml");
 
         Config::load_with(None, Some(&absent), &env).expect("an unnamed file is optional");
     }
 
     #[kithara::test(native, flash(false))]
     fn an_unresolved_reference_refuses_to_start() {
+        let dir = tempdir();
         let path = write(
+            &dir,
             "unresolved-reference",
             concat!(
                 "drm:\n  providers:\n    - name: x\n      domains: [x.test]\n",
@@ -289,14 +332,31 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn a_malformed_file_names_its_path() {
-        let path = write("malformed", "network: [not, a, mapping]\n");
+        let dir = tempdir();
+        let path = write(&dir, "malformed", "network: [not, a, mapping]\n");
 
         let error = Config::load_with(Some(&path), None, &env).expect_err("the shape is wrong");
 
-        assert!(
-            error.to_string().contains("kithara-config-malformed"),
-            "{error}"
+        let report = error.to_string();
+        assert!(report.contains("malformed.yaml"), "{report}");
+        assert!(report.contains("<baked app.yaml>"), "{report}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_reference_in_a_typed_field_reports_the_reference_not_its_value() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "typed-field",
+            "playback:\n  crossfade_seconds: $KITHARA_DRM_PROD_KEY\n",
         );
+
+        let error =
+            Config::load_with(Some(&path), None, &env).expect_err("a string is not a float");
+
+        let report = error.to_string();
+        assert!(report.contains("$KITHARA_DRM_PROD_KEY"), "{report}");
+        assert!(!report.contains("test-value"), "{report}");
     }
 
     #[kithara::test(native, flash(false))]
@@ -309,5 +369,15 @@ mod tests {
             dump.contains("$KITHARA_DRM_PROD_KEY"),
             "the dump prints the reference, not what it resolves to"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_debug_render_carries_references_not_secrets() {
+        let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
+
+        let rendered = format!("{config:?}");
+
+        assert!(rendered.contains("$KITHARA_DRM_PROD_KEY"), "{rendered}");
+        assert!(!rendered.contains("test-value"), "{rendered}");
     }
 }

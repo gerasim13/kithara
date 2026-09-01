@@ -230,6 +230,41 @@ mod tests {
         assert!(matches!(error, PolicyError::OddHexSeed { length: 7, .. }));
     }
 
+    fn shipped_salt(key_url: &str) -> String {
+        let document: Document =
+            serde_yaml_ng::from_str(BAKED_DOCUMENT).expect("the baked document parses");
+        let policy = drm_policy(&document.drm).expect("the shipped providers are valid");
+        policy
+            .prepare(&url(key_url))
+            .expect("a shipped rule matches")
+            .headers["X-Encrypted-Key"]
+            .clone()
+    }
+
+    /// `app.yaml` warns that the prod WAF validates alphabet and length and
+    /// answers 418 on deviation. Nothing else pins the shipped shape.
+    #[kithara::test(native, flash(false))]
+    fn the_shipped_prod_provider_salts_with_eight_lowercase_hex_characters() {
+        let salt = shipped_salt("https://zvuk.com/keyserver/key");
+
+        assert_eq!(salt.len(), 8);
+        assert!(
+            salt.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "not lowercase hex: {salt}"
+        );
+    }
+
+    /// The 8-char hex prod format on stage silently corrupts decrypt output, so
+    /// the stage shape is pinned separately from prod's.
+    #[kithara::test(native, flash(false))]
+    fn the_shipped_stage_provider_salts_with_sixteen_alphanumeric_characters() {
+        let salt = shipped_salt("https://zvq.me/keyserver/key");
+
+        assert_eq!(salt.len(), 16);
+        assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()), "{salt}");
+    }
+
     #[kithara::test(native, flash(false))]
     fn every_shipped_provider_domain_reaches_its_rule() {
         let document: Document =
