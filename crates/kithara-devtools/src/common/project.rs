@@ -516,7 +516,9 @@ pub struct StressEnvironmentConfig {
 pub struct StressModeConfig {
     pub raw_path_env: BTreeMap<String, String>,
     pub set_env: BTreeMap<String, String>,
-    /// Where this command leaves a `JUnit` report, relative to `build_dir`.
+    /// Where this command leaves a `JUnit` report, relative to the checkout
+    /// root rather than to `build_dir`: the runner's store anchors on the
+    /// workspace it tests, not on the directory it builds into.
     ///
     /// An exit code names no test. When the command runs its tests under a
     /// runner that writes a report anyway, that report is what turns "something
