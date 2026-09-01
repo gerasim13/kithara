@@ -14,11 +14,13 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- `comment_hygiene` cannot be trusted yet, for three separate reasons.
-  `[lint_exclude]` hides whole crates from it, 292 `WHY:` prefixes satisfy the
-  rule without removing anything, and its autofix now reaches nothing: all 138
-  category violations are longer than the 30-character guard. Only the density
-  check resists a marker, and it has no autofix by construction.
+- Work the comment queue down: 426 comments carry prose outside a doc comment
+  and 99 doc blocks run past a dozen lines. Only 76 sit above an item, where
+  `--fix` moves them; the rest are inside bodies, where the answer is usually a
+  named function rather than a sentence.
+- `[lint_exclude]` still hides `kithara-devtools` from every style check, so
+  446 of those comments are invisible to the ratchet. Narrow the exemption to
+  the check files that carry lint patterns.
 - Clear the 12 stale identifiers `doc_staleness` reports, then promote it to
   deny.
 - Work through the 16 warn-level documents.
