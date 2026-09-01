@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use kithara::{hls::SizeProbeMethod, net::Compression};
+use kithara::{
+    hls::SizeProbeMethod,
+    net::{Compression, CompressionAlgorithm, NetSettings},
+};
 use serde::Deserialize;
 
 use crate::config::AppSettings;
@@ -20,6 +23,7 @@ pub(crate) struct Document {
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
     pub(crate) drm: Drm,
+    pub(crate) net: NetSettings,
     pub(crate) network: Network,
     pub(crate) playback: Playback,
     pub(crate) playlist: Playlist,
@@ -49,29 +53,6 @@ impl Network {
             .fold(Compression::empty(), |flags, &algorithm| {
                 flags.union(algorithm.into())
             })
-    }
-}
-
-/// One `Accept-Encoding` algorithm. Named rather than spelled as bit flags,
-/// because a document reads as a list of names.
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum CompressionAlgorithm {
-    Gzip,
-    Deflate,
-    #[serde(alias = "br")]
-    Brotli,
-    Zstd,
-}
-
-impl From<CompressionAlgorithm> for Compression {
-    fn from(algorithm: CompressionAlgorithm) -> Self {
-        match algorithm {
-            CompressionAlgorithm::Gzip => Self::GZIP,
-            CompressionAlgorithm::Deflate => Self::DEFLATE,
-            CompressionAlgorithm::Brotli => Self::BROTLI,
-            CompressionAlgorithm::Zstd => Self::ZSTD,
-        }
     }
 }
 

@@ -259,7 +259,7 @@ fn schema_detail(source: &Value) -> String {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use kithara::hls::SizeProbeMethod;
+    use kithara::{hls::SizeProbeMethod, net::Compression};
     use tempfile::TempDir;
 
     use super::{BAKED_PATH, Config, LoadError};
@@ -314,6 +314,29 @@ mod tests {
         assert!(
             !config.tracks().is_empty(),
             "a section the overlay never names keeps its baked value"
+        );
+    }
+
+    /// Staged transfer, in force until the task that moves the read: `network`
+    /// and `net` both name the compression setting, and `network` is the only
+    /// one the application resolves through. `net` is declared and typed so the
+    /// crate's own section parses, and nothing reads it yet; the task that
+    /// deletes `network` inverts this assertion.
+    #[kithara::test(native, flash(false))]
+    fn the_net_section_does_not_yet_move_the_compression_the_app_reads() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "net-compression-only",
+            "net:\n  compression: [zstd]\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+
+        assert_eq!(
+            config.compression(),
+            Compression::GZIP.union(Compression::DEFLATE),
+            "`network` stays the only section the application reads"
         );
     }
 

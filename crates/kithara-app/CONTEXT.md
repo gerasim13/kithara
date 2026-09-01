@@ -278,3 +278,16 @@ bytes in `strings` output; a name it had no value for is answered `None` and ref
 talk to a real key server — today the CI `network*` lanes — set `KITHARA_DRM_REQUIRE` (any
 non-empty value): an upfront pass then validates every reference in the document, the whole tree rather than
 the DRM providers alone, and fails the build listing all missing names with their positions.
+
+### Crate sections, and the transfer that is under way
+
+A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once, in
+the crate that defines it. `net` is the first of them: it is `kithara::net::NetSettings`, and what it may say is the
+`kithara-net` contract rather than this crate's.
+
+`network` predates that shape and still exists. Until the task that moves the read, `network.compression` and
+`net.compression` both name the compression setting, which is two sections for one value — allowed only as the staged
+transfer it is, and only under one rule: `network` stays the only section `main` resolves through. `net` is declared and
+typed so the section parses and a document may be written against it, and nothing reads it yet. A test in
+`document::load` holds that rule; the task that deletes `network` inverts it, and a failure before then says the
+transfer half-happened.
