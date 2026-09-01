@@ -248,10 +248,10 @@ pub(crate) struct DocStalenessConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DocSizeLimit {
-    /// Line count above which the document is denied.
-    pub(crate) deny: usize,
     /// Documents this rule applies to.
     pub(crate) globs: Vec<String>,
+    /// Line count above which the document is denied.
+    pub(crate) deny: usize,
     /// Line count above which the document is reported.
     pub(crate) warn: usize,
 }

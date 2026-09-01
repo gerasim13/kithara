@@ -174,12 +174,12 @@ pub struct CiReportConfig {
     /// Rows of the CRAP table carried into the report. The whole table runs to
     /// five figures of lines and a step summary is capped at a megabyte.
     pub crap_rows: usize,
-    /// Contours listed under the architecture complexity index, worst first.
-    pub top_contours: usize,
     /// Lines of the duplication report carried into the report. It leads with
     /// the crate-level map and the explainable candidates, which is the part
     /// worth reading without opening the artifact.
     pub similarity_rows: usize,
+    /// Contours listed under the architecture complexity index, worst first.
+    pub top_contours: usize,
 }
 
 impl Default for CiReportConfig {
@@ -254,17 +254,17 @@ pub struct LintExcludeConfig {
     /// debt, not test code. `#[cfg(test)]` blocks are stripped automatically
     /// (AST) on top of this — no glob can match inline test modules.
     pub paths: Vec<String>,
-    /// Build tooling, dropped by [`Self::runtime_paths`] alone: it is not a
-    /// runtime path, so architecture and idiom rules have nothing to say about
-    /// it, and their lexical rules misfire on the lint engine's own sources,
-    /// which carry the patterns they detect. `style` keeps these files.
-    pub tooling_paths: Vec<String>,
     /// ast-grep rule IDs that must scan the FULL tree — tests included —
     /// bypassing [`Self::paths`]. Hard-correctness bans (e.g. `arch.no-direct-time`)
     /// where test code is NOT exempt: routing time through one primitive only
     /// works if tests obey it too. Run in a second ast-grep pass per rule with
     /// no exclude globs; the rule's own `files:` / `ignores:` scope it.
     pub scan_all_rules: Vec<String>,
+    /// Build tooling, dropped by [`Self::runtime_paths`] alone: it is not a
+    /// runtime path, so architecture and idiom rules have nothing to say about
+    /// it, and their lexical rules misfire on the lint engine's own sources,
+    /// which carry the patterns they detect. `style` keeps these files.
+    pub tooling_paths: Vec<String>,
 }
 
 impl LintExcludeConfig {
@@ -379,9 +379,6 @@ fn default_perf_nextest_profile() -> String {
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
     pub lanes: BTreeMap<String, TestLaneConfig>,
-    /// Paths that belong to no single lane: a change to one of them runs every
-    /// lane that declares `owns`, because the routing itself moved.
-    pub shared_paths: Vec<String>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,
     pub default_lane: String,
@@ -390,6 +387,9 @@ pub struct TestCommandConfig {
     pub flash: TestFlashConfig,
     pub no_block: TestNoBlockConfig,
     pub features: Vec<String>,
+    /// Paths that belong to no single lane: a change to one of them runs every
+    /// lane that declares `owns`, because the routing itself moved.
+    pub shared_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -428,16 +428,16 @@ pub struct TestLaneConfig {
     /// the lane rather than by whatever the caller happened to export.
     pub env: BTreeMap<String, String>,
     pub default_flash: Option<bool>,
-    /// Source prefixes this lane is the test for. `just test run --touched`
-    /// runs the lane when the branch changed a path under one of them; a lane
-    /// that owns nothing is never selected that way.
-    pub owns: Vec<String>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,
+    /// Source prefixes this lane is the test for. `just test run --touched`
+    /// runs the lane when the branch changed a path under one of them; a lane
+    /// that owns nothing is never selected that way.
+    pub owns: Vec<String>,
     pub prefix_args: Vec<String>,
     pub suffix_args: Vec<String>,
 }
