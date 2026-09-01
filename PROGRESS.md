@@ -9,17 +9,16 @@ the change that lands the work, and keep it short.
 ## In Flight
 
 - Harness and document revision. `AGENTS.md` now routes instead of restating,
-  and the `style` namespace enforces document budgets with `doc_size` and
-  `doc_staleness`.
+  and the `style` namespace budgets documents by size with `doc_size` and
+  catches drift with `doc_staleness`.
 
 ## Next
 
-- Bring the deny-level documents under their limits: `crates/kithara-ui`,
-  `crates/kithara-play`, `docs/guides/ci-host.md`, `tests/README.md`, and
-  `apple/README.md`.
-- Clear the stale identifiers `doc_staleness` reports at warn level, then
-  promote the check to deny.
-- Reduce the warn-level crate documents to their budgets.
+- `crates/kithara-ui/CONTEXT.md` is the only denied document, at 155 KB against
+  a 48 KB budget and four times the next largest crate contract.
+- Clear the 18 stale identifiers `doc_staleness` reports, then promote it to
+  deny.
+- Work through the 16 warn-level documents.
 
 ## Blocked
 
