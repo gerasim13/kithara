@@ -34,7 +34,7 @@ mod tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::{PoolConfig, PoolSettings};
+    use super::{Percent, PoolConfig, PoolSettings};
 
     #[kithara::test(native, flash(false))]
     fn a_patch_writes_only_the_field_it_names() {
@@ -52,6 +52,14 @@ mod tests {
             config.trim_capacity, 4_096,
             "a field the document does not name keeps the value it already had"
         );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_share_at_the_ceiling_is_accepted() {
+        let patch: PoolSettings = serde_yaml_ng::from_str("max_share: 100\n")
+            .expect("100 percent is inside the invariant");
+
+        assert_eq!(patch.max_share, Some(Percent::FULL));
     }
 
     #[kithara::test(native, flash(false))]

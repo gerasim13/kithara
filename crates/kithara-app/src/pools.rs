@@ -45,9 +45,10 @@ pub type AppQueueControl = kithara::queue::QueueControl<AppPools>;
 /// App-owned track-source shape.
 pub type AppTrackSource = kithara::queue::TrackSource<AppPools>;
 
-/// What a document can say about this application's buffer pools. One field
-/// per pool the `pool_schema!` invocation below declares -- there is no shared
-/// region type to derive on, because a region is generated per consumer.
+/// What a document can say about this application's buffer pools: the region's
+/// own byte budget, then one field per pool the `pool_schema!` invocation above
+/// declares. There is no shared region type to derive a patch on, because
+/// `pool_schema!` generates a region per consumer.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
@@ -65,23 +66,23 @@ pub fn build(section: &PoolsSection) -> Result<Pools, PoolError> {
     AppPools::builder(OverallBudget(
         section.budget_bytes.unwrap_or(Consts::OVERALL_BYTES),
     ))
-    .bytes(bytes_config(section))
-    .samples(samples_config(section))
+    .bytes(bytes_config(&section.bytes))
+    .samples(samples_config(&section.samples))
     .build()
 }
 
-fn bytes_config(section: &PoolsSection) -> PoolConfig {
+fn bytes_config(patch: &PoolSettings) -> PoolConfig {
     let mut config = PoolConfig::builder()
         .initial_buffers(0)
         .max_buffers(usize::MAX)
         .max_share(Percent::FULL)
         .trim_capacity(0)
         .build();
-    config.apply(section.bytes.clone());
+    config.apply(patch.clone());
     config
 }
 
-fn samples_config(section: &PoolsSection) -> PoolConfig {
+fn samples_config(patch: &PoolSettings) -> PoolConfig {
     let mut config = PoolConfig::builder()
         .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
         .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
@@ -89,7 +90,7 @@ fn samples_config(section: &PoolsSection) -> PoolConfig {
         .max_share(Percent::FULL)
         .trim_capacity(200_000)
         .build();
-    config.apply(section.samples.clone());
+    config.apply(patch.clone());
     config
 }
 
@@ -130,35 +131,33 @@ mod tests {
         assert_eq!(peak, initial_peak);
     }
 
+    /// The value itself is pinned in `kithara-bufpool`, which owns `PoolConfig`
+    /// and can read its fields; what this pins is the routing -- that a named
+    /// pool's settings reach that pool and no other.
     #[kithara::test(native, flash(false))]
-    fn a_pools_document_names_the_bytes_pool_and_leaves_samples_untouched() {
+    fn a_pools_document_reaches_the_pool_it_names_and_no_other() {
         let section: PoolsSection = serde_yaml_ng::from_str("bytes:\n  max_buffers: 64\n")
             .expect("a valid pools document parses");
 
-        let bytes = bytes_config(&section);
-        let samples = samples_config(&section);
-
-        let expected_bytes = PoolConfig::builder()
-            .initial_buffers(0)
-            .max_buffers(64)
-            .max_share(Percent::FULL)
-            .trim_capacity(0)
-            .build();
-        let expected_samples = PoolConfig::builder()
-            .initial_buffers(Consts::INITIAL_SAMPLE_BUFFERS)
-            .initial_capacity(Consts::INITIAL_SAMPLE_CAPACITY)
-            .max_buffers(128)
-            .max_share(Percent::FULL)
-            .trim_capacity(200_000)
-            .build();
-
-        assert_eq!(
-            bytes, expected_bytes,
-            "the document's max_buffers reaches the bytes pool"
+        assert_ne!(
+            bytes_config(&section.bytes),
+            bytes_config(&PoolSettings::default()),
+            "the document's value reaches the bytes pool"
         );
         assert_eq!(
-            samples, expected_samples,
-            "a pool the document does not name keeps the crate default"
+            samples_config(&section.samples),
+            samples_config(&PoolSettings::default()),
+            "a pool the document does not name keeps the policy the builder set"
         );
+    }
+
+    #[kithara::test]
+    fn a_document_budget_replaces_the_regions_own() {
+        let section: PoolsSection = serde_yaml_ng::from_str("budget_bytes: 1048576\n")
+            .expect("a valid pools document parses");
+
+        let pools = build(&section).unwrap_or_else(|error| panic!("app pool region: {error}"));
+
+        assert_eq!(pools.stats().max_bytes, 1_048_576);
     }
 }

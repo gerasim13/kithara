@@ -283,7 +283,10 @@ the DRM providers alone, and fails the build listing all missing names with thei
 ### Crate sections, and the transfer that is under way
 
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once, in
-the crate that defines it. `net` is the first of them: it is `kithara::net::NetSettings`, and what it may say is the
+the crate that defines it. `pools` is the one section that cannot: `pool_schema!` generates a region type per consumer,
+so there is no crate-level type to derive a patch on. It is composed here instead, out of `kithara-bufpool`'s own
+`PoolSettings` — one per pool this application declares — which keeps the per-pool value spelled once even though the
+region shape is local. `net` is the first of them: it is `kithara::net::NetSettings`, and what it may say is the
 `kithara-net` contract rather than this crate's. `main` builds `NetOptions` from the crate default, applies that
 section, and only then lets `--insecure` force verification off; the flag is an override that can turn verification
 off and never back on.
