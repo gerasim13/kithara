@@ -1,13 +1,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kithara::host::{Host, HostConfig};
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::{
+    host::HostConfig,
+    platform::{CancelToken, time::Duration},
+};
 
 use super::{
     BroadcastResult, Packager,
     broadcaster::{Broadcaster, Phase},
     fixture::Stream,
 };
+use crate::pools::AppHost;
 
 pub(super) struct Ready;
 
@@ -36,7 +39,7 @@ impl Packager for Ready {
     }
 
     fn start(
-        _host: &Host,
+        _host: &AppHost,
         _shutdown: &CancelToken,
         _tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
@@ -44,7 +47,7 @@ impl Packager for Ready {
         Ok(Some(Self::stream()))
     }
 
-    fn release(_host: &Host) -> BroadcastResult<()> {
+    fn release(_host: &AppHost) -> BroadcastResult<()> {
         Ok(())
     }
 
@@ -58,7 +61,7 @@ impl Packager for Ready {
 #[kithara::test]
 fn an_ended_stream_is_noticed_by_the_next_poll() {
     let mut broadcaster = Broadcaster::<Ready>::new(CancelToken::root(), Duration::from_secs(2));
-    let host = Host::new(HostConfig::builder().build()).expect("test host");
+    let host = AppHost::new(HostConfig::builder().build()).expect("test host");
     broadcaster.toggle(&host);
     broadcaster.poll(&host);
     assert!(broadcaster.is_on_air());

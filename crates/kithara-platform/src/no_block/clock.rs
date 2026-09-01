@@ -19,9 +19,9 @@ thread_local! {
     static FORCED_CPU_ELAPSED: Cell<Option<Duration>> = const { Cell::new(None) };
 }
 
-const SNAPSHOT_MAX_AGE: Duration = Duration::from_millis(1);
-
 pub(super) fn snapshot(now: Instant) -> Option<ThreadTime> {
+    const SNAPSHOT_MAX_AGE: Duration = Duration::from_millis(1);
+
     SNAPSHOT.with(|snapshot| {
         if let Some((cpu, sampled_at)) = snapshot.get() {
             if now

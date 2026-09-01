@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{sync::Arc, time::Duration};
 
 #[cfg(test)]
@@ -28,25 +29,28 @@ struct ActivatedPending {
     duration_seconds: f64,
 }
 
-struct Handover<'a> {
-    player: &'a PlayerRuntime,
+struct Handover<'a, S> {
+    player: &'a PlayerRuntime<S>,
 }
 
-impl<'a> Handover<'a> {
-    const fn new(player: &'a PlayerRuntime) -> Self {
+impl<'a, S> Handover<'a, S> {
+    const fn new(player: &'a PlayerRuntime<S>) -> Self {
         Self { player }
     }
 }
 
-impl Deref for Handover<'_> {
-    type Target = PlayerRuntime;
+impl<S> Deref for Handover<'_, S> {
+    type Target = PlayerRuntime<S>;
 
     fn deref(&self) -> &Self::Target {
         self.player
     }
 }
 
-impl Handover<'_> {
+impl<S> Handover<'_, S>
+where
+    S: HasPool<f32>,
+{
     /// Mark the armed-next slot at `index` activated under a short lock,
     /// returning its src. `Ok(None)` when it was already activated.
     fn activate_pending(&self, index: usize) -> Result<Option<ActivatedPending>, PlayError> {
@@ -84,15 +88,14 @@ impl Handover<'_> {
     /// Idempotent for the same index. Returns `Some(src)` on success;
     /// `None` if `items[index]` is empty (loader hasn't filled it yet) or
     /// `index` is out of range.
-    fn arm_next(&self, index: usize) -> Option<Arc<str>> {
+    fn arm_next(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
         let current_index = self.current_index();
         if index >= self.item_count() {
-            return None;
+            return Ok(None);
         }
 
-        // Resolve any already-armed slot under a short phase lock: either the
-        // same index is already armed (return early), or it must be cleared
-        // and possibly unloaded outside the lock.
+        // WHY: Resolve any already-armed slot under a short phase lock: either the same index is already armed (return early), or it must be
+        // cleared and possibly unloaded outside the lock.
         let mut phase = self.phase.lock();
         let existing = phase.pending_mut().and_then(|slot| slot.as_ref());
         let decision = match existing {
@@ -112,14 +115,16 @@ impl Handover<'_> {
         drop(phase);
 
         let to_unload = match decision {
-            ArmDecision::AlreadyArmed(src) => return Some(src),
+            ArmDecision::AlreadyArmed(src) => return Ok(Some(src)),
             ArmDecision::Clear(unload) => unload,
         };
         if let Some(item_id) = to_unload {
             let _ = self.send_to_slot(PlayerCmd::UnloadTrack { item_id });
         }
 
-        let (item_id, src, duration_seconds) = self.enqueue_to_processor(index)?;
+        let Some((item_id, src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(None);
+        };
         if let Some(pending_slot) = self.phase.lock().pending_mut() {
             *pending_slot = Some(PendingNext {
                 item_id,
@@ -129,7 +134,7 @@ impl Handover<'_> {
                 state: PendingNextState::Armed,
             });
         }
-        Some(src)
+        Ok(Some(src))
     }
 
     /// Snapshot of the armed-next index. `None` when no slot is armed
@@ -153,7 +158,7 @@ impl Handover<'_> {
     /// - [`PlayError::ArmIndexMismatch`] if `index` does not match
     ///   [`Self::armed_next`].
     fn commit_next(&self, index: usize) -> Result<(), PlayError> {
-        // `None` ⇒ the slot was already activated (idempotent no-op).
+        // WHY: `None` ⇒ the slot was already activated (idempotent no-op).
         let Some(activated) = self.activate_pending(index)? else {
             return Ok(());
         };
@@ -214,8 +219,11 @@ impl Handover<'_> {
     }
 }
 
-impl PlayerRuntime {
-    pub fn arm_next(&self, index: usize) -> Option<Arc<str>> {
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<f32>,
+{
+    pub fn arm_next(&self, index: usize) -> Result<Option<Arc<str>>, PlayError> {
         Handover::new(self).arm_next(index)
     }
 
@@ -239,17 +247,19 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_events::{EngineEvent, Envelope, Event, PlayerEvent};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        player::PlayerConfig,
+        session::testing,
+        test_pools::{TestPools, pools},
+    };
 
-    fn worker() -> PlayWorker {
-        PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        )
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
     }
 
     #[kithara::test]

@@ -1,8 +1,9 @@
-use core::sync::atomic::AtomicU64;
-
 use kithara_audio::SeekBegin;
 use kithara_events::TrackId;
-use kithara_platform::{sync::Arc, time::Duration};
+use kithara_platform::{
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
+};
 use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 use smallvec::SmallVec;
 
@@ -24,14 +25,14 @@ pub struct NodeInputs {
 /// Producer for interleaved stereo mix samples and their drop count.
 #[non_exhaustive]
 pub struct MixTapWriter {
-    pub(crate) samples: HeapProd<f32>,
     pub(crate) drops: Arc<AtomicU64>,
+    pub(crate) samples: HeapProd<f32>,
 }
 
 impl MixTapWriter {
     #[must_use]
     pub fn new(samples: HeapProd<f32>, drops: Arc<AtomicU64>) -> Self {
-        Self { samples, drops }
+        Self { drops, samples }
     }
 }
 
@@ -60,16 +61,16 @@ type SeekBinding = (TrackId, Arc<dyn SeekBegin>);
 const SLOT_TRACKS: usize = PlayerNodeProcessor::MAX_TRACKS;
 
 impl SlotControl {
-    /// Record the control half of a track's seek path.
-    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
-        self.seek.0.push((item_id, handle));
-    }
-
     /// Begin a seek on every track this slot holds, off the audio thread.
     pub fn begin_seek(&self, position: Duration) {
         for (_, handle) in &self.seek.0 {
             handle.begin(position);
         }
+    }
+
+    /// Record the control half of a track's seek path.
+    pub fn bind_seek(&mut self, item_id: TrackId, handle: Arc<dyn SeekBegin>) {
+        self.seek.0.push((item_id, handle));
     }
 
     /// Forget the exact resource generation returned by the processor.

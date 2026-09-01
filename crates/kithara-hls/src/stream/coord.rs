@@ -5,6 +5,7 @@ use std::{ops::Range, sync::atomic::AtomicU64};
 use delegate::delegate;
 use kithara_abr::{AbrHandle, AbrPublisher};
 use kithara_assets::{AssetScope, ResourceKey};
+use kithara_bufpool::HasPool;
 use kithara_events::{DeferredBus, HlsEvent};
 use kithara_platform::{
     CancelToken,
@@ -38,9 +39,12 @@ const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 /// the parent cancel token (cancel hierarchy owner of `HlsCoord.cancel`)
 /// and the per-track [`AssetStore`] used by reader paths and by every
 /// variant's `dispatch` closures.
-pub(crate) struct HlsCoordEnv {
+pub(crate) struct HlsCoordEnv<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
-    pub(crate) scope: AssetScope,
+    pub(crate) scope: AssetScope<S>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     pub(crate) signal: SizeSignal,
@@ -48,16 +52,19 @@ pub(crate) struct HlsCoordEnv {
 
 /// Coordinator over fixed variants and one authoritative active reader session.
 /// The optional incoming session stays private until exact audio promotion.
-pub(crate) struct HlsCoord {
+pub(crate) struct HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(crate) abr: AbrHandle,
     pub(crate) emit: Arc<DeferredBus<HlsEvent>>,
-    pub(crate) variants: Arc<[Arc<HlsVariant>]>,
-    pub(crate) scope: AssetScope,
+    pub(crate) variants: Arc<[Arc<HlsVariant<S>>]>,
+    pub(crate) scope: AssetScope<S>,
     pub(crate) cancel: CancelToken,
     pub(crate) headers: Option<kithara_net::Headers>,
     pub(super) abr_publisher: AbrPublisher,
     /// One authoritative active session and at most one exact incoming session.
-    pub(super) sessions: SessionSlots,
+    pub(super) sessions: SessionSlots<S>,
     /// Backing playhead state — the coord owns the `Arc` directly and
     /// vends narrow trait-object handles from it.
     playhead: Arc<PlayheadState>,
@@ -70,7 +77,10 @@ pub(crate) struct HlsCoord {
     signal: SizeSignal,
 }
 
-impl HlsCoord {
+impl<S> HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Re-aim heartbeat for the off-RT blocking wait. The wait wakes immediately
     /// on any readiness signal (the fact of a write/commit/fence/seek) —
     /// event-driven. This interval bounds only the *quiet* case: if no signal
@@ -82,12 +92,12 @@ impl HlsCoord {
     const READER_REAIM_INTERVAL: Duration = Duration::from_millis(25);
 
     pub(crate) fn new(
-        env: HlsCoordEnv,
+        env: HlsCoordEnv<S>,
         playhead: Arc<PlayheadState>,
         seek: Arc<SeekState>,
         abr: AbrHandle,
         abr_publisher: AbrPublisher,
-        variants: Arc<[Arc<HlsVariant>]>,
+        variants: Arc<[Arc<HlsVariant<S>>]>,
     ) -> Self {
         assert!(
             !variants.is_empty(),
@@ -136,7 +146,12 @@ impl HlsCoord {
 
     /// Mark an evicted segment missing and rebuild each resident reader from
     /// its own cursor. Variants without a reader rebuild on activation.
-    pub(crate) fn broadcast_eviction(&self, ctx: &PlanCtx, key: &ResourceKey, seg_at_reader: u32) {
+    pub(crate) fn broadcast_eviction(
+        &self,
+        ctx: &PlanCtx<S>,
+        key: &ResourceKey,
+        seg_at_reader: u32,
+    ) {
         let active_idx = self.variant_index();
         let incoming = self.sessions.incoming_session();
         let incoming_idx = incoming.as_ref().map(|session| session.variant_index());
@@ -346,7 +361,7 @@ impl HlsCoord {
     /// excluded: their layout overlaps the active range but their
     /// resources were never fetched, so routing to them would return
     /// `NotFound` / `Pending(Retry)`.
-    pub(crate) fn variant_serving(&self, offset: u64) -> Arc<HlsVariant> {
+    pub(crate) fn variant_serving(&self, offset: u64) -> Arc<HlsVariant<S>> {
         let active = self.active();
         if active.init_descriptor_at(offset).is_some() || active.find_at_offset(offset).is_some() {
             return active;
@@ -440,7 +455,7 @@ impl HlsCoord {
     delegate! {
         to self.active_session() {
             #[call(variant)]
-            pub(crate) fn active(&self) -> Arc<HlsVariant>;
+            pub(crate) fn active(&self) -> Arc<HlsVariant<S>>;
             pub(crate) fn advance(&self, n: u64);
             pub(crate) fn position(&self) -> u64;
             pub(crate) fn seek_time_anchor(
@@ -490,17 +505,26 @@ pub(super) fn variant_switch_target_time(
 /// cursor, length, and layout, so the forbid-blocking audio core reads
 /// them here without the stream mutex. Wraps the `Arc` because the byte
 /// map IS the coord — vending it is an allocation-free `Arc` clone.
-pub(crate) struct HlsProbe {
-    coord: Arc<HlsCoord>,
+pub(crate) struct HlsProbe<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    coord: Arc<HlsCoord<S>>,
 }
 
-impl HlsProbe {
-    pub(crate) fn new(coord: Arc<HlsCoord>) -> Self {
+impl<S> HlsProbe<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) fn new(coord: Arc<HlsCoord<S>>) -> Self {
         Self { coord }
     }
 }
 
-impl SourceProbe for HlsProbe {
+impl<S> SourceProbe for HlsProbe<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     delegate! {
         to self.coord {
             fn phase_at(&self, range: Range<u64>) -> SourcePhase;
@@ -524,7 +548,10 @@ impl SourceProbe for HlsProbe {
 /// to the stream layer. The bodies are the coord's existing inherent
 /// methods — non-adaptive sources vend `None` instead of implementing
 /// these.
-impl VariantControl for HlsCoord {
+impl<S> VariantControl for HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     fn abort_variant(&self, transition: VariantTransition) -> bool {
         Self::abort_variant(self, transition)
     }
@@ -571,7 +598,10 @@ impl VariantControl for HlsCoord {
     }
 }
 
-impl ByteMap for HlsCoord {
+impl<S> ByteMap for HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     delegate! {
         to self {
             #[call(seek_time_anchor)]
@@ -605,7 +635,10 @@ impl ByteMap for HlsCoord {
     }
 }
 
-impl SeekPrepare for HlsCoord {
+impl<S> SeekPrepare for HlsCoord<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     delegate! {
         to self {
             #[call(prepare_for_seek)]
@@ -642,24 +675,28 @@ mod tests {
         variant::{PlanConfig, PlanCtx, VariantParts},
     };
 
-    fn switch_coord() -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+    type TestHlsCoord = HlsCoord<crate::test_pools::TestPools>;
+    type TestHlsVariant = HlsVariant<crate::test_pools::TestPools>;
+    type TestPlanCtx = PlanCtx<crate::test_pools::TestPools>;
+
+    fn switch_coord() -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
         switch_coord_with_reason(AbrReason::ManualOverride)
     }
 
     fn switch_coord_with_reason(
         reason: AbrReason,
-    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+    ) -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
         switch_coord_sized(reason, 1)
     }
 
     fn switch_coord_sized(
         reason: AbrReason,
         v0_segments: u32,
-    ) -> (Arc<HlsCoord>, EventBus, PlanCtx, Arc<AbrState>) {
+    ) -> (Arc<TestHlsCoord>, EventBus, TestPlanCtx, Arc<AbrState>) {
         let bus = EventBus::new(8);
         let cancel = CancelToken::never();
         let store = Arc::new(
-            AssetStore::builder()
+            AssetStore::builder(crate::test_pools::pools())
                 .backend(StorageBackend::Memory)
                 .cancel(cancel.clone())
                 .build(),
@@ -668,7 +705,7 @@ mod tests {
         let ctx = PlanCtx {
             bus: bus.clone(),
             scope: store
-                .scope::<crate::Hls>(&AssetSource::Remote {
+                .scope::<crate::Hls<crate::test_pools::TestPools>>(&AssetSource::Remote {
                     url: "https://example.com/master.m3u8"
                         .parse()
                         .expect("master url"),
@@ -712,7 +749,7 @@ mod tests {
                 }],
             },
         ]));
-        let variants: Arc<[Arc<HlsVariant>]> = Arc::from(vec![
+        let variants: Arc<[Arc<TestHlsVariant>]> = Arc::from(vec![
             VariantParts {
                 init: None,
                 segments: v0_urls
@@ -809,7 +846,7 @@ mod tests {
     }
 
     fn prepare_incoming(
-        coord: &HlsCoord,
+        coord: &TestHlsCoord,
         profile: ReaderProfile,
     ) -> StreamResult<Option<VariantTransition>> {
         let Some(plan) = VariantControl::plan_variant_reader(coord, None)? else {
@@ -819,8 +856,8 @@ mod tests {
     }
 
     fn take_ready_incremental_reader(
-        coord: &HlsCoord,
-        ctx: &PlanCtx,
+        coord: &TestHlsCoord,
+        ctx: &TestPlanCtx,
         transition: VariantTransition,
     ) {
         let mut command = coord

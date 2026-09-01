@@ -1,12 +1,12 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_bufpool::SamplePool;
 use kithara_test_utils::kithara;
 
 use super::{GlideBackend, GlideConfig, GlideInterpolation, resampler::GlideResampler};
 use crate::{
     RatioGlide, Resampler, ResamplerBackend, ResamplerCapabilities, ResamplerConfig,
     ResamplerControl, ResamplerMode, ResamplerOptions, ResamplerSettings, create_resampler,
+    test_pools::{TestPools, pools},
 };
 
 fn channels(value: usize) -> NonZeroUsize {
@@ -17,12 +17,12 @@ fn rate(value: u32) -> NonZeroU32 {
     NonZeroU32::new(value).unwrap_or_else(|| panic!("sample rate must be non-zero"))
 }
 
-fn settings(mode: ResamplerMode) -> ResamplerSettings {
+fn settings(mode: ResamplerMode) -> ResamplerSettings<TestPools> {
     ResamplerSettings::builder()
         .channels(channels(1))
         .mode(mode)
         .options(ResamplerOptions::builder().chunk_size(16).build())
-        .sample_pool(SamplePool::new(16, 1_024))
+        .pools(pools())
         .build()
 }
 

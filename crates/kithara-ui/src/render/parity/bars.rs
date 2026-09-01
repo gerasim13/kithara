@@ -89,16 +89,16 @@ impl Reads for Bars {
 }
 
 impl App for Bars {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         "bars.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn update(&mut self, event: UiEvent) {
@@ -145,7 +145,7 @@ fn retained_menus(standing: &str, width: u32, height: u32) -> Vec<Vec<Rect>> {
     .unwrap_or_else(|error| panic!("the bar fixture must mount: {error}"));
     let anchor = ui
         .rect_of(&format!("{standing}/anchor"))
-        .unwrap_or_else(|| panic!("the bar the room reached must be laid out"));
+        .expect("the bar the room reached must be laid out");
     let at = Pt {
         x: anchor.x + anchor.w / 2.0,
         y: anchor.y + anchor.h / 2.0,

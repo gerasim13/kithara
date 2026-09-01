@@ -47,7 +47,18 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct MasonryRoot<Action> {
+    window: Option<WindowTracker>,
+    signals: Rc<RefCell<VecDeque<RenderRootSignal>>>,
+    #[field(get, vis = "pub")]
+    root: RenderRoot,
     actions: Vec<Action>,
+    blocks: Vec<BlockRegistration>,
+    boxes: Vec<NodeBox>,
+    engines: Vec<Rc<HostedEngine>>,
+    native: Vec<WidgetId>,
+    platform: Vec<RenderRootSignal>,
+    popovers: Vec<PopoverRegistration>,
+    watched: Vec<Watched>,
     /// The document this root holds draws a different picture at a later
     /// moment, so a frame it finished has to be followed by another.
     ///
@@ -59,6 +70,9 @@ pub struct MasonryRoot<Action> {
     /// is drawn once and then only when something unrelated wakes the window.
     #[field(with, vis = "pub")]
     animates: bool,
+    /// Whether the press the window last reported was a second one, so the
+    /// release that follows it is a double click rather than a plain one.
+    double_click: bool,
     /// The last refresh moved the picture without an event having asked it to.
     ///
     /// A document showing values the application keeps changing draws a new
@@ -67,23 +81,9 @@ pub struct MasonryRoot<Action> {
     /// after it, and a document that has come to rest stops asking after a
     /// single frame that moved nothing.
     moved: bool,
-    platform: Vec<RenderRootSignal>,
-    engines: Vec<Rc<HostedEngine>>,
-    /// Whether the press the window last reported was a second one, so the
-    /// release that follows it is a double click rather than a plain one.
-    double_click: bool,
     /// What the window last said its scale is, which is what turns a wheel's
     /// physical delta into the distance a control scrolls.
     scale: f64,
-    boxes: Vec<NodeBox>,
-    popovers: Vec<PopoverRegistration>,
-    blocks: Vec<BlockRegistration>,
-    watched: Vec<Watched>,
-    native: Vec<WidgetId>,
-    window: Option<WindowTracker>,
-    #[field(get, vis = "pub")]
-    root: RenderRoot,
-    signals: Rc<RefCell<VecDeque<RenderRootSignal>>>,
 }
 
 /// Failure to recover the host's declared action type from a Masonry signal.
@@ -124,12 +124,7 @@ where
             options,
         );
         let mut this = Self {
-            actions: Vec::new(),
-            animates: false,
-            moved: false,
-            platform: Vec::new(),
             engines,
-            double_click: false,
             scale,
             boxes,
             popovers,
@@ -139,6 +134,11 @@ where
             window,
             root,
             signals,
+            actions: Vec::new(),
+            animates: false,
+            moved: false,
+            platform: Vec::new(),
+            double_click: false,
         };
         this.sync_popovers();
         for layer in layers {
@@ -149,32 +149,24 @@ where
         Ok(this)
     }
 
-    pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
-        self.native
-            .iter()
-            .filter_map(|id| {
-                let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
-                if widget.ctx().is_stashed() {
-                    return None;
-                }
-                let frame = widget.vis_frame()?;
-                let bounds = widget.ctx().bounding_rect();
-                VisDeclaration::logical(frame, [bounds.x0, bounds.y0, bounds.x1, bounds.y1])
-            })
-            .collect()
+    /// Where the node a surface hangs on stands, or nothing when it stands
+    /// nowhere.
+    ///
+    /// A node the room did not reach is stashed rather than left out of the
+    /// tree, and a stashed node keeps the box it last had, so the box alone
+    /// cannot say whether it is still in the picture.
+    fn anchor_box(&self, anchor: WidgetId) -> Option<MasonryRect> {
+        let widget = self.root.get_widget(anchor)?;
+        (!widget.ctx().is_stashed()).then(|| widget.ctx().bounding_rect())
     }
 
-    pub(crate) fn shader_declarations(&self) -> Vec<ShaderDeclaration> {
-        self.native
-            .iter()
-            .filter_map(|id| {
-                let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
-                if widget.ctx().is_stashed() {
-                    return None;
-                }
-                widget.shader_declaration()
-            })
-            .collect()
+    /// Satisfies the redraw signals covered by a completed frame.
+    ///
+    /// Returns whether an animation frame, rather than an ordinary redraw, was
+    /// requested. Every unrelated platform signal remains queued in order.
+    pub(crate) fn complete_frame(&mut self) -> bool {
+        let animation = complete_frame_signals(&mut self.platform);
+        animation || self.animates || std::mem::take(&mut self.moved)
     }
 
     /// Dispatches one keyboard or input-method event.
@@ -220,6 +212,27 @@ where
         Ok(handled)
     }
 
+    /// Reports whether Masonry requested another paint or animation frame.
+    pub(crate) fn needs_frame(&self) -> bool {
+        frame_requested(&self.platform) || self.animates || self.moved
+    }
+
+    fn push_action(&mut self, action: masonry::core::ErasedAction) -> Result<(), MasonryRootError> {
+        let actual = action.type_name();
+        let host = action
+            .downcast::<HostAction>()
+            .map_err(|_| MasonryRootError::ForeignAction { actual })?;
+        let actual = host.type_name();
+        let action = (*host)
+            .downcast::<Action>()
+            .map_err(|_| MasonryRootError::MappedAction {
+                actual,
+                expected: std::any::type_name::<Action>(),
+            })?;
+        self.actions.push(action);
+        Ok(())
+    }
+
     /// Renders the current tree and applies signals emitted during paint.
     ///
     /// # Errors
@@ -231,105 +244,17 @@ where
         Ok(rendered)
     }
 
-    /// Takes all concrete actions emitted since the previous call.
-    pub fn take_actions(&mut self) -> Vec<Action> {
-        std::mem::take(&mut self.actions)
-    }
-
-    /// Takes non-layer, non-action signals for the platform runner.
-    pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal> {
-        std::mem::take(&mut self.platform)
-    }
-
-    /// Takes the cursor the tree last asked its window to show, if it asked.
-    ///
-    /// Every cursor the tree resolves reaches a host this way: the shape a
-    /// widget answers a hover with, the resize edge, the text caret, and the
-    /// shape [`Self::show_cursor`] takes from a router. A host that never reads
-    /// them shows one cursor for the life of its window and keeps them queued
-    /// forever, so a window runner takes them here. Only the last one is worth
-    /// showing, and every other platform signal is left where it stands.
-    pub fn take_cursor(&mut self) -> Option<CursorIcon> {
-        let mut cursor = None;
-        self.platform.retain(|signal| {
-            let RenderRootSignal::SetCursor(icon) = signal else {
-                return true;
-            };
-            cursor = Some(*icon);
-            false
-        });
-        cursor
-    }
-
-    /// Satisfies the redraw signals covered by a completed frame.
-    ///
-    /// Returns whether an animation frame, rather than an ordinary redraw, was
-    /// requested. Every unrelated platform signal remains queued in order.
-    pub(crate) fn complete_frame(&mut self) -> bool {
-        let animation = complete_frame_signals(&mut self.platform);
-        animation || self.animates || std::mem::take(&mut self.moved)
-    }
-
-    /// Reports whether Masonry requested another paint or animation frame.
-    pub(crate) fn needs_frame(&self) -> bool {
-        frame_requested(&self.platform) || self.animates || self.moved
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
-        self.engines
+    pub(crate) fn shader_declarations(&self) -> Vec<ShaderDeclaration> {
+        self.native
             .iter()
-            .find_map(|engine| engine.tree_picture(path))
-    }
-
-    fn sync_popovers(&self) {
-        for popover in &self.popovers {
-            popover.state.set_anchor(self.anchor_box(popover.anchor));
-        }
-    }
-
-    /// Re-reads the box every mounted surface that answers a hand stands in.
-    ///
-    /// A control an engine drives answers the pointer against a box, and that
-    /// box moves without the control being told: Masonry recomputes a whole
-    /// subtree itself when a window above it scrolls and calls no widget back.
-    /// So the boxes are read out of the tree here, after every event, the same
-    /// way a popover reads its anchor.
-    fn sync_boxes(&self) {
-        for stood in &self.boxes {
-            stood
-                .area
-                .set(self.anchor_box(stood.node).unwrap_or(MasonryRect::ZERO));
-        }
-    }
-
-    /// Where the node a surface hangs on stands, or nothing when it stands
-    /// nowhere.
-    ///
-    /// A node the room did not reach is stashed rather than left out of the
-    /// tree, and a stashed node keeps the box it last had, so the box alone
-    /// cannot say whether it is still in the picture.
-    fn anchor_box(&self, anchor: WidgetId) -> Option<MasonryRect> {
-        let widget = self.root.get_widget(anchor)?;
-        (!widget.ctx().is_stashed()).then(|| widget.ctx().bounding_rect())
-    }
-
-    /// Repaints the layer of every engine whose menu has changed.
-    ///
-    /// The menu is drawn above the tree by a layer of its own, so the widget
-    /// that routed the press cannot mark it: a press that opens a menu is,
-    /// from Masonry's side, a press that changed nothing on screen.
-    fn sync_menus(&mut self) {
-        let changed: Vec<WidgetId> = self
-            .engines
-            .iter()
-            .filter_map(|engine| engine.take_changed_menu())
-            .collect();
-        for layer in changed {
-            self.root.edit_widget(layer, |mut layer| {
-                layer.ctx.request_paint_only();
-            });
-        }
+            .filter_map(|id| {
+                let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
+                if widget.ctx().is_stashed() {
+                    return None;
+                }
+                widget.shader_declaration()
+            })
+            .collect()
     }
 
     fn sync(&mut self) -> Result<(), MasonryRootError> {
@@ -360,20 +285,95 @@ where
         Ok(())
     }
 
-    fn push_action(&mut self, action: masonry::core::ErasedAction) -> Result<(), MasonryRootError> {
-        let actual = action.type_name();
-        let host = action
-            .downcast::<HostAction>()
-            .map_err(|_| MasonryRootError::ForeignAction { actual })?;
-        let actual = host.type_name();
-        let action = (*host)
-            .downcast::<Action>()
-            .map_err(|_| MasonryRootError::MappedAction {
-                actual,
-                expected: std::any::type_name::<Action>(),
-            })?;
-        self.actions.push(action);
-        Ok(())
+    /// Re-reads the box every mounted surface that answers a hand stands in.
+    ///
+    /// A control an engine drives answers the pointer against a box, and that
+    /// box moves without the control being told: Masonry recomputes a whole
+    /// subtree itself when a window above it scrolls and calls no widget back.
+    /// So the boxes are read out of the tree here, after every event, the same
+    /// way a popover reads its anchor.
+    fn sync_boxes(&self) {
+        for stood in &self.boxes {
+            stood
+                .area
+                .set(self.anchor_box(stood.node).unwrap_or(MasonryRect::ZERO));
+        }
+    }
+
+    /// Repaints the layer of every engine whose menu has changed.
+    ///
+    /// The menu is drawn above the tree by a layer of its own, so the widget
+    /// that routed the press cannot mark it: a press that opens a menu is,
+    /// from Masonry's side, a press that changed nothing on screen.
+    fn sync_menus(&mut self) {
+        let changed: Vec<WidgetId> = self
+            .engines
+            .iter()
+            .filter_map(|engine| engine.take_changed_menu())
+            .collect();
+        for layer in changed {
+            self.root.edit_widget(layer, |mut layer| {
+                layer.ctx.request_paint_only();
+            });
+        }
+    }
+
+    fn sync_popovers(&self) {
+        for popover in &self.popovers {
+            popover.state.set_anchor(self.anchor_box(popover.anchor));
+        }
+    }
+
+    /// Takes all concrete actions emitted since the previous call.
+    pub fn take_actions(&mut self) -> Vec<Action> {
+        std::mem::take(&mut self.actions)
+    }
+
+    /// Takes the cursor the tree last asked its window to show, if it asked.
+    ///
+    /// Every cursor the tree resolves reaches a host this way: the shape a
+    /// widget answers a hover with, the resize edge, the text caret, and the
+    /// shape [`Self::show_cursor`] takes from a router. A host that never reads
+    /// them shows one cursor for the life of its window and keeps them queued
+    /// forever, so a window runner takes them here. Only the last one is worth
+    /// showing, and every other platform signal is left where it stands.
+    pub fn take_cursor(&mut self) -> Option<CursorIcon> {
+        let mut cursor = None;
+        self.platform.retain(|signal| {
+            let RenderRootSignal::SetCursor(icon) = signal else {
+                return true;
+            };
+            cursor = Some(*icon);
+            false
+        });
+        cursor
+    }
+
+    /// Takes non-layer, non-action signals for the platform runner.
+    pub fn take_platform_signals(&mut self) -> Vec<RenderRootSignal> {
+        std::mem::take(&mut self.platform)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tree_picture(&self, path: &str) -> Option<(usize, String)> {
+        self.engines
+            .iter()
+            .find_map(|engine| engine.tree_picture(path))
+    }
+
+    pub(crate) fn vis_declarations(&self) -> Vec<VisDeclaration> {
+        self.native
+            .iter()
+            .filter_map(|id| {
+                let widget = self.root.get_widget(*id)?.downcast::<Node>()?;
+                if widget.ctx().is_stashed() {
+                    return None;
+                }
+                let frame = widget.vis_frame()?;
+                let bounds = widget.ctx().bounding_rect();
+                VisDeclaration::logical(frame, [bounds.x0, bounds.y0, bounds.x1, bounds.y1])
+            })
+            .collect()
     }
 }
 
@@ -390,147 +390,6 @@ impl<Action> MasonryRoot<Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    /// Dispatches one pointer event, including origin banking and layer updates.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
-    pub fn handle_pointer_event(
-        &mut self,
-        event: PointerEvent,
-    ) -> Result<Handled, MasonryRootError> {
-        self.observe_pointer(&event);
-        if self.root.pointer_capture_target().is_some() || self.window_answers_first(&event) {
-            return self.route_root_pointer(event);
-        }
-        // A standing popover swallows the press that lands outside it, unless
-        // a menu is up: the menu is drawn above the popover and is the thing
-        // the hand is aiming at.
-        let menu = self.engines.iter().any(|engine| engine.has_open_picker());
-        if !menu && self.dismisses_popover(&event)? {
-            return Ok(Handled::Yes);
-        }
-        self.bank_pointer(&event);
-        let at = picker::at(&event);
-        let handled = if self.route_engines(&event)? {
-            self.sync()?;
-            Handled::Yes
-        } else {
-            self.route_root_pointer(event)?
-        };
-        if let Some(point) = at {
-            self.show_cursor(point);
-        }
-        Ok(handled)
-    }
-
-    /// Asks every router the document mounted, and says whether one took the
-    /// event outright.
-    ///
-    /// A router with nothing under the hand answers nothing, so the order only
-    /// decides who hears a point two of them could claim, and the one drawn on
-    /// top hears it.
-    ///
-    /// A router that holds the pointer, or takes it here, ends the walk — and
-    /// the event that lets go is still its own, which is what makes a double
-    /// click that ends a drag land on the control that was dragged. A router
-    /// that merely answers — a list that hears the item it is carrying move —
-    /// leaves the event for the routers below it and for the tree, which is
-    /// how the module the item is dropped on learns the hand is above it.
-    fn route_engines(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
-        let Some((input, at)) = picker::pointing(event, &mut self.double_click, self.scale) else {
-            return Ok(false);
-        };
-        for engine in self.routers() {
-            let owner = engine.owner();
-            let held = engine.captures_pointer();
-            let routed = engine.route(input, at);
-            if routed.repaint {
-                self.root.edit_widget(owner, |mut widget| {
-                    widget.ctx.request_paint_only();
-                });
-            }
-            if matches!(event, PointerEvent::Down(_)) {
-                self.sync_picker_focus(owner, routed.focused);
-            }
-            let captured = routed.outcome.is_captured();
-            if let Some(action) = routed.outcome.value() {
-                self.push_action(Box::new(action))?;
-            }
-            if captured || held {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
-    /// The routers in the order they are asked: from the top of the document
-    /// down, which is the order they were stacked in, reversed.
-    fn routers(&self) -> Vec<Rc<HostedEngine>> {
-        self.engines.iter().rev().map(Rc::clone).collect()
-    }
-
-    /// Says what the hand is doing, from the router that owns it.
-    ///
-    /// The tree asks whatever sits under the pointer, and by the time a track
-    /// is over the deck that is the deck, which knows nothing about the drag.
-    /// The list that started it does, so its answer is the last word.
-    fn show_cursor(&mut self, point: Pt) {
-        let shape = self
-            .routers()
-            .into_iter()
-            .map(|engine| engine.cursor(point))
-            .find(|shape| *shape != CursorShape::None);
-        if let Some(shape) = shape {
-            self.platform
-                .push(RenderRootSignal::SetCursor(cursor_icon(shape)));
-        }
-    }
-
-    fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {
-        let handled = self.root.handle_pointer_event(event);
-        self.sync_popovers();
-        self.sync()?;
-        Ok(handled)
-    }
-
-    fn sync_picker_focus(&mut self, owner: WidgetId, focused: bool) {
-        if focused {
-            self.root.focus_on(Some(owner));
-        } else if self.root.focused_widget() == Some(owner) {
-            self.root.focus_on(None);
-        }
-    }
-
-    fn observe_pointer(&mut self, event: &PointerEvent) {
-        let position = match event {
-            PointerEvent::Down(button) | PointerEvent::Up(button) => {
-                Some(button.state.logical_position())
-            }
-            PointerEvent::Move(update) => Some(update.current.logical_position()),
-            PointerEvent::Scroll(scroll) => Some(scroll.state.logical_position()),
-            PointerEvent::Gesture(gesture) => Some(gesture.state.logical_position()),
-            PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => None,
-        };
-        if let Some(position) = position {
-            let point = Pt {
-                x: position.x.as_(),
-                y: position.y.as_(),
-            };
-            if let Some(window) = &self.window {
-                window.pointer.set(Some(point));
-                if window.carrying
-                    && matches!(event, PointerEvent::Move(_))
-                    && let Some(layer) = window.layer
-                {
-                    self.root.edit_widget(layer, |mut layer| {
-                        layer.ctx.request_paint_only();
-                    });
-                }
-            }
-        }
-    }
-
     fn bank_pointer(&self, event: &PointerEvent) {
         let PointerEvent::Down(button) = event else {
             return;
@@ -574,14 +433,142 @@ where
         Ok(true)
     }
 
-    fn window_owns(&self, point: Point) -> bool {
-        let Some(layer) = self.window.as_ref().and_then(|window| window.layer) else {
-            return false;
+    /// Dispatches one pointer event, including origin banking and layer updates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MasonryRootError`] when a widget violates the typed action contract.
+    pub fn handle_pointer_event(
+        &mut self,
+        event: PointerEvent,
+    ) -> Result<Handled, MasonryRootError> {
+        self.observe_pointer(&event);
+        if self.root.pointer_capture_target().is_some() || self.window_answers_first(&event) {
+            return self.route_root_pointer(event);
+        }
+        let menu = self.engines.iter().any(|engine| engine.has_open_picker());
+        if !menu && self.dismisses_popover(&event)? {
+            return Ok(Handled::Yes);
+        }
+        self.bank_pointer(&event);
+        let at = picker::at(&event);
+        let handled = if self.route_engines(&event)? {
+            self.sync()?;
+            Handled::Yes
+        } else {
+            self.route_root_pointer(event)?
         };
-        self.root
-            .get_widget(layer)
-            .and_then(|layer| layer.find_widget_under_pointer(point))
-            .is_some()
+        if let Some(point) = at {
+            self.show_cursor(point);
+        }
+        Ok(handled)
+    }
+
+    fn observe_pointer(&mut self, event: &PointerEvent) {
+        let position = match event {
+            PointerEvent::Down(button) | PointerEvent::Up(button) => {
+                Some(button.state.logical_position())
+            }
+            PointerEvent::Move(update) => Some(update.current.logical_position()),
+            PointerEvent::Scroll(scroll) => Some(scroll.state.logical_position()),
+            PointerEvent::Gesture(gesture) => Some(gesture.state.logical_position()),
+            PointerEvent::Cancel(_) | PointerEvent::Enter(_) | PointerEvent::Leave(_) => None,
+        };
+        if let Some(position) = position {
+            let point = Pt {
+                x: position.x.as_(),
+                y: position.y.as_(),
+            };
+            if let Some(window) = &self.window {
+                window.pointer.set(Some(point));
+                if window.carrying
+                    && matches!(event, PointerEvent::Move(_))
+                    && let Some(layer) = window.layer
+                {
+                    self.root.edit_widget(layer, |mut layer| {
+                        layer.ctx.request_paint_only();
+                    });
+                }
+            }
+        }
+    }
+
+    /// Asks every router the document mounted, and says whether one took the
+    /// event outright.
+    ///
+    /// A router with nothing under the hand answers nothing, so the order only
+    /// decides who hears a point two of them could claim, and the one drawn on
+    /// top hears it.
+    ///
+    /// A router that holds the pointer, or takes it here, ends the walk — and
+    /// the event that lets go is still its own, which is what makes a double
+    /// click that ends a drag land on the control that was dragged. A router
+    /// that merely answers — a list that hears the item it is carrying move —
+    /// leaves the event for the routers below it and for the tree, which is
+    /// how the module the item is dropped on learns the hand is above it.
+    fn route_engines(&mut self, event: &PointerEvent) -> Result<bool, MasonryRootError> {
+        let Some((input, at)) = picker::pointing(event, &mut self.double_click, self.scale) else {
+            return Ok(false);
+        };
+        for engine in self.routers() {
+            let owner = engine.owner();
+            let held = engine.captures_pointer();
+            let routed = engine.route(input, at);
+            if routed.repaint {
+                self.root.edit_widget(owner, |mut widget| {
+                    widget.ctx.request_paint_only();
+                });
+            }
+            if matches!(event, PointerEvent::Down(_)) {
+                self.sync_picker_focus(owner, routed.focused);
+            }
+            let captured = routed.outcome.is_captured();
+            if let Some(action) = routed.outcome.value() {
+                self.push_action(Box::new(action))?;
+            }
+            if captured || held {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn route_root_pointer(&mut self, event: PointerEvent) -> Result<Handled, MasonryRootError> {
+        let handled = self.root.handle_pointer_event(event);
+        self.sync_popovers();
+        self.sync()?;
+        Ok(handled)
+    }
+
+    /// The routers in the order they are asked: from the top of the document
+    /// down, which is the order they were stacked in, reversed.
+    fn routers(&self) -> Vec<Rc<HostedEngine>> {
+        self.engines.iter().rev().map(Rc::clone).collect()
+    }
+
+    /// Says what the hand is doing, from the router that owns it.
+    ///
+    /// The tree asks whatever sits under the pointer, and by the time a track
+    /// is over the deck that is the deck, which knows nothing about the drag.
+    /// The list that started it does, so its answer is the last word.
+    fn show_cursor(&mut self, point: Pt) {
+        let shape = self
+            .routers()
+            .into_iter()
+            .map(|engine| engine.cursor(point))
+            .find(|shape| *shape != CursorShape::None);
+        if let Some(shape) = shape {
+            self.platform
+                .push(RenderRootSignal::SetCursor(cursor_icon(shape)));
+        }
+    }
+
+    fn sync_picker_focus(&mut self, owner: WidgetId, focused: bool) {
+        if focused {
+            self.root.focus_on(Some(owner));
+        } else if self.root.focused_widget() == Some(owner) {
+            self.root.focus_on(None);
+        }
     }
 
     fn window_answers_first(&self, event: &PointerEvent) -> bool {
@@ -591,6 +578,16 @@ where
         let position = button.state.logical_position();
         self.window_owns(Point::new(position.x, position.y))
     }
+
+    fn window_owns(&self, point: Point) -> bool {
+        let Some(layer) = self.window.as_ref().and_then(|window| window.layer) else {
+            return false;
+        };
+        self.root
+            .get_widget(layer)
+            .and_then(|layer| layer.find_widget_under_pointer(point))
+            .is_some()
+    }
 }
 
 /// Re-reading a standing tree, which is what this host does instead of
@@ -599,29 +596,6 @@ impl<Action> MasonryRoot<Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
-    /// Re-reads everything the mounted document shows and hands it to the
-    /// widget that draws it.
-    ///
-    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
-    /// gesture in flight and the pointer capture that feeds it both survive, and
-    /// every control bound to the same endpoint moves together rather than one
-    /// of them being poked by hand.
-    ///
-    /// Two kinds of thing change between frames without the document changing.
-    /// A control's *value* comes from an endpoint the control names, and is
-    /// re-read one control at a time. A control's *pose* comes from the objects
-    /// around it, and is worked out by the document walk rather than named
-    /// anywhere, so it takes a walk to re-read — one for the whole document.
-    pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
-        let shown = self.show_values(ctx);
-        self.reread_plans(ctx);
-        let placed = self.place_objects(ctx);
-        self.open_surfaces(ctx);
-        self.stand_blocks(ctx);
-        let carried = self.carry_ghost(ctx);
-        self.moved = shown || placed || carried;
-    }
-
     /// Shows what the pointer is carrying now.
     ///
     /// The ghost is a value the window layer draws, not shape the layer was
@@ -670,25 +644,57 @@ where
         }
     }
 
-    /// Shows the blocks the document now shows, and hides the rest.
+    /// Walks the document again for the poses alone, and moves whatever the
+    /// walk now puts somewhere else.
     ///
-    /// A block is the same kind of thing as a surface opening: re-reading a
-    /// leaf changes what that leaf shows, while a block changes whether a
-    /// whole subtree stands in the picture at all. The flow above it hides it
-    /// the way it hides a child the room did not reach, so all this does is
-    /// tell the flow to lay itself out again once the answer has changed.
-    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) {
-        let changed: Vec<WidgetId> = self
-            .blocks
-            .iter()
-            .filter(|block| block.state.latch(ctx.flag(Some(&block.hidden))))
-            .map(|block| block.flow)
-            .collect();
-        for flow in changed {
-            self.root.edit_widget(flow, |mut flow| {
-                flow.ctx.request_layout();
+    /// Nothing is watched this way unless the document declares an object an
+    /// endpoint drives, so a page that never moves pays for none of this.
+    fn place_objects(&mut self, ctx: Ctx<'_, '_>) -> bool {
+        if !ctx.ui.driven {
+            return false;
+        }
+        let placed = placements(&ctx.ui.root, ctx);
+        let mut moved = false;
+        for watched in &self.watched {
+            let Watched::Placed { id, path } = watched else {
+                continue;
+            };
+            let Some(transform) = placed.get(path).copied() else {
+                continue;
+            };
+            moved |= self.root.edit_widget(*id, |mut widget| {
+                let mut node = widget.downcast::<Node>();
+                let moved = node.widget.place(transform);
+                if moved {
+                    node.ctx.request_paint_only();
+                }
+                moved
             });
         }
+        moved
+    }
+
+    /// Re-reads everything the mounted document shows and hands it to the
+    /// widget that draws it.
+    ///
+    /// This is what a rebuild was doing, minus the rebuild: the tree stays, so a
+    /// gesture in flight and the pointer capture that feeds it both survive, and
+    /// every control bound to the same endpoint moves together rather than one
+    /// of them being poked by hand.
+    ///
+    /// Two kinds of thing change between frames without the document changing.
+    /// A control's *value* comes from an endpoint the control names, and is
+    /// re-read one control at a time. A control's *pose* comes from the objects
+    /// around it, and is worked out by the document walk rather than named
+    /// anywhere, so it takes a walk to re-read — one for the whole document.
+    pub fn refresh(&mut self, ctx: Ctx<'_, '_>) {
+        let shown = self.show_values(ctx);
+        self.reread_plans(ctx);
+        let placed = self.place_objects(ctx);
+        self.open_surfaces(ctx);
+        self.stand_blocks(ctx);
+        let carried = self.carry_ghost(ctx);
+        self.moved = shown || placed || carried;
     }
 
     /// Carries the frame just read into the gestures already mounted.
@@ -736,8 +742,6 @@ where
                     };
                     moved |= self.root.edit_widget(*id, |mut widget| {
                         let mut node = widget.downcast::<Node>();
-                        // The point is where the stage lays this node out, so
-                        // the stage above it is what has to run again.
                         let moved = node.widget.move_spot(at);
                         if moved {
                             node.ctx.request_layout();
@@ -751,34 +755,25 @@ where
         moved
     }
 
-    /// Walks the document again for the poses alone, and moves whatever the
-    /// walk now puts somewhere else.
+    /// Shows the blocks the document now shows, and hides the rest.
     ///
-    /// Nothing is watched this way unless the document declares an object an
-    /// endpoint drives, so a page that never moves pays for none of this.
-    fn place_objects(&mut self, ctx: Ctx<'_, '_>) -> bool {
-        if !ctx.ui.driven {
-            return false;
-        }
-        let placed = placements(&ctx.ui.root, ctx);
-        let mut moved = false;
-        for watched in &self.watched {
-            let Watched::Placed { id, path } = watched else {
-                continue;
-            };
-            let Some(transform) = placed.get(path).copied() else {
-                continue;
-            };
-            moved |= self.root.edit_widget(*id, |mut widget| {
-                let mut node = widget.downcast::<Node>();
-                let moved = node.widget.place(transform);
-                if moved {
-                    node.ctx.request_paint_only();
-                }
-                moved
+    /// A block is the same kind of thing as a surface opening: re-reading a
+    /// leaf changes what that leaf shows, while a block changes whether a
+    /// whole subtree stands in the picture at all. The flow above it hides it
+    /// the way it hides a child the room did not reach, so all this does is
+    /// tell the flow to lay itself out again once the answer has changed.
+    fn stand_blocks(&mut self, ctx: Ctx<'_, '_>) {
+        let changed: Vec<WidgetId> = self
+            .blocks
+            .iter()
+            .filter(|block| block.state.latch(ctx.flag(Some(&block.hidden))))
+            .map(|block| block.flow)
+            .collect();
+        for flow in changed {
+            self.root.edit_widget(flow, |mut flow| {
+                flow.ctx.request_layout();
             });
         }
-        moved
     }
 }
 
@@ -809,9 +804,9 @@ pub(crate) struct WindowLayer {
     ghost: Option<DragGhost>,
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
-    resize_edge: f32,
-    resize_edges: bool,
     text: TextContext,
+    resize_edges: bool,
+    resize_edge: f32,
 }
 
 impl WindowLayer {
@@ -823,20 +818,14 @@ impl WindowLayer {
         skin: &Skin,
     ) -> Self {
         Self {
-            active: None,
             ghost,
             map_event,
             pointer,
-            resize_edge: skin.window.resize_edge,
             resize_edges,
+            active: None,
+            resize_edge: skin.window.resize_edge,
             text: TextContext::from(skin.text_resources()),
         }
-    }
-
-    /// Takes up what the pointer is carrying now, and says whether that changed
-    /// what this layer draws.
-    fn carry(&mut self, label: Option<&str>) -> bool {
-        self.ghost.as_mut().is_some_and(|ghost| ghost.carry(label))
     }
 
     fn bounds(size: Size) -> Rect {
@@ -848,19 +837,84 @@ impl WindowLayer {
         }
     }
 
-    fn resize_layer(&self, size: Size) -> Option<crate::render::HostLayer<WindowCommand>> {
-        self.resize_edges
-            .then(|| WindowSurface::frame(Self::bounds(size), self.resize_edge))
+    /// Takes up what the pointer is carrying now, and says whether that changed
+    /// what this layer draws.
+    fn carry(&mut self, label: Option<&str>) -> bool {
+        self.ghost.as_mut().is_some_and(|ghost| ghost.carry(label))
     }
 
     fn command_at(&self, size: Size, pointer: Option<Pt>) -> Option<WindowCommand> {
         self.resize_layer(size)
             .and_then(|layer| layer.action_at(pointer).copied())
     }
+
+    fn resize_layer(&self, size: Size) -> Option<crate::render::HostLayer<WindowCommand>> {
+        self.resize_edges
+            .then(|| WindowSurface::frame(Self::bounds(size), self.resize_edge))
+    }
 }
 
 impl Widget for WindowLayer {
     type Action = HostAction;
+
+    fn accessibility(
+        &mut self,
+        _ctx: &mut AccessCtx<'_>,
+        _props: &PropertiesRef<'_>,
+        _node: &mut AccessNode,
+    ) {
+    }
+
+    fn accessibility_role(&self) -> Role {
+        Role::GenericContainer
+    }
+
+    fn children_ids(&self) -> ChildrenIds {
+        ChildrenIds::new()
+    }
+
+    fn find_widget_under_pointer<'ctx>(
+        &'ctx self,
+        ctx: QueryCtx<'ctx>,
+        pos: Point,
+    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
+        let local = ctx.window_transform().inverse() * pos;
+        let pointer = Some(Pt {
+            x: local.x.as_(),
+            y: local.y.as_(),
+        });
+        self.command_at(ctx.size(), pointer)
+            .and_then(|_| find_widget_under_pointer(self, ctx, pos))
+    }
+
+    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
+        let local = ctx.window_transform().inverse() * pos;
+        let pointer = Some(Pt {
+            x: local.x.as_(),
+            y: local.y.as_(),
+        });
+        let cursor = self.active.map_or_else(
+            || {
+                self.resize_layer(ctx.size())
+                    .map_or(CursorShape::None, |layer| layer.cursor_at(pointer))
+            },
+            command_cursor,
+        );
+        cursor_icon(cursor)
+    }
+
+    fn layout(
+        &mut self,
+        _ctx: &mut LayoutCtx<'_>,
+        _props: &mut PropertiesMut<'_>,
+        constraints: &BoxConstraints,
+    ) -> Size {
+        constraints.max()
+    }
+
+    fn make_trace_span(&self, id: WidgetId) -> Span {
+        trace_span!("KitharaWindowLayer", id = id.trace())
+    }
 
     fn on_pointer_event(
         &mut self,
@@ -895,17 +949,6 @@ impl Widget for WindowLayer {
         }
     }
 
-    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
-
-    fn layout(
-        &mut self,
-        _ctx: &mut LayoutCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        constraints: &BoxConstraints,
-    ) -> Size {
-        constraints.max()
-    }
-
     fn paint(&mut self, ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
         let Some(ghost) = &self.ghost else {
             return;
@@ -914,55 +957,7 @@ impl Widget for WindowLayer {
         replay(layer.draw(), &mut VelloBackend::new(scene));
     }
 
-    fn accessibility_role(&self) -> Role {
-        Role::GenericContainer
-    }
-
-    fn accessibility(
-        &mut self,
-        _ctx: &mut AccessCtx<'_>,
-        _props: &PropertiesRef<'_>,
-        _node: &mut AccessNode,
-    ) {
-    }
-
-    fn children_ids(&self) -> ChildrenIds {
-        ChildrenIds::new()
-    }
-
-    fn get_cursor(&self, ctx: &QueryCtx<'_>, pos: Point) -> CursorIcon {
-        let local = ctx.window_transform().inverse() * pos;
-        let pointer = Some(Pt {
-            x: local.x.as_(),
-            y: local.y.as_(),
-        });
-        let cursor = self.active.map_or_else(
-            || {
-                self.resize_layer(ctx.size())
-                    .map_or(CursorShape::None, |layer| layer.cursor_at(pointer))
-            },
-            command_cursor,
-        );
-        cursor_icon(cursor)
-    }
-
-    fn find_widget_under_pointer<'ctx>(
-        &'ctx self,
-        ctx: QueryCtx<'ctx>,
-        pos: Point,
-    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
-        let local = ctx.window_transform().inverse() * pos;
-        let pointer = Some(Pt {
-            x: local.x.as_(),
-            y: local.y.as_(),
-        });
-        self.command_at(ctx.size(), pointer)
-            .and_then(|_| find_widget_under_pointer(self, ctx, pos))
-    }
-
-    fn make_trace_span(&self, id: WidgetId) -> Span {
-        trace_span!("KitharaWindowLayer", id = id.trace())
-    }
+    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
 }
 
 const fn command_cursor(command: WindowCommand) -> CursorShape {

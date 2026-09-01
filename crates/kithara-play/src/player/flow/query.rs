@@ -7,7 +7,7 @@ use crate::{
     EngineLoadSnapshot, PlayWorker, api::PlayerStatus, bridge::PlaybackSnapshot, engine::EngineImpl,
 };
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S> {
     /// ABR handle of the currently loaded item, if any.
     ///
     /// Reads the stash populated by `enqueue_to_processor` — stays valid for
@@ -18,15 +18,63 @@ impl PlayerRuntime {
         self.phase.lock().abr_handle()
     }
 
+    /// Current media duration in seconds.
+    ///
+    /// Returns `None` while duration is unknown — the engine sets the shared
+    /// atomic from the demuxer once mvhd / fmt-equivalent metadata is parsed.
+    /// The atomic's default `0.0` conflates "unknown" with "empty track";
+    /// callers that distinguish (e.g. `seek_seconds`'s `target >= dur` check,
+    /// queue auto-advance) need the `None` to avoid false-EOF on a freshly-
+    /// loaded track whose demuxer has not yet seen the metadata box.
+    pub fn duration_seconds(&self) -> Option<f64> {
+        let dur = self.playback_snapshot()?.duration;
+        (dur > 0.0).then_some(dur)
+    }
+
+    /// Live cost snapshot of the audio engine (decode + effects).
+    #[must_use]
+    pub fn engine_load(&self) -> EngineLoadSnapshot {
+        self.core.engine_load.snapshot()
+    }
+
+    /// Get EQ gain for a band in dB.
+    pub fn eq_gain(&self, band: usize) -> Option<f32> {
+        let slot_id = self.slot()?;
+        self.core
+            .engine
+            .slot_eq(slot_id)
+            .and_then(|eq| eq.gain(band))
+    }
+
+    /// Single coherent read of the active slot's live playback scalars.
+    ///
+    /// `None` when no slot is allocated. The standalone `position_seconds`
+    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
+    /// thin derivations of this snapshot — one shared read primitive.
+    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
+        let slot_id = self.slot()?;
+        Some(self.core.engine.slot_playback(slot_id)?.snapshot())
+    }
+
+    /// Get current player status.
+    pub fn status(&self) -> PlayerStatus {
+        *self.core.status.lock()
+    }
+
+    /// Subscribe to player events.
+    pub fn subscribe(&self) -> kithara_events::EventReceiver {
+        self.core.engine.bus().subscribe()
+    }
+
     delegate! {
         to self.core {
             /// Get a reference to the underlying engine.
             #[field(&engine)]
-            pub const fn engine(&self) -> &EngineImpl;
+            pub const fn engine(&self) -> &EngineImpl<S>;
             /// Shared playback worker configured for this Player.
             #[field(&worker)]
             #[must_use]
-            pub const fn worker(&self) -> &PlayWorker;
+            pub const fn worker(&self) -> &PlayWorker<S>;
         }
         to self.core.params {
             /// Whether the built-in linear auto-advance handler is enabled.
@@ -83,53 +131,5 @@ impl PlayerRuntime {
             #[call(has_resource)]
             pub fn item_has_resource(&self, index: usize) -> bool;
         }
-    }
-
-    /// Current media duration in seconds.
-    ///
-    /// Returns `None` while duration is unknown — the engine sets the shared
-    /// atomic from the demuxer once mvhd / fmt-equivalent metadata is parsed.
-    /// The atomic's default `0.0` conflates "unknown" with "empty track";
-    /// callers that distinguish (e.g. `seek_seconds`'s `target >= dur` check,
-    /// queue auto-advance) need the `None` to avoid false-EOF on a freshly-
-    /// loaded track whose demuxer has not yet seen the metadata box.
-    pub fn duration_seconds(&self) -> Option<f64> {
-        let dur = self.playback_snapshot()?.duration;
-        (dur > 0.0).then_some(dur)
-    }
-
-    /// Live cost snapshot of the audio engine (decode + effects).
-    #[must_use]
-    pub fn engine_load(&self) -> EngineLoadSnapshot {
-        self.core.engine_load.snapshot()
-    }
-
-    /// Get EQ gain for a band in dB.
-    pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = self.slot()?;
-        self.core
-            .engine
-            .slot_eq(slot_id)
-            .and_then(|eq| eq.gain(band))
-    }
-
-    /// Single coherent read of the active slot's live playback scalars.
-    ///
-    /// `None` when no slot is allocated. The standalone `position_seconds`
-    /// / `duration_seconds` / `is_playing` / `buffered_seconds` getters are
-    /// thin derivations of this snapshot — one shared read primitive.
-    pub fn playback_snapshot(&self) -> Option<PlaybackSnapshot> {
-        let slot_id = self.slot()?;
-        Some(self.core.engine.slot_playback(slot_id)?.snapshot())
-    }
-
-    /// Get current player status.
-    pub fn status(&self) -> PlayerStatus {
-        *self.core.status.lock()
-    }
-
-    /// Subscribe to player events.
-    pub fn subscribe(&self) -> kithara_events::EventReceiver {
-        self.core.engine.bus().subscribe()
     }
 }

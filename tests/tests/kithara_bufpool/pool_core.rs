@@ -1,196 +1,79 @@
-use kithara::{self, bufpool::*, platform::tokio::task::spawn_blocking};
-use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
+use kithara::{self, platform::tokio::task::spawn_blocking};
+use kithara_integration_tests::bufpool_ext::pools;
 
 #[kithara::test]
-fn test_pool_basic() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-    let mut buf = pool.get();
-    buf.extend_from_slice(b"hello");
-    assert_eq!(&buf[..], b"hello");
+fn byte_buffer_supports_checked_writes() {
+    let pools = pools();
+    let mut buffer = pools.get::<u8>();
+    buffer
+        .try_extend_from_slice(b"hello")
+        .expect("test bytes fit the region budget");
+    assert_eq!(&buffer[..], b"hello");
 }
 
 #[kithara::test]
-fn test_pool_reuse() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-
+fn returned_buffer_is_reused_empty() {
+    let pools = pools();
     {
-        let mut buf = pool.get();
-        buf.extend_from_slice(b"data");
+        let mut buffer = pools
+            .get_with_len::<u8>(4)
+            .expect("test bytes fit the region budget");
+        buffer.copy_from_slice(b"data");
     }
 
-    let buf = pool.get();
-    assert_eq!(buf.len(), 0);
-    assert!(buf.capacity() > 0);
+    let buffer = pools.get::<u8>();
+    assert!(buffer.is_empty());
+    assert!(buffer.capacity() >= 4);
 }
 
 #[kithara::test]
-fn test_pool_f32() {
-    let pool = Pool::<4, Vec<f32>>::new(16, 1024);
-    let mut buf = pool.get_with(|b| b.resize(100, 0.0));
-    assert_eq!(buf.len(), 100);
-    buf[0] = 1.5;
-    assert_eq!(buf[0], 1.5);
+fn sample_buffer_has_requested_length() {
+    let pools = pools();
+    let mut buffer = pools
+        .get_with_len::<f32>(100)
+        .expect("test samples fit the region budget");
+    buffer[0] = 1.5;
+    assert_eq!(buffer.len(), 100);
+    assert_eq!(buffer[0], 1.5);
 }
 
 #[kithara::test]
-fn test_shared_pool() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-    let pool2 = pool.clone();
+fn cloned_facade_shares_physical_pools() {
+    let pools = pools();
+    let clone = pools.clone();
+    drop(
+        pools
+            .get_with_len::<u8>(128)
+            .expect("test bytes fit the region budget"),
+    );
 
-    let mut buf1 = pool.get();
-    buf1.push(1);
-
-    let mut buf2 = pool2.get();
-    buf2.push(2);
-
-    assert_eq!(buf1[0], 1);
-    assert_eq!(buf2[0], 2);
-}
-
-#[kithara::test]
-fn test_cross_shard_fallback() {
-    let pool = Pool::<2, Vec<u8>>::new(8, 1024);
-    let home_shard = pool.shard_index_of();
-    let other_shard = (home_shard + 1) % 2;
-
-    let mut buf = Vec::with_capacity(999);
-    buf.push(0);
-    pool.put(buf, other_shard);
-
-    let retrieved = pool.get();
-    assert!(retrieved.capacity() > 0);
-}
-
-#[kithara::test]
-fn test_shard_saturation_drops_excess() {
-    let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = pool.shard_index_of();
-
-    for i in 0u8..3 {
-        let mut buf = Vec::with_capacity(128);
-        buf.resize(10, i);
-        pool.put(buf, shard);
-    }
-
-    let first = pool.get();
-    assert!(first.capacity() > 0);
-
-    let second = pool.get();
-    assert_eq!(second.len(), 0);
-    assert_eq!(second.capacity(), 0);
-}
-
-#[kithara::test]
-#[case::pool(false)]
-#[case::shared_pool(true)]
-fn test_into_inner_does_not_recycle(#[case] shared: bool) {
-    if shared {
-        let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-        let buf = pool.get_with(|b| b.extend_from_slice(b"owned_extracted"));
-        let cap_before = buf.capacity();
-        let vec = buf.into_inner();
-        assert_eq!(&vec[..], b"owned_extracted");
-        assert_eq!(vec.capacity(), cap_before);
-        drop(vec);
-        let fresh = pool.get();
-        assert_eq!(fresh.len(), 0);
-        assert_eq!(fresh.capacity(), 0);
-    } else {
-        let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-        let buf = pool.get_with(|b| b.extend_from_slice(b"extracted"));
-        let cap_before = buf.capacity();
-        let vec = buf.into_inner();
-        assert_eq!(&vec[..], b"extracted");
-        assert_eq!(vec.capacity(), cap_before);
-        drop(vec);
-        let fresh = pool.get();
-        assert_eq!(fresh.len(), 0);
-        assert_eq!(fresh.capacity(), 0);
-    }
-}
-
-#[kithara::test]
-#[case::pool(false)]
-#[case::shared_pool(true)]
-fn test_recycle_roundtrip(#[case] shared: bool) {
-    if shared {
-        let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-        let buf = pool.get_with(|b| b.extend_from_slice(b"recycle me"));
-        let vec = buf.into_inner();
-        assert_eq!(&vec[..], b"recycle me");
-        let cap = vec.capacity();
-        pool.recycle(vec);
-        let reused = pool.get();
-        assert_eq!(reused.len(), 0);
-        assert_eq!(reused.capacity(), cap);
-    } else {
-        let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-        let buf = pool.get_with(|b| b.extend_from_slice(b"recycle me"));
-        let vec = buf.into_inner();
-        assert_eq!(&vec[..], b"recycle me");
-        let cap = vec.capacity();
-        pool.recycle(vec);
-        let reused = pool.get();
-        assert_eq!(reused.len(), 0);
-        assert_eq!(reused.capacity(), cap);
-    }
-}
-
-#[kithara::test]
-fn test_shared_pool_attach() {
-    let pool = SharedPool::<4, Vec<f32>>::new(16, 1024);
-    let mut vec = Vec::with_capacity(256);
-    vec.resize(100, 42.0);
-    let cap = vec.capacity();
-
-    {
-        let attached = pool.attach(vec);
-        assert_eq!(attached.len(), 100);
-        assert_eq!(attached[0], 42.0);
-    }
-
-    let reused = pool.get();
-    assert_eq!(reused.len(), 0);
-    assert_eq!(reused.capacity(), cap);
-}
-
-#[kithara::test]
-fn test_attach_into_inner_does_not_recycle() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-
-    let vec = Vec::with_capacity(128);
-    let attached = pool.attach(vec);
-    let extracted = attached.into_inner();
-    drop(extracted);
-
-    let fresh = pool.get();
-    assert_eq!(fresh.capacity(), 0);
+    let buffer = clone.get::<u8>();
+    assert!(buffer.capacity() >= 128);
 }
 
 #[kithara::test(tokio, browser)]
-async fn test_multi_threaded_contention() {
-    use kithara::platform::sync::Arc;
+async fn multi_threaded_contention_preserves_data() {
+    let pools = pools();
+    let threads = 8usize;
+    let iterations = 1_000usize;
 
-    let pool = Arc::new(Pool::<4, Vec<u8>>::new(64, 4096));
-    let num_threads = 8usize;
-    let iterations = 1000usize;
-
-    let mut handles = Vec::with_capacity(num_threads);
-    for t in 0..num_threads {
-        let pool = Arc::clone(&pool);
+    let mut handles = Vec::with_capacity(threads);
+    for thread in 0..threads {
+        let pools = pools.clone();
         handles.push(spawn_blocking(move || {
-            for i in 0..iterations {
-                let mut buf = pool.get_with(|b| b.resize(64, 0));
-                let tag = u8::try_from((t * iterations + i) & 0xFF).expect("tag must fit into u8");
-                buf.fill(tag);
-                assert!(buf.iter().all(|&b| b == tag), "data corruption detected");
+            for iteration in 0..iterations {
+                let mut buffer = pools
+                    .get_with_len::<u8>(64)
+                    .expect("test bytes fit the region budget");
+                let tag =
+                    u8::try_from((thread * iterations + iteration) & 0xFF).expect("tag fits u8");
+                buffer.fill(tag);
+                assert!(buffer.iter().all(|&byte| byte == tag));
             }
         }));
     }
 
     for handle in handles {
-        handle
-            .await
-            .expect("thread panicked during contention test");
+        handle.await.expect("contention worker did not panic");
     }
 }

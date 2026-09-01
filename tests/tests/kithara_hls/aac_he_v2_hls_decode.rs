@@ -3,13 +3,16 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioRead, ReadOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{thread, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
 };
-use kithara_integration_tests::{HlsFixtureBuilder, TestServerHelper, TestTempDir, temp_dir};
+use kithara_integration_tests::{
+    HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -38,24 +41,21 @@ async fn aac_he_v2_hls_produces_pcm(temp_dir: TestTempDir, #[case] backend: Deco
         .await
         .expect("create AAC HE v2 HLS fixture");
 
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build(),
         )
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .build();
     // Park on ring underrun instead of spinning on Pending, so the read
     // loop needs no wall-clock iteration cap.
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)

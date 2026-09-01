@@ -14,19 +14,19 @@ pub(in crate::engine) struct CrossingComponent {
 impl CrossingComponent {
     pub(super) fn new(path: String) -> Self {
         Self {
-            crossing: Crossing::default(),
             path,
+            crossing: Crossing::default(),
         }
     }
 }
 
 impl Component for CrossingComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn captures_pointer(&self) -> bool {
+        false
     }
 
-    fn kind(&self) -> Kind {
-        Kind::Crossing
+    fn cursor(&self, _hit: &Hit) -> CursorShape {
+        CursorShape::None
     }
 
     fn handle(
@@ -44,11 +44,11 @@ impl Component for CrossingComponent {
         )
     }
 
-    fn cursor(&self, _hit: &Hit) -> CursorShape {
-        CursorShape::None
+    fn kind(&self) -> Kind {
+        Kind::Crossing
     }
 
-    fn captures_pointer(&self) -> bool {
-        false
+    fn path(&self) -> &str {
+        &self.path
     }
 }

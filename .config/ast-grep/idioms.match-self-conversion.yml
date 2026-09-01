@@ -36,23 +36,11 @@ rule:
                 match self { $$$ARMS }
             }
         - pattern: |
-            fn $NAME(&self) -> $RET {
-                match self { $$$ARMS }
-            }
-        - pattern: |
             pub fn $NAME(self) -> $RET {
                 match self { $$$ARMS }
             }
         - pattern: |
-            pub fn $NAME(&self) -> $RET {
-                match self { $$$ARMS }
-            }
-        - pattern: |
             pub(crate) fn $NAME(self) -> $RET {
-                match self { $$$ARMS }
-            }
-        - pattern: |
-            pub(crate) fn $NAME(&self) -> $RET {
                 match self { $$$ARMS }
             }
     # At least one arm must BUILD a value rather than hand back a name the arm
@@ -74,6 +62,32 @@ rule:
             - kind: float_literal
             - kind: integer_literal
             - kind: string_literal
+    - not:
+        any:
+          - pattern: |
+              fn $NAME(&self) -> $RET {
+                  match self { $$$ARMS }
+              }
+          - pattern: |
+              pub fn $NAME(&self) -> $RET {
+                  match self { $$$ARMS }
+              }
+          - pattern: |
+              pub(crate) fn $NAME(&self) -> $RET {
+                  match self { $$$ARMS }
+              }
+          - pattern: |
+              fn $NAME(self) -> Option<$ITEM> {
+                  match self { $$$ARMS }
+              }
+          - pattern: |
+              pub fn $NAME(self) -> Option<$ITEM> {
+                  match self { $$$ARMS }
+              }
+          - pattern: |
+              pub(crate) fn $NAME(self) -> Option<$ITEM> {
+                  match self { $$$ARMS }
+              }
 constraints:
   RET:
     not:

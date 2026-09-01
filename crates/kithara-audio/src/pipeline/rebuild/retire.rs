@@ -25,6 +25,11 @@ impl Retired {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn chunk_len(&self) -> usize {
+        self.chunks.len()
+    }
+
     pub(crate) fn drain(&self) {
         while self.chunks.pop().is_some() {}
         while self.generations.pop().is_some() {}
@@ -36,11 +41,6 @@ impl Retired {
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.generations.len()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn chunk_len(&self) -> usize {
-        self.chunks.len()
     }
 
     pub(crate) fn retire_generation(&self, generation: DecoderGeneration) {

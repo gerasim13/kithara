@@ -1,7 +1,9 @@
-use kithara::prelude::ResourceConfig;
-use kithara_queue::{QueueControl, QueueError, Transition};
+use kithara::{
+    prelude::ResourceSrc,
+    queue::{QueueError, Transition},
+};
 
-use crate::{config::AppConfig, sources::build_source};
+use crate::{config::AppConfig, pools::AppQueueControl, sources::build_source};
 
 /// One track the app knows about, independent of any deck.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,7 +29,7 @@ impl CatalogEntry {
 /// string the same way so comparisons match. A string that fails to parse is
 /// loaded verbatim as `TrackSource::Uri`, so it stays as-is here too.
 fn canonical_source(url: &str) -> String {
-    ResourceConfig::parse_src(url).map_or_else(|_| url.to_string(), |src| src.to_string())
+    ResourceSrc::parse(url).map_or_else(|_| url.to_string(), |src| src.to_string())
 }
 
 /// The app's track list. Decks load from it; it never plays anything itself,
@@ -69,7 +71,7 @@ impl Catalog {
 /// # Errors
 /// Returns [`QueueError`] when the queue rejects the selection.
 pub fn load_onto(
-    queue: &QueueControl,
+    queue: &AppQueueControl,
     entry: &CatalogEntry,
     config: &AppConfig,
 ) -> Result<(), QueueError> {
@@ -87,7 +89,7 @@ pub fn load_onto(
 
 /// Whether this deck already holds the track — the library's per-deck marker.
 #[must_use]
-pub fn is_loaded(queue: &QueueControl, entry: &CatalogEntry) -> bool {
+pub fn is_loaded(queue: &AppQueueControl, entry: &CatalogEntry) -> bool {
     queue
         .tracks()
         .iter()

@@ -20,19 +20,28 @@ use crate::{
     File,
     coord::FileCoord,
     session::{FileSource, inner::FileSourceCtx},
+    test_pools::{TestPools, pools},
 };
+
+type TestFile = File<TestPools>;
+type TestInner = FileInner<TestPools>;
+type TestLease = ResourceLease<TestPools>;
+type TestPeer = FilePeer<TestPools>;
+type TestReader = AssetReader<TestPools>;
+type TestStore = AssetStore<TestPools>;
+type TestWriterHandle = WriterHandle<TestPools>;
 
 mod completion;
 mod metadata;
 mod ownership;
 mod seek;
 
-fn test_key(store: &AssetStore) -> ResourceKey {
+fn test_key(store: &TestStore) -> ResourceKey {
     let source = AssetSource::Remote {
         url: Url::parse("https://example.com/remote.dat").expect("test URL"),
         discriminator: Some("peer-test".to_string()),
     };
-    let scope = store.scope::<File>(&source).expect("test scope");
+    let scope = store.scope::<TestFile>(&source).expect("test scope");
     scope
         .key(&AssetResource::Source {
             extension: "dat".to_string(),
@@ -48,11 +57,11 @@ fn make_coord() -> Arc<FileCoord> {
 }
 
 fn attach_pending(
-    store: &AssetStore,
+    store: &TestStore,
     key: &ResourceKey,
     coord: &Arc<FileCoord>,
     look_ahead: Option<u64>,
-) -> (AssetReader, ResourceLease, Option<WriterHandle>) {
+) -> (TestReader, TestLease, Option<TestWriterHandle>) {
     let AcquisitionResult::Pending(attachment) = store
         .attach_pending_resource(key, coord.read_pos_handle(), look_ahead)
         .expect("attach pending resource")
@@ -63,21 +72,21 @@ fn attach_pending(
 }
 
 fn make_inner(
-    reader: AssetReader,
-    lease: ResourceLease,
+    reader: TestReader,
+    lease: TestLease,
     coord: Arc<FileCoord>,
     bus: EventBus,
-) -> Arc<FileInner> {
+) -> Arc<TestInner> {
     make_inner_with_cancel(reader, lease, coord, bus, CancelToken::never())
 }
 
 fn make_inner_with_cancel(
-    reader: AssetReader,
-    lease: ResourceLease,
+    reader: TestReader,
+    lease: TestLease,
     coord: Arc<FileCoord>,
     bus: EventBus,
     cancel: CancelToken,
-) -> Arc<FileInner> {
+) -> Arc<TestInner> {
     Arc::new(FileInner::new(
         FileSourceCtx {
             coord,
@@ -95,7 +104,7 @@ fn make_inner_with_cancel(
     ))
 }
 
-fn make_peer(inner: &Arc<FileInner>, writer: Option<WriterHandle>) -> FilePeer {
+fn make_peer(inner: &Arc<TestInner>, writer: Option<TestWriterHandle>) -> TestPeer {
     FilePeer::new(inner, writer)
 }
 
@@ -130,23 +139,23 @@ impl CountingWake {
 }
 
 impl WorkerWake for CountingWake {
-    fn wake(&self) {
+    fn defer(&self) {
         self.0.fetch_add(1, Ordering::Release);
     }
 
-    fn defer(&self) {
+    fn wake(&self) {
         self.0.fetch_add(1, Ordering::Release);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WorkerWake for BlockingWake {
+    fn defer(&self) {}
+
     fn wake(&self) {
         self.entered.wait();
         self.release.wait();
     }
-
-    fn defer(&self) {}
 }
 
 impl Wake for CountingWake {
@@ -157,8 +166,8 @@ impl Wake for CountingWake {
 
 fn fresh_session(
     look_ahead: Option<u64>,
-) -> (AssetStore, ResourceKey, Arc<FileInner>, WriterHandle) {
-    let store = AssetStore::builder()
+) -> (TestStore, ResourceKey, Arc<TestInner>, TestWriterHandle) {
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -170,7 +179,7 @@ fn fresh_session(
     (store, key, inner, writer)
 }
 
-fn assert_ready_bytes(store: &AssetStore, key: &ResourceKey, expected: &[u8]) {
+fn assert_ready_bytes(store: &TestStore, key: &ResourceKey, expected: &[u8]) {
     let AcquisitionResult::Ready(reader) = store
         .attach_pending_resource(key, Arc::new(AtomicU64::new(0)), None)
         .expect("reopen committed session")

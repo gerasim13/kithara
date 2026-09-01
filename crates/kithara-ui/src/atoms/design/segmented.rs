@@ -42,6 +42,16 @@ impl Segmented {
         }
     }
 
+    /// The box of one cell, counted from the left edge.
+    fn cell(bounds: Rect, index: usize, width: f32) -> Rect {
+        Rect {
+            h: bounds.h,
+            w: width,
+            x: bounds.x + offset(index, width),
+            y: bounds.y,
+        }
+    }
+
     pub(crate) fn paint(
         &self,
         list: &mut DrawListBuilder,
@@ -66,16 +76,6 @@ impl Segmented {
                 index,
                 data,
             );
-        }
-    }
-
-    /// The box of one cell, counted from the left edge.
-    fn cell(bounds: Rect, index: usize, width: f32) -> Rect {
-        Rect {
-            h: bounds.h,
-            w: width,
-            x: bounds.x + offset(index, width),
-            y: bounds.y,
         }
     }
 

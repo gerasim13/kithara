@@ -7,22 +7,21 @@ use kithara::{
         AnalysisToken, AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder, BeatAnalysisConfig,
     },
     audio::AudioReader,
-    bufpool::SamplePool,
-    prelude::{PlaybackResamplerBackend, Resource, ResourceConfig},
-};
-use kithara_platform::{
-    CancelToken,
-    sync::Arc,
-    tokio::{
-        sync::watch,
-        task::{self, JoinHandle},
+    platform::{
+        CancelToken,
+        sync::Arc,
+        tokio::{
+            sync::watch,
+            task::{self, JoinHandle},
+        },
     },
+    prelude::{PlaybackResamplerBackend, Resource},
+    worker::Worker,
 };
-use kithara_worker::{TaskError, Worker};
 use tracing::warn;
 
 type AppBeatAnalysisConfig = BeatAnalysisConfig<PlaybackResamplerBackend>;
-type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
+use crate::pools::{AppResourceConfig, Pools};
 
 /// App-side handle over the shared [`AnalysisWorker`]: opens the resource
 /// off the player runtime, hands the opened reader to the worker thread,
@@ -31,10 +30,10 @@ type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct TrackAnalysisRunner {
-    worker: Arc<AnalysisWorker>,
-    current: Option<RunHandle>,
     /// What this configuration produces, per artifact: the cache keys off it.
     fingerprint: AnalysisFingerprint,
+    worker: Arc<AnalysisWorker>,
+    current: Option<RunHandle>,
     /// Whether any analyzer is compiled in; without one a decode pass would
     /// produce nothing, so the driver skips analysis entirely.
     #[field(get = is_active)]
@@ -53,19 +52,16 @@ impl TrackAnalysisRunner {
     /// `master` must be a child of the app master cancel; the worker thread
     /// and every run scope live under it. `buckets` caps the waveform output;
     /// the native window count is the real resolution.
-    ///
-    /// # Errors
-    ///
-    /// Returns the base worker's task admission error.
+    #[must_use]
     pub fn new(
         master: &CancelToken,
         base_worker: Option<Worker>,
         chunk_seconds: NonZeroU32,
         _buckets: usize,
         beat_config: AppBeatAnalysisConfig,
-        sample_pool: SamplePool,
-    ) -> Result<Self, TaskError> {
-        let builder = AnalyzerBuilder::new(sample_pool).with_beat_config(beat_config);
+        pools: Pools,
+    ) -> Self {
+        let builder = AnalyzerBuilder::new(pools).with_beat_config(beat_config);
         #[cfg(feature = "analysis-waveform")]
         let builder = builder.with_waveform(_buckets);
         let builder = builder.with_beat();
@@ -75,21 +71,15 @@ impl TrackAnalysisRunner {
                 .chunk_seconds(chunk_seconds)
                 .maybe_worker(base_worker)
                 .build(),
-        )?);
+        ));
         let active = worker.is_active();
         let fingerprint = worker.fingerprint().clone();
-        Ok(Self {
+        Self {
             fingerprint,
             worker,
             active,
             current: None,
-        })
-    }
-
-    /// What the active configuration produces, per artifact.
-    #[must_use]
-    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
-        &self.fingerprint
+        }
     }
 
     /// Cancel any prior run and queue `config` for analysis on the `rate`
@@ -126,6 +116,20 @@ impl TrackAnalysisRunner {
         rx
     }
 
+    /// Cancel the in-flight run.
+    pub fn clear(&mut self) {
+        if let Some(prev) = self.current.take() {
+            prev.cancel.cancel();
+            prev.task.abort();
+        }
+    }
+
+    /// What the active configuration produces, per artifact.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
+    }
+
     /// Resume a validated checkpoint, preserving the same synchronous
     /// playback-producer handoff as a fresh pass.
     ///
@@ -157,14 +161,6 @@ impl TrackAnalysisRunner {
         ));
         self.current = Some(RunHandle { task, cancel: run });
         Ok(rx)
-    }
-
-    /// Cancel the in-flight run.
-    pub fn clear(&mut self) {
-        if let Some(prev) = self.current.take() {
-            prev.cancel.cancel();
-            prev.task.abort();
-        }
     }
 }
 

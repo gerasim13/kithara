@@ -62,8 +62,7 @@ impl Track<Decoding> {
                 src.update_state(Track::<Failed>::new(TrackFailure::SourceCancelled).erase());
                 return TrackStep::Failed;
             }
-            // Stay in Decoding — the dispatcher's sentinel is already
-            // `Decoding`, so no restore is needed.
+            // WHY: Stay in Decoding - the dispatcher's sentinel is already `Decoding`, so no restore is needed.
             super::waiting_branch!("decoding_not_ready_unparked");
             return TrackStep::Blocked(WaitingReason::Waiting);
         }
@@ -75,14 +74,9 @@ impl Track<Decoding> {
                 super::waiting_branch!("decoding_transition_pending");
                 TrackStep::Blocked(src.transition_wait_reason())
             }
-            // The decoder read across the current segment boundary into a
-            // not-ready (withheld) byte. Park in `WaitingForSource(Playback)`
-            // rather than re-running the full decode every tick: the wait
-            // state re-checks the forward read-ahead window cheaply and only
-            // re-enters `Decoding` once that window is ready. Staying in
-            // `Decoding` here hot-spins the decode loop (`source_is_ready`
-            // gates only the current segment, so it never reflects the
-            // blocked forward read) — flake F5.
+            // WHY: The decoder read across the current segment boundary into a not-ready (withheld) byte. Park in `WaitingForSource(Playback)`
+            // rather than re-running the full decode every tick: the wait state re-checks the forward read-ahead window cheaply and only
+            // re-enters `Decoding` once that window is ready.
             DecodeStep::NotReady(reason) => {
                 src.update_state(
                     Track::<WaitingForSource>::new(WaitState {

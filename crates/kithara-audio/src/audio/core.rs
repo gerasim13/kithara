@@ -4,7 +4,6 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-use kithara_bufpool::SamplePool;
 use kithara_decode::TrackMetadata;
 use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
@@ -12,6 +11,7 @@ use kithara_signal::AudioSpec;
 use kithara_stream::{
     DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare, WorkerWake,
 };
+use kithara_test_utils::kithara;
 
 use super::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, PendingReason, PreloadGate,
@@ -69,8 +69,7 @@ impl<R, P> From<PreparedAudio<R, P>> for (R, PreparedAudioLane<P>) {
 pub(super) struct AudioParts<S> {
     pub(super) emit: Arc<kithara_events::DeferredBus<kithara_events::Event>>,
     pub(super) controls: Controls,
-    pub(super) sample_pool: SamplePool,
-    pub(super) spec: AudioSpec,
+    pub(super) cursor: ChunkCursor,
     pub(super) marker: PhantomData<S>,
     pub(super) ring: RingConsumer,
     pub(super) runtime: AudioRuntime,
@@ -109,7 +108,7 @@ impl<S> From<AudioParts<S>> for Audio<S> {
         Self {
             runtime: parts.runtime,
             ring: parts.ring,
-            cursor: ChunkCursor::new(&parts.sample_pool, parts.spec),
+            cursor: parts.cursor,
             events: AudioEvents::new(parts.emit, wake_mode),
             session: parts.session,
             controls: parts.controls,
@@ -192,6 +191,7 @@ impl<S> Audio<S> {
     /// # Errors
     ///
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
+    #[kithara::measure(label = "audio.read")]
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         self.sync_seek();
         let recv = recv_ctx(&self.session, &self.runtime);
@@ -305,7 +305,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
         Self::read(self, buf)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],
@@ -414,7 +414,6 @@ mod tests {
         sync::atomic::{AtomicU32, AtomicU64},
     };
 
-    use kithara_bufpool::SamplePool;
     use kithara_events::{AudioEvent, Event, EventReceiver};
     use kithara_platform::{CancelScope, sync::Arc, tokio::sync::broadcast::error::TryRecvError};
     use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
@@ -425,6 +424,7 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, Outlet, ThreadWake, connect, ring::RingParts},
+        test_pools::pools,
     };
 
     struct TestWorkerWake;
@@ -464,13 +464,14 @@ mod tests {
             let seek: Arc<dyn SeekControl> = seek_state.clone();
             let seek_obs: Arc<dyn SeekObserve> = seek_state;
             let playhead: Arc<dyn PlayheadWrite> = Arc::new(PlayheadState::new());
-            let sample_pool = SamplePool::default();
+            let cursor = ChunkCursor::new(&pools(), AudioChunkInfo::default().spec)
+                .expect("cursor scratch fits test pools");
             let bus = EventBus::default();
             let emit = AudioEvents::deferred(&bus);
             Self {
                 audio: Audio::from(AudioParts {
                     ring,
-                    sample_pool,
+                    cursor,
                     emit: Arc::clone(&emit),
                     runtime: AudioRuntime {
                         cancel: CancelScope::new(None).token(),
@@ -489,7 +490,6 @@ mod tests {
                     controls: Controls {
                         host_sample_rate: Arc::new(AtomicU32::new(0)),
                     },
-                    spec: AudioChunkInfo::default().spec,
                     marker: PhantomData,
                 }),
                 data_tx,
@@ -511,7 +511,9 @@ mod tests {
     }
 
     fn staged_chunk() -> AudioChunk {
-        let samples = vec![0.0f32; 8];
+        let samples = pools()
+            .get_with_len::<f32>(8)
+            .expect("staged samples fit test pools");
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate is non-zero"));
         let frames = u32::try_from(samples.len() / usize::from(spec.channels))
             .expect("fixture frame count fits u32");
@@ -521,7 +523,7 @@ mod tests {
                 frames,
                 ..AudioChunkInfo::default()
             },
-            SamplePool::default().attach(samples),
+            samples,
         )
     }
 

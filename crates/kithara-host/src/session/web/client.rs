@@ -1,7 +1,8 @@
-use std::{cell::RefCell, num::NonZeroU32};
+use std::{cell::Cell, num::NonZeroU32};
 
 use kithara_audio::ConsumerWakeMode;
-use kithara_platform::sync::{Arc, mpsc};
+use kithara_bufpool::HasPool;
+use kithara_platform::sync::{Arc, Mutex, mpsc};
 use kithara_play::{GroupState, player::PlayerMember};
 
 use super::bridge::{init_bridge_state, reset_bridge_state, start_stream_web_audio};
@@ -17,25 +18,32 @@ use crate::{
     },
 };
 
-enum SessionHost {
-    Local,
-    Remote { tx: mpsc::Sender<HostCmdMsg> },
+pub(crate) type WebSessionState<S> =
+    Arc<Mutex<Option<SessionState<firewheel_web_audio::WebAudioBackend, S>>>>;
+
+enum SessionHost<S> {
+    Local { state: WebSessionState<S> },
+    Remote { tx: mpsc::Sender<HostCmdMsg<S>> },
 }
 
-pub(crate) struct SessionClient {
-    host: SessionHost,
+pub(crate) struct SessionClient<S> {
+    host: SessionHost<S>,
 }
 
-impl SessionClient {
-    fn call(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+impl<S> SessionClient<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn call(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         match &self.host {
-            SessionHost::Local => WASM_SESSION_STATE.with(|cell| {
+            SessionHost::Local { state } => {
                 if matches!(&cmd, HostCmd::Shutdown) {
-                    drop(cell.borrow_mut().take());
+                    drop(state.lock().take());
+                    WASM_SESSION_ACTIVE.with(|active| active.set(false));
                     reset_bridge_state();
                     return Ok(HostReply::Ok);
                 }
-                let mut state = cell.borrow_mut();
+                let mut state = state.lock();
                 match state.as_mut() {
                     Some(state) => Ok(run_host_cmd(state, cmd)),
                     None => Err(HostDispatchError::before_send(
@@ -43,7 +51,7 @@ impl SessionClient {
                         cmd,
                     )),
                 }
-            }),
+            }
             SessionHost::Remote { tx } => {
                 let (reply_tx, reply_rx) = mpsc::channel();
                 if let Err(error) = tx.send(HostCmdMsg { cmd, reply_tx }) {
@@ -64,8 +72,11 @@ impl SessionClient {
     }
 }
 
-impl SessionDispatcher for SessionClient {
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+impl<S> SessionDispatcher<S> for SessionClient<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn exec(&self, cmd: Cmd<S>) -> Result<Reply, PlayError> {
         match self.call(HostCmd::Play(cmd)).map_err(PlayError::from)? {
             HostReply::Play(reply) => Ok(reply),
             HostReply::Err(error) => Err(error),
@@ -80,48 +91,54 @@ impl SessionDispatcher for SessionClient {
     }
 }
 
-impl HostDispatcher for SessionClient {
-    fn exec_host(&self, cmd: HostCmd) -> Result<HostReply, HostDispatchError> {
+impl<S> HostDispatcher<S> for SessionClient<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn exec_host(&self, cmd: HostCmd<S>) -> Result<HostReply, HostDispatchError<S>> {
         self.call(cmd)
     }
 }
 
 thread_local! {
-    pub(super) static WASM_SESSION_STATE: RefCell<Option<SessionState<firewheel_web_audio::WebAudioBackend>>> = const { RefCell::new(None) };
+    static WASM_SESSION_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
 
-pub(crate) fn spawn(
+pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
-) -> Result<Arc<dyn HostDispatcher>, PlayError> {
-    WASM_SESSION_STATE.with(|state| {
-        let mut state = state.borrow_mut();
-        if state.is_some() {
+) -> Result<(Arc<dyn HostDispatcher<S>>, WebSessionState<S>), PlayError> {
+    WASM_SESSION_ACTIVE.with(|active| {
+        if active.replace(true) {
             return Err(PlayError::SessionAlreadyActive);
         }
-        *state = Some(SessionState::new(
-            root,
-            root_view,
-            sample_rate,
-            start_stream_web_audio,
-        ));
         Ok(())
     })?;
+    let state = Arc::new(Mutex::new(Some(SessionState::new(
+        root,
+        root_view,
+        sample_rate,
+        start_stream_web_audio,
+    ))));
     init_bridge_state();
     let client = Arc::new(SessionClient {
-        host: SessionHost::Local,
+        host: SessionHost::Local {
+            state: Arc::clone(&state),
+        },
     });
-    Ok(client)
+    Ok((client, state))
 }
 
-pub(crate) fn remote(tx: mpsc::Sender<HostCmdMsg>) -> Arc<dyn HostDispatcher> {
+pub(crate) fn remote<S: HasPool<f32> + Send + Sync + 'static>(
+    tx: mpsc::Sender<HostCmdMsg<S>>,
+) -> Arc<dyn HostDispatcher<S>> {
     let client = Arc::new(SessionClient {
         host: SessionHost::Remote { tx },
     });
     client
 }
 
-pub(crate) fn worker_channel() -> (mpsc::Sender<HostCmdMsg>, mpsc::Receiver<HostCmdMsg>) {
+pub(crate) fn worker_channel<S>() -> (mpsc::Sender<HostCmdMsg<S>>, mpsc::Receiver<HostCmdMsg<S>>) {
     mpsc::channel()
 }

@@ -14,7 +14,8 @@ use kithara::{
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, auto,
-    fixture_protocol::{DataMode, InitMode},
+    bufpool_ext::{TestPools, pools},
+    fixture_protocol::DataMode,
 };
 use kithara_test_fixtures::signal;
 use tracing::{info, warn};
@@ -91,11 +92,12 @@ async fn init() {
         .segments_per_variant(48)
         .segment_size(200_000)
         .segment_duration_secs(200_000.0 / bytes_per_second)
+        // `SawWav` is a whole WAV file cut into segments, so segment 0 already
+        // carries the 44-byte header. An `EXT-X-MAP` header on top of it is a
+        // second copy: the reader parses the init one and the segment's own
+        // lands in the data chunk, where 44 bytes read back as 11 frames of
+        // noise. The two are alternative fixture shapes, not layers.
         .data_mode(DataMode::SawWav {
-            sample_rate: 44_100,
-            channels: 2,
-        })
-        .init_mode(InitMode::WavHeader {
             sample_rate: 44_100,
             channels: 2,
         });
@@ -117,24 +119,23 @@ async fn init() {
 }
 
 /// Create a registered HLS audio pipeline in ephemeral mode.
-async fn create_pipeline() -> RegisteredAudio<Stream<Hls>> {
+async fn create_pipeline() -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     create_pipeline_with_url(fixture_url()).await
 }
 
-async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
+async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     const EVENT_BUS_CAPACITY: usize = 4096;
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
-    let byte_pool = kithara::bufpool::BytePool::default();
-    let sample_pool = kithara::bufpool::SamplePool::default();
+    let pools = pools();
 
     let hls_config = HlsConfig::for_url(url)
         .events(bus)
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(byte_pool.clone())
                 .build(),
         )
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
@@ -142,10 +143,10 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .build();
-    let worker = PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, sample_pool).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker.open(config).await.unwrap();
     audio
         .preload()
@@ -153,7 +154,7 @@ async fn create_pipeline_with_url(url: Url) -> RegisteredAudio<Stream<Hls>> {
     audio
 }
 
-async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
+async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls<TestPools>>, TestPools>) {
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let sample_rate = spec.sample_rate.get() as usize;
@@ -264,7 +265,7 @@ async fn run_seek_pcm_window_check(mut audio: RegisteredAudio<Stream<Hls>>) {
 /// uses `preload()` mode where `read()` returns 0 when data isn't ready yet.
 /// We yield via `gloo_timers` to let async downloads and Web Workers proceed.
 async fn read_with_yield(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
 ) -> Option<usize> {
     read_with_yield_limit(audio, buf, 500).await
@@ -273,7 +274,7 @@ async fn read_with_yield(
 /// Read with configurable retry limit. `None` is the end of the stream;
 /// `Some(0)` is a reader that stayed pending for the whole budget.
 async fn read_with_yield_limit(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     buf: &mut [f32],
     max_yields: usize,
 ) -> Option<usize> {
@@ -959,7 +960,7 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
     info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
 
     let mut audio = create_pipeline().await;
-    let mut events_rx = audio.events();
+    let mut events_rx = audio.event_bus().subscribe();
     let spec = audio.spec();
     let channels = spec.channels as usize;
     let mut buf = vec![0.0f32; 4096];

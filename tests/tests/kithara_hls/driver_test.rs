@@ -4,6 +4,7 @@ use std::{
 };
 
 use kithara::{
+    assets::{AssetStore, StorageBackend},
     events::{AbrEvent, Event, EventBus, HlsEvent},
     hls::{AbrMode, Hls, HlsConfig},
     platform::{
@@ -16,6 +17,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, auto,
+    bufpool_ext::{TestPools, pools},
     hls_server::{
         TestServer,
         abr::{AbrTestServer, master_playlist},
@@ -38,13 +40,20 @@ async fn test_driver_seek_after_playlist_finished(temp_dir: TestTempDir, rt_canc
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8");
 
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(rt_cancel)
         .initial_abr_mode(AbrMode::manual(0))
         .build();
 
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await.unwrap();
 
     spawn_blocking(move || {
         let mut all_data = Vec::new();
@@ -101,15 +110,22 @@ async fn test_driver_abr_seek_backward(temp_dir: TestTempDir, rt_cancel: CancelT
 
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp_dir.path().to_path_buf(),
+        })
+        .build();
 
     let config = HlsConfig::for_url(url)
-        .store(kithara_integration_tests::disk_asset_store(temp_dir.path()))
+        .store(store)
+        .pools(pools)
         .cancel(rt_cancel)
         .events(bus)
         .initial_abr_mode(auto(0))
         .build();
 
-    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+    let mut stream = Stream::<Hls<TestPools>>::new(config).await.unwrap();
 
     let variant_switches = Arc::new(StdMutex::new(Vec::new()));
     let switches_clone = variant_switches.clone();

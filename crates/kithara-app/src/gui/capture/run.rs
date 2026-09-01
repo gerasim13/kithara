@@ -1,6 +1,5 @@
 //! The studio capture itself: two layouts through both hosts, written as two
 //! sets the parity lane compares.
-
 use std::{
     env,
     fs::write,
@@ -8,11 +7,11 @@ use std::{
     rc::Rc,
 };
 
-use kithara_test_utils::kithara;
-use kithara_ui::{
+use ::kithara::ui::{
     app::Config,
     capture::{Film, shoot_set},
 };
+use kithara_test_utils::kithara;
 
 use super::{
     immediate::Immediate,
@@ -39,8 +38,6 @@ fn capture(dir: &Path) -> Result<(), String> {
     write(iced_dir.join("draw-pools.txt"), &immediate.pools)
         .map_err(|error| format!("write iced draw-pools.txt: {error}"))?;
 
-    // The package and the registry the retained host reads through outlive the
-    // stage that borrows them.
     let package = Package::load(None).map_err(|error| format!("package: {error}"))?;
     let endpoints = Registry::default();
     let config = Config::builder()

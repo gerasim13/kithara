@@ -1,3 +1,4 @@
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::AudioCodec;
 
 use super::pcm::pump_pcm_samples;
@@ -11,7 +12,13 @@ use crate::{
 pub(crate) struct AacFFmpegEncoder;
 
 impl AacFFmpegEncoder {
-    pub(crate) fn encode(request: &PackagedEncodeRequest<'_>) -> EncodeResult<EncodedTrack> {
+    pub(crate) fn encode<S>(
+        pools: &PoolRegion<S>,
+        request: &PackagedEncodeRequest<'_>,
+    ) -> EncodeResult<EncodedTrack>
+    where
+        S: HasPool<u8> + HasPool<f32>,
+    {
         request.validate()?;
 
         let pcm = request.pcm;
@@ -24,16 +31,10 @@ impl AacFFmpegEncoder {
             .build()?;
 
         let mut access_units: Vec<EncodedAccessUnit> = Vec::new();
-        pump_pcm_samples(
-            pcm,
-            &request.byte_pool,
-            &request.sample_pool,
-            Self::frame_samples(),
-            |samples| {
-                access_units.extend(encoder.push(samples)?);
-                Ok(())
-            },
-        )?;
+        pump_pcm_samples(pcm, pools, Self::frame_samples(), |samples| {
+            access_units.extend(encoder.push(samples)?);
+            Ok(())
+        })?;
         access_units.extend(encoder.finish()?);
 
         let mut media_info = request.media_info.clone();
@@ -43,13 +44,13 @@ impl AacFFmpegEncoder {
 
         Ok(EncodedTrack {
             media_info,
+            access_units,
             timescale: request.timescale,
             bit_rate: request.bit_rate,
             codec_config: Vec::new(),
             packets_per_segment: request.packets_per_segment,
             encoder_delay: request.encoder_delay,
             trailing_delay: request.trailing_delay,
-            access_units,
         })
     }
 
@@ -60,7 +61,6 @@ impl AacFFmpegEncoder {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
     use super::{AacFFmpegEncoder, PackagedEncodeRequest};
@@ -68,6 +68,7 @@ mod tests {
         EncodedTrack,
         stream::{StreamBackend, StreamEncoder},
         test_pcm::TestPcm,
+        test_pools,
     };
 
     struct Consts;
@@ -82,8 +83,10 @@ mod tests {
     }
 
     fn encode_offline(pcm: &TestPcm) -> EncodedTrack {
+        let pools = test_pools::pools();
         AacFFmpegEncoder::encode(
-            &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+            &pools,
+            &PackagedEncodeRequest::builder()
                 .pcm(pcm)
                 .media_info(
                     MediaInfo::builder()

@@ -21,12 +21,13 @@ pub(crate) struct PresetItem {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PresetData {
-    pub(crate) active: Option<usize>,
     pub(crate) items: &'static [PresetItem],
+    pub(crate) active: Option<usize>,
 }
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct Preset {
+    metrics: GlobalBarSkin,
     active: Rgba,
     active_hovered: Rgba,
     active_pressed: Rgba,
@@ -35,19 +36,18 @@ pub(crate) struct Preset {
     hovered: Rgba,
     idle: Rgba,
     inactive_text: Rgba,
-    metrics: GlobalBarSkin,
     panel: Rgba,
     pressed: Rgba,
-    role: TextRoleSkin,
     selector_fill: Rgba,
     selector_stroke: Rgba,
+    role: TextRoleSkin,
 }
 
 struct ChipFace {
-    active: bool,
-    bounds: Rect,
-    index: usize,
     visual: IndexedVisual,
+    bounds: Rect,
+    active: bool,
+    index: usize,
 }
 
 impl Preset {
@@ -71,6 +71,20 @@ impl Preset {
         }
     }
 
+    const fn chip(selector: Rect, width: f32, x: f32) -> Rect {
+        Rect {
+            x,
+            w: width,
+            ..selector
+        }
+    }
+
+    fn chip_width(&self, width: f32, count: usize) -> Option<f32> {
+        let count = count.to_f32()?;
+        let gaps = self.metrics.chip_gap * (count - 1.0).max(0.0);
+        (count > 0.0 && width > gaps).then_some((width - gaps) / count)
+    }
+
     pub(crate) fn declared(&self) -> Size<Length> {
         Size::new(
             Length::Fixed(self.metrics.selector_width),
@@ -78,13 +92,17 @@ impl Preset {
         )
     }
 
-    pub(crate) fn selector(&self, bounds: Rect) -> Rect {
-        Rect {
-            h: (bounds.h - self.metrics.selector_padding_y * 2.0).max(0.0),
-            w: (bounds.w - self.metrics.selector_padding_x * 2.0).max(0.0),
-            x: bounds.x + self.metrics.selector_padding_x,
-            y: bounds.y + self.metrics.selector_padding_y,
-        }
+    /// The chip a point selects: the selector split into equal cells, not the
+    /// painted chips walked.
+    ///
+    /// The gap the chips are painted with is a seam, not a target. Walking the
+    /// painted rects left it owned by nobody, and on a two-chip selector it
+    /// lands exactly on the middle - the point a hand aims at, and the point
+    /// `center(rect)` presses. Every other indexed control already resolves its
+    /// cell this way, through the same `Rect` method.
+    pub(crate) fn hit_index(&self, data: &PresetData, bounds: Rect, point: Pt) -> Option<usize> {
+        self.selector(bounds)
+            .uniform_horizontal_index(point, data.items.len())
     }
 
     pub(crate) fn paint(
@@ -127,33 +145,6 @@ impl Preset {
             self.metrics.selector_frame,
             self.selector_stroke,
         );
-    }
-
-    fn chip_width(&self, width: f32, count: usize) -> Option<f32> {
-        let count = count.to_f32()?;
-        let gaps = self.metrics.chip_gap * (count - 1.0).max(0.0);
-        (count > 0.0 && width > gaps).then_some((width - gaps) / count)
-    }
-
-    /// The chip a point selects: the selector split into equal cells, not the
-    /// painted chips walked.
-    ///
-    /// The gap the chips are painted with is a seam, not a target. Walking the
-    /// painted rects left it owned by nobody, and on a two-chip selector it
-    /// lands exactly on the middle - the point a hand aims at, and the point
-    /// `center(rect)` presses. Every other indexed control already resolves its
-    /// cell this way, through the same `Rect` method.
-    pub(crate) fn hit_index(&self, data: &PresetData, bounds: Rect, point: Pt) -> Option<usize> {
-        self.selector(bounds)
-            .uniform_horizontal_index(point, data.items.len())
-    }
-
-    const fn chip(selector: Rect, width: f32, x: f32) -> Rect {
-        Rect {
-            x,
-            w: width,
-            ..selector
-        }
     }
 
     fn paint_chip(
@@ -201,6 +192,15 @@ impl Preset {
             },
         );
         list.clip(content, word.finish());
+    }
+
+    pub(crate) fn selector(&self, bounds: Rect) -> Rect {
+        Rect {
+            h: (bounds.h - self.metrics.selector_padding_y * 2.0).max(0.0),
+            w: (bounds.w - self.metrics.selector_padding_x * 2.0).max(0.0),
+            x: bounds.x + self.metrics.selector_padding_x,
+            y: bounds.y + self.metrics.selector_padding_y,
+        }
     }
 }
 
@@ -462,8 +462,8 @@ mod tests {
         let selector = painter.selector(BOUNDS);
         let y = selector.y + selector.h / 2.0;
         let last_left = Pt {
-            x: selector.x + selector.w / 2.0 - 0.5,
             y,
+            x: selector.x + selector.w / 2.0 - 0.5,
         };
 
         assert_eq!(painter.hit_index(&data, BOUNDS, last_left), Some(0));
@@ -477,8 +477,8 @@ mod tests {
         let selector = painter.selector(BOUNDS);
         let y = selector.y + selector.h / 2.0;
         let first_right = Pt {
-            x: selector.x + selector.w / 2.0,
             y,
+            x: selector.x + selector.w / 2.0,
         };
 
         assert_eq!(painter.hit_index(&data, BOUNDS, first_right), Some(1));

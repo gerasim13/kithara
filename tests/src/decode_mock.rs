@@ -7,7 +7,6 @@ use std::{
 };
 
 use kithara::{
-    bufpool::SamplePool,
     decode::{
         DecodeResult, Decoder, DecoderChunkOutcome, DecoderSeekOutcome, DecoderTrackInfo,
         mock::DecoderMock,
@@ -16,6 +15,8 @@ use kithara::{
     signal::{AudioChunk, AudioChunkInfo, AudioSpec},
 };
 use unimock::{MockFn, Unimock, matching};
+
+use crate::bufpool_ext::pools;
 
 /// Minimal mutex wrapper with infallible `lock()` for tests.
 pub struct MockLog<T> {
@@ -180,18 +181,23 @@ fn build_infinite_decoder(
     /// Default mock track duration in seconds.
     const MOCK_DURATION_SECS: u64 = 220;
 
+    let pools = pools();
     build_decoder_mock(
         spec,
         move |_| {
             if stop.load(Ordering::Acquire) {
                 return Ok(DecoderChunkOutcome::Eof);
             }
+            let mut samples = pools
+                .get_with_len::<f32>(MOCK_CHUNK_SIZE)
+                .expect("mock chunk fits the test pool budget");
+            samples.fill(SAMPLE_VALUE);
             Ok(DecoderChunkOutcome::Chunk(AudioChunk::new(
                 AudioChunkInfo {
                     spec,
                     ..Default::default()
                 },
-                SamplePool::default().attach(vec![SAMPLE_VALUE; MOCK_CHUNK_SIZE]),
+                samples,
             )))
         },
         Vec::new(),

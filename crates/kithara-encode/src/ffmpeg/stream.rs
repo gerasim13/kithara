@@ -29,11 +29,11 @@ const INPUT_FORMAT: Sample = Sample::F32(SampleType::Packed);
 pub(crate) struct FfmpegStream {
     encoder: AudioEncoder,
     filter: FilterGraph,
+    timestamp_origin: Option<i64>,
+    rates: RebaseRates,
+    next_pts: i64,
     channels: u16,
     sample_rate: u32,
-    rates: RebaseRates,
-    timestamp_origin: Option<i64>,
-    next_pts: i64,
 }
 
 impl FfmpegStream {
@@ -108,6 +108,20 @@ impl FfmpegStream {
 }
 
 impl AacStream for FfmpegStream {
+    fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        flush_filter(&mut self.filter)?;
+        let mut units = self.drain_filter()?;
+        send_eof_to_encoder(&mut self.encoder)?;
+        collect_encoded_packets(
+            &mut self.encoder,
+            self.rates,
+            &mut self.timestamp_origin,
+            &mut units,
+            PacketCodec::Aac,
+        )?;
+        Ok(units)
+    }
+
     fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>> {
         let frames = samples.len() / usize::from(self.channels);
         let frame_count = i32::try_from(frames).map_err(|_| {
@@ -133,20 +147,6 @@ impl AacStream for FfmpegStream {
         self.next_pts += i64::from(frame_count);
 
         Ok(self.drain_filter()?)
-    }
-
-    fn finish(mut self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        flush_filter(&mut self.filter)?;
-        let mut units = self.drain_filter()?;
-        send_eof_to_encoder(&mut self.encoder)?;
-        collect_encoded_packets(
-            &mut self.encoder,
-            self.rates,
-            &mut self.timestamp_origin,
-            &mut units,
-            PacketCodec::Aac,
-        )?;
-        Ok(units)
     }
 }
 

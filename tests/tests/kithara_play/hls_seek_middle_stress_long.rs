@@ -3,7 +3,6 @@
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
-    bufpool::{BytePool, SamplePool},
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventReceiver, PlayerEvent},
     net::{HttpClient, NetOptions},
@@ -16,7 +15,10 @@ use kithara::{
             task::{self, yield_now},
         },
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig},
+    play::{
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
+        ResourceSrc,
+    },
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -31,7 +33,10 @@ use kithara_integration_tests::{
 };
 use kithara_test_utils::probe::capture::install as install_recorder;
 
-use crate::common::test_defaults::Consts as Shared;
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    common::test_defaults::Consts as Shared,
+};
 
 struct Consts;
 impl Consts {
@@ -118,7 +123,7 @@ fn segment_for_target(target: f64) -> usize {
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue>) {
+async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -128,7 +133,7 @@ async fn drive_queue_ticks(queue: Arc<Queue>) {
 }
 
 #[kithara::flash(true)]
-async fn churn_rates(queue: Arc<Queue>, seed: u64, stop: CancelToken) -> usize {
+async fn churn_rates(queue: Arc<Queue<TestPools>>, seed: u64, stop: CancelToken) -> usize {
     let mut rng = Xorshift64::new(seed);
     let mut changes = 0;
     while !stop.is_cancelled() {
@@ -186,7 +191,7 @@ async fn observe_playback(
     Ok(stats)
 }
 
-async fn seek_and_require_read(queue: &Queue, stage: &str, target: f64) {
+async fn seek_and_require_read(queue: &Queue<TestPools>, stage: &str, target: f64) {
     let mut progress_rx = queue.subscribe();
     let recorder = install_recorder();
     queue
@@ -284,26 +289,27 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
     let temp = temp_dir();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .downloader(downloader.clone())
-    .discriminator("t0")
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
-    .worker(PlayWorker::new(
-        PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-    ))
-    .build();
+    let cfg: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .downloader(downloader.clone())
+            .discriminator("t0")
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .initial_abr_mode(AbrMode::manual(Consts::GATED_VARIANT))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .build();
 
     let resource = Resource::new(cfg)
         .await
@@ -417,23 +423,22 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     let temp = temp_dir();
     let shutdown = CancelScope::new(None);
     let shutdown_token = shutdown.token();
-    let byte_pool = BytePool::default();
-    let sample_pool = SamplePool::default();
-    let store = AssetStore::builder()
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
         .cancel(shutdown_token.child())
         .backend(StorageBackend::Disk {
             root: temp.path().to_path_buf(),
         })
-        .pool(byte_pool.clone())
         .build();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(byte_pool.clone(), sample_pool)
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(shutdown_token.child())
             .build(),
     );
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
-            NetOptions::builder().byte_pool(byte_pool.clone()).build(),
+            NetOptions::default(),
+            pools,
             shutdown_token.child(),
         ))
         .build(),
@@ -455,7 +460,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     let tick_handle = task::spawn(drive_queue_ticks(Arc::clone(&queue)));
 
     let hls_config = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid packaged HLS URL"),
+        ResourceSrc::parse(master.as_str()).expect("valid packaged HLS URL"),
     )
     .downloader(downloader.clone())
     .cancel(shutdown_token.child())

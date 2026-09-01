@@ -101,17 +101,12 @@ fn apply_recreate_next<T: StreamType>(
 fn finish_format_boundary_rebuild<T: StreamType>(
     src: &mut StreamAudioSource<T>,
 ) -> RecreateOutcome {
-    // Continue from the decoded-source endpoint represented by PCM admitted
-    // to the final producer port, not from raw decode progress or the
-    // consumer's lagging `committed`. A FormatBoundary recreate neither
-    // flushes that port nor bumps the seek epoch, so either other coordinate
-    // would replay queued content or skip source still retained by Warp.
+    // WHY: Continue from the decoded-source endpoint represented by PCM admitted to the final producer port, not from raw decode
+    // progress or the consumer's lagging `committed`.
     let committed = src.playhead.position();
     let epoch_now = src.seek_engine.epoch();
-    // `resume_target` wins only while the target has NOT yet
-    // materialized in admitted output (`target > rendered source head`);
-    // comparing against the consumer's lagging `committed` mislabels
-    // the warmed-up case and re-emits `[target..rendered source head)`.
+    // WHY: `resume_target` wins only while the target has NOT yet materialized in admitted output (`target > rendered source head`);
+    // comparing against the consumer's lagging `committed` mislabels the warmed-up case and re-emits `[target..rendered source head)`.
     let target_time =
         src.resume
             .resume_position(epoch_now, committed, src.seek_engine.resume_target());

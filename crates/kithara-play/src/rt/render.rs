@@ -9,7 +9,7 @@ use firewheel::{
     node::ProcBuffers,
     param::smoother::SmootherConfig,
 };
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use num_traits::cast::AsPrimitive;
 use ringbuf::HeapProd;
 use smallvec::SmallVec;
@@ -32,18 +32,18 @@ struct Handover {
 }
 
 pub(crate) struct RenderTargets<'a> {
-    pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     pub(crate) notification_tx: &'a mut HeapProd<PlayerNotification>,
     pub(crate) metrics: &'a RtMetrics,
+    pub(crate) tracks: &'a mut TrackSlots<{ PlayerNodeProcessor::MAX_TRACKS }>,
     /// Slot seek epoch published when this block started rendering.
     pub(crate) seek_epoch: u64,
 }
 
 pub(crate) struct RenderPass {
-    scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
-    capacity: usize,
     gate: MixDSP,
+    scratch_bufs: [SampleBuffer; Self::SCRATCH_BUF_COUNT],
     priming: bool,
+    capacity: usize,
 }
 
 impl RenderPass {
@@ -55,9 +55,12 @@ impl RenderPass {
 
     const SCRATCH_BUF_COUNT: usize = 6;
 
-    pub(crate) fn new(pool: &SamplePool, shape: StreamShape) -> Self {
+    pub(crate) fn new<S>(pools: &PoolRegion<S>, shape: StreamShape) -> Self
+    where
+        S: HasPool<f32>,
+    {
         let mut pass = Self {
-            scratch_bufs: std::array::from_fn(|_| pool.get()),
+            scratch_bufs: std::array::from_fn(|_| pools.get::<f32>()),
             capacity: 0,
             priming: true,
             gate: MixDSP::new(
@@ -93,8 +96,8 @@ impl RenderPass {
             ch_buffer[..frames].fill(0.0);
         }
 
-        // Growing a pooled buffer here would allocate on the audio thread. The fill above already
-        // covered the frames past the clamp with silence.
+        // WHY: Growing a pooled buffer here would allocate on the audio thread. The fill above already covered the frames past the clamp
+        // with silence.
         let frames = frames.min(self.capacity);
 
         self.gate.set_mix(
@@ -109,8 +112,7 @@ impl RenderPass {
             self.priming = false;
             self.gate.reset_to_target();
         }
-        // A closed gate outputs silence whatever the tracks hold, so readers stop only once its
-        // ramp has run out.
+        // WHY: A closed gate outputs silence whatever the tracks hold, so readers stop only once its ramp has run out.
         if !is_playing && self.gate.has_settled() {
             return (false, None);
         }
@@ -245,10 +247,6 @@ impl RenderPass {
         (playback_started, leading_outcome_pos_dur)
     }
 
-    pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.gate.update_sample_rate(sample_rate);
-    }
-
     pub(crate) fn resize(&mut self, max_frames: usize) {
         let mut capacity = usize::MAX;
         for buf in &mut self.scratch_bufs {
@@ -263,6 +261,10 @@ impl RenderPass {
             capacity = capacity.min(buf.len());
         }
         self.capacity = capacity;
+    }
+
+    pub(crate) fn update_sample_rate(&mut self, sample_rate: NonZeroU32) {
+        self.gate.update_sample_rate(sample_rate);
     }
 }
 

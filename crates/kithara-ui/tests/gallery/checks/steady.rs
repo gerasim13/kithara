@@ -29,7 +29,6 @@
 //! Neither uses the software backend the walk settles its own question on: a
 //! page of plain controls comes out of that one blank but for its title, so a
 //! picture taken there answers nothing about a page.
-
 use kithara_platform::time::Duration;
 use kithara_test_utils::kithara;
 
@@ -50,17 +49,17 @@ impl Between {
     /// moves at all has moved.
     const TICKS: usize = 30;
 
+    /// How far the clock moves in total.
+    fn elapsed(self) -> Duration {
+        Duration::from_millis(Consts::STRESS_TICK_MS) * whole(self.ticks())
+    }
+
     /// How many of the gallery's frames pass.
     const fn ticks(self) -> usize {
         match self {
             Self::Held => 0,
             Self::Ticked => Self::TICKS,
         }
-    }
-
-    /// How far the clock moves in total.
-    fn elapsed(self) -> Duration {
-        Duration::from_millis(Consts::STRESS_TICK_MS) * whole(self.ticks())
     }
 }
 

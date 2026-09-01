@@ -10,12 +10,12 @@ use crate::{expand::Binding, ids::InternId, mount::Control, size::SizeSpec, skin
 /// This is the sheet contract with a drawing in place of a picture.
 #[derive(Builder)]
 pub(crate) struct Lottie<'a> {
+    pub(crate) artwork: InternId,
     /// The flag that says which of the two artworks stands. It is an endpoint
     /// of its own rather than the control's value, which carries seconds.
     pub(crate) active: Option<&'a Binding>,
     /// The artwork shown while `active` reads true.
     pub(crate) active_artwork: Option<InternId>,
-    pub(crate) artwork: InternId,
     /// How long one pass through the whole artwork takes.
     pub(crate) seconds: f32,
 }
@@ -46,10 +46,6 @@ mod host {
     impl Draws for Lottie<'_> {
         type Painter = Face;
 
-        fn painter(&self, _skin: &Skin) -> Face {
-            Face
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<Standing> {
             let name = self
                 .active_artwork
@@ -61,6 +57,10 @@ mod host {
                 self.seconds,
                 seconds(read.value),
             ))
+        }
+
+        fn painter(&self, _skin: &Skin) -> Face {
+            Face
         }
 
         /// A retained host mounts a leaf once and then only hears about it

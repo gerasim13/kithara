@@ -1,7 +1,7 @@
-use kithara::host::Host;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::platform::{CancelToken, time::Duration};
 
 use super::state::{BroadcastResult, Packager};
+use crate::pools::AppHost;
 
 pub(crate) struct Backend;
 
@@ -19,14 +19,14 @@ impl Packager for Backend {
     }
 
     fn start(
-        _host: &Host,
+        _host: &AppHost,
         _shutdown: &CancelToken,
         _tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
         Err("this build carries no broadcaster; rebuild with `--features broadcast`".into())
     }
 
-    fn release(_host: &Host) -> BroadcastResult<()> {
+    fn release(_host: &AppHost) -> BroadcastResult<()> {
         Ok(())
     }
 

@@ -71,11 +71,11 @@ impl Context<'_> {
 /// structural address used to preserve expanded include roots.
 pub(crate) struct Expander<'m, 'v> {
     pub(super) interner: &'m mut Interner,
+    pub(super) shaders: &'m mut ShaderCache,
+    pub(super) endpoints: &'m dyn EndpointRegistry,
     pub(super) address: Vec<usize>,
     pub(super) includes: Vec<ExpandedInclude>,
     budget: &'m mut Budget,
-    pub(super) endpoints: &'m dyn EndpointRegistry,
-    pub(super) shaders: &'m mut ShaderCache,
     visitor: &'m mut ControlVisitor<'v>,
     text: &'m TextDoc,
     in_popover: bool,
@@ -227,10 +227,10 @@ pub(super) fn expand_at(
     }
     let context = Context {
         set,
-        text: machine.text,
         args,
         instance,
         prefix,
+        text: machine.text,
         origin: uri.clone(),
     };
     walk(&context, &doc.root, depth, machine)
@@ -518,9 +518,9 @@ fn expand_pressable(
 #[derive(Clone, Copy)]
 struct Track<'a> {
     pose: &'a Pose,
-    to: Option<&'a Pose>,
-    phase: Option<&'a BindingRef>,
     motion: Option<&'a Motion<BindingRef>>,
+    phase: Option<&'a BindingRef>,
+    to: Option<&'a Pose>,
 }
 
 /// The pose survives expansion rather than being folded into the control, so
@@ -536,9 +536,6 @@ fn expand_object(
 ) -> Result<ExpandedNode, UiDocError> {
     machine.budget.charge(&context.origin)?;
     let path = child_path(&context.prefix, id);
-    // One endpoint drives an object however it was written: a phase hands the
-    // scalar over, a motion hands over the seconds one is computed from. An
-    // object declaring both is refused before it reaches here.
     let driver = match (track.phase, track.motion) {
         (Some(phase), None) => Some(phase),
         (None, Some(motion)) => Some(&motion.clock),
@@ -571,10 +568,10 @@ fn expand_object(
         None => (driver, None),
     };
     Ok(ExpandedNode::Object {
-        pose: *track.pose,
-        to: track.to.copied(),
         phase,
         motion,
+        pose: *track.pose,
+        to: track.to.copied(),
         child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }
@@ -629,6 +626,7 @@ fn expand_placed(
         .map(|magnet| intern_magnet(machine, magnet, &context.origin))
         .transpose()?;
     Ok(ExpandedNode::Placed {
+        magnet,
         path: machine.interner.intern(&path, &context.origin)?,
         id: machine.interner.intern(&id.0, &context.origin)?,
         at: *at,
@@ -640,7 +638,6 @@ fn expand_placed(
             .as_ref()
             .map(|binding| intern_binding(machine.interner, binding, &context.origin))
             .transpose()?,
-        magnet,
         child: Box::new(walk_child(context, child, 0, depth, machine)?),
     })
 }

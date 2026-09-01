@@ -1,5 +1,5 @@
 use kithara_beat::{BEAT_MODEL_BYTES, BeatThis, MEL_MODEL_BYTES};
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 
 use super::{BeatDetectError, BeatDetector, BeatMark, RawBeats};
 
@@ -23,25 +23,34 @@ impl Default for BeatDetectorKind {
     }
 }
 
-pub(crate) fn build_detector(
+pub(crate) fn build_detector<S>(
     kind: BeatDetectorKind,
-    sample_pool: &SamplePool,
-) -> Result<Box<dyn BeatDetector>, BeatDetectError> {
+    pools: &PoolRegion<S>,
+) -> Result<Box<dyn BeatDetector>, BeatDetectError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     match kind {
-        BeatDetectorKind::NnBeatThis => Ok(Box::new(NnDetector::new(sample_pool)?)),
+        BeatDetectorKind::NnBeatThis => Ok(Box::new(NnDetector::new(pools)?)),
     }
 }
 
-struct NnDetector {
-    inner: BeatThis,
+struct NnDetector<S>
+where
+    S: HasPool<f32>,
+{
+    inner: BeatThis<S>,
 }
 
-impl NnDetector {
-    fn new(sample_pool: &SamplePool) -> Result<Self, BeatDetectError> {
+impl<S> NnDetector<S>
+where
+    S: HasPool<f32>,
+{
+    fn new(pools: &PoolRegion<S>) -> Result<Self, BeatDetectError> {
         let inner = BeatThis::builder()
             .mel_model(MEL_MODEL_BYTES)
             .beat_model(BEAT_MODEL_BYTES)
-            .sample_pool(sample_pool.clone())
+            .pools(pools.clone())
             .build()
             .map_err(|e| BeatDetectError::Init {
                 reason: e.to_string(),
@@ -50,8 +59,11 @@ impl NnDetector {
     }
 }
 
-impl BeatDetector for NnDetector {
-    fn detect(&mut self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+impl<S> BeatDetector for NnDetector<S>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    fn detect(&self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
         let raw = self
             .inner
             .analyze(mono_window)

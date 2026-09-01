@@ -5,9 +5,9 @@ use crate::{draw::Rect, module::TableColumn, render::Skin};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ColumnDividerLayout {
-    pub(crate) column: TableColumn,
     pub(crate) hit: Rect,
     pub(crate) paint: Rect,
+    pub(crate) column: TableColumn,
     pub(crate) value: f32,
 }
 
@@ -141,9 +141,9 @@ mod tests {
             y: 0.0,
         };
         let hit = |x, w| Rect {
-            h: 22.0,
             w,
             x,
+            h: 22.0,
             y: 0.0,
         };
 

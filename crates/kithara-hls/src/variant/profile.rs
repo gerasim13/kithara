@@ -1,5 +1,6 @@
 use std::{num::NonZeroU64, ops::Range};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -22,7 +23,10 @@ pub(crate) struct VariantReaderPreparation {
     warmup: u64,
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Last segment an inactive session may fetch while it is being built.
     ///
     /// Derived from the same window [`reader_is_ready`](Self::reader_is_ready)
@@ -85,27 +89,8 @@ impl HlsVariant {
         })?;
 
         self.set_prefetch_anchor(warmup_start);
-        // The plan covers one segment behind the landing, whatever the
-        // container. A demuxer handed a landing time parks at the packet
-        // boundary at or before it, and when the landing is a segment start the
-        // first packet it reads begins in the segment before. Exact byte sizes
-        // say nothing about where the codec's packet grid falls, so this backoff
-        // cannot be conditional on them: without it the decoder is handed a
-        // reader that cannot reach its own first packet, produces one chunk, and
-        // stalls with the transition still pending.
-        // What the plan must not carry is a segment-0 decoder probe. That probe
-        // belongs to a reader opened at the head of the stream, which scans
-        // forward from byte zero; this one opens on the landing anchor and seeks
-        // straight to it, so it never reads segment 0 — and readiness does not
-        // wait for it either. Queued at the front it was simply the first thing
-        // the downloader served, ahead of the segment readiness *is* waiting
-        // for: measured on a same-codec downswitch it took 9.8 ms of an 18.4 ms
-        // switch and the landing segment never arrived at all.
-        // The backoff still leads the landing. Ordering the landing first buys
-        // nothing — readiness is reached on the same fetch either way — while
-        // the decoder build that follows reads backwards from the landing, so a
-        // backoff deferred by one fetch is a build deferred by one fetch, which
-        // on a slow target is the whole switch.
+        // WHY: The plan covers one segment behind the landing, whatever the container. A demuxer handed a landing time parks at the packet
+        // boundary at or before it, and when the landing is a segment start the first packet it reads begins in the segment before.
         let tail_start = forward_segment.saturating_sub(1);
         self.set_segment_aware_seek_tail(tail_start);
         if !self.queue_matches_plan(tail_start) {
@@ -149,9 +134,8 @@ impl HlsVariant {
         };
         let forward = self.forward_window(preparation);
         let forward_ready = self.reader_range_is_ready(forward.clone())?;
-        // Polled every transition pass, so `trace!`: the pair of flags plus the
-        // window they are asked about is the difference between "the header
-        // never arrived" and "the window is not covered yet", which no other
+        // WHY: Polled every transition pass, so `trace!`: the pair of flags plus the window they are asked about is the difference between
+        // "the header never arrived" and "the window is not covered yet", which no other
         trace!(
             variant = self.variant,
             header_ready,
@@ -163,10 +147,8 @@ impl HlsVariant {
             init_downloading = self.init().is_some_and(|i| i.state().is_downloading()),
             init_slow = self.init().is_some_and(|i| i.state().is_slow()),
             init_failed = self.init().is_some_and(|i| i.state().is_failed()),
-            // A window this session waits on but has nothing queued for is the
-            // shape of a stall: nothing is in flight, nothing is planned, and
-            // the only thing that re-drives the peer is another readiness poll
-            // the consumer cannot make while it waits for this one.
+            // WHY: A window this session waits on but has nothing queued for is the shape of a stall: nothing is in flight, nothing is planned,
+            // and the only thing that re-drives the peer is another readiness poll the consumer cannot make while it waits for this one.
             queued = self.flow.queue.lock().len(),
             "variant reader readiness"
         );

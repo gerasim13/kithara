@@ -1,13 +1,13 @@
 use std::mem;
 
-use kithara::host::Host;
-use kithara_platform::{
+use kithara::platform::{
     CancelToken,
     time::{Duration, Instant},
     tokio::task,
 };
 
 use super::Packager;
+use crate::pools::AppHost;
 
 pub(crate) struct Broadcaster<P: Packager> {
     shutdown: CancelToken,
@@ -40,7 +40,7 @@ impl<P: Packager> Broadcaster<P> {
         }
     }
 
-    pub(crate) fn release(&mut self, host: &Host) {
+    pub(crate) fn release(&mut self, host: &AppHost) {
         if matches!(self.phase, Phase::Running { .. })
             && let Err(error) = P::release(host)
         {
@@ -57,7 +57,7 @@ impl<P: Packager> Broadcaster<P> {
         matches!(self.phase, Phase::Running { .. })
     }
 
-    pub(crate) fn poll(&mut self, host: &Host) {
+    pub(crate) fn poll(&mut self, host: &AppHost) {
         if matches!(&self.phase, Phase::Running { live } if !P::is_live(live)) {
             if let Err(error) = P::release(host) {
                 tracing::error!(%error, "failed to release stopped broadcast mix tap");
@@ -81,7 +81,7 @@ impl<P: Packager> Broadcaster<P> {
         }
     }
 
-    pub(crate) fn toggle(&mut self, host: &Host) -> Option<BroadcastStop<P>> {
+    pub(crate) fn toggle(&mut self, host: &AppHost) -> Option<BroadcastStop<P>> {
         match mem::replace(&mut self.phase, Phase::Off) {
             Phase::Off => self.phase = Phase::Requested,
             Phase::Requested => {}

@@ -45,8 +45,8 @@ impl Worker {
 
 struct WorkerInner {
     compute: Arc<ComputeRuntime>,
-    runtime: Option<kithara_platform::tokio::runtime::Handle>,
     scope: CancelScope,
+    runtime: Option<kithara_platform::tokio::runtime::Handle>,
 }
 
 impl Drop for WorkerInner {

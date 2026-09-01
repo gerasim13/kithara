@@ -1,22 +1,26 @@
 use std::num::NonZeroU32;
 
 use bungee_sys::InputChunk;
+use kithara_bufpool::HasPool;
 use kithara_signal::{AudioSpec, FrameCount, PlanarBuffer, SignalError};
 use num_traits::ToPrimitive;
 
 use super::ffi::{AnalysisInput, NativeStretcher};
 use crate::{ElasticConfig, ElasticError};
 
-pub(super) fn planar_buffer(
-    config: &ElasticConfig,
+pub(super) fn planar_buffer<S>(
+    config: &ElasticConfig<S>,
     frames: usize,
-) -> Result<PlanarBuffer, ElasticError> {
+) -> Result<PlanarBuffer, ElasticError>
+where
+    S: HasPool<f32>,
+{
     let channels = u16::try_from(config.channels())
         .map_err(|_| ElasticError::ChannelCountOutOfRange(config.channels()))?;
     let sample_rate =
         NonZeroU32::new(config.sample_rate()).ok_or(ElasticError::InvalidSampleRate)?;
     PlanarBuffer::new(
-        config.pool(),
+        config.pools(),
         AudioSpec::new(channels, sample_rate),
         FrameCount::new(frames),
     )
@@ -27,7 +31,7 @@ pub(super) fn signal_error(error: SignalError) -> ElasticError {
     match error {
         SignalError::ChannelCountZero => ElasticError::InvalidChannelCount,
         SignalError::SampleCountOverflow { .. } => ElasticError::SampleCountOverflow,
-        SignalError::PoolCapacity { .. } => ElasticError::SamplePoolBudgetExhausted,
+        SignalError::PoolCapacity { .. } => ElasticError::PoolCapacity,
         SignalError::Shape { .. }
         | SignalError::IncompleteFrame { .. }
         | SignalError::FrameRange { .. }
@@ -46,21 +50,24 @@ pub(super) fn signal_error(error: SignalError) -> ElasticError {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct InputBuffer {
+    #[field(set, vis = "pub(super)")]
+    requested: InputChunk,
     analysis: PlanarBuffer,
     audio: PlanarBuffer,
     begin: i32,
     #[field(get, copy, vis = "pub(super)")]
     end: i32,
-    #[field(set, vis = "pub(super)")]
-    requested: InputChunk,
 }
 
 impl InputBuffer {
-    pub(super) fn new(
-        config: &ElasticConfig,
+    pub(super) fn new<S>(
+        config: &ElasticConfig<S>,
         max_input_frames: usize,
         max_source_frames: usize,
-    ) -> Result<Self, ElasticError> {
+    ) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let capacity = max_input_frames
             .checked_add(max_source_frames)
             .ok_or(ElasticError::SampleCountOverflow)?;
@@ -70,6 +77,79 @@ impl InputBuffer {
             begin: 0,
             end: 0,
             requested: InputChunk { begin: 0, end: 0 },
+        })
+    }
+
+    pub(super) fn analyse(
+        &mut self,
+        native: &mut NativeStretcher,
+        valid: bool,
+        end_of_input: bool,
+    ) -> Result<(), ElasticError> {
+        self.analysis.as_samples_mut().fill(0.0);
+        if !valid {
+            return native.analyse(AnalysisInput {
+                samples: self.analysis.as_samples(),
+                channel_stride: self.analysis.stride().get(),
+                mute_head: 0,
+                mute_tail: 0,
+            });
+        }
+
+        let requested_frames = self.requested_frames()?;
+        if requested_frames > self.analysis.stride().get() {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee requested an oversized input grain",
+            ));
+        }
+        let available_begin = self.requested.begin.max(self.begin);
+        let available_end = self.requested.end.min(self.end).max(available_begin);
+        let copied = usize::try_from(
+            available_end
+                .checked_sub(available_begin)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        )
+        .map_err(|_| ElasticError::SampleCountOverflow)?;
+        if copied > 0 {
+            let source_begin = usize::try_from(
+                available_begin
+                    .checked_sub(self.begin)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            let destination_begin = usize::try_from(
+                available_begin
+                    .checked_sub(self.requested.begin)
+                    .ok_or(ElasticError::SampleCountOverflow)?,
+            )
+            .map_err(|_| ElasticError::SampleCountOverflow)?;
+            let channels = usize::from(self.audio.spec().channels);
+            for channel in 0..channels {
+                let source = &self.audio.channel(channel).map_err(signal_error)?
+                    [source_begin..source_begin + copied];
+                self.analysis.channel_mut(channel).map_err(signal_error)?
+                    [destination_begin..destination_begin + copied]
+                    .copy_from_slice(source);
+            }
+        }
+        let mute_head =
+            usize::try_from((i64::from(self.begin) - i64::from(self.requested.begin)).max(0))
+                .map_err(|_| ElasticError::SampleCountOverflow)?
+                .min(requested_frames);
+        let mute_tail =
+            usize::try_from((i64::from(self.requested.end) - i64::from(self.end)).max(0))
+                .map_err(|_| ElasticError::SampleCountOverflow)?
+                .min(requested_frames);
+        if mute_tail > 0 && mute_head < requested_frames && !end_of_input {
+            return Err(ElasticError::EnginePreparation(
+                "Bungee requested unavailable future input",
+            ));
+        }
+        native.analyse(AnalysisInput {
+            mute_head,
+            mute_tail,
+            samples: self.analysis.as_samples(),
+            channel_stride: self.analysis.stride().get(),
         })
     }
 
@@ -141,6 +221,10 @@ impl InputBuffer {
         Ok(())
     }
 
+    pub(super) fn clear(&mut self) {
+        self.set_position(0);
+    }
+
     pub(super) fn prepare_source_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
         self.audio
             .resize_frames(FrameCount::new(capacity))
@@ -177,83 +261,6 @@ impl InputBuffer {
             .ok_or(ElasticError::EnginePreparation(
                 "Bungee reported an input window outside its processing center",
             ))
-    }
-
-    pub(super) fn analyse(
-        &mut self,
-        native: &mut NativeStretcher,
-        valid: bool,
-        end_of_input: bool,
-    ) -> Result<(), ElasticError> {
-        self.analysis.as_samples_mut().fill(0.0);
-        if !valid {
-            return native.analyse(AnalysisInput {
-                samples: self.analysis.as_samples(),
-                channel_stride: self.analysis.stride().get(),
-                mute_head: 0,
-                mute_tail: 0,
-            });
-        }
-
-        let requested_frames = self.requested_frames()?;
-        if requested_frames > self.analysis.stride().get() {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee requested an oversized input grain",
-            ));
-        }
-        let available_begin = self.requested.begin.max(self.begin);
-        let available_end = self.requested.end.min(self.end).max(available_begin);
-        let copied = usize::try_from(
-            available_end
-                .checked_sub(available_begin)
-                .ok_or(ElasticError::SampleCountOverflow)?,
-        )
-        .map_err(|_| ElasticError::SampleCountOverflow)?;
-        if copied > 0 {
-            let source_begin = usize::try_from(
-                available_begin
-                    .checked_sub(self.begin)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            let destination_begin = usize::try_from(
-                available_begin
-                    .checked_sub(self.requested.begin)
-                    .ok_or(ElasticError::SampleCountOverflow)?,
-            )
-            .map_err(|_| ElasticError::SampleCountOverflow)?;
-            let channels = usize::from(self.audio.spec().channels);
-            for channel in 0..channels {
-                let source = &self.audio.channel(channel).map_err(signal_error)?
-                    [source_begin..source_begin + copied];
-                self.analysis.channel_mut(channel).map_err(signal_error)?
-                    [destination_begin..destination_begin + copied]
-                    .copy_from_slice(source);
-            }
-        }
-        let mute_head =
-            usize::try_from((i64::from(self.begin) - i64::from(self.requested.begin)).max(0))
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(requested_frames);
-        let mute_tail =
-            usize::try_from((i64::from(self.requested.end) - i64::from(self.end)).max(0))
-                .map_err(|_| ElasticError::SampleCountOverflow)?
-                .min(requested_frames);
-        if mute_tail > 0 && mute_head < requested_frames && !end_of_input {
-            return Err(ElasticError::EnginePreparation(
-                "Bungee requested unavailable future input",
-            ));
-        }
-        native.analyse(AnalysisInput {
-            samples: self.analysis.as_samples(),
-            channel_stride: self.analysis.stride().get(),
-            mute_head,
-            mute_tail,
-        })
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.set_position(0);
     }
 
     pub(super) fn set_position(&mut self, position: i32) {

@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use kithara_audio::{AudioObserver, AudioObserverRelay, AudioObserverSlot};
+use kithara_bufpool::HasPool;
 use kithara_events::{EventBus, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::CancelToken;
 use kithara_play::{ResourceConfig, ResourceSrc};
@@ -39,19 +40,37 @@ pub struct TrackEntry {
 /// `TrackSource` is `Clone` so the queue can respawn a load when a
 /// previously-consumed track is re-selected — re-tapping a track in
 /// the playlist must work without the caller reconstructing anything.
-#[derive(Clone, derive_more::From)]
+#[derive(derive_more::From)]
 #[non_exhaustive]
-pub enum TrackSource {
+pub enum TrackSource<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Load from URL / path. Queue fills in defaults from `QueueConfig`.
     #[from]
     Uri(String),
     /// Caller-assembled resource config (DRM, headers, etc.). Boxed because
     /// [`ResourceConfig`] is ~100 bytes larger than the `Uri` variant.
     #[from]
-    Config(Box<ResourceConfig>),
+    Config(Box<ResourceConfig<S>>),
 }
 
-impl TrackSource {
+impl<S> Clone for TrackSource<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Uri(uri) => Self::Uri(uri.clone()),
+            Self::Config(config) => Self::Config(Box::new((**config).clone())),
+        }
+    }
+}
+
+impl<S> TrackSource<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Canonical source location: the string for [`TrackSource::Uri`], the
     /// config's URL or file path for [`TrackSource::Config`]. `None` only
     /// for a non-UTF-8 file path.
@@ -67,32 +86,44 @@ impl TrackSource {
     }
 }
 
-impl From<&str> for TrackSource {
+impl<S> From<&str> for TrackSource<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn from(s: &str) -> Self {
         Self::Uri(s.to_string())
     }
 }
 
-impl From<ResourceConfig> for TrackSource {
-    fn from(c: ResourceConfig) -> Self {
+impl<S> From<ResourceConfig<S>> for TrackSource<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    fn from(c: ResourceConfig<S>) -> Self {
         Self::Config(Box::new(c))
     }
 }
 
 /// Single owner of everything the queue knows about one track. Dropping the record aborts its
 /// attempt via [`AttemptGuard`].
-pub(crate) struct TrackRecord {
+pub(crate) struct TrackRecord<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     pub(crate) load: Option<AttemptGuard>,
     pub(crate) url: Option<String>,
     pub(crate) name: String,
     pub(crate) id: TrackId,
-    pub(crate) source: TrackSource,
+    pub(crate) source: TrackSource<S>,
     pub(crate) status: TrackStatus,
     observer: AudioObserverSlot,
 }
 
-impl TrackRecord {
-    pub(crate) fn new(id: TrackId, name: String, source: TrackSource) -> Self {
+impl<S> TrackRecord<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
+    pub(crate) fn new(id: TrackId, name: String, source: TrackSource<S>) -> Self {
         Self {
             id,
             name,
@@ -121,13 +152,19 @@ impl TrackRecord {
 /// transition MUST go through [`Tracks::set_status`] (or the attempt ops
 /// below) so the polled view and the reactive
 /// [`QueueEvent::TrackStatusChanged`] stream never drift.
-pub(crate) struct Tracks {
+pub(crate) struct Tracks<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     next_generation: AtomicU64,
     bus: EventBus,
-    inner: Mutex<Vec<TrackRecord>>,
+    inner: Mutex<Vec<TrackRecord<S>>>,
 }
 
-impl Tracks {
+impl<S> Tracks<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     pub(crate) const fn new(bus: EventBus) -> Self {
         Self {
             bus,
@@ -148,19 +185,6 @@ impl Tracks {
             return;
         };
         slot.attach(observer);
-    }
-
-    /// Create the decoder half before resource opening and install its
-    /// control half in canonical per-track state. Any observer attached before
-    /// admission is transferred into the same bounded relay.
-    pub(crate) fn observer_relay(&self, id: TrackId) -> AudioObserverRelay {
-        let slot = self
-            .lock()
-            .iter()
-            .find(|record| record.id == id)
-            .map(|record| record.observer.clone())
-            .unwrap_or_default();
-        slot.relay()
     }
 
     /// Register a fresh attempt. Dedupes against a live attempt; replaces
@@ -210,7 +234,7 @@ impl Tracks {
     /// Lock the underlying `Vec<TrackRecord>` for direct read/write.
     /// Callers that only need to flip status should prefer
     /// [`Self::set_status`].
-    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord>> {
+    pub(crate) fn lock(&self) -> std::sync::MutexGuard<'_, Vec<TrackRecord<S>>> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -241,6 +265,19 @@ impl Tracks {
             });
         }
         claimed
+    }
+
+    /// Create the decoder half before resource opening and install its
+    /// control half in canonical per-track state. Any observer attached before
+    /// admission is transferred into the same bounded relay.
+    pub(crate) fn observer_relay(&self, id: TrackId) -> AudioObserverRelay {
+        let slot = self
+            .lock()
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.observer.clone())
+            .unwrap_or_default();
+        slot.relay()
     }
 
     /// Move a track's pending load into the interactive lane: replace a
@@ -285,7 +322,7 @@ impl Tracks {
     }
 
     /// Original source for `id`, if still queued.
-    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource> {
+    pub(crate) fn source(&self, id: TrackId) -> Option<TrackSource<S>> {
         self.lock()
             .iter()
             .find(|r| r.id == id)
@@ -293,9 +330,12 @@ impl Tracks {
     }
 }
 
-fn install(record: &mut TrackRecord, generations: &AtomicU64, cancel: CancelToken) -> Ticket {
+fn install<S>(record: &mut TrackRecord<S>, generations: &AtomicU64, cancel: CancelToken) -> Ticket
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let generation = generations.fetch_add(1, Ordering::Relaxed);
-    // Replacing the guard drops the old one armed, cancelling the
+    // WHY: Replacing the guard drops the old one armed, cancelling the
     record.load = Some(AttemptGuard::new(generation, cancel));
     Ticket {
         generation,
@@ -309,31 +349,32 @@ mod tests {
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{TestPools, pools};
 
     #[kithara::test]
     #[case::from_str("https://example.com/song.mp3")]
     #[case::from_string("https://example.com/track.m3u8")]
     fn track_source_from_string_kind(#[case] url: &str) {
         let owned = url.to_string();
-        let from_owned: TrackSource = owned.into();
+        let from_owned: TrackSource<TestPools> = owned.into();
         assert_eq!(from_owned.uri(), Some(url));
-        let from_ref: TrackSource = url.into();
+        let from_ref: TrackSource<TestPools> = url.into();
         assert_eq!(from_ref.uri(), Some(url));
     }
 
     #[kithara::test]
     fn track_source_from_resource_config() {
-        let src = ResourceConfig::parse_src("https://example.com/a.mp3")
-            .expect("BUG: hard-coded URL is valid");
+        let src =
+            ResourceSrc::parse("https://example.com/a.mp3").expect("BUG: hard-coded URL is valid");
         let cfg = ResourceConfig::for_src(src)
-            .store(AssetStore::builder().build())
+            .store(AssetStore::builder(pools()).build())
             .build();
-        let src: TrackSource = cfg.into();
+        let src: TrackSource<TestPools> = cfg.into();
         assert!(matches!(src, TrackSource::Config(_)));
         assert_eq!(src.uri(), Some("https://example.com/a.mp3"));
     }
 
-    fn tracks_with(id: TrackId) -> Tracks {
+    fn tracks_with(id: TrackId) -> Tracks<TestPools> {
         let tracks = Tracks::new(EventBus::default());
         tracks.lock().push(TrackRecord::new(
             id,

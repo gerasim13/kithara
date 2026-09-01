@@ -37,12 +37,12 @@ pub(crate) enum ChromeLeaf<'a> {
 }
 
 pub(crate) fn chrome_leaf<'a>(leaf: ChromeLeaf<'a>, skin: &'a Skin) -> Element<'a, UiEvent> {
-    Element::new(LeafPaint { leaf, skin })
+    Element::new(LeafPaint { skin, leaf })
 }
 
 struct LeafPaint<'data, 'skin> {
-    leaf: ChromeLeaf<'data>,
     skin: &'skin Skin,
+    leaf: ChromeLeaf<'data>,
 }
 
 #[derive(Default)]
@@ -51,6 +51,16 @@ struct LeafState {
 }
 
 impl LeafPaint<'_, '_> {
+    /// The label this leaf draws, and what it says. A line has neither, and a
+    /// footer is a word with no box around it.
+    fn label(&self) -> Option<(ChromeLabel, &str)> {
+        match &self.leaf {
+            ChromeLeaf::Chip(label) => Some((ChromeLabel::chip(self.skin), label)),
+            ChromeLeaf::Title(title) => Some((ChromeLabel::title(self.skin), title)),
+            ChromeLeaf::Footer(_) | ChromeLeaf::HorizontalLine | ChromeLeaf::VerticalLine => None,
+        }
+    }
+
     fn lengths(&self) -> Size<Length> {
         match &self.leaf {
             ChromeLeaf::Chip(_) | ChromeLeaf::Title(_) => Size::new(Length::Shrink, Length::Fill),
@@ -63,16 +73,6 @@ impl LeafPaint<'_, '_> {
                 Length::Fixed(self.skin.chrome.inner_line_width),
                 Length::Fill,
             ),
-        }
-    }
-
-    /// The label this leaf draws, and what it says. A line has neither, and a
-    /// footer is a word with no box around it.
-    fn label(&self) -> Option<(ChromeLabel, &str)> {
-        match &self.leaf {
-            ChromeLeaf::Chip(label) => Some((ChromeLabel::chip(self.skin), label)),
-            ChromeLeaf::Title(title) => Some((ChromeLabel::title(self.skin), title)),
-            ChromeLeaf::Footer(_) | ChromeLeaf::HorizontalLine | ChromeLeaf::VerticalLine => None,
         }
     }
 
@@ -95,37 +95,6 @@ impl LeafPaint<'_, '_> {
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
-    fn size(&self) -> Size<Length> {
-        self.lengths()
-    }
-
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<LeafState>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(LeafState::default())
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let intrinsic = if let Some((label, content)) = self.label() {
-            let state = tree.state.downcast_mut::<LeafState>();
-            let mut text = state.text.borrow_mut();
-            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
-            let (width, height) = label.intrinsic(text, content);
-            Size::new(width, height)
-        } else {
-            Size::ZERO
-        };
-        let lengths = self.lengths();
-        layout::Node::new(limits.resolve(lengths.width, lengths.height, intrinsic))
-    }
-
     fn draw(
         &self,
         tree: &Tree,
@@ -161,6 +130,37 @@ impl IcedWidget<UiEvent, Theme, Renderer> for LeafPaint<'_, '_> {
             renderer.draw_geometry(frame.into_geometry());
         });
     }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let intrinsic = if let Some((label, content)) = self.label() {
+            let state = tree.state.downcast_mut::<LeafState>();
+            let mut text = state.text.borrow_mut();
+            let text = text.get_or_insert_with(|| self.skin.text_resources().into());
+            let (width, height) = label.intrinsic(text, content);
+            Size::new(width, height)
+        } else {
+            Size::ZERO
+        };
+        let lengths = self.lengths();
+        layout::Node::new(limits.resolve(lengths.width, lengths.height, intrinsic))
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.lengths()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(LeafState::default())
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<LeafState>()
+    }
 }
 
 pub(crate) fn header_chevron<'a>(
@@ -176,8 +176,8 @@ pub(crate) fn header_chevron<'a>(
     };
     match owner {
         InputOwner::Leaf => Canvas::new(ChevronProgram {
-            module: module.to_owned(),
             paint,
+            module: module.to_owned(),
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -190,8 +190,8 @@ pub(crate) fn header_chevron<'a>(
 }
 
 struct ChevronProgram<'skin> {
-    module: String,
     paint: ChevronPaint<'skin>,
+    module: String,
 }
 
 impl canvas::Program<UiEvent> for ChevronProgram<'_> {
@@ -230,9 +230,9 @@ impl canvas::Program<UiEvent> for ChevronProgram<'_> {
 /// The chevron drawn over the header, through the same neutral mark the
 /// retained host draws in its own cell.
 struct ChevronPaint<'skin> {
+    skin: &'skin Skin,
     chevron: ChromeChevron,
     collapsed: bool,
-    skin: &'skin Skin,
 }
 
 impl ChevronPaint<'_> {
@@ -327,8 +327,8 @@ mod tests {
     fn chrome_leaves_paint_through_the_retained_builder() {
         let skin = builtin::skin();
         let leaf = LeafPaint {
-            leaf: ChromeLeaf::Chip("FX"),
             skin,
+            leaf: ChromeLeaf::Chip("FX"),
         };
         let mut builder = DrawListBuilder::default();
         let mut text = TextContext::from(skin.text_resources());
@@ -350,8 +350,8 @@ mod tests {
         ));
 
         let line = LeafPaint {
-            leaf: ChromeLeaf::HorizontalLine,
             skin,
+            leaf: ChromeLeaf::HorizontalLine,
         };
         let mut builder = DrawListBuilder::default();
         line.paint(
@@ -370,8 +370,8 @@ mod tests {
         ));
 
         let title = LeafPaint {
-            leaf: ChromeLeaf::Title("DECK"),
             skin,
+            leaf: ChromeLeaf::Title("DECK"),
         };
         let mut builder = DrawListBuilder::default();
         title.paint(
@@ -390,8 +390,8 @@ mod tests {
         ));
 
         let line = LeafPaint {
-            leaf: ChromeLeaf::VerticalLine,
             skin,
+            leaf: ChromeLeaf::VerticalLine,
         };
         let mut builder = DrawListBuilder::default();
         line.paint(
@@ -467,7 +467,7 @@ mod tests {
         let press = Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left));
 
         let action = canvas::Program::update(&program, &mut (), &press, bounds, cursor)
-            .unwrap_or_else(|| panic!("a press anywhere in the header must toggle its module"));
+            .expect("a press anywhere in the header must toggle its module");
 
         assert_eq!(
             action.into_inner(),

@@ -14,16 +14,16 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreeditSnapshot {
-    pub(crate) content: String,
     pub(crate) selection: Option<Range<usize>>,
+    pub(crate) content: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TextInputSnapshot {
-    pub(crate) caret: usize,
-    pub(crate) focused: bool,
     pub(crate) preedit: Option<PreeditSnapshot>,
     pub(crate) selection: Option<Range<usize>>,
+    pub(crate) focused: bool,
+    pub(crate) caret: usize,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -43,13 +43,6 @@ impl Cursor {
         self.focus = index;
     }
 
-    fn move_to(&mut self, index: usize, select: bool) {
-        if !select {
-            self.anchor = index;
-        }
-        self.focus = index;
-    }
-
     fn left(&mut self, query: &str, select: bool) {
         let index = if select || self.anchor == self.focus {
             previous_grapheme(query, self.focus)
@@ -57,6 +50,13 @@ impl Cursor {
             self.anchor.min(self.focus)
         };
         self.move_to(index, select);
+    }
+
+    fn move_to(&mut self, index: usize, select: bool) {
+        if !select {
+            self.anchor = index;
+        }
+        self.focus = index;
     }
 
     fn right(&mut self, query: &str, select: bool) {
@@ -103,57 +103,39 @@ fn grapheme_boundary_at_or_after(query: &str, index: usize) -> usize {
 
 pub(in crate::engine) struct TextInputComponent {
     cursor: Cursor,
-    dragging: bool,
-    layout: TextInputLayout,
     modifiers: Modifiers,
-    path: String,
     preedit: Option<PreeditSnapshot>,
+    path: String,
     query: String,
+    layout: TextInputLayout,
+    dragging: bool,
 }
 
 impl TextInputComponent {
     pub(super) fn new(path: String, query: String, layout: TextInputLayout) -> Self {
         Self {
+            layout,
+            path,
+            query,
             cursor: Cursor::default(),
             dragging: false,
-            layout,
             modifiers: Modifiers::default(),
-            path,
             preedit: None,
-            query,
         }
     }
 
-    pub(super) fn reconcile(mut self, next: Self) -> Self {
-        self.layout = next.layout;
-        self.path = next.path;
-        self.query = next.query;
-        self.cursor.clamp(&self.layout);
-        self
+    fn backspace(&mut self) -> Outcome<EngineEvent> {
+        if self.cursor.selection().is_none() {
+            self.cursor.anchor = previous_grapheme(&self.query, self.cursor.focus);
+        }
+        self.edit("")
     }
 
-    pub(super) fn snapshot(&self, focused: bool) -> TextInputSnapshot {
-        TextInputSnapshot {
-            caret: self.cursor.focus,
-            focused,
-            preedit: self.preedit.clone(),
-            selection: self.cursor.selection(),
+    fn delete(&mut self) -> Outcome<EngineEvent> {
+        if self.cursor.selection().is_none() {
+            self.cursor.anchor = next_grapheme(&self.query, self.cursor.focus);
         }
-    }
-
-    pub(super) fn input_method(&self, area: Rect) -> InputMethodRequest<'_> {
-        let caret = self
-            .cursor
-            .selection()
-            .map_or(self.cursor.focus, |selection| selection.start);
-        InputMethodRequest {
-            caret: self.layout.caret(caret, area),
-            preedit: self.preedit.as_ref().map(|preedit| PreeditRef {
-                content: &preedit.content,
-                selection: preedit.selection.clone(),
-            }),
-            text_size: self.layout.text_size(),
-        }
+        self.edit("")
     }
 
     fn edit(&mut self, inserted: &str) -> Outcome<EngineEvent> {
@@ -171,18 +153,46 @@ impl TextInputComponent {
         Outcome::set(EngineEvent::Text(query))
     }
 
-    fn backspace(&mut self) -> Outcome<EngineEvent> {
-        if self.cursor.selection().is_none() {
-            self.cursor.anchor = previous_grapheme(&self.query, self.cursor.focus);
+    pub(super) fn input_method(&self, area: Rect) -> InputMethodRequest<'_> {
+        let caret = self
+            .cursor
+            .selection()
+            .map_or(self.cursor.focus, |selection| selection.start);
+        InputMethodRequest {
+            caret: self.layout.caret(caret, area),
+            preedit: self.preedit.as_ref().map(|preedit| PreeditRef {
+                content: &preedit.content,
+                selection: preedit.selection.clone(),
+            }),
+            text_size: self.layout.text_size(),
         }
-        self.edit("")
     }
 
-    fn delete(&mut self) -> Outcome<EngineEvent> {
-        if self.cursor.selection().is_none() {
-            self.cursor.anchor = next_grapheme(&self.query, self.cursor.focus);
+    fn input_method_event(&mut self, event: InputMethod<'_>) -> Outcome<EngineEvent> {
+        match event {
+            InputMethod::Opened => {
+                self.preedit = Some(PreeditSnapshot {
+                    content: String::new(),
+                    selection: None,
+                });
+                Outcome::captured()
+            }
+            InputMethod::Preedit { content, selection } => {
+                self.preedit = Some(PreeditSnapshot {
+                    content: content.to_owned(),
+                    selection: selection.map(|(start, end)| start..end),
+                });
+                Outcome::captured()
+            }
+            InputMethod::Commit(content) => {
+                self.preedit = None;
+                self.edit(content)
+            }
+            InputMethod::Closed => {
+                self.preedit = None;
+                Outcome::captured()
+            }
         }
-        self.edit("")
     }
 
     fn key_pressed(
@@ -226,41 +236,48 @@ impl TextInputComponent {
         }
     }
 
-    fn input_method_event(&mut self, event: InputMethod<'_>) -> Outcome<EngineEvent> {
-        match event {
-            InputMethod::Opened => {
-                self.preedit = Some(PreeditSnapshot {
-                    content: String::new(),
-                    selection: None,
-                });
-                Outcome::captured()
-            }
-            InputMethod::Preedit { content, selection } => {
-                self.preedit = Some(PreeditSnapshot {
-                    content: content.to_owned(),
-                    selection: selection.map(|(start, end)| start..end),
-                });
-                Outcome::captured()
-            }
-            InputMethod::Commit(content) => {
-                self.preedit = None;
-                self.edit(content)
-            }
-            InputMethod::Closed => {
-                self.preedit = None;
-                Outcome::captured()
-            }
+    pub(super) fn reconcile(mut self, next: Self) -> Self {
+        self.layout = next.layout;
+        self.path = next.path;
+        self.query = next.query;
+        self.cursor.clamp(&self.layout);
+        self
+    }
+
+    pub(super) fn snapshot(&self, focused: bool) -> TextInputSnapshot {
+        TextInputSnapshot {
+            focused,
+            caret: self.cursor.focus,
+            preedit: self.preedit.clone(),
+            selection: self.cursor.selection(),
         }
     }
 }
 
 impl Component for TextInputComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn blur(&mut self) {
+        self.dragging = false;
+        self.preedit = None;
     }
 
-    fn kind(&self) -> Kind {
-        Kind::TextInput
+    fn cancel_pointer(&mut self) {
+        self.dragging = false;
+    }
+
+    fn captures_pointer(&self) -> bool {
+        self.dragging
+    }
+
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        if hit.over() {
+            CursorShape::Text
+        } else {
+            CursorShape::None
+        }
+    }
+
+    fn focusable(&self) -> bool {
+        true
     }
 
     fn handle(
@@ -314,28 +331,11 @@ impl Component for TextInputComponent {
         (outcome, None)
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        if hit.over() {
-            CursorShape::Text
-        } else {
-            CursorShape::None
-        }
+    fn kind(&self) -> Kind {
+        Kind::TextInput
     }
 
-    fn captures_pointer(&self) -> bool {
-        self.dragging
-    }
-
-    fn cancel_pointer(&mut self) {
-        self.dragging = false;
-    }
-
-    fn focusable(&self) -> bool {
-        true
-    }
-
-    fn blur(&mut self) {
-        self.dragging = false;
-        self.preedit = None;
+    fn path(&self) -> &str {
+        &self.path
     }
 }

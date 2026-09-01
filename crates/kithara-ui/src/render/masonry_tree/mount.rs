@@ -59,14 +59,14 @@ pub(super) trait NodeControl {
 /// What a control is handed when it mounts: the box it was given, the endpoint
 /// behind it, and who owns the pointer over it.
 pub(super) struct Cx<'a> {
-    pub(super) declared: solve::Size<solve::Length>,
-    pub(super) owner: InputOwner,
-    pub(super) path: &'a str,
-    pub(super) plan: Option<&'a HostedControlPlan>,
-    pub(super) read: Option<&'a Binding>,
     /// The skin this instance wears, which is the host's own unless the skin
     /// names this path.
     pub(super) skin: &'a Skin,
+    pub(super) path: &'a str,
+    pub(super) owner: InputOwner,
+    pub(super) plan: Option<&'a HostedControlPlan>,
+    pub(super) read: Option<&'a Binding>,
+    pub(super) declared: solve::Size<solve::Length>,
 }
 
 impl NodeControl for mount::Summary {
@@ -218,9 +218,6 @@ impl NodeControl for mount::Custom {
     {
         let kind = host.ctx.ui.resolve(self.kind);
         let Some(widget) = host.ctx.kinds.and_then(|kinds| kinds.make(kind)) else {
-            // Compiling the document already refused an unregistered kind, so
-            // reaching here means the host was handed a different registry than
-            // the one that validated it. See `CONTEXT.md`, "Custom Kinds".
             tracing::error!(kind, path = cx.path, "no registered widget for this kind");
             return MasonryNode::empty(cx.declared);
         };
@@ -518,11 +515,6 @@ impl Viewport {
         declared: solve::Size<solve::Length>,
     ) -> solve::Size {
         let size = limits.resolve(declared.width, declared.height, limits.max());
-        // The child is measured against the window's width and its own height.
-        // The scrolled axis is compressed, which is what makes a `Fill` child
-        // report the content it has rather than claim the window: an uncompressed
-        // limit would make the content exactly as tall as the window, and there
-        // would be nothing to scroll to.
         let inner = normalized(solve::Limits::with_compression(
             solve::Size::ZERO,
             solve::Size::new(size.width, f32::MAX),
@@ -560,6 +552,26 @@ pub(super) enum NodeLayout {
 }
 
 impl NodeLayout {
+    /// A window always answers, because the wheel over it is its own; a leaf
+    /// answers only what it says it does.
+    pub(super) fn accepts_input(&self) -> bool {
+        matches!(self, Self::Scroll(_)) || matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
+    }
+
+    pub(super) fn accepts_text_input(&self) -> bool {
+        matches!(self, Self::Leaf(leaf) if leaf.accepts_text_input())
+    }
+
+    /// Draws whatever this node paints over its own children. Only a window
+    /// has one: its indicator belongs above the rows it scrolls, not under
+    /// them.
+    pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
+        match self {
+            Self::Scroll(viewport) => viewport.indicate(bounds, list),
+            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => {}
+        }
+    }
+
     pub(super) fn layout(
         &mut self,
         ctx: &mut LayoutCtx<'_>,
@@ -590,14 +602,9 @@ impl NodeLayout {
         }
     }
 
-    /// Draws whatever this node paints over its own children. Only a window
-    /// has one: its indicator belongs above the rows it scrolls, not under
-    /// them.
-    pub(super) fn indicate(&self, bounds: DrawRect, list: &mut DrawListBuilder) {
-        match self {
-            Self::Scroll(viewport) => viewport.indicate(bounds, list),
-            Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => {}
-        }
+    /// Whether the leaf this node holds draws differently under the pointer.
+    pub(super) fn reads_pointer(&self) -> bool {
+        matches!(self, Self::Leaf(leaf) if leaf.reads_pointer())
     }
 
     /// Moves a bounded window under the pointer, answering whether it did.
@@ -606,21 +613,6 @@ impl NodeLayout {
             Self::Scroll(viewport) => viewport.wheel(input),
             Self::Flex(_) | Self::Leaf(_) | Self::Measured(_) | Self::Stack | Self::Stage => false,
         }
-    }
-
-    /// A window always answers, because the wheel over it is its own; a leaf
-    /// answers only what it says it does.
-    pub(super) fn accepts_input(&self) -> bool {
-        matches!(self, Self::Scroll(_)) || matches!(self, Self::Leaf(leaf) if leaf.accepts_input())
-    }
-
-    pub(super) fn accepts_text_input(&self) -> bool {
-        matches!(self, Self::Leaf(leaf) if leaf.accepts_text_input())
-    }
-
-    /// Whether the leaf this node holds draws differently under the pointer.
-    pub(super) fn reads_pointer(&self) -> bool {
-        matches!(self, Self::Leaf(leaf) if leaf.reads_pointer())
     }
 }
 
@@ -652,9 +644,6 @@ fn stage(
     for child in children {
         Node::set_child_limits(ctx, child, loose);
         ctx.run_layout(child, &box_constraints(loose));
-        // A placement carries the point it stands at; every other child of a
-        // stage stands at its origin, and is moved, if at all, by an object
-        // offsetting what it draws.
         let at = Node::child_spot(ctx, child).map_or(Point::ORIGIN, |at| {
             Point::new(f64::from(at.x), f64::from(at.y))
         });
@@ -847,7 +836,7 @@ where
         control.painter(cx.skin),
         data,
         cx.skin,
-        host.ctx.ui.draw_pools(),
+        host.ctx.ui.draw_buffers(),
     );
     let leaf = if let Some(refresh) = refresh {
         leaf.refreshing(refresh)

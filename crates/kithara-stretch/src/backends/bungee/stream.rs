@@ -1,4 +1,5 @@
 use bungee_sys::Request;
+use kithara_bufpool::HasPool;
 use kithara_signal::PlanarBuffer;
 
 use super::{
@@ -10,31 +11,34 @@ use crate::{ElasticConfig, ElasticError, ElasticRateEnvelope};
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct StreamCore {
-    pub(super) anchor: Option<f64>,
-    pub(super) cue_grain_pending: bool,
+    pub(super) rate_envelope: ElasticRateEnvelope,
     pub(super) input: InputBuffer,
+    pub(super) native: NativeStretcher,
+    pub(super) anchor: Option<f64>,
+    pub(super) output_chunk: Option<NativeOutput>,
+    pub(super) output: PlanarBuffer,
+    pub(super) request: Request,
+    pub(super) cue_grain_pending: bool,
+    pub(super) request_pending: bool,
+    pub(super) unprimed_started: bool,
+    pub(super) samples_needed: f64,
+    pub(super) output_consumed: usize,
+    pub(super) source_latency_frames: usize,
     #[field(get, copy, vis = "pub(super)")]
     max_input_frames: usize,
-    pub(super) native: NativeStretcher,
-    pub(super) output: PlanarBuffer,
-    pub(super) output_chunk: Option<NativeOutput>,
-    pub(super) output_consumed: usize,
-    pub(super) request: Request,
-    pub(super) request_pending: bool,
-    pub(super) rate_envelope: ElasticRateEnvelope,
-    pub(super) samples_needed: f64,
-    pub(super) source_latency_frames: usize,
-    pub(super) unprimed_started: bool,
 }
 
 impl StreamCore {
     pub(super) const PIPELINE_GRAINS: usize = 4;
     pub(super) const TERMINAL_GRAIN_LIMIT: usize = 64;
 
-    pub(super) fn new(
-        config: &ElasticConfig,
+    pub(super) fn new<S>(
+        config: &ElasticConfig<S>,
         max_source_frames: usize,
-    ) -> Result<Self, ElasticError> {
+    ) -> Result<Self, ElasticError>
+    where
+        S: HasPool<f32>,
+    {
         let native = NativeStretcher::new(config.sample_rate(), config.channels())?;
         let max_input_frames = native.max_input_frames()?;
         let source_latency_frames = max_input_frames / 2;
@@ -65,16 +69,6 @@ impl StreamCore {
         self.input.prepare_source_capacity(capacity)
     }
 
-    pub(super) fn source_latency_frames(&self) -> Result<usize, ElasticError> {
-        let (history, lookahead) = self.input.requested_window(self.request.position)?;
-        if history > 0 && history == lookahead {
-            return Ok(history);
-        }
-        Err(ElasticError::EnginePreparation(
-            "Bungee reported an unsupported asymmetric input window",
-        ))
-    }
-
     pub(super) fn set_source_latency_frames(&mut self, frames: usize) -> Result<(), ElasticError> {
         if frames == 0 || frames > self.max_input_frames / 2 {
             return Err(ElasticError::EnginePreparation(
@@ -84,18 +78,27 @@ impl StreamCore {
         self.source_latency_frames = frames;
         Ok(())
     }
+
+    pub(super) fn source_latency_frames(&self) -> Result<usize, ElasticError> {
+        let (history, lookahead) = self.input.requested_window(self.request.position)?;
+        if history > 0 && history == lookahead {
+            return Ok(history);
+        }
+        Err(ElasticError::EnginePreparation(
+            "Bungee reported an unsupported asymmetric input window",
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::f32::consts::TAU;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
     use num_traits::ToPrimitive;
 
     use super::*;
-    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault};
+    use crate::{ElasticRequest, backends::bungee::ffi::NativeFault, test_pools::pools};
 
     struct Fixture;
 
@@ -124,7 +127,7 @@ mod tests {
 
     fn anchored_core() -> StreamCore {
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(Fixture::SAMPLE_RATE)
             .channels(Fixture::CHANNELS)
             .max_source_frames(Fixture::CONTEXT_FRAMES)
@@ -157,7 +160,7 @@ mod tests {
         const FRAMES: usize = 8192;
 
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(48_000)
             .channels(2)
             .max_source_frames(FRAMES)
@@ -186,7 +189,7 @@ mod tests {
         const SLOW_SOURCE_FRAMES: usize = 400;
 
         let config = ElasticConfig::builder()
-            .pool(SamplePool::default())
+            .pools(pools())
             .sample_rate(Fixture::SAMPLE_RATE)
             .channels(Fixture::CHANNELS)
             .max_source_frames(Fixture::CONTEXT_FRAMES)

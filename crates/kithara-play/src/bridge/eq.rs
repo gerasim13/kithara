@@ -29,13 +29,9 @@ impl SharedEq {
         }
     }
 
-    delegate::delegate! {
-        to self.gains.load() {
-            #[expr($.map(load_gain))]
-            #[call(get)]
-            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
-            pub(crate) fn len(&self) -> usize;
-        }
+    /// Replaces the complete control-plane band layout atomically.
+    pub fn replace(&self, gains: &[GainDb]) {
+        self.gains.store(Arc::new(band_array(gains)));
     }
 
     pub(crate) fn reset(&self) {
@@ -62,9 +58,13 @@ impl SharedEq {
         self.gains.load().iter().map(load_gain).collect()
     }
 
-    /// Replaces the complete control-plane band layout atomically.
-    pub fn replace(&self, gains: &[GainDb]) {
-        self.gains.store(Arc::new(band_array(gains)));
+    delegate::delegate! {
+        to self.gains.load() {
+            #[expr($.map(load_gain))]
+            #[call(get)]
+            pub(crate) fn gain(&self, band: usize) -> Option<f32>;
+            pub(crate) fn len(&self) -> usize;
+        }
     }
 }
 

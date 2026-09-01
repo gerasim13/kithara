@@ -104,8 +104,22 @@ pub enum Scroll {
 }
 
 impl Scroll {
+    pub(crate) const fn delta(self, axis: ScrollAxis) -> f32 {
+        let (x, y) = match self {
+            Self::Lines { x, y } | Self::Pixels { x, y } => (x, y),
+        };
+        match axis {
+            ScrollAxis::Horizontal => x,
+            ScrollAxis::Vertical => y,
+        }
+    }
+
+    pub(crate) const fn is_pixels(self) -> bool {
+        matches!(self, Self::Pixels { .. })
+    }
+
     pub(crate) const fn lines(y: f32) -> Self {
-        Self::Lines { x: 0.0, y }
+        Self::Lines { y, x: 0.0 }
     }
 
     #[cfg(test)]
@@ -120,20 +134,6 @@ impl Scroll {
 
     pub(crate) const fn y(self) -> f32 {
         self.delta(ScrollAxis::Vertical)
-    }
-
-    pub(crate) const fn delta(self, axis: ScrollAxis) -> f32 {
-        let (x, y) = match self {
-            Self::Lines { x, y } | Self::Pixels { x, y } => (x, y),
-        };
-        match axis {
-            ScrollAxis::Horizontal => x,
-            ScrollAxis::Vertical => y,
-        }
-    }
-
-    pub(crate) const fn is_pixels(self) -> bool {
-        matches!(self, Self::Pixels { .. })
     }
 }
 
@@ -153,6 +153,13 @@ impl Hit {
     #[must_use]
     pub const fn new(at: Option<Pt>, area: Rect) -> Self {
         Self { at, area }
+    }
+
+    /// The box the pointer is tested against, for a recognizer that normalizes
+    /// a position against it rather than only asking whether it landed inside.
+    #[must_use]
+    pub const fn area(self) -> Rect {
+        self.area
     }
 
     /// The pointer wherever it is, in or out of the area.
@@ -180,13 +187,6 @@ impl Hit {
 
     pub(crate) fn uniform_horizontal_index(self, count: usize) -> Option<usize> {
         self.area.uniform_horizontal_index(self.inside()?, count)
-    }
-
-    /// The box the pointer is tested against, for a recognizer that normalizes
-    /// a position against it rather than only asking whether it landed inside.
-    #[must_use]
-    pub const fn area(self) -> Rect {
-        self.area
     }
 }
 

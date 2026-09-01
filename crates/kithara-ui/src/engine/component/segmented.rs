@@ -7,9 +7,9 @@ use crate::{
 };
 
 pub(in crate::engine) struct SegmentedComponent {
+    hover: Hover,
     path: String,
     item_count: usize,
-    hover: Hover,
 }
 
 impl SegmentedComponent {
@@ -23,12 +23,16 @@ impl SegmentedComponent {
 }
 
 impl Component for SegmentedComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn captures_pointer(&self) -> bool {
+        false
     }
 
-    fn kind(&self) -> Kind {
-        Kind::Segmented
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        if self.item_count == 0 {
+            CursorShape::None
+        } else {
+            self.hover.cursor(false, hit)
+        }
     }
 
     fn handle(
@@ -47,15 +51,11 @@ impl Component for SegmentedComponent {
         (outcome, None)
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        if self.item_count == 0 {
-            CursorShape::None
-        } else {
-            self.hover.cursor(false, hit)
-        }
+    fn kind(&self) -> Kind {
+        Kind::Segmented
     }
 
-    fn captures_pointer(&self) -> bool {
-        false
+    fn path(&self) -> &str {
+        &self.path
     }
 }

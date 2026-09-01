@@ -11,7 +11,6 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    bufpool::Region,
     events::{Event, EventBus, EventReceiver, TrackId},
     platform::sync::Arc,
     play::{
@@ -21,6 +20,8 @@ use kithara::{
     signal::AudioSpec,
 };
 use kithara_integration_tests::{audio_mock::TestPcmReader, offline::OfflineSession};
+
+use crate::bufpool_ext::{TestPools, pools};
 
 #[derive(Clone, Copy)]
 enum InsertScenario {
@@ -55,33 +56,27 @@ fn make_tagged_resource(label: &'static str, duration_secs: f64) -> Resource {
     )
 }
 
-fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl, Arc<OfflineSession>) {
+fn make_offline_player(crossfade_duration: f32) -> (PlayerImpl<TestPools>, Arc<OfflineSession>) {
     let bus = EventBus::default();
     let session = Arc::new(OfflineSession::new_manual());
-    let region = Region::default();
     let player_config = PlayerConfig::builder()
         .bus(bus)
         .crossfade_duration(crossfade_duration)
-        .worker(PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        ))
-        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+        .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
         .build();
     let player = PlayerImpl::new(player_config);
     (player, session)
 }
 
-fn default_player_config() -> PlayerConfig {
-    let region = Region::default();
+fn default_player_config() -> PlayerConfig<TestPools> {
     PlayerConfig::builder()
-        .worker(PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        ))
+        .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
         .session(OfflineSession::arc_manual())
         .build()
 }
 
-fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
+fn drain_player_events(player: &PlayerImpl<TestPools>, rx: &mut EventReceiver) -> Vec<PlayerEvent> {
     use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
     player.process_notifications();
     let mut events = Vec::new();
@@ -97,7 +92,7 @@ fn drain_player_events(player: &PlayerImpl, rx: &mut EventReceiver) -> Vec<Playe
 }
 
 fn render_until_events(
-    player: &PlayerImpl,
+    player: &PlayerImpl<TestPools>,
     session: &OfflineSession,
     rx: &mut EventReceiver,
     max_blocks: usize,
@@ -291,12 +286,9 @@ fn replacing_current_item_re_announces_on_next_play() {
 
 #[kithara::test(tokio)]
 async fn player_play_without_audio_hardware_logs_warning() {
-    let region = Region::default();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(OfflineSession::arc_auto())
             .build(),
     );
@@ -426,7 +418,8 @@ fn arm_next_loads_item_and_returns_src() {
 
     let src = player
         .arm_next(1)
-        .expect("BUG: arm_next succeeds for items[1]");
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
     let _ = session.render(512);
     player.process_notifications();
@@ -518,7 +511,8 @@ fn arm_next_returns_none_for_empty_slot() {
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    assert!(player.arm_next(1).is_none(), "empty slot must yield None");
+    let src = player.arm_next(1).expect("arm_next succeeds");
+    assert!(src.is_none(), "empty slot must yield None");
     assert_eq!(player.armed_next(), None);
 }
 
@@ -533,8 +527,14 @@ fn arm_next_idempotent_for_same_index() {
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    let first_src = player.arm_next(1).unwrap();
-    let second_src = player.arm_next(1).unwrap();
+    let first_src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
+    let second_src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(first_src.as_ref(), second_src.as_ref());
     assert_eq!(player.armed_next(), Some(1));
 }
@@ -552,10 +552,16 @@ fn arm_next_replaces_previously_armed_slot() {
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
 
-    let first = player.arm_next(1).unwrap();
+    let first = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     let _ = session.render(512);
     player.process_notifications();
-    let second = player.arm_next(2).unwrap();
+    let second = player
+        .arm_next(2)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_ne!(first.as_ref(), second.as_ref());
     assert_eq!(player.armed_next(), Some(2));
 
@@ -573,7 +579,10 @@ fn commit_next_index_mismatch_returns_typed_error() {
     player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
 
     let err = player.commit_next(2).expect_err("mismatch");
     assert!(matches!(
@@ -595,7 +604,10 @@ fn commit_next_advances_index_and_publishes_event() {
     player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     let mut rx = player.subscribe();
 
     player.commit_next(1).unwrap();
@@ -623,7 +635,10 @@ fn commit_next_idempotent_when_already_activated() {
     player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
 
     player.commit_next(1).unwrap();
     player.commit_next(1).unwrap();
@@ -640,7 +655,10 @@ fn unarm_next_clears_when_not_activated_and_unloads() {
     player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    let src = player.arm_next(1).unwrap();
+    let src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     let _ = session.render(512);
     player.process_notifications();
 
@@ -661,7 +679,10 @@ fn unarm_next_preserves_activated_current() {
     player.insert(second, TrackId::allocate(), None);
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    player.arm_next(1).unwrap();
+    player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     player.commit_next(1).unwrap();
     player.unarm_next();
     assert_eq!(player.armed_next(), None);
@@ -681,7 +702,10 @@ fn select_item_clears_pending_next_and_unloads_preloaded_track() {
 
     player.ensure_engine_started().unwrap();
     player.ensure_slot().unwrap();
-    let src = player.arm_next(1).expect("BUG: arm_next loads items[1]");
+    let src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
 
     player.select_item(2, true).unwrap();
@@ -710,7 +734,10 @@ fn select_item_on_armed_index_promotes_armed_slot() {
     player.ensure_slot().unwrap();
     player.select_item(0, true).unwrap();
     let _ = session.render(256);
-    let armed_src = player.arm_next(1).expect("BUG: arm_next loads items[1]");
+    let armed_src = player
+        .arm_next(1)
+        .expect("arm_next succeeds")
+        .expect("populated slot returns src");
     assert_eq!(player.armed_next(), Some(1));
 
     player.select_item(1, true).unwrap();

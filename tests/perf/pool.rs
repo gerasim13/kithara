@@ -3,40 +3,32 @@
 use std::{mem, thread};
 
 use hotpath::HotpathGuardBuilder;
-use kithara::{
-    bufpool::SamplePool,
-    platform::{sync::Arc, time::Instant},
-};
+use kithara::platform::time::Instant;
+use kithara_integration_tests::bufpool_ext::{Pools, pools};
 
 #[hotpath::measure]
-fn pool_get_put_cycle(pool: &SamplePool) {
-    let buf = pool.get_with(|b| {
-        b.clear();
-        b.resize(2048, 0.0);
-    });
+fn pool_get_put_cycle(pools: &Pools) {
+    let buf = pools.get_with_len::<f32>(2048).expect("perf sample buffer");
     drop(buf);
 }
 
 #[hotpath::measure]
-fn pool_thread_worker(pool: Arc<SamplePool>, thread_id: usize, iterations: usize) {
+fn pool_thread_worker(pools: Pools, thread_id: usize, iterations: usize) {
     for i in 0..iterations {
-        let buf = pool.get_with(|b| {
-            b.clear();
-            b.resize(2048, 0.0);
-            for j in 0..2048 {
-                b[j] = (thread_id * iterations + i + j) as f32 * 0.001;
-            }
-        });
+        let mut buf = pools.get_with_len::<f32>(2048).expect("perf sample buffer");
+        for (j, sample) in buf.iter_mut().enumerate() {
+            *sample = (thread_id * iterations + i + j) as f32 * 0.001;
+        }
         drop(buf);
     }
 }
 
-fn run_threaded(pool: Arc<SamplePool>, num_threads: usize, iterations_per_thread: usize) {
+fn run_threaded(pools: Pools, num_threads: usize, iterations_per_thread: usize) {
     let handles: Vec<_> = (0..num_threads)
         .map(|thread_id| {
-            let pool_clone = Arc::clone(&pool);
+            let pools = pools.clone();
             thread::spawn(move || {
-                pool_thread_worker(pool_clone, thread_id, iterations_per_thread);
+                pool_thread_worker(pools, thread_id, iterations_per_thread);
             })
         })
         .collect();
@@ -63,13 +55,13 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
     let _guard = HotpathGuardBuilder::new(label).build();
     match scenario {
         PerfScenario::SingleThreadGetPut => {
-            let pool = SamplePool::default();
+            let pools = pools();
 
             for _ in 0..100 {
-                pool_get_put_cycle(&pool);
+                pool_get_put_cycle(&pools);
             }
             for _ in 0..10000 {
-                pool_get_put_cycle(&pool);
+                pool_get_put_cycle(&pools);
             }
 
             println!("\n{:=<60}", "");
@@ -78,10 +70,10 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             println!("{:=<60}\n", "");
         }
         PerfScenario::MultiThreadContention => {
-            let pool = Arc::new(SamplePool::default().clone());
+            let pools = pools();
             let num_threads = 8;
             let iterations_per_thread = 1000;
-            run_threaded(pool, num_threads, iterations_per_thread);
+            run_threaded(pools, num_threads, iterations_per_thread);
 
             println!("\n{:=<60}", "");
             println!("Multi-threaded Pool Contention ({} threads)", num_threads);
@@ -89,13 +81,10 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
             println!("{:=<60}\n", "");
         }
         PerfScenario::AllocationRate => {
-            let pool = SamplePool::default();
+            let pools = pools();
             hotpath::measure_block!("allocation_from_empty", {
                 for _ in 0..1000 {
-                    let buf = pool.get_with(|b| {
-                        b.clear();
-                        b.resize(2048, 0.0);
-                    });
+                    let buf = pools.get_with_len::<f32>(2048).expect("perf sample buffer");
                     mem::forget(buf);
                 }
             });
@@ -113,10 +102,10 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
                 let scenario_label =
                     Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
                 let _guard = HotpathGuardBuilder::new(scenario_label).build();
-                let pool = Arc::new(SamplePool::default().clone());
+                let pools = pools();
                 let start = Instant::now();
 
-                run_threaded(pool, num_threads, iterations_per_thread);
+                run_threaded(pools, num_threads, iterations_per_thread);
 
                 let elapsed = start.elapsed();
                 let total_ops = num_threads * iterations_per_thread;

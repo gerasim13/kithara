@@ -1,5 +1,7 @@
 use bon::Builder;
-use kithara_bufpool::{BudgetExhausted, SampleBuffer, SamplePool};
+#[cfg(test)]
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_bufpool::{PoolError, SampleBuffer};
 use num_traits::cast::ToPrimitive;
 
 use super::{
@@ -29,10 +31,10 @@ impl Consts {
     const MERGE_RATIO_EPS: f64 = 1e-3;
     const MIN_BAR_RATIO: f64 = 0.5;
     const MIN_BEAT_GAPS: usize = 8;
-    const MIN_MAP_BEATS: usize = 2;
     const MIN_DOWNBEATS: usize = 2;
     const MIN_GAP_RATIO: f64 = 0.7;
     const MIN_LEAF_BARS: usize = 8;
+    const MIN_MAP_BEATS: usize = 2;
     const OUTLIER_RATIO: f64 = 0.04;
     const OUTLIER_WINDOW: usize = 4;
     const RESIDUAL_MS: f64 = 18.0;
@@ -72,25 +74,27 @@ impl Default for GridParams {
     }
 }
 
-pub(crate) fn build_grid(
+#[cfg(test)]
+fn build_grid<S>(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,
-    pool: &SamplePool,
-) -> Result<BeatArtifact, BudgetExhausted> {
-    let mut buffers = GridBuffers::new(pool);
+    pools: &PoolRegion<S>,
+) -> Result<BeatArtifact, PoolError>
+where
+    S: HasPool<f32>,
+{
+    let mut buffers = GridBuffers::new(pools);
     build_grid_with(raw, sample_rate, params, &mut buffers)
 }
 
-fn build_grid_with(
+pub(crate) fn build_grid_with(
     raw: &RawBeats,
     sample_rate: u32,
     params: &GridParams,
     buffers: &mut GridBuffers,
-) -> Result<BeatArtifact, BudgetExhausted> {
+) -> Result<BeatArtifact, PoolError> {
     let sr = f64::from(sample_rate);
-    // Both lookups below binary-search these, and both asserts downstream
-    // assume it. `normalize_marks` is what guarantees it on the live path.
     debug_assert!(
         is_sorted(&raw.beats) && is_sorted(&raw.downbeats),
         "build_grid needs detector marks sorted by position"
@@ -140,8 +144,6 @@ fn build_grid_with(
     let nominal_seed = median(&buffers.gaps, &mut buffers.sorted)?;
     let downbeats = marks_to_frames(&buffers.positions, &raw.downbeats, sr);
 
-    // Degraded mode (per plan): too short / no stable tempo region means no
-    // trustworthy piecewise grid — report tempo only, no segments.
     let Some((anchor_idx, nominal_bar)) = find_stable_window(
         &buffers.positions,
         nominal_seed,
@@ -183,7 +185,7 @@ fn clean_beats(
     marks: &mut SampleBuffer,
     gaps: &mut SampleBuffer,
     sorted: &mut SampleBuffer,
-) -> Result<(), BudgetExhausted> {
+) -> Result<(), PoolError> {
     fill(marks, secs.iter().map(|mark| mark.at))?;
     retain(marks, |time| time.is_finite() && time >= 0.0);
     marks.sort_unstable_by(f32::total_cmp);
@@ -197,7 +199,7 @@ fn beats_bpm(
     beats: &[f32],
     gaps: &mut SampleBuffer,
     sorted: &mut SampleBuffer,
-) -> Result<Option<f64>, BudgetExhausted> {
+) -> Result<Option<f64>, PoolError> {
     bar_gaps(beats, gaps)?;
     retain(gaps, |gap| gap > 0.0);
     if gaps.len() < Consts::MIN_BEAT_GAPS {
@@ -227,8 +229,6 @@ fn beats_bpm(
     Ok((beat > 0.0).then(|| Consts::SECS_PER_MIN / beat))
 }
 
-// Cleaning only drops and reorders, so a survivor is one the detector reported
-// and its confidence is recoverable by exact lookup; a miss means that broke.
 fn marks_to_frames(positions: &[f32], detected: &[BeatMark], sample_rate: f64) -> Vec<MarkedBeat> {
     let mut out: Vec<MarkedBeat> = Vec::with_capacity(positions.len());
     for &position in positions {
@@ -271,10 +271,10 @@ fn bar_to_bpm(bar_seconds: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::pools;
 
     struct Consts;
 
@@ -344,26 +344,26 @@ mod tests {
     }
 
     fn build_grid(raw: &RawBeats, sample_rate: u32, params: &GridParams) -> BeatArtifact {
-        super::build_grid(raw, sample_rate, params, &SamplePool::default())
+        super::build_grid(raw, sample_rate, params, &pools())
             .expect("grid scratch fits the PCM pool budget")
     }
 
     #[kithara::test(native, flash(false))]
-    fn injected_sample_pool_reuses_grid_buffers() {
-        let pool = SamplePool::new(64, 200_000);
+    fn injected_region_reuses_grid_buffers() {
+        let pools = pools();
         let raw = RawBeats {
             beats: marks(steady(0.0, 0.5, 128)),
             downbeats: marks(steady(0.0, 2.0, 64)),
         };
 
-        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pool)
+        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pools)
             .expect("first grid fits the PCM pool budget");
-        let misses = pool.stats().alloc_misses;
+        let allocated = pools.stats().allocated_bytes;
 
-        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pool)
+        super::build_grid(&raw, Consts::SR, &GridParams::default(), &pools)
             .expect("second grid fits the PCM pool budget");
 
-        assert_eq!(pool.stats().alloc_misses, misses);
+        assert_eq!(pools.stats().allocated_bytes, allocated);
     }
 
     #[kithara::test(native, flash(false))]

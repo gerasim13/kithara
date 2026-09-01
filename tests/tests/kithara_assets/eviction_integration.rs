@@ -10,7 +10,10 @@ use kithara::{
     },
     platform::{thread, time::Duration},
 };
-use kithara_integration_tests::temp_dir;
+use kithara_integration_tests::{
+    bufpool_ext::{TestPools, pools},
+    temp_dir,
+};
 
 use super::support::{LiteralLayout, literal_layouts, resource, source};
 
@@ -32,8 +35,8 @@ fn asset_scope_with_root(
     temp_dir: &kithara_integration_tests::TestTempDir,
     asset_root: &str,
     max_assets: Option<usize>,
-) -> AssetScope {
-    AssetStore::builder()
+) -> AssetScope<TestPools> {
+    AssetStore::builder(pools())
         .backend(StorageBackend::Disk {
             root: (temp_dir.path()).into(),
         })

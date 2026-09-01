@@ -8,6 +8,8 @@ use crate::AudioSpec;
 /// Position and provenance facts for one decoded-audio chunk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioChunkInfo {
+    /// Decoded-audio format.
+    pub spec: AudioSpec,
     /// Media-timeline position after this chunk's frames have played out.
     pub end_timestamp: Duration,
     /// Media-timeline position of the first frame in this chunk.
@@ -18,8 +20,6 @@ pub struct AudioChunkInfo {
     pub source_byte_offset: Option<u64>,
     /// Opaque source variant index reported by the decoder, when available.
     pub variant_index: Option<usize>,
-    /// Decoded-audio format.
-    pub spec: AudioSpec,
     /// Number of interleaved audio frames represented by this chunk.
     pub frames: u32,
     /// Decoder generation, incremented on decoder recreation.
@@ -30,13 +30,13 @@ pub struct AudioChunkInfo {
     pub source_bytes: u64,
 }
 
-const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
-    Some(rate) => rate,
-    None => unreachable!(),
-};
-
 impl Default for AudioChunkInfo {
     fn default() -> Self {
+        const PLACEHOLDER_RATE: NonZeroU32 = match NonZeroU32::new(48_000) {
+            Some(rate) => rate,
+            None => unreachable!(),
+        };
+
         Self {
             spec: AudioSpec::new(0, PLACEHOLDER_RATE),
             end_timestamp: Duration::ZERO,
@@ -55,14 +55,14 @@ impl Default for AudioChunkInfo {
 /// One owning chunk of interleaved decoded samples and timeline information.
 #[derive(Debug)]
 pub struct AudioChunk {
-    pub samples: SampleBuffer,
     pub meta: AudioChunkInfo,
+    pub samples: SampleBuffer,
 }
 
 impl AudioChunk {
     #[must_use]
     pub const fn new(meta: AudioChunkInfo, samples: SampleBuffer) -> Self {
-        Self { samples, meta }
+        Self { meta, samples }
     }
 
     /// Number of complete audio frames in this chunk.
@@ -88,10 +88,10 @@ impl AsRef<[f32]> for AudioChunk {
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
+    use crate::test_pools::{Pools, pools, sample_buffer};
 
     fn audio_spec(channels: u16, sample_rate: u32) -> AudioSpec {
         AudioSpec::new(
@@ -100,13 +100,13 @@ mod tests {
         )
     }
 
-    fn chunk(spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
+    fn chunk(pools: &Pools, spec: AudioSpec, samples: Vec<f32>) -> AudioChunk {
         AudioChunk::new(
             AudioChunkInfo {
                 spec,
                 ..Default::default()
             },
-            SamplePool::new(4, 64).attach(samples),
+            sample_buffer(pools, &samples),
         )
     }
 
@@ -119,12 +119,20 @@ mod tests {
 
     #[kithara::test]
     fn chunk_reports_complete_frames() {
-        assert_eq!(chunk(audio_spec(2, 44_100), vec![0.0; 6]).frames(), 3);
+        let pools = pools();
+        assert_eq!(
+            chunk(&pools, audio_spec(2, 44_100), vec![0.0; 6]).frames(),
+            3
+        );
     }
 
     #[kithara::test]
     fn zero_channels_report_no_frames() {
-        assert_eq!(chunk(audio_spec(0, 44_100), vec![0.0; 4]).frames(), 0);
+        let pools = pools();
+        assert_eq!(
+            chunk(&pools, audio_spec(0, 44_100), vec![0.0; 4]).frames(),
+            0
+        );
     }
 
     #[kithara::test]

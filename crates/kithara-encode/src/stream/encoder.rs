@@ -33,16 +33,16 @@ pub enum StreamBackend {
 
 #[derive(Clone, Copy)]
 pub(crate) struct StreamParams {
-    pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
-    pub(crate) bit_rate: u64,
+    pub(crate) sample_rate: u32,
     pub(crate) timescale: u32,
+    pub(crate) bit_rate: u64,
 }
 
 pub(crate) trait AacStream: Send {
-    fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>>;
-
     fn finish(self: Box<Self>) -> EncodeResult<Vec<EncodedAccessUnit>>;
+
+    fn push(&mut self, samples: &[f32]) -> EncodeResult<Vec<EncodedAccessUnit>>;
 }
 
 /// Continuous AAC-LC encoder from interleaved f32 to raw access units.
@@ -71,10 +71,10 @@ impl StreamEncoder {
         timescale: u32,
     ) -> EncodeResult<Self> {
         let params = StreamParams {
-            sample_rate,
             channels,
-            bit_rate,
+            sample_rate,
             timescale,
+            bit_rate,
         };
         params.validate()?;
 
@@ -86,6 +86,15 @@ impl StreamEncoder {
         };
 
         Ok(Self { inner, channels })
+    }
+
+    /// Drain and return remaining access units.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot drain.
+    pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
+        self.inner.finish()
     }
 
     /// Encode whole interleaved frames and return completed access units.
@@ -106,15 +115,6 @@ impl StreamEncoder {
         }
 
         self.inner.push(samples)
-    }
-
-    /// Drain and return remaining access units.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the backend cannot drain.
-    pub fn finish(self) -> EncodeResult<Vec<EncodedAccessUnit>> {
-        self.inner.finish()
     }
 }
 

@@ -28,13 +28,13 @@ mod host {
     impl Draws for Select {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// A select shows the word the document wrote; no endpoint moves it.
         fn data(&self, read: Reading<'_>) -> Option<String> {
             Some(read.ctx.ui.resolve(self.label).to_owned())
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

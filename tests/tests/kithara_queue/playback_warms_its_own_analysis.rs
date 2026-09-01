@@ -5,11 +5,11 @@ use std::num::NonZeroU32;
 
 use kithara::{
     analysis::{AnalysisWorker, AnalysisWorkerConfig, AnalyzerBuilder},
-    bufpool::Region,
+    assets::{AssetStore, StorageBackend},
     events::TrackStatus,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, sync::Arc, time::Duration, tokio},
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource},
     resampler::NoResamplerBackend,
     signal::AudioSpec,
@@ -20,6 +20,8 @@ use kithara_integration_tests::{
     waits::wait_until,
 };
 use kithara_test_fixtures::SignalAsset;
+
+use crate::bufpool_ext::pools;
 
 /// A handle left for a track must reach that track's decode path, so playing
 /// it warms its own analysis instead of leaving the pass to decode the same
@@ -35,11 +37,13 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let url = helper.signal(SignalAsset::MP3_SINE880_48K_162S);
 
     let temp = temp_dir();
-    let store = kithara_integration_tests::disk_asset_store(temp.path());
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
+    let pools = pools();
+    let store = AssetStore::builder(pools.clone())
+        .backend(StorageBackend::Disk {
+            root: temp.path().to_path_buf(),
+        })
+        .build();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(worker)
@@ -63,15 +67,17 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     });
 
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools.clone(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
-    let cfg = ResourceConfig::for_src(
-        ResourceConfig::parse_src(url.as_str()).expect("valid fixture URL"),
-    )
-    .downloader(downloader)
-    .store(store)
-    .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
+        .downloader(downloader)
+        .store(store)
+        .build();
 
     let id = queue
         .append(TrackSource::Config(Box::new(cfg)))
@@ -88,12 +94,11 @@ async fn playback_feeds_the_pass_opened_for_the_track_it_plays() {
     let cancel = CancelToken::never();
     let worker = AnalysisWorker::new(
         AnalysisWorkerConfig::for_builder(
-            AnalyzerBuilder::<NoResamplerBackend>::new(region.sample_pool()).with_waveform(64),
+            AnalyzerBuilder::<NoResamplerBackend, _>::new(pools).with_waveform(64),
         )
         .cancel(cancel)
         .build(),
-    )
-    .expect("analysis worker task is admitted");
+    );
     let (analysis, producer) = worker.analyze(
         stalled_reader(AudioSpec::new(2, rate)),
         "played-track".into(),

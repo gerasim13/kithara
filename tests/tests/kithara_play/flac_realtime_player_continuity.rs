@@ -8,7 +8,7 @@ use kithara::{
         CancelToken,
         time::{Duration, Instant, sleep},
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::{
         AudioCodec,
         dl::{Downloader, DownloaderConfig},
@@ -20,8 +20,11 @@ use kithara_integration_tests::{
 };
 use tracing::{info, warn};
 
-use crate::phase_continuity::common::{
-    CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, scan_rendered_pcm,
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    phase_continuity::common::{
+        CHANNELS, FREQ_HZ, PhaseDrift, SAMPLE_RATE, SinePhaseSpec, scan_rendered_pcm,
+    },
 };
 
 const SEGMENT_DURATION_SECS: f64 = 2.0;
@@ -123,34 +126,31 @@ async fn run_case(
     let temp = TestTempDir::new();
     let store = kithara_integration_tests::disk_asset_store(temp.path());
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(NetOptions::default(), CancelToken::never()))
-            .build(),
+        DownloaderConfig::for_client(HttpClient::new(
+            NetOptions::default(),
+            pools(),
+            CancelToken::never(),
+        ))
+        .build(),
     );
 
     let initial_mode = match scenario {
         Scenario::SustainedFlac => AbrMode::manual(TOP_VARIANT),
         Scenario::SwitchToFlac => AbrMode::manual(0),
     };
-    let cfg: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master.as_str()).expect("valid master URL"),
-    )
-    .worker(PlayWorker::new(
-        PlayWorkerConfig::for_pools(
-            kithara::bufpool::BytePool::default(),
-            kithara::bufpool::SamplePool::default(),
-        )
-        .build(),
-    ))
-    .downloader(downloader)
-    .discriminator("t0")
-    .store(store)
-    .decoder(
-        kithara::audio::AudioDecoderConfig::builder()
-            .backend(backend)
-            .build(),
-    )
-    .initial_abr_mode(initial_mode)
-    .build();
+    let cfg: ResourceConfig<TestPools> =
+        ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid master URL"))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
+            .downloader(downloader)
+            .discriminator("t0")
+            .store(store)
+            .decoder(
+                kithara::audio::AudioDecoderConfig::builder()
+                    .backend(backend)
+                    .build(),
+            )
+            .initial_abr_mode(initial_mode)
+            .build();
 
     let resource = Resource::new(cfg)
         .await

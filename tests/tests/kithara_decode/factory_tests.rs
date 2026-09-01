@@ -11,7 +11,6 @@ use std::sync::atomic::AtomicU64;
 use kithara::platform::sync::Arc;
 use kithara::{
     self,
-    bufpool::{BytePool, SamplePool},
     decode::{DecodeError, DecoderBackend, DecoderConfig, DecoderFactory},
     resampler::NoResamplerBackend,
     stream::{AudioCodec, ContainerFormat, MediaInfo},
@@ -24,14 +23,14 @@ use kithara::{
     decode::{DecodeResult, Decoder, DecoderResamplerConfig},
     resampler::{ResamplerOptions, ResamplerQuality},
 };
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
+
+type TestDecoderConfig = DecoderConfig<NoResamplerBackend, TestPools>;
 
 #[kithara::test]
 fn decoder_config_default_uses_symphonia_backend() {
-    let config: DecoderConfig = DecoderConfig::<NoResamplerBackend>::builder()
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
-        .build();
+    let config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
     assert_eq!(config.backend, DecoderBackend::Symphonia);
     assert!(config.byte_len_handle.is_none());
 }
@@ -40,10 +39,7 @@ fn decoder_config_default_uses_symphonia_backend() {
 #[kithara::test]
 fn decoder_config_custom_apple_backend_preserves_fields() {
     let handle = Arc::new(AtomicU64::new(1000));
-    let mut config: DecoderConfig = DecoderConfig::<NoResamplerBackend>::builder()
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
-        .build();
+    let mut config: TestDecoderConfig = TestDecoderConfig::builder().pools(pools()).build();
     config.backend = DecoderBackend::Apple;
     config.byte_len_handle = Some(Arc::clone(&handle));
     config.hint = Some("mp3".to_string());
@@ -57,10 +53,7 @@ fn create_with_probe_without_hint_fails_with_probe_failed() {
     let result = DecoderFactory::create_with_probe(
         Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
         None,
-        DecoderConfig::<NoResamplerBackend>::builder()
-            .byte_pool(BytePool::default())
-            .sample_pool(SamplePool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     );
     assert!(matches!(result, Err(DecodeError::ProbeFailed)));
 }
@@ -70,10 +63,7 @@ fn create_with_probe_with_mp3_hint_succeeds() {
     let decoder = DecoderFactory::create_with_probe(
         Cursor::new(signal_mp3_track_sine440_187s().bytes().to_vec()),
         Some("mp3"),
-        DecoderConfig::<NoResamplerBackend>::builder()
-            .byte_pool(BytePool::default())
-            .sample_pool(SamplePool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     )
     .expect("BUG: mp3 hint should produce a decoder");
 
@@ -92,10 +82,7 @@ fn create_from_media_info_surfaces_error_without_native_probe_fallback() {
     let result = DecoderFactory::create_from_media_info(
         source,
         &media_info,
-        DecoderConfig::<NoResamplerBackend>::builder()
-            .byte_pool(BytePool::default())
-            .sample_pool(SamplePool::default())
-            .build(),
+        TestDecoderConfig::builder().pools(pools()).build(),
     );
     assert!(
         result.is_err(),
@@ -112,9 +99,8 @@ fn apple_mp3_decoder(
     media_info: &MediaInfo,
     resampler: Option<DecoderResamplerConfig<NoResamplerBackend>>,
 ) -> DecodeResult<Box<dyn Decoder>> {
-    let config = DecoderConfig::<NoResamplerBackend>::builder()
-        .byte_pool(BytePool::default())
-        .sample_pool(SamplePool::default())
+    let config = TestDecoderConfig::builder()
+        .pools(pools())
         .backend(DecoderBackend::Apple)
         .maybe_resampler(resampler)
         .build();

@@ -21,7 +21,7 @@ use kithara::{
         time::{Duration, Instant, sleep},
         tokio::sync::broadcast::error::TryRecvError,
     },
-    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig},
+    play::{PlayWorker, PlayWorkerConfig, Resource, ResourceConfig, ResourceSrc},
     stream::AudioCodec,
 };
 use kithara_integration_tests::{
@@ -33,6 +33,8 @@ use kithara_integration_tests::{
     offline::OfflinePlayer,
 };
 use num_traits::ToPrimitive;
+
+use crate::bufpool_ext::{TestPools, pools};
 
 const SAMPLE_RATE: u32 = 44_100;
 const CHANNELS: u16 = 2;
@@ -275,17 +277,11 @@ async fn prepare_player(
     let temp = TestTempDir::new();
     let bus = EventBus::new(1_024);
     let mut events = bus.subscribe();
-    let config: ResourceConfig = ResourceConfig::for_src(
-        ResourceConfig::parse_src(master_url.as_str()).expect("fixture master URL must be valid"),
+    let config: ResourceConfig<TestPools> = ResourceConfig::for_src(
+        ResourceSrc::parse(master_url.as_str()).expect("fixture master URL must be valid"),
     )
     .store(kithara_integration_tests::disk_asset_store(temp.path()))
-    .worker(PlayWorker::new(
-        PlayWorkerConfig::for_pools(
-            kithara::bufpool::BytePool::default(),
-            kithara::bufpool::SamplePool::default(),
-        )
-        .build(),
-    ))
+    .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
     .decoder(
         kithara::audio::AudioDecoderConfig::builder()
             .backend(backend)

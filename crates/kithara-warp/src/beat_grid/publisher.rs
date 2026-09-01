@@ -1,7 +1,14 @@
+use kithara_platform::maybe_send::{MaybeSend, MaybeSync};
+
 use super::{BeatGridId, BeatGridSnapshot};
 
 /// Live publisher of immutable beat-grid snapshots.
-pub trait BeatGrid: Send + Sync + 'static {
+///
+/// Implementors are grid owners, not grid data: a player owns its decoder and
+/// its reader, and on wasm those are bound to the worker that created them.
+/// The bound is therefore `MaybeSend`, which is `Send` on every threaded
+/// target and nothing on wasm.
+pub trait BeatGrid: MaybeSend + MaybeSync + 'static {
     /// Returns the stable identity of this grid owner.
     fn id(&self) -> BeatGridId;
 

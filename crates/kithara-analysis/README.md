@@ -49,17 +49,21 @@ consumer (currently `kithara-app`).
 - `TrackAnalysis` — self-contained published snapshot: token, revision, source
   axis, coverage, fingerprint, waveform, and beat artifact.
 - `Waveform` / `BeatArtifact` — analysis artifacts with versioned byte codecs.
-- `BlobError` — corruption/version error from the pure artifact and composite
-  byte codecs.
+- `BlobError` - format, corruption, and pooled restore errors from the artifact
+  and composite byte codecs.
 
 ## Ownership
 
 `kithara-analysis` consumes `kithara-audio`'s `AudioReader`, `AudioObserver`,
 and decoded-signal values. It does not own decoder lifecycle, source readiness,
-or playback scheduling. It uses the caller-injected `SamplePool` and
-`kithara-resampler::MonoStream` for detector-rate mono spans. Persisting a
-`TrackAnalysis` through `AssetStore`, choosing cache keys, and eviction policy
-remain application responsibilities.
+or playback scheduling. `AnalyzerBuilder<B, S>` receives the caller's typed
+`PoolRegion<S>`; the schema must implement `HasPool<f32>`, so a missing sample
+pool is rejected at compile time. Analysis scratch and
+`kithara-resampler::MonoStream` buffers therefore compete under the same hard
+region budget as the rest of the application instead of receiving a separate
+pool. Persisting a `TrackAnalysis` through `AssetStore`, choosing cache keys,
+and eviction policy remain application responsibilities. `write_to` appends to
+caller-owned `Vec<u8>` output.
 
 See [CONTEXT.md](CONTEXT.md) for the scheduling, ingest, waveform, and codec
 contracts.

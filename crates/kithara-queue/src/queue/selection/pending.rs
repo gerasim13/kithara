@@ -1,6 +1,7 @@
 #[cfg(any(test, feature = "probe"))]
 use std::sync::PoisonError;
 
+use kithara_bufpool::HasPool;
 #[cfg(any(test, feature = "probe"))]
 use kithara_events::{AdvanceReason, QueueEvent};
 use kithara_events::{TrackId, TrackStatus};
@@ -17,7 +18,10 @@ use crate::{
     track::TrackSource,
 };
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Synchronous-select counterpart to [`Self::override_pending_select`]:
     /// the user picked a `Loaded` track, so any other in-flight load is
     /// stale. Drop pending and mark the stale track [`TrackStatus::Cancelled`]
@@ -87,7 +91,7 @@ impl QueueControl {
     pub(in crate::queue) fn spawn_apply_after_load(
         &self,
         id: TrackId,
-        source: TrackSource,
+        source: TrackSource<S>,
         class: LoadClass,
     ) {
         let handle = self.loader.spawn_load(id, source, class);

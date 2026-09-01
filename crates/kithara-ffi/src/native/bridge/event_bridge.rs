@@ -1,18 +1,20 @@
-use kithara::play::{PlayerEvent, TimeControlStatus};
-use kithara_events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    thread::{JoinHandle, sleep, spawn},
-    time::Duration,
-    tokio,
-    tokio::sync::broadcast,
+use kithara::{
+    events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        thread::{JoinHandle, sleep, spawn},
+        time::Duration,
+        tokio,
+        tokio::sync::broadcast,
+    },
+    play::{PlayerEvent, TimeControlStatus},
 };
-use kithara_queue::QueueControl;
 
 use crate::{
     item::AudioPlayerItem,
     observer::{ItemObserver, PlayerObserver},
+    pools::FfiQueueControl,
     registry::ItemRegistry,
     types::{
         FfiAdvanceReason, FfiItemEvent, FfiItemStatus, FfiPlayerEvent, FfiRepeatMode, FfiTimeRange,
@@ -275,7 +277,7 @@ impl EventBridge {
     pub(crate) fn spawn(
         rx: EventReceiver,
         observer: Arc<dyn PlayerObserver>,
-        queue: QueueControl,
+        queue: FfiQueueControl,
         items: &Arc<Mutex<ItemRegistry>>,
         cancel: CancelToken,
     ) -> Self {
@@ -334,7 +336,7 @@ impl EventBridge {
     /// instead of an async task to avoid blocking the single-threaded
     /// tokio runtime with sync locks held inside the engine.
     fn spawn_time_thread(
-        queue: QueueControl,
+        queue: FfiQueueControl,
         observer: Arc<dyn PlayerObserver>,
         items: Arc<Mutex<ItemRegistry>>,
         last_current: Arc<Mutex<Option<TrackId>>>,
@@ -378,19 +380,19 @@ mod tests {
     use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
     use kithara::{
-        bufpool::Region,
-        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        events::{
+            AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
+            QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
+        },
+        platform::sync::{Arc, Mutex},
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        queue::{QueueConfig, test_utils::QueueProbe},
     };
-    use kithara_events::{
-        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
-        QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
-    };
-    use kithara_platform::sync::{Arc, Mutex};
-    use kithara_queue::{Queue, QueueConfig, test_utils::QueueProbe};
 
     use super::*;
     use crate::{
         observer::ItemObserver,
+        pools::{self, FfiQueue, FfiWorker},
         types::{FfiItemConfig, FfiItemEvent},
     };
 
@@ -821,7 +823,7 @@ mod tests {
             }
             false
         };
-        kithara_platform::time::timeout(Duration::from_millis(timeout_ms), wait)
+        kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
             .await
             .unwrap_or(false)
     }
@@ -833,18 +835,17 @@ mod tests {
     /// itself.
     #[kithara::test(tokio)]
     async fn polling_thread_reloads_a_consumed_track_after_eof() {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+        let worker = FfiWorker::new(
+            PlayWorkerConfig::builder(pools::build().expect("valid FFI pool policy")).build(),
         );
         let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = FfiQueue::new(QueueConfig::builder().player(player).build());
         let owner = crate::native::session::insert(queue)
             .expect("INVARIANT: the FFI test Host accepts its allocated Queue");
         let queue = owner.control().clone();
         let id = queue.register_for_test();
         queue.mark_played_for_test(id);
-        queue.set_repeat(kithara_queue::RepeatMode::One);
+        queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
 
         let mut events = queue.subscribe();

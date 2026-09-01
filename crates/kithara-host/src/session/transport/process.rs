@@ -105,6 +105,7 @@ fn publish_observation(store: &mut ProcStore) -> Result<(), TransportProcessErro
 impl TransportCommitState {
     pub(crate) const fn new(session_grid: SessionGridGeneration) -> Self {
         Self {
+            session_grid,
             active: None,
             anchor: None,
             boundary: None,
@@ -113,7 +114,6 @@ impl TransportCommitState {
             pending: None,
             reanchor_beat: None,
             snapshot: None,
-            session_grid,
         }
     }
 
@@ -256,6 +256,53 @@ impl TransportCommitState {
         self.completion = None;
     }
 
+    fn build_anchor(
+        frame: SessionFrame,
+        beat: SessionBeat,
+        tempo: Tempo,
+        sample_rate: NonZeroU32,
+    ) -> Result<SessionAnchor, TransportProcessError> {
+        let anchor = SessionAnchor::new(frame, beat, tempo.beats_per_second(), sample_rate)
+            .map_err(|_| TransportProcessError::InvalidBeatRange)?;
+        if anchor
+            .frame_at(beat)
+            .map_err(|_| TransportProcessError::InvalidBeatRange)?
+            != frame
+        {
+            return Err(TransportProcessError::InvalidBeatRange);
+        }
+        Ok(anchor)
+    }
+
+    fn converge_restart(
+        &mut self,
+        target: SessionGridGeneration,
+    ) -> Result<SessionGridGeneration, TransportProcessError> {
+        let target_stamp = target.stamp()?;
+        let current_stamp = self.session_grid.stamp()?;
+        if current_stamp.grid_id() != target_stamp.grid_id() {
+            return Err(TransportProcessError::SessionGridGenerationMismatch);
+        }
+        if self.session_grid.epoch() < target.epoch() {
+            let mut successor = self.session_grid;
+            successor.advance_restart()?;
+            if successor.epoch() != target.epoch() {
+                return Err(TransportProcessError::SessionGridGenerationMismatch);
+            }
+            self.restart()?;
+        } else if self.session_grid.epoch() > target.epoch() {
+            return Err(TransportProcessError::SessionGridGenerationMismatch);
+        }
+        let actual_stamp = self.session_grid.stamp()?;
+        if self.session_grid.epoch() == target.epoch()
+            && actual_stamp.revision() >= target_stamp.revision()
+        {
+            Ok(self.session_grid)
+        } else {
+            Err(TransportProcessError::SessionGridGenerationMismatch)
+        }
+    }
+
     fn next_boundary(
         info: &ProcInfo,
         active: Option<SessionTransportCommit>,
@@ -368,35 +415,6 @@ impl TransportCommitState {
         generation
     }
 
-    fn converge_restart(
-        &mut self,
-        target: SessionGridGeneration,
-    ) -> Result<SessionGridGeneration, TransportProcessError> {
-        let target_stamp = target.stamp()?;
-        let current_stamp = self.session_grid.stamp()?;
-        if current_stamp.grid_id() != target_stamp.grid_id() {
-            return Err(TransportProcessError::SessionGridGenerationMismatch);
-        }
-        if self.session_grid.epoch() < target.epoch() {
-            let mut successor = self.session_grid;
-            successor.advance_restart()?;
-            if successor.epoch() != target.epoch() {
-                return Err(TransportProcessError::SessionGridGenerationMismatch);
-            }
-            self.restart()?;
-        } else if self.session_grid.epoch() > target.epoch() {
-            return Err(TransportProcessError::SessionGridGenerationMismatch);
-        }
-        let actual_stamp = self.session_grid.stamp()?;
-        if self.session_grid.epoch() == target.epoch()
-            && actual_stamp.revision() >= target_stamp.revision()
-        {
-            Ok(self.session_grid)
-        } else {
-            Err(TransportProcessError::SessionGridGenerationMismatch)
-        }
-    }
-
     fn session_beats(
         &self,
         info: &ProcInfo,
@@ -423,24 +441,6 @@ impl TransportCommitState {
                 .map_err(|_| TransportProcessError::InvalidBeatRange)
         };
         Ok(Some(at(start)?..at(end)?))
-    }
-
-    fn build_anchor(
-        frame: SessionFrame,
-        beat: SessionBeat,
-        tempo: Tempo,
-        sample_rate: NonZeroU32,
-    ) -> Result<SessionAnchor, TransportProcessError> {
-        let anchor = SessionAnchor::new(frame, beat, tempo.beats_per_second(), sample_rate)
-            .map_err(|_| TransportProcessError::InvalidBeatRange)?;
-        if anchor
-            .frame_at(beat)
-            .map_err(|_| TransportProcessError::InvalidBeatRange)?
-            != frame
-        {
-            return Err(TransportProcessError::InvalidBeatRange);
-        }
-        Ok(anchor)
     }
 
     fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), TransportProcessError> {

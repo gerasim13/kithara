@@ -73,10 +73,6 @@ pub(crate) struct SymphoniaDemuxer {
     /// Replaced (and the previous packet dropped) on every successful
     /// `next_frame` call.
     current_packet: Option<Packet>,
-    /// Time base used to translate packet timestamps into wall-clock
-    /// [`std::time::Duration`].
-    time_base: Option<TimeBase>,
-    track_info: TrackInfo,
     /// Pending reason retained while recovering an interrupted packet read.
     /// Symphonia's `MediaSourceStream` may have consumed ring-buffered bytes
     /// into a packet that was then discarded (its read position advanced),
@@ -84,6 +80,10 @@ pub(crate) struct SymphoniaDemuxer {
     /// to `resume_ts`; if that seek also pends, the reason stays armed until
     /// recovery succeeds.
     resume_pending: Option<PendingReason>,
+    /// Time base used to translate packet timestamps into wall-clock
+    /// [`std::time::Duration`].
+    time_base: Option<TimeBase>,
+    track_info: TrackInfo,
     /// Native (timebase-unit) timestamp the *next* packet must start at.
     /// Authoritative across a `Pending`: set to the seek's `actual_ts` on
     /// seek and advanced to `pts + dur` after each successfully-returned
@@ -235,13 +235,11 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     #[kithara::probe]
+    #[kithara::measure(label = "decode.symphonia.demux")]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
-        // A previous read stranded bytes inside `MediaSourceStream` at a
-        // not-ready boundary (it consumed ring bytes into a packet that was
-        // then discarded, advancing its read position). Re-seek to the last
-        // authoritative timestamp so the stranded packet is re-read from its
-        // start instead of being skipped (CONTEXT.md "Read-ahead strand").
+        // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that
+        // was then discarded, advancing its read position).
         let resume_floor = if let Some(reason) = self.resume_pending {
             match self.reseek_to_resume() {
                 Ok(()) => {
@@ -270,18 +268,8 @@ impl Demuxer for SymphoniaDemuxer {
                     let Some(reason) = pending_reason(&error) else {
                         return Err(DecodeError::backend(error));
                     };
-                    // A `MediaSourceStream` read interrupted at a not-ready
-                    // boundary can strand bytes it already consumed from its
-                    // ring (read position advanced, no packet emitted). The
-                    // adapter's byte cursor doesn't reveal this — the consumed
-                    // bytes were buffered by an earlier read-ahead. Flag an
-                    // unconditional resume: the next call re-seeks to
-                    // `resume_ts` so the interrupted packet is re-read from
-                    // its start. Recovery filters an accurate seek's possible
-                    // one-packet backstep before returning PCM. Native MPA
-                    // readers instead restore their byte checkpoint before
-                    // surfacing the transient error; timestamp recovery would
-                    // discard that exact rollback.
+                    // WHY: A `MediaSourceStream` read interrupted at a not-ready boundary can strand bytes it already consumed from its ring (read
+                    // position advanced, no packet emitted).
                     if !matches!(
                         self.format_reader.format_info().format,
                         FORMAT_ID_MP1 | FORMAT_ID_MP2 | FORMAT_ID_MP3
@@ -297,8 +285,7 @@ impl Demuxer for SymphoniaDemuxer {
             if resume_floor.is_some_and(|floor| packet_ends_at_or_before(&packet, floor)) {
                 continue;
             }
-            // This packet was emitted cleanly; the next one must start at
-            // its end. Track the resume point in native timebase units so a
+            // WHY: This packet was emitted cleanly; the next one must start at its end. Track the resume point in native timebase units so a
             // strand re-seek round-trips exactly to this boundary.
             self.resume_ts = packet
                 .pts
@@ -340,8 +327,8 @@ impl Demuxer for SymphoniaDemuxer {
 
         let landed_at = self.ts_to_duration(seeked.actual_ts);
 
-        // A fresh seek defines the authoritative resume point and clears any
-        // pending strand recovery left over from the prior read position.
+        // WHY: A fresh seek defines the authoritative resume point and clears any pending strand recovery left over from the prior read
+        // position.
         self.resume_ts = seeked.actual_ts.get();
         self.resume_pending = None;
 
@@ -561,11 +548,8 @@ fn classify_seek_err(err: &SymphoniaError) -> DecodeError {
                     .is_some_and(|reason| matches!(reason, PendingReason::SeekPending))
             }) =>
         {
-            // The typed payload (`StreamPending`: pos/phase/epoch/flushing)
-            // dies here — `Interrupted` is a unit variant, and the seek
-            // recovery above can only log the name. A retry loop measured at
-            // hundreds of attempts per millisecond was undiagnosable because
-            // every attempt said "Interrupted" and nothing said by what.
+            // WHY: The typed payload (`StreamPending`: pos/phase/epoch/flushing) dies here - `Interrupted` is a unit variant, and the seek
+            // recovery above can only log the name.
             tracing::debug!(error = ?io_err, "demuxer seek interrupted");
             DecodeError::Interrupted
         }

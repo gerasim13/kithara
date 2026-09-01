@@ -22,19 +22,19 @@ pub const UI_CONTRACT: u32 = 1;
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct PackageDoc {
-    /// The ui contract the package was written against.
-    pub contract: u32,
-    pub id: DocId,
-    /// Whether what this package does not hold is read from the one below it.
-    #[serde(default)]
-    pub inherits: bool,
-    pub schema: String,
     /// The file behind each role the package answers for.
     pub screens: BTreeMap<ScreenRole, String>,
+    pub id: DocId,
     #[serde(default)]
     pub skin: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+    pub schema: String,
+    /// Whether what this package does not hold is read from the one below it.
+    #[serde(default)]
+    pub inherits: bool,
+    /// The ui contract the package was written against.
+    pub contract: u32,
     pub version: u32,
 }
 

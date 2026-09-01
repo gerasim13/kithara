@@ -1,12 +1,4 @@
-//! What this run of the gallery was asked for.
-//!
-//! Every debug capability the gallery carries is named here as a flag, so
-//! `--help` is the list of them and a run states on its own command line what
-//! it did. Each capability's parameters are flags of their own; the constants
-//! in [`Consts`] are only what those flags default to.
-
 use std::{
-    fmt::{self, Display},
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -47,7 +39,8 @@ pub(crate) const WINDOW: Extent = Extent {
 };
 
 /// A size written the way a person writes one: `1300x720`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, derive_more::Display)]
+#[display("{}x{}", width, height)]
 pub(crate) struct Extent {
     pub(crate) height: f32,
     pub(crate) width: f32,
@@ -56,12 +49,6 @@ pub(crate) struct Extent {
 impl From<Extent> for Size {
     fn from(extent: Extent) -> Self {
         Self::new(extent.width, extent.height)
-    }
-}
-
-impl Display for Extent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}x{}", self.width, self.height)
     }
 }
 
@@ -95,22 +82,27 @@ fn side(text: &str) -> Result<f32, String> {
 #[derive(Clone, Debug, Parser)]
 #[command(name = "gallery", about = "The Kithara UI gallery")]
 pub(crate) struct Args {
+    /// The smallest size the window can be dragged to, so a page can be shown
+    /// the room its adaptive and revealed cells answer.
+    #[arg(long, value_name = "WxH", default_value_t = MIN_WINDOW)]
+    pub(crate) min_size: Extent,
+
+    /// The size the gallery opens and photographs at.
+    #[arg(long, value_name = "WxH", default_value_t = WINDOW)]
+    pub(crate) size: Extent,
+
     /// Which host draws the gallery.
     #[arg(long, value_enum, default_value_t)]
     pub(crate) host: Host,
 
-    /// Photograph the pages into this folder instead of showing them.
-    #[arg(long, value_name = "DIR")]
-    pub(crate) shoot: Option<PathBuf>,
+    /// Fail the comparison where a page differs by more than this file allows.
+    /// Without one the comparison only reports.
+    #[arg(long, value_name = "FILE", requires = "compare")]
+    pub(crate) budget: Option<PathBuf>,
 
-    /// Photograph through a window on a display rather than off-screen. The
-    /// immediate host only: the retained one photographs off-screen either way.
-    #[arg(long, requires = "shoot")]
-    pub(crate) windowed: bool,
-
-    /// A page to photograph, repeated. Every page when none is named.
-    #[arg(long = "page", value_name = "NAME", requires = "shoot")]
-    pub(crate) pages: Vec<Shot>,
+    /// Compare two folders of photographs, writing the differences to a third.
+    #[arg(long, num_args = 3, value_names = ["A", "B", "OUT"])]
+    pub(crate) compare: Option<Vec<PathBuf>>,
 
     /// Photograph the one control at this document path instead of whole
     /// pages. Takes one `--page`, and the host that keeps what it draws.
@@ -122,32 +114,18 @@ pub(crate) struct Args {
     )]
     pub(crate) element: Option<String>,
 
-    /// How many photographs to take of each page. More than one shows a page
-    /// that moves at more than the moment it opens at.
-    #[arg(long, value_name = "N", default_value_t = 1, requires = "shoot")]
-    pub(crate) photos: usize,
+    /// Photograph the pages into this folder instead of showing them.
+    #[arg(long, value_name = "DIR")]
+    pub(crate) shoot: Option<PathBuf>,
 
-    /// How many frames run between two photographs of a page.
-    #[arg(long, value_name = "N", default_value_t = 0, requires = "shoot")]
-    pub(crate) steps: usize,
+    /// A page to photograph, repeated. Every page when none is named.
+    #[arg(long = "page", value_name = "NAME", requires = "shoot")]
+    pub(crate) pages: Vec<Shot>,
 
-    /// Compare two folders of photographs, writing the differences to a third.
-    #[arg(long, num_args = 3, value_names = ["A", "B", "OUT"])]
-    pub(crate) compare: Option<Vec<PathBuf>>,
-
-    /// Fail the comparison where a page differs by more than this file allows.
-    /// Without one the comparison only reports.
-    #[arg(long, value_name = "FILE", requires = "compare")]
-    pub(crate) budget: Option<PathBuf>,
-
-    /// The size the gallery opens and photographs at.
-    #[arg(long, value_name = "WxH", default_value_t = WINDOW)]
-    pub(crate) size: Extent,
-
-    /// The smallest size the window can be dragged to, so a page can be shown
-    /// the room its adaptive and revealed cells answer.
-    #[arg(long, value_name = "WxH", default_value_t = MIN_WINDOW)]
-    pub(crate) min_size: Extent,
+    /// Photograph through a window on a display rather than off-screen. The
+    /// immediate host only: the retained one photographs off-screen either way.
+    #[arg(long, requires = "shoot")]
+    pub(crate) windowed: bool,
 
     /// The scale a photograph is taken at. One means a page's pixels are its
     /// points, so a difference between two sets is a difference in what was
@@ -158,6 +136,15 @@ pub(crate) struct Args {
     /// How long one frame of a moving page takes.
     #[arg(long, value_name = "MS", default_value_t = Consts::STRESS_TICK_MS)]
     pub(crate) tick: u64,
+
+    /// How many photographs to take of each page. More than one shows a page
+    /// that moves at more than the moment it opens at.
+    #[arg(long, value_name = "N", default_value_t = 1, requires = "shoot")]
+    pub(crate) photos: usize,
+
+    /// How many frames run between two photographs of a page.
+    #[arg(long, value_name = "N", default_value_t = 0, requires = "shoot")]
+    pub(crate) steps: usize,
 }
 
 impl Args {

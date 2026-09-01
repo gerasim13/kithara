@@ -4,24 +4,21 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use kithara::{
     abr::AbrMode,
+    drm::{KeyRequest, KeyRequestFactory},
     events::ScopeLabel,
     hls::{KeyOptions, KeyProcessorRegistry},
     net::{HttpClient, NetOptions},
-    play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig,
-        effects::eq::generate_log_spaced_bands,
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
     },
+    play::{
+        PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSrc,
+        effects::eq::generate_log_spaced_bands,
+        policy::{DomainKeyPolicy, DomainKeyRule},
+    },
+    queue::{QueueConfig, QueueError, RepeatMode, Transition},
     stream::dl::{Downloader, DownloaderConfig},
-};
-use kithara_assets::BytePool;
-use kithara_drm::{KeyRequest, KeyRequestFactory};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-};
-use kithara_play::policy::{DomainKeyPolicy, DomainKeyRule};
-use kithara_queue::{
-    Queue, QueueConfig, QueueControl, QueueError, RepeatMode, TrackSource, Transition,
 };
 
 use super::salt;
@@ -31,6 +28,7 @@ use crate::{
     event_bridge::EventBridge,
     item::AudioPlayerItem,
     observer::{AUTH_TOKEN_HEADER, FfiKeyProcessor, PlayerObserver, SALT_HEADER, SeekCallback},
+    pools::{FfiQueue, FfiQueueControl, FfiResourceConfig, FfiTrackSource, FfiWorker},
     registry::ItemRegistry,
     types::{FfiAbrMode, FfiError, FfiKeyRule, FfiPlayerSnapshot, FfiPlayerStatus, FfiRepeatMode},
 };
@@ -38,7 +36,7 @@ use crate::{
 fn build_processor_closure(
     processor: Arc<dyn FfiKeyProcessor>,
     salt: String,
-) -> kithara_drm::KeyProcessor {
+) -> kithara::drm::KeyProcessor {
     Arc::new(move |key: Bytes| {
         Ok(Bytes::from(
             processor.process_key(key.to_vec(), salt.clone()),
@@ -49,12 +47,9 @@ fn build_processor_closure(
 /// Build the default `NetOptions`. The `dev` feature enables the
 /// `insecure` flag for local test servers; release builds always
 /// validate TLS.
-fn default_net_options(byte_pool: BytePool) -> NetOptions {
+fn default_net_options() -> NetOptions {
     const INSECURE: bool = cfg!(feature = "dev");
-    NetOptions::builder()
-        .is_insecure(INSECURE)
-        .byte_pool(byte_pool)
-        .build()
+    NetOptions::builder().is_insecure(INSECURE).build()
 }
 
 fn build_processor_rule(rule: FfiKeyRule) -> DomainKeyRule {
@@ -157,8 +152,8 @@ pub(crate) struct NativeInner {
     /// the same `AudioPlayerItem` instances that Swift handed in (preserves
     /// identity + active per-item observer wiring).
     items: Arc<Mutex<ItemRegistry>>,
-    queue_owner: kithara::host::HostOwned<Queue>,
-    queue: QueueControl,
+    queue_owner: kithara::host::HostOwned<FfiQueue>,
+    queue: FfiQueueControl,
     /// Rust-owned asset store shared by the queue and every item resource.
     store: Arc<FfiAssetStore>,
     /// Cancellation root for player-owned work; the shared store owns a
@@ -194,9 +189,9 @@ impl NativeInner {
             eq_band_count,
         } = config;
         let cancel = CancelToken::root();
-        let region = store.region().clone();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        let pools = store.pools().clone();
+        let worker = FfiWorker::new(
+            PlayWorkerConfig::builder(pools.clone())
                 .cancel(cancel.child())
                 .build(),
         );
@@ -212,12 +207,12 @@ impl NativeInner {
             .player(player)
             .store(queue_store)
             .build();
-        let queue_owner = super::session::insert(Queue::new(queue_config))
+        let queue_owner = super::session::insert(FfiQueue::new(queue_config))
             .expect("INVARIANT: the process Host must accept a freshly allocated Queue");
         let queue = queue_owner.control().clone();
-        let net = default_net_options(region.byte_pool());
+        let net = default_net_options();
         let downloader = Downloader::new(
-            DownloaderConfig::for_client(HttpClient::new(net, cancel.child()))
+            DownloaderConfig::for_client(HttpClient::new(net, pools, cancel.child()))
                 .runtime(crate::FFI_RUNTIME.clone())
                 .build(),
         );
@@ -571,14 +566,14 @@ impl NativeInner {
     }
 }
 
-/// Build a [`TrackSource::Config`] from the item's fields. Also attaches
+/// Build an [`FfiTrackSource::Config`] from the item's fields. Also attaches
 /// a scoped bus so the item's per-resource event bridge captures events
 /// published during `Resource::new` (`VariantsDiscovered` fires
 /// synchronously during stream open — a late subscriber would miss it).
 fn build_source_for_item(
     inner: &NativeInner,
     item: &Arc<AudioPlayerItem>,
-) -> Result<TrackSource, FfiError> {
+) -> Result<FfiTrackSource, FfiError> {
     let scoped = inner.queue.bus().scoped_labeled(ScopeLabel {
         track: Some(item.track_id()),
         ..ScopeLabel::default()
@@ -587,10 +582,10 @@ fn build_source_for_item(
         FfiAbrMode::Auto => AbrMode::Auto(None),
         FfiAbrMode::Manual { variant_index } => AbrMode::manual(variant_index as usize),
     });
-    let src = ResourceConfig::parse_src(item.url()).map_err(|e| FfiError::InvalidArgument {
+    let src = ResourceSrc::parse(item.url()).map_err(|e| FfiError::InvalidArgument {
         reason: e.to_string(),
     })?;
-    let config = ResourceConfig::for_src(src)
+    let config = FfiResourceConfig::for_src(src)
         .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
@@ -601,7 +596,7 @@ fn build_source_for_item(
         .build();
     *item.bus.lock() = Some(scoped);
 
-    Ok(TrackSource::Config(Box::new(config)))
+    Ok(FfiTrackSource::Config(Box::new(config)))
 }
 
 /// Merge player-wide headers (auth, salt, …) into the item's own headers.
@@ -671,7 +666,7 @@ mod tests {
 
     #[kithara::test]
     fn shared_store_outlives_each_player() {
-        let store = Arc::new(FfiAssetStore::default());
+        let store = Arc::new(FfiAssetStore::for_test());
         let cancel = store.cancel_token();
         let config = |store| FfiPlayerConfig {
             store,
@@ -734,7 +729,7 @@ mod tests {
 
     #[kithara::test]
     fn runtime_key_rules_append_in_registration_order() {
-        let inner = NativeInner::new(FfiPlayerConfig::default());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.setup_hls_aes_with_rule(tagged_rule(1, "first-salt", &["keys.example.com"]));
         inner.setup_hls_aes_with_rule(tagged_rule(2, "second-salt", &["*"]));
 
@@ -767,7 +762,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_writes_auth_token_into_player_headers() {
-        let inner = NativeInner::new(FfiPlayerConfig::default());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.setup_network("token-123".to_string());
         let token = inner
             .player_headers
@@ -778,7 +773,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_network_clears_auth_token_when_empty() {
-        let inner = NativeInner::new(FfiPlayerConfig::default());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.setup_network("token-123".to_string());
         inner.setup_network(String::new());
         assert!(!inner.player_headers.contains_key(AUTH_TOKEN_HEADER));
@@ -786,7 +781,7 @@ mod tests {
 
     #[kithara::test]
     fn setup_hls_aes_registers_wildcard_rule_with_prod_salt() {
-        let inner = NativeInner::new(FfiPlayerConfig::default());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
         // Registration must not run the processor: an unstubbed `Unimock`
         // panics if `setup_hls_aes` calls it.
         inner.setup_hls_aes(Arc::new(Unimock::new(())));
@@ -812,7 +807,7 @@ mod tests {
 
     #[kithara::test]
     fn update_peak_bitrate_remembers_both_limits() {
-        let inner = NativeInner::new(FfiPlayerConfig::default());
+        let inner = NativeInner::new(FfiPlayerConfig::for_test());
         inner.update_peak_bitrate(2_000_000.0, 500_000.0);
         let snapshot = *inner.peak_bitrate.lock();
         assert!((snapshot.wifi_bps - 2_000_000.0).abs() < f64::EPSILON);

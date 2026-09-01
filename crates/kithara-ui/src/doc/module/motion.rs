@@ -17,10 +17,10 @@ use crate::geom::{Pt, Transform};
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct Pose {
-    /// Where the anchor lands, in the box the container placed.
-    pub position: (f32, f32),
     /// The point of the object that `position` places, from the box's corner.
     pub anchor: (f32, f32),
+    /// Where the anchor lands, in the box the container placed.
+    pub position: (f32, f32),
     /// Scale factors, `1.0` being unscaled.
     pub scale: (f32, f32),
     /// Clockwise rotation in degrees, because y grows downward on a screen.
@@ -39,24 +39,6 @@ impl Default for Pose {
 }
 
 impl Pose {
-    /// Whether this leaves its object where the container put it, so a caller
-    /// can skip the work entirely and — more importantly — so a document with
-    /// no objects in it draws exactly the list it drew before.
-    #[must_use]
-    pub fn is_still(&self) -> bool {
-        *self == Self::default()
-    }
-
-    /// Whether this does anything but move its object.
-    ///
-    /// A move applies to a whole subtree, because every box in it shifts by the
-    /// same vector. A turn or a scale does not: each box would turn about its
-    /// own corner.
-    #[must_use]
-    pub fn turns(&self) -> bool {
-        self.rotation != 0.0 || self.scale != (1.0, 1.0)
-    }
-
     /// This pose a fraction of the way toward `to`.
     ///
     /// `phase` is clamped to `0.0..=1.0`, so a model that overshoots settles at
@@ -76,6 +58,14 @@ impl Pose {
         }
     }
 
+    /// Whether this leaves its object where the container put it, so a caller
+    /// can skip the work entirely and — more importantly — so a document with
+    /// no objects in it draws exactly the list it drew before.
+    #[must_use]
+    pub fn is_still(&self) -> bool {
+        *self == Self::default()
+    }
+
     /// This pose as one transform, in the coordinates the box was handed in.
     #[must_use]
     pub fn matrix(&self) -> Transform {
@@ -92,6 +82,16 @@ impl Pose {
             x: self.position.0 + self.anchor.0,
             y: self.position.1 + self.anchor.1,
         }))
+    }
+
+    /// Whether this does anything but move its object.
+    ///
+    /// A move applies to a whole subtree, because every box in it shifts by the
+    /// same vector. A turn or a scale does not: each box would turn about its
+    /// own corner.
+    #[must_use]
+    pub fn turns(&self) -> bool {
+        self.rotation != 0.0 || self.scale != (1.0, 1.0)
     }
 }
 
@@ -145,12 +145,6 @@ impl Easing {
     }
 }
 
-/// Halvings of the parameter range when solving a curve for its phase.
-///
-/// The range starts one unit wide and halves each step, so twenty-four of them
-/// land inside what an `f32` can tell apart and a twenty-fifth changes nothing.
-const CURVE_STEPS: u32 = 24;
-
 /// One axis of a cubic Bézier running `0.0` to `1.0`, at parameter `t`.
 fn curve(first: f32, second: f32, t: f32) -> f32 {
     let rest = 1.0 - t;
@@ -164,6 +158,12 @@ fn curve(first: f32, second: f32, t: f32) -> f32 {
 /// axis only ever rises with its parameter, which is what lets plain halving
 /// find it without ever diverging.
 fn parameter_at(phase: f32, x1: f32, x2: f32) -> f32 {
+    /// Halvings of the parameter range when solving a curve for its phase.
+    ///
+    /// The range starts one unit wide and halves each step, so twenty-four of them
+    /// land inside what an `f32` can tell apart and a twenty-fifth changes nothing.
+    const CURVE_STEPS: u32 = 24;
+
     let (x1, x2) = (x1.clamp(0.0, 1.0), x2.clamp(0.0, 1.0));
     let (mut low, mut high) = (0.0, 1.0);
     for _ in 0..CURVE_STEPS {
@@ -189,36 +189,20 @@ fn parameter_at(phase: f32, x1: f32, x2: f32) -> f32 {
 pub struct Motion<B> {
     /// The endpoint answering with the seconds this motion has been running.
     pub clock: B,
-    /// How long one pass along the track takes, in seconds.
-    pub duration: f32,
-    /// What happens at the far end.
-    #[serde(default)]
-    pub repeat: Repeat,
     /// The curve travelled, rather than the pace.
     #[serde(default)]
     pub easing: Easing,
+    /// What happens at the far end.
+    #[serde(default)]
+    pub repeat: Repeat,
+    /// How long one pass along the track takes, in seconds.
+    pub duration: f32,
 }
 
 impl<B> Motion<B> {
-    /// This motion with its clock written another way, the timing untouched.
-    ///
-    /// A document names its clock by an endpoint reference and an expanded one
-    /// by an interned binding; the duration, curve and repeat are the same
-    /// numbers in both, and this is the one place that says so.
-    pub fn with_clock<C>(&self, clock: C) -> Motion<C> {
-        Motion {
-            clock,
-            duration: self.duration,
-            repeat: self.repeat,
-            easing: self.easing,
-        }
-    }
-
     /// How far along its track an object is, `seconds` after this began.
     #[must_use]
     pub fn phase_at(&self, seconds: f32) -> f32 {
-        // A motion with no length, or one whose length is not a number, is
-        // already over rather than dividing by it.
         if self.duration <= 0.0 || !self.duration.is_finite() {
             return 1.0;
         }
@@ -237,6 +221,20 @@ impl<B> Motion<B> {
         };
         self.easing.at(along)
     }
+
+    /// This motion with its clock written another way, the timing untouched.
+    ///
+    /// A document names its clock by an endpoint reference and an expanded one
+    /// by an interned binding; the duration, curve and repeat are the same
+    /// numbers in both, and this is the one place that says so.
+    pub fn with_clock<C>(&self, clock: C) -> Motion<C> {
+        Motion {
+            clock,
+            duration: self.duration,
+            repeat: self.repeat,
+            easing: self.easing,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -250,10 +248,10 @@ mod tests {
     /// the arithmetic that turns its seconds into a phase.
     fn motion(duration: f32, repeat: Repeat, easing: Easing) -> Motion<()> {
         Motion {
-            clock: (),
             duration,
             repeat,
             easing,
+            clock: (),
         }
     }
 

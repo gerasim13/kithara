@@ -7,10 +7,10 @@ use crate::{
 /// host that has no skin at paint time still draws the same bar.
 #[derive(Clone, Copy)]
 pub(crate) struct Bar {
-    inset: f32,
-    min_length: f32,
     thumb_color: Rgba,
     track_color: Rgba,
+    inset: f32,
+    min_length: f32,
     width: f32,
 }
 

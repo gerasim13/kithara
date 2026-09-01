@@ -1,14 +1,3 @@
-//! Photographs the gallery through iced with no window and no display.
-//!
-//! Asked for by `--shoot <dir>`. It writes the same pages, the same `frame.txt`
-//! and the same images as the window capture, so any two of the three sets —
-//! window, offscreen, masonry — compare on equal terms.
-//!
-//! Parity with the masonry capture is the point: that one has always been
-//! headless, and while this one needed a display the two could only be compared
-//! on a developer's machine. The window capture stays, and its job becomes
-//! checking that this path draws what a window draws.
-
 use std::path::Path;
 
 use iced::{Theme, window};
@@ -29,13 +18,13 @@ pub(super) fn run(args: &Args, dir: &Path) -> Result<usize, String> {
 
 /// The gallery drawn by iced into a texture, one page at a time.
 struct Iced {
-    frame: Geometry,
     gallery: Gallery,
+    frame: Geometry,
     photographer: Photographer,
+    theme: Theme,
     /// The pixels of the page last photographed. Held here because the walk
     /// borrows them rather than owning storage it cannot size.
     pixels: Vec<u8>,
-    theme: Theme,
 }
 
 impl Iced {
@@ -46,9 +35,9 @@ impl Iced {
         Ok(Self {
             frame,
             gallery,
+            theme,
             photographer: Photographer::new()?,
             pixels: Vec::new(),
-            theme,
         })
     }
 }
@@ -60,15 +49,6 @@ impl Stage for Iced {
         self.frame
     }
 
-    fn turn(&mut self, page: &Shot) -> Result<(), String> {
-        self.gallery.select(*page);
-        Ok(())
-    }
-
-    fn tick(&mut self) {
-        self.gallery.tick();
-    }
-
     fn shoot(&mut self) -> Result<&[u8], String> {
         self.pixels = self.photographer.shoot(
             view(&self.gallery, window::Id::unique()),
@@ -76,5 +56,14 @@ impl Stage for Iced {
             self.frame,
         )?;
         Ok(&self.pixels)
+    }
+
+    fn tick(&mut self) {
+        self.gallery.tick();
+    }
+
+    fn turn(&mut self, page: &Shot) -> Result<(), String> {
+        self.gallery.select(*page);
+        Ok(())
     }
 }

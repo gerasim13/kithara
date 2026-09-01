@@ -14,6 +14,7 @@ use axum::{
 use bytes::Bytes;
 use futures::{StreamExt, stream::iter as stream_iter};
 use kithara_abr::{Abr, AbrSettings, AbrState};
+use kithara_bufpool::testing::pools as test_pools;
 use kithara_events::{
     AbrEvent, AbrMode, AbrReason, DownloaderEvent, Envelope, Event, EventBus, VariantDuration,
     VariantIndex, VariantInfo,
@@ -59,9 +60,9 @@ impl Abr for MockPeer {
 impl Peer for MockPeer {}
 
 struct ScheduledAbrPeer {
-    cancel: CancelToken,
     state: Arc<AbrState>,
     wake: Arc<Notify>,
+    cancel: CancelToken,
 }
 
 impl Abr for ScheduledAbrPeer {
@@ -96,7 +97,11 @@ impl Abr for ScheduledAbrPeer {
 impl Peer for ScheduledAbrPeer {}
 
 fn test_client() -> HttpClient {
-    HttpClient::new(NetOptions::default(), CancelToken::never())
+    test_client_with_options(NetOptions::default())
+}
+
+fn test_client_with_options(options: NetOptions) -> HttpClient {
+    HttpClient::new(options, test_pools(), CancelToken::never())
 }
 
 fn test_config() -> DownloaderConfig {
@@ -386,9 +391,7 @@ async fn peer_handle_execute_returns_error_on_unreachable() {
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build();
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
     let handle = dl.register(Arc::new(MockPeer::new()));
 
     let h2 = handle.clone();
@@ -700,8 +703,8 @@ async fn poll_next_respects_max_concurrent() {
     let dl = Downloader::new(config);
     let gate = CompletionGate::new(TOTAL_CMDS);
     let handle = dl.register(Arc::new(FloodPeer {
-        cancel: CancelToken::never(),
         url,
+        cancel: CancelToken::never(),
         remaining: Mutex::new(TOTAL_CMDS),
         gate: Arc::clone(&gate),
     }));
@@ -772,11 +775,10 @@ async fn shared_client_keepalive_bounds_connection_count() {
     });
 
     let url = Url::parse(&format!("http://{addr}/head")).expect("url");
-    let shared_client = HttpClient::new(
+    let shared_client = test_client_with_options(
         NetOptions::builder()
             .pool_max_idle_per_host(PARALLEL_DLS * MAX_CONCURRENT)
             .build(),
-        CancelToken::never(),
     );
 
     let mut total_ok = 0;
@@ -952,9 +954,9 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 /// tag when the response arrives. `priority()` reads the shared
 /// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
-    cancel: CancelToken,
     gate: Arc<CompletionGate>,
     seek: Arc<SeekState>,
+    cancel: CancelToken,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
@@ -971,10 +973,10 @@ impl TaggedPriorityPeer {
         completion_log: &CompletionLog,
     ) -> Self {
         Self {
-            cancel: CancelToken::never(),
             tag,
             seek,
             url,
+            cancel: CancelToken::never(),
             remaining: Mutex::new(cmds),
             gate: Arc::clone(gate),
             completion_log: Arc::clone(completion_log),
@@ -1131,9 +1133,7 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();
@@ -1190,9 +1190,7 @@ async fn stalled_body_publishes_resume_and_exhaustion_events() {
                 .build(),
         )
         .build();
-    let dl = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
-    );
+    let dl = Downloader::new(DownloaderConfig::for_client(test_client_with_options(net)).build());
     let root = EventBus::new(64);
     let scoped = root.scoped();
     let mut rx = scoped.subscribe();

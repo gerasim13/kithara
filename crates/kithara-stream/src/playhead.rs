@@ -91,7 +91,6 @@ impl PlayheadState {
     const NO_DURATION: u64 = u64::MAX;
 
     #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
     pub const fn new() -> Self {
         Self {
             position_ns: AtomicU64::new(0),

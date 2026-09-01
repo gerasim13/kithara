@@ -40,7 +40,7 @@ pub(crate) fn hosted_control_plan(
         read.and_then(|binding| ctx.read(binding)),
         read,
         ctx.scope(read),
-        Resolving { ctx, skin },
+        Resolving { skin, ctx },
     )
 }
 
@@ -62,9 +62,9 @@ pub(super) struct TableState {
 }
 
 pub(super) struct TableSource {
-    columns: Vec<TableColumn>,
     columns_state: Option<(String, String)>,
     rows: Option<String>,
+    columns: Vec<TableColumn>,
 }
 
 #[derive(Clone, Default)]
@@ -162,53 +162,33 @@ impl HostedControlPlan {
 }
 
 impl TreePlan {
+    fn append_targets<'a>(
+        &'a self,
+        bounds: Rect,
+        point: Option<Pt>,
+        engine: &Engine,
+        targets: &mut Vec<Target<'a>>,
+    ) {
+        if self.view(engine, point, bounds).is_none() {
+            return;
+        }
+        let picture = self.picture();
+        targets.push(Target::new(
+            &self.search_path,
+            Hit::new(point, picture.search_input_bounds(bounds)),
+        ));
+        targets.push(Target::new(
+            &self.path,
+            Hit::new(point, picture.rows_bounds(bounds)),
+        ));
+    }
+
     pub(crate) fn bind_projection(&self, projection: Weak<dyn TreeProjection>) {
         let _ = self.state.projection.get_or_init(|| projection);
     }
 
     pub(super) fn bind_source(&self, source: TreeSource) {
         let _ = self.state.source.get_or_init(|| source);
-    }
-
-    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
-        let Some(source) = self.state.source.get() else {
-            self.report_missing("tree source");
-            return false;
-        };
-        let skin = self.picture.borrow().skin().clone();
-        let next = source.picture(ctx, &skin);
-        if *self.picture.borrow() == next {
-            return false;
-        }
-        *self.picture.borrow_mut() = next;
-        if let Some(projection) = self.projection() {
-            projection.reconcile();
-        }
-        true
-    }
-
-    pub(crate) fn drawn(&self) -> Option<TreeDrawn> {
-        self.projection()
-            .and_then(|projection| projection.project(self))
-    }
-
-    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
-        self.picture.borrow()
-    }
-
-    pub(crate) fn view(
-        &self,
-        engine: &Engine,
-        point: Option<Pt>,
-        bounds: Rect,
-    ) -> Option<TreeDrawn> {
-        match self.complete_view(engine, point, bounds) {
-            Ok(view) => Some(view),
-            Err(missing) => {
-                self.report_missing(missing.entry);
-                None
-            }
-        }
     }
 
     fn complete_view<'a>(
@@ -233,12 +213,38 @@ impl TreePlan {
         })
     }
 
+    pub(crate) fn drawn(&self) -> Option<TreeDrawn> {
+        self.projection()
+            .and_then(|projection| projection.project(self))
+    }
+
+    pub(crate) fn picture(&self) -> Ref<'_, Tree> {
+        self.picture.borrow()
+    }
+
     fn projection(&self) -> Option<Rc<dyn TreeProjection>> {
         let projection = self.state.projection.get().and_then(Weak::upgrade);
         if projection.is_none() {
             self.report_missing("retained projection");
         }
         projection
+    }
+
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        let Some(source) = self.state.source.get() else {
+            self.report_missing("tree source");
+            return false;
+        };
+        let skin = self.picture.borrow().skin().clone();
+        let next = source.picture(ctx, &skin);
+        if *self.picture.borrow() == next {
+            return false;
+        }
+        *self.picture.borrow_mut() = next;
+        if let Some(projection) = self.projection() {
+            projection.reconcile();
+        }
+        true
     }
 
     fn report_missing(&self, entry: &str) {
@@ -254,105 +260,12 @@ impl TreePlan {
         );
     }
 
-    fn append_targets<'a>(
-        &'a self,
-        bounds: Rect,
-        point: Option<Pt>,
+    pub(crate) fn view(
+        &self,
         engine: &Engine,
-        targets: &mut Vec<Target<'a>>,
-    ) {
-        if self.view(engine, point, bounds).is_none() {
-            return;
-        }
-        let picture = self.picture();
-        targets.push(Target::new(
-            &self.search_path,
-            Hit::new(point, picture.search_input_bounds(bounds)),
-        ));
-        targets.push(Target::new(
-            &self.path,
-            Hit::new(point, picture.rows_bounds(bounds)),
-        ));
-    }
-}
-
-impl TablePlan {
-    #[cfg(test)]
-    pub(crate) fn fixture(
-        path: &str,
-        rows: Vec<TableRowData>,
-        columns: Vec<ColumnLayout>,
-        skin: &Skin,
-    ) -> Self {
-        let declared = columns.iter().map(|column| column.column.clone()).collect();
-        let plan = Self::new(path, rows, columns, skin);
-        plan.bind_source(TableSource::new(declared, None, None));
-        plan
-    }
-
-    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
-        if !self.refresh_picture(ctx) {
-            return false;
-        }
-        if let Some(projection) = self.projection() {
-            projection.reconcile();
-        }
-        true
-    }
-
-    pub(crate) fn bind_projection(&self, projection: Weak<dyn TableProjection>) {
-        let _ = self.state.projection.get_or_init(|| projection);
-    }
-
-    pub(super) fn bind_source(&self, source: TableSource) {
-        let _ = self.state.source.get_or_init(|| source);
-    }
-
-    fn refresh_picture(&self, ctx: Ctx<'_, '_>) -> bool {
-        let Some(source) = self.state.source.get() else {
-            self.report_missing("track-list source");
-            return false;
-        };
-        let skin = self.picture.borrow().skin().clone();
-        let next = source.picture(ctx, &skin);
-        if *self.picture.borrow() == next {
-            return false;
-        }
-        *self.picture.borrow_mut() = next;
-        true
-    }
-
-    pub(crate) fn drawn(&self) -> Option<Drawn> {
-        self.projection()
-            .and_then(|projection| projection.project(self))
-    }
-
-    pub(crate) fn picture(&self) -> Ref<'_, TableFace> {
-        self.picture.borrow()
-    }
-
-    fn projection(&self) -> Option<Rc<dyn TableProjection>> {
-        let projection = self.state.projection.get().and_then(Weak::upgrade);
-        if projection.is_none() {
-            self.report_missing("retained projection");
-        }
-        projection
-    }
-
-    pub(super) fn report_missing(&self, entry: &str) {
-        let mut reported = self.state.reported_missing.borrow_mut();
-        if reported.iter().any(|candidate| candidate == entry) {
-            return;
-        }
-        reported.push(entry.to_owned());
-        tracing::error!(
-            control_path = self.path,
-            engine_entry = entry,
-            "Table projection is incomplete"
-        );
-    }
-
-    pub(crate) fn view(&self, engine: &Engine, point: Option<Pt>, bounds: Rect) -> Option<Drawn> {
+        point: Option<Pt>,
+        bounds: Rect,
+    ) -> Option<TreeDrawn> {
         match self.complete_view(engine, point, bounds) {
             Ok(view) => Some(view),
             Err(missing) => {
@@ -361,61 +274,9 @@ impl TablePlan {
             }
         }
     }
+}
 
-    fn complete_view<'a>(
-        &'a self,
-        engine: &Engine,
-        point: Option<Pt>,
-        bounds: Rect,
-    ) -> Result<Drawn, MissingEntry<'a>> {
-        let picture = self.picture();
-        let mut columns = picture.columns().to_vec();
-        let resizable = columns
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| column_resizable(&columns, *index))
-            .map(|(index, column)| (index, self.divider_path(&column.column)))
-            .collect::<Vec<(usize, &str)>>();
-        for (index, path) in resizable {
-            let width = engine
-                .column_divider_value(path)
-                .ok_or(MissingEntry { entry: path })?;
-            columns[index].width = width;
-        }
-        let overflows = table_overflows(&columns, bounds.w);
-        let horizontal = if overflows {
-            engine
-                .scroll_offset(&self.horizontal_path)
-                .ok_or(MissingEntry {
-                    entry: &self.horizontal_path,
-                })?
-        } else {
-            0.0
-        };
-        let vertical = engine
-            .scroll_offset(&self.path)
-            .ok_or(MissingEntry { entry: &self.path })?;
-        let pressed = engine.item_pressed(&self.path).ok_or(MissingEntry {
-            entry: &self.row_target,
-        })?;
-        let hovered = table_row_at(
-            point,
-            bounds,
-            &columns,
-            picture.rows().len(),
-            horizontal,
-            vertical,
-            picture.skin(),
-        );
-        Ok(Drawn {
-            columns,
-            horizontal,
-            hovered,
-            pressed,
-            vertical,
-        })
-    }
-
+impl TablePlan {
     fn append_targets<'a>(
         &'a self,
         bounds: Rect,
@@ -464,6 +325,145 @@ impl TablePlan {
             }
         }
     }
+
+    pub(crate) fn bind_projection(&self, projection: Weak<dyn TableProjection>) {
+        let _ = self.state.projection.get_or_init(|| projection);
+    }
+
+    pub(super) fn bind_source(&self, source: TableSource) {
+        let _ = self.state.source.get_or_init(|| source);
+    }
+
+    fn complete_view<'a>(
+        &'a self,
+        engine: &Engine,
+        point: Option<Pt>,
+        bounds: Rect,
+    ) -> Result<Drawn, MissingEntry<'a>> {
+        let picture = self.picture();
+        let mut columns = picture.columns().to_vec();
+        let resizable = columns
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| column_resizable(&columns, *index))
+            .map(|(index, column)| (index, self.divider_path(&column.column)))
+            .collect::<Vec<(usize, &str)>>();
+        for (index, path) in resizable {
+            let width = engine
+                .column_divider_value(path)
+                .ok_or(MissingEntry { entry: path })?;
+            columns[index].width = width;
+        }
+        let overflows = table_overflows(&columns, bounds.w);
+        let horizontal = if overflows {
+            engine
+                .scroll_offset(&self.horizontal_path)
+                .ok_or(MissingEntry {
+                    entry: &self.horizontal_path,
+                })?
+        } else {
+            0.0
+        };
+        let vertical = engine
+            .scroll_offset(&self.path)
+            .ok_or(MissingEntry { entry: &self.path })?;
+        let pressed = engine.item_pressed(&self.path).ok_or(MissingEntry {
+            entry: &self.row_target,
+        })?;
+        let hovered = table_row_at(
+            point,
+            bounds,
+            &columns,
+            picture.rows().len(),
+            horizontal,
+            vertical,
+            picture.skin(),
+        );
+        Ok(Drawn {
+            hovered,
+            pressed,
+            columns,
+            horizontal,
+            vertical,
+        })
+    }
+
+    pub(crate) fn drawn(&self) -> Option<Drawn> {
+        self.projection()
+            .and_then(|projection| projection.project(self))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        path: &str,
+        rows: Vec<TableRowData>,
+        columns: Vec<ColumnLayout>,
+        skin: &Skin,
+    ) -> Self {
+        let declared = columns.iter().map(|column| column.column.clone()).collect();
+        let plan = Self::new(path, rows, columns, skin);
+        plan.bind_source(TableSource::new(declared, None, None));
+        plan
+    }
+
+    pub(crate) fn picture(&self) -> Ref<'_, TableFace> {
+        self.picture.borrow()
+    }
+
+    fn projection(&self) -> Option<Rc<dyn TableProjection>> {
+        let projection = self.state.projection.get().and_then(Weak::upgrade);
+        if projection.is_none() {
+            self.report_missing("retained projection");
+        }
+        projection
+    }
+
+    pub(crate) fn refresh(&self, ctx: Ctx<'_, '_>) -> bool {
+        if !self.refresh_picture(ctx) {
+            return false;
+        }
+        if let Some(projection) = self.projection() {
+            projection.reconcile();
+        }
+        true
+    }
+
+    fn refresh_picture(&self, ctx: Ctx<'_, '_>) -> bool {
+        let Some(source) = self.state.source.get() else {
+            self.report_missing("track-list source");
+            return false;
+        };
+        let skin = self.picture.borrow().skin().clone();
+        let next = source.picture(ctx, &skin);
+        if *self.picture.borrow() == next {
+            return false;
+        }
+        *self.picture.borrow_mut() = next;
+        true
+    }
+
+    pub(super) fn report_missing(&self, entry: &str) {
+        let mut reported = self.state.reported_missing.borrow_mut();
+        if reported.iter().any(|candidate| candidate == entry) {
+            return;
+        }
+        reported.push(entry.to_owned());
+        tracing::error!(
+            control_path = self.path,
+            engine_entry = entry,
+            "Table projection is incomplete"
+        );
+    }
+
+    pub(crate) fn view(&self, engine: &Engine, point: Option<Pt>, bounds: Rect) -> Option<Drawn> {
+        match self.complete_view(engine, point, bounds) {
+            Ok(view) => Some(view),
+            Err(missing) => {
+                self.report_missing(missing.entry);
+                None
+            }
+        }
+    }
 }
 
 impl TableSource {
@@ -473,9 +473,9 @@ impl TableSource {
         rows: Option<String>,
     ) -> Self {
         Self {
-            columns,
             columns_state,
             rows,
+            columns,
         }
     }
 

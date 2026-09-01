@@ -55,6 +55,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 kithara-assets = { path = "." }
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-drm = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 

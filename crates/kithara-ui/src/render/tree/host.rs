@@ -77,14 +77,6 @@ impl State {
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<State>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(State::new(&self.layout))
-    }
-
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.child)]
     }
@@ -97,11 +89,25 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         tree.diff_children(std::slice::from_ref(&self.child));
     }
 
-    delegate::delegate! {
-        to self.child.as_widget() {
-            fn size(&self) -> Size<Length>;
-            fn size_hint(&self) -> Size<Length>;
-        }
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.child.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
     }
 
     fn layout(
@@ -153,6 +159,82 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
             &state.engine,
         );
         node
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let interaction = interaction(
+            &tree.state.downcast_ref::<State>().engine,
+            &self.layout,
+            layout,
+            cursor,
+        );
+        if interaction == mouse::Interaction::None {
+            self.child.as_widget().mouse_interaction(
+                &tree.children[0],
+                layout,
+                cursor,
+                viewport,
+                renderer,
+            )
+        } else {
+            interaction
+        }
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        self.child
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut Tree,
+        layout: Layout<'a>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+        let layout_tree = &self.layout;
+        let state = tree.state.downcast_mut::<State>();
+        let open = layout_tree
+            .picker_snapshots(&state.engine)
+            .iter()
+            .any(|(_, snapshot)| snapshot.open);
+        let child = self.child.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )?;
+        if !open {
+            return Some(child);
+        }
+        Some(hosted_picker_overlay(child, move |event, cursor, shell| {
+            route_open_picker(layout_tree, &mut state.engine, layout, event, cursor, shell)
+        }))
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(State::new(&self.layout))
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<State>()
     }
 
     fn update(
@@ -318,93 +400,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Host<'_> {
         }
     }
 
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        let interaction = interaction(
-            &tree.state.downcast_ref::<State>().engine,
-            &self.layout,
-            layout,
-            cursor,
-        );
-        if interaction == mouse::Interaction::None {
-            self.child.as_widget().mouse_interaction(
-                &tree.children[0],
-                layout,
-                cursor,
-                viewport,
-                renderer,
-            )
-        } else {
-            interaction
+    delegate::delegate! {
+        to self.child.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
         }
-    }
-
-    fn draw(
-        &self,
-        tree: &Tree,
-        renderer: &mut Renderer,
-        theme: &Theme,
-        style: &renderer::Style,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-    ) {
-        self.child.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            style,
-            layout,
-            cursor,
-            viewport,
-        );
-    }
-
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        renderer: &Renderer,
-        operation: &mut dyn Operation,
-    ) {
-        self.child
-            .as_widget_mut()
-            .operate(&mut tree.children[0], layout, renderer, operation);
-    }
-
-    fn overlay<'a>(
-        &'a mut self,
-        tree: &'a mut Tree,
-        layout: Layout<'a>,
-        renderer: &Renderer,
-        viewport: &Rectangle,
-        translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
-        let layout_tree = &self.layout;
-        let state = tree.state.downcast_mut::<State>();
-        let open = layout_tree
-            .picker_snapshots(&state.engine)
-            .iter()
-            .any(|(_, snapshot)| snapshot.open);
-        let child = self.child.as_widget_mut().overlay(
-            &mut tree.children[0],
-            layout,
-            renderer,
-            viewport,
-            translation,
-        )?;
-        if !open {
-            return Some(child);
-        }
-        Some(hosted_picker_overlay(child, move |event, cursor, shell| {
-            route_open_picker(layout_tree, &mut state.engine, layout, event, cursor, shell)
-        }))
     }
 }
 
@@ -635,10 +635,6 @@ mod tests {
     impl WindowLayerProgram for OverlapWindowProgram {
         type State = ();
 
-        fn size(&self) -> SolveSize<SolveLength> {
-            SolveSize::new(SolveLength::Fill, SolveLength::Fill)
-        }
-
         fn layer(
             &self,
             _state: &(),
@@ -658,6 +654,10 @@ mod tests {
 
         fn resources(&self) -> Option<&TextResources> {
             None
+        }
+
+        fn size(&self) -> SolveSize<SolveLength> {
+            SolveSize::new(SolveLength::Fill, SolveLength::Fill)
         }
     }
 
@@ -769,8 +769,8 @@ mod tests {
         scalar: EndpointDesc,
         scoped_scalar: EndpointDesc,
         stereo: EndpointDesc,
-        text: EndpointDesc,
         table: EndpointDesc,
+        text: EndpointDesc,
         tree: EndpointDesc,
         trigger: EndpointDesc,
         waveform: EndpointDesc,
@@ -866,9 +866,9 @@ mod tests {
     }
 
     struct FixtureReads {
+        query: String,
         gain: f64,
         progress: f64,
-        query: String,
     }
 
     impl Default for FixtureReads {
@@ -1499,7 +1499,9 @@ mod tests {
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Reveal { child, .. }
-            | ExpandedNode::Scroll { child, .. } => {
+            | ExpandedNode::Scroll { child, .. }
+            | ExpandedNode::Placed { child, .. }
+            | ExpandedNode::Pressable { child, .. } => {
                 claimed_components(child, components);
             }
             ExpandedNode::Adaptive { base, steps, .. } => {
@@ -1555,9 +1557,6 @@ mod tests {
                 _ => {}
             },
             ExpandedNode::Popover { anchor, .. } => claimed_components(anchor, components),
-            ExpandedNode::Placed { child, .. } | ExpandedNode::Pressable { child, .. } => {
-                claimed_components(child, components);
-            }
         }
     }
 
@@ -1728,8 +1727,8 @@ mod tests {
     fn full_module_header_activation_toggles_the_module_directly() {
         let module = "app-deck";
         let spec = ModuleHost {
-            instance: "deck-a",
             module,
+            instance: "deck-a",
             chrome: ChromeStyle::Full,
             collapsed: false,
             drop: true,
@@ -2008,7 +2007,7 @@ mod tests {
             .downcast_ref::<State>()
             .engine
             .scroll_offset("tree/browser")
-            .unwrap_or_else(|| panic!("the retained tree must own an offset"));
+            .expect("the retained tree must own an offset");
         assert!(bottom > 0.0);
         assert!(
             messages.is_empty(),
@@ -2072,7 +2071,7 @@ mod tests {
             .downcast_ref::<State>()
             .engine
             .scroll_offset("tree/browser")
-            .unwrap_or_else(|| panic!("the retained offset must survive the upward wheel"));
+            .expect("the retained offset must survive the upward wheel");
         let expected = ((offset + 1.0) / builtin::skin().tree.row_height)
             .floor()
             .as_();
@@ -2186,14 +2185,13 @@ mod tests {
         let mut engine = Engine::default();
         engine.reconcile([Descriptor::vertical_vu(path.to_owned())]);
 
-        let input = iced_interact::input(&press)
-            .unwrap_or_else(|| panic!("a left press must become portable input"));
+        let input = iced_interact::input(&press).expect("a left press must become portable input");
         let target = Target::new(path, iced_interact::hit(bounds, cursor));
         let emission = engine
             .handle(input, &[target], Instant::now())
-            .unwrap_or_else(|| panic!("a press on the meter must publish"));
+            .expect("a press on the meter must publish");
         let action = engine_event(&emission.path, emission.child, emission.outcome)
-            .unwrap_or_else(|| panic!("the published value must cross the iced boundary"));
+            .expect("the published value must cross the iced boundary");
 
         assert_eq!(
             action.into_inner().0,
@@ -2444,7 +2442,7 @@ mod tests {
         let stereo = targets
             .iter()
             .find(|target| target.path == "atoms/meters/stereo")
-            .unwrap_or_else(|| panic!("the hosted stereo meter target must exist"));
+            .expect("the hosted stereo meter target must exist");
         let area = stereo.hit.area();
         assert_eq!((area.w, area.h), (64.0, 22.0));
         let expected_path = stereo.path.to_owned();
@@ -2889,7 +2887,7 @@ mod tests {
         let target = targets
             .iter()
             .find(|target| target.path == "cells/beat")
-            .unwrap_or_else(|| panic!("the hosted segmented target must exist"));
+            .expect("the hosted segmented target must exist");
         let area = target.hit.area();
         assert_eq!((area.w, area.h), (220.0, 26.0));
         let cursor = Cursor::Available(Point::new(area.x + area.w * 0.625, area.y + area.h / 2.0));
@@ -3204,7 +3202,7 @@ mod tests {
         let picker = targets
             .iter()
             .find(|target| target.path == "library2/context")
-            .unwrap_or_else(|| panic!("the ContextBar picker target must exist"));
+            .expect("the ContextBar picker target must exist");
         assert_eq!(picker.hit.area().h, builtin::skin().tree.scope_item_height);
         assert_eq!(
             active_descriptors(&hosted, &targets).len(),
@@ -3561,7 +3559,7 @@ mod tests {
                 Layout::new(&node)
                     .children()
                     .next()
-                    .unwrap_or_else(|| panic!("the stack must retain the hosted document")),
+                    .expect("the stack must retain the hosted document"),
                 Cursor::Unavailable,
             )
             .into_iter()
@@ -4014,7 +4012,7 @@ mod tests {
         let target = targets
             .iter()
             .find(|target| target.path == "modules-tabs/deck-micro")
-            .unwrap_or_else(|| panic!("the hosted DECK MICRO target must exist"));
+            .expect("the hosted DECK MICRO target must exist");
         let area = target.hit.area();
         assert!((area.w - 94.0).abs() < 0.001);
         assert_eq!(area.h, builtin::skin().tab_large.height);
@@ -4130,7 +4128,7 @@ mod tests {
         let target = targets
             .iter()
             .find(|target| target.path == "gallery/buttons/item")
-            .unwrap_or_else(|| panic!("the hosted buttons nav item target must exist"));
+            .expect("the hosted buttons nav item target must exist");
         let area = target.hit.area();
         assert_eq!((area.w, area.h), (198.0, builtin::skin().nav.item_height));
         let cursor = Cursor::Available(Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0));
@@ -4326,11 +4324,6 @@ mod tests {
 
     /// What one drag out of a scrolling box did.
     struct DraggedOut {
-        /// Whether the press inside the box armed the meter there. Without this
-        /// the move that follows measures nothing.
-        armed: bool,
-        /// What that move published.
-        published: Vec<UiEvent>,
         /// Where the pointer ended up.
         at: Point,
         /// The meter's own box, which reaches past the box that scrolls it.
@@ -4338,6 +4331,11 @@ mod tests {
         /// The box of the knob below the scrolling one, which is what the
         /// pointer ended up over.
         other: Rect,
+        /// What that move published.
+        published: Vec<UiEvent>,
+        /// Whether the press inside the box armed the meter there. Without this
+        /// the move that follows measures nothing.
+        armed: bool,
     }
 
     /// Presses the meter inside the scrolling box, then drags the pointer down
@@ -4386,11 +4384,11 @@ mod tests {
                 drop(shell);
 
                 DraggedOut {
-                    armed,
-                    published,
                     at,
                     held,
                     other,
+                    published,
+                    armed,
                 }
             },
         )
@@ -4772,11 +4770,11 @@ mod tests {
         let high_a = targets
             .iter()
             .find(|target| target.path == "mixer/a/high")
-            .unwrap_or_else(|| panic!("strip A high target must exist"));
+            .expect("strip A high target must exist");
         let high_b = targets
             .iter()
             .find(|target| target.path == "mixer/b/high")
-            .unwrap_or_else(|| panic!("strip B high target must exist"));
+            .expect("strip B high target must exist");
         let center = |target: &Target<'_>| {
             let area = target.hit.area();
             Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0)
@@ -4894,7 +4892,7 @@ mod tests {
             .targets(Layout::new(&node), Cursor::Unavailable)
             .into_iter()
             .find(|target| target.path == "mixer/a/high")
-            .unwrap_or_else(|| panic!("strip A high target must exist"));
+            .expect("strip A high target must exist");
         let area = high.hit.area();
         let start = Point::new(area.x + area.w / 2.0, area.y + area.h / 2.0);
         let mut clipboard = clipboard::Null;

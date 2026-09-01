@@ -1,14 +1,16 @@
 use std::rc::Rc;
 
 use iced::{Element, Size};
-use kithara_platform::time::Duration;
-use kithara_ui::{
-    compile::{CompiledUi, compile},
-    error::UiDocError,
-    ids::SourceUri,
-    render::{Clock, Walk, tree},
-    source::UiConfig,
-    view::ViewState,
+use kithara::{
+    platform::time::Duration,
+    ui::{
+        compile::{CompiledUi, compile},
+        error::UiDocError,
+        ids::SourceUri,
+        render::{Clock, Walk, tree},
+        source::UiConfig,
+        view::ViewState,
+    },
 };
 
 use super::{
@@ -22,14 +24,14 @@ use crate::gui::{app::Kithara, message::Message, reads::ReadRoot};
 /// deck layouts are compiled once; the top bar picks which one renders.
 pub(crate) struct AppUi {
     pub(crate) cache: ViewCache,
-    /// This host's own reading of time, advanced once per tick so a document
-    /// bound to it animates without the application keeping a timer of its own.
-    clock: Clock,
-    dual: CompiledUi,
     /// The package every page here was read, dressed and worded by. A host
     /// that has to build its own window reads it from here rather than
     /// loading a second copy.
     pub(in crate::gui) package: Rc<Package>,
+    /// This host's own reading of time, advanced once per tick so a document
+    /// bound to it animates without the application keeping a timer of its own.
+    clock: Clock,
+    dual: CompiledUi,
     single: CompiledUi,
     /// State the documents keep for themselves, which no endpoint of this
     /// application declares or answers.
@@ -38,9 +40,6 @@ pub(crate) struct AppUi {
 
 impl AppUi {
     pub(crate) fn new(package: Rc<Package>) -> Result<Self, UiDocError> {
-        // One configuration for both screens: it carries the draw pools, and a
-        // family per screen would keep two sets of retained buffers where the
-        // host only ever draws one layout at a time.
         let doc = UiConfig::default();
         let view = ViewState::default();
         Ok(Self {
@@ -56,13 +55,6 @@ impl AppUi {
     /// Moves this host's clock on by one tick of `step`.
     pub(crate) fn advance(&mut self, step: Duration) {
         self.clock = self.clock.advance(step);
-    }
-
-    pub(crate) fn window_min(&self) -> Size {
-        Size::new(
-            self.single.min.w.min().max(self.dual.min.w.min()),
-            self.single.min.h.min().max(self.dual.min.h.min()),
-        )
     }
 
     const fn compiled(&self, layout: DeckLayout) -> &CompiledUi {
@@ -85,6 +77,13 @@ impl AppUi {
             view.apply(state, write);
         }
     }
+
+    pub(crate) fn window_min(&self) -> Size {
+        Size::new(
+            self.single.min.w.min().max(self.dual.min.w.min()),
+            self.single.min.h.min().max(self.dual.min.h.min()),
+        )
+    }
 }
 
 const fn screen<'a>(
@@ -104,7 +103,7 @@ pub(in crate::gui) fn compile_ui(layout: DeckLayout) -> Result<CompiledUi, UiDoc
         Package::load(None)?.as_ref(),
         layout,
         &UiConfig::default(),
-        &kithara_ui::view::EMPTY,
+        &kithara::ui::view::EMPTY,
     )
 }
 

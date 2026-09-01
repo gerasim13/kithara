@@ -65,17 +65,17 @@ pub enum SegmentError {
 #[non_exhaustive]
 pub struct MapSegment {
     #[field(get, vis = "pub(crate)", copy)]
-    start_position: MapPosition,
+    end_beat: Beat,
+    #[field(get, vis = "pub(crate)", copy)]
+    start_beat: Beat,
+    end_evidence: BeatEvidence,
+    start_evidence: BeatEvidence,
+    end_uncertainty: FrameUncertainty,
+    start_uncertainty: FrameUncertainty,
     #[field(get, vis = "pub(crate)", copy)]
     end_position: MapPosition,
     #[field(get, vis = "pub(crate)", copy)]
-    start_beat: Beat,
-    #[field(get, vis = "pub(crate)", copy)]
-    end_beat: Beat,
-    start_evidence: BeatEvidence,
-    end_evidence: BeatEvidence,
-    start_uncertainty: FrameUncertainty,
-    end_uncertainty: FrameUncertainty,
+    start_position: MapPosition,
     facts: SegmentFacts,
 }
 
@@ -114,39 +114,16 @@ impl MapSegment {
             endpoint: SegmentEndpoint::End,
         })?;
         Ok(Self {
-            start_position: start.position,
-            end_position: end.position,
             start_beat,
             end_beat,
+            facts,
+            start_position: start.position,
+            end_position: end.position,
             start_evidence: start.evidence,
             end_evidence: end.evidence,
             start_uncertainty: start.uncertainty,
             end_uncertainty: end.uncertainty,
-            facts,
         })
-    }
-
-    /// Returns the inclusive position region represented by this segment.
-    #[must_use]
-    pub const fn region(&self) -> MapRegion {
-        MapRegion {
-            start: self.start_position,
-            end: self.end_position,
-        }
-    }
-
-    pub(crate) const fn kind(&self) -> AxisKind {
-        self.start_position.kind()
-    }
-
-    pub(crate) fn contains_position(&self, position: MapPosition) -> bool {
-        position.kind() == self.kind()
-            && position >= self.start_position
-            && position <= self.end_position
-    }
-
-    pub(crate) fn contains_beat(&self, beat: Beat) -> bool {
-        beat >= self.start_beat && beat <= self.end_beat
     }
 
     pub(crate) fn beat_at(
@@ -170,6 +147,28 @@ impl MapSegment {
         Beat::new(beat)
             .ok()
             .map(|value| (value, self.facts.evidence, self.facts.uncertainty))
+    }
+
+    pub(crate) fn contains_beat(&self, beat: Beat) -> bool {
+        beat >= self.start_beat && beat <= self.end_beat
+    }
+
+    pub(crate) fn contains_position(&self, position: MapPosition) -> bool {
+        position.kind() == self.kind()
+            && position >= self.start_position
+            && position <= self.end_position
+    }
+
+    pub(crate) const fn kind(&self) -> AxisKind {
+        self.start_position.kind()
+    }
+
+    pub(crate) fn meter_at(&self, beat: Beat) -> Option<(Meter, BeatEvidence, FrameUncertainty)> {
+        if !self.contains_beat(beat) {
+            return None;
+        }
+        let facts = self.facts.meter?;
+        Some((facts.meter, facts.evidence, facts.uncertainty))
     }
 
     pub(crate) fn position_at(
@@ -199,6 +198,23 @@ impl MapSegment {
             .map(|value| (value, self.facts.evidence, self.facts.uncertainty))
     }
 
+    /// Returns the inclusive position region represented by this segment.
+    #[must_use]
+    pub const fn region(&self) -> MapRegion {
+        MapRegion {
+            start: self.start_position,
+            end: self.end_position,
+        }
+    }
+
+    fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
+        let frames =
+            f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
+        let beats = f64::from(self.end_beat) - f64::from(self.start_beat);
+        let bpm = beats * f64::from(axis.sample_rate().get()) * SECONDS_PER_MINUTE / frames;
+        BeatsPerMinute::try_from(bpm).ok()
+    }
+
     pub(crate) fn tempo_at(
         &self,
         axis: MapAxis,
@@ -210,22 +226,6 @@ impl MapSegment {
         self.tempo(axis)
             .map(|tempo| (tempo, self.facts.evidence, self.facts.uncertainty))
     }
-
-    fn tempo(&self, axis: MapAxis) -> Option<BeatsPerMinute> {
-        let frames =
-            f64::try_from(self.end_position).ok()? - f64::try_from(self.start_position).ok()?;
-        let beats = f64::from(self.end_beat) - f64::from(self.start_beat);
-        let bpm = beats * f64::from(axis.sample_rate().get()) * SECONDS_PER_MINUTE / frames;
-        BeatsPerMinute::try_from(bpm).ok()
-    }
-
-    pub(crate) fn meter_at(&self, beat: Beat) -> Option<(Meter, BeatEvidence, FrameUncertainty)> {
-        if !self.contains_beat(beat) {
-            return None;
-        }
-        let facts = self.facts.meter?;
-        Some((facts.meter, facts.evidence, facts.uncertainty))
-    }
 }
 
 /// An inclusive grid-native position region.
@@ -233,12 +233,12 @@ impl MapSegment {
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct MapRegion {
-    /// Returns the first position in the region.
-    #[field(get, copy)]
-    start: MapPosition,
     /// Returns the last position in the region.
     #[field(get, copy)]
     end: MapPosition,
+    /// Returns the first position in the region.
+    #[field(get, copy)]
+    start: MapPosition,
 }
 
 /// An inclusive native-position region is not ordered on one coordinate axis.
@@ -254,6 +254,12 @@ pub enum MapRegionError {
 }
 
 impl MapRegion {
+    /// Creates an inclusive native-position region from trusted ordered facts.
+    #[must_use]
+    pub(crate) const fn between(start: MapPosition, end: MapPosition) -> Self {
+        Self { end, start }
+    }
+
     /// Creates a region containing one native position.
     #[must_use]
     pub const fn point(position: MapPosition) -> Self {
@@ -261,12 +267,6 @@ impl MapRegion {
             start: position,
             end: position,
         }
-    }
-
-    /// Creates an inclusive native-position region from trusted ordered facts.
-    #[must_use]
-    pub(crate) const fn between(start: MapPosition, end: MapPosition) -> Self {
-        Self { start, end }
     }
 }
 
@@ -281,7 +281,7 @@ impl TryFrom<RangeInclusive<MapPosition>> for MapRegion {
         if start > end {
             return Err(MapRegionError::Reversed);
         }
-        Ok(Self { start, end })
+        Ok(Self { end, start })
     }
 }
 
@@ -293,11 +293,11 @@ impl TryFrom<RangeInclusive<MapPosition>> for MapRegion {
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct SegmentSet {
-    #[field(get, vis = "pub(crate)", copy)]
-    axis: MapAxis,
     /// Returns all validated segments in coordinate order.
     #[field(get)]
     segments: Arc<[MapSegment]>,
+    #[field(get, vis = "pub(crate)", copy)]
+    axis: MapAxis,
 }
 
 impl SegmentSet {
@@ -353,16 +353,6 @@ impl SegmentSet {
         })
     }
 
-    pub(crate) fn by_position(&self, position: MapPosition) -> Option<&MapSegment> {
-        let upper = self
-            .segments
-            .partition_point(|segment| segment.start_position() <= position);
-        upper
-            .checked_sub(1)
-            .and_then(|index| self.segments.get(index))
-            .filter(|segment| segment.contains_position(position))
-    }
-
     pub(crate) fn by_beat(&self, beat: Beat) -> Option<&MapSegment> {
         let upper = self
             .segments
@@ -371,6 +361,16 @@ impl SegmentSet {
             .checked_sub(1)
             .and_then(|index| self.segments.get(index))
             .filter(|segment| segment.contains_beat(beat))
+    }
+
+    pub(crate) fn by_position(&self, position: MapPosition) -> Option<&MapSegment> {
+        let upper = self
+            .segments
+            .partition_point(|segment| segment.start_position() <= position);
+        upper
+            .checked_sub(1)
+            .and_then(|index| self.segments.get(index))
+            .filter(|segment| segment.contains_position(position))
     }
 
     pub(crate) fn uncovered_region(&self, position: MapPosition) -> MapRegion {

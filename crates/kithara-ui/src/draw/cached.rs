@@ -21,10 +21,6 @@ impl<K: PartialEq + Default, V> Default for CachedValue<K, V> {
 }
 
 impl<K: PartialEq + Default, V> CachedValue<K, V> {
-    pub(crate) fn value(&self) -> Option<&V> {
-        self.value.as_ref()
-    }
-
     /// Takes the new pair when the old one no longer answers. A key that still
     /// holds keeps the value it was paired with, so a caller that re-derived
     /// the same key cannot replace a good value with a stale one.
@@ -33,6 +29,10 @@ impl<K: PartialEq + Default, V> CachedValue<K, V> {
             self.key = key;
             self.value = value;
         }
+    }
+
+    pub(crate) fn value(&self) -> Option<&V> {
+        self.value.as_ref()
     }
 }
 

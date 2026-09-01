@@ -39,17 +39,15 @@ impl<F: Future> Future for Participating<F> {
         let this = self.project();
         this.gate.store_runtime_waker(cx.waker());
         if !this.gate.try_enter_poll() {
-            // Duplicate/stale schedule: the task is parked (or done), holding no
-            // slot. Stay pending without re-polling the inner future — the real
+            // WHY: Duplicate/stale schedule: the task is parked (or done), holding no slot. Stay pending without re-polling the inner future -
+            // the real
             return Poll::Pending;
         }
         let gate_waker = Waker::from(Arc::clone(this.gate));
         let mut gate_cx = Context::from_waker(&gate_waker);
-        // Mark this OS thread as inside an async poll for the duration of the
-        // inner poll, so a synchronous wrapped wait taken from within it (e.g. a
-        // blocking `recv` reaching the engine) is treated as a BRIDGED wait —
-        // releasing this task's `active_async` slot while it blocks instead of
-        // pinning the clock. Drops (restoring the depth) even if the poll unwinds.
+        // WHY: Mark this OS thread as inside an async poll for the duration of the inner poll, so a synchronous wrapped wait taken from
+        // within it (e.g. a blocking `recv` reaching the engine) is treated as a BRIDGED wait - releasing this task's `active_async` slot
+        // while it blocks instead of pinning the clock.
         let outcome = {
             let _poll_guard = credit::AsyncPollGuard::enter(this.gate.id(), this.gate.loc());
             this.fut.poll(&mut gate_cx)

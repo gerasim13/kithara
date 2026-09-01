@@ -29,21 +29,6 @@ impl MemResolver {
 }
 
 impl SourceResolver for MemResolver {
-    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
-        let uri = resolve_uri(base, rel)?;
-        let origin = base.cloned().unwrap_or_else(|| uri.clone());
-        self.files
-            .get(&uri.0)
-            .map(|text| LoadedSource {
-                uri,
-                text: text.clone(),
-            })
-            .ok_or_else(|| UiDocError::NotFound {
-                origin,
-                rel: rel.to_owned(),
-            })
-    }
-
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         let uri = resolve_uri(base, rel)?;
         let origin = base.cloned().unwrap_or_else(|| uri.clone());
@@ -52,6 +37,21 @@ impl SourceResolver for MemResolver {
             .map(|bytes| LoadedBytes {
                 uri,
                 bytes: Arc::clone(bytes),
+            })
+            .ok_or_else(|| UiDocError::NotFound {
+                origin,
+                rel: rel.to_owned(),
+            })
+    }
+
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
+        let uri = resolve_uri(base, rel)?;
+        let origin = base.cloned().unwrap_or_else(|| uri.clone());
+        self.files
+            .get(&uri.0)
+            .map(|text| LoadedSource {
+                uri,
+                text: text.clone(),
             })
             .ok_or_else(|| UiDocError::NotFound {
                 origin,

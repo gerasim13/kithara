@@ -28,13 +28,6 @@ pub enum TextError {
     Fallback { script: Script },
 }
 
-/// Scripts the Display family does not cover, answered by an embedded face.
-///
-/// A fallback key carries a script and a locale rather than a family, so this
-/// is a collection-wide safety net: Inter and `JetBrains` Mono carry these
-/// scripts themselves and never reach it, and only Space Grotesk does.
-const DISPLAY_SCRIPT_COVERAGE: [Script; 2] = [Script(*b"Cyrl"), Script(*b"Grek")];
-
 /// Maps a registered Fontique blob back to the face it was registered for.
 ///
 /// Registration is the one place a face and a blob meet, so identity is
@@ -86,9 +79,9 @@ impl TextResources {
         register_fallbacks(&mut collection)?;
         Ok(Self {
             collection,
+            policy,
             fonts: FontId::ALL,
             faces: FaceBlobs(blobs),
-            policy,
             #[cfg(feature = "render")]
             outlines: FontId::ALL
                 .into_iter()
@@ -124,6 +117,13 @@ impl PartialEq for TextResources {
 }
 
 fn register_fallbacks(collection: &mut Collection) -> Result<(), TextError> {
+    /// Scripts the Display family does not cover, answered by an embedded face.
+    ///
+    /// A fallback key carries a script and a locale rather than a family, so this
+    /// is a collection-wide safety net: Inter and `JetBrains` Mono carry these
+    /// scripts themselves and never reach it, and only Space Grotesk does.
+    const DISPLAY_SCRIPT_COVERAGE: [Script; 2] = [Script(*b"Cyrl"), Script(*b"Grek")];
+
     let font = FontId::InterRegular;
     let Some(family) = collection.family_id(font.family_name()) else {
         return Err(TextError::Registration { font });

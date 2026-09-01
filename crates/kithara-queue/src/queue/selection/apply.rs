@@ -1,5 +1,6 @@
 use std::sync::PoisonError;
 
+use kithara_bufpool::HasPool;
 use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
 use kithara_platform::{sync::Arc, tokio::task};
 use kithara_play::{Resource, SelectTransition};
@@ -10,7 +11,10 @@ use crate::{
     queue::{QueueControl, types::SelectPhase},
 };
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     pub(super) fn watch_apply(
         &self,
         id: TrackId,
@@ -44,8 +48,7 @@ impl QueueControl {
                 return;
             }
 
-            // Held across the whole synchronous block (never across .await):
-            // the Cancelled re-check and select_item must be atomic w.r.t. a
+            // WHY: Held across the whole synchronous block (never across .await): the Cancelled re-check and select_item must be atomic w.r.t. a
             let _apply = select_apply.lock().unwrap_or_else(PoisonError::into_inner);
 
             if player.is_closed() {

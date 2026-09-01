@@ -3,7 +3,6 @@
 
 //! Proves a forward seek is served by a range request from the seek target
 //! instead of waiting for the sequential fetch to walk the skipped span.
-
 use std::{
     convert::Infallible,
     io::{Read, Seek, SeekFrom},
@@ -30,7 +29,10 @@ use kithara::{
     },
     stream::Stream,
 };
-use kithara_integration_tests::TestHttpServer;
+use kithara_integration_tests::{
+    TestHttpServer,
+    bufpool_ext::{TestPools, pools},
+};
 
 const TOTAL: usize = 4096;
 /// Bytes the stalled head fetch delivers before it goes quiet forever.
@@ -123,15 +125,19 @@ async fn a_forward_seek_is_served_by_a_range_request() {
             first_range_start: Arc::clone(&first_range_start),
         });
     let server = TestHttpServer::new(app).await;
+    let pools = pools();
 
     let config = FileConfig::for_src(server.url("/audio.mp3").into())
         .store(
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
                 .build(),
         )
+        .pools(pools)
         .build();
-    let mut stream = Stream::<File>::new(config).await.expect("remote stream");
+    let mut stream = Stream::<File<TestPools>>::new(config)
+        .await
+        .expect("remote stream");
 
     let seeked = spawn_blocking(move || {
         let mut head = [0u8; 16];

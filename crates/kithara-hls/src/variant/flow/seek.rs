@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use kithara_stream::{SourceSeekAnchor, StreamError, StreamResult, needs_exact_byte_sizes};
 
@@ -19,7 +20,10 @@ impl ResolvedSeekProjection {
     }
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     /// Called from `reset_layout_to_full_range` inside the Layout write
     /// lock: the tail retires atomically with the byte-space re-mint, so a
     /// settle can never park behind a tail whose space is already gone.
@@ -94,9 +98,8 @@ impl HlsVariant {
     }
 
     pub(super) fn resolve_seek_alias(&self, demand: ExactSeekDemand, exact_anchor: u64) {
-        // Off-RT (exact-prefix settle): a lock-free, alloc-free store of the
-        // resolved exact anchor onto the matching base, tagged with the base
-        // generation so a stale resolver cannot attach to a newer alias.
+        // WHY: Off-RT (exact-prefix settle): a lock-free, alloc-free store of the resolved exact anchor onto the matching base, tagged with
+        // the base generation so a stale resolver cannot attach to a newer alias.
         self.seek
             .alias
             .resolve(demand.segment, demand.anchor, exact_anchor);
@@ -143,9 +146,8 @@ impl HlsVariant {
     }
 
     pub(crate) fn retire_seek_projection_if_moved(&self, pos: u64) {
-        // RT-reachable (via `advance`): a lock-free, alloc-free load + atomic
-        // clear. The base is single-writer (on-core), so the `Some -> None`
-        // store never races a concurrent base writer.
+        // WHY: RT-reachable (via `advance`): a lock-free, alloc-free load + atomic clear. The base is single-writer (on-core), so the `Some
+        // -> None` store never races a concurrent base writer.
         if self
             .seek
             .alias

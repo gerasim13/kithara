@@ -15,8 +15,8 @@ impl VisLeaf {
         ctx: Ctx<'_, '_>,
     ) -> Self {
         Self {
-            frame: VisFrame::read(value, &ctx),
             preset,
+            frame: VisFrame::read(value, &ctx),
         }
     }
 

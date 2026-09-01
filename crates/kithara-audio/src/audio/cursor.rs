@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::time::Duration;
 use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, InterleavedView};
 use kithara_stream::PlayheadWrite;
@@ -21,29 +21,27 @@ pub(super) struct CursorRead {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct ChunkCursor {
-    interleaved: Option<SampleBuffer>,
     #[field(get, vis = "pub(super)", copy)]
     spec: AudioSpec,
+    interleaved: Option<SampleBuffer>,
     current_chunk_consumed_frames: u64,
 }
 
 impl ChunkCursor {
-    pub(super) fn new(pool: &SamplePool, spec: AudioSpec) -> Self {
+    pub(super) fn new<S>(pools: &PoolRegion<S>, spec: AudioSpec) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let channels = usize::from(spec.channels).max(2);
         let sample_rate = usize::try_from(spec.sample_rate.get()).unwrap_or(usize::MAX);
         let capacity = sample_rate.saturating_mul(channels);
-        let interleaved = pool.get_with(|buffer| {
-            buffer.clear();
-            let current = buffer.capacity();
-            if current < capacity {
-                buffer.reserve(capacity - current);
-            }
-        });
-        Self {
+        let mut interleaved = pools.get_with_len::<f32>(capacity)?;
+        interleaved.clear();
+        Ok(Self {
             spec,
             current_chunk_consumed_frames: 0,
             interleaved: Some(interleaved),
-        }
+        })
     }
 
     pub(super) const fn begin_chunk(&mut self, chunk: &AudioChunk) {
@@ -95,7 +93,7 @@ impl ChunkCursor {
         Ok(CopyOutcome { finished, samples })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::hang_watchdog]
     pub(super) fn read(
         &mut self,
@@ -286,13 +284,16 @@ mod tests {
     use crate::{
         ConsumerWakeMode,
         audio::{Fetch, ThreadWake, connect, ring::RingParts},
+        test_pools::{Pools, pools, sample_buffer},
     };
 
     #[kithara::test]
     fn partial_resampled_chunk_position_caps_at_duration() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let duration = Duration::from_nanos(36_360_000_000);
         let chunk = timed_chunk(
+            &pools,
             spec,
             148,
             duration.saturating_sub(Duration::from_millis(2)),
@@ -315,8 +316,7 @@ mod tests {
 
         let playhead = PlayheadState::new();
         playhead.set_duration(Some(duration));
-        let pool = SamplePool::default();
-        let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut buf = vec![0.0; 200];
         let read = cursor
@@ -342,6 +342,7 @@ mod tests {
 
     #[kithara::test]
     fn read_buffer_shorter_than_frame_preserves_current_chunk() {
+        let pools = pools();
         let spec = AudioSpec::new(2, NonZeroU32::new(48_000).expect("test rate"));
         let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(1, None);
         let (trash_tx, mut trash_rx) = connect::<AudioChunk>(3, None);
@@ -356,12 +357,11 @@ mod tests {
         ring.preloaded = true;
         data_tx
             .try_push(Fetch::data(
-                timed_chunk(spec, 1, Duration::ZERO, Duration::from_millis(1)),
+                timed_chunk(&pools, spec, 1, Duration::ZERO, Duration::from_millis(1)),
                 0,
             ))
             .expect("chunk reaches test ring");
-        let pool = SamplePool::default();
-        let mut cursor = ChunkCursor::new(&pool, spec);
+        let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
         let mut events = AudioEvents::test();
         let mut output = [0.0];
 
@@ -384,7 +384,13 @@ mod tests {
         assert!(trash_rx.try_pop().is_none());
     }
 
-    fn timed_chunk(spec: AudioSpec, frames: u32, start: Duration, end: Duration) -> AudioChunk {
+    fn timed_chunk(
+        pools: &Pools,
+        spec: AudioSpec,
+        frames: u32,
+        start: Duration,
+        end: Duration,
+    ) -> AudioChunk {
         let channels = usize::from(spec.channels.max(1));
         let frame_count = usize::try_from(frames).expect("test frame count fits usize");
         let samples = vec![0.5; frame_count * channels];
@@ -396,7 +402,7 @@ mod tests {
                 frames,
                 ..Default::default()
             },
-            SamplePool::default().attach(samples),
+            sample_buffer(pools, &samples),
         )
     }
 }

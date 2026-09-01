@@ -68,12 +68,6 @@ pub struct BeatGridIdAllocationError;
 pub struct BeatGridRevision(NonZeroU64);
 
 impl BeatGridRevision {
-    /// Returns the first revision assigned by a grid owner.
-    #[must_use]
-    pub const fn first() -> Self {
-        Self(NonZeroU64::MIN)
-    }
-
     /// Returns the next owner-assigned revision, or `None` on exhaustion.
     #[must_use]
     pub fn checked_next(self) -> Option<Self> {
@@ -82,6 +76,12 @@ impl BeatGridRevision {
             .checked_add(1)
             .and_then(NonZeroU64::new)
             .map(Self)
+    }
+
+    /// Returns the first revision assigned by a grid owner.
+    #[must_use]
+    pub const fn first() -> Self {
+        Self(NonZeroU64::MIN)
     }
 }
 

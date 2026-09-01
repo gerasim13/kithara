@@ -28,9 +28,6 @@ mod host {
         },
     };
 
-    /// What a deck with nothing loaded says.
-    const NO_TRACK: &str = "No track loaded";
-
     /// What stands in for a source nobody reported.
     fn unknown() -> String {
         "\u{2014}".to_owned()
@@ -39,14 +36,14 @@ mod host {
     impl Draws for Summary {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(self.style, skin)
-        }
-
         /// A summary always draws: a deck with nothing loaded says so, which
         /// is a headline of its own rather than an empty panel.
         fn data(&self, read: Reading<'_>) -> Option<Loaded> {
             Some(snapshot(read.value, &read.ctx, read.scope))
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.style, skin)
         }
 
         #[cfg(feature = "masonry")]
@@ -64,6 +61,9 @@ mod host {
     }
 
     fn snapshot(value: Option<&ReadValue<'_>>, reads: &dyn Reads, scope: &str) -> Loaded {
+        /// What a deck with nothing loaded says.
+        const NO_TRACK: &str = "No track loaded";
+
         let title = match value {
             Some(ReadValue::Text(value)) if !value.is_empty() => (*value).to_owned(),
             _ => word(reads, scope, "deck.track.title")
@@ -71,8 +71,8 @@ mod host {
                 .unwrap_or_else(|| NO_TRACK.to_owned()),
         };
         Loaded {
-            source: word(reads, scope, "deck.track.source_kind").unwrap_or_else(unknown),
             title,
+            source: word(reads, scope, "deck.track.source_kind").unwrap_or_else(unknown),
         }
     }
 

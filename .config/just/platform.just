@@ -11,11 +11,15 @@ wasm MODE="check" *ARGS:
     shift
     case "$mode" in
       check)
+        # `+atomics` already forces `-Z build-std` on the browser test lane, and
+        # `parking_lot_core` needs its nightly-only feature to compile a wasm
+        # parker that does not panic. The target is nightly-only either way.
+        toolchain="${KITHARA_NIGHTLY_TOOLCHAIN:-nightly}"
         for c in kithara-storage kithara-net kithara-stream kithara-assets kithara-hls; do
-          cargo check -p "$c" --target wasm32-unknown-unknown
+          cargo "+$toolchain" check -p "$c" --target wasm32-unknown-unknown
         done
-        cargo check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
-        cargo check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
+        cargo "+$toolchain" check -p kithara-decode --target wasm32-unknown-unknown --no-default-features --features symphonia,webcodecs,client-reqwest,tls-rustls
+        cargo "+$toolchain" check -p kithara-ffi --target wasm32-unknown-unknown --features wasm --no-default-features
         ;;
       build)
         just _xtask wasm build "$@"

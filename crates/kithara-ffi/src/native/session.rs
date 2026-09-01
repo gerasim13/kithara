@@ -1,16 +1,18 @@
 use std::sync::OnceLock;
 
 use kithara::{
-    host::{Host, HostConfig, HostOwned},
+    host::{HostConfig, HostOwned},
+    platform::sync::Mutex,
     play::{PlayError, player::PlayerControlSource},
 };
-use kithara_platform::sync::Mutex;
 
-static HOST: OnceLock<Mutex<Host>> = OnceLock::new();
+use crate::pools::{FfiHost, FfiPools};
 
-fn host() -> &'static Mutex<Host> {
+static HOST: OnceLock<Mutex<FfiHost>> = OnceLock::new();
+
+fn host() -> &'static Mutex<FfiHost> {
     HOST.get_or_init(|| {
-        let host = Host::new(HostConfig::builder().build())
+        let host = FfiHost::new(HostConfig::builder().build())
             .expect("INVARIANT: the process audio Host must allocate its root identity");
         Mutex::new(host)
     })
@@ -18,14 +20,14 @@ fn host() -> &'static Mutex<Host> {
 
 pub(crate) fn insert<P>(player: P) -> Result<HostOwned<P>, PlayError>
 where
-    P: PlayerControlSource,
+    P: PlayerControlSource<Schema = FfiPools>,
 {
     host().lock().insert(player)
 }
 
 pub(crate) fn remove<P>(player: &HostOwned<P>) -> Result<(), PlayError>
 where
-    P: PlayerControlSource,
+    P: PlayerControlSource<Schema = FfiPools>,
 {
     host().lock().remove(player)
 }

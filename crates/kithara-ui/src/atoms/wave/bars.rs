@@ -30,8 +30,8 @@ pub(crate) fn columns(bounds: Rect, metrics: WaveSkin) -> usize {
 
 #[derive(Clone, Copy)]
 pub(crate) struct Played {
-    end_x: f32,
     overlay: Rgba,
+    end_x: f32,
 }
 
 impl Played {
@@ -120,10 +120,10 @@ pub(crate) fn draw_column(
 /// Colors the coverage layer resolves from the skin once per frame.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct CoveragePalette {
-    /// Baseline and comb stubs.
-    pub(crate) mark: Rgba,
     /// Rails and region boundaries.
     pub(crate) edge: Rgba,
+    /// Baseline and comb stubs.
+    pub(crate) mark: Rgba,
 }
 
 /// One stretch of the lane, in canvas pixels measured from the box's left edge.
@@ -242,10 +242,10 @@ fn draw_unready(
     for y in [bounds.y, bounds.y + bounds.h - rail] {
         list.fill_rect(
             Rect {
+                y,
                 h: rail,
                 w: width,
                 x: bounds.x + span[0],
-                y,
             },
             palette.edge,
         );
@@ -374,8 +374,8 @@ mod tests {
         let left = column_at(10.5);
         let right = column_at(10.5 + step);
 
-        let first = left.first().unwrap_or_else(|| panic!("a band must draw"));
-        let second = right.first().unwrap_or_else(|| panic!("a band must draw"));
+        let first = left.first().expect("a band must draw");
+        let second = right.first().expect("a band must draw");
         assert!(
             second.x - (first.x + first.w) >= 1.0,
             "columns {first:?} and {second:?} left no gap"
@@ -391,8 +391,8 @@ mod tests {
         let left = column_at(-step / 2.0);
         let right = column_at(step / 2.0);
 
-        let first = left.first().unwrap_or_else(|| panic!("a band must draw"));
-        let second = right.first().unwrap_or_else(|| panic!("a band must draw"));
+        let first = left.first().expect("a band must draw");
+        let second = right.first().expect("a band must draw");
         assert_eq!(
             second.x - first.x,
             step,
@@ -407,8 +407,8 @@ mod tests {
     fn a_sub_pixel_wider_box_holds_the_same_columns() {
         let metrics = builtin::skin().wave;
         let box_of = |w| Rect {
-            h: 60.0,
             w,
+            h: 60.0,
             x: 0.0,
             y: 0.0,
         };

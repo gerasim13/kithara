@@ -6,24 +6,15 @@ use crate::layout::Axis;
 #[derive(Clone, Copy, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 struct TestItem {
-    declared: Size<Length>,
-    intrinsic: Size,
     #[field(with, option_set_some, vis = "")]
     main_minimum: Option<f32>,
     #[field(with, option_set_some, vis = "")]
     main_weight: Option<f32>,
+    declared: Size<Length>,
+    intrinsic: Size,
 }
 
 impl TestItem {
-    const fn fixed(width: f32, height: f32) -> Self {
-        Self {
-            declared: Size::new(Length::Fixed(width), Length::Fixed(height)),
-            intrinsic: Size::new(width, height),
-            main_minimum: None,
-            main_weight: None,
-        }
-    }
-
     const fn new(declared: Size<Length>, intrinsic: Size) -> Self {
         Self {
             declared,
@@ -38,6 +29,15 @@ impl TestItem {
             Size::new(Length::FillPortion(weight), Length::Fixed(5.0)),
             Size::new(0.0, 5.0),
         )
+    }
+
+    const fn fixed(width: f32, height: f32) -> Self {
+        Self {
+            declared: Size::new(Length::Fixed(width), Length::Fixed(height)),
+            intrinsic: Size::new(width, height),
+            main_minimum: None,
+            main_weight: None,
+        }
     }
 
     const fn vertical_fill(weight: u16) -> Self {
@@ -62,40 +62,27 @@ impl Measure for TestMeasure<'_> {
 }
 
 struct Case {
-    axis: Axis,
-    max: Size,
-    width: Length,
-    height: Length,
-    padding: Padding,
-    spacing: f32,
     align_items: Alignment,
+    axis: Axis,
+    height: Length,
+    width: Length,
+    padding: Padding,
+    max: Size,
     items: Vec<TestItem>,
+    spacing: f32,
 }
 
 impl Case {
     fn horizontal(max: Size, width: Length, height: Length, items: Vec<TestItem>) -> Self {
         Self {
+            max,
+            width,
+            height,
+            items,
             axis: Axis::Horizontal,
-            max,
-            width,
-            height,
             padding: Padding::default(),
             spacing: 0.0,
             align_items: Alignment::Start,
-            items,
-        }
-    }
-
-    fn vertical(max: Size, width: Length, height: Length, items: Vec<TestItem>) -> Self {
-        Self {
-            axis: Axis::Vertical,
-            max,
-            width,
-            height,
-            padding: Padding::default(),
-            spacing: 0.0,
-            align_items: Alignment::Start,
-            items,
         }
     }
 
@@ -129,6 +116,19 @@ impl Case {
             &mut measure,
         );
         (distribution, measure.calls)
+    }
+
+    fn vertical(max: Size, width: Length, height: Length, items: Vec<TestItem>) -> Self {
+        Self {
+            max,
+            width,
+            height,
+            items,
+            axis: Axis::Vertical,
+            padding: Padding::default(),
+            spacing: 0.0,
+            align_items: Alignment::Start,
+        }
     }
 }
 

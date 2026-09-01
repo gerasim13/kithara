@@ -756,8 +756,8 @@ pub enum ControlNode {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct AdaptiveStep {
-    pub from: f32,
     pub node: ControlNode,
+    pub from: f32,
 }
 
 /// Where the number that picks a branch comes from.

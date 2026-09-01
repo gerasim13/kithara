@@ -93,16 +93,17 @@ platform.clock().now(); platform.sleep(d).await; platform.rng().next_u64();
 
 *tier: cold; detector: `arch.no-direct-time` + `arch.no-implicit-sleep` + `arch.no-implicit-rng` (ast-grep); already-enforced*
 
-**Global pool accessor**
+**Pool-region construction outside its composition owner**
 
 ```rust
 // bad
-let buf = kithara_bufpool::SamplePool::default().get(); // ambient global accessor
+pool_schema! { pub LocalPools { samples: f32 } }
+let pools = LocalPools::builder(OverallBudget(64 * 1024 * 1024)).samples(config).build()?;
 // good
-let buf = self.sample_pool.get_with(|b| b.clear());     // pool passed through config
+let buf = self.pools.get::<f32>(); // existing PoolRegion<S> passed through config
 ```
 
-*tier: hot; detector: `perf.no-global-pool-accessor` (ast-grep); already-enforced*
+*tier: hot; detector: `perf.no-component-pool-construction` (ast-grep); already-enforced*
 
 **`unwrap()` / `expect()` in production**
 
@@ -123,8 +124,12 @@ let n = map.get(k).ok_or(Error::Missing { key })?;    // or unwrap_or(default)
 // bad
 for seg in segments { let buf = seg.bytes().to_vec(); decode(buf); }   // alloc per packet
 // good
-let mut buf = pool.get_with(|b| b.clear());
-for seg in segments { buf.clear(); buf.extend_from_slice(seg.bytes()); decode(&buf); } // reuse; Bytes for zero-copy
+let mut buf = pools.get::<u8>();
+for seg in segments {
+    buf.clear();
+    buf.try_extend_from_slice(seg.bytes())?;
+    decode(&buf);
+}
 ```
 
 *tier: warm; detector: `audit.alloc-in-loop` / `audit.push-in-loop` (backlog, port to `.config/ast-grep/perf.*` in M3); present in red-flags, not yet ast-grep-enforced*
@@ -132,14 +137,18 @@ for seg in segments { buf.clear(); buf.extend_from_slice(seg.bytes()); decode(&b
 **Alloc-on-pool-miss fallback (I9)**
 
 ```rust
-// bad
-let buf = pool.try_acquire().unwrap_or_else(|| Vec::with_capacity(n)); // RT stall + banned fallback
-// good
-let Some(buf) = pool.try_acquire() else { self.underruns += 1; return; }; // wait-free, failable, counted
+// bad: budget rejection escapes into an untracked allocation
+let scratch = match pools.get_with_len::<f32>(max_samples) {
+    Ok(buf) => buf,
+    Err(_) => return run_with_untracked(vec![0.0; max_samples]),
+};
+// good: preparation fails closed under the shared hard budget
+let scratch = pools.get_with_len::<f32>(max_samples)?;
+processor.install(scratch);
 ```
 
-Pre-fill the pool to a computed budget; allocate-on-miss only on non-RT lanes, and count misses.
-*tier: hot; detector: targeted ast-grep candidate (M3) - specializes `rust.no-fallback-*`; preventive*
+Set `initial_buffers` and `initial_capacity` in the root `PoolConfig`, acquire RT scratch during preparation, and benchmark the configured inventory. Never escape the hard budget with a raw-vector fallback.
+*tier: hot; detector: `perf.prefer-primitive-pool` + `perf.no-component-pool-construction`; already-enforced*
 
 **`Arc` clone / `load_full()` in the inner loop**
 

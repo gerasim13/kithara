@@ -29,17 +29,30 @@ pub trait Host {
     /// it hides a child the room did not reach.
     const MOUNTS_HIDDEN: bool = false;
 
-    /// Mounts a weighted layout split.
+    /// Mounts one compiled control leaf.
     ///
-    /// A split that names a `measure` shows only the cells whose band holds the
-    /// room it turned out to have, which is a question only the layout pass can
-    /// answer: every cell is mounted either way.
-    fn split(
+    /// `transform` is every enclosing object's pose folded into one offset,
+    /// expressed in the box this control paints into. A host applies it to the
+    /// neutral draw list rather than asking its toolkit to turn the widget:
+    /// only one of the two toolkits can, and the two would disagree.
+    fn control(
         &mut self,
-        axis: Axis,
-        measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
+        path: InternId,
+        spec: &ControlSpec,
+        read: Option<&Binding>,
+        owner: InputOwner,
+        size: Option<SizeSpec>,
+        transform: Transform,
     ) -> Self::Output;
+
+    /// Mounts a row or column around its already-produced visible children.
+    ///
+    /// A group that names a `measure` shows only the children whose band holds
+    /// the room it turned out to have; the rest are mounted and stand aside.
+    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output;
+
+    /// Mounts the retained interaction owner around one produced subtree.
+    fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output;
 
     /// Mounts the branches of a node that draws whichever one fits its room.
     ///
@@ -50,11 +63,13 @@ pub trait Host {
     /// Mounts one compiled module around its already-produced content.
     fn module(&mut self, module: Module<'_>, content: Option<Self::Output>) -> Self::Output;
 
-    /// Mounts a row or column around its already-produced visible children.
+    /// Mounts one placement of a stage around the subtree it holds.
     ///
-    /// A group that names a `measure` shows only the children whose band holds
-    /// the room it turned out to have; the rest are mounted and stand aside.
-    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output;
+    /// The host puts that subtree at the placement's point and, where the
+    /// placement has somewhere to write, lets the pointer carry it: what a
+    /// drag publishes is [`Snap::take`] of where it was left, so the magnet
+    /// answers the same in both hosts.
+    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output;
 
     /// Mounts an anchored popover around its produced anchor, and around the
     /// content it expands from `content` if it wants it.
@@ -91,13 +106,17 @@ pub trait Host {
     /// Mounts a vertical slot of visible children.
     fn slot(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
 
-    /// Mounts one placement of a stage around the subtree it holds.
+    /// Mounts a weighted layout split.
     ///
-    /// The host puts that subtree at the placement's point and, where the
-    /// placement has somewhere to write, lets the pointer carry it: what a
-    /// drag publishes is [`Snap::take`] of where it was left, so the magnet
-    /// answers the same in both hosts.
-    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output;
+    /// A split that names a `measure` shows only the cells whose band holds the
+    /// room it turned out to have, which is a question only the layout pass can
+    /// answer: every cell is mounted either way.
+    fn split(
+        &mut self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output;
 
     /// Mounts children that all share one box, in document order.
     ///
@@ -105,25 +124,6 @@ pub trait Host {
     /// whatever object wraps each of them, and a stage with no objects in it
     /// simply draws its children on top of one another.
     fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output;
-
-    /// Mounts one compiled control leaf.
-    ///
-    /// `transform` is every enclosing object's pose folded into one offset,
-    /// expressed in the box this control paints into. A host applies it to the
-    /// neutral draw list rather than asking its toolkit to turn the widget:
-    /// only one of the two toolkits can, and the two would disagree.
-    fn control(
-        &mut self,
-        path: InternId,
-        spec: &ControlSpec,
-        read: Option<&Binding>,
-        owner: InputOwner,
-        size: Option<SizeSpec>,
-        transform: Transform,
-    ) -> Self::Output;
-
-    /// Mounts the retained interaction owner around one produced subtree.
-    fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output;
 
     /// Finishes the whole document with host-owned window layers.
     ///

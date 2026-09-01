@@ -6,9 +6,9 @@ use crate::{AudioSpec, FrameCount, SignalError};
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct InterleavedView<'a> {
-    frames: FrameCount,
     samples: &'a [f32],
     spec: AudioSpec,
+    frames: FrameCount,
 }
 
 impl<'a> InterleavedView<'a> {
@@ -30,63 +30,10 @@ impl<'a> InterleavedView<'a> {
             });
         }
         Ok(Self {
-            frames,
             samples,
             spec,
+            frames,
         })
-    }
-
-    #[must_use]
-    pub const fn spec(&self) -> AudioSpec {
-        self.spec
-    }
-
-    #[must_use]
-    pub const fn frames(&self) -> FrameCount {
-        self.frames
-    }
-
-    #[must_use]
-    pub const fn samples(&self) -> &'a [f32] {
-        self.samples
-    }
-
-    /// Select a relative frame range.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when `range` exceeds this view.
-    pub fn range(self, range: Range<usize>) -> Result<Self, SignalError> {
-        let available = self.frames.get();
-        if range.start > range.end || range.end > available {
-            return Err(SignalError::FrameRange {
-                start: range.start,
-                end: range.end,
-                frames: available,
-            });
-        }
-        let channels = self.spec.channel_count()?.get();
-        let sample_start =
-            range
-                .start
-                .checked_mul(channels)
-                .ok_or(SignalError::SampleCountOverflow {
-                    frames: range.start,
-                    channels,
-                })?;
-        let sample_end =
-            range
-                .end
-                .checked_mul(channels)
-                .ok_or(SignalError::SampleCountOverflow {
-                    frames: range.end,
-                    channels,
-                })?;
-        Self::new(
-            &self.samples[sample_start..sample_end],
-            self.spec,
-            FrameCount::new(range.end - range.start),
-        )
     }
 
     /// Deinterleave into caller-owned channel slices without allocating metadata.
@@ -123,17 +70,69 @@ impl<'a> InterleavedView<'a> {
         fast_interleave::deinterleave_variable(self.samples, channel_count, output, 0..required);
         Ok(())
     }
+
+    #[must_use]
+    pub const fn frames(&self) -> FrameCount {
+        self.frames
+    }
+
+    /// Select a relative frame range.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when `range` exceeds this view.
+    pub fn range(self, range: Range<usize>) -> Result<Self, SignalError> {
+        let available = self.frames.get();
+        if range.start > range.end || range.end > available {
+            return Err(SignalError::FrameRange {
+                start: range.start,
+                end: range.end,
+                frames: available,
+            });
+        }
+        let channels = self.spec.channel_count()?.get();
+        let sample_start =
+            range
+                .start
+                .checked_mul(channels)
+                .ok_or(SignalError::SampleCountOverflow {
+                    channels,
+                    frames: range.start,
+                })?;
+        let sample_end =
+            range
+                .end
+                .checked_mul(channels)
+                .ok_or(SignalError::SampleCountOverflow {
+                    channels,
+                    frames: range.end,
+                })?;
+        Self::new(
+            &self.samples[sample_start..sample_end],
+            self.spec,
+            FrameCount::new(range.end - range.start),
+        )
+    }
+
+    #[must_use]
+    pub const fn samples(&self) -> &'a [f32] {
+        self.samples
+    }
+
+    #[must_use]
+    pub const fn spec(&self) -> AudioSpec {
+        self.spec
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
 
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::PlanarBuffer;
+    use crate::{PlanarBuffer, test_pools::pools_with_budget};
 
     const RATE: NonZeroU32 = NonZeroU32::new(48_000).expect("48 kHz is non-zero");
 
@@ -166,9 +165,9 @@ mod tests {
         let source = signal(usize::from(channels), frames.get());
         let interleaved =
             InterleavedView::new(&source, spec(channels), frames).expect("fixture shape is exact");
-        let sample_pool = SamplePool::new(4, 128);
-        let mut planar = PlanarBuffer::new(&sample_pool, spec(channels), frames)
-            .expect("fixture planar storage fits");
+        let pools = pools_with_budget(128 * size_of::<f32>());
+        let mut planar =
+            PlanarBuffer::new(&pools, spec(channels), frames).expect("fixture planar storage fits");
         let mut channel_samples = (0..usize::from(channels))
             .map(|_| vec![0.0; frames.get()])
             .collect::<Vec<_>>();
@@ -238,9 +237,9 @@ mod tests {
 
     #[kithara::test]
     fn non_zero_planar_range_interleaves_only_selected_frames() {
-        let sample_pool = SamplePool::new(2, 64);
-        let mut planar = PlanarBuffer::new(&sample_pool, spec(2), FrameCount::new(4))
-            .expect("planar storage fits");
+        let pools = pools_with_budget(64 * size_of::<f32>());
+        let mut planar =
+            PlanarBuffer::new(&pools, spec(2), FrameCount::new(4)).expect("planar storage fits");
         planar
             .channel_mut(0)
             .expect("left channel exists")

@@ -1,11 +1,9 @@
 //! The lifecycle contract runs through the same Host graph with a cpal backend.
 //! A test-only dispatcher owns that graph so the production Host never exposes
 //! its resident engine or raw session.
-
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
 use kithara::{
     audio::ConsumerWakeMode,
-    bufpool::{BytePool, SamplePool},
     host::testing::GraphSession,
     platform::{
         sync::{Arc, Mutex, mpsc},
@@ -18,6 +16,7 @@ use kithara::{
 };
 
 use super::engine_session_contract as contract;
+use crate::bufpool_ext::{TestPools, pools};
 
 struct CpalGraphSession {
     cmd_tx: Mutex<mpsc::Sender<CpalMessage>>,
@@ -26,7 +25,7 @@ struct CpalGraphSession {
 
 enum CpalMessage {
     Command {
-        cmd: Cmd,
+        cmd: Cmd<TestPools>,
         reply_tx: mpsc::Sender<Reply>,
     },
     Shutdown,
@@ -36,7 +35,7 @@ impl CpalGraphSession {
     fn new() -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel::<CpalMessage>();
         let worker = spawn_named("kithara-engine-cpal-contract", move || {
-            let mut graph = GraphSession::<CpalBackend>::new(start_stream);
+            let mut graph = GraphSession::<CpalBackend, TestPools>::new(start_stream);
             while let Ok(message) = cmd_rx.recv() {
                 match message {
                     CpalMessage::Command { cmd, reply_tx } => {
@@ -62,9 +61,9 @@ impl Drop for CpalGraphSession {
     }
 }
 
-impl SessionDispatcher for CpalGraphSession {
+impl SessionDispatcher<TestPools> for CpalGraphSession {
     #[kithara::allow_block]
-    fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+    fn exec(&self, cmd: Cmd<TestPools>) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = mpsc::channel();
         self.cmd_tx
             .lock()
@@ -93,14 +92,12 @@ fn start_stream(ctx: &mut FirewheelCtx<CpalBackend>, sample_rate: u32) -> Result
     .map_err(|error| error.to_string())
 }
 
-fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl)) {
-    let session: Arc<dyn SessionDispatcher> = Arc::new(CpalGraphSession::new());
+fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>)) {
+    let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
             .max_slots(max_slots)
-            .worker(PlayWorker::new(
-                PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-            ))
+            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(session)
             .build(),
     );

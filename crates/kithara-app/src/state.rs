@@ -7,20 +7,23 @@ use kithara::{
     abr::AbrHandle,
     analysis::FrameRange,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        time::Duration,
+        tokio::task,
+    },
     play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
+    queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
 };
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    time::Duration,
-    tokio::task,
-};
-use kithara_queue::{QueueControl, QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
-use crate::{config::AppConfig, wave_cache::AnalysisPersistence, waveform::TrackAnalysis};
+use crate::{
+    config::AppConfig, pools::AppQueueControl, wave_cache::AnalysisPersistence,
+    waveform::TrackAnalysis,
+};
 
 /// Snapshot of player state shared between the queue, the listener task,
 /// and the UI thread. The struct is cloned cheaply each frame so the UI
@@ -56,7 +59,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    fn new(queue: &QueueControl) -> Self {
+    fn new(queue: &AppQueueControl) -> Self {
         let tracks = queue.tracks();
         let current_track_index = tracks.first().map(|_| 0usize);
         let track_name = tracks.first().map(|e| e.name.clone()).unwrap_or_default();
@@ -214,7 +217,7 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 /// UI thread cover values that the UI commits optimistically (seek
 /// scrub, crossfade slider, etc.) before the engine echoes them back.
 ///
-/// Synchronisation uses [`kithara_platform::sync::Mutex`] (a sync
+/// Synchronisation uses [`kithara::platform::sync::Mutex`] (a sync
 /// `parking_lot` mutex) instead of `tokio::sync::Mutex`. The previous
 /// design called `blocking_lock` from inside the iced runtime, which
 /// would panic; this one avoids `await`s while the lock is held.
@@ -223,7 +226,7 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 pub struct StateController {
     beat_clock: Arc<Mutex<BeatClockState>>,
     #[field(get, deref = false)]
-    queue: QueueControl,
+    queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     /// Per-deck time-stretch handle.
     #[field(get = stretch, deref = false)]
@@ -240,7 +243,7 @@ impl StateController {
     /// `config` supplies the shared stores for per-track source analysis.
     /// `timestretch` is the per-deck handle shared with the player.
     pub(crate) fn new(
-        queue: QueueControl,
+        queue: AppQueueControl,
         timestretch: Arc<StretchControls>,
         config: AppConfig,
         cancel: CancelToken,
@@ -421,7 +424,7 @@ impl Drop for StateController {
 }
 
 fn spawn_listener(
-    queue: QueueControl,
+    queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
@@ -440,13 +443,13 @@ fn spawn_listener(
 
 /// Push the desired EQ gains down to the engine. Calls for bands with no
 /// active slot are no-ops; the master EQ persists once a slot accepts them.
-fn reapply_eq(queue: &QueueControl, eq_bands: &[GainDb]) {
+fn reapply_eq(queue: &AppQueueControl, eq_bands: &[GainDb]) {
     for (band, &gain) in eq_bands.iter().enumerate() {
         let _ = queue.set_eq_gain(band, f32::from(gain));
     }
 }
 
-pub(crate) fn apply_event(event: &Event, queue: &QueueControl, state: &Mutex<UiState>) {
+pub(crate) fn apply_event(event: &Event, queue: &AppQueueControl, state: &Mutex<UiState>) {
     match *event {
         Event::Queue(QueueEvent::CurrentTrackChanged { .. }) => {
             let current_index = queue.current_index();

@@ -6,13 +6,17 @@ This crate owns the pure protocol used to align one beat map with another and
 to compose maps through nested synchronization groups. It owns immutable
 snapshots, coordinates, `WarpMap`, `SyncGroup`, topology operations, alignment
 plans, cursors, and typed results. It also owns the resident identity `Warp<S>`
-decorator, `WarpConfig`, and synchronous `WarpRenderer`, which applies temporal
+decorator, `WarpConfig`, and synchronous `WarpRenderer<S>`, which applies temporal
 plans through the backend-neutral `kithara-stretch::ElasticEngine` contract on
 native targets. Without an elastic backend, including on wasm, the same
 renderer contract stays resident as an exact identity stage.
 
 Host-axis values describe an ephemeral musical clock; they do not make this
 crate the owner of the live Host, playback session, audio graph, or worker.
+`SyncMember::Grid` accepts only `Send + Sync` leaf grids because an owning
+topology operation may cross the wasm Worker-to-Host route. Nested group owners
+remain `MaybeSend + MaybeSync`; the platform owner must split worker-bound
+runtime state before transferring such a group.
 
 ## Boundaries
 
@@ -28,7 +32,7 @@ crate the owner of the live Host, playback session, audio graph, or worker.
 - `kithara-assets` is the only production persistence path.
 
 The crate must not depend on audio, play, host, assets, or analyzer runtime
-types. `Warp<S>` is generic over its source, and `WarpRenderer` is a synchronous
+types. `Warp<S>` is generic over its source, and `WarpRenderer<S>` is a synchronous
 stage; neither makes this crate the owner of source lifecycle, playback
 scheduling, or worker threads.
 
@@ -44,7 +48,7 @@ contracts for the later actuator integration.
 the shared `StretchControls` owned by the resident identity `Warp<S>` and
 consumed by its native renderer. The identity renderer deliberately ignores
 temporal intent while preserving the same stage contract. Every renderer
-receives the caller's configured `SamplePool`; it never creates a pool. Source
+receives the caller's configured `PoolRegion<S>`; it never creates a pool region. Source
 ownership, cancellation, and worker resources remain in their canonical
 configs and are not duplicated here.
 

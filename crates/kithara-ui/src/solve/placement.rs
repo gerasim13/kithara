@@ -9,10 +9,10 @@ pub(crate) enum Alignment {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Padding {
-    pub(crate) top: f32,
-    pub(crate) right: f32,
     pub(crate) bottom: f32,
     pub(crate) left: f32,
+    pub(crate) right: f32,
+    pub(crate) top: f32,
 }
 
 impl From<Padding> for Size {

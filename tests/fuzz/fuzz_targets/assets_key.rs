@@ -1,8 +1,9 @@
 #![no_main]
 
 use arbitrary::Arbitrary;
-use kithara::assets::{
-    AssetLayout, AssetResource, AssetSource, AssetStore, DefaultLayout, StorageBackend,
+use kithara::{
+    assets::{AssetLayout, AssetResource, AssetSource, AssetStore, DefaultLayout, StorageBackend},
+    bufpool::testing::pools,
 };
 use libfuzzer_sys::fuzz_target;
 use url::Url;
@@ -42,7 +43,7 @@ fuzz_target!(|input: Input| {
     assert_eq!(root.len(), 32);
     assert!(root.bytes().all(|b| b.is_ascii_hexdigit()));
 
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store

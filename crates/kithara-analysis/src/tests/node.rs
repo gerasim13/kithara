@@ -3,8 +3,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 #[cfg(feature = "analysis-waveform")]
 use kithara_audio::AudioObserveError;
 use kithara_audio::AudioReader;
-#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::HasPool;
 #[cfg(feature = "analysis-beat")]
 use kithara_platform::sync::Arc;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -25,6 +24,7 @@ use kithara_resampler::ResamplerBackend;
 use kithara_resampler::rubato::RubatoBackend;
 #[cfg(feature = "analysis-waveform")]
 use kithara_signal::AudioSpec;
+#[cfg(any(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_test_utils::kithara;
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
 use kithara_worker::TaskContext;
@@ -60,26 +60,33 @@ use crate::coverage::FrameRange;
 use crate::producer::{AnalysisProducer, ring};
 #[cfg(feature = "analysis-waveform")]
 use crate::waveform::{AnalysisParams, WaveformAnalyzer};
+#[cfg(not(feature = "analysis-waveform"))]
 use crate::{AnalysisProgress, TrackAnalysis};
+#[cfg(feature = "analysis-waveform")]
+use crate::{
+    AnalysisProgress, TrackAnalysis,
+    test_pools::{TestPools, pools},
+};
 
 #[cfg(feature = "analysis-waveform")]
 const BUCKETS: usize = 64;
 
-pub(super) struct NodeHarness<B>
+pub(super) struct NodeHarness<B, S>
 where
     B: ResamplerBackend,
 {
-    node: AnalysisNode<B>,
+    node: AnalysisNode<B, S>,
     _pending: PendingTask,
     _dispatcher: Dispatcher,
     _worker: Worker,
 }
 
-impl<B> NodeHarness<B>
+impl<B, S> NodeHarness<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
-    pub(super) fn new(builder: AnalyzerBuilder<B>, jobs: mpsc::Receiver<Job>) -> Self {
+    pub(super) fn new(builder: AnalyzerBuilder<B, S>, jobs: mpsc::Receiver<Job>) -> Self {
         Self::with_settings(
             builder,
             jobs,
@@ -90,7 +97,7 @@ where
     }
 
     pub(super) fn with_settings(
-        builder: AnalyzerBuilder<B>,
+        builder: AnalyzerBuilder<B, S>,
         jobs: mpsc::Receiver<Job>,
         chunk_seconds: NonZeroU32,
         producer_drain_limit: NonZeroUsize,
@@ -135,8 +142,8 @@ where
 }
 
 #[cfg(feature = "analysis-waveform")]
-fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend> {
-    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_waveform(BUCKETS)
+fn waveform_only() -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_waveform(BUCKETS)
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
@@ -144,7 +151,7 @@ fn beat_waveform(
     detector: Box<dyn BeatDetector>,
     min_window_seconds: u32,
     window_seconds: u32,
-) -> AnalyzerBuilder<NoResamplerBackend> {
+) -> AnalyzerBuilder<NoResamplerBackend, TestPools> {
     let config = BeatAnalysisConfig::builder()
         .resampler_backend(NoResamplerBackend)
         .target_rate(SR)
@@ -152,7 +159,7 @@ fn beat_waveform(
         .detector_window_seconds(window_seconds)
         .detector_overlap_seconds(0)
         .build();
-    AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default())
+    AnalyzerBuilder::<NoResamplerBackend, _>::new(pools())
         .with_beat_config(config)
         .with_beat_detector(detector, GridParams::default())
         .with_waveform(BUCKETS)
@@ -203,9 +210,10 @@ fn take_analysis(results: &mut watch::Receiver<Option<AnalysisProgress>>) -> Opt
 }
 
 #[cfg(all(feature = "analysis-beat", feature = "analysis-waveform"))]
-fn drive_until<B>(node: &mut NodeHarness<B>, mut done: impl FnMut() -> bool)
+fn drive_until<B, S>(node: &mut NodeHarness<B, S>, mut done: impl FnMut() -> bool)
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     let deadline = Instant::now() + Duration::from_secs(2);
     while !done() {
@@ -218,6 +226,7 @@ where
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn pending_reader_yields_one_scheduler_tick() {
+    let builder = waveform_only();
     let (jobs, receiver) = mpsc::channel();
     let (tx, _results) = watch::channel(None);
     jobs.send(Job {
@@ -225,12 +234,16 @@ fn pending_reader_yields_one_scheduler_tick() {
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
-        reader: Box::new(FakeReader::chunked_with_pending(&sine(1024), 1)),
+        reader: Box::new(FakeReader::chunked_with_pending(
+            builder.pools(),
+            &sine(1024),
+            1,
+        )),
         cancel: CancelToken::root(),
         resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = NodeHarness::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(builder, receiver);
 
     assert_eq!(node.tick(), TickResult::UpstreamPending);
     assert_eq!(node.tick(), TickResult::Progress);
@@ -239,6 +252,7 @@ fn pending_reader_yields_one_scheduler_tick() {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
+    let builder = waveform_only();
     let (jobs, receiver) = mpsc::channel();
     let (tx, results) = watch::channel(None);
     let cancel = CancelToken::root();
@@ -247,12 +261,12 @@ fn cancel_racing_finalize_publishes_partial_before_dropping_sender() {
         tx,
         rate: super::fixtures::spec().sample_rate,
         ingest: super::fixtures::idle_ingest(),
-        reader: Box::new(FakeReader::chunked(&sine(1024), 1)),
+        reader: Box::new(FakeReader::chunked(builder.pools(), &sine(1024), 1)),
         cancel: cancel.clone(),
         resume: None,
     })
     .expect("analysis node accepts the test job");
-    let mut node = NodeHarness::new(waveform_only(), receiver);
+    let mut node = NodeHarness::new(builder, receiver);
 
     assert_eq!(node.tick(), TickResult::Progress, "decode one chunk");
     cancel.cancel();
@@ -726,13 +740,14 @@ fn offers_out_of_order_cover_their_union() {
     );
 }
 
-fn stages<B>(
+fn stages<B, S>(
     reader: Box<dyn AudioReader>,
-    builder: AnalyzerBuilder<B>,
+    builder: AnalyzerBuilder<B, S>,
     cancel: &CancelToken,
 ) -> Vec<TrackAnalysis>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     let (jobs, receiver) = mpsc::channel();
     let (tx, mut results) = watch::channel(None);
@@ -773,12 +788,17 @@ where
 fn matches_direct_waveform_analyzer_over_chunked_stream() {
     let samples = sine(usize::try_from(SR).unwrap());
     let frames = u64::try_from(samples.len() / usize::from(CH)).unwrap_or(0);
-    let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &SamplePool::default());
-    direct.push(&samples, usize::from(CH), 0);
+    let builder = waveform_only();
+    let pools = builder.pools().clone();
+    let mut direct = WaveformAnalyzer::new(SR, AnalysisParams::default(), &pools)
+        .expect("waveform buffers fit the test region");
+    direct
+        .push(&pools, &samples, usize::from(CH), 0)
+        .expect("waveform buffers fit the test region");
     let want = direct.snapshot(BUCKETS, Some(frames));
 
-    let reader = Box::new(FakeReader::chunked(&samples, 4));
-    let out = stages(reader, waveform_only(), &CancelToken::root());
+    let reader = Box::new(FakeReader::chunked(&pools, &samples, 4));
+    let out = stages(reader, builder, &CancelToken::root());
     assert_eq!(out.len(), 1, "waveform-only emits once");
     let got = out[0]
         .waveform()
@@ -794,10 +814,11 @@ fn matches_direct_waveform_analyzer_over_chunked_stream() {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn cancelled_token_yields_none() {
+    let builder = waveform_only();
     let cancel = CancelToken::root();
     cancel.cancel();
-    let reader = Box::new(FakeReader::chunked(&sine(4096), 2));
-    assert!(stages(reader, waveform_only(), &cancel).is_empty());
+    let reader = Box::new(FakeReader::chunked(builder.pools(), &sine(4096), 2));
+    assert!(stages(reader, builder, &cancel).is_empty());
 }
 
 #[cfg(feature = "analysis-waveform")]
@@ -845,7 +866,7 @@ fn a_slow_detector_does_not_stop_decoder_or_ring_progress() {
     let mut results = enqueue(
         &jobs,
         "same-track",
-        Box::new(FakeReader::chunked(&sine(3 * frames), 3)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(3 * frames), 3)),
         CancelToken::root(),
         ingest,
     );
@@ -922,7 +943,7 @@ fn saturation_retries_the_exact_detection_payload_once() {
     let results = enqueue(
         &jobs,
         "saturated-track",
-        Box::new(FakeReader::chunked(&pcm, 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &pcm, 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1007,14 +1028,14 @@ fn cancelled_late_result_cannot_contaminate_the_same_token_next_pass() {
     let mut results_a = enqueue(
         &jobs,
         "same-token",
-        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
         cancel_a.clone(),
         super::fixtures::idle_ingest(),
     );
     let mut results_b = enqueue(
         &jobs,
         "same-token",
-        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1093,7 +1114,7 @@ fn final_publication_waits_for_trailing_detection() {
     let mut results = enqueue(
         &jobs,
         "trailing-track",
-        Box::new(FakeReader::chunked(&sine(frames), 1)),
+        Box::new(FakeReader::chunked(builder.pools(), &sine(frames), 1)),
         CancelToken::root(),
         super::fixtures::idle_ingest(),
     );
@@ -1182,10 +1203,11 @@ fn beat_slot_fills_the_beat_grid() {
             .answers_arc(Arc::new(move |_, _| Ok(raw.clone()))),
     );
     let detector = Box::new(mock) as Box<dyn BeatDetector>;
-    let builder = AnalyzerBuilder::<RubatoBackend>::new(SamplePool::default())
+    let builder = AnalyzerBuilder::<RubatoBackend, _>::new(pools())
         .with_beat_detector(detector, GridParams::default());
 
     let reader = Box::new(FakeReader::chunked(
+        builder.pools(),
         &sine(17 * usize::try_from(SR).unwrap()),
         3,
     ));
@@ -1274,8 +1296,13 @@ fn beat_slot_fills_the_beat_grid() {
 #[cfg(feature = "analysis-waveform")]
 #[kithara::test]
 fn pending_is_tolerated_mid_stream() {
+    let builder = waveform_only();
     let samples = sine(8192);
-    let reader = Box::new(FakeReader::chunked_with_pending(&samples, 2));
-    let out = stages(reader, waveform_only(), &CancelToken::root());
+    let reader = Box::new(FakeReader::chunked_with_pending(
+        builder.pools(),
+        &samples,
+        2,
+    ));
+    let out = stages(reader, builder, &CancelToken::root());
     assert!(out.len() == 1 && out[0].waveform().is_some());
 }

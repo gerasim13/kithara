@@ -3,7 +3,6 @@ use std::num::NonZeroUsize;
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
-    bufpool::Region,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
@@ -11,6 +10,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir, Xorshift64, abr_fast, auto,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::DelayRule,
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
@@ -154,9 +154,9 @@ async fn stress_seek_lifecycle_with_zero_reset(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
+    let pools = pools();
     let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool())
+        PlayWorkerConfig::builder(pools.clone())
             .cancel(cancel.clone())
             .build(),
     );
@@ -164,23 +164,21 @@ async fn stress_seek_lifecycle_with_zero_reset(
     let store = if ephemeral {
         let cap =
             NonZeroUsize::new(Consts::SEGMENT_COUNT * Consts::VARIANT_COUNT + 20).expect("nz");
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .pool(worker.byte_pool().clone())
             .cache_capacity(cap)
             .build()
     } else {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().to_path_buf(),
             })
-            .pool(worker.byte_pool().clone())
             .build()
     };
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools)
         .cancel(cancel)
         .initial_abr_mode(auto(0))
         .build();
@@ -190,7 +188,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         .maybe_codec(Some(AudioCodec::Pcm))
         .maybe_container(Some(ContainerFormat::Wav))
         .build();
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
         .block_on_underrun(true)
         .build();

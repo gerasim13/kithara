@@ -16,14 +16,6 @@ pub struct Artwork {
 }
 
 impl Artwork {
-    /// The box the artwork was authored in, which is what a drawing fits into
-    /// its own.
-    pub(crate) fn size(&self) -> (f64, f64) {
-        let width: f64 = self.composition.width.max(1).as_();
-        let height: f64 = self.composition.height.max(1).as_();
-        (width, height)
-    }
-
     /// Which frame of this artwork stands `seconds` into a pass of `pass`.
     ///
     /// Wraps, so a clock that keeps running keeps playing. A pass of nothing at
@@ -37,6 +29,14 @@ impl Artwork {
         let through = f64::from(seconds / pass).rem_euclid(1.0);
 
         span.mul_add(through, frames.start)
+    }
+
+    /// The box the artwork was authored in, which is what a drawing fits into
+    /// its own.
+    pub(crate) fn size(&self) -> (f64, f64) {
+        let width: f64 = self.composition.width.max(1).as_();
+        let height: f64 = self.composition.height.max(1).as_();
+        (width, height)
     }
 }
 
@@ -79,15 +79,14 @@ mod tests {
     use super::builtin_artwork;
 
     fn shipped() -> &'static super::Artwork {
-        builtin_artwork("pulse").unwrap_or_else(|| panic!("the toolkit ships the pulse artwork"))
+        builtin_artwork("pulse").expect("the toolkit ships the pulse artwork")
     }
 
     /// A document that switches artwork on a flag needs two that read, and two
     /// that are not the same drawing.
     #[kithara::test]
     fn the_two_shipped_artworks_are_two_drawings() {
-        let spark = builtin_artwork("spark")
-            .unwrap_or_else(|| panic!("the toolkit ships the spark artwork"));
+        let spark = builtin_artwork("spark").expect("the toolkit ships the spark artwork");
 
         assert!(!std::ptr::eq(shipped(), spark));
     }

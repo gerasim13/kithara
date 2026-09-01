@@ -54,14 +54,6 @@ impl TransportControl {
         }
     }
 
-    delegate::delegate! {
-        to self.observation {
-            #[expr(*$)]
-            #[call(read)]
-            pub(crate) fn observation(&mut self) -> TransportObservation;
-        }
-    }
-
     pub(crate) fn queue_abort<B: AudioBackend>(
         &self,
         ctx: &mut FirewheelCtx<B>,
@@ -90,18 +82,20 @@ impl TransportControl {
             )))),
         );
     }
+
+    delegate::delegate! {
+        to self.observation {
+            #[expr(*$)]
+            #[call(read)]
+            pub(crate) fn observation(&mut self) -> TransportObservation;
+        }
+    }
 }
 
 pub(crate) struct SessionTransportNode;
 
 impl AudioNode for SessionTransportNode {
     type Configuration = EmptyConfig;
-
-    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
-            .debug_name("SessionTransport")
-            .is_pre_process()
-    }
 
     fn construct_processor(
         &self,
@@ -110,17 +104,17 @@ impl AudioNode for SessionTransportNode {
     ) -> impl AudioNodeProcessor {
         SessionTransportProcessor
     }
+
+    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
+        AudioNodeInfo::new()
+            .debug_name("SessionTransport")
+            .is_pre_process()
+    }
 }
 
 pub(crate) struct SessionTransportProcessor;
 
 impl AudioNodeProcessor for SessionTransportProcessor {
-    fn stream_stopped(&mut self, context: &mut ProcStreamCtx) {
-        if let Err(error) = restart_transport(context.store) {
-            let _ = context.logger.try_error(error.message());
-        }
-    }
-
     #[rtsan_forbid_blocking]
     fn process(
         &mut self,
@@ -133,5 +127,11 @@ impl AudioNodeProcessor for SessionTransportProcessor {
             let _ = extra.logger.try_error(error.message());
         }
         ProcessStatus::ClearAllOutputs
+    }
+
+    fn stream_stopped(&mut self, context: &mut ProcStreamCtx) {
+        if let Err(error) = restart_transport(context.store) {
+            let _ = context.logger.try_error(error.message());
+        }
     }
 }

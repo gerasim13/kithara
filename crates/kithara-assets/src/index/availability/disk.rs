@@ -124,19 +124,6 @@ impl AvailabilityIndex {
 }
 
 impl InnerIndex {
-    pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
-        let Some(p) = self.persist.get() else {
-            return Ok(());
-        };
-        // Order is the whole point: force the committed files onto the medium
-        // first, then name them. Reversed, a crash could leave the manifest
-        // vouching for bytes that never landed.
-        self.barrier_pending_files();
-        let atomic = init_atomic(&p.res, &p.path, &p.cancel)?;
-        write_aggregate(self, atomic, durable)?;
-        Ok(())
-    }
-
     /// `sync_data` every committed file queued since the last flush. A file
     /// that vanished (evicted, or its asset deleted) simply drops out — the
     /// manifest entry goes with it.
@@ -157,6 +144,18 @@ impl InnerIndex {
             }
         }
     }
+
+    pub(super) fn flush_with_durability(&self, durable: bool) -> AssetsResult<()> {
+        let Some(p) = self.persist.get() else {
+            return Ok(());
+        };
+        // WHY: Order is the whole point: force the committed files onto the medium first, then name them. Reversed, a crash could leave the
+        // manifest vouching for bytes that never landed.
+        self.barrier_pending_files();
+        let atomic = init_atomic(&p.res, &p.path, &p.cancel)?;
+        write_aggregate(self, atomic, durable)?;
+        Ok(())
+    }
 }
 
 /// Serialise the aggregate into an `Atomic`-wrapped storage resource.
@@ -173,15 +172,8 @@ fn write_aggregate(
                 .iter()
                 .filter_map(|(path, entry)| {
                     let avail = entry.load();
-                    // The crash-recovery snapshot is a COMMITTED-only
-                    // contract: an uncommitted partial write (whose `.tmp`
-                    // was never renamed) must be invisible after a rebuild,
-                    // matching the aggregate probes' verdict. Persisting
-                    // its in-flight ranges would let a flush that races the
-                    // writer's cleanup resurrect a partial segment on the
-                    // next open — corrupting availability and a real crash
-                    // recovery alike. The live in-memory ranges still serve
-                    // in-flight readers; only the persisted snapshot filters.
+                    // WHY: The crash-recovery snapshot is a COMMITTED-only contract: an uncommitted partial write (whose `.tmp` was never renamed) must
+                    // be invisible after a rebuild, matching the aggregate probes' verdict.
                     if !avail.committed {
                         return None;
                     }

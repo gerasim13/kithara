@@ -1,5 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
+use kithara_bufpool::HasPool;
 use kithara_platform::{
     CancelToken,
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
@@ -11,81 +12,100 @@ use tracing::warn;
 use super::AnalysisTask;
 pub(crate) use super::task::Job;
 use crate::{
-    analyzer::{AnalysisFingerprint, AnalyzerBuilder, Detector},
+    analyzer::{AnalyzerBuilder, Detector},
     slots::beat::{DetectionOutput, DetectionRequest, detect},
 };
 
 struct DetectJob {
     pass_cancel: CancelToken,
-    detector: Detector,
     request: DetectionRequest,
 }
 
 struct DetectDone {
-    detector: Detector,
     output: Option<DetectionOutput>,
 }
 
 enum DetectorState {
     Disabled,
-    Idle(Detector),
+    Idle,
     Retry(DetectJob),
     Running,
     Unavailable,
 }
 
-pub(crate) struct AnalysisNode<B>
+pub(crate) struct AnalysisNode<B, S>
 where
     B: ResamplerBackend,
 {
-    builder: AnalyzerBuilder<B>,
+    builder: AnalyzerBuilder<B, S>,
     chunk_seconds: NonZeroU32,
+    _completion: Option<Sender<()>>,
     completed: Receiver<DetectDone>,
     completion: Sender<DetectDone>,
     context: TaskContext,
-    current: Option<AnalysisTask<B>>,
-    detector: DetectorState,
+    current: Option<AnalysisTask<B, S>>,
+    detector: Option<Detector>,
+    detector_state: DetectorState,
     jobs: Receiver<Job>,
     producer_drain_limit: NonZeroUsize,
     publish_seconds: NonZeroU32,
 }
 
-impl<B> AnalysisNode<B>
+impl<B, S> AnalysisNode<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
+    #[cfg(test)]
     pub(crate) fn new(
-        mut builder: AnalyzerBuilder<B>,
+        builder: AnalyzerBuilder<B, S>,
         jobs: Receiver<Job>,
         context: TaskContext,
         chunk_seconds: NonZeroU32,
         producer_drain_limit: NonZeroUsize,
         publish_seconds: NonZeroU32,
     ) -> Self {
-        let detector = builder
-            .take_detector()
-            .map_or(DetectorState::Disabled, DetectorState::Idle);
+        Self::with_completion(
+            builder,
+            jobs,
+            context,
+            chunk_seconds,
+            producer_drain_limit,
+            publish_seconds,
+            None,
+        )
+    }
+
+    pub(crate) fn with_completion(
+        mut builder: AnalyzerBuilder<B, S>,
+        jobs: Receiver<Job>,
+        context: TaskContext,
+        chunk_seconds: NonZeroU32,
+        producer_drain_limit: NonZeroUsize,
+        publish_seconds: NonZeroU32,
+        task_completion: Option<Sender<()>>,
+    ) -> Self {
+        let detector = builder.take_detector();
+        let detector_state = if detector.is_some() {
+            DetectorState::Idle
+        } else {
+            DetectorState::Disabled
+        };
         let (completion, completed) = mpsc::channel();
         Self {
             builder,
             chunk_seconds,
+            _completion: task_completion,
             completed,
             completion,
             context,
             current: None,
             detector,
+            detector_state,
             jobs,
             producer_drain_limit,
             publish_seconds,
         }
-    }
-
-    pub(crate) fn effective(&self) -> (AnalysisFingerprint, bool, (bool, bool)) {
-        (
-            self.builder.fingerprint(),
-            !self.builder.is_empty(),
-            self.builder.resume_shape(),
-        )
     }
 
     fn accept_completion(&mut self) -> bool {
@@ -93,7 +113,7 @@ where
             Ok(done) => done,
             Err(TryRecvError::Empty | TryRecvError::Disconnected) => return false,
         };
-        self.detector = DetectorState::Idle(done.detector);
+        self.detector_state = DetectorState::Idle;
         let Some(current) = &mut self.current else {
             return true;
         };
@@ -107,33 +127,32 @@ where
 
     fn submit_detection(&mut self, job: DetectJob) -> TickResult {
         let completion = self.completion.clone();
-        match self.context.submit_compute(job, move |compute, mut job| {
+        let Some(detector) = self.detector.clone() else {
+            self.detector_state = DetectorState::Disabled;
+            return TickResult::Progress;
+        };
+        match self.context.submit_compute(job, move |compute, job| {
             let cancel = compute.cancel_group().clone() | job.pass_cancel.clone();
             let output = if cancel.is_cancelled() {
                 None
             } else {
-                let output = detect(job.request, &mut job.detector);
+                let output = detect(job.request, &detector);
                 (!cancel.is_cancelled()).then_some(output)
             };
-            completion
-                .send(DetectDone {
-                    detector: job.detector,
-                    output,
-                })
-                .ok();
+            completion.send(DetectDone { output }).ok();
         }) {
             Ok(()) => {
-                self.detector = DetectorState::Running;
+                self.detector_state = DetectorState::Running;
                 TickResult::Progress
             }
             Err(rejected) if rejected.reason() == ComputeSubmitError::Saturated => {
-                self.detector = DetectorState::Retry(rejected.recover_payload());
+                self.detector_state = DetectorState::Retry(rejected.recover_payload());
                 TickResult::Backpressured
             }
             Err(rejected) => {
                 let reason = rejected.reason();
                 drop(rejected.recover_payload());
-                self.detector = DetectorState::Unavailable;
+                self.detector_state = DetectorState::Unavailable;
                 if let Some(current) = &mut self.current {
                     current.fail_compute_unavailable();
                 }
@@ -147,14 +166,14 @@ where
     }
 
     fn drive_detection(&mut self) -> Option<TickResult> {
-        let state = std::mem::replace(&mut self.detector, DetectorState::Disabled);
+        let state = std::mem::replace(&mut self.detector_state, DetectorState::Disabled);
         match state {
             DetectorState::Disabled => {
-                self.detector = DetectorState::Disabled;
+                self.detector_state = DetectorState::Disabled;
                 None
             }
             DetectorState::Unavailable => {
-                self.detector = DetectorState::Unavailable;
+                self.detector_state = DetectorState::Unavailable;
                 let current = self.current.as_mut()?;
                 if current.prepare_detection().is_some() {
                     current.fail_compute_unavailable();
@@ -164,7 +183,7 @@ where
                 }
             }
             DetectorState::Running => {
-                self.detector = DetectorState::Running;
+                self.detector_state = DetectorState::Running;
                 self.current
                     .as_ref()
                     .is_some_and(AnalysisTask::is_ending)
@@ -175,27 +194,26 @@ where
                 if live {
                     Some(self.submit_detection(job))
                 } else {
-                    self.detector = DetectorState::Idle(job.detector);
+                    self.detector_state = DetectorState::Idle;
                     None
                 }
             }
-            DetectorState::Idle(detector) => {
+            DetectorState::Idle => {
                 let Some(current) = &mut self.current else {
-                    self.detector = DetectorState::Idle(detector);
+                    self.detector_state = DetectorState::Idle;
                     return None;
                 };
                 if current.cancel_token().is_cancelled() {
-                    self.detector = DetectorState::Idle(detector);
+                    self.detector_state = DetectorState::Idle;
                     return None;
                 }
                 let Some(request) = current.prepare_detection() else {
-                    self.detector = DetectorState::Idle(detector);
+                    self.detector_state = DetectorState::Idle;
                     return None;
                 };
                 let pass_cancel = current.cancel_token().clone();
                 Some(self.submit_detection(DetectJob {
                     pass_cancel,
-                    detector,
                     request,
                 }))
             }
@@ -207,9 +225,9 @@ where
             return;
         }
         self.current = None;
-        let state = std::mem::replace(&mut self.detector, DetectorState::Disabled);
-        self.detector = match state {
-            DetectorState::Retry(job) => DetectorState::Idle(job.detector),
+        let state = std::mem::replace(&mut self.detector_state, DetectorState::Disabled);
+        self.detector_state = match state {
+            DetectorState::Retry(_) => DetectorState::Idle,
             state => state,
         };
     }
@@ -267,9 +285,10 @@ where
     }
 }
 
-impl<B> Task for AnalysisNode<B>
+impl<B, S> Task for AnalysisNode<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     fn tick(&mut self) -> TickResult {
         let completed = self.accept_completion();

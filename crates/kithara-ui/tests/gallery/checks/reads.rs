@@ -3,7 +3,6 @@
 //! The demo model behind the pages is the application the gallery is; these
 //! are the questions asked of it, which belong with the gallery's other
 //! checks rather than beside the model itself.
-
 use kithara_test_utils::kithara;
 use kithara_ui::{
     builtin,

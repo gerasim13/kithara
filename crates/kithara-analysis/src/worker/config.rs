@@ -10,6 +10,10 @@ use crate::analyzer::AnalyzerBuilder;
 struct Consts;
 
 impl Consts {
+    const CAPACITY: NonZeroUsize = match NonZeroUsize::new(64) {
+        Some(value) => value,
+        None => unreachable!(),
+    };
     const CHUNK_SECONDS: NonZeroU32 = match NonZeroU32::new(16) {
         Some(value) => value,
         None => unreachable!(),
@@ -28,23 +32,23 @@ impl Consts {
     };
 }
 
-/// Configuration for one analysis dispatcher and its long-lived domain task.
+/// Configuration for one analysis dispatcher and its per-pass tasks.
 #[derive(Builder)]
 #[builder(start_fn = for_builder)]
 #[non_exhaustive]
-pub struct AnalysisWorkerConfig<B>
+pub struct AnalysisWorkerConfig<B, S>
 where
     B: ResamplerBackend,
 {
     /// Analyzer selection and DSP configuration.
     #[builder(start_fn)]
-    pub(crate) builder: AnalyzerBuilder<B>,
+    pub(crate) builder: AnalyzerBuilder<B, S>,
     /// Parent cancellation token for the analysis worker lifetime.
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers.
     pub(crate) worker: Option<Worker>,
     /// Maximum number of tasks admitted to the analysis dispatcher.
-    #[builder(default = NonZeroUsize::MIN)]
+    #[builder(default = Consts::CAPACITY)]
     pub(crate) capacity: NonZeroUsize,
     /// Fixed source duration covered by one progressive schedule chunk.
     #[builder(default = Consts::CHUNK_SECONDS)]
@@ -64,10 +68,10 @@ where
     /// Park duration while analysis is waiting on decoded input.
     #[builder(default = Duration::from_millis(10))]
     pub(crate) wait_timeout: Duration,
-    /// Numeric priority of the long-lived analysis task.
+    /// Numeric priority of every analysis pass task.
     #[builder(default = Priority::new(0))]
     pub(crate) priority: Priority,
-    /// Maximum number of in-flight compute jobs owned by the analysis task.
+    /// Maximum number of in-flight compute jobs owned by one analysis pass.
     #[builder(default = NonZeroUsize::MIN)]
     pub(crate) max_compute_tasks: NonZeroUsize,
     /// Maximum playback-ring descriptors folded during one dispatcher tick.

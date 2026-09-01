@@ -6,10 +6,10 @@ use crate::SessionFrame;
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PresentationFrontier {
-    /// Exclusive decoded source-frame boundary actually consumed.
-    #[field(get, copy)]
-    source: u64,
     /// Exclusive session output-frame boundary actually consumed.
     #[field(get, copy)]
     output: SessionFrame,
+    /// Exclusive decoded source-frame boundary actually consumed.
+    #[field(get, copy)]
+    source: u64,
 }

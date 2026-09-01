@@ -3,6 +3,7 @@ use std::{fmt::Write, num::NonZeroU16};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
+use kithara_bufpool::{HasPool, PoolRegion};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 use kithara_platform::sync::Mutex;
 use kithara_platform::{
@@ -13,7 +14,7 @@ use kithara_platform::{
 use url::Url;
 
 mod kithara {
-    pub(crate) use kithara_test_macros::flash;
+    pub(crate) use kithara_test_macros::{flash, measure};
 }
 
 use crate::{
@@ -313,8 +314,8 @@ impl RawHttp {
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me.raw_body(url, Some(resume), headers, true).await?;
-                // `206` → body already starts at `abs` (skip 0); `200` → server
-                // ignored Range and re-sent from zero, drop the consumed prefix.
+                // WHY: `206` -> body already starts at `abs` (skip 0); `200` -> server ignored Range and re-sent from zero, drop the consumed
+                // prefix.
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -362,7 +363,10 @@ impl HttpClient {
     ///
     /// Panics if the HTTP `Client` builder fails to build.
     #[must_use]
-    pub fn new(options: NetOptions, cancel: CancelToken) -> Self {
+    pub fn new<S>(options: NetOptions, _pools: PoolRegion<S>, cancel: CancelToken) -> Self
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         let connection_metrics = ConnectionMetrics::default();
         let inner = build_client(&options, &connection_metrics)
             .expect("BUG: HTTP client builder with our defaults cannot fail");
@@ -499,7 +503,7 @@ impl Net for HttpClient {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Net for RawHttp {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.as_str());
         let resp = self
@@ -508,7 +512,7 @@ impl Net for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn get_range(
         &self,
         url: Url,
@@ -521,7 +525,7 @@ impl Net for RawHttp {
         Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         let req = self.head_request(&url);
         let req = self.apply_headers(req, headers, AcceptEncodingPolicy::Identity);
@@ -560,7 +564,7 @@ impl Net for RawHttp {
         Ok(out)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn post_bytes(
         &self,
         url: Url,
@@ -574,7 +578,7 @@ impl Net for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn stream(
         &self,
         url: Url,
@@ -583,7 +587,7 @@ impl Net for RawHttp {
         let first = self
             .raw_body(url.clone(), None, headers.clone(), false)
             .await?;
-        // Full GET; a resume re-fetches `bytes=consumed-` (base 0).
+        // WHY: Full GET; a resume re-fetches `bytes=consumed-` (base 0).
         Ok(self.wrap_resumable(first, url, 0, None, headers))
     }
 }
@@ -743,7 +747,11 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn get_bytes_aborts_when_body_stalls() {
         let url = server_stalling_body().await;
-        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let client = HttpClient::new(
+            stall_options(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let err = client
             .get_bytes(url, None)
             .await
@@ -754,7 +762,11 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn post_bytes_aborts_when_body_stalls() {
         let url = server_stalling_body().await;
-        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let client = HttpClient::new(
+            stall_options(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let err = client
             .post_bytes(url, Bytes::from_static(b"req"), None)
             .await
@@ -823,7 +835,7 @@ mod tests {
         let options = NetOptions::builder()
             .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
             .build();
-        let client = HttpClient::new(options, CancelToken::never());
+        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
 
         let mut caller_headers = Headers::default();
         caller_headers.insert("AcCePt-EnCoDiNg", "br");
@@ -886,7 +898,7 @@ mod tests {
         let options = NetOptions::builder()
             .compression(crate::Compression::GZIP | crate::Compression::DEFLATE)
             .build();
-        let client = HttpClient::new(options, CancelToken::never());
+        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
 
         let Err(error) = client.stream(url, None).await else {
             panic!("encoded bytes must not reach a byte-addressed stream");
@@ -913,7 +925,11 @@ mod tests {
             axum::serve(listener, app).await.expect("serve");
         });
         let url = Url::parse(&format!("http://{addr}/range")).expect("url");
-        let client = HttpClient::new(NetOptions::default(), CancelToken::never());
+        let client = HttpClient::new(
+            NetOptions::default(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
 
         let Err(error) = client
             .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -945,7 +961,11 @@ mod tests {
             axum::serve(listener, app).await.expect("serve");
         });
         let url = Url::parse(&format!("http://{addr}/range")).expect("url");
-        let client = HttpClient::new(NetOptions::default(), CancelToken::never());
+        let client = HttpClient::new(
+            NetOptions::default(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
 
         let Err(error) = client
             .get_range(url, RangeSpec::new(0, Some(3)), None)
@@ -992,7 +1012,11 @@ mod tests {
             axum::serve(listener, app).await.expect("serve");
         });
         let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
-        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let client = HttpClient::new(
+            stall_options(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let mut body = client.stream(url, None).await.expect("initial stream");
         let error = loop {
             match body.next().await {
@@ -1043,7 +1067,11 @@ mod tests {
             axum::serve(listener, app).await.expect("serve");
         });
         let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
-        let client = HttpClient::new(stall_options(), CancelToken::never());
+        let client = HttpClient::new(
+            stall_options(),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let mut body = client.stream(url, None).await.expect("initial stream");
         let error = loop {
             match body.next().await {
@@ -1098,7 +1126,11 @@ mod tests {
             axum::serve(listener, app).await.expect("serve");
         });
         let url = Url::parse(&format!("http://{addr}/resume")).expect("url");
-        let client = HttpClient::new(stall_options_with_retries(2), CancelToken::never());
+        let client = HttpClient::new(
+            stall_options_with_retries(2),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let mut body = client
             .get_range(url, RangeSpec::new(0, Some(1)), None)
             .await
@@ -1115,7 +1147,11 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(3), CancelToken::never());
+        let client = HttpClient::new(
+            fast_options(3),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let bytes = client
             .get_bytes(url, None)
             .await
@@ -1131,7 +1167,11 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_no_retry_propagates_5xx() {
         let (url, counter) = server_failing_first_n(2).await;
-        let client = HttpClient::new(fast_options(0), CancelToken::never());
+        let client = HttpClient::new(
+            fast_options(0),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let err = client
             .get_bytes(url, None)
             .await
@@ -1150,7 +1190,11 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_head_retries_503_until_ok() {
         let (url, counter) = server_failing_first_n(1).await;
-        let client = HttpClient::new(fast_options(2), CancelToken::never());
+        let client = HttpClient::new(
+            fast_options(2),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         client.head(url, None).await.expect("HEAD must retry");
         assert_eq!(counter.load(Ordering::SeqCst), 2);
     }
@@ -1158,7 +1202,11 @@ mod tests {
     #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn http_client_post_retries_then_echoes_body() {
         let (url, counter) = server_post_echo_failing_first_n(1).await;
-        let client = HttpClient::new(fast_options(2), CancelToken::never());
+        let client = HttpClient::new(
+            fast_options(2),
+            crate::test_pools::pools(),
+            CancelToken::never(),
+        );
         let echoed = client
             .post_bytes(url, Bytes::from_static(b"ping"), None)
             .await
@@ -1179,7 +1227,7 @@ mod tests {
         let options = NetOptions::builder()
             .pool_idle_timeout(Duration::from_secs(77))
             .build();
-        let client = HttpClient::new(options, CancelToken::never());
+        let client = HttpClient::new(options, crate::test_pools::pools(), CancelToken::never());
 
         assert_eq!(
             client.with_observer(None).options().pool_idle_timeout,

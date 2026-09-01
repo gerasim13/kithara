@@ -83,11 +83,6 @@ impl StretchControls {
         self.engine.keylock.load(Ordering::Relaxed)
     }
 
-    pub fn set_speed(&self, speed: f32) {
-        self.speed
-            .store(speed.max(Self::MIN_SPEED), Ordering::Relaxed);
-    }
-
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "stretch-signalsmith", feature = "stretch-bungee")
@@ -104,6 +99,11 @@ impl StretchControls {
     ))]
     pub fn set_keylock(&self, on: bool) {
         self.engine.keylock.store(on, Ordering::Relaxed);
+    }
+
+    pub fn set_speed(&self, speed: f32) {
+        self.speed
+            .store(speed.max(Self::MIN_SPEED), Ordering::Relaxed);
     }
 
     #[must_use]

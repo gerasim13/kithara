@@ -25,10 +25,6 @@ mod host {
     impl Draws for Meter {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// An unbound meter is an empty track rather than an empty box: a level
         /// nobody reports is a level of nothing.
         fn data(&self, read: Reading<'_>) -> Option<f32> {
@@ -36,6 +32,10 @@ mod host {
                 Some(ReadValue::Scalar(level)) => level.clamp(0.0, 1.0).as_(),
                 _ => 0.0,
             })
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

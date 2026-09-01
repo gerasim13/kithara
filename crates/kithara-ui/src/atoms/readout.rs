@@ -10,13 +10,13 @@ use crate::{
 /// A caption stacked over the value it names, framed or bare.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Readout {
-    framed: bool,
-    label_color: Rgba,
-    label_role: TextRoleSkin,
     metrics: ReadoutSkin,
+    label_color: Rgba,
     stroke: Rgba,
     value_color: Rgba,
+    label_role: TextRoleSkin,
     value_role: TextRoleSkin,
+    framed: bool,
 }
 
 /// What a readout is handed each frame: the word it names and the word it

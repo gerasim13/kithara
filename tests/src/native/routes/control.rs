@@ -1,5 +1,3 @@
-use std::path::{Component, Path};
-
 use axum::{
     Json, Router,
     extract::{Request, State},
@@ -14,7 +12,6 @@ use kithara_test_fixtures::assets::by_name;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    routes::assets::assets_dir,
     test_server_state::{Content, Delivery, FixtureBehavior, TestServerState},
     token_store::TokenResponse,
 };
@@ -35,19 +32,10 @@ pub(crate) enum ContentSpec {
         base64: String,
         content_type: Option<String>,
     },
-    /// Serve a fixture already on disk, named the way `/assets/*` names it.
-    ///
-    /// Out-of-process clients (the iOS traps) cannot construct
-    /// [`ContentSpec::Bytes`] for a multi-megabyte fixture without uploading
-    /// it, which the request-body limit rejects.
-    Asset {
-        name: String,
-    },
     /// Serve one generated body, named the way `/signal/*` names it.
     ///
-    /// Same reason as [`ContentSpec::Asset`]: an out-of-process client cannot
-    /// upload a multi-megabyte body. Generated bodies have no path under
-    /// `assets/`, so they need their own spelling.
+    /// An out-of-process client cannot upload a multi-megabyte body. Generated
+    /// bodies are resolved by accessor name instead.
     Signal {
         name: String,
     },
@@ -107,22 +95,6 @@ fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
                 content_type,
             })
         }
-        ContentSpec::Asset { name } => {
-            let relative = Path::new(&name);
-            if relative.is_absolute()
-                || relative
-                    .components()
-                    .any(|component| !matches!(component, Component::Normal(_)))
-            {
-                return Err(format!("asset name must stay under assets/: {name}"));
-            }
-            let bytes = std::fs::read(assets_dir().join(relative))
-                .map_err(|error| format!("asset `{name}` not readable: {error}"))?;
-            Ok(Content::StaticBytes {
-                bytes: Arc::new(bytes),
-                content_type: asset_content_type(&name),
-            })
-        }
         ContentSpec::Signal { name } => {
             let accessor = name
                 .rsplit_once('.')
@@ -134,16 +106,6 @@ fn content_from_spec(spec: ContentSpec) -> Result<Content, String> {
                 content_type: Some(asset.entry().content_type),
             })
         }
-    }
-}
-
-fn asset_content_type(name: &str) -> Option<&'static str> {
-    if name.ends_with(".mp3") {
-        Some("audio/mpeg")
-    } else if name.ends_with(".m3u8") {
-        Some("application/vnd.apple.mpegurl")
-    } else {
-        None
     }
 }
 
@@ -223,26 +185,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn asset_spec_serves_the_fixture_without_uploading_it() {
-        let content = content_from_spec(ContentSpec::Asset {
-            name: "hls/master.m3u8".to_owned(),
-        })
-        .expect("the HLS fixture must resolve");
-        let Content::StaticBytes {
-            bytes,
-            content_type,
-        } = content
-        else {
-            panic!("asset spec must resolve to static bytes");
-        };
-        assert!(
-            bytes.starts_with(b"#EXTM3U"),
-            "fixture bytes come from disk"
-        );
-        assert_eq!(content_type, Some("application/vnd.apple.mpegurl"));
-    }
-
-    #[kithara::test]
     fn signal_spec_serves_a_generated_body() {
         let content = content_from_spec(ContentSpec::Signal {
             name: "signal_mp3_track_sine440_187s.mp3".to_owned(),
@@ -271,19 +213,6 @@ mod tests {
         };
         assert!(
             error.contains("no generated asset is named"),
-            "unexpected rejection reason: {error}"
-        );
-    }
-
-    #[kithara::test]
-    fn asset_spec_rejects_paths_outside_assets() {
-        let Err(error) = content_from_spec(ContentSpec::Asset {
-            name: "../Cargo.toml".to_owned(),
-        }) else {
-            panic!("traversal must be rejected");
-        };
-        assert!(
-            error.contains("must stay under assets/"),
             "unexpected rejection reason: {error}"
         );
     }

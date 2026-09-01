@@ -1,6 +1,3 @@
-//! The convenience layer: a window of our own for an application that has no
-//! host to live in. Everything it does, it does through [`Ui`].
-
 use kithara_platform::{
     sync::Arc,
     time::{Duration, Instant, WallInstant},
@@ -55,10 +52,10 @@ where
     let event_loop = EventLoop::new().map_err(|error| RunError::Host(error.to_string()))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut runner = Runner {
-        app: Some(app),
         config,
-        live: None,
         size,
+        app: Some(app),
+        live: None,
     };
     event_loop
         .run_app(&mut runner)
@@ -67,19 +64,19 @@ where
 
 /// The window and its GPU surface, with the UI mounted in it.
 struct Live<'config, Application> {
+    window: Arc<Window>,
     clicks: Clicks,
-    context: RenderContext,
     frames: FrameClock,
     idle: IdleClock,
     modifiers: Modifiers,
     pointer: PhysicalPosition<f64>,
-    recovery_redraw_latched: bool,
+    context: RenderContext,
+    surface: RenderSurface<'static>,
     renderer: Renderer,
     shaders: ShaderPass,
-    surface: RenderSurface<'static>,
     ui: Ui<'config, Application>,
     vis: VisPass,
-    window: Arc<Window>,
+    recovery_redraw_latched: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,8 +145,8 @@ const fn surface_recovery(error: &SurfaceError) -> SurfaceRecovery {
 /// control, rather than in each of them.
 #[derive(Default)]
 struct Clicks {
-    count: u8,
     last: Option<(PhysicalPosition<f64>, Instant)>,
+    count: u8,
 }
 
 impl Clicks {
@@ -175,16 +172,26 @@ impl Clicks {
 }
 
 struct Runner<'config, Application> {
-    app: Option<Application>,
-    config: Config<'config>,
-    live: Option<Live<'config, Application>>,
     size: (u32, u32),
+    config: Config<'config>,
+    app: Option<Application>,
+    live: Option<Live<'config, Application>>,
 }
 
 impl<Application> ApplicationHandler for Runner<'_, Application>
 where
     Application: App,
 {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        if live.idle.wake(WallInstant::now()) {
+            live.request_redraw();
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(live.idle.next));
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.live.is_some() {
             return;
@@ -232,16 +239,6 @@ where
         if live.obey(event_loop) {
             event_loop.exit();
         }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let Some(live) = &mut self.live else {
-            return;
-        };
-        if live.idle.wake(WallInstant::now()) {
-            live.request_redraw();
-        }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(live.idle.next));
     }
 }
 
@@ -294,9 +291,6 @@ where
             .app
             .take()
             .ok_or_else(|| RunError::Host("the application was already taken".to_owned()))?;
-        // The window keeps no ground of its own: the document paints the page
-        // in the shape the skin gives the window, and whatever the shape leaves
-        // out is the desktop behind it.
         let mut attributes = Window::default_attributes()
             .with_decorations(self.config.decorations)
             .with_title(self.config.title)
@@ -342,19 +336,19 @@ where
         let scale = window.scale_factor();
         let ui = Ui::new(app, self.config, (size.width, size.height), scale)?;
         let mut live = Live {
-            clicks: Clicks::default(),
             context,
-            frames: FrameClock::new(WallInstant::now()),
-            idle: IdleClock::new(WallInstant::now()),
-            modifiers: Modifiers::default(),
-            pointer: PhysicalPosition::new(0.0, 0.0),
-            recovery_redraw_latched: false,
             renderer,
             shaders,
             surface,
             ui,
             vis,
             window,
+            clicks: Clicks::default(),
+            frames: FrameClock::new(WallInstant::now()),
+            idle: IdleClock::new(WallInstant::now()),
+            modifiers: Modifiers::default(),
+            pointer: PhysicalPosition::new(0.0, 0.0),
+            recovery_redraw_latched: false,
         };
         live.resize(size);
         Ok(live)
@@ -365,101 +359,30 @@ impl<Application> Live<'_, Application>
 where
     Application: App,
 {
-    fn request_redraw(&mut self) {
-        self.clear_recovery_redraw();
-        self.window.request_redraw();
-    }
-
-    fn request_recovery_redraw(&mut self) -> bool {
-        if self.recovery_redraw_latched {
-            return false;
-        }
-        self.recovery_redraw_latched = true;
-        self.window.request_redraw();
-        true
-    }
-
     fn clear_recovery_redraw(&mut self) {
         self.recovery_redraw_latched = false;
     }
 
-    fn resize(&mut self, size: PhysicalSize<u32>) {
-        if size.width == 0 || size.height == 0 {
+    fn draw(&mut self) {
+        let elapsed = self.frames.step(WallInstant::now());
+        self.ui.frame(elapsed);
+        if !self.ui.needs_frame() {
             return;
         }
-        if self.surface.config.width != size.width || self.surface.config.height != size.height {
-            self.reconfigure_surface(size);
-        } else {
-            self.replace_target(size);
-        }
-        self.ui
-            .resize((size.width, size.height), self.window.scale_factor());
-        self.request_redraw();
-    }
-
-    fn reconfigure_surface(&mut self, size: PhysicalSize<u32>) {
-        self.context
-            .resize_surface(&mut self.surface, size.width, size.height);
-        self.replace_target(size);
-    }
-
-    fn replace_target(&mut self, size: PhysicalSize<u32>) {
-        let handle = &self.context.devices[self.surface.dev_id];
-        target::replace(&mut self.surface, &handle.device, size.width, size.height);
-    }
-
-    fn recover_surface(&mut self, error: &SurfaceError) {
-        match surface_recovery(error) {
-            SurfaceRecovery::Retry => {
-                let redraw_requested = self.request_recovery_redraw();
-                tracing::warn!(%error, redraw_requested, "surface frame timed out");
-            }
-            SurfaceRecovery::Reconfigure => {
-                let size = self.window.inner_size();
-                if size.width == 0 || size.height == 0 {
-                    tracing::warn!(%error, "surface recovery waits for a nonzero resize");
-                    return;
-                }
-                self.reconfigure_surface(size);
-                let redraw_requested = self.request_recovery_redraw();
-                tracing::warn!(%error, redraw_requested, "surface frame reconfigured");
-            }
-            SurfaceRecovery::Stop => tracing::error!(%error, "surface frame failed"),
+        let Ok(frame) = self
+            .ui
+            .render()
+            .inspect_err(|error| tracing::error!(%error, "redraw"))
+        else {
+            return;
+        };
+        if self.present(&frame) && self.ui.complete_frame() {
+            self.request_redraw();
         }
     }
 
-    /// Turns the window's physical pointer position into the logical point the
-    /// neutral input contract speaks in.
-    fn point(&mut self, phase: PointerPhase) {
-        let scale = self.window.scale_factor();
-        let at = Pt {
-            x: (self.pointer.x / scale).as_(),
-            y: (self.pointer.y / scale).as_(),
-        };
-        let clicks = if phase == PointerPhase::Down {
-            self.clicks.press(self.pointer, Instant::now())
-        } else {
-            self.clicks.count.max(1)
-        };
-        self.ui.input(Input::Pointer(PointerInput::new(
-            MOUSE,
-            None,
-            phase,
-            Some(at),
-            clicks,
-        )));
-        self.request_redraw();
-    }
-
-    /// One wheel notch, in whichever units the platform reports it.
-    fn wheel(&mut self, delta: MouseScrollDelta) {
-        self.ui.input(Input::Wheel(match delta {
-            MouseScrollDelta::LineDelta(x, y) => Scroll::Lines { x, y },
-            MouseScrollDelta::PixelDelta(at) => Scroll::Pixels {
-                x: at.x.as_(),
-                y: at.y.as_(),
-            },
-        }));
+    fn ime(&mut self, event: &WinitIme) {
+        self.ui.input(Input::InputMethod(portable_ime(event)));
         self.request_redraw();
     }
 
@@ -486,11 +409,6 @@ where
             state.shift_key(),
         );
         self.ui.input(Input::ModifiersChanged(self.modifiers));
-        self.request_redraw();
-    }
-
-    fn ime(&mut self, event: &WinitIme) {
-        self.ui.input(Input::InputMethod(portable_ime(event)));
         self.request_redraw();
     }
 
@@ -523,22 +441,27 @@ where
         close
     }
 
-    fn draw(&mut self) {
-        let elapsed = self.frames.step(WallInstant::now());
-        self.ui.frame(elapsed);
-        if !self.ui.needs_frame() {
-            return;
-        }
-        let Ok(frame) = self
-            .ui
-            .render()
-            .inspect_err(|error| tracing::error!(%error, "redraw"))
-        else {
-            return;
+    /// Turns the window's physical pointer position into the logical point the
+    /// neutral input contract speaks in.
+    fn point(&mut self, phase: PointerPhase) {
+        let scale = self.window.scale_factor();
+        let at = Pt {
+            x: (self.pointer.x / scale).as_(),
+            y: (self.pointer.y / scale).as_(),
         };
-        if self.present(&frame) && self.ui.complete_frame() {
-            self.request_redraw();
-        }
+        let clicks = if phase == PointerPhase::Down {
+            self.clicks.press(self.pointer, Instant::now())
+        } else {
+            self.clicks.count.max(1)
+        };
+        self.ui.input(Input::Pointer(PointerInput::new(
+            MOUSE,
+            None,
+            phase,
+            Some(at),
+            clicks,
+        )));
+        self.request_redraw();
     }
 
     /// Vello paints into its own `Rgba8Unorm` target; the surface takes whatever
@@ -598,6 +521,77 @@ where
         frame.present();
         self.clear_recovery_redraw();
         true
+    }
+
+    fn reconfigure_surface(&mut self, size: PhysicalSize<u32>) {
+        self.context
+            .resize_surface(&mut self.surface, size.width, size.height);
+        self.replace_target(size);
+    }
+
+    fn recover_surface(&mut self, error: &SurfaceError) {
+        match surface_recovery(error) {
+            SurfaceRecovery::Retry => {
+                let redraw_requested = self.request_recovery_redraw();
+                tracing::warn!(%error, redraw_requested, "surface frame timed out");
+            }
+            SurfaceRecovery::Reconfigure => {
+                let size = self.window.inner_size();
+                if size.width == 0 || size.height == 0 {
+                    tracing::warn!(%error, "surface recovery waits for a nonzero resize");
+                    return;
+                }
+                self.reconfigure_surface(size);
+                let redraw_requested = self.request_recovery_redraw();
+                tracing::warn!(%error, redraw_requested, "surface frame reconfigured");
+            }
+            SurfaceRecovery::Stop => tracing::error!(%error, "surface frame failed"),
+        }
+    }
+
+    fn replace_target(&mut self, size: PhysicalSize<u32>) {
+        let handle = &self.context.devices[self.surface.dev_id];
+        target::replace(&mut self.surface, &handle.device, size.width, size.height);
+    }
+
+    fn request_recovery_redraw(&mut self) -> bool {
+        if self.recovery_redraw_latched {
+            return false;
+        }
+        self.recovery_redraw_latched = true;
+        self.window.request_redraw();
+        true
+    }
+
+    fn request_redraw(&mut self) {
+        self.clear_recovery_redraw();
+        self.window.request_redraw();
+    }
+
+    fn resize(&mut self, size: PhysicalSize<u32>) {
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        if self.surface.config.width != size.width || self.surface.config.height != size.height {
+            self.reconfigure_surface(size);
+        } else {
+            self.replace_target(size);
+        }
+        self.ui
+            .resize((size.width, size.height), self.window.scale_factor());
+        self.request_redraw();
+    }
+
+    /// One wheel notch, in whichever units the platform reports it.
+    fn wheel(&mut self, delta: MouseScrollDelta) {
+        self.ui.input(Input::Wheel(match delta {
+            MouseScrollDelta::LineDelta(x, y) => Scroll::Lines { x, y },
+            MouseScrollDelta::PixelDelta(at) => Scroll::Pixels {
+                x: at.x.as_(),
+                y: at.y.as_(),
+            },
+        }));
+        self.request_redraw();
     }
 }
 

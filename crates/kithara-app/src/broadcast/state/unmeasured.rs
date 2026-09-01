@@ -1,7 +1,7 @@
-use kithara::host::Host;
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::platform::{CancelToken, time::Duration};
 
 use super::{BroadcastResult, Packager, fixture::Stream};
+use crate::pools::AppHost;
 
 pub(super) struct Unmeasured;
 
@@ -15,14 +15,14 @@ impl Packager for Unmeasured {
     }
 
     fn start(
-        _host: &Host,
+        _host: &AppHost,
         _shutdown: &CancelToken,
         _tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
         Ok(None)
     }
 
-    fn release(_host: &Host) -> BroadcastResult<()> {
+    fn release(_host: &AppHost) -> BroadcastResult<()> {
         Ok(())
     }
 

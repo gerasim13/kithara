@@ -31,6 +31,11 @@ impl ComputeRuntime {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) const fn pool(&self) -> &ComputePool {
+        &self.pool
+    }
+
     pub(crate) fn submit<T, F>(
         &self,
         task_budget: &Arc<Budget>,
@@ -74,8 +79,8 @@ impl ComputeRuntime {
             token,
         };
         let permit = ComputePermit {
-            task: Some(task_permit),
             wake,
+            task: Some(task_permit),
             worker: Some(worker_permit),
         };
 
@@ -84,11 +89,6 @@ impl ComputeRuntime {
             job(context, payload);
         });
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn pool(&self) -> &ComputePool {
-        &self.pool
     }
 }
 
@@ -150,8 +150,8 @@ pub(crate) struct Budget {
 impl Budget {
     pub(crate) fn new(limit: NonZeroUsize) -> Self {
         Self {
-            active: AtomicUsize::new(0),
             limit,
+            active: AtomicUsize::new(0),
         }
     }
 
@@ -180,8 +180,8 @@ impl Drop for BudgetPermit {
 
 struct ComputePermit {
     task: Option<BudgetPermit>,
-    wake: Wake,
     worker: Option<BudgetPermit>,
+    wake: Wake,
 }
 
 impl Drop for ComputePermit {

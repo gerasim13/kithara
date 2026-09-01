@@ -53,27 +53,6 @@ impl Squeeze {
         resolver
     }
 
-    /// The box the retained host laid the strip's run into.
-    fn retained(width: u32) -> Rect {
-        let endpoints = Endpoints::default();
-        let resolver = Self::document();
-        let mut ui = Ui::new(
-            Strip,
-            Config::builder()
-                .endpoints(&endpoints)
-                .resolver(&resolver)
-                .text(builtin::text_doc())
-                .build(),
-            (width, Self::HEIGHT),
-            1.0,
-        )
-        .unwrap_or_else(|error| panic!("the strip fixture must mount: {error}"));
-        ui.scene()
-            .unwrap_or_else(|error| panic!("the retained host must draw the strip: {error}"));
-        ui.rect_of("strip/label")
-            .unwrap_or_else(|| panic!("the run must be laid out at {width} across"))
-    }
-
     /// The box the immediate host laid the strip's run into.
     fn neutral(width: u32) -> Rect {
         let ui = compile(
@@ -113,6 +92,27 @@ impl Squeeze {
         };
         run
     }
+
+    /// The box the retained host laid the strip's run into.
+    fn retained(width: u32) -> Rect {
+        let endpoints = Endpoints::default();
+        let resolver = Self::document();
+        let mut ui = Ui::new(
+            Strip,
+            Config::builder()
+                .endpoints(&endpoints)
+                .resolver(&resolver)
+                .text(builtin::text_doc())
+                .build(),
+            (width, Self::HEIGHT),
+            1.0,
+        )
+        .unwrap_or_else(|error| panic!("the strip fixture must mount: {error}"));
+        ui.scene()
+            .unwrap_or_else(|error| panic!("the retained host must draw the strip: {error}"));
+        ui.rect_of("strip/label")
+            .unwrap_or_else(|| panic!("the run must be laid out at {width} across"))
+    }
 }
 
 /// An application that reads nothing, because the strip asks nothing of it.
@@ -125,16 +125,16 @@ impl Reads for Strip {
 }
 
 impl App for Strip {
-    fn skin(&self) -> &Skin {
-        builtin::skin()
-    }
-
     fn document(&self) -> &str {
         "strip.klayout.ron"
     }
 
     fn reads<R>(&self, with: impl FnOnce(&dyn Reads) -> R) -> R {
         with(self)
+    }
+
+    fn skin(&self) -> &Skin {
+        builtin::skin()
     }
 
     fn update(&mut self, _event: UiEvent) {}

@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_platform::ranged;
 
 use super::{ElasticCapabilities, ElasticConfig, ElasticDrain, ElasticError, ElasticRequest};
@@ -14,18 +15,36 @@ ranged!(
 /// engine never chooses a rate, a direction or a phase on its own, so two
 /// engines fed the same plan advance through the source identically.
 pub trait ElasticEngine: Send + 'static {
+    /// Immutable limits, latency and rate window of this engine.
+    fn capabilities(&self) -> ElasticCapabilities;
+
+    /// Writes the next portion of terminal buffered audio into caller-owned storage.
+    ///
+    /// The caller supplies storage for
+    /// `capabilities().terminal_chunk_frames() * channels` samples and repeats
+    /// until the returned [`ElasticDrain`] is complete. Every incomplete step
+    /// writes a non-empty contiguous tail portion; an active drain reports
+    /// completion together with its final non-empty portion. Fresh, reset and
+    /// already-completed engines return an empty completed step until
+    /// [`prime`](Self::prime) or [`process`](Self::process).
+    ///
+    /// # Errors
+    /// While a drain is active, returns [`ElasticError`] when `output` does not
+    /// match the engine's declared terminal span or when sizing that span
+    /// overflows. An inactive drain returns an empty completed step without
+    /// accessing `output`.
+    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError>;
+
     /// Allocates and initializes an engine for a fixed preparation shape,
     /// outside the render core.
     ///
     /// # Errors
     /// Returns [`ElasticError`] when the shape is outside what the engine can
     /// represent, or when the engine cannot be constructed.
-    fn prepare(config: ElasticConfig) -> Result<Self, ElasticError>
+    fn prepare<S>(config: ElasticConfig<S>) -> Result<Self, ElasticError>
     where
-        Self: Sized;
-
-    /// Immutable limits, latency and rate window of this engine.
-    fn capabilities(&self) -> ElasticCapabilities;
+        Self: Sized,
+        S: HasPool<f32>;
 
     /// Clears prior stream state, absorbs source history and lookahead, then
     /// renders one latency-sized warmup span into caller-owned discard storage.
@@ -67,6 +86,12 @@ pub trait ElasticEngine: Send + 'static {
         output: &mut [f32],
     ) -> Result<(), ElasticError>;
 
+    /// Clears stream history while retaining the prepared shape and latency.
+    ///
+    /// # Errors
+    /// Returns [`ElasticError`] when the resident backend state cannot be cleared.
+    fn reset(&mut self) -> Result<(), ElasticError>;
+
     /// Sets pitch independently from source-to-output frame advance. Across
     /// immediately adjacent [`process`](Self::process) calls, a changed pitch
     /// must affect emitted audio within the declared output latency; engines
@@ -76,27 +101,4 @@ pub trait ElasticEngine: Send + 'static {
     /// Returns [`ElasticError`] when `scale` is outside the common native
     /// range `0.25..=4.0` or is not finite.
     fn set_pitch(&mut self, scale: f64) -> Result<(), ElasticError>;
-
-    /// Writes the next portion of terminal buffered audio into caller-owned storage.
-    ///
-    /// The caller supplies storage for
-    /// `capabilities().terminal_chunk_frames() * channels` samples and repeats
-    /// until the returned [`ElasticDrain`] is complete. Every incomplete step
-    /// writes a non-empty contiguous tail portion; an active drain reports
-    /// completion together with its final non-empty portion. Fresh, reset and
-    /// already-completed engines return an empty completed step until
-    /// [`prime`](Self::prime) or [`process`](Self::process).
-    ///
-    /// # Errors
-    /// While a drain is active, returns [`ElasticError`] when `output` does not
-    /// match the engine's declared terminal span or when sizing that span
-    /// overflows. An inactive drain returns an empty completed step without
-    /// accessing `output`.
-    fn flush(&mut self, output: &mut [f32]) -> Result<ElasticDrain, ElasticError>;
-
-    /// Clears stream history while retaining the prepared shape and latency.
-    ///
-    /// # Errors
-    /// Returns [`ElasticError`] when the resident backend state cannot be cleared.
-    fn reset(&mut self) -> Result<(), ElasticError>;
 }

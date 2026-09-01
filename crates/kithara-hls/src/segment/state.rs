@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use bitflags::bitflags;
+use kithara_bufpool::HasPool;
 use kithara_platform::sync::Arc;
 
 use crate::{
@@ -49,7 +50,12 @@ bitflags! {
 /// atomic (no lock) because `download_head` scans every slot on the ABR tick.
 #[derive(Debug)]
 pub(crate) struct SegmentSlotState {
-    flags: AtomicU8,
+    /// Whether a parked read needs the in-flight fetch's bytes. Set only
+    /// while `DOWNLOADING`, cleared by every terminal transition, read back
+    /// by the command's live demand probe. Kept beside the flags for the
+    /// same reason as `acquire_failures`: a bit packed in there would break
+    /// the claim CAS.
+    reader_demand: AtomicBool,
     /// Consecutive dispatch-side acquire failures on this slot, kept beside
     /// the flags rather than inside them: [`Self::try_claim`] CAS's the flag
     /// byte against a bare zero, so a counter packed in there would make the
@@ -57,22 +63,23 @@ pub(crate) struct SegmentSlotState {
     /// requeue — that is the whole point — and is cleared the moment an
     /// acquire succeeds.
     acquire_failures: AtomicU8,
-    /// Whether a parked read needs the in-flight fetch's bytes. Set only
-    /// while `DOWNLOADING`, cleared by every terminal transition, read back
-    /// by the command's live demand probe. Kept beside the flags for the
-    /// same reason as `acquire_failures`: a bit packed in there would break
-    /// the claim CAS.
-    reader_demand: AtomicBool,
+    flags: AtomicU8,
 }
 
 impl SegmentSlotState {
+    /// Forget the acquire failures: the resource opened, so whatever was in
+    /// the way is gone and the next obstruction starts its own budget.
+    pub(crate) fn clear_acquire_failures(&self) {
+        self.acquire_failures.store(0, Ordering::Release);
+    }
+
     fn flags(&self) -> SlotFlags {
         SlotFlags::from_bits_truncate(self.flags.load(Ordering::Acquire))
     }
 
-    fn settle(&self, state: SlotFlags) {
-        self.flags.store(state.bits(), Ordering::Release);
-        self.reader_demand.store(false, Ordering::Release);
+    /// True while a parked read needs the current in-flight fetch's bytes.
+    pub(crate) fn is_reader_demanded(&self) -> bool {
+        self.is_downloading() && self.reader_demand.load(Ordering::Acquire)
     }
 
     pub(crate) fn mark_failed(&self) {
@@ -94,20 +101,6 @@ impl SegmentSlotState {
             .fetch_or(SlotFlags::SLOW.bits(), Ordering::AcqRel);
     }
 
-    /// File a parked read on the in-flight fetch. A slot that is not
-    /// `DOWNLOADING` is left alone: a planned one is owed, and the owed
-    /// dispatch stamps it `High` at emit.
-    pub(crate) fn note_reader_demand(&self) {
-        if self.is_downloading() {
-            self.reader_demand.store(true, Ordering::Release);
-        }
-    }
-
-    /// True while a parked read needs the current in-flight fetch's bytes.
-    pub(crate) fn is_reader_demanded(&self) -> bool {
-        self.is_downloading() && self.reader_demand.load(Ordering::Acquire)
-    }
-
     pub(crate) fn missing() -> Arc<Self> {
         Arc::new(Self {
             flags: AtomicU8::new(SlotFlags::empty().bits()),
@@ -126,10 +119,18 @@ impl SegmentSlotState {
         next
     }
 
-    /// Forget the acquire failures: the resource opened, so whatever was in
-    /// the way is gone and the next obstruction starts its own budget.
-    pub(crate) fn clear_acquire_failures(&self) {
-        self.acquire_failures.store(0, Ordering::Release);
+    /// File a parked read on the in-flight fetch. A slot that is not
+    /// `DOWNLOADING` is left alone: a planned one is owed, and the owed
+    /// dispatch stamps it `High` at emit.
+    pub(crate) fn note_reader_demand(&self) {
+        if self.is_downloading() {
+            self.reader_demand.store(true, Ordering::Release);
+        }
+    }
+
+    fn settle(&self, state: SlotFlags) {
+        self.flags.store(state.bits(), Ordering::Release);
+        self.reader_demand.store(false, Ordering::Release);
     }
 
     /// Atomic `Missing -> Downloading` claim. Returns the owned
@@ -137,13 +138,16 @@ impl SegmentSlotState {
     /// the in-flight slot, `None` when another caller already claimed it.
     /// `plan_revision` records the plan the fetch was taken from, so a
     /// cancelled settle can tell a still-current plan from a superseded one.
-    pub(crate) fn try_claim(
+    pub(crate) fn try_claim<S>(
         self: &Arc<Self>,
         planned: PlannedFetch,
         plan_revision: PlanRevision,
-        variant: Weak<HlsVariant>,
+        variant: Weak<HlsVariant<S>>,
         signal: SizeSignal,
-    ) -> Option<FetchClaim<Downloading>> {
+    ) -> Option<FetchClaim<Downloading, S>>
+    where
+        S: HasPool<u8> + Send + Sync + 'static,
+    {
         self.flags
             .compare_exchange(
                 SlotFlags::empty().bits(),
@@ -189,7 +193,10 @@ mod sealed {
 ///
 /// Sealed — the phase set is closed to this module. Each phase carries its
 /// own [`Data`](SegmentPhase::Data) payload; phases without state use `()`.
-pub(crate) trait SegmentPhase: sealed::Sealed {
+pub(crate) trait SegmentPhase<S>: sealed::Sealed
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data;
 }
 
@@ -209,15 +216,27 @@ impl sealed::Sealed for Loaded {}
 impl sealed::Sealed for Missing {}
 impl sealed::Sealed for Failed {}
 
-impl SegmentPhase for Downloading {
-    type Data = super::fetch::DownloadClaim;
+impl<S> SegmentPhase<S> for Downloading
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    type Data = super::fetch::DownloadClaim<S>;
 }
-impl SegmentPhase for Loaded {
+impl<S> SegmentPhase<S> for Loaded
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data = super::fetch::LoadedProof;
 }
-impl SegmentPhase for Missing {
+impl<S> SegmentPhase<S> for Missing
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data = ();
 }
-impl SegmentPhase for Failed {
+impl<S> SegmentPhase<S> for Failed
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     type Data = ();
 }

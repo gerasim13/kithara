@@ -9,19 +9,19 @@ use crate::{
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct Crossfader {
-    arrow_color: Rgba,
     arrows: (char, char),
     captions: CrossfaderLabels,
-    label_color: Rgba,
-    label_role: TextRoleSkin,
-    letter_color: Rgba,
-    letter_role: TextRoleSkin,
     metrics: CrossfaderSkin,
+    ticks: Option<TickRail>,
+    arrow_color: Rgba,
+    label_color: Rgba,
+    letter_color: Rgba,
     rail_background: Rgba,
     rail_border: Rgba,
     thumb_color: Rgba,
     thumb_notch_color: Rgba,
-    ticks: Option<TickRail>,
+    label_role: TextRoleSkin,
+    letter_role: TextRoleSkin,
 }
 
 impl Crossfader {
@@ -73,9 +73,53 @@ impl Crossfader {
         self.paint_labels(list, text, labels);
     }
 
-    /// The strip the rail and its ticks occupy above the labels.
-    fn slider_height(&self) -> f32 {
-        self.ticks.as_ref().map_or(0.0, TickRail::reserved) + self.metrics.thumb_height
+    /// Draws the deck letters, their arrows, and the centre caption on one row:
+    /// the letters hug the outer edges, the caption owns the middle third.
+    fn paint_labels(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
+        let metrics = &self.metrics;
+        let left = text.shape(&self.captions.left, self.letter_role, None);
+        let right = text.shape(&self.captions.right, self.letter_role, None);
+        let center = text.shape(&self.captions.center, self.label_role, None);
+        let back = self.arrows.0.to_string();
+        let forward = self.arrows.1.to_string();
+        let back_run = text.shape_lucide(&back, metrics.arrow_size);
+        let forward_run = text.shape_lucide(&forward, metrics.arrow_size);
+        let height = [&left, &right, &center, &back_run, &forward_run]
+            .into_iter()
+            .map(GlyphRun::height)
+            .fold(0.0_f32, f32::max);
+        let mut place = |run: &GlyphRun, content: &str, x: f32, color: Rgba| {
+            list.text(
+                run,
+                content,
+                Transform::translate(Pt {
+                    x,
+                    y: bounds.y + (height - run.height()) / 2.0,
+                }),
+                color,
+            );
+            x + run.width() + metrics.arrow_gap
+        };
+
+        let x = place(&left, &self.captions.left, bounds.x, self.letter_color);
+        place(&back_run, &back, x, self.arrow_color);
+
+        let column = bounds.w / 3.0;
+        place(
+            &center,
+            &self.captions.center,
+            bounds.x + column + (column - center.width()) / 2.0,
+            self.label_color,
+        );
+
+        let tail = forward_run.width() + metrics.arrow_gap + right.width();
+        let x = place(
+            &forward_run,
+            &forward,
+            bounds.x + bounds.w - tail,
+            self.arrow_color,
+        );
+        place(&right, &self.captions.right, x, self.letter_color);
     }
 
     fn paint_slider(&self, list: &mut DrawListBuilder, value: f32, bounds: Rect) {
@@ -125,53 +169,9 @@ impl Crossfader {
         }
     }
 
-    /// Draws the deck letters, their arrows, and the centre caption on one row:
-    /// the letters hug the outer edges, the caption owns the middle third.
-    fn paint_labels(&self, list: &mut DrawListBuilder, text: &mut TextContext, bounds: Rect) {
-        let metrics = &self.metrics;
-        let left = text.shape(&self.captions.left, self.letter_role, None);
-        let right = text.shape(&self.captions.right, self.letter_role, None);
-        let center = text.shape(&self.captions.center, self.label_role, None);
-        let back = self.arrows.0.to_string();
-        let forward = self.arrows.1.to_string();
-        let back_run = text.shape_lucide(&back, metrics.arrow_size);
-        let forward_run = text.shape_lucide(&forward, metrics.arrow_size);
-        let height = [&left, &right, &center, &back_run, &forward_run]
-            .into_iter()
-            .map(GlyphRun::height)
-            .fold(0.0_f32, f32::max);
-        let mut place = |run: &GlyphRun, content: &str, x: f32, color: Rgba| {
-            list.text(
-                run,
-                content,
-                Transform::translate(Pt {
-                    x,
-                    y: bounds.y + (height - run.height()) / 2.0,
-                }),
-                color,
-            );
-            x + run.width() + metrics.arrow_gap
-        };
-
-        let x = place(&left, &self.captions.left, bounds.x, self.letter_color);
-        place(&back_run, &back, x, self.arrow_color);
-
-        let column = bounds.w / 3.0;
-        place(
-            &center,
-            &self.captions.center,
-            bounds.x + column + (column - center.width()) / 2.0,
-            self.label_color,
-        );
-
-        let tail = forward_run.width() + metrics.arrow_gap + right.width();
-        let x = place(
-            &forward_run,
-            &forward,
-            bounds.x + bounds.w - tail,
-            self.arrow_color,
-        );
-        place(&right, &self.captions.right, x, self.letter_color);
+    /// The strip the rail and its ticks occupy above the labels.
+    fn slider_height(&self) -> f32 {
+        self.ticks.as_ref().map_or(0.0, TickRail::reserved) + self.metrics.thumb_height
     }
 }
 

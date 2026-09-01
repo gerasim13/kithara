@@ -1,5 +1,6 @@
 use std::ops::Range;
 
+use kithara_bufpool::HasPool;
 use kithara_stream::{SourcePhase, needs_exact_byte_sizes};
 
 use super::HlsVariant;
@@ -12,11 +13,13 @@ pub(super) enum RangeGate {
     Ready,
 }
 
-impl HlsVariant {
+impl<S> HlsVariant<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     pub(super) fn fetch_is_planned(&self, planned: PlannedFetch) -> bool {
-        // Runs on the produce core inside `phase_at`: the membership mirror,
-        // not the queue lock — a blocking lock here spins into `sched_yield`
-        // in a real-time context under planner contention.
+        // WHY: Runs on the produce core inside `phase_at`: the membership mirror, not the queue lock - a blocking lock here spins into
+        // `sched_yield` in a real-time context under planner contention.
         self.flow.queue.planned(planned)
     }
 
@@ -26,25 +29,6 @@ impl HlsVariant {
 
     pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase {
         self.phase_at_with(range, || {})
-    }
-
-    delegate::delegate! {
-        to self {
-            #[cfg(test)]
-            #[call(phase_at_with)]
-            pub(crate) fn phase_at_after_eof(
-                &self,
-                range: Range<u64>,
-                after_eof: impl FnOnce(),
-            ) -> SourcePhase;
-            #[cfg(test)]
-            #[call(range_ready_with)]
-            pub(crate) fn range_ready_after_total(
-                &self,
-                range: &Range<u64>,
-                after_total: impl FnOnce(),
-            ) -> bool;
-        }
     }
 
     fn phase_at_with(&self, range: Range<u64>, after_eof: impl FnOnce()) -> SourcePhase {
@@ -200,19 +184,6 @@ impl HlsVariant {
         self.range_wait_phase_with(range, |_| {})
     }
 
-    /// Wait phase of `range`; `on_demand` sees every planned or in-flight
-    /// fetch the range still needs bytes from. The query itself is pure —
-    /// only the wait filing in `wait_range` passes a writing visitor.
-    pub(super) fn range_wait_phase_with(
-        &self,
-        range: &Range<u64>,
-        on_demand: impl FnMut(PlannedFetch),
-    ) -> SourcePhase {
-        self.layout
-            .try_published(|| Some(self.range_wait_phase_published(range, on_demand)))
-            .unwrap_or(SourcePhase::WaitingDemand)
-    }
-
     fn range_wait_phase_published(
         &self,
         range: &Range<u64>,
@@ -289,6 +260,38 @@ impl HlsVariant {
             SourcePhase::WaitingDemand
         } else {
             SourcePhase::Waiting
+        }
+    }
+
+    /// Wait phase of `range`; `on_demand` sees every planned or in-flight
+    /// fetch the range still needs bytes from. The query itself is pure —
+    /// only the wait filing in `wait_range` passes a writing visitor.
+    pub(super) fn range_wait_phase_with(
+        &self,
+        range: &Range<u64>,
+        on_demand: impl FnMut(PlannedFetch),
+    ) -> SourcePhase {
+        self.layout
+            .try_published(|| Some(self.range_wait_phase_published(range, on_demand)))
+            .unwrap_or(SourcePhase::WaitingDemand)
+    }
+
+    delegate::delegate! {
+        to self {
+            #[cfg(test)]
+            #[call(phase_at_with)]
+            pub(crate) fn phase_at_after_eof(
+                &self,
+                range: Range<u64>,
+                after_eof: impl FnOnce(),
+            ) -> SourcePhase;
+            #[cfg(test)]
+            #[call(range_ready_with)]
+            pub(crate) fn range_ready_after_total(
+                &self,
+                range: &Range<u64>,
+                after_total: impl FnOnce(),
+            ) -> bool;
         }
     }
 }

@@ -3,16 +3,23 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-use kithara_host::{Host, HostConfig, wasm};
-use kithara_platform::sync::{Mutex, MutexGuard, mpsc};
+use kithara::{
+    host::{HostConfig, wasm},
+    platform::sync::{Mutex, MutexGuard, mpsc},
+    play::wasm as play_wasm,
+};
 use wasm_bindgen::JsValue;
 
-use crate::web::commands::WorkerCmd;
+use crate::{
+    pools::{FfiHost, FfiPools, Pools, build as build_pools},
+    web::commands::WorkerCmd,
+};
 
 struct HostChannel {
-    _host: Host,
-    receiver: wasm::HostReceiver,
-    sender: wasm::HostSender,
+    _host: FfiHost,
+    pools: Pools,
+    receiver: wasm::HostReceiver<FfiPools>,
+    sender: wasm::HostSender<FfiPools>,
 }
 
 fn current_track_id_cell() -> &'static AtomicI64 {
@@ -25,22 +32,32 @@ fn host_channel() -> &'static Mutex<Option<HostChannel>> {
     &CHANNEL
 }
 
-fn ensure_host_channel() -> Result<wasm::HostSender, JsValue> {
+fn ensure_host_channel() -> Result<(wasm::HostSender<FfiPools>, Pools), JsValue> {
     let mut guard = host_channel().lock();
     if let Some(channel) = guard.as_ref() {
-        return Ok(channel.sender.clone());
+        return Ok((channel.sender.clone(), channel.pools.clone()));
     }
 
-    let host = Host::new(HostConfig::builder().build())
+    let pools = build_pools()
+        .map_err(|error| JsValue::from_str(&format!("pool construction failed: {error}")))?;
+    let host = FfiHost::new(HostConfig::builder().build())
         .map_err(|error| JsValue::from_str(&format!("host construction failed: {error}")))?;
-    let (sender, receiver) = wasm::worker_host_channel(&host);
-    wasm::warm_up_audio();
+    let (sender, receiver) = wasm::worker_host_channel(&host)
+        .map_err(|error| JsValue::from_str(&format!("host channel failed: {error}")))?;
+    play_wasm::spawn_webcodecs_probe(pools.clone());
+    wasm::warm_up_audio(&host)
+        .map_err(|error| JsValue::from_str(&format!("audio warm-up failed: {error}")))?;
     *guard = Some(HostChannel {
         _host: host,
+        pools: pools.clone(),
         receiver,
         sender: sender.clone(),
     });
-    Ok(sender)
+    Ok((sender, pools))
+}
+
+pub(crate) fn initialize() -> Result<(), JsValue> {
+    ensure_host_channel().map(drop)
 }
 
 pub(crate) fn tick_and_poll() {
@@ -52,7 +69,7 @@ pub(crate) fn tick_and_poll() {
 
 /// Record the worker's current track id for the main-thread read-back.
 /// Called from the worker's event source on every `CurrentTrackChanged`.
-pub(crate) fn set_current_track_id(id: Option<kithara_queue::TrackId>) {
+pub(crate) fn set_current_track_id(id: Option<kithara::queue::TrackId>) {
     let raw = id.map_or(WorkerBridge::NO_CURRENT_TRACK, |id| {
         i64::try_from(id.as_u64()).unwrap_or(WorkerBridge::NO_CURRENT_TRACK)
     });
@@ -79,11 +96,11 @@ impl WorkerBridge {
     /// Id of the worker's current track, read synchronously from the
     /// shared current-track atomic the worker's event source keeps
     /// in sync. `None` when no track is current.
-    pub(crate) fn current_track_id(&self) -> Option<kithara_queue::TrackId> {
+    pub(crate) fn current_track_id(&self) -> Option<kithara::queue::TrackId> {
         let _ = self;
         match current_track_id_cell().load(Ordering::Relaxed) {
             Self::NO_CURRENT_TRACK => None,
-            raw => u64::try_from(raw).ok().map(kithara_queue::TrackId),
+            raw => u64::try_from(raw).ok().map(kithara::queue::TrackId),
         }
     }
 
@@ -106,15 +123,15 @@ impl WorkerBridge {
             return;
         }
 
-        let Ok(host_sender) = ensure_host_channel() else {
+        let Ok((host_sender, pools)) = ensure_host_channel() else {
             return;
         };
 
         let (cmd_tx, cmd_rx) = mpsc::channel();
         *self.lock_cmd_tx() = Some(cmd_tx);
 
-        let worker = kithara_platform::thread::spawn(move || {
-            crate::web::worker::worker_main(cmd_rx, host_sender);
+        let worker = kithara::platform::thread::spawn(move || {
+            crate::web::worker::worker_main(cmd_rx, host_sender, pools);
         });
         std::mem::forget(worker);
     }

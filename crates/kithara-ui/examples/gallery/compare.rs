@@ -1,9 +1,3 @@
-//! Compares two capture sets page by page and says, in numbers, where they
-//! disagree.
-//!
-//! Asked for by `--compare <a> <b> <out>`. The comparison itself belongs to the
-//! toolkit; what stands here is the way this example is asked for one.
-
 use std::path::{Path, PathBuf};
 
 use kithara_ui::capture::diff;

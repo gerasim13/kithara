@@ -1,0 +1,72 @@
+id: perf.no-manual-pool-registration
+message: |
+  Implementing typed pool registration by hand can attach forged slots or
+  detach them from the owning region budget. Declare registrations only with
+  `pool_schema!`; its generated `HasPool<K>` implementations preserve region
+  provenance and keep unregistered keys as compile-time errors.
+severity: error
+language: Rust
+files:
+  - crates/kithara/src/**/*.rs
+  - crates/kithara-*/src/**/*.rs
+ignores:
+  - crates/kithara-bufpool/**
+  - crates/kithara-devtools/**
+  - crates/kithara-test-macros/**
+  - crates/kithara-test-utils/**
+  - crates/kithara-workspace-hack/**
+  - "**/tests/**"
+  - "**/test_*.rs"
+  - "**/*_test.rs"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - crates/kithara-host/src/session/testing.rs
+  - crates/kithara-play/src/session/testing.rs
+  - "**/benches/**"
+rule:
+  all:
+    - kind: impl_item
+    - has:
+        kind: function_item
+        regex: '(?s)^fn\s+__slot\s*\('
+        stopBy: end
+    - not:
+        follows:
+          kind: attribute_item
+          regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+          stopBy:
+            not:
+              kind: attribute_item
+    - not:
+        inside:
+          all:
+            - kind: mod_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: function_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b|^#\[test\]$|kithara::test'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end
+    - not:
+        inside:
+          all:
+            - kind: impl_item
+            - follows:
+                kind: attribute_item
+                regex: 'cfg\(test\)|cfg\(all\([^)]*\btest\b'
+                stopBy:
+                  not:
+                    kind: attribute_item
+          stopBy: end

@@ -13,10 +13,10 @@ Dependencies point strictly **downward**; nothing lower reaches back up into orc
 
 ```
         kithara-app          kithara-ffi     ← surfaces (cancel-root owners)
-            |   \             /
-      kithara-ui  kithara  (facade: feature-gated re-export modules)
-                     |
-               kithara-queue   (multi-track queue, auto-advance, pause gate)
+                 \             /
+                  kithara  (facade: feature-gated product modules)
+                    /  \
+          kithara-ui   kithara-queue   (UI model / multi-track queue)
                      |
                kithara-play    (Player/deck, worker/scheduler, effects, sessions)
                 /          \
@@ -59,8 +59,8 @@ are no-ops in production builds).
   lifecycle, the worker, the Host/session, or presentation acknowledgement; R7 does not yet connect map progress to the
   production render path. `kithara-analysis` consumes its backend-independent grid types, while feature-enabled
   `kithara-warp` delegates DSP to the backend engines owned by `kithara-stretch`.
-- **`kithara`** is the facade aggregating protocols + storage + net behind feature flags; `kithara-ffi` and `kithara-app`
-  consume it rather than reaching into protocol crates for the playback path.
+- **`kithara`** is the top-level product facade aggregating protocols, storage, net, UI, workers, encoding, and playback
+  behind feature flags; `kithara-ffi` and `kithara-app` consume product crates through it.
 - **Side branches:** `kithara-stretch` supplies backend engines to the `kithara-warp` renderer; `kithara-warp` owns the
   temporal-control protocol and synchronous time-stretch stage. `kithara-analysis`
   consumes decoded source ranges from `kithara-audio`, `kithara-beat`, and

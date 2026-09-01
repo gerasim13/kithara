@@ -18,13 +18,13 @@ use crate::{
 };
 
 pub(super) struct TableHost {
-    columns: Vec<ColumnLayout>,
-    divider_paths: Vec<String>,
+    skin: Skin,
     horizontal_path: String,
     path: String,
-    row_count: usize,
     row_target: String,
-    skin: Skin,
+    columns: Vec<ColumnLayout>,
+    divider_paths: Vec<String>,
+    row_count: usize,
 }
 
 impl TableHost {
@@ -43,11 +43,43 @@ impl TableHost {
         Self {
             columns,
             divider_paths,
+            row_count,
             horizontal_path: format!("{path}/scroll-x"),
             path: path.to_owned(),
-            row_count,
             row_target: format!("{path}/rows"),
             skin: skin.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
+        descriptors.push(Descriptor::scroll(
+            self.horizontal_path.clone(),
+            ScrollConfig::plain(ScrollAxis::Horizontal, minimum_table_width(&self.columns)),
+        ));
+        descriptors.push(Descriptor::scroll(
+            self.path.clone(),
+            ScrollConfig::plain(
+                ScrollAxis::Vertical,
+                table_content_height(self.row_count, &self.skin),
+            ),
+        ));
+        descriptors.push(Descriptor::item(
+            self.row_target.clone(),
+            self.path.clone(),
+            self.row_count,
+        ));
+        let resizable = self
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| column_resizable(&self.columns, *index));
+        for (divider_path, (_, column)) in self.divider_paths.iter().zip(resizable) {
+            descriptors.push(Descriptor::column_divider(
+                divider_path.clone(),
+                column.width,
+                self.skin.table.min_column_width,
+            ));
         }
     }
 
@@ -131,38 +163,6 @@ impl TableHost {
             }
         }
     }
-
-    #[cfg(test)]
-    pub(super) fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
-        descriptors.push(Descriptor::scroll(
-            self.horizontal_path.clone(),
-            ScrollConfig::plain(ScrollAxis::Horizontal, minimum_table_width(&self.columns)),
-        ));
-        descriptors.push(Descriptor::scroll(
-            self.path.clone(),
-            ScrollConfig::plain(
-                ScrollAxis::Vertical,
-                table_content_height(self.row_count, &self.skin),
-            ),
-        ));
-        descriptors.push(Descriptor::item(
-            self.row_target.clone(),
-            self.path.clone(),
-            self.row_count,
-        ));
-        let resizable = self
-            .columns
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| column_resizable(&self.columns, *index));
-        for (divider_path, (_, column)) in self.divider_paths.iter().zip(resizable) {
-            descriptors.push(Descriptor::column_divider(
-                divider_path.clone(),
-                column.width,
-                self.skin.table.min_column_width,
-            ));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -229,7 +229,7 @@ mod tests {
         let divider = targets
             .iter()
             .find(|target| target.path == "library/tracks/width/index")
-            .unwrap_or_else(|| panic!("the partially visible index divider must remain hittable"));
+            .expect("the partially visible index divider must remain hittable");
         assert_eq!(divider.hit.area().x, 94.5);
         assert_eq!(divider.hit.area().w, 5.5);
         assert!(
@@ -279,7 +279,7 @@ mod tests {
         let watcher = release_targets
             .iter()
             .find(|target| target.path == path)
-            .unwrap_or_else(|| panic!("an active offscreen divider must retain a release watcher"));
+            .expect("an active offscreen divider must retain a release watcher");
         assert_eq!((watcher.hit.area().w, watcher.hit.area().h), (0.0, 0.0));
 
         let _ = engine.handle(pointer_input(PointerPhase::Up, None), &release_targets, now);

@@ -4,7 +4,6 @@ use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession},
-    bufpool::Region,
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{CancelToken, time::Duration},
@@ -15,6 +14,7 @@ use kithara::{
 use kithara_integration_tests::auto;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
+    bufpool_ext::{TestPools, pools},
     fixture_protocol::{EncryptionRequest, PackagedSignal},
 };
 use tracing::{info, warn};
@@ -162,40 +162,36 @@ async fn run_case_paced(
 
     let temp_dir = TestTempDir::new();
     let cancel = CancelToken::never();
-    let region = Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let store = if ephemeral {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .pool(byte_pool.clone())
             .cache_capacity(NonZeroUsize::new(SEGMENTS_PER_VARIANT + 10).expect("nonzero"))
             .build()
     } else {
-        AssetStore::builder()
+        AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: temp_dir.path().into(),
             })
-            .pool(byte_pool.clone())
             .build()
     };
     let initial_mode = scenario.first().map_or(AbrMode::default(), |&(m, _)| m);
     let hls_config = HlsConfig::for_url(created.master_url())
         .store(store)
-        .pool(byte_pool.clone())
+        .pools(pools.clone())
         .cancel(cancel)
         .initial_abr_mode(initial_mode)
         .build();
     // Keep HLS scan nonblocking: readiness is observed through Frames/Pending,
     // not through the blocking read watchdog's wall-clock budget.
-    let audio_config = AudioConfig::<Hls>::for_stream(hls_config)
+    let audio_config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
                 .build(),
         )
         .build();
-    let worker =
-        PlayWorker::new(PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build());
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());
     let mut audio = worker
         .open(audio_config)
         .await

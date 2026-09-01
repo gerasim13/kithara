@@ -160,7 +160,6 @@ fn decide(state: &AbrState, view: &AbrView<'_>) -> AbrDecision {
     let max_bw = state.max_bandwidth_bps();
     let mut sorted = sorted_candidates(view.variants, max_bw);
     if escaping {
-        // The active variant cannot deliver — it must not be a Stay target.
         sorted.retain(|(idx, _)| *idx != current);
     }
     if sorted.is_empty() {
@@ -181,10 +180,6 @@ fn decide(state: &AbrState, view: &AbrView<'_>) -> AbrDecision {
     };
 
     if escaping {
-        // `current` was excluded from `sorted` above, so `candidate_idx !=
-        // current`. Escape to the bandwidth-viable candidate, bypassing the
-        // buffer-too-low and hysteresis gates: their premise (staying grows the
-        // buffer) is false for a variant that delivers nothing.
         return AbrDecision::UpSwitch {
             from: current,
             to: candidate_idx,

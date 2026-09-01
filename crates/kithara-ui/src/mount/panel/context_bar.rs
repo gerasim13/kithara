@@ -11,8 +11,8 @@ use crate::{
 /// The strip under the tree that names the scope in view.
 #[derive(Builder)]
 pub(crate) struct ContextBar<'a> {
-    pub(crate) scope: Option<&'a Binding>,
     pub(crate) scope_items: &'a [InternId],
+    pub(crate) scope: Option<&'a Binding>,
 }
 
 impl Control for ContextBar<'_> {
@@ -35,10 +35,6 @@ mod host {
 
     impl Draws for ContextBar<'_> {
         type Painter = Context;
-
-        fn painter(&self, skin: &Skin) -> Context {
-            Context::new(skin)
-        }
 
         /// The path in view is what this strip is for: without one there is
         /// nothing to name, and the scope beside it is what the document
@@ -64,6 +60,10 @@ mod host {
                     items,
                 }),
             })
+        }
+
+        fn painter(&self, skin: &Skin) -> Context {
+            Context::new(skin)
         }
     }
 }

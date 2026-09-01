@@ -12,9 +12,6 @@ use crate::{
 pub(crate) trait Draws {
     type Painter: ControlPainter;
 
-    /// The painter, with the skin already resolved into it.
-    fn painter(&self, skin: &Skin) -> Self::Painter;
-
     /// What it draws this frame, or nothing at all when its endpoint has not
     /// said yet - an unbound switch is an empty box, not an idle switch.
     fn data(&self, read: Reading<'_>) -> Option<<Self::Painter as ControlPainter>::Data>;
@@ -27,6 +24,9 @@ pub(crate) trait Draws {
     fn index_event(&self) -> Option<IndexEvent<<Self::Painter as ControlPainter>::Data>> {
         None
     }
+
+    /// The painter, with the skin already resolved into it.
+    fn painter(&self, skin: &Skin) -> Self::Painter;
 
     /// How a leaf that is mounted once steps itself afterwards, given the
     /// endpoint its reading came from.
@@ -58,8 +58,8 @@ pub(crate) type DataRefresh<Data> = Box<dyn Fn(&mut Data, Ctx<'_, '_>) -> bool>;
 /// named by the document and carried by the skin.
 #[derive(Clone, Copy)]
 pub(crate) struct Reading<'a> {
-    pub(crate) ctx: Ctx<'a, 'a>,
-    pub(crate) scope: &'a str,
     pub(crate) skin: &'a Skin,
+    pub(crate) scope: &'a str,
+    pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) value: Option<&'a ReadValue<'a>>,
 }

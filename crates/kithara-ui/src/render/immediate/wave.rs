@@ -55,9 +55,9 @@ impl<'a, 'skin: 'a> Widget<'a> for MiniWave<'_, 'skin> {
             }))
             .build();
         Canvas::new(MiniWaveCanvas {
-            data: self.data,
             drag,
             painter,
+            data: self.data,
             path: self.path.to_owned(),
             skin: self.skin,
         })
@@ -68,19 +68,19 @@ impl<'a, 'skin: 'a> Widget<'a> for MiniWave<'_, 'skin> {
 }
 
 struct MiniWaveCanvas<'skin> {
-    data: Drawn,
-    drag: Scalar,
-    painter: Face,
-    path: String,
     skin: &'skin Skin,
+    data: Drawn,
+    painter: Face,
+    drag: Scalar,
+    path: String,
 }
 
 #[derive(Default)]
 struct MiniWaveState {
     modifiers: Modifiers,
     loop_start: Option<f32>,
-    drag: ScalarState,
     text: RefCell<Option<TextContext>>,
+    drag: ScalarState,
 }
 
 impl canvas::Program<UiEvent> for MiniWaveCanvas<'_> {

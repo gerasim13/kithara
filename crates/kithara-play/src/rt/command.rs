@@ -40,8 +40,7 @@ impl PlayerNodeProcessor {
 
         let mut revived = false;
         for (_, track) in self.tracks.iter_mut() {
-            // Slot-wide: the re-base releases the natural-end hold on every
-            // loaded track, including the ones this seek does not move.
+            // WHY: Slot-wide: the re-base releases the natural-end hold on every loaded track, including the ones this seek does not move.
             track.observe_seek_epoch(seek_epoch);
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {

@@ -30,8 +30,8 @@ use crate::{
 /// file appearing later is still found.
 #[derive(Debug)]
 pub struct FileResolver {
-    blobs: RefCell<BTreeMap<String, Arc<[u8]>>>,
     root: PathBuf,
+    blobs: RefCell<BTreeMap<String, Arc<[u8]>>>,
     texts: RefCell<BTreeMap<String, String>>,
 }
 
@@ -78,21 +78,6 @@ fn refusal(origin: SourceUri, rel: &str, error: &io::Error) -> UiDocError {
 }
 
 impl SourceResolver for FileResolver {
-    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
-        let uri = resolve_uri(base, rel)?;
-        if let Some(text) = self.texts.borrow().get(&uri.0) {
-            return Ok(LoadedSource {
-                uri,
-                text: text.clone(),
-            });
-        }
-        let origin = base.cloned().unwrap_or_else(|| uri.clone());
-        let path = self.real(&origin, &uri, rel)?;
-        let text = fs::read_to_string(path).map_err(|error| refusal(origin, rel, &error))?;
-        self.texts.borrow_mut().insert(uri.0.clone(), text.clone());
-        Ok(LoadedSource { uri, text })
-    }
-
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError> {
         let uri = resolve_uri(base, rel)?;
         if let Some(bytes) = self.blobs.borrow().get(&uri.0) {
@@ -108,7 +93,22 @@ impl SourceResolver for FileResolver {
         self.blobs
             .borrow_mut()
             .insert(uri.0.clone(), Arc::clone(&bytes));
-        Ok(LoadedBytes { uri, bytes })
+        Ok(LoadedBytes { bytes, uri })
+    }
+
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError> {
+        let uri = resolve_uri(base, rel)?;
+        if let Some(text) = self.texts.borrow().get(&uri.0) {
+            return Ok(LoadedSource {
+                uri,
+                text: text.clone(),
+            });
+        }
+        let origin = base.cloned().unwrap_or_else(|| uri.clone());
+        let path = self.real(&origin, &uri, rel)?;
+        let text = fs::read_to_string(path).map_err(|error| refusal(origin, rel, &error))?;
+        self.texts.borrow_mut().insert(uri.0.clone(), text.clone());
+        Ok(LoadedSource { uri, text })
     }
 }
 

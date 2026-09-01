@@ -7,6 +7,7 @@ use std::{
 };
 
 use kithara_platform::sync::Arc;
+use kithara_test_utils::kithara;
 use mmap_io::MemoryMappedFile;
 
 use crate::{
@@ -22,11 +23,8 @@ impl DriverIo for MmapDriver {
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
 
-        // A re-download (`reactivate`) wrote the new generation to a temp file so
-        // it never aliased the still-published committed snapshot. Detect that
-        // here: the new generation is swapped into place with an atomic rename,
-        // which keeps the old inode alive for in-flight readers holding the old
-        // RO mmap. An initial download writes `self.path` in place (no temp).
+        // WHY: A re-download (`reactivate`) wrote the new generation to a temp file so it never aliased the still-published committed
+        // snapshot.
         let rewrite_temp: Option<PathBuf> = match &*mmap_guard {
             MmapState::Active(m) if m.path() != self.path => Some(m.path().to_path_buf()),
             _ => None,
@@ -39,8 +37,7 @@ impl DriverIo for MmapDriver {
                     MmapState::Active(mmap) if len < mmap.len()
                 );
 
-                // Flush the temp generation's dirty pages before dropping the
-                // map and renaming, so the republished RO mmap sees them.
+                // WHY: Flush the temp generation's dirty pages before dropping the map and renaming, so the republished RO mmap sees them.
                 if rewrite_temp.is_some()
                     && let MmapState::Active(m) = &*mmap_guard
                 {
@@ -104,32 +101,6 @@ impl DriverIo for MmapDriver {
         Ok(())
     }
 
-    /// Flush the written pages and stop, keeping the active mapping. The
-    /// caller renames the file and reopens on its canonical path, so the
-    /// snapshot this would have published is dead on arrival — and the live
-    /// mapping is what serves readers until that reopen lands. A zero-length
-    /// or already-published resource has nothing to keep alive and takes the
-    /// ordinary commit path.
-    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
-        if final_len == Some(0) {
-            return self.commit(final_len);
-        }
-        let mmap_guard = self.mmap.lock();
-        let MmapState::Active(mmap) = &*mmap_guard else {
-            drop(mmap_guard);
-            return self.commit(final_len);
-        };
-        // Flush the written prefix, not the whole mapping: the reservation
-        // beyond `final_len` is untouched, and syncing it back would cost
-        // more than the re-map this seal exists to avoid.
-        match final_len.filter(|len| *len < mmap.len()) {
-            Some(len) => mmap.flush_range(0, len)?,
-            None => mmap.flush()?,
-        }
-        drop(mmap_guard);
-        Ok(())
-    }
-
     fn committed_len(&self) -> Option<u64> {
         self.committed.load().as_ref().map(|m| m.len())
     }
@@ -146,22 +117,13 @@ impl DriverIo for MmapDriver {
         let mut mmap_guard = self.mmap.lock();
 
         match &*mmap_guard {
-            // Already active (initial download in flight) — nothing to do, but
-            // only while the file this maps still exists. A cancelled or failed
-            // fetch unlinks its partial temp, which leaves the mapping over a
-            // deleted inode; treating that as "download in flight" lets the
-            // refetch write into a file no commit can ever find, and the retry
-            // dies on a missing path instead of re-downloading.
+            // WHY: Already active (initial download in flight) - nothing to do, but only while the file this maps still exists.
             MmapState::Active(active) if active.path().exists() => {}
-            // Re-download. Keep the committed snapshot PUBLISHED so in-flight
-            // readers keep serving the immutable prior generation zero-copy via
-            // the old RO mmap. Write the new generation to a fresh temp file;
-            // `commit` atomically renames it into place. The committed file
-            // mapped by the snapshot is never overwritten in place, so a
-            // concurrent read can never tear across the generation boundary.
+            // WHY: Re-download. Keep the committed snapshot PUBLISHED so in-flight readers keep serving the immutable prior generation zero-copy
+            // via the old RO mmap.
             MmapState::Active(_) | MmapState::Committed(_) | MmapState::Empty => {
                 let temp = self.rewrite_temp_path();
-                // Drop any stale temp left by a previously-cancelled rewrite.
+                // WHY: Drop any stale temp left by a previously-cancelled rewrite.
                 let _ = fs::remove_file(&temp);
                 let rw = MemoryMappedFile::create_rw(&temp, self.initial_len)?;
                 *mmap_guard = MmapState::Active(rw);
@@ -172,7 +134,7 @@ impl DriverIo for MmapDriver {
         Ok(())
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         {
             let mmap_guard = self.mmap.lock();
@@ -209,6 +171,31 @@ impl DriverIo for MmapDriver {
         Ok(Some(to_read))
     }
 
+    /// Flush the written pages and stop, keeping the active mapping. The
+    /// caller renames the file and reopens on its canonical path, so the
+    /// snapshot this would have published is dead on arrival — and the live
+    /// mapping is what serves readers until that reopen lands. A zero-length
+    /// or already-published resource has nothing to keep alive and takes the
+    /// ordinary commit path.
+    fn seal(&self, final_len: Option<u64>) -> StorageResult<()> {
+        if final_len == Some(0) {
+            return self.commit(final_len);
+        }
+        let mmap_guard = self.mmap.lock();
+        let MmapState::Active(mmap) = &*mmap_guard else {
+            drop(mmap_guard);
+            return self.commit(final_len);
+        };
+        // WHY: Flush the written prefix, not the whole mapping: the reservation beyond `final_len` is untouched, and syncing it back would
+        // cost more than the re-map this seal exists to avoid.
+        match final_len.filter(|len| *len < mmap.len()) {
+            Some(len) => mmap.flush_range(0, len)?,
+            None => mmap.flush()?,
+        }
+        drop(mmap_guard);
+        Ok(())
+    }
+
     fn storage_len(&self) -> u64 {
         let mmap_guard = self.mmap.lock();
         mmap_guard.len()
@@ -219,7 +206,7 @@ impl DriverIo for MmapDriver {
             .any(|ready| ready.start <= range.start && ready.end >= range.end)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         let end = offset + data.len() as u64;
         let mut mmap_guard = self.mmap.lock();

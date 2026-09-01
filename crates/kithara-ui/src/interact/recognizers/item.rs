@@ -19,16 +19,24 @@ pub(crate) enum DragEvent {
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct ItemDrag {
-    #[field(get = is_held, vis = "pub(crate)")]
-    held: bool,
     origin: Option<Pt>,
     active: bool,
+    #[field(get = is_held, vis = "pub(crate)")]
+    held: bool,
 }
 
 impl ItemDrag {
     /// Pointer travel that turns a press on an item into a drag; below it the
     /// press stays a plain click.
     const THRESHOLD: f32 = 4.0;
+
+    pub(crate) const fn cursor(&self) -> CursorShape {
+        if self.active {
+            CursorShape::Grabbing
+        } else {
+            CursorShape::None
+        }
+    }
 
     pub(crate) fn on_input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<DragEvent> {
         match input {
@@ -72,14 +80,6 @@ impl ItemDrag {
             | Input::ModifiersChanged(_)
             | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
-        }
-    }
-
-    pub(crate) const fn cursor(&self) -> CursorShape {
-        if self.active {
-            CursorShape::Grabbing
-        } else {
-            CursorShape::None
         }
     }
 }

@@ -25,9 +25,9 @@ pub(crate) fn tree_rows<'a>(path: &str, picture: Tree, owner: InputOwner) -> Ele
     let row_right_inset =
         picture.skin().tree.scrollbar_margin + picture.skin().tree.scrollbar_width;
     let config = TreeConfig {
-        row_count,
         row_height,
         row_right_inset,
+        row_count,
     };
     match owner {
         InputOwner::Leaf => RetainedCanvas::new(
@@ -70,37 +70,12 @@ pub(crate) fn sync_tree_scroll(path: &str, offset: f32) -> impl Operation + '_ {
 }
 
 struct TreeProgram {
-    picture: Tree,
     path: String,
+    picture: Tree,
 }
 
 impl canvas::Program<UiEvent> for TreeProgram {
     type State = TreeState;
-
-    fn update(
-        &self,
-        state: &mut TreeState,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: Cursor,
-    ) -> Option<Action<UiEvent>> {
-        state.reconcile_scroll(
-            &self.path,
-            self.picture.row_count(),
-            self.picture.skin().tree.row_height,
-            self.picture.skin().tree.scrollbar_margin + self.picture.skin().tree.scrollbar_width,
-        );
-        let input = iced_interact::input(event)?;
-        let before = state.scroll.offset();
-        let outcome = state
-            .scroll
-            .handle(input, &iced_interact::hit(bounds, cursor));
-        if outcome.is_captured() && outcome.value().is_none() && state.scroll.offset() != before {
-            Some(Action::request_redraw().and_capture())
-        } else {
-            index(&self.path, outcome)
-        }
-    }
 
     fn draw(
         &self,
@@ -131,6 +106,31 @@ impl canvas::Program<UiEvent> for TreeProgram {
             Interaction::Pointer
         } else {
             Interaction::None
+        }
+    }
+
+    fn update(
+        &self,
+        state: &mut TreeState,
+        event: &Event,
+        bounds: Rectangle,
+        cursor: Cursor,
+    ) -> Option<Action<UiEvent>> {
+        state.reconcile_scroll(
+            &self.path,
+            self.picture.row_count(),
+            self.picture.skin().tree.row_height,
+            self.picture.skin().tree.scrollbar_margin + self.picture.skin().tree.scrollbar_width,
+        );
+        let input = iced_interact::input(event)?;
+        let before = state.scroll.offset();
+        let outcome = state
+            .scroll
+            .handle(input, &iced_interact::hit(bounds, cursor));
+        if outcome.is_captured() && outcome.value().is_none() && state.scroll.offset() != before {
+            Some(Action::request_redraw().and_capture())
+        } else {
+            index(&self.path, outcome)
         }
     }
 }
@@ -186,25 +186,19 @@ fn geometry(
 
 #[derive(Default)]
 struct TreeState {
-    path: String,
-    scroll: ScrollState,
     text: RefCell<Option<TextContext>>,
+    scroll: ScrollState,
+    path: String,
 }
 
 #[derive(Clone, Copy)]
 struct TreeConfig {
-    row_count: usize,
     row_height: f32,
     row_right_inset: f32,
+    row_count: usize,
 }
 
 impl TreeState {
-    fn sync(&mut self, path: &str, offset: f32) {
-        if self.path == path {
-            self.scroll.sync_offset(offset);
-        }
-    }
-
     fn reconcile_scroll(
         &mut self,
         path: &str,
@@ -215,11 +209,17 @@ impl TreeState {
         self.reconcile_canvas(
             path,
             &TreeConfig {
-                row_count,
                 row_height,
                 row_right_inset,
+                row_count,
             },
         );
+    }
+
+    fn sync(&mut self, path: &str, offset: f32) {
+        if self.path == path {
+            self.scroll.sync_offset(offset);
+        }
     }
 }
 
@@ -378,7 +378,7 @@ mod tests {
             bounds,
             Cursor::Available(iced::Point::new(90.0, 24.0)),
         )
-        .unwrap_or_else(|| panic!("a movable leaf tree must answer its wheel"));
+        .expect("a movable leaf tree must answer its wheel");
         let (message, redraw, status) = action.into_inner();
 
         assert_eq!(message, None);

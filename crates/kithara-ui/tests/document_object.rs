@@ -3,7 +3,6 @@
 //! The pose is resolved in the neutral facade, so the one place worth testing
 //! is the argument every host receives: a control's transform. Neither host is
 //! involved here, which is the point — if this is right, both draw it right.
-
 mod common;
 
 use kithara_platform::time::Duration;
@@ -49,13 +48,35 @@ impl Spy<'_> {
 impl Host for Spy<'_> {
     type Output = Vec<Placed>;
 
-    fn split(
+    fn control(
         &mut self,
-        _axis: Axis,
-        _measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
+        path: InternId,
+        _spec: &ControlSpec,
+        _read: Option<&Binding>,
+        _owner: InputOwner,
+        _size: Option<SizeSpec>,
+        transform: Transform,
+    ) -> Self::Output {
+        vec![Placed {
+            path: self.ui.resolve(path).to_owned(),
+            transform,
+        }]
+    }
+
+    fn group(
+        &mut self,
+        _group: Group<'_>,
+        children: Vec<GroupMount<Self::Output>>,
     ) -> Self::Output {
         Self::flatten(children.into_iter().map(|cell| cell.output))
+    }
+
+    fn hosted(
+        &mut self,
+        _node: &kithara_ui::expand::ExpandedNode,
+        child: Self::Output,
+    ) -> Self::Output {
+        child
     }
 
     fn measured(&mut self, _plan: Measured, branches: Vec<Self::Output>) -> Self::Output {
@@ -66,12 +87,10 @@ impl Host for Spy<'_> {
         content.unwrap_or_default()
     }
 
-    fn group(
-        &mut self,
-        _group: Group<'_>,
-        children: Vec<GroupMount<Self::Output>>,
-    ) -> Self::Output {
-        Self::flatten(children.into_iter().map(|cell| cell.output))
+    /// A placement carries no pose of its own: it moves the box its child is
+    /// laid out in, which this counts nothing of.
+    fn placed(&mut self, _placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        child
     }
 
     /// Counts what the document shows, so a shut surface contributes nothing.
@@ -85,12 +104,6 @@ impl Host for Spy<'_> {
             anchor.extend(content(self));
         }
         anchor
-    }
-
-    /// A placement carries no pose of its own: it moves the box its child is
-    /// laid out in, which this counts nothing of.
-    fn placed(&mut self, _placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
-        child
     }
 
     fn pressable(
@@ -115,31 +128,17 @@ impl Host for Spy<'_> {
         Self::flatten(children)
     }
 
+    fn split(
+        &mut self,
+        _axis: Axis,
+        _measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
+        Self::flatten(children.into_iter().map(|cell| cell.output))
+    }
+
     fn stage(&mut self, children: Vec<Self::Output>, _size: Option<SizeSpec>) -> Self::Output {
         Self::flatten(children)
-    }
-
-    fn control(
-        &mut self,
-        path: InternId,
-        _spec: &ControlSpec,
-        _read: Option<&Binding>,
-        _owner: InputOwner,
-        _size: Option<SizeSpec>,
-        transform: Transform,
-    ) -> Self::Output {
-        vec![Placed {
-            path: self.ui.resolve(path).to_owned(),
-            transform,
-        }]
-    }
-
-    fn hosted(
-        &mut self,
-        _node: &kithara_ui::expand::ExpandedNode,
-        child: Self::Output,
-    ) -> Self::Output {
-        child
     }
 
     fn window(

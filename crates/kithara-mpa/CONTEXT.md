@@ -51,6 +51,8 @@ Files are vendored verbatim except for:
 
 - the rollback delta above;
 - `log` -> `tracing`;
+- comment cleanup required by the workspace lint policy; the MPL notices stay
+  intact as legal comment headers;
 - the workspace lint gate, which this crate is a full member of. That forced
   `pub` -> `pub(crate)` on the items no longer re-exported, `as` casts replaced
   by `From` / `try_from` / `num-traits`, the frame-scan loop lifted out of `seek`

@@ -21,14 +21,10 @@ pub(crate) struct Press {
 }
 
 impl Press {
-    pub(crate) const fn visual(&self) -> VisualState {
-        if self.pressed && self.hovered {
-            VisualState::Pressed
-        } else if self.hovered {
-            VisualState::Hovered
-        } else {
-            VisualState::Idle
-        }
+    /// Records where the pointer is relative to the control, answering whether
+    /// that changed the picture.
+    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
+        std::mem::replace(&mut self.hovered, hovered) != hovered
     }
 
     /// Follows the pointer's button through one input, answering whether that
@@ -50,9 +46,13 @@ impl Press {
         std::mem::replace(&mut self.pressed, pressed) != pressed
     }
 
-    /// Records where the pointer is relative to the control, answering whether
-    /// that changed the picture.
-    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
-        std::mem::replace(&mut self.hovered, hovered) != hovered
+    pub(crate) const fn visual(&self) -> VisualState {
+        if self.pressed && self.hovered {
+            VisualState::Pressed
+        } else if self.hovered {
+            VisualState::Hovered
+        } else {
+            VisualState::Idle
+        }
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use rten::{Model as RtenGraph, NodeId, ValueOrView, ValueView};
 use rten_tensor::{AsView, Layout};
 use smallvec::SmallVec;
@@ -65,11 +65,14 @@ impl TryFrom<(&'static str, &[u8])> for RtenModel {
 
 impl RtenModel {
     /// Run inference with named inputs, return named outputs.
-    pub(crate) fn run(
-        &mut self,
+    pub(crate) fn run<S>(
+        &self,
         inputs: &[(&str, &Tensor)],
-        sample_pool: &SamplePool,
-    ) -> Result<HashMap<String, Tensor>, BeatError> {
+        pools: &PoolRegion<S>,
+    ) -> Result<HashMap<String, Tensor>, BeatError>
+    where
+        S: HasPool<f32>,
+    {
         let rten_inputs: Vec<(NodeId, ValueOrView<'_>)> = inputs
             .iter()
             .map(|(name, tensor)| {
@@ -107,7 +110,11 @@ impl RtenModel {
                     reason: format!("rten: output '{name}' is not f32"),
                 })?;
             let shape = SmallVec::from_slice(rten_tensor.shape());
-            let data = sample_pool.collect(rten_tensor.iter().copied());
+            let values = rten_tensor.iter();
+            let mut data = pools.get_with_len::<f32>(values.len())?;
+            for (dst, src) in data.iter_mut().zip(values) {
+                *dst = *src;
+            }
 
             result.insert(name, Tensor { data, shape });
         }

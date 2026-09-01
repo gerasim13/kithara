@@ -3,6 +3,7 @@ use std::path::Path;
 use kithara::{
     abr::AbrHandle,
     assets::{AssetStore, StorageBackend},
+    bufpool::HasPool,
     decode::DecoderBackend,
     events::{
         AbrMode, AdvanceReason, AudioEvent, Event, EventReceiver, QueueEvent, SeekLifecycleStage,
@@ -17,15 +18,20 @@ use kithara::{
         tokio::sync::broadcast::error::TryRecvError,
     },
     play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, SeekOutcome,
-        SessionDispatcher, player::PlayerControlSource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc,
+        SeekOutcome, SessionDispatcher, player::PlayerControlSource,
     },
     queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use url::Url;
 
-use crate::{kithara, offline::OfflineSession, user_sim::actions::Action};
+use crate::{
+    bufpool_ext::{TestPools, pools},
+    kithara,
+    offline::OfflineSession,
+    user_sim::actions::Action,
+};
 
 /// Worst-case wall-clock budget for any single action. Anything longer
 /// is treated as a hang — matches the "no hang" invariant from the
@@ -66,7 +72,7 @@ const RENDER_STALL_BUDGET: Duration = Duration::from_secs(3);
 /// watchdog false-fires. Off the `flash` feature the macro is a no-op, so
 /// the driver is a plain real-time tick exactly as before.
 #[kithara::flash(true)]
-async fn run_tick_driver(queue: QueueControl) {
+async fn run_tick_driver(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -80,12 +86,12 @@ async fn run_tick_driver(queue: QueueControl) {
 /// plus a tokio tick task; callers drive it with `Action`s and the
 /// harness asserts the per-action invariants from the plan.
 pub struct SimHarness {
-    queue: QueueControl,
-    queue_owner: Queue,
+    queue: QueueControl<TestPools>,
+    queue_owner: Queue<TestPools>,
     session: Arc<OfflineSession>,
     tick: tokio::task::JoinHandle<()>,
     _downloader: Downloader,
-    _store: AssetStore,
+    _store: AssetStore<TestPools>,
     track_ids: Vec<TrackId>,
     /// Captured codec of the currently-playing variant. Updated by
     /// `enter_track` and on each successful quality switch; the
@@ -132,21 +138,17 @@ impl SimHarness {
     /// to the scenario via `enter_track`.
     pub async fn new(cache_path: &Path, specs: &[TrackSpec]) -> Self {
         let session = Arc::new(OfflineSession::new());
-        let region = kithara::bufpool::Region::default();
-        let byte_pool = region.byte_pool();
-        let store = AssetStore::builder()
+        let pools = pools();
+        let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: cache_path.into(),
             })
-            .pool(byte_pool.clone())
             .build();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(byte_pool.clone(), region.sample_pool()).build(),
-        );
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)
-                .session(Arc::clone(&session) as Arc<dyn SessionDispatcher>)
+                .session(Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>)
                 .build(),
         );
         let queue_owner = Queue::new(
@@ -167,7 +169,8 @@ impl SimHarness {
 
         let downloader = Downloader::new(
             DownloaderConfig::for_client(HttpClient::new(
-                NetOptions::builder().byte_pool(byte_pool).build(),
+                NetOptions::default(),
+                pools,
                 CancelToken::never(),
             ))
             .build(),
@@ -176,7 +179,7 @@ impl SimHarness {
         let mut track_ids = Vec::with_capacity(specs.len());
         for spec in specs {
             let cfg = ResourceConfig::for_src(
-                ResourceConfig::parse_src(spec.url.as_str()).expect("valid track URL"),
+                ResourceSrc::parse(spec.url.as_str()).expect("valid track URL"),
             )
             .downloader(downloader.clone())
             .store(store.clone())
@@ -205,7 +208,7 @@ impl SimHarness {
         }
     }
 
-    pub const fn queue(&self) -> &QueueControl {
+    pub const fn queue(&self) -> &QueueControl<TestPools> {
         &self.queue
     }
 
@@ -1024,12 +1027,15 @@ fn progress_secs(ev: &Event) -> Option<f64> {
 /// virtual clock, so the engine is free to advance time, run the tick
 /// driver, and let the decode worker produce the next block — exactly
 /// the events the wait then resolves on.
-async fn await_progress(
+async fn await_progress<S>(
     rx: &mut EventReceiver,
-    queue: &QueueControl,
+    queue: &QueueControl<S>,
     mut done: impl FnMut(f64) -> bool,
     deadline: Duration,
-) -> Result<f64, String> {
+) -> Result<f64, String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     // The current cached position may already satisfy the predicate
     // (the tick driver updated it before we subscribed) — check before
     // blocking so a no-op wait returns immediately.
@@ -1060,11 +1066,14 @@ async fn await_progress(
     }
 }
 
-pub async fn wait_for_loaded(
-    queue: &QueueControl,
+pub async fn wait_for_loaded<S>(
+    queue: &QueueControl<S>,
     id: TrackId,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     if let Some(entry) = queue.track(id) {
         match &entry.status {
             TrackStatus::Loaded | TrackStatus::Consumed => return Ok(()),
@@ -1107,11 +1116,14 @@ pub async fn wait_for_loaded(
     }
 }
 
-pub async fn wait_for_position_at_least(
-    queue: &QueueControl,
+pub async fn wait_for_position_at_least<S>(
+    queue: &QueueControl<S>,
     min_secs: f64,
     deadline: Duration,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     let mut rx = queue.subscribe();
     await_progress(&mut rx, queue, |p| p >= min_secs, deadline)
         .await

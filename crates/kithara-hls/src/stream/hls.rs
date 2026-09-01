@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::sync::OnceLock;
+use std::{marker::PhantomData, sync::OnceLock};
 
 use kithara_assets::{AssetSource, ResourceKey};
+use kithara_bufpool::HasPool;
 use kithara_events::{DeferredBus, EventBus, HlsError as EventHlsError, HlsEvent, VariantInfo};
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -33,9 +34,12 @@ use crate::{
 };
 
 /// Marker type for HLS streaming.
-pub struct Hls;
+pub struct Hls<S>(PhantomData<fn() -> S>);
 
-fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
+fn effective_look_ahead_segments<S>(config: &HlsConfig<S>) -> Option<usize>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let capacity = config.store.ephemeral_cache_capacity()?;
     let maximum = config
         .ephemeral_cache_max_media_window
@@ -48,10 +52,13 @@ fn effective_look_ahead_segments(config: &HlsConfig) -> Option<usize> {
     Some(capacity.get().min(bounded))
 }
 
-impl StreamType for Hls {
-    type Config = HlsConfig;
+impl<S> StreamType for Hls<S>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    type Config = HlsConfig<S>;
     type Events = EventBus;
-    type Source = HlsSource;
+    type Source = HlsSource<S>;
 
     async fn create(config: Self::Config) -> Result<Self::Source, SourceError> {
         let stream_scope = CancelScope::new(config.cancel.clone());
@@ -79,8 +86,6 @@ impl StreamType for Hls {
             .map_err(crate::HlsError::from)?;
         let invalidation_guard = store.subscribe_eviction(Arc::from(scope.asset_root()), evict_tx);
 
-        let byte_pool = config.pool.clone();
-
         let playhead = Arc::new(PlayheadState::new());
         let seek = Arc::new(SeekState::new());
         let seek_obs = Arc::clone(&seek) as Arc<dyn SeekObserve>;
@@ -95,7 +100,6 @@ impl StreamType for Hls {
             Arc::clone(&hls_peer) as Arc<dyn Peer>,
             bus.clone(),
             scope,
-            byte_pool,
         );
 
         let (master, media_playlists) = load_playlists(&stream_peer, &bus, &config).await?;
@@ -106,7 +110,7 @@ impl StreamType for Hls {
             bus.clone(),
             config.headers.clone(),
             config.keys.clone(),
-            stream_peer.byte_pool(),
+            config.pools.clone(),
         );
 
         let playlist_state = Arc::new(PlaylistState::build(
@@ -124,19 +128,14 @@ impl StreamType for Hls {
         let look_ahead_bytes = Some(
             config
                 .look_ahead_bytes
-                .unwrap_or(HlsConfig::DEFAULT_LOOK_AHEAD_BYTES),
+                .unwrap_or(HlsConfig::<S>::DEFAULT_LOOK_AHEAD_BYTES),
         );
         let look_ahead_segments = effective_look_ahead_segments(&config);
 
         playhead.set_duration(playlist_state.track_duration());
 
-        // Unified reader-wake handle: the shared readiness gate for the off-RT
-        // `wait_range(_, None)` park (CONTEXT.md "Seek and wait_range Contract")
-        // paired with the late-bound audio-worker wake. The wake is filled by
-        // `HlsSource::set_worker_wake` once the worker exists; `SizeSignal::fire`
-        // fires both on the two downloader write/settle sites so the RT decoder
-        // re-ticks on data arrival, not on its 10 ms scheduler poll. Built once
-        // here and cloned down into every consumer.
+        // WHY: Unified reader-wake handle: the shared readiness gate for the off-RT `wait_range(_, None)` park (CONTEXT.md "Seek and
+        // wait_range Contract") paired with the late-bound audio-worker wake.
         let signal = SizeSignal::new(Arc::new(ThreadGate::default()), Arc::new(OnceLock::new()));
         let emit = Arc::new(DeferredBus::new(bus.clone(), 256));
 
@@ -156,7 +155,7 @@ impl StreamType for Hls {
             signal: signal.clone(),
         };
 
-        let variants: Vec<Arc<HlsVariant>> = media_playlists
+        let variants: Vec<Arc<HlsVariant<S>>> = media_playlists
             .iter()
             .enumerate()
             .map(|(idx, mp)| {
@@ -171,7 +170,7 @@ impl StreamType for Hls {
                     .call()
             })
             .collect::<crate::HlsResult<Vec<_>>>()?;
-        let variants: Arc<[Arc<HlsVariant>]> = variants.into();
+        let variants: Arc<[Arc<HlsVariant<S>>]> = variants.into();
 
         let coord = Arc::new(HlsCoord::new(
             HlsCoordEnv {
@@ -206,15 +205,18 @@ impl StreamType for Hls {
 
 /// Build the playlist cache and load the master plus every variant media
 /// playlist (master order).
-async fn load_playlists(
-    stream_peer: &StreamPeer,
+async fn load_playlists<S>(
+    stream_peer: &StreamPeer<S>,
     bus: &EventBus,
-    config: &HlsConfig,
-) -> Result<(ParsedMaster, Vec<MediaPlaylist>), SourceError> {
+    config: &HlsConfig<S>,
+) -> Result<(ParsedMaster, Vec<MediaPlaylist>), SourceError>
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let playlist_cache = PlaylistCache::new(
         stream_peer.scope(),
         stream_peer.peer_handle(),
-        stream_peer.byte_pool(),
+        config.pools.clone(),
     );
     playlist_cache.set_master_url(config.url.clone());
     playlist_cache.set_base_url(config.base_url.clone());
@@ -258,11 +260,13 @@ fn publish_playlist_error(bus: &EventBus, err: &crate::HlsError) {
 
 /// Default transport when the caller injects none: a private `Downloader`
 /// rooted at a child of the stream's cancel token.
-fn default_downloader(config: &HlsConfig, cancel: &CancelToken) -> Downloader {
+fn default_downloader<S>(config: &HlsConfig<S>, cancel: &CancelToken) -> Downloader
+where
+    S: HasPool<u8> + Send + Sync + 'static,
+{
     let dl_cancel = cancel.child();
-    let net_options: NetOptions =
-        FromWithParams::build(config.net_options.clone(), config.pool.clone());
-    let client = HttpClient::new(net_options, dl_cancel.child());
+    let net_options: NetOptions = config.net_options.clone();
+    let client = HttpClient::new(net_options, config.pools.clone(), dl_cancel.child());
     let dl_config = DownloaderConfig::for_client(client)
         .cancel(dl_cancel)
         .build();
@@ -279,14 +283,17 @@ mod tests {
 
     use super::*;
 
-    fn config_with_capacity(capacity: usize) -> HlsConfig {
+    fn config_with_capacity(capacity: usize) -> HlsConfig<crate::test_pools::TestPools> {
         let capacity = NonZeroUsize::new(capacity).expect("test capacity must be non-zero");
-        let store = AssetStore::builder()
+        let store = AssetStore::builder(crate::test_pools::pools())
             .backend(StorageBackend::Memory)
             .cache_capacity(capacity)
             .build();
         let url = Url::parse("https://example.com/master.m3u8").expect("valid test URL");
-        HlsConfig::for_url(url).store(store).build()
+        HlsConfig::for_url(url)
+            .store(store)
+            .pools(crate::test_pools::pools())
+            .build()
     }
 
     #[kithara::test]

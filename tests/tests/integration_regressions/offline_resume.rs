@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{fs, path::PathBuf};
-
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event},
@@ -13,16 +11,19 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
-    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir, kithara,
+    Content, Delivery, FixtureBehavior, PrivateTestServer, TestTempDir,
+    bufpool_ext::{TestPools, pools},
+    kithara,
     offline::OfflineSession,
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_fixtures::hls::long_plain;
 
 /// Playback failing to resume once connectivity returns does not reproduce in
 /// the core: with connectivity restored the engine resumes on its own. This
@@ -60,7 +61,7 @@ impl Drop for NetworkRestore<'_> {
     }
 }
 
-fn spawn_ticker(queue: Arc<Queue>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -105,11 +106,12 @@ fn paced_master(server: &PrivateTestServer) -> String {
     const INITIALIZATION: &str = "init-slq-a1.mp4";
     const PLAYLIST_TYPE: Option<&'static str> = Some("application/vnd.apple.mpegurl");
 
-    let hls = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root from tests/")
-        .join("assets/hls");
-    let playlist = fs::read_to_string(hls.join(VARIANT)).expect("read the packaged variant");
+    let bundle = long_plain();
+    let playlist_resource = bundle
+        .get(&format!("/hls/{VARIANT}"))
+        .expect("generated HLS variant");
+    let playlist = std::fs::read_to_string(playlist_resource.path())
+        .expect("read the generated packaged variant");
 
     let mut rewritten = Vec::new();
     for line in playlist.split('\n') {
@@ -117,7 +119,10 @@ fn paced_master(server: &PrivateTestServer) -> String {
             let init = server.helper().asset(&format!("hls/{INITIALIZATION}"));
             rewritten.push(line.replace(INITIALIZATION, init.as_str()));
         } else if !line.is_empty() && !line.starts_with('#') {
-            let bytes = fs::read(hls.join(line)).expect("read a packaged segment");
+            let resource = bundle
+                .get(&format!("/hls/{line}"))
+                .expect("generated HLS segment");
+            let bytes = std::fs::read(resource.path()).expect("read a generated packaged segment");
             let handle = server.helper().register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
                     bytes: Arc::new(bytes),
@@ -161,8 +166,7 @@ async fn resumes_after_outage(
     url: String,
     look_ahead_bytes: u64,
 ) {
-    let region = kithara::bufpool::Region::default();
-    let byte_pool = region.byte_pool();
+    let pools = pools();
     let net = NetOptions::builder()
         .inactivity_timeout(Duration::from_millis(500))
         .retry_policy(
@@ -172,21 +176,20 @@ async fn resumes_after_outage(
                 .max_delay(Duration::from_millis(200))
                 .build(),
         )
-        .byte_pool(byte_pool.clone())
         .build();
     let downloader = Downloader::new(
-        DownloaderConfig::for_client(HttpClient::new(net, CancelToken::never())).build(),
+        DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), CancelToken::never()))
+            .build(),
     );
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Disk {
             root: temp_dir.path().into(),
         })
-        .pool(byte_pool.clone())
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::for_pools(byte_pool, region.sample_pool()).build(),
+                kithara::play::PlayWorkerConfig::builder(pools).build(),
             ))
             .session(OfflineSession::arc_auto())
             .build(),
@@ -197,13 +200,12 @@ async fn resumes_after_outage(
             .store(store.clone())
             .build(),
     ));
-    let cfg =
-        ResourceConfig::for_src(ResourceConfig::parse_src(url.as_str()).expect("valid HLS URL"))
-            .downloader(downloader)
-            .initial_abr_mode(AbrMode::manual(0))
-            .look_ahead_bytes(look_ahead_bytes)
-            .store(store)
-            .build();
+    let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
+        .downloader(downloader)
+        .initial_abr_mode(AbrMode::manual(0))
+        .look_ahead_bytes(look_ahead_bytes)
+        .store(store)
+        .build();
 
     let ticker = spawn_ticker(Arc::clone(&queue));
     let mut rx = queue.subscribe();

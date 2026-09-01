@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
-use kithara::analysis::Waveform;
-use kithara_ui::render::WaveBucket;
+use kithara::{analysis::Waveform, ui::render::WaveBucket};
 use num_traits::cast::{AsPrimitive, ToPrimitive};
 
 use super::{menu::MenuState, modules::Modules, scope::deck_letter, window::WindowState};
@@ -22,13 +21,13 @@ use crate::{
 pub(crate) struct ViewCache {
     pub(in crate::gui) deck_marks: CatalogRowMarks,
     pub(in crate::gui) collapsed: CollapsedModules,
-    pub(in crate::gui) drag: Option<usize>,
     /// Which source group the library lists and what its browser search box
     /// narrows the tree to. The tree and the context bar both select the group;
     /// it has one owner here and no second copy.
     pub(in crate::gui) library: LibraryView,
     pub(in crate::gui) menu: MenuState,
     pub(in crate::gui) modules: Modules,
+    pub(in crate::gui) drag: Option<usize>,
     pub(in crate::gui) stage: StageView,
     pub(in crate::gui) window: WindowState,
     #[field(get, vis = "pub(in crate::gui)", copy)]
@@ -46,8 +45,8 @@ pub(crate) struct ViewCache {
 /// against. Both are the host's alone: no engine value moves them.
 #[derive(Debug, PartialEq)]
 pub(in crate::gui) struct StageView {
-    pub(in crate::gui) preset: u32,
     pub(in crate::gui) window: (f32, f32),
+    pub(in crate::gui) preset: u32,
 }
 
 impl Default for StageView {
@@ -60,9 +59,9 @@ impl Default for StageView {
 }
 
 impl StageView {
+    pub(in crate::gui) const BPM_CEILING: f32 = 200.0;
     /// The BPM span the window is a fraction of.
     pub(in crate::gui) const BPM_FLOOR: f32 = 60.0;
-    pub(in crate::gui) const BPM_CEILING: f32 = 200.0;
 
     /// The window's lower and upper edge in BPM.
     pub(in crate::gui) fn bpm_window(&self) -> (f32, f32) {
@@ -93,8 +92,8 @@ pub(in crate::gui) enum WindowEdge {
 /// What the library browser is showing.
 #[derive(Default)]
 pub(in crate::gui) struct LibraryView {
-    pub(in crate::gui) query: String,
     pub(in crate::gui) scope: LibraryScope,
+    pub(in crate::gui) query: String,
 }
 
 impl LibraryView {
@@ -135,11 +134,13 @@ pub(in crate::gui) enum LibraryScope {
 impl LibraryScope {
     pub(in crate::gui) const ALL: [Self; 3] = [Self::All, Self::Local, Self::Stream];
 
-    pub(in crate::gui) const fn label(self) -> &'static str {
+    /// A catalog entry belongs to this group.
+    pub(in crate::gui) fn holds(self, entry: &CatalogEntry) -> bool {
+        let streamed = entry.source.contains("://") && !entry.source.starts_with("file://");
         match self {
-            Self::All => "ALL",
-            Self::Local => "LOCAL",
-            Self::Stream => "STREAM",
+            Self::All => true,
+            Self::Local => !streamed,
+            Self::Stream => streamed,
         }
     }
 
@@ -151,13 +152,11 @@ impl LibraryScope {
         }
     }
 
-    /// A catalog entry belongs to this group.
-    pub(in crate::gui) fn holds(self, entry: &CatalogEntry) -> bool {
-        let streamed = entry.source.contains("://") && !entry.source.starts_with("file://");
+    pub(in crate::gui) const fn label(self) -> &'static str {
         match self {
-            Self::All => true,
-            Self::Local => !streamed,
-            Self::Stream => streamed,
+            Self::All => "ALL",
+            Self::Local => "LOCAL",
+            Self::Stream => "STREAM",
         }
     }
 }
@@ -215,8 +214,8 @@ pub(in crate::gui) struct DeckCache {
 #[derive(Default)]
 pub(in crate::gui) struct DeckViewState {
     pub(in crate::gui) zoom: Option<f64>,
-    pub(in crate::gui) quality_menu: bool,
     pub(in crate::gui) eq_menu_open: bool,
+    pub(in crate::gui) quality_menu: bool,
 }
 
 #[derive(Default)]
@@ -226,6 +225,12 @@ pub(in crate::gui) struct CatalogRowMarks(Vec<String>);
 pub(in crate::gui) struct CollapsedModules(BTreeSet<String>);
 
 impl ViewCache {
+    pub(in crate::gui) fn close_eq_menus(&mut self) {
+        for deck in &mut self.decks {
+            deck.view.eq_menu_open = false;
+        }
+    }
+
     pub(in crate::gui) fn deck_mut(&mut self, index: usize) -> Option<&mut DeckCache> {
         self.decks.get_mut(index)
     }
@@ -235,17 +240,6 @@ impl ViewCache {
             self.hover_deck
         } else {
             None
-        }
-    }
-
-    pub(in crate::gui) fn set_eq_menu_open(&mut self, index: usize, open: bool) -> Option<()> {
-        self.deck_mut(index)?.view.eq_menu_open = open;
-        Some(())
-    }
-
-    pub(in crate::gui) fn close_eq_menus(&mut self) {
-        for deck in &mut self.decks {
-            deck.view.eq_menu_open = false;
         }
     }
 
@@ -260,6 +254,11 @@ impl ViewCache {
         }
         self.deck_marks.refresh(decks, catalog);
         self.window.refresh(self.layout, &self.modules);
+    }
+
+    pub(in crate::gui) fn set_eq_menu_open(&mut self, index: usize, open: bool) -> Option<()> {
+        self.deck_mut(index)?.view.eq_menu_open = open;
+        Some(())
     }
 
     pub(in crate::gui) fn set_hover_deck(&mut self, deck: usize, over: bool) {

@@ -28,9 +28,9 @@ impl<'a> crate::render::Widget<'a> for TitleBar<'_, '_> {
 pub(crate) struct TitleProgram {
     color: Rgba,
     label: String,
-    padding_x: f32,
     resources: TextResources,
     role: TextRoleSkin,
+    padding_x: f32,
 }
 
 impl TitleProgram {
@@ -73,8 +73,16 @@ pub(crate) struct TitleState {
 impl WindowLayerProgram for TitleProgram {
     type State = TitleState;
 
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
+    fn hit_layer(&self, _state: &TitleState, bounds: Rect) -> HostLayer<WindowCommand> {
+        HostLayer::new(
+            bounds,
+            DrawList::default(),
+            vec![LayerHit::new(
+                bounds,
+                CursorShape::None,
+                WindowCommand::Drag,
+            )],
+        )
     }
 
     fn layer(
@@ -105,20 +113,12 @@ impl WindowLayerProgram for TitleProgram {
         )
     }
 
-    fn hit_layer(&self, _state: &TitleState, bounds: Rect) -> HostLayer<WindowCommand> {
-        HostLayer::new(
-            bounds,
-            DrawList::default(),
-            vec![LayerHit::new(
-                bounds,
-                CursorShape::None,
-                WindowCommand::Drag,
-            )],
-        )
-    }
-
     fn resources(&self) -> Option<&TextResources> {
         Some(&self.resources)
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
     }
 }
 

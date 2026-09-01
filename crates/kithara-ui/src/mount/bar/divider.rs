@@ -27,12 +27,12 @@ mod host {
     impl Draws for Divider {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         fn data(&self, _read: Reading<'_>) -> Option<()> {
             Some(())
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

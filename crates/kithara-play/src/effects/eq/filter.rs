@@ -1,5 +1,5 @@
 use biquad::{Biquad, Coefficients, DirectForm1, Type};
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 
 struct Consts;
 
@@ -54,22 +54,25 @@ impl Lr4 {
 }
 
 pub(crate) struct CrossoverFilters {
-    allpass: Vec<Section>,
     crossover_freqs: SampleBuffer,
-    highpass: Vec<Lr4>,
-    history: [f32; Consts::HISTORY_LEN],
-    lowpass: Vec<Lr4>,
     lowpass_scratch: SampleBuffer,
+    allpass: Vec<Section>,
+    highpass: Vec<Lr4>,
+    lowpass: Vec<Lr4>,
+    history: [f32; Consts::HISTORY_LEN],
     sample_rate: f32,
     history_pos: usize,
 }
 
 impl CrossoverFilters {
-    pub(crate) fn new(
-        sample_pool: &SamplePool,
+    pub(crate) fn new<S>(
+        pools: &PoolRegion<S>,
         crossover_freqs: SampleBuffer,
         sample_rate: f32,
-    ) -> Self {
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let lowpass = crossover_freqs
             .iter()
             .map(|&freq| Lr4::new(biquad_coeffs(Type::LowPass, freq, sample_rate)))
@@ -86,17 +89,17 @@ impl CrossoverFilters {
                     .map(|&freq| Section::new(biquad_coeffs(Type::AllPass, freq, sample_rate))),
             );
         }
-        let lowpass_scratch = sample_pool.collect(std::iter::repeat_n(0.0, crossover_freqs.len()));
-        Self {
+        let lowpass_scratch = pools.get_with_len::<f32>(crossover_freqs.len())?;
+        Ok(Self {
             allpass,
             crossover_freqs,
             highpass,
-            history: [0.0; Consts::HISTORY_LEN],
             lowpass,
             lowpass_scratch,
             sample_rate,
+            history: [0.0; Consts::HISTORY_LEN],
             history_pos: 0,
-        }
+        })
     }
 
     pub(crate) fn process(&mut self, input: f32, gains: impl Fn(usize) -> f32) -> f32 {

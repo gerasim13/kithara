@@ -26,9 +26,9 @@ pub struct DecoderTrackInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct GaplessProfile {
+    spec: AudioSpec,
     gapless: Option<GaplessInfo>,
     tail_compensation: Option<GaplessTailCompensation>,
-    spec: AudioSpec,
     default_priming_frames: u64,
 }
 
@@ -41,9 +41,9 @@ impl GaplessProfile {
         default_priming_frames: u64,
     ) -> Self {
         Self {
+            spec,
             gapless,
             tail_compensation,
-            spec,
             default_priming_frames,
         }
     }

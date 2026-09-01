@@ -14,14 +14,14 @@ pub(crate) struct Tab {
 }
 
 impl Control for Tab {
-    fn size(&self, skin: &SkinDoc) -> SizeSpec {
-        SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height))
-    }
-
     /// A tab fills the strip it sits in, so a parent that measured it would
     /// size itself to a height the tab never asked for.
     fn composes_size(&self) -> bool {
         false
+    }
+
+    fn size(&self, skin: &SkinDoc) -> SizeSpec {
+        SizeSpec::new(Dim::Fill, Dim::Fixed(skin.tab_large.height))
     }
 }
 
@@ -39,10 +39,6 @@ mod host {
     impl Draws for Tab {
         type Painter = TabLarge;
 
-        fn painter(&self, skin: &Skin) -> TabLarge {
-            TabLarge::new(skin)
-        }
-
         /// A tab heads a page, so one whose endpoint has not said whether its
         /// page is the current one draws nothing rather than a tab at rest.
         fn data(&self, read: Reading<'_>) -> Option<Labelled> {
@@ -57,6 +53,10 @@ mod host {
 
         fn grip(&self, _skin: &Skin, _data: &Labelled) -> Grip {
             Grip::Press
+        }
+
+        fn painter(&self, skin: &Skin) -> TabLarge {
+            TabLarge::new(skin)
         }
     }
 }

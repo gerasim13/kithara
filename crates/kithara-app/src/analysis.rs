@@ -4,23 +4,22 @@ use kithara::{
     analysis::AnalysisProgress,
     decode::DecodeError,
     events::{EngineEvent, Envelope, Event, EventReceiver, SessionEvent, TrackId},
-    prelude::{PlaybackResamplerBackend, ResourceConfig},
-};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    tokio::{
-        self,
-        sync::{broadcast::error::RecvError, watch},
-        task::JoinHandle,
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        tokio::{
+            self,
+            sync::{broadcast::error::RecvError, watch},
+            task::JoinHandle,
+        },
     },
+    queue::QueueEvent,
 };
-use kithara_queue::{QueueControl, QueueEvent, TrackSource};
-use kithara_worker::TaskError;
 use tracing::warn;
 
 use crate::{
     config::AppConfig,
+    pools::{AppQueueControl, AppResourceConfig, AppTrackSource},
     sources::build_resource_config,
     state::{UiState, apply_event},
     wave_cache::{
@@ -30,26 +29,18 @@ use crate::{
     waveform::{TrackAnalysis, TrackAnalysisRunner},
 };
 
-type AppResourceConfig = ResourceConfig<PlaybackResamplerBackend>;
-
 /// Analysis-aware state listener: mirrors queue events into [`UiState`] and
 /// drives the background [`AnalysisController`]. Starts analysing the already
 /// loaded library immediately — independent of which UI is open.
 pub(crate) async fn listen(
-    queue: QueueControl,
+    queue: AppQueueControl,
     state: Arc<Mutex<UiState>>,
     config: AppConfig,
     cancel: CancelToken,
     mut rx: EventReceiver,
     persistence: AnalysisPersistence,
 ) {
-    let mut driver = match AnalysisController::new(&cancel, &config, Some(persistence)) {
-        Ok(driver) => driver,
-        Err(error) => {
-            warn!(%error, "analysis worker stopped before its controller was created");
-            return;
-        }
-    };
+    let mut driver = AnalysisController::new(&cancel, &config, Some(persistence));
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
@@ -73,7 +64,7 @@ pub(crate) async fn listen(
 fn handle_event(
     driver: &mut AnalysisController,
     event: &Event,
-    queue: &QueueControl,
+    queue: &AppQueueControl,
     state: &Mutex<UiState>,
     config: &AppConfig,
 ) {
@@ -143,26 +134,26 @@ impl AnalysisController {
         cancel: &CancelToken,
         config: &AppConfig,
         persistence: Option<AnalysisPersistence>,
-    ) -> Result<Self, TaskError> {
+    ) -> Self {
         let runner = TrackAnalysisRunner::new(
             cancel,
             config.base_worker.clone(),
             config.analysis_chunk_seconds,
             config.waveform_max_buckets,
             config.beat_analysis.clone(),
-            config.worker.sample_pool().clone(),
-        )?;
-        Ok(Self {
+            config.worker.pools().clone(),
+        );
+        Self {
             cache: TrackAnalysisCache::new(
                 runner.fingerprint().clone(),
-                config.worker.byte_pool().clone(),
+                config.worker.pools().clone(),
                 config.analysis_chunk_seconds,
             ),
             persistence,
             runner,
             activity: None,
             pending: VecDeque::new(),
-        })
+        }
     }
 
     /// Persist a closed run before allowing the next analysis to start.
@@ -190,7 +181,7 @@ impl AnalysisController {
     /// intermediate, or commit and pump on close. Parks when no run is active.
     pub(crate) async fn drive(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -221,7 +212,7 @@ impl AnalysisController {
     /// preempt an in-flight background run so the visible deck wins.
     pub(crate) fn on_track_changed(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -244,7 +235,7 @@ impl AnalysisController {
     /// keep the background pass going. Cached tracks are skipped cheaply.
     pub(crate) fn on_tracks_changed(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -263,7 +254,7 @@ impl AnalysisController {
     /// back at the front of the queue so the next pump opens a fresh pass on
     /// the new axis. Letting the old pass follow the device would leave one
     /// snapshot series whose frames mean two different things.
-    fn retire_stale_axis(&mut self, queue: &QueueControl) {
+    fn retire_stale_axis(&mut self, queue: &AppQueueControl) {
         let Some(Activity::Running(run)) = &self.activity else {
             return;
         };
@@ -318,7 +309,7 @@ impl AnalysisController {
     /// or unkeyable, decode the first genuine miss.
     pub(crate) fn pump(
         &mut self,
-        queue: &QueueControl,
+        queue: &AppQueueControl,
         state: &Mutex<UiState>,
         config: &AppConfig,
     ) {
@@ -508,12 +499,12 @@ fn publish_if_current(state: &Mutex<UiState>, track_id: TrackId, analysis: Track
 /// Build an analysis resource from a track's source, reusing the shared
 /// stores so the analysis and the player share one download.
 fn resource_config_from_source(
-    source: TrackSource,
+    source: AppTrackSource,
     config: &AppConfig,
 ) -> Option<AppResourceConfig> {
     match source {
-        TrackSource::Config(cfg) => Some(*cfg),
-        TrackSource::Uri(url) => build_resource_config(&url, config),
+        AppTrackSource::Config(cfg) => Some(*cfg),
+        AppTrackSource::Uri(url) => build_resource_config(&url, config),
         _ => None,
     }
 }
@@ -527,32 +518,34 @@ mod tests {
             AnalysisFile, AnalysisFingerprint, AnalysisProgress, Coverage, FrameRange, Waveform,
         },
         assets::{
-            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, AssetStore, ReadSide,
-            StorageBackend,
+            AssetLayout, AssetLayoutRegistry, AssetResource, AssetSource, ReadSide, StorageBackend,
         },
-        bufpool::{BytePool, Region},
         events::{EngineEvent, Event, RouteChangeReason, RouteDescription, SessionEvent, TrackId},
         file::File,
-        host::{Host, HostConfig},
+        host::HostConfig,
         net::{HttpClient, NetOptions},
-        play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
-        prelude::ResourceConfig,
+        platform::{
+            CancelToken,
+            sync::{Arc, Mutex},
+            time::Duration,
+            tokio::{runtime::Handle, sync::watch},
+        },
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        prelude::ResourceSrc,
+        queue::QueueConfig,
         stream::dl::{Downloader, DownloaderConfig},
+        worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig},
     };
-    use kithara_platform::{
-        CancelToken,
-        sync::{Arc, Mutex},
-        time::Duration,
-        tokio::{runtime::Handle, sync::watch},
-    };
-    use kithara_queue::{Queue, QueueConfig, QueueControl};
     use kithara_test_utils::kithara;
-    use kithara_worker::{DispatcherConfig, TaskConfig, Worker, WorkerConfig};
 
     use super::{
         Activity, AnalysisController, Plan, Run, handle_event, pending_order, plan_analysis,
     };
     use crate::{
+        pools::{
+            self, AppHost, AppPools, AppQueue, AppQueueControl, AppResourceConfig, AppStore,
+            AppWorker, Pools,
+        },
         state::UiState,
         wave_cache::{
             AnalysisPersistence, AnalysisTarget, TrackAnalysisCache,
@@ -563,6 +556,10 @@ mod tests {
 
     fn chunk_seconds() -> NonZeroU32 {
         NonZeroU32::new(16).expect("fixture chunk duration is non-zero")
+    }
+
+    fn test_pools() -> Pools {
+        pools::build().expect("valid app pool policy")
     }
 
     fn sample_rate() -> NonZeroU32 {
@@ -618,19 +615,19 @@ mod tests {
     }
 
     fn cache() -> TrackAnalysisCache {
-        TrackAnalysisCache::new(fingerprint(), BytePool::default(), chunk_seconds())
+        TrackAnalysisCache::new(fingerprint(), test_pools(), chunk_seconds())
     }
 
     fn target(discriminator: &str) -> AnalysisTarget {
-        let store = AssetStore::builder()
+        let store = AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .build();
         target_in(&store, discriminator)
     }
 
-    fn target_in(store: &AssetStore, discriminator: &str) -> AnalysisTarget {
-        let config = ResourceConfig::for_src(
-            ResourceConfig::parse_src("https://analysis.test.invalid/track.mp3")
+    fn target_in(store: &AppStore, discriminator: &str) -> AnalysisTarget {
+        let config = AppResourceConfig::for_src(
+            ResourceSrc::parse("https://analysis.test.invalid/track.mp3")
                 .expect("valid test source"),
         )
         .store(store.clone())
@@ -652,14 +649,11 @@ mod tests {
         Mutex::new(state)
     }
 
-    fn queue() -> (Host, QueueControl) {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
-        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+    fn queue() -> (AppHost, AppQueueControl) {
+        let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
-        let queue = Queue::new(QueueConfig::builder().player(player).build());
+        let queue = AppQueue::new(QueueConfig::builder().player(player).build());
         let queue = host.insert(queue).expect("host accepts queue");
         let control = queue.control().clone();
         (host, control)
@@ -681,8 +675,7 @@ mod tests {
     ) -> (AnalysisController, watch::Sender<Option<AnalysisProgress>>) {
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
-        let mut controller = AnalysisController::new(&cancel, &config, persistence)
-            .expect("analysis controller fixture starts");
+        let mut controller = AnalysisController::new(&cancel, &config, persistence);
         let (tx, rx) = watch::channel(value.map(progress));
         controller.activity = Some(Activity::Running(Run {
             shown_revision: None,
@@ -694,7 +687,7 @@ mod tests {
         (controller, tx)
     }
 
-    fn persistence(cancel: &CancelToken, byte_pool: BytePool) -> AnalysisPersistence {
+    fn persistence(cancel: &CancelToken, pools: Pools) -> AnalysisPersistence {
         let worker = Worker::new(
             WorkerConfig::new()
                 .with_cancel(cancel.child())
@@ -702,7 +695,7 @@ mod tests {
         );
         AnalysisPersistence::new(AnalysisPersistenceConfig::new(
             worker,
-            byte_pool,
+            pools,
             NonZeroUsize::MIN,
             Duration::from_secs(u64::from(chunk_seconds().get())),
             DispatcherConfig::new("analysis-persistence-controller-test"),
@@ -741,7 +734,7 @@ mod tests {
         let a = target("root_refill");
         let stored = TrackAnalysisCache::new(
             AnalysisFingerprint::new(None, Some("wave:v1")),
-            BytePool::default(),
+            test_pools(),
             chunk_seconds(),
         );
         let mut stored = stored;
@@ -749,7 +742,7 @@ mod tests {
 
         let mut current = TrackAnalysisCache::new(
             AnalysisFingerprint::new(None, Some("wave:v2")),
-            BytePool::default(),
+            test_pools(),
             chunk_seconds(),
         );
         assert!(
@@ -789,14 +782,13 @@ mod tests {
     }
 
     fn app_config(cancel: &CancelToken) -> crate::config::AppConfig {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+        let pools = test_pools();
+        let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         crate::config::AppConfig::builder()
             .downloader(Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(
                     NetOptions::builder().build(),
+                    pools.clone(),
                     cancel.child(),
                 ))
                 .build(),
@@ -804,7 +796,7 @@ mod tests {
             .shutdown(cancel.child())
             .worker(worker)
             .store(
-                AssetStore::builder()
+                AppStore::builder(pools)
                     .backend(StorageBackend::Memory)
                     .build(),
             )
@@ -820,8 +812,7 @@ mod tests {
         let state = state_with_current(&[TrackId::from(1)], 0);
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
-        let mut controller = AnalysisController::new(&cancel, &config, None)
-            .expect("analysis controller fixture starts");
+        let mut controller = AnalysisController::new(&cancel, &config, None);
 
         controller.on_tracks_changed(&queue, &state, &config);
 
@@ -947,14 +938,15 @@ mod tests {
     #[kithara::test(native, tokio)]
     async fn preemption_commits_a_checkpoint_before_starting_the_next_track() {
         let directory = tempfile::tempdir().expect("temporary analysis store");
-        let store = AssetStore::builder()
+        let pools = test_pools();
+        let store = AppStore::builder(pools.clone())
             .backend(StorageBackend::Disk {
                 root: directory.path().into(),
             })
             .build();
         let target = target_in(&store, "track-a");
         let cancel = CancelToken::root();
-        let persistence = persistence(&cancel, BytePool::default());
+        let persistence = persistence(&cancel, pools.clone());
         let track_a = TrackId::from(1);
         let track_b = TrackId::from(2);
         let (_host, queue) = queue();
@@ -997,7 +989,7 @@ mod tests {
         let reader = store
             .open_resource(target.key(), None)
             .expect("acknowledged checkpoint is committed");
-        let mut bytes = BytePool::default().get();
+        let mut bytes = pools.get::<u8>();
         reader
             .read_into(&mut bytes)
             .expect("committed checkpoint reads");
@@ -1093,13 +1085,14 @@ mod tests {
 
     #[kithara::test(native, tokio)]
     fn invalid_layout_for_current_track_clears_previous_analysis() {
-        let layouts = AssetLayoutRegistry::default().with::<File>(Arc::new(InvalidLayout));
-        let store = AssetStore::builder()
+        let layouts =
+            AssetLayoutRegistry::default().with::<File<AppPools>>(Arc::new(InvalidLayout));
+        let store = AppStore::builder(test_pools())
             .backend(StorageBackend::Memory)
             .layouts(layouts)
             .build();
-        let resource_config = ResourceConfig::for_src(
-            ResourceConfig::parse_src("https://analysis.test.invalid/invalid.mp3")
+        let resource_config = AppResourceConfig::for_src(
+            ResourceSrc::parse("https://analysis.test.invalid/invalid.mp3")
                 .expect("valid test source"),
         )
         .store(store)

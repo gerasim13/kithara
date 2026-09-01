@@ -1,3 +1,4 @@
+use kithara_bufpool::HasPool;
 use kithara_events::{AdvanceReason, QueueEvent, TrackId, TrackStatus};
 use kithara_play::SelectTransition;
 
@@ -13,7 +14,10 @@ mod apply;
 mod navigation;
 mod pending;
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Select a track by id, applying the given [`Transition`]. If the
     /// track is still loading or pending, both the id and the
     /// transition are stashed and applied when loading finishes.
@@ -34,11 +38,8 @@ impl QueueControl {
         transition: Transition,
         reason: AdvanceReason,
     ) -> Result<(), QueueError> {
-        // Serialise the whole select against a concurrent
-        // `spawn_apply_after_load` completion (see `select_apply`): the
-        // supersede (marking the prior pending `Cancelled`) and a loading
-        // track's apply must not interleave, or the superseded track barges
-        // in. Held across the synchronous body only.
+        // WHY: Serialise the whole select against a concurrent `spawn_apply_after_load` completion (see `select_apply`): the supersede
+        // (marking the prior pending `Cancelled`) and a loading track's apply must not interleave, or the superseded track barges in.
         let _apply = self.lock_select_apply();
         let (index, status) = {
             let guard = self.lock_tracks();
@@ -108,7 +109,7 @@ mod tests {
     use super::*;
     use crate::queue::state::tests::{make_queue, wait_for_queue_event};
 
-    fn append(queue: &crate::Queue, source: &str) -> TrackId {
+    fn append(queue: &crate::Queue<crate::test_pools::TestPools>, source: &str) -> TrackId {
         queue
             .append(source)
             .expect("BUG: open queue must accept a track")

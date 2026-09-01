@@ -5,7 +5,10 @@
 The Host owns the session root sync group and its member values, the shared
 Firewheel graph, session transport, mix tap, output limiter, and native or web
 audio backend. The graph registry is only a projection of Host-owned members;
-it must not become a second mutable synchronization topology.
+it must not become a second mutable synchronization topology. On wasm the
+main-thread member owns the sendable synchronization state and desired level;
+the remote Worker Host retains the Queue runtime and its worker-bound JS
+resources until explicit removal.
 
 `kithara-play` owns one player/deck, its render node, effects, fades, worker,
 and playback flow. `kithara-warp` owns synchronization and warp contracts. The
@@ -26,27 +29,45 @@ Player destruction takes the per-player admission gate, so an admitted command
 cannot wait on the owner while the owner waits on that command's gate.
 
 A `HostOwned` endpoint contains the canonical member identity and the player's
-cloneable control capability. It does not expose the inner Player, retain
-players through `Arc` or `Weak`, keep a compatibility registry, or introduce a
-second command route. The immutable `RootView` publishes grid, topology, and
-status observations; it is a read-only projection, never another mutable root.
+cloneable control capability. It does not expose or own the inner Player,
+retain players through `Arc` or `Weak`, or introduce a second command route.
+The wasm remote Host's resident registry only retains Worker-bound runtime
+values; membership remains canonical in the main-thread topology. The
+immutable `RootView` publishes grid, topology, and status observations; it is a
+read-only projection, never another mutable root.
+
+Worker teardown attempts explicit removal once. Success detaches and releases
+the resident; `SessionGone` ends teardown without a retry because the canonical
+owner no longer exists. Any remote Host that still has resident entries when it
+drops logs the invariant failure and retains only those players. It neither
+retries a potentially permanent failure nor drops runtime state while a
+main-thread topology may still reference its member.
 
 `Host::insert` accepts one fully configured Player or decorator instance. The
 instance already owns its stable grid identity. Insertion attaches an opaque
-`SessionBinding` exactly once, then transfers the instance into the Host root;
-decorators only delegate that capability to their resident Player. Neither a
-config builder nor a raw `SessionDispatcher` crosses the insertion API.
+`SessionBinding` exactly once. Native transfers the instance into the Host
+root. Wasm transfers only its synchronization state and current desired level
+to the main-thread root, while the remote Worker Host retains the resident
+instance. The session graph copies that level when the player registers and
+owns later graph actuation. Decorators only delegate the binding and ownership
+split to their resident Player. Neither a config builder nor a raw
+`SessionDispatcher` crosses the insertion API.
 
 Native and web dispatch wrap lower Player commands and Host topology commands
 in one private envelope. On web, the main-thread Host and its Worker facade use
 that same envelope and shared `RootView`; the Worker is never given a raw
 `SessionHandle` with which to construct an unattached player.
 
-On web, one local Host is exclusive per JavaScript thread. It owns both the TLS
-session state and every remote command receiver; sender and receiver wrappers
-are capabilities, not owners. Host shutdown drops those receivers before the
-TLS state so queued reply channels disconnect and a Worker call cannot wait
-forever. A replacement Host starts with cleared bridge playback observations.
+The envelope is typed by the composition root's pool schema. `Host<S>` accepts
+only `PlayerControlSource<Schema = S>`, and each graph deck retains the same
+`PoolRegion<S>` handle carried by the player's registration command.
+
+On web, one local Host is exclusive per JavaScript thread. It owns the session
+state and every remote command receiver; TLS retains only a nongeneric active
+Host flag. Sender and receiver wrappers are capabilities, not owners. Host
+shutdown drops those receivers before session state so queued reply channels
+disconnect and a Worker call cannot wait forever. A replacement Host starts
+with cleared bridge playback observations.
 
 If a command cannot be sent, ownership has not transferred and the original
 operation is rejected as owner-unavailable. If the sole owner thread stops

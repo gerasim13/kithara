@@ -24,6 +24,79 @@ impl<Action> MasonryHost<'_, Action>
 where
     Action: std::fmt::Debug + Send + 'static,
 {
+    /// A chrome frame is drawn only when the skin asks for one.
+    fn chrome_frame(&self, frame: FrameSkin) -> Option<(FrameSides, Rgba, f32)> {
+        (frame.border_width > 0.0).then(|| {
+            (
+                FrameSides::default(),
+                self.skin.rgba(frame.border),
+                frame.border_width,
+            )
+        })
+    }
+
+    /// A word in a box, sized by the word.
+    fn chrome_label(&self, label: ChromeLabel, content: &str) -> MasonryNode<Action> {
+        MasonryNode::control_leaf(
+            Painted::pooled(
+                label,
+                content.to_owned(),
+                self.skin,
+                self.ctx.ui.draw_buffers(),
+            ),
+            solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
+        )
+    }
+
+    /// The cell at the end of the header, with the mark that says which way
+    /// the module folds.
+    fn module_chevron(&self, collapsed: bool) -> MasonryNode<Action> {
+        let metrics = self.skin.chrome;
+        let declared = solve::Size::new(
+            solve::Length::Fixed(metrics.chevron_size),
+            solve::Length::Fill,
+        );
+        let mark = MasonryNode::control_leaf(
+            Painted::pooled(
+                ChromeChevron::new(self.skin),
+                collapsed,
+                self.skin,
+                self.ctx.ui.draw_buffers(),
+            ),
+            declared,
+        );
+        MasonryNode::chrome(
+            NodeLayout::Stack,
+            declared,
+            vec![mark],
+            Some(self.skin.rgba(metrics.header_background)),
+            self.chrome_frame(metrics.chevron_frame),
+        )
+    }
+
+    /// The strip under a module, carrying the one word it resolved for itself.
+    pub(super) fn module_footer(&self, content: String) -> MasonryNode<Action> {
+        let metrics = self.skin.chrome;
+        let role = footer_role(self.skin);
+        MasonryNode::chrome(
+            NodeLayout::Leaf(Leaf::Text {
+                align: TextAlign::Start,
+                content,
+                role,
+                padding_x: metrics.footer_pad,
+                color: self.skin.rgba(role.color),
+                text: Box::new(TextContext::from(self.skin.text_resources())),
+            }),
+            solve::Size::new(
+                solve::Length::Fill,
+                solve::Length::Fixed(metrics.footer_height),
+            ),
+            Vec::new(),
+            Some(self.skin.rgba(metrics.footer_background)),
+            self.chrome_frame(metrics.footer_frame),
+        )
+    }
+
     /// The bar across the top of a module: what it is called, what it is
     /// assigned to, and the chevron that folds it away.
     pub(super) fn module_header(&self, module: &Module<'_>) -> MasonryNode<Action> {
@@ -75,88 +148,11 @@ where
             Some(self.skin.rgba(metrics.header_background)),
             self.chrome_frame(metrics.header_frame),
         );
-        // The bar itself folds the module away, not just the mark at the end of
-        // it: the other host answers a press anywhere on the header through the
-        // activation target it registers for it, and a chevron that only looks
-        // like a button is a module this host cannot fold.
         let name = self.ctx.ui.resolve(module.module()).to_owned();
         header.set_actions(
             Some(self.event(move || UiEvent::ToggleModule(name.clone()))),
             None,
         );
         header
-    }
-
-    /// A word in a box, sized by the word.
-    fn chrome_label(&self, label: ChromeLabel, content: &str) -> MasonryNode<Action> {
-        MasonryNode::control_leaf(
-            Painted::pooled(
-                label,
-                content.to_owned(),
-                self.skin,
-                self.ctx.ui.draw_pools(),
-            ),
-            solve::Size::new(solve::Length::Shrink, solve::Length::Fill),
-        )
-    }
-
-    /// The cell at the end of the header, with the mark that says which way
-    /// the module folds.
-    fn module_chevron(&self, collapsed: bool) -> MasonryNode<Action> {
-        let metrics = self.skin.chrome;
-        let declared = solve::Size::new(
-            solve::Length::Fixed(metrics.chevron_size),
-            solve::Length::Fill,
-        );
-        let mark = MasonryNode::control_leaf(
-            Painted::pooled(
-                ChromeChevron::new(self.skin),
-                collapsed,
-                self.skin,
-                self.ctx.ui.draw_pools(),
-            ),
-            declared,
-        );
-        MasonryNode::chrome(
-            NodeLayout::Stack,
-            declared,
-            vec![mark],
-            Some(self.skin.rgba(metrics.header_background)),
-            self.chrome_frame(metrics.chevron_frame),
-        )
-    }
-
-    /// The strip under a module, carrying the one word it resolved for itself.
-    pub(super) fn module_footer(&self, content: String) -> MasonryNode<Action> {
-        let metrics = self.skin.chrome;
-        let role = footer_role(self.skin);
-        MasonryNode::chrome(
-            NodeLayout::Leaf(Leaf::Text {
-                align: TextAlign::Start,
-                content,
-                role,
-                padding_x: metrics.footer_pad,
-                color: self.skin.rgba(role.color),
-                text: Box::new(TextContext::from(self.skin.text_resources())),
-            }),
-            solve::Size::new(
-                solve::Length::Fill,
-                solve::Length::Fixed(metrics.footer_height),
-            ),
-            Vec::new(),
-            Some(self.skin.rgba(metrics.footer_background)),
-            self.chrome_frame(metrics.footer_frame),
-        )
-    }
-
-    /// A chrome frame is drawn only when the skin asks for one.
-    fn chrome_frame(&self, frame: FrameSkin) -> Option<(FrameSides, Rgba, f32)> {
-        (frame.border_width > 0.0).then(|| {
-            (
-                FrameSides::default(),
-                self.skin.rgba(frame.border),
-                frame.border_width,
-            )
-        })
     }
 }

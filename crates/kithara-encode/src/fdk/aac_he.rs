@@ -1,7 +1,7 @@
 use std::{cmp, mem::size_of};
 
 use fdk_aac_sys as sys;
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use super::encoder::{Encoder, EncoderParams, audio_specific_config};
@@ -50,10 +50,14 @@ impl AacHeProfile {
 pub(crate) struct AacHeEncoder;
 
 impl AacHeEncoder {
-    pub(crate) fn encode(
+    pub(crate) fn encode<S>(
+        pools: &PoolRegion<S>,
         request: &PackagedEncodeRequest<'_>,
         profile: AacHeProfile,
-    ) -> EncodeResult<EncodedTrack> {
+    ) -> EncodeResult<EncodedTrack>
+    where
+        S: HasPool<u8>,
+    {
         request.validate()?;
 
         let sample_rate = request.pcm.sample_rate();
@@ -67,12 +71,12 @@ impl AacHeEncoder {
         }
 
         let mut encoder = Encoder::new(&EncoderParams {
+            channels,
+            sample_rate,
             aot: profile.aot(),
             bit_rate: request.bit_rate.try_into().map_err(|_| {
                 EncodeError::InvalidInput("bit_rate does not fit into u32".to_owned())
             })?,
-            channels,
-            sample_rate,
             sbr: true,
         })?;
         let info = encoder.info()?;
@@ -104,26 +108,21 @@ impl AacHeEncoder {
             EncodeError::backend_message("frame duration does not fit into u32".to_owned())
         })?;
 
-        pump_pcm_into_encoder(
-            request.pcm,
-            &request.byte_pool,
-            frame_input_samples,
-            |input| {
-                let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
-                let encoded = encoder.encode(input, &mut output)?;
-                if encoded.output_size > 0 {
-                    units.push(EncodedAccessUnit {
-                        pts,
-                        bytes: output[..encoded.output_size].to_vec(),
-                        dts: pts,
-                        duration: frame_duration,
-                        is_sync: true,
-                    });
-                    pts = pts.saturating_add(frame_pts_step);
-                }
-                Ok::<usize, EncodeError>(encoded.input_consumed)
-            },
-        )?;
+        pump_pcm_into_encoder(request.pcm, pools, frame_input_samples, |input| {
+            let mut output = [0u8; Consts::ACCESS_UNIT_CAPACITY];
+            let encoded = encoder.encode(input, &mut output)?;
+            if encoded.output_size > 0 {
+                units.push(EncodedAccessUnit {
+                    pts,
+                    bytes: output[..encoded.output_size].to_vec(),
+                    dts: pts,
+                    duration: frame_duration,
+                    is_sync: true,
+                });
+                pts = pts.saturating_add(frame_pts_step);
+            }
+            Ok::<usize, EncodeError>(encoded.input_consumed)
+        })?;
 
         let empty: [i16; 0] = [];
         loop {
@@ -165,13 +164,14 @@ impl AacHeEncoder {
     }
 }
 
-fn pump_pcm_into_encoder<F>(
+fn pump_pcm_into_encoder<S, F>(
     pcm: &dyn PcmSource,
-    byte_pool: &BytePool,
+    pools: &PoolRegion<S>,
     frame_input_samples: usize,
     mut feed: F,
 ) -> EncodeResult<()>
 where
+    S: HasPool<u8>,
     F: FnMut(&[i16]) -> EncodeResult<usize>,
 {
     let total = pcm.total_byte_len().unwrap_or(0);
@@ -184,10 +184,9 @@ where
     let mut byte_offset: usize = 0;
     let mut samples = [0_i16; Consts::MAX_FRAME_INPUT_SAMPLES];
     let mut sample_count = 0;
-    let mut raw = byte_pool.get_with(|buffer| {
-        buffer.clear();
-        buffer.resize(frame_bytes, 0);
-    });
+    let mut raw = pools
+        .get_with_len::<u8>(frame_bytes)
+        .map_err(|error| EncodeError::Backend(Box::new(error)))?;
     while byte_offset < total {
         let remaining_samples = frame_input_samples - sample_count;
         let want = cmp::min(remaining_samples * bytes_per_sample, total - byte_offset);
@@ -228,15 +227,13 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_bufpool::BytePool;
-
     use super::pump_pcm_into_encoder;
-    use crate::{EncodeError, PcmSource};
+    use crate::{EncodeError, PcmSource, test_pools};
 
     struct ChunkedPcm {
+        reads: AtomicUsize,
         bytes: Vec<u8>,
         max_read: usize,
-        reads: AtomicUsize,
     }
 
     impl ChunkedPcm {
@@ -281,7 +278,7 @@ mod tests {
         pcm: &ChunkedPcm,
         mut feed: impl FnMut(&[i16]) -> Result<usize, EncodeError>,
     ) -> Result<(), EncodeError> {
-        pump_pcm_into_encoder(pcm, &BytePool::new(1, 0), 4, |input| feed(input))
+        pump_pcm_into_encoder(pcm, &test_pools::pools(), 4, |input| feed(input))
     }
 
     #[test]

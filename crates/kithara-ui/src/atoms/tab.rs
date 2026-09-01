@@ -10,9 +10,9 @@ use crate::{
 pub(crate) struct TabLarge {
     active_color: Rgba,
     idle_color: Rgba,
+    underline: Rgba,
     metrics: TabLargeSkin,
     role: TextRoleSkin,
-    underline: Rgba,
 }
 
 impl TabLarge {
@@ -26,17 +26,6 @@ impl TabLarge {
         }
     }
 
-    pub(crate) fn intrinsic_size(&self, text: &mut TextContext, label: &str) -> (f32, f32) {
-        let run = self.shape(text, label);
-        (run.width() + self.metrics.pad_x * 2.0, self.height())
-    }
-
-    /// The one axis the skin settles outright: every tab in a strip is the same
-    /// height whatever its word.
-    pub(crate) const fn height(&self) -> f32 {
-        self.metrics.height
-    }
-
     /// The box a tab asks for, said once for both hosts.
     ///
     /// A tab is as wide as its own word: a strip of tabs is a row of headings,
@@ -46,6 +35,17 @@ impl TabLarge {
     /// this rather than restating it.
     pub(crate) const fn declared_length(height: f32) -> Size<Length> {
         Size::new(Length::Shrink, Length::Fixed(height))
+    }
+
+    /// The one axis the skin settles outright: every tab in a strip is the same
+    /// height whatever its word.
+    pub(crate) const fn height(&self) -> f32 {
+        self.metrics.height
+    }
+
+    pub(crate) fn intrinsic_size(&self, text: &mut TextContext, label: &str) -> (f32, f32) {
+        let run = self.shape(text, label);
+        (run.width() + self.metrics.pad_x * 2.0, self.height())
     }
 
     pub(crate) fn paint(

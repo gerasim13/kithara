@@ -56,6 +56,11 @@ one root — races on the same entries. The protocol is double-checked:
 `EntryLock` releases with its file handle, so a producer that panics or is
 killed does not wedge the store.
 
+An asset with named `#[case::...(...)]` cases may use `{case}` in a
+`depends_on` entry. The macro substitutes the current case name before the
+registry is built, so parallel fixture families can declare one dependency
+pattern without a second hand-maintained case map.
+
 ## `embed`
 
 `#[kithara::asset(..., embed)]` changes how an asset is *served*, never how it is
@@ -72,6 +77,36 @@ Consequences, in the order they matter:
   filesystem, and only embedded accessors compile there.
 - rustc records `include_bytes!` paths in dep-info, so cargo rebuilds the
   accessor when the store entry it was built from changes.
+
+## Optional And Remote Assets
+
+`#[kithara::asset(..., optional)]` is the only asset shape allowed to fail
+without failing the build. It is reserved for opt-in remote hydration:
+
+- Normal builds stay offline. `KITHARA_REMOTE_FIXTURES` enables optional
+  producers; without it their generated accessors report that hydration is
+  disabled.
+- `env = ["NAME", ...]` records credential dependencies with
+  `cargo:rerun-if-env-changed`. Values are read only by the producer and are
+  never written to generated source, manifests, diagnostics, or the store.
+- A failed optional producer emits a redacted Cargo warning and leaves no final
+  entry. `Asset::try_bytes()` returns the recorded `AssetError::Unavailable`,
+  and the next enabled build retries because the entry is still absent.
+- Required producers retain the old fail-closed contract. `optional` cannot be
+  combined with `embed` because unavailable bytes cannot be compiled into a
+  binary.
+
+The HLS hydrator stores every fetched playlist, media resource, init section,
+and AES-128 key as an atomic child entry through `BuildContext`. It rewrites
+their URIs to stable local routes and returns one bundle manifest only after the
+complete VOD graph is valid and stored. The ordinary asset writer commits that
+manifest last. Child entries left by a storage failure are unreachable without
+the manifest and safe to reuse on a retry.
+
+`HlsBundle::try_from(&Asset)` is the runtime read side. It accepts only one-level
+store filenames, absolute routes, unique routes, and a master route present in
+the manifest, so a hydrated manifest cannot escape its fixture namespace when
+served by a test.
 
 ## Generators Stay Out Of The Library
 
@@ -146,9 +181,12 @@ asserting against.
 build script packages the HE-AAC bodies it embeds, and the integration suite's
 HLS server packages its variants while the tests run. `mux_audio_track` turns an
 `EncodedTrack` into an `Fmp4Package`: one init segment plus one media segment
-per `packets_per_segment` access units, each with its duration in seconds
-derived from the track's `timescale`. `Vec::<u8>::from(package)` concatenates
-them into the single body a decoder reads.
+per `packets_per_segment` access units. `mux_audio_track_at` accepts explicit
+access-unit end boundaries for non-uniform HLS and can package a prefix of one
+longer encode. Both derive segment duration from the track's `timescale` and
+keep one continuous decode timeline. This is how the long, gapless, and RSS HLS
+bundles reuse one encode per variant. `Vec::<u8>::from(package)` concatenates
+the package into the single body a decoder reads.
 
 It lives here rather than in `kithara-encode` because nothing ships it: the
 workspace *reads* fMP4 in `kithara-decode` and broadcasts ADTS in

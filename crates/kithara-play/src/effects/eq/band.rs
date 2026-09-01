@@ -46,11 +46,11 @@ pub struct EqBandConfig {
     #[builder(default)]
     #[field(get(copy))]
     kind: FilterKind,
-    #[builder(default = Consts::DEFAULT_FREQ)]
-    frequency: f32,
     #[builder(default)]
     #[field(get(copy))]
     gain_db: GainDb,
+    #[builder(default = Consts::DEFAULT_FREQ)]
+    frequency: f32,
     #[builder(default = std::f32::consts::FRAC_1_SQRT_2)]
     q_factor: f32,
 }

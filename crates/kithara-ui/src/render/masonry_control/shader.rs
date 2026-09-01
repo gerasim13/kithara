@@ -17,18 +17,18 @@ pub(super) struct ShaderLeaf {
     error: Option<ShaderFrameError>,
     frame: Option<ShaderFrame>,
     image: Option<ImageData>,
-    path: String,
     spec: ShaderSpec,
+    path: String,
 }
 
 impl ShaderLeaf {
     pub(super) fn new(spec: ShaderSpec, path: String, ctx: Ctx<'_, '_>) -> Self {
         let mut this = Self {
+            path,
+            spec,
             error: None,
             frame: None,
             image: None,
-            path,
-            spec,
         };
         this.update(ctx);
         this

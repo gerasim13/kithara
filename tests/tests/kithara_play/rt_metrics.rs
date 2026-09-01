@@ -2,14 +2,12 @@
 //!
 //! Each test drives one failure branch of `process()` and asserts the matching counter moved, so a
 //! change that reintroduces a log — or drops the signal altogether — fails here.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::SamplePool,
     events::TrackId,
     platform::{sync::Arc, time::Duration},
     play::{
@@ -23,6 +21,8 @@ use kithara_integration_tests::audio_mock::{
     Fault, FaultyPcmReader, SeekSplitReader, TestPcmReader,
 };
 use ringbuf::traits::Producer;
+
+use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: u32 = 128;
@@ -41,10 +41,7 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(BLOCK_FRAMES).expect("non-zero block"),
     };
-    (
-        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
-        control,
-    )
+    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
 }
 
 fn faulty_track(src: &str, fault: Fault) -> Box<PlayerResource> {
@@ -62,11 +59,10 @@ fn healthy_track(src: &str) -> Box<PlayerResource> {
 }
 
 fn boxed(resource: Resource, src: &str) -> Box<PlayerResource> {
-    Box::new(PlayerResource::new(
-        resource,
-        Arc::from(src),
-        &SamplePool::default(),
-    ))
+    Box::new(
+        PlayerResource::new(resource, Arc::from(src), &pools())
+            .expect("player resource fits the test pool budget"),
+    )
 }
 
 fn load(control: &mut SlotControl, resource: Box<PlayerResource>) -> TrackId {

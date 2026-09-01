@@ -19,8 +19,8 @@ use crate::{BroadcastError, BroadcastResult, window::PlaylistSnapshot};
 
 #[derive(Debug)]
 pub(crate) struct Origin {
-    pub(crate) snapshot: ArcSwap<PlaylistSnapshot>,
     pub(crate) master: Arc<str>,
+    pub(crate) snapshot: ArcSwap<PlaylistSnapshot>,
 }
 
 pub(crate) fn start(
@@ -29,11 +29,11 @@ pub(crate) fn start(
     token: CancelToken,
 ) -> BroadcastResult<SocketAddr> {
     let listener =
-        TcpListener::bind(bind).map_err(|source| BroadcastError::Bind { addr: bind, source })?;
+        TcpListener::bind(bind).map_err(|source| BroadcastError::Bind { source, addr: bind })?;
     let addr = listener
         .local_addr()
         .and_then(|addr| listener.set_nonblocking(true).map(|()| addr))
-        .map_err(|source| BroadcastError::Bind { addr: bind, source })?;
+        .map_err(|source| BroadcastError::Bind { source, addr: bind })?;
 
     std::thread::Builder::new()
         .name(Consts::THREAD.to_owned())

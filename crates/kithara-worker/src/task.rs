@@ -59,17 +59,17 @@ pub enum TickResult {
 
 /// Domain task executed in short quanta by one dispatcher thread.
 pub trait Task: Send + 'static {
-    /// Perform one short quantum of work.
-    fn tick(&mut self) -> TickResult;
+    /// Release domain state after cancellation or panic.
+    fn on_cancel(&mut self) {}
 
     /// Reclaim deferred resources outside the task tick.
     fn recycle(&mut self) {}
 
+    /// Perform one short quantum of work.
+    fn tick(&mut self) -> TickResult;
+
     /// Prepare dispatcher-thread-local state before the first tick.
     fn warm_up(&mut self) {}
-
-    /// Release domain state after cancellation or panic.
-    fn on_cancel(&mut self) {}
 }
 
 /// Cloneable priority and wake control for an admitted task.
@@ -83,10 +83,16 @@ pub struct TaskControl {
 impl TaskControl {
     pub(crate) fn new(priority: Priority, token: CancelToken, wake: Wake) -> Self {
         Self {
-            priority: Arc::new(AtomicU32::new(priority.get())),
             token,
             wake,
+            priority: Arc::new(AtomicU32::new(priority.get())),
         }
+    }
+
+    /// Cancel only this task subtree and wake its dispatcher.
+    pub fn cancel(&self) {
+        self.token.cancel();
+        self.wake.wake();
     }
 
     /// Return the current scheduler priority.
@@ -99,12 +105,6 @@ impl TaskControl {
     pub fn set_priority(&self, priority: Priority) {
         self.priority.store(priority.get(), Ordering::Relaxed);
         self.wake.defer();
-    }
-
-    /// Cancel only this task subtree and wake its dispatcher.
-    pub fn cancel(&self) {
-        self.token.cancel();
-        self.wake.wake();
     }
 
     delegate::delegate! {
@@ -123,12 +123,12 @@ impl TaskControl {
 #[non_exhaustive]
 #[derive(Clone)]
 pub struct TaskContext {
-    cancel: CancelGroup,
     compute: Arc<ComputeRuntime>,
     compute_budget: Arc<Budget>,
-    control: TaskControl,
-    runtime: Option<Handle>,
+    cancel: CancelGroup,
     token: CancelToken,
+    runtime: Option<Handle>,
+    control: TaskControl,
 }
 
 impl TaskContext {
@@ -141,12 +141,12 @@ impl TaskContext {
         token: CancelToken,
     ) -> Self {
         Self {
-            cancel,
             compute,
             compute_budget,
-            control,
-            runtime,
+            cancel,
             token,
+            runtime,
+            control,
         }
     }
 

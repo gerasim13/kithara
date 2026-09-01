@@ -1,9 +1,11 @@
 use std::fmt;
 
-use kithara_assets::{AssetLayout, AssetLayoutRegistry};
-use kithara_platform::sync::{Arc, Mutex};
+use kithara::{
+    assets::{AssetLayout, AssetLayoutRegistry},
+    platform::sync::{Arc, Mutex},
+};
 
-use crate::{layout::FfiAssetLayout, native::layout::ForeignLayout};
+use crate::{layout::FfiAssetLayout, native::layout::ForeignLayout, pools::FfiPools};
 
 /// Playback protocol whose default asset layout can be replaced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,8 +44,12 @@ impl FfiAssetLayoutRegistry {
         let replaced = {
             let mut layouts = self.inner.lock();
             match target {
-                FfiAssetLayoutTarget::File => layouts.register::<kithara::file::File>(layout),
-                FfiAssetLayoutTarget::Hls => layouts.register::<kithara::hls::Hls>(layout),
+                FfiAssetLayoutTarget::File => {
+                    layouts.register::<kithara::file::File<FfiPools>>(layout)
+                }
+                FfiAssetLayoutTarget::Hls => {
+                    layouts.register::<kithara::hls::Hls<FfiPools>>(layout)
+                }
             }
         };
         drop(replaced);

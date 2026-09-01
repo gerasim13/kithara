@@ -19,16 +19,16 @@ impl GateGuard {
         self.armed = false;
     }
 
+    pub(super) fn shared(&self) -> Arc<ReadinessGate> {
+        Arc::clone(&self.readiness)
+    }
+
     delegate::delegate! {
         to self.readiness {
             pub(super) fn fail(&self);
             pub(super) fn is_ready(&self) -> bool;
             pub(super) fn mark_ready(&self);
         }
-    }
-
-    pub(super) fn shared(&self) -> Arc<ReadinessGate> {
-        Arc::clone(&self.readiness)
     }
 }
 

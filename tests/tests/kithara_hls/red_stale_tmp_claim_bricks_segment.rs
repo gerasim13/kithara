@@ -22,7 +22,6 @@
 //! `WaitingDemand`, `range_has_failed` stayed false, and the decode gate parked
 //! for good. Only a live-writer `TmpClaimed` requeues now; anything else
 //! settles as failed.
-
 use std::{
     fs,
     io::{self, Read},
@@ -38,6 +37,7 @@ use kithara::{
 };
 use kithara_integration_tests::{
     TestTempDir,
+    bufpool_ext::{TestPools, pools},
     hls_server::{HlsTestServer, HlsTestServerConfig},
 };
 
@@ -114,7 +114,7 @@ struct Fixture {
     /// store's own scope and key so a test cannot plant its tmp somewhere the
     /// store never looks.
     canonical: PathBuf,
-    config: HlsConfig,
+    config: HlsConfig<TestPools>,
     _temp_dir: TestTempDir,
 }
 
@@ -131,12 +131,13 @@ impl Fixture {
         let stale_url = server.url(&format!("/seg/v0_{}.bin", Consts::STALE_SEGMENT));
 
         let root = temp_dir.path().to_path_buf();
-        let store = AssetStore::builder()
+        let pools = pools();
+        let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Disk { root: root.clone() })
             .cache_capacity(NonZeroUsize::new(256).unwrap())
             .build();
         let key = store
-            .scope::<Hls>(&AssetSource::Remote {
+            .scope::<Hls<TestPools>>(&AssetSource::Remote {
                 url: master_url.clone(),
                 discriminator: None,
             })
@@ -149,6 +150,7 @@ impl Fixture {
 
         let config = HlsConfig::for_url(master_url)
             .store(store)
+            .pools(pools)
             .cancel(CancelToken::never())
             .initial_abr_mode(AbrMode::manual(0))
             .build();
@@ -162,7 +164,7 @@ impl Fixture {
 
     /// Read the whole stream byte-for-byte, returning the byte count.
     async fn read_to_eof(&self) -> io::Result<u64> {
-        let mut stream = Stream::<Hls>::new(self.config.clone())
+        let mut stream = Stream::<Hls<TestPools>>::new(self.config.clone())
             .await
             .expect("create stream");
         spawn_blocking(move || {

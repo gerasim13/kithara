@@ -29,15 +29,15 @@ pub(super) trait ViewControl {
 /// What a control is handed when it mounts: the document it was read from, the
 /// value behind it, and who owns the pointer over it.
 pub(super) struct Cx<'a, 'ctx, 'value> {
-    pub(super) owner: InputOwner,
-    pub(super) path: &'a str,
-    pub(super) ctx: Ctx<'a, 'ctx>,
-    pub(super) scope: &'a str,
     pub(super) skin: &'a Skin,
+    pub(super) path: &'a str,
+    pub(super) scope: &'a str,
+    pub(super) ctx: Ctx<'a, 'ctx>,
+    pub(super) owner: InputOwner,
+    pub(super) value: Option<&'value ReadValue<'ctx>>,
     /// Every enclosing object's pose, folded into the box this control paints
     /// into. Identity for a control no object wraps.
     pub(super) transform: Transform,
-    pub(super) value: Option<&'value ReadValue<'ctx>>,
 }
 
 impl ViewControl for mount::Summary {
@@ -355,7 +355,7 @@ where
         control.painter(cx.skin),
         data,
         cx.skin,
-        cx.ctx.ui.draw_pools(),
+        cx.ctx.ui.draw_buffers(),
     )
     .posed(cx.transform);
     let element = if cx.owner == InputOwner::Leaf {

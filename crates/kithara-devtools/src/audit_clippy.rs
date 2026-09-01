@@ -20,13 +20,13 @@ pub struct AuditClippyArgs {
         trailing_var_arg = true
     )]
     pub paths: Vec<String>,
+    /// Skip the dirty-tree guard before applying fixes.
+    #[arg(long = "allow-dirty")]
+    pub allow_dirty: bool,
     /// Apply every machine-applicable suggestion emitted by the configured
     /// advisory lints, then rerun the grouped report over the same scope.
     #[arg(long)]
     pub fix: bool,
-    /// Skip the dirty-tree guard before applying fixes.
-    #[arg(long = "allow-dirty")]
-    pub allow_dirty: bool,
     /// Print cargo's JSON message stream instead of the grouped report.
     #[arg(long)]
     pub raw: bool,

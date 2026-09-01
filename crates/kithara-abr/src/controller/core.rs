@@ -24,8 +24,8 @@ use crate::{
 struct Defaults;
 
 impl Defaults {
-    const BANDWIDTH_EMIT_MIN_INTERVAL: Duration = Duration::from_secs(1);
     const BANDWIDTH_EMIT_MIN_DELTA_RATIO: f64 = 0.10;
+    const BANDWIDTH_EMIT_MIN_INTERVAL: Duration = Duration::from_secs(1);
     const BUFFER_EMIT_MIN_DELTA: Duration = Duration::from_millis(500);
     const BUFFER_EMIT_MIN_INTERVAL: Duration = Duration::from_millis(500);
     const DOWN_HYSTERESIS_RATIO: f64 = 0.8;
@@ -61,11 +61,6 @@ impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct AbrSettings {
-    /// Optional parent cancellation token for the controller scope.
-    ///
-    /// `Some` derives a child scope from the supplied parent; `None` gives the
-    /// controller a standalone scope.
-    pub cancel: Option<CancelToken>,
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
     pub bandwidth_emit_min_interval: Duration,
@@ -75,20 +70,25 @@ pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_INTERVAL)]
     pub buffer_emit_min_interval: Duration,
-    /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
-    /// sample still reaches the estimator; this bounds only how often the
-    /// raw per-fetch rate is published to the bus.
-    #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
-    pub throughput_sample_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[builder(default = Defaults::MIN_BUFFER_FOR_UP_SWITCH)]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
     #[builder(default = Defaults::MIN_SWITCH_INTERVAL)]
     pub min_switch_interval: Duration,
+    /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
+    /// sample still reaches the estimator; this bounds only how often the
+    /// raw per-fetch rate is published to the bus.
+    #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
+    pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
     #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
     pub urgent_downswitch_buffer: Duration,
+    /// Optional parent cancellation token for the controller scope.
+    ///
+    /// `Some` derives a child scope from the supplied parent; `None` gives the
+    /// controller a standalone scope.
+    pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
     pub initial_throughput_bps: Option<u64>,
@@ -124,11 +124,11 @@ impl Default for AbrSettings {
 pub struct AbrController {
     #[field(get)]
     pub(super) settings: AbrSettings,
-    scope: CancelScope,
     pub(super) estimator: Arc<dyn Estimator>,
+    pub(super) peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
     pub(super) tick_waker: Mutex<Option<Waker>>,
     next_peer_id: AtomicU64,
-    pub(super) peers: DashMap<AbrPeerId, Arc<PeerEntry>>,
+    scope: CancelScope,
 }
 
 impl AbrController {
@@ -181,9 +181,6 @@ impl AbrController {
         if let Some(entry) = self.peer_entry(peer_id)
             && let Some(peer) = entry.peer_weak.upgrade()
         {
-            // A mode change is work even when the queued decision is
-            // temporarily locked by a seek. Re-polling the peer synchronizes
-            // that lock; its existing unlock edge then re-evaluates the mode.
             peer.wake();
         }
     }

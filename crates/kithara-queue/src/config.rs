@@ -2,6 +2,7 @@ use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
 use kithara_assets::AssetStore;
+use kithara_bufpool::HasPool;
 use kithara_platform::CancelToken;
 use kithara_play::PlayerImpl;
 
@@ -27,7 +28,10 @@ pub(crate) const DEFAULT_PREFETCH_DURATION: f32 = 3.5;
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
-pub struct QueueConfig {
+pub struct QueueConfig<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     /// Max concurrent background prefetch loads. Default: 3.
     #[builder(default = DEFAULT_MAX_CONCURRENT_LOADS)]
     pub max_concurrent_loads: NonZeroUsize,
@@ -39,10 +43,10 @@ pub struct QueueConfig {
     pub cancel: Option<CancelToken>,
 
     /// Player owned and decorated by this queue.
-    pub player: PlayerImpl,
+    pub player: PlayerImpl<S>,
 
     /// Shared store used for bare URI track sources.
-    pub store: Option<AssetStore>,
+    pub store: Option<AssetStore<S>>,
 
     /// Whether the queue auto-advances to the next track at EOF.
     #[builder(default = true)]
@@ -60,7 +64,10 @@ pub struct QueueConfig {
     pub max_history_size: usize,
 }
 
-impl fmt::Debug for QueueConfig {
+impl<S> fmt::Debug for QueueConfig<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("QueueConfig")
             .field("max_concurrent_loads", &self.max_concurrent_loads)
@@ -73,19 +80,15 @@ impl fmt::Debug for QueueConfig {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::Region;
     use kithara_play::{PlayWorker, PlayWorkerConfig, PlayerConfig};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::queue::test_session;
+    use crate::{queue::test_session, test_pools::pools};
 
     #[kithara::test]
     fn default_config_has_reasonable_loader_cap() {
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

@@ -1,7 +1,3 @@
-//! The gallery's documents and their resolver, apart from the window that shows
-//! them. A measurement harness mounts the same pages from here without pulling
-//! in a toolkit main.
-
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

@@ -4,8 +4,8 @@ use serde::Serialize;
 
 #[derive(Clone, Copy, Default, Serialize)]
 struct PlaybackHangContext {
-    active_tasks: usize,
     first_waiting_task: Option<u64>,
+    active_tasks: usize,
     waiting_tasks: usize,
 }
 

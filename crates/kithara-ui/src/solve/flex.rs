@@ -4,23 +4,23 @@ use super::{Alignment, Length, Limits, Padding, Point, Size, fluid};
 use crate::layout::Axis;
 
 pub(crate) struct Input<'a> {
-    pub(crate) axis: Axis,
     pub(crate) limits: &'a Limits,
-    pub(crate) width: Length,
-    pub(crate) height: Length,
-    pub(crate) padding: Padding,
-    pub(crate) spacing: f32,
     pub(crate) align_items: Alignment,
+    pub(crate) axis: Axis,
+    pub(crate) height: Length,
+    pub(crate) width: Length,
+    pub(crate) padding: Padding,
     pub(crate) items: Vec<Item>,
+    pub(crate) spacing: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Item {
+    pub(crate) offset: Point,
     pub(crate) declared: Size<Length>,
+    pub(crate) size: Size,
     pub(super) main_minimum: Option<f32>,
     main_weight: Option<f32>,
-    pub(crate) offset: Point,
-    pub(crate) size: Size,
 }
 
 impl Item {
@@ -29,16 +29,6 @@ impl Item {
             declared,
             main_minimum,
             main_weight: None,
-            offset: Point::ORIGIN,
-            size: Size::ZERO,
-        }
-    }
-
-    pub(crate) const fn weighted(declared: Size<Length>, main_weight: f32) -> Self {
-        Self {
-            declared,
-            main_minimum: None,
-            main_weight: Some(main_weight),
             offset: Point::ORIGIN,
             size: Size::ZERO,
         }
@@ -53,6 +43,16 @@ impl Item {
             0.0
         } else {
             self.main_weight.unwrap_or_else(|| f32::from(fill_factor))
+        }
+    }
+
+    pub(crate) const fn weighted(declared: Size<Length>, main_weight: f32) -> Self {
+        Self {
+            declared,
+            main_minimum: None,
+            main_weight: Some(main_weight),
+            offset: Point::ORIGIN,
+            size: Size::ZERO,
         }
     }
 }

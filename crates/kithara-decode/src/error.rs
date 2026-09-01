@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, io, io::ErrorKind, num::TryFromIntError};
 
-use kithara_bufpool::BudgetExhausted;
+use kithara_bufpool::PoolError;
 use kithara_signal::SignalError;
 use kithara_stream::{AudioCodec, ContainerFormat, PendingReason, VariantChangeError};
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -42,6 +42,14 @@ pub enum DecodeError {
         #[from]
         #[source]
         source: SignalError,
+    },
+
+    /// The injected pool region rejected a checked buffer allocation.
+    #[error("decode buffer allocation failed: {source}")]
+    Pool {
+        #[from]
+        #[source]
+        source: PoolError,
     },
 
     #[error("Seek failed: {detail}")]
@@ -192,6 +200,20 @@ pub enum ErrorClass {
 }
 
 impl DecodeError {
+    /// Wrap a producer-side stream failure as a [`DecodeError::AudioStream`]
+    /// with a `&'static str` site tag, keeping the cause a typed source
+    /// instead of a pre-formatted message.
+    #[must_use]
+    pub fn audio_stream<E>(what: &'static str, err: E) -> Self
+    where
+        E: Into<Box<dyn StdError + Send + Sync>>,
+    {
+        Self::AudioStream {
+            what,
+            source: err.into(),
+        }
+    }
+
     /// Wrap any `StdError + Send + Sync` payload as a [`DecodeError::Backend`].
     /// Avoids 30+ repeats of `.map_err(|e| DecodeError::Backend { source: Box::new(e) })`
     /// across the apple / android / symphonia codec layers.
@@ -208,7 +230,6 @@ impl DecodeError {
     /// `match` over the discriminant.
     #[must_use]
     #[inline]
-    // ast-grep-ignore: idioms.match-self-conversion
     pub fn classify(&self) -> ErrorClass {
         match self {
             Self::Interrupted => ErrorClass::Interrupted,
@@ -250,20 +271,6 @@ impl DecodeError {
         E: Into<Box<dyn StdError + Send + Sync>>,
     {
         Self::Parse {
-            what,
-            source: err.into(),
-        }
-    }
-
-    /// Wrap a producer-side stream failure as a [`DecodeError::AudioStream`]
-    /// with a `&'static str` site tag, keeping the cause a typed source
-    /// instead of a pre-formatted message.
-    #[must_use]
-    pub fn audio_stream<E>(what: &'static str, err: E) -> Self
-    where
-        E: Into<Box<dyn StdError + Send + Sync>>,
-    {
-        Self::AudioStream {
             what,
             source: err.into(),
         }
@@ -311,12 +318,6 @@ impl From<io::Error> for DecodeError {
 
 impl From<TryFromIntError> for DecodeError {
     fn from(err: TryFromIntError) -> Self {
-        Self::backend(err)
-    }
-}
-
-impl From<BudgetExhausted> for DecodeError {
-    fn from(err: BudgetExhausted) -> Self {
         Self::backend(err)
     }
 }

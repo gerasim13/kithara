@@ -1,4 +1,4 @@
-use kithara_ui::render::{Node, ReadValue, Scope};
+use kithara::ui::render::{Node, ReadValue, Scope};
 
 use super::value::Value;
 use crate::gui::ui::{
@@ -12,10 +12,10 @@ use crate::gui::ui::{
 #[derive(Clone, Copy)]
 pub(super) struct UiNode<'a> {
     collapsed: &'a CollapsedModules,
-    layout: DeckLayout,
     menu: &'a MenuState,
     modules: &'a Modules,
     window: &'a WindowState,
+    layout: DeckLayout,
     drag: DragNode<'a>,
 }
 
@@ -30,10 +30,10 @@ impl<'a> UiNode<'a> {
     ) -> Self {
         Self {
             collapsed,
-            layout,
             menu,
             modules,
             window,
+            layout,
             drag,
         }
     }

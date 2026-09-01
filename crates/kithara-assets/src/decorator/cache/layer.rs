@@ -223,11 +223,8 @@ where
         let ResourceStatus::Committed { final_len } = reader.status() else {
             return None;
         };
-        // A committed resource of unknown length counts as unbounded so it
-        // cannot stay in a byte-bounded cache — see CONTEXT.md "Memory byte
-        // bound". Not a hidden-missing-value sentinel: `retained_bytes`'s
-        // eviction loop is designed to keep targeting an unbounded entry
-        // until it is the one removed.
+        // WHY: A committed resource of unknown length counts as unbounded so it cannot stay in a byte-bounded cache - see CONTEXT.md "Memory
+        // byte bound".
         Some(final_len.or_else(|| reader.len()).unwrap_or(u64::MAX))
     }
 
@@ -302,8 +299,7 @@ where
                 }
                 Some((key.clone(), Self::entry_hits(entry)))
             })
-            // Frequency-aware victim: fewest hits wins; ties fall to the
-            // least-recently-used end (iter yields MRU->LRU, so a later equal
+            // WHY: Frequency-aware victim: fewest hits wins; ties fall to the least-recently-used end (iter yields MRU->LRU, so a later equal
             // candidate is the better victim).
             .reduce(|best, cand| if cand.1 <= best.1 { cand } else { best })
             .map(|(key, _)| key)?;
@@ -472,10 +468,8 @@ where
                 drop(cache);
                 return Ok(AcquisitionResult::Ready(self.wrap_reader(key, reader)));
             }
-            // In-flight slot: reactivate mints a fresh-generation writer; cache
-            // its current-generation reader-view so concurrent opens block on
-            // the new generation's gate. No invalidation — same key, same bytes.
-            // Carry the hit count across the re-put so frequency survives.
+            // WHY: In-flight slot: reactivate mints a fresh-generation writer; cache its current-generation reader-view so concurrent opens
+            // block on the new generation's gate.
             let writer = reader.reactivate()?;
             cache.put(
                 cache_key,
@@ -740,13 +734,13 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct ContextMemStore {
-        inner: MemAssetStore,
+        inner: MemAssetStore<crate::test_pools::TestPools>,
     }
 
     impl Default for ContextMemStore {
         fn default() -> Self {
             Self {
-                inner: MemAssetStore::new(CancelToken::never(), None, &crate::BytePool::default()),
+                inner: MemAssetStore::new(CancelToken::never(), None, crate::test_pools::pools()),
             }
         }
     }
@@ -788,11 +782,7 @@ mod tests {
     }
 
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        ));
+        let disk = Arc::new(DiskAssetStore::new(dir, CancelToken::never()));
         CachedAssets::new(disk, capacity, None, false)
     }
 
@@ -835,11 +825,7 @@ mod tests {
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn durable_displacement_does_not_invalidate() {
         let dir = tempfile::tempdir().unwrap();
-        let disk = Arc::new(DiskAssetStore::new(
-            dir.path(),
-            CancelToken::never(),
-            &crate::BytePool::default(),
-        ));
+        let disk = Arc::new(DiskAssetStore::new(dir.path(), CancelToken::never()));
         let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::new(disk, NonZeroUsize::new(2).unwrap(), Some(cb), false);
 
@@ -872,7 +858,7 @@ mod tests {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
             None,
-            &crate::BytePool::default(),
+            crate::test_pools::pools(),
         ));
         let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::new(mem, NonZeroUsize::new(2).unwrap(), Some(cb), true);
@@ -899,7 +885,7 @@ mod tests {
         let mem = Arc::new(MemAssetStore::new(
             CancelToken::never(),
             None,
-            &crate::BytePool::default(),
+            crate::test_pools::pools(),
         ));
         let (mut invalidations, cb) = record_invalidations();
         let cached = CachedAssets::with_max_bytes(
@@ -919,7 +905,7 @@ mod tests {
 
         let reader = reader.release();
         assert!(cached.cache.lock().is_empty());
-        assert_eq!(drained(&mut invalidations), [key.clone()]);
+        assert_eq!(drained(&mut invalidations), [key]);
         drop(reader);
     }
 

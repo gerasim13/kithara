@@ -3,9 +3,10 @@ use std::io::Cursor;
 use kithara::{
     self,
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+    encode::{EncodedTrack, StreamBackend, StreamEncoder},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::{EncodedTrack, StreamBackend, StreamEncoder};
+use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::{
     fmp4::{GaplessEncoding, mux_audio_track},
     signal::{Wave, goertzel_magnitude},
@@ -71,9 +72,8 @@ fn decode_left_channel(bytes: Vec<u8>) -> Vec<f32> {
             .codec(AudioCodec::AacLc)
             .container(ContainerFormat::Fmp4)
             .build(),
-        DecoderConfig::<kithara::resampler::NoResamplerBackend>::builder()
-            .byte_pool(kithara::bufpool::BytePool::default())
-            .sample_pool(kithara::bufpool::SamplePool::default())
+        DecoderConfig::<kithara::resampler::NoResamplerBackend, TestPools>::builder()
+            .pools(pools())
             .build(),
     )
     .expect("create the fMP4 AAC-LC decoder");

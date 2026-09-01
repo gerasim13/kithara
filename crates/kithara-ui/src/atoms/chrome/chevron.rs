@@ -13,10 +13,10 @@ use crate::{
 /// cell draw the same mark in the same place.
 #[derive(Clone, PartialEq)]
 pub(crate) struct ChromeChevron {
-    cell_width: f32,
     color: Rgba,
-    icon_size: f32,
     line_color: Rgba,
+    cell_width: f32,
+    icon_size: f32,
     line_width: f32,
     stroke_width: f32,
 }

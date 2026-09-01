@@ -86,7 +86,6 @@ pub fn write_entry(
         file.sync_all()
     })();
     if let Err(error) = write {
-        // The write already failed; a failure to clean up must not replace it.
         drop(fs::remove_file(&tmp_path));
         return Err(error);
     }

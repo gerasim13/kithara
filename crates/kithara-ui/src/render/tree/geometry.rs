@@ -178,22 +178,6 @@ pub(super) enum HostedLayout {
 }
 
 impl HostedLayout {
-    pub(super) fn module(spec: ModuleHost<'_>) -> Self {
-        let ModuleHost {
-            instance,
-            module,
-            chrome,
-            collapsed,
-            drop,
-        } = spec;
-        Self::Chrome {
-            drop: drop.then(|| HostedControlPlan::crossing(instance)),
-            header: (chrome == ChromeStyle::Full)
-                .then(|| (format!("{instance}/header"), module.to_owned())),
-            collapsed,
-        }
-    }
-
     pub(super) fn new(node: &ExpandedNode, ctx: Ctx<'_, '_>, skin: &Skin) -> Self {
         let snapshot: &dyn Snapshot = &ctx;
         match node {
@@ -223,9 +207,6 @@ impl HostedLayout {
             ExpandedNode::Object { child, .. }
             | ExpandedNode::Optional { child, .. }
             | ExpandedNode::Reveal { child, .. } => Self::new(child, ctx, skin),
-            // An axis names a room only the layout pass knows, so every branch
-            // is mounted and the plan keeps them all. A measure that is read
-            // has its answer here, and only the branch it names is mounted.
             ExpandedNode::Adaptive {
                 measure,
                 base,
@@ -264,7 +245,7 @@ impl HostedLayout {
                     read.as_ref().and_then(|binding| ctx.read(binding)),
                     read.as_ref(),
                     ctx.scope(read.as_ref()),
-                    Resolving { ctx, skin },
+                    Resolving { skin, ctx },
                 );
                 if effective_size(node, skin, snapshot).is_none() {
                     Self::SelfMeasuredControl(control)
@@ -280,20 +261,12 @@ impl HostedLayout {
                 sized: effective_size(node, skin, snapshot).is_some(),
                 child: Box::new(Self::new(child, ctx, skin)),
             },
-            // A placement keeps a layout node of its own and puts the child one
-            // level down in it, the way a viewport does.
             ExpandedNode::Placed { child, .. } | ExpandedNode::Scroll { child, .. } => {
                 Self::Scroll {
                     child: Box::new(Self::new(child, ctx, skin)),
                 }
             }
         }
-    }
-
-    pub(super) fn descriptors(&self) -> Vec<Descriptor> {
-        let mut descriptors = Vec::new();
-        self.append_descriptors(&mut descriptors);
-        descriptors
     }
 
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
@@ -322,29 +295,6 @@ impl HostedLayout {
             }
             Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn targets<'a>(
-        &'a self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-    ) -> Vec<Target<'a>> {
-        self.targets_with_engine(layout, cursor, None)
-    }
-
-    pub(super) fn targets_with_engine<'a>(
-        &'a self,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        engine: Option<&Engine>,
-    ) -> Vec<Target<'a>> {
-        let mut targets = Vec::new();
-        self.append_targets(layout, cursor, engine, &mut targets);
-        if let Some(engine) = engine {
-            self.append_open_picker_targets(engine, cursor, &mut targets);
-        }
-        targets
     }
 
     fn append_open_picker_targets<'a>(
@@ -388,12 +338,6 @@ impl HostedLayout {
         }
     }
 
-    pub(super) fn pickers(&self) -> Vec<(&str, usize, f32)> {
-        let mut pickers = Vec::new();
-        self.append_pickers(&mut pickers);
-        pickers
-    }
-
     fn append_pickers<'a>(&'a self, pickers: &mut Vec<(&'a str, usize, f32)>) {
         match self {
             Self::Group { children, .. }
@@ -414,20 +358,6 @@ impl HostedLayout {
             }
             Self::Chrome { .. } | Self::Control(None) | Self::SelfMeasuredControl(None) => {}
         }
-    }
-
-    pub(super) fn picker_snapshots<'a>(
-        &'a self,
-        engine: &Engine,
-    ) -> Vec<(&'a str, PickerSnapshot)> {
-        self.pickers()
-            .into_iter()
-            .filter_map(|(path, _, _)| {
-                engine
-                    .picker_snapshot(path)
-                    .map(|snapshot| (path, snapshot))
-            })
-            .collect()
     }
 
     fn append_targets<'a>(
@@ -538,6 +468,12 @@ impl HostedLayout {
         }
     }
 
+    pub(super) fn descriptors(&self) -> Vec<Descriptor> {
+        let mut descriptors = Vec::new();
+        self.append_descriptors(&mut descriptors);
+        descriptors
+    }
+
     pub(super) fn header_module<'a>(&'a self, path: &str) -> Option<&'a str> {
         match self {
             Self::Chrome {
@@ -554,6 +490,65 @@ impl HostedLayout {
             | Self::Control(_)
             | Self::SelfMeasuredControl(_) => None,
         }
+    }
+
+    pub(super) fn module(spec: ModuleHost<'_>) -> Self {
+        let ModuleHost {
+            instance,
+            module,
+            chrome,
+            collapsed,
+            drop,
+        } = spec;
+        Self::Chrome {
+            collapsed,
+            drop: drop.then(|| HostedControlPlan::crossing(instance)),
+            header: (chrome == ChromeStyle::Full)
+                .then(|| (format!("{instance}/header"), module.to_owned())),
+        }
+    }
+
+    pub(super) fn picker_snapshots<'a>(
+        &'a self,
+        engine: &Engine,
+    ) -> Vec<(&'a str, PickerSnapshot)> {
+        self.pickers()
+            .into_iter()
+            .filter_map(|(path, _, _)| {
+                engine
+                    .picker_snapshot(path)
+                    .map(|snapshot| (path, snapshot))
+            })
+            .collect()
+    }
+
+    pub(super) fn pickers(&self) -> Vec<(&str, usize, f32)> {
+        let mut pickers = Vec::new();
+        self.append_pickers(&mut pickers);
+        pickers
+    }
+
+    #[cfg(test)]
+    pub(super) fn targets<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) -> Vec<Target<'a>> {
+        self.targets_with_engine(layout, cursor, None)
+    }
+
+    pub(super) fn targets_with_engine<'a>(
+        &'a self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        engine: Option<&Engine>,
+    ) -> Vec<Target<'a>> {
+        let mut targets = Vec::new();
+        self.append_targets(layout, cursor, engine, &mut targets);
+        if let Some(engine) = engine {
+            self.append_open_picker_targets(engine, cursor, &mut targets);
+        }
+        targets
     }
 }
 pub(super) fn tree_input_layout(layout: Layout<'_>) -> Option<Layout<'_>> {

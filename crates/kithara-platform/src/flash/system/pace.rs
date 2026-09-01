@@ -62,9 +62,8 @@ impl FlashInner {
                 .owner
                 .upgrade()
                 .expect("BUG: real_io_enter is reachable only through a live Arc<FlashInner>");
-            // Raw std thread: the pacer must stay INVISIBLE to the engine (a
-            // platform `spawn_named` would count it as a dedicated pacer and pin
-            // the very clock it exists to advance).
+            // WHY: Raw std thread: the pacer must stay INVISIBLE to the engine (a platform `spawn_named` would count it as a dedicated pacer and
+            // pin the very clock it exists to advance).
             std::thread::Builder::new()
                 .name("kithara-flash-io-pacer".into())
                 .spawn(move || owner.pace_run())

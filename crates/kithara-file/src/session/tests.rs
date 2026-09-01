@@ -20,14 +20,24 @@ use kithara_stream::{
 use kithara_test_utils::kithara;
 
 use super::source::{FileLocalConfig, FileSource};
-use crate::{File, coord::FileCoord};
+use crate::{
+    File,
+    coord::FileCoord,
+    test_pools::{TestPools, pools},
+};
 
-fn test_key(store: &AssetStore, name: &str) -> ResourceKey {
+type TestFile = File<TestPools>;
+type TestReader = AssetReader<TestPools>;
+type TestSource = FileSource<TestPools>;
+type TestStore = AssetStore<TestPools>;
+type TestWriter = kithara_assets::AssetWriter<TestPools>;
+
+fn test_key(store: &TestStore, name: &str) -> ResourceKey {
     let source = AssetSource::Remote {
         url: url::Url::parse("https://example.com/session-test").expect("test URL"),
         discriminator: Some("session-test".to_string()),
     };
-    let scope = store.scope::<File>(&source).expect("test scope");
+    let scope = store.scope::<TestFile>(&source).expect("test scope");
     scope
         .key(&AssetResource::Named {
             namespace: "test".to_string(),
@@ -47,16 +57,16 @@ fn make_coord() -> Arc<FileCoord> {
     ))
 }
 
-fn make_source(reader: AssetReader, coord: Arc<FileCoord>, bus: EventBus) -> FileSource {
+fn make_source(reader: TestReader, coord: Arc<FileCoord>, bus: EventBus) -> TestSource {
     make_source_with_cancel(reader, coord, bus, CancelToken::never())
 }
 
 fn make_source_with_cancel(
-    reader: AssetReader,
+    reader: TestReader,
     coord: Arc<FileCoord>,
     bus: EventBus,
     cancel: CancelToken,
-) -> FileSource {
+) -> TestSource {
     FileSource::local(
         FileLocalConfig::builder()
             .reader(reader)
@@ -138,8 +148,8 @@ fn file_coord_total_bytes_roundtrip() {
     assert_eq!(coord.total_bytes(), None);
 }
 
-fn create_committed_resource(data: &[u8]) -> AssetReader {
-    let store = AssetStore::builder()
+fn create_committed_resource(data: &[u8]) -> TestReader {
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(CancelToken::never())
         .build();
@@ -152,15 +162,15 @@ fn create_committed_resource(data: &[u8]) -> AssetReader {
     writer.commit(Some(data.len() as u64)).unwrap()
 }
 
-fn create_active_resource(data: &[u8]) -> (AssetReader, kithara_assets::AssetWriter) {
+fn create_active_resource(data: &[u8]) -> (TestReader, TestWriter) {
     create_active_resource_with_cancel(data, CancelToken::never())
 }
 
 fn create_active_resource_with_cancel(
     data: &[u8],
     cancel: CancelToken,
-) -> (AssetReader, kithara_assets::AssetWriter) {
-    let store = AssetStore::builder()
+) -> (TestReader, TestWriter) {
+    let store = AssetStore::builder(pools())
         .backend(StorageBackend::Memory)
         .cancel(cancel)
         .build();

@@ -12,8 +12,8 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Drawn {
     pub(crate) hovered: Option<usize>,
-    pub(crate) offset: f32,
     pub(crate) search: TextInputSnapshot,
+    pub(crate) offset: f32,
 }
 
 impl Tree {
@@ -35,29 +35,6 @@ impl Tree {
             drawn.hovered,
         );
         list.finish()
-    }
-
-    pub(crate) fn search_input_bounds(&self, bounds: Rect) -> Rect {
-        let divider = 1.0;
-        Rect {
-            h: self.skin().tree.search_height.min(bounds.h.max(0.0)),
-            w: (bounds.w - self.skin().tree.search_icon_width - divider).max(0.0),
-            x: bounds.x + self.skin().tree.search_icon_width + divider,
-            y: bounds.y,
-        }
-    }
-
-    pub(crate) fn rows_bounds(&self, bounds: Rect) -> Rect {
-        Rect {
-            h: (bounds.h
-                - self.skin().tree.search_height
-                - self.skin().tree.panel_padding_top
-                - self.skin().tree.panel_padding_bottom)
-                .max(0.0),
-            w: bounds.w,
-            x: bounds.x,
-            y: bounds.y + self.skin().tree.search_height + self.skin().tree.panel_padding_top,
-        }
     }
 
     pub(crate) fn hovered_row(
@@ -109,6 +86,29 @@ impl Tree {
         list.fill_rect(input, self.skin().rgba(self.skin().tree.search_background));
         paint_search_icon(list, text, icon, self.skin());
         paint_query(list, text, input, self.query(), snapshot, self.skin());
+    }
+
+    pub(crate) fn rows_bounds(&self, bounds: Rect) -> Rect {
+        Rect {
+            h: (bounds.h
+                - self.skin().tree.search_height
+                - self.skin().tree.panel_padding_top
+                - self.skin().tree.panel_padding_bottom)
+                .max(0.0),
+            w: bounds.w,
+            x: bounds.x,
+            y: bounds.y + self.skin().tree.search_height + self.skin().tree.panel_padding_top,
+        }
+    }
+
+    pub(crate) fn search_input_bounds(&self, bounds: Rect) -> Rect {
+        let divider = 1.0;
+        Rect {
+            h: self.skin().tree.search_height.min(bounds.h.max(0.0)),
+            w: (bounds.w - self.skin().tree.search_icon_width - divider).max(0.0),
+            x: bounds.x + self.skin().tree.search_icon_width + divider,
+            y: bounds.y,
+        }
     }
 }
 

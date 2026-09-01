@@ -132,14 +132,6 @@ pub struct FrameCorners {
 }
 
 impl FrameCorners {
-    /// No corner, which is what a box inside the window is given.
-    pub const EMPTY: Self = Self {
-        bottom_left: false,
-        bottom_right: false,
-        top_left: false,
-        top_right: false,
-    };
-
     /// Every corner, which is what the root of a layout is given.
     pub const ALL: Self = Self {
         bottom_left: true,
@@ -148,14 +140,18 @@ impl FrameCorners {
         top_right: true,
     };
 
-    /// The top pair of `self`, the bottom pair dropped.
+    /// No corner, which is what a box inside the window is given.
+    pub const EMPTY: Self = Self {
+        bottom_left: false,
+        bottom_right: false,
+        top_left: false,
+        top_right: false,
+    };
+
+    /// Whether any corner is the window's.
     #[must_use]
-    pub const fn top(self) -> Self {
-        Self {
-            bottom_left: false,
-            bottom_right: false,
-            ..self
-        }
+    pub const fn any(self) -> bool {
+        self.bottom_left || self.bottom_right || self.top_left || self.top_right
     }
 
     /// The bottom pair of `self`, the top pair dropped.
@@ -188,10 +184,14 @@ impl FrameCorners {
         }
     }
 
-    /// Whether any corner is the window's.
+    /// The top pair of `self`, the bottom pair dropped.
     #[must_use]
-    pub const fn any(self) -> bool {
-        self.bottom_left || self.bottom_right || self.top_left || self.top_right
+    pub const fn top(self) -> Self {
+        Self {
+            bottom_left: false,
+            bottom_right: false,
+            ..self
+        }
     }
 }
 
@@ -206,8 +206,8 @@ pub enum Axis {
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct AdaptiveStep {
-    pub from: f32,
     pub node: LayoutNode,
+    pub from: f32,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -215,15 +215,15 @@ pub struct AdaptiveStep {
 #[non_exhaustive]
 pub struct SplitChild {
     pub node: LayoutNode,
-    #[serde(default = "default_weight")]
-    pub weight: f32,
+    #[serde(default)]
+    pub until: Option<f32>,
     /// The room the child stands from, and the room it stands until. Both
     /// answer the axis its split measures, and the pair a child keeps by
     /// default stands in every room.
     #[serde(default)]
     pub from: f32,
-    #[serde(default)]
-    pub until: Option<f32>,
+    #[serde(default = "default_weight")]
+    pub weight: f32,
 }
 
 const fn default_weight() -> f32 {

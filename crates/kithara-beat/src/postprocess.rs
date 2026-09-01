@@ -5,8 +5,6 @@ use crate::{
     config::BeatConfig,
 };
 
-const FPS: f32 = 50.0;
-
 pub(crate) struct PeakPicker {
     config: BeatConfig,
 }
@@ -42,12 +40,14 @@ impl PeakPicker {
 
 #[derive(Clone, Copy, Debug)]
 struct Peak {
-    at: f64,
     logit: f32,
+    at: f64,
 }
 
 impl Peak {
     fn mark(self) -> BeatMark {
+        const FPS: f32 = 50.0;
+
         BeatMark {
             at: (self.at / f64::from(FPS)).as_(),
             confidence: sigmoid(self.logit),
@@ -94,13 +94,13 @@ fn visit_deduplicated_peaks(
             p += (p2 - p) / c;
             logit = logit.max(p2_logit);
         } else {
-            visit(Peak { at: p, logit });
+            visit(Peak { logit, at: p });
             p = p2;
             logit = p2_logit;
             c = 1.0;
         }
     }
-    visit(Peak { at: p, logit });
+    visit(Peak { logit, at: p });
 }
 
 fn find_marks(logits: &[f32], config: &BeatConfig) -> Vec<BeatMark> {

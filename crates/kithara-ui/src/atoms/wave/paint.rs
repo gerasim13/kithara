@@ -17,30 +17,30 @@ use crate::{
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct WavePalette {
     pub(crate) coverage: bars::CoveragePalette,
-    pub(crate) trough: Rgba,
+    pub(crate) band_high: Rgba,
+    pub(crate) band_low: Rgba,
+    pub(crate) band_mid: Rgba,
     pub(crate) grid: Rgba,
     pub(crate) label: Rgba,
     pub(crate) played: Rgba,
-    pub(crate) band_low: Rgba,
-    pub(crate) band_mid: Rgba,
-    pub(crate) band_high: Rgba,
+    pub(crate) trough: Rgba,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct WavePaint<'a> {
+    pub(crate) overlay: Option<Overlay<'a>>,
+    pub(crate) waveform: Option<WaveformView<'a>>,
     pub(crate) background: Rgba,
     pub(crate) border: Rgba,
     pub(crate) cache_strip: Rgba,
-    /// How far the host says the track is held, as a share of its length.
-    pub(crate) cached: f32,
     pub(crate) cue_badge: Rgba,
     pub(crate) cue_text: Rgba,
-    pub(crate) metrics: WaveSkin,
-    pub(crate) overlay: Option<Overlay<'a>>,
     pub(crate) palette: WavePalette,
-    pub(crate) progress: f32,
+    pub(crate) metrics: WaveSkin,
     pub(crate) style: WaveStyle,
-    pub(crate) waveform: Option<WaveformView<'a>>,
+    /// How far the host says the track is held, as a share of its length.
+    pub(crate) cached: f32,
+    pub(crate) progress: f32,
     pub(crate) zoom: f32,
 }
 
@@ -62,6 +62,57 @@ impl WavePaint<'_> {
     ) {
         self.paint_wave(list, text, bounds);
         self.paint_foreground(list, text, bounds, show_overlay);
+    }
+
+    /// The bottom strip the micro wave draws: played to the playhead, held
+    /// ahead of it, and the plain background wherever the host answers
+    /// nothing.
+    fn paint_cache_strip(&self, list: &mut DrawListBuilder, bounds: Rect, head_x: f32) {
+        let h = self.metrics.cache_strip_height;
+        let y = bounds.y + (bounds.h - h).max(0.0);
+        let cached_x = bounds.x + self.cached.clamp(0.0, 1.0) * bounds.w;
+        let mut fill = |x: f32, w: f32, color| {
+            if w > 0.0 {
+                list.fill_rect(Rect { h, w, x, y }, color);
+            }
+        };
+        fill(bounds.x, bounds.w, self.background);
+        fill(bounds.x, head_x - bounds.x, self.palette.played);
+        fill(head_x, cached_x - head_x, self.cache_strip);
+    }
+
+    pub(crate) fn paint_foreground(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        show_overlay: bool,
+    ) {
+        if !self.hero() {
+            let head_x = bounds.x + self.progress.clamp(0.0, 1.0) * bounds.w;
+            rule(
+                list,
+                bounds,
+                head_x,
+                self.metrics.playhead_width,
+                self.palette.played,
+            );
+            list.fill_rect(
+                Rect {
+                    x: head_x - self.metrics.playhead_marker_width / 2.0,
+                    y: bounds.y,
+                    w: self.metrics.playhead_marker_width,
+                    h: self.metrics.playhead_marker_height,
+                },
+                self.palette.played,
+            );
+            if self.style == WaveStyle::Micro {
+                self.paint_cache_strip(list, bounds, head_x);
+            }
+        }
+        if show_overlay && let Some(data) = self.overlay {
+            overlay::paint(list, text, bounds, data, self.metrics.overlay);
+        }
     }
 
     pub(crate) fn paint_wave(
@@ -121,57 +172,6 @@ impl WavePaint<'_> {
             }
         }
         draw_border(list, bounds, self.metrics.frame, self.border);
-    }
-
-    /// The bottom strip the micro wave draws: played to the playhead, held
-    /// ahead of it, and the plain background wherever the host answers
-    /// nothing.
-    fn paint_cache_strip(&self, list: &mut DrawListBuilder, bounds: Rect, head_x: f32) {
-        let h = self.metrics.cache_strip_height;
-        let y = bounds.y + (bounds.h - h).max(0.0);
-        let cached_x = bounds.x + self.cached.clamp(0.0, 1.0) * bounds.w;
-        let mut fill = |x: f32, w: f32, color| {
-            if w > 0.0 {
-                list.fill_rect(Rect { h, w, x, y }, color);
-            }
-        };
-        fill(bounds.x, bounds.w, self.background);
-        fill(bounds.x, head_x - bounds.x, self.palette.played);
-        fill(head_x, cached_x - head_x, self.cache_strip);
-    }
-
-    pub(crate) fn paint_foreground(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        bounds: Rect,
-        show_overlay: bool,
-    ) {
-        if !self.hero() {
-            let head_x = bounds.x + self.progress.clamp(0.0, 1.0) * bounds.w;
-            rule(
-                list,
-                bounds,
-                head_x,
-                self.metrics.playhead_width,
-                self.palette.played,
-            );
-            list.fill_rect(
-                Rect {
-                    x: head_x - self.metrics.playhead_marker_width / 2.0,
-                    y: bounds.y,
-                    w: self.metrics.playhead_marker_width,
-                    h: self.metrics.playhead_marker_height,
-                },
-                self.palette.played,
-            );
-            if self.style == WaveStyle::Micro {
-                self.paint_cache_strip(list, bounds, head_x);
-            }
-        }
-        if show_overlay && let Some(data) = self.overlay {
-            overlay::paint(list, text, bounds, data, self.metrics.overlay);
-        }
     }
 }
 
@@ -276,13 +276,14 @@ mod tests {
         let mut metrics = builtin::skin().wave;
         metrics.frame.border_width = 1.0;
         let paint = WavePaint {
+            cue_badge,
+            metrics,
+            palette,
             background: color(0.01),
             border: color(0.02),
             cache_strip: color(0.04),
             cached: 0.5,
-            cue_badge,
             cue_text: color(0.03),
-            metrics,
             overlay: Some(Overlay {
                 title: "Track",
                 artist: "Artist",
@@ -292,7 +293,6 @@ mod tests {
                 badge: "A",
                 palette: overlay_palette,
             }),
-            palette,
             progress: 0.5,
             style: WaveStyle::Hero,
             waveform: Some(WaveformView {
@@ -421,17 +421,17 @@ mod tests {
 
         for style in [WaveStyle::Default, WaveStyle::Micro] {
             let paint = WavePaint {
+                metrics,
+                palette,
+                style,
                 background: color(0.01),
                 border: color(0.02),
                 cache_strip: color(0.05),
                 cached: 0.8,
                 cue_badge: color(0.03),
                 cue_text: color(0.04),
-                metrics,
                 overlay: None,
-                palette,
                 progress: 0.5,
-                style,
                 waveform: Some(WaveformView {
                     buckets: &buckets,
                     revision: 0,
@@ -496,10 +496,11 @@ mod tests {
 
     fn strip_face(style: WaveStyle, cached: f32) -> DrawList {
         let paint = WavePaint {
+            cached,
+            style,
             background: color(0.01),
             border: color(0.02),
             cache_strip: strip::COLOR,
-            cached,
             cue_badge: color(0.03),
             cue_text: color(0.04),
             metrics: builtin::skin().wave,
@@ -515,7 +516,6 @@ mod tests {
                 band_high: color(0.8),
             },
             progress: 0.5,
-            style,
             waveform: None,
             zoom: 1.0,
         };
@@ -648,10 +648,10 @@ mod tests {
 
     const fn color(r: f32) -> Rgba {
         Rgba {
+            r,
             a: 1.0,
             b: 0.0,
             g: 0.0,
-            r,
         }
     }
 }

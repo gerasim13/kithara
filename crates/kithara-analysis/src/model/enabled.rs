@@ -1,4 +1,5 @@
-use kithara_bufpool::SamplePool;
+use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
 use tracing::warn;
 
@@ -9,9 +10,12 @@ use crate::{
 
 const NN_MODEL_TAG: &str = "beat_this_small_v1";
 
-pub(crate) fn detector(sample_pool: &SamplePool) -> Option<Box<dyn crate::beat::BeatDetector>> {
-    match build_detector(BeatDetectorKind::default(), sample_pool) {
-        Ok(detector) => Some(detector),
+pub(crate) fn detector<S>(pools: &PoolRegion<S>) -> Option<Arc<dyn crate::beat::BeatDetector>>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    match build_detector(BeatDetectorKind::default(), pools) {
+        Ok(detector) => Some(Arc::from(detector)),
         Err(e) => {
             warn!(?e, "beat detector init failed; beat analysis disabled");
             None

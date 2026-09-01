@@ -10,14 +10,14 @@ use crate::{
 /// One mounted custom widget, with its own action vocabulary already mapped to
 /// whatever the host that holds it speaks.
 pub(crate) trait MountedCustom<Action> {
-    fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
-
-    fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
-
     #[cfg(feature = "masonry")]
     fn accepts_text_input(&self) -> bool;
 
     fn frame(&mut self, elapsed: Duration) -> Option<Action>;
+
+    fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Action>;
+
+    fn measure(&mut self, text: &mut TextMeasurer<'_>, limits: SizeLimits) -> Size2;
 
     fn paint(
         &mut self,
@@ -31,13 +31,13 @@ pub(crate) trait MountedCustom<Action> {
 }
 
 pub(crate) struct MappedCustom<Widget, Map> {
-    widget: Widget,
     map: Map,
+    widget: Widget,
 }
 
 impl<Widget, Map> MappedCustom<Widget, Map> {
     pub(crate) const fn new(widget: Widget, map: Map) -> Self {
-        Self { widget, map }
+        Self { map, widget }
     }
 }
 

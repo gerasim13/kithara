@@ -16,11 +16,11 @@ use super::{topology::materialize_topology, transaction};
 /// access so member references cannot escape the owning lock.
 pub struct GroupState<G: SyncGroup<NestedGroup = G>> {
     grid: BeatGridSnapshot,
-    members: Vec<SyncMember<G>>,
     next_operation: Option<SyncOperationId>,
-    topology_revision: TopologyRevision,
     unavailable: Option<(SyncOperationId, SyncCapability)>,
     member_kind: SyncMemberKind,
+    topology_revision: TopologyRevision,
+    members: Vec<SyncMember<G>>,
 }
 
 impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
@@ -29,30 +29,12 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
     pub fn new(grid: BeatGridSnapshot, member_kind: SyncMemberKind) -> Self {
         Self {
             grid,
+            member_kind,
             members: Vec::new(),
             next_operation: Some(SyncOperationId::first()),
             topology_revision: TopologyRevision::first(),
             unavailable: None,
-            member_kind,
         }
-    }
-
-    /// Creates an empty group whose session-axis grid is not available yet.
-    #[must_use]
-    pub fn unavailable(
-        id: BeatGridId,
-        sample_rate: NonZeroU32,
-        epoch: SessionEpoch,
-        member_kind: SyncMemberKind,
-    ) -> Self {
-        Self::new(
-            BeatGridSnapshot::unavailable(
-                id,
-                BeatGridRevision::first(),
-                MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
-            ),
-            member_kind,
-        )
     }
 
     /// Publishes a later immutable grid snapshot for this stable owner.
@@ -78,8 +60,8 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         }
         if given.revision() <= self.grid.revision() {
             return Err(SyncError::StaleGridRevision {
-                current: self.grid.stamp(),
                 given,
+                current: self.grid.stamp(),
             });
         }
         if !matches!(
@@ -145,6 +127,24 @@ impl<G: SyncGroup<NestedGroup = G>> GroupState<G> {
         ))
     }
 
+    /// Creates an empty group whose session-axis grid is not available yet.
+    #[must_use]
+    pub fn unavailable(
+        id: BeatGridId,
+        sample_rate: NonZeroU32,
+        epoch: SessionEpoch,
+        member_kind: SyncMemberKind,
+    ) -> Self {
+        Self::new(
+            BeatGridSnapshot::unavailable(
+                id,
+                BeatGridRevision::first(),
+                MapAxis::Session(SessionAxis::new(sample_rate, epoch)),
+            ),
+            member_kind,
+        )
+    }
+
     /// Executes `dispatch` against one direct nested group without exposing a
     /// reference outside the call.
     pub fn with_group<R, F>(&self, id: BeatGridId, dispatch: F) -> Option<R>
@@ -173,6 +173,17 @@ impl<G: SyncGroup<NestedGroup = G>> BeatGrid for GroupState<G> {
 impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
     type NestedGroup = G;
 
+    fn acknowledge(&mut self, _applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
+        Err(SyncError::NoPreparedOperation)
+    }
+
+    fn status(&self) -> SyncStatusSnapshot {
+        transaction::status(
+            TopologyStamp::new(self.grid.id(), self.topology_revision),
+            self.unavailable,
+        )
+    }
+
     fn topology(&self) -> Result<SyncGroupSnapshot, SyncError> {
         materialize_topology(&self.grid, self.topology_revision, &self.members)
     }
@@ -187,17 +198,6 @@ impl<G: SyncGroup<NestedGroup = G>> SyncGroup for GroupState<G> {
             self.member_kind,
             operation,
         )
-    }
-
-    fn status(&self) -> SyncStatusSnapshot {
-        transaction::status(
-            TopologyStamp::new(self.grid.id(), self.topology_revision),
-            self.unavailable,
-        )
-    }
-
-    fn acknowledge(&mut self, _applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError> {
-        Err(SyncError::NoPreparedOperation)
     }
 }
 

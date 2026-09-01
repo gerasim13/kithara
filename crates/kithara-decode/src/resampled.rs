@@ -1,6 +1,6 @@
 use std::num::{NonZeroU32, NonZeroUsize};
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::time::Duration;
 use kithara_resampler::{
     Resampler, ResamplerBackend, ResamplerConfig, ResamplerMode, ResamplerProcess,
@@ -10,6 +10,7 @@ use kithara_signal::{
     AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, PlanarBuffer, sanitize_sample,
 };
 use kithara_stream::AudioCodec;
+use kithara_test_utils::kithara;
 use smallvec::SmallVec;
 
 use crate::{
@@ -18,13 +19,14 @@ use crate::{
     GaplessTailCompensation, TrackMetadata,
 };
 
-pub(crate) fn wrap<B>(
+pub(crate) fn wrap<B, S>(
     decoder: Box<dyn Decoder>,
     config: Option<DecoderResamplerConfig<B>>,
-    pool: &SamplePool,
+    pools: &PoolRegion<S>,
 ) -> DecodeResult<Box<dyn Decoder>>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     let Some(config) = config else {
         return Ok(decoder);
@@ -32,10 +34,10 @@ where
     if decoder.spec().sample_rate == config.target_sample_rate {
         return Ok(decoder);
     }
-    Ok(Box::new(ResampledDecoder::new(decoder, config, pool)?))
+    Ok(Box::new(ResampledDecoder::new(decoder, config, pools)?))
 }
 
-struct ResampledDecoder<B>
+struct ResampledDecoder<B, S>
 where
     B: ResamplerBackend,
 {
@@ -44,7 +46,7 @@ where
     target_sample_rate: NonZeroU32,
     last_input_meta: Option<AudioChunkInfo>,
     pending_meta: Option<AudioChunkInfo>,
-    pool: SamplePool,
+    pools: PoolRegion<S>,
     source_spec: AudioSpec,
     target_spec: AudioSpec,
     resampler: B::Resampler,
@@ -61,14 +63,15 @@ where
     output_skip_frames: usize,
 }
 
-impl<B> ResampledDecoder<B>
+impl<B, S> ResampledDecoder<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32>,
 {
     fn new(
         decoder: Box<dyn Decoder>,
         config: DecoderResamplerConfig<B>,
-        pool: &SamplePool,
+        pools: &PoolRegion<S>,
     ) -> DecodeResult<Self> {
         let backend = config.backend;
         let source_spec = decoder.spec();
@@ -79,7 +82,7 @@ where
             config.target_sample_rate,
             config.quality,
             config.options,
-            pool.clone(),
+            pools,
         )?;
         let empty = FrameCount::new(0);
         Ok(Self {
@@ -87,18 +90,18 @@ where
             decoder,
             emitted_frames: 0,
             eof_flushed: false,
-            input: PlanarBuffer::new(pool, source_spec, empty)?,
+            input: PlanarBuffer::new(pools, source_spec, empty)?,
             last_input_meta: None,
             options: config.options,
-            output: PlanarBuffer::new(pool, target_spec, empty)?,
+            output: PlanarBuffer::new(pools, target_spec, empty)?,
             output_frame_offset: 0,
             output_skip_frames: resampler.output_delay(),
             pending_meta: None,
-            pool: pool.clone(),
+            pools: pools.clone(),
             quality: config.quality,
             reanchor_output_on_next_chunk: false,
             resampler,
-            scratch: PlanarBuffer::new(pool, target_spec, empty)?,
+            scratch: PlanarBuffer::new(pools, target_spec, empty)?,
             source_frames_seen: 0,
             source_spec,
             target_sample_rate: config.target_sample_rate,
@@ -235,7 +238,7 @@ where
     }
 
     fn interleave(&self, frames: FrameCount) -> DecodeResult<SampleBuffer> {
-        let mut samples = self.pool.get();
+        let mut samples = self.pools.get::<f32>();
         let sample_count = self.target_spec.sample_count(frames)?.get();
         samples.ensure_len(sample_count)?;
         self.output.view().interleave_into(&mut samples)?;
@@ -301,12 +304,12 @@ where
             self.target_sample_rate,
             self.quality,
             self.options,
-            self.pool.clone(),
+            &self.pools,
         )?;
         let empty = FrameCount::new(0);
-        let input = PlanarBuffer::new(&self.pool, source_spec, empty)?;
-        let output = PlanarBuffer::new(&self.pool, target_spec, empty)?;
-        let scratch = PlanarBuffer::new(&self.pool, target_spec, empty)?;
+        let input = PlanarBuffer::new(&self.pools, source_spec, empty)?;
+        let output = PlanarBuffer::new(&self.pools, target_spec, empty)?;
+        let scratch = PlanarBuffer::new(&self.pools, target_spec, empty)?;
         self.source_spec = source_spec;
         self.target_spec = target_spec;
         self.input = input;
@@ -342,9 +345,10 @@ where
     }
 }
 
-impl<B> Decoder for ResampledDecoder<B>
+impl<B, S> Decoder for ResampledDecoder<B, S>
 where
     B: ResamplerBackend,
+    S: HasPool<f32> + Send + Sync + 'static,
 {
     fn blender_profile(&self) -> BlenderProfile {
         BlenderProfile::new(self.target_spec)
@@ -359,6 +363,7 @@ where
         )
     }
 
+    #[kithara::measure(label = "decode.resampled.next")]
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             match self.decoder.next_chunk()? {
@@ -449,16 +454,17 @@ where
     }
 }
 
-fn build_resampler<B>(
+fn build_resampler<B, S>(
     backend: B,
     source_spec: AudioSpec,
     target_sample_rate: NonZeroU32,
     quality: kithara_resampler::ResamplerQuality,
     options: kithara_resampler::ResamplerOptions,
-    pool: SamplePool,
+    pools: &PoolRegion<S>,
 ) -> DecodeResult<B::Resampler>
 where
     B: ResamplerBackend,
+    S: HasPool<f32>,
 {
     let channels =
         NonZeroUsize::new(usize::from(source_spec.channels)).ok_or(DecodeError::InvalidData {
@@ -472,7 +478,7 @@ where
         })
         .options(options)
         .quality(quality)
-        .sample_pool(pool)
+        .pools(pools.clone())
         .build();
     let config = ResamplerConfig::builder()
         .backend(backend)

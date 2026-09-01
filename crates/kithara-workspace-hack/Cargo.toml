@@ -33,7 +33,6 @@ half = { version = "2" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
-memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
@@ -80,6 +79,7 @@ idna = { version = "1" }
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
@@ -117,6 +117,7 @@ idna = { version = "1" }
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
@@ -161,6 +162,7 @@ idna = { version = "1" }
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
@@ -200,6 +202,7 @@ indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = { version = "1" }
@@ -238,7 +241,6 @@ half = { version = "2" }
 hashbrown-9067fe90e8c1f593 = { package = "hashbrown", version = "0.17" }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16", default-features = false, features = ["default-hasher", "equivalent", "inline-more", "raw-entry"] }
 log = { version = "0.4", default-features = false, features = ["std"] }
-memchr = { version = "2" }
 nu-ansi-term = { version = "0.50" }
 num-traits = { version = "0.2", features = ["i128", "libm"] }
 once_cell = { version = "1" }
@@ -289,6 +291,7 @@ idna = { version = "1" }
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
@@ -330,6 +333,7 @@ idna = { version = "1" }
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
@@ -377,6 +381,7 @@ idna = { version = "1" }
 indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 objc2-core-foundation = { version = "0.3" }
 objc2-foundation = { version = "0.3" }
@@ -420,6 +425,7 @@ indexmap = { version = "2" }
 itertools = { version = "0.13" }
 libc = { version = "0.2" }
 linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "system", "xdp"] }
+memchr = { version = "2" }
 miniz_oxide = { version = "0.8", features = ["simd"] }
 prettyplease = { version = "0.2", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }

@@ -96,8 +96,6 @@ pub(crate) fn descriptor(tag: u8, payload: &[u8]) -> Vec<u8> {
     let mut value = payload.len();
     let mut stack = [0u8; 4];
     let mut len = 0;
-    // The low byte masked to seven bits is the next group; taking it from the
-    // little-endian bytes keeps the narrowing lossless.
     stack[len] = value.to_le_bytes()[0] & 0x7F;
     len += 1;
     value >>= 7;

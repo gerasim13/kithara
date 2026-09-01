@@ -3,289 +3,285 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use kithara_platform::thread::current_thread_id;
+use crossbeam_queue::ArrayQueue;
+use kithara_platform::{sync::Arc, thread::current_thread_id};
+use kithara_test_macros as kithara;
 
-use super::{reuse::Reuse, shard::PoolShard};
-use crate::{ByteBudget, budget::RegionBudget, growth::BudgetExhausted};
+use super::{shard::PoolShard, stats::PoolStats, storage::Storage};
+use crate::{
+    PoolConfig, PoolError,
+    budget::{BudgetPair, RegionBudget, ReserveFailure},
+    buffer::OwnedBuffer,
+};
 
-/// Pool hit/miss statistics for observability.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PoolStats {
-    /// No reusable buffer found — fresh allocation.
-    pub alloc_misses: u64,
-    /// Post-initialization growth events that exceeded the byte budget.
-    pub budget_overshoots: u64,
-    /// Buffer retrieved from home shard (best case).
-    pub home_hits: u64,
-    /// Buffer dropped on return (shard full or reuse rejected).
-    pub put_drops: u64,
-    /// Buffer stolen from a non-home shard.
-    pub steal_hits: u64,
-    /// Current tracked byte budget usage.
-    ///
-    /// For region-derived pools this is the region's shared byte count.
-    pub allocated_bytes: usize,
-}
-
-/// Generic sharded buffer pool.
-///
-/// Type parameters:
-/// - `SHARDS`: Number of shards (compile-time constant for optimal performance)
-/// - `T`: Type of buffer (must implement `Reuse`)
-///
-/// ## Sharding
-///
-/// The pool is divided into multiple shards to reduce contention.
-/// Each thread gets assigned to a shard based on its thread ID. Each shard is
-/// a lock-free bounded queue, so `get` and `put` never take a lock.
-///
-/// ## Memory Management
-///
-/// - `max_buffers`: Maximum buffers across all shards
-/// - `trim_capacity`: Shrink buffers to this size when returning to pool
-pub struct Pool<const SHARDS: usize, T>
+pub(crate) struct Core<const SHARDS: usize, B, const OBSERVE: bool>
 where
-    T: Reuse,
+    B: Storage,
 {
+    budgets: BudgetPair,
+    cold: Option<ArrayQueue<B>>,
+    shards: [PoolShard<B>; SHARDS],
     stat_alloc_misses: AtomicU64,
-    stat_budget_overshoots: AtomicU64,
     stat_home_hits: AtomicU64,
     stat_put_drops: AtomicU64,
     stat_steal_hits: AtomicU64,
-    budget: RegionBudget,
-    shards: [PoolShard<T>; SHARDS],
 }
 
-impl<const SHARDS: usize, T> Pool<SHARDS, T>
+impl<const SHARDS: usize, B, const OBSERVE: bool> Core<SHARDS, B, OBSERVE>
 where
-    T: Reuse,
+    B: Storage,
 {
-    /// Maximum number of non-home shards to probe on a miss.
-    ///
-    /// Each probe is a lock-free `pop` — empty shards yield `None`.
     const MAX_PROBE: usize = 4;
 
-    delegate::delegate! {
-        to self.budget {
-            /// Current number of tracked bytes across all live buffers.
-            pub fn allocated_bytes(&self) -> usize;
-            /// Release byte budget (e.g., when a buffer is dropped without returning to pool).
-            ///
-            /// Uses saturating subtraction to prevent underflow when buffers grow
-            /// via `DerefMut` (e.g., `Vec::resize`) without going through
-            /// [`super::owned::PooledOwned::ensure_len`].
-            #[call(release)]
-            pub fn release_budget(&self, amount: usize);
-            /// Request additional byte budget. Returns `Err` if exceeding `max_bytes`.
-            ///
-            /// Uses a compare-and-swap loop to atomically check and update.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`BudgetExhausted`] if adding `additional` bytes would exceed
-            /// the pool's `max_bytes` limit, or if the total would overflow `usize`.
-            #[call(request)]
-            pub fn request_budget(&self, additional: usize) -> Result<(), BudgetExhausted>;
+    pub(crate) fn new(
+        config: PoolConfig,
+        region_budget: RegionBudget,
+        pool_limit: usize,
+    ) -> Result<Self, PoolError> {
+        if SHARDS == 0 {
+            return Err(PoolError::InvalidConfig {
+                field: "shards",
+                reason: "must contain at least one shard",
+            });
         }
+        if config.max_buffers < SHARDS {
+            return Err(PoolError::InvalidConfig {
+                field: "max_buffers",
+                reason: "must provide at least one retained slot per shard",
+            });
+        }
+        let buffers_per_shard = config.max_buffers / SHARDS;
+        let effective_buffers = buffers_per_shard
+            .min(PoolShard::<B>::MAX_SLOTS)
+            .checked_mul(SHARDS)
+            .ok_or(PoolError::InvalidConfig {
+                field: "max_buffers",
+                reason: "effective shard capacity overflows usize",
+            })?;
+        if config.initial_buffers > effective_buffers {
+            return Err(PoolError::InvalidConfig {
+                field: "initial_buffers",
+                reason: "exceeds the effective retained-buffer capacity",
+            });
+        }
+        B::bytes_for_capacity(config.initial_capacity)
+            .and_then(|bytes| bytes.checked_mul(config.initial_buffers))
+            .ok_or(PoolError::InvalidConfig {
+                field: "initial_capacity",
+                reason: "initial payload byte count overflows usize",
+            })?;
+
+        let cold = (config.initial_buffers > 0).then(|| ArrayQueue::new(config.initial_buffers));
+        let core = Self {
+            budgets: BudgetPair::new(region_budget, pool_limit),
+            cold,
+            shards: array::from_fn(|_| {
+                PoolShard::new(
+                    buffers_per_shard,
+                    config.max_retained_capacity,
+                    config.trim_capacity,
+                )
+            }),
+            stat_alloc_misses: AtomicU64::new(0),
+            stat_home_hits: AtomicU64::new(0),
+            stat_put_drops: AtomicU64::new(0),
+            stat_steal_hits: AtomicU64::new(0),
+        };
+
+        if let Some(cold) = &core.cold {
+            for _ in 0..config.initial_buffers {
+                let value = core.allocate(config.initial_capacity, 0)?;
+                if let Err(value) = cold.push(value) {
+                    let bytes = Self::byte_size(&value)?;
+                    drop(value);
+                    core.budgets.release(bytes);
+                    return Err(PoolError::InvalidConfig {
+                        field: "initial_buffers",
+                        reason: "cold-start queue rejected a validated payload",
+                    });
+                }
+            }
+        }
+        Ok(core)
     }
 
-    /// Return a buffer to the pool.
-    pub fn put(&self, value: T, shard_idx: usize) {
-        let bytes = value.byte_size();
-        // A trimmed return handed memory back; the budget holds the charge the
-        // buffer carried at its widest until it is told.
-        if let Ok(kept) = self.shards[shard_idx].try_put(value) {
-            self.release_budget(bytes.saturating_sub(kept));
+    #[kithara::measure]
+    pub(crate) fn acquire(self: &Arc<Self>) -> OwnedBuffer<SHARDS, B, OBSERVE> {
+        let shard_idx = Self::shard_index();
+        let value = self.shards[shard_idx]
+            .try_get()
+            .map(|value| (value, &self.stat_home_hits))
+            .or_else(|| {
+                self.try_steal(shard_idx)
+                    .map(|value| (value, &self.stat_steal_hits))
+            })
+            .or_else(|| {
+                self.cold
+                    .as_ref()
+                    .and_then(ArrayQueue::pop)
+                    .map(|value| (value, &self.stat_home_hits))
+            })
+            .map_or_else(
+                || {
+                    Self::increment(&self.stat_alloc_misses);
+                    B::default()
+                },
+                |(value, counter)| {
+                    Self::increment(counter);
+                    value
+                },
+            );
+        OwnedBuffer::new(Arc::clone(self), value, shard_idx)
+    }
+
+    pub(crate) fn grow(&self, current: &mut B, new_len: usize) -> Result<(), PoolError> {
+        let old_capacity = current.capacity();
+        if new_len <= old_capacity {
+            return Ok(());
+        }
+        let old_bytes = Self::bytes_for_capacity(old_capacity)?;
+        let element_bytes = Self::bytes_for_capacity(1)?;
+        if element_bytes == 0 {
+            return Ok(());
+        }
+        let region_available = self
+            .budgets
+            .region_limit()
+            .saturating_sub(self.budgets.region_current());
+        let pool_available = self.budgets.limit().saturating_sub(self.budgets.current());
+        let affordable_capacity =
+            old_bytes.saturating_add(region_available.min(pool_available)) / element_bytes;
+        let amortized_capacity = new_len.max(old_capacity.saturating_mul(2));
+        let target_capacity = if affordable_capacity >= new_len {
+            amortized_capacity.min(affordable_capacity)
         } else {
-            self.release_budget(bytes);
-            self.stat_put_drops.fetch_add(1, Ordering::Relaxed);
+            new_len
+        };
+        let mut grown = self.allocate(target_capacity, old_bytes)?;
+        grown.move_from(current);
+        *current = grown;
+        Ok(())
+    }
+
+    pub(crate) fn put(&self, value: B, shard_idx: usize) {
+        let before = Self::byte_size(&value).unwrap_or(usize::MAX);
+        match self.shards[shard_idx].try_put(value) {
+            Ok(kept) => self.budgets.release(before.saturating_sub(kept)),
+            Err(value) => {
+                drop(value);
+                self.budgets.release(before);
+                Self::increment(&self.stat_put_drops);
+            }
         }
     }
 
-    /// Determine shard index for current thread. Pure function of the
-    /// `SHARDS` const; takes no `self`. Result is bounded by `SHARDS`,
-    /// which fits in `usize` on every platform we target — so the
-    /// `usize::try_from` here is infallible in practice and the
-    /// `.unwrap_or(0)` is just a non-panicking fallback.
-    #[inline]
-    #[must_use]
-    pub fn shard_index() -> usize {
-        let tid = current_thread_id();
-        let shards_u64 = SHARDS as u64;
-        usize::try_from(tid % shards_u64).unwrap_or(0)
-    }
-
-    /// Get pool hit/miss statistics.
-    pub fn stats(&self) -> PoolStats {
+    pub(crate) fn stats(&self) -> PoolStats {
         PoolStats {
             alloc_misses: self.stat_alloc_misses.load(Ordering::Relaxed),
-            allocated_bytes: self.budget.allocated_bytes(),
-            budget_overshoots: self.stat_budget_overshoots.load(Ordering::Relaxed),
             home_hits: self.stat_home_hits.load(Ordering::Relaxed),
             put_drops: self.stat_put_drops.load(Ordering::Relaxed),
             steal_hits: self.stat_steal_hits.load(Ordering::Relaxed),
         }
     }
 
-    /// Track byte delta without enforcement (for `get_with` closures).
-    ///
-    /// When shrinking (before > after), uses saturating subtraction
-    /// to prevent underflow from untracked external growth.
-    fn track_byte_delta(&self, before: usize, after: usize) {
-        if self.budget.track_byte_delta(before, after) {
-            self.stat_budget_overshoots.fetch_add(1, Ordering::Relaxed);
+    fn allocate(&self, capacity: usize, old_bytes: usize) -> Result<B, PoolError> {
+        let requested_bytes = Self::bytes_for_capacity(capacity)?;
+        let requested_delta =
+            requested_bytes
+                .checked_sub(old_bytes)
+                .ok_or(PoolError::InvalidConfig {
+                    field: "buffer growth",
+                    reason: "new capacity is smaller than the current capacity",
+                })?;
+        let mut reservation = self.reserve(requested_delta)?;
+        let grown = B::try_with_capacity(capacity).map_err(|()| PoolError::AllocationFailed {
+            additional_bytes: requested_delta,
+            allocated_bytes: self.budgets.region_current(),
+            max_bytes: self.budgets.region_limit(),
+        })?;
+        let actual_bytes = Self::byte_size(&grown)?;
+        let actual_delta = actual_bytes
+            .checked_sub(old_bytes)
+            .ok_or(PoolError::InvalidConfig {
+                field: "buffer growth",
+                reason: "allocator returned less capacity than the current buffer",
+            })?;
+        let extra = if actual_delta > requested_delta {
+            Some(self.reserve(actual_delta - requested_delta)?)
+        } else {
+            reservation.reduce(requested_delta - actual_delta);
+            None
+        };
+        if let Some(extra) = extra {
+            extra.commit();
+        }
+        reservation.commit();
+        Ok(grown)
+    }
+
+    fn byte_size(value: &B) -> Result<usize, PoolError> {
+        Self::bytes_for_capacity(value.capacity())
+    }
+
+    fn bytes_for_capacity(capacity: usize) -> Result<usize, PoolError> {
+        B::bytes_for_capacity(capacity).ok_or_else(|| PoolError::CapacityOverflow {
+            elements: capacity,
+            element_size: B::bytes_for_capacity(1).unwrap_or(usize::MAX),
+        })
+    }
+
+    fn increment(counter: &AtomicU64) {
+        if OBSERVE {
+            counter.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    /// Try to steal a buffer from nearby shards via lock-free `pop`.
-    ///
-    /// Probes up to [`MAX_PROBE`](Self::MAX_PROBE) shards starting from `home + 1`.
-    fn try_steal(&self, home: usize) -> Option<T> {
-        let probe = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
-        (1..=probe).find_map(|i| self.shards[(home + i) % SHARDS].try_get())
+    fn reserve(&self, amount: usize) -> Result<crate::budget::Reservation<'_>, PoolError> {
+        self.budgets
+            .reserve(amount)
+            .map_err(|failure| match failure {
+                ReserveFailure::Overall { amount, snapshot } => PoolError::OverallBudgetExceeded {
+                    additional_bytes: amount,
+                    allocated_bytes: snapshot.current,
+                    max_bytes: snapshot.limit,
+                },
+                ReserveFailure::Pool { amount, snapshot } => PoolError::PoolBudgetExceeded {
+                    additional_bytes: amount,
+                    allocated_bytes: snapshot.current,
+                    max_bytes: snapshot.limit,
+                },
+            })
+    }
+
+    fn shard_index() -> usize {
+        let shards = SHARDS as u64;
+        usize::try_from(current_thread_id() % shards).unwrap_or(0)
+    }
+
+    fn try_steal(&self, home: usize) -> Option<B> {
+        let probes = Self::MAX_PROBE.min(SHARDS.saturating_sub(1));
+        (1..=probes).find_map(|offset| self.shards[(home + offset) % SHARDS].try_get())
     }
 }
 
-impl<const SHARDS: usize, T> Pool<SHARDS, T>
+impl<const SHARDS: usize, B, const OBSERVE: bool> Drop for Core<SHARDS, B, OBSERVE>
 where
-    T: Reuse,
+    B: Storage,
 {
-    /// Return a value to the pool for reuse.
-    ///
-    /// Useful for returning buffers that were extracted via
-    /// [`super::pooled::Pooled::into_inner`] or
-    /// [`super::owned::PooledOwned::into_inner`] after the caller is done.
-    ///
-    /// The value is cleared and trimmed via [`Reuse::reuse`] before storing.
-    /// If the pool is full, the value is silently dropped.
-    pub fn recycle(&self, value: T) {
-        let shard_idx = Self::shard_index();
-        self.put(value, shard_idx);
-    }
-}
-
-impl<const SHARDS: usize, T> Pool<SHARDS, T>
-where
-    T: Reuse + Default,
-{
-    /// Create a new pool.
-    ///
-    /// # Arguments
-    ///
-    /// - `max_buffers`: Maximum total buffers across all shards
-    /// - `trim_capacity`: Shrink buffers to this capacity when returning
-    ///
-    /// # Panics
-    ///
-    /// Panics if `SHARDS` is zero.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use kithara_bufpool::Pool;
-    ///
-    /// // Pool for Vec<u8> with 1024 max buffers, trim to 128KB
-    /// let pool = Pool::<32, Vec<u8>>::new(1024, 128 * 1024);
-    /// ```
-    #[must_use]
-    pub fn new(max_buffers: usize, trim_capacity: usize) -> Self {
-        Self::with_byte_budget(max_buffers, trim_capacity, ByteBudget(usize::MAX))
-    }
-
-    /// Shared implementation for `Pool::get_with` and `SharedPool::get_with`:
-    /// picks a shard, tries home → steal → alloc, updates stats, runs init,
-    /// tracks byte delta. Returns `(value, shard_idx)` so callers can wrap
-    /// it in `Pooled<'_>` or `PooledOwned` depending on ownership.
-    pub(crate) fn acquire<F>(&self, init: F) -> (T, usize)
-    where
-        F: FnOnce(&mut T),
-    {
-        let shard_idx = Self::shard_index();
-        let mut value = self.shards[shard_idx].try_get();
-
-        if value.is_some() {
-            self.stat_home_hits.fetch_add(1, Ordering::Relaxed);
-        } else {
-            value = self.try_steal(shard_idx);
-            if value.is_some() {
-                self.stat_steal_hits.fetch_add(1, Ordering::Relaxed);
-            } else {
-                self.stat_alloc_misses.fetch_add(1, Ordering::Relaxed);
+    fn drop(&mut self) {
+        if let Some(cold) = &self.cold {
+            while let Some(value) = cold.pop() {
+                let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
+                drop(value);
+                self.budgets.release(bytes);
             }
         }
-
-        let mut value = value.unwrap_or_default();
-        let before = value.byte_size();
-        init(&mut value);
-        let after = value.byte_size();
-        self.track_byte_delta(before, after);
-
-        (value, shard_idx)
-    }
-
-    /// Get a buffer from the pool.
-    ///
-    /// If pool has available buffers, returns a reused one.
-    /// Otherwise, creates a new default buffer.
-    ///
-    /// The buffer is automatically returned to the pool on drop.
-    pub fn get(&self) -> super::pooled::Pooled<'_, SHARDS, T> {
-        self.get_with(|_| {})
-    }
-
-    /// Get a buffer and apply initialization function.
-    ///
-    /// Useful for setting up the buffer after getting it from pool.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use kithara_bufpool::Pool;
-    ///
-    /// let pool = Pool::<32, Vec<u8>>::new(1024, 128 * 1024);
-    /// let buf = pool.get_with(|b| b.resize(1024, 0));
-    /// assert_eq!(buf.len(), 1024);
-    /// ```
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub fn get_with<F>(&self, init: F) -> super::pooled::Pooled<'_, SHARDS, T>
-    where
-        F: FnOnce(&mut T),
-    {
-        let (value, shard_idx) = self.acquire(init);
-        super::pooled::Pooled::wrap(self, value, shard_idx)
-    }
-
-    /// Create a pool with a byte budget limit.
-    ///
-    /// - `max_buffers`: Maximum total buffers across all shards.
-    /// - `trim_capacity`: Shrink buffers to this capacity when returning.
-    /// - `budget`: Maximum total bytes tracked. Use
-    ///   `ByteBudget(usize::MAX)` for no cap.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `SHARDS` is zero.
-    #[must_use]
-    pub fn with_byte_budget(max_buffers: usize, trim_capacity: usize, budget: ByteBudget) -> Self {
-        Self::with_region_budget(max_buffers, trim_capacity, RegionBudget::new(budget.0))
-    }
-
-    pub(crate) fn with_region_budget(
-        max_buffers: usize,
-        trim_capacity: usize,
-        budget: RegionBudget,
-    ) -> Self {
-        assert!(SHARDS > 0, "Pool must have at least 1 shard");
-        let buffers_per_shard = max_buffers / SHARDS;
-
-        Self {
-            budget,
-            shards: array::from_fn(|_| PoolShard::new(buffers_per_shard, trim_capacity)),
-            stat_alloc_misses: AtomicU64::new(0),
-            stat_budget_overshoots: AtomicU64::new(0),
-            stat_home_hits: AtomicU64::new(0),
-            stat_put_drops: AtomicU64::new(0),
-            stat_steal_hits: AtomicU64::new(0),
+        for shard in &self.shards {
+            shard.drain(|value| {
+                let bytes = Self::byte_size(&value).unwrap_or(usize::MAX);
+                drop(value);
+                self.budgets.release(bytes);
+            });
         }
     }
 }

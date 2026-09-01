@@ -1,14 +1,12 @@
 //! A click is a step in the waveform, so every test here renders PCM through the same calls
 //! `process()` makes and measures the largest jump between neighbouring frames. The mock source is
 //! constant DC: whatever step the render adds is the transport or the fade, never the material.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::{num::NonZeroU32, sync::atomic::Ordering};
 
 use firewheel::node::ProcBuffers;
 use kithara::{
-    bufpool::SamplePool,
     events::TrackId,
     platform::sync::Arc,
     play::{
@@ -20,6 +18,8 @@ use kithara::{
 };
 use kithara_integration_tests::audio_mock::{TEST_PCM_DEFAULT_VALUE, TestPcmReader};
 use ringbuf::traits::Producer;
+
+use crate::bufpool_ext::pools;
 
 const SAMPLE_RATE: u32 = 48_000;
 const BLOCK_FRAMES: usize = 128;
@@ -41,18 +41,18 @@ fn processor() -> (PlayerNodeProcessor, SlotControl) {
         sample_rate: NonZeroU32::new(SAMPLE_RATE).expect("non-zero rate"),
         max_block_frames: NonZeroU32::new(128).expect("non-zero block"),
     };
-    (
-        PlayerNodeProcessor::new(inputs, shape, &SamplePool::default()),
-        control,
-    )
+    (PlayerNodeProcessor::new(inputs, shape, &pools()), control)
 }
 
 fn track(src: &str, level: f32) -> Box<PlayerResource> {
-    Box::new(PlayerResource::new(
-        Resource::from_reader(TestPcmReader::with_value(spec(), TRACK_SECS, level), None),
-        Arc::from(src),
-        &SamplePool::default(),
-    ))
+    Box::new(
+        PlayerResource::new(
+            Resource::from_reader(TestPcmReader::with_value(spec(), TRACK_SECS, level), None),
+            Arc::from(src),
+            &pools(),
+        )
+        .expect("player resource fits the test pool budget"),
+    )
 }
 
 fn load(control: &mut SlotControl, src: &str, level: f32) -> TrackId {

@@ -21,46 +21,46 @@ use time::format_timestamp;
 struct Consts;
 
 impl Consts {
+    const MANIFEST_READ_LIMIT: u64 = 1_048_577;
     const MANIFEST_SCHEMA: u32 = 4;
     const MAX_MANIFEST_BYTES: usize = 1_048_576;
-    const MANIFEST_READ_LIMIT: u64 = 1_048_577;
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Manifest {
-    pub(super) schema: u32,
-    pub(super) mode: String,
     pub(super) build: BuildSnapshot,
+    pub(super) runner: ConfiguredLane,
     pub(super) config: ManifestConfig,
+    pub(super) policy: PolicySnapshot,
+    pub(super) pressure: Pressure,
     pub(super) controller: Revision,
     pub(super) subject: Revision,
-    pub(super) runner: ConfiguredLane,
     pub(super) selection: Selection,
-    pub(super) policy: PolicySnapshot,
-    pub(super) timing: Timing,
-    pub(super) pressure: Pressure,
+    pub(super) mode: String,
     pub(super) system: SystemSnapshot,
+    pub(super) timing: Timing,
+    pub(super) schema: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ManifestSpec {
-    pub(super) mode: String,
     pub(super) build: BuildSnapshot,
-    pub(super) config: ManifestConfig,
-    pub(super) controller_sha: String,
-    pub(super) subject_sha: String,
     pub(super) runner: ConfiguredLane,
-    pub(super) selection: Selection,
+    pub(super) config: ManifestConfig,
     pub(super) policy: PolicySnapshot,
+    pub(super) selection: Selection,
+    pub(super) controller_sha: String,
+    pub(super) mode: String,
+    pub(super) subject_sha: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ManifestConfig {
-    pub(super) profile: String,
     pub(super) nextest: String,
     pub(super) pressure_schema: String,
+    pub(super) profile: String,
     pub(super) workflow_job_timeout_minutes: u64,
 }
 
@@ -72,10 +72,10 @@ impl ManifestConfig {
         workflow_job_timeout_minutes: u64,
     ) -> Self {
         Self {
+            workflow_job_timeout_minutes,
             profile: nextest_profile.into(),
             nextest: nextest.into(),
             pressure_schema: PRESSURE_SCHEMA.to_owned(),
-            workflow_job_timeout_minutes,
         }
     }
 }
@@ -119,26 +119,26 @@ pub(super) struct Revision {
 #[serde(deny_unknown_fields)]
 pub(super) struct Selection {
     pub(super) filter: String,
-    pub(super) count: usize,
     pub(super) test_threads: String,
+    pub(super) count: usize,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct PolicySnapshot {
+    pub(super) raw_path_env: BTreeMap<String, String>,
+    pub(super) set_env: BTreeMap<String, String>,
+    pub(super) evidence: StressEvidenceConfig,
     pub(super) features: Vec<String>,
     pub(super) remove_env: Vec<String>,
-    pub(super) set_env: BTreeMap<String, String>,
-    pub(super) raw_path_env: BTreeMap<String, String>,
-    pub(super) evidence: StressEvidenceConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Timing {
-    pub(super) started_at: String,
     pub(super) ended_at: Option<String>,
     pub(super) exit_code: Option<i32>,
+    pub(super) started_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -149,17 +149,17 @@ pub(super) struct Pressure {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct ExpectedProvenance {
-    pub(super) controller_sha: String,
-    pub(super) subject_sha: String,
-    pub(super) filter: String,
-    pub(super) count: usize,
-    pub(super) test_threads: String,
-    pub(super) mode: String,
-    pub(super) config: ManifestConfig,
     pub(super) runner: ConfiguredLane,
-    pub(super) policy: PolicySnapshot,
     pub(super) execute_result: ExecuteResult,
+    pub(super) config: ManifestConfig,
+    pub(super) policy: PolicySnapshot,
+    pub(super) controller_sha: String,
+    pub(super) filter: String,
+    pub(super) mode: String,
+    pub(super) subject_sha: String,
+    pub(super) test_threads: String,
     pub(super) sampler_healthy: bool,
+    pub(super) count: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -179,7 +179,8 @@ impl ExecuteResult {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, derive_more::Display)]
+#[display("{}={}, expected {}", field, actual, expected)]
 pub(super) struct ProvenanceMismatch {
     pub(super) field: &'static str,
     pub(super) actual: String,
@@ -196,47 +197,7 @@ impl ProvenanceMismatch {
     }
 }
 
-impl fmt::Display for ProvenanceMismatch {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{}={}, expected {}",
-            self.field, self.actual, self.expected
-        )
-    }
-}
-
 impl Manifest {
-    pub(super) fn start(spec: ManifestSpec, system: SystemSnapshot) -> Result<Self> {
-        let started_at = format_timestamp(SystemTime::now())?;
-        let manifest = Self {
-            schema: Consts::MANIFEST_SCHEMA,
-            mode: spec.mode,
-            build: spec.build,
-            config: spec.config,
-            controller: Revision {
-                sha: spec.controller_sha,
-            },
-            subject: Revision {
-                sha: spec.subject_sha,
-            },
-            runner: spec.runner,
-            selection: spec.selection,
-            policy: spec.policy,
-            timing: Timing {
-                started_at,
-                ended_at: None,
-                exit_code: None,
-            },
-            pressure: Pressure {
-                sampler_healthy: None,
-            },
-            system,
-        };
-        manifest.validate_invariants()?;
-        Ok(manifest)
-    }
-
     pub(super) fn finalize(&mut self, exit_code: i32, sampler_healthy: bool) -> Result<()> {
         ensure!(
             self.timing.ended_at.is_none() && self.timing.exit_code.is_none(),
@@ -246,33 +207,6 @@ impl Manifest {
         self.timing.exit_code = Some(exit_code);
         self.pressure.sampler_healthy = Some(sampler_healthy);
         Ok(())
-    }
-
-    pub(super) fn write_atomic(&self, path: &Path) -> Result<()> {
-        self.validate_invariants()?;
-        let mut contents = serde_json::to_vec_pretty(self).context("serialize stress manifest")?;
-        contents.push(b'\n');
-        ensure!(
-            contents.len() <= Consts::MAX_MANIFEST_BYTES,
-            "stress manifest is {} bytes; maximum is {}",
-            contents.len(),
-            Consts::MAX_MANIFEST_BYTES,
-        );
-        if let Some(parent) = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-        {
-            fs::create_dir_all(parent).with_context(|| {
-                format!("create stress manifest directory {}", parent.display())
-            })?;
-        }
-
-        let temporary = temporary_path(path)?;
-        let publication = write_and_publish(&temporary, path, &contents);
-        if publication.is_err() {
-            let _cleanup = fs::remove_file(&temporary);
-        }
-        publication
     }
 
     pub(super) fn read(path: &Path) -> Result<Self> {
@@ -305,20 +239,67 @@ impl Manifest {
         Ok(manifest)
     }
 
-    #[must_use]
-    pub(super) fn validate_provenance(
+    pub(super) fn start(spec: ManifestSpec, system: SystemSnapshot) -> Result<Self> {
+        let started_at = format_timestamp(SystemTime::now())?;
+        let manifest = Self {
+            system,
+            schema: Consts::MANIFEST_SCHEMA,
+            mode: spec.mode,
+            build: spec.build,
+            config: spec.config,
+            controller: Revision {
+                sha: spec.controller_sha,
+            },
+            subject: Revision {
+                sha: spec.subject_sha,
+            },
+            runner: spec.runner,
+            selection: spec.selection,
+            policy: spec.policy,
+            timing: Timing {
+                started_at,
+                ended_at: None,
+                exit_code: None,
+            },
+            pressure: Pressure {
+                sampler_healthy: None,
+            },
+        };
+        manifest.validate_invariants()?;
+        Ok(manifest)
+    }
+
+    fn validate_config(
         &self,
         expected: &ExpectedProvenance,
-    ) -> Vec<ProvenanceMismatch> {
-        let mut mismatches = Vec::new();
-        self.validate_identity(expected, &mut mismatches);
-        self.validate_config(expected, &mut mismatches);
-        compare_debug("runner", &self.runner, &expected.runner, &mut mismatches);
-        self.validate_selection(expected, &mut mismatches);
-        self.validate_policy(expected, &mut mismatches);
-        self.validate_timing(expected, &mut mismatches);
-        self.validate_pressure(expected, &mut mismatches);
-        mismatches
+        mismatches: &mut Vec<ProvenanceMismatch>,
+    ) {
+        compare_string(
+            "config.profile",
+            &self.config.profile,
+            &expected.config.profile,
+            mismatches,
+        );
+        compare_string(
+            "config.nextest",
+            &self.config.nextest,
+            &expected.config.nextest,
+            mismatches,
+        );
+        compare_string(
+            "config.pressure_schema",
+            &self.config.pressure_schema,
+            &expected.config.pressure_schema,
+            mismatches,
+        );
+        if self.config.workflow_job_timeout_minutes != expected.config.workflow_job_timeout_minutes
+        {
+            mismatches.push(ProvenanceMismatch::new(
+                "config.workflow_job_timeout_minutes",
+                self.config.workflow_job_timeout_minutes.to_string(),
+                expected.config.workflow_job_timeout_minutes.to_string(),
+            ));
+        }
     }
 
     fn validate_identity(
@@ -354,37 +335,117 @@ impl Manifest {
         }
     }
 
-    fn validate_config(
+    fn validate_invariants(&self) -> Result<()> {
+        ensure!(
+            valid_sha(&self.controller.sha),
+            "manifest controller SHA is invalid"
+        );
+        ensure!(
+            valid_sha(&self.subject.sha),
+            "manifest subject SHA is invalid"
+        );
+        ensure!(!self.mode.trim().is_empty(), "manifest mode is empty");
+        ensure!(
+            Path::new(&self.build.target_dir).is_absolute(),
+            "manifest build directory is not absolute: {}",
+            self.build.target_dir
+        );
+        ensure!(
+            !self.config.profile.trim().is_empty(),
+            "manifest nextest profile is empty"
+        );
+        ensure!(
+            !self.config.nextest.trim().is_empty(),
+            "manifest nextest configuration path is empty"
+        );
+        ensure!(
+            self.config.pressure_schema == PRESSURE_SCHEMA,
+            "manifest pressure schema is invalid"
+        );
+        ensure!(
+            self.config.workflow_job_timeout_minutes > 0,
+            "manifest job timeout is zero"
+        );
+        ensure!(
+            !self.selection.filter.trim().is_empty(),
+            "manifest filter is empty"
+        );
+        ensure!(self.selection.count > 0, "manifest count is zero");
+        ensure!(
+            !self.selection.test_threads.trim().is_empty(),
+            "manifest test-threads value is empty"
+        );
+        self.runner.validate()?;
+        validate_policy(&self.policy)?;
+        validate_timing_state(&self.timing, &self.pressure)?;
+        Ok(())
+    }
+
+    fn validate_policy(
         &self,
         expected: &ExpectedProvenance,
         mismatches: &mut Vec<ProvenanceMismatch>,
     ) {
-        compare_string(
-            "config.profile",
-            &self.config.profile,
-            &expected.config.profile,
+        compare_debug(
+            "policy.features",
+            &self.policy.features,
+            &expected.policy.features,
             mismatches,
         );
-        compare_string(
-            "config.nextest",
-            &self.config.nextest,
-            &expected.config.nextest,
+        compare_debug(
+            "policy.remove_env",
+            &self.policy.remove_env,
+            &expected.policy.remove_env,
             mismatches,
         );
-        compare_string(
-            "config.pressure_schema",
-            &self.config.pressure_schema,
-            &expected.config.pressure_schema,
+        compare_debug(
+            "policy.set_env",
+            &self.policy.set_env,
+            &expected.policy.set_env,
             mismatches,
         );
-        if self.config.workflow_job_timeout_minutes != expected.config.workflow_job_timeout_minutes
-        {
+        compare_debug(
+            "policy.raw_path_env",
+            &self.policy.raw_path_env,
+            &expected.policy.raw_path_env,
+            mismatches,
+        );
+        compare_debug(
+            "policy.evidence",
+            &self.policy.evidence,
+            &expected.policy.evidence,
+            mismatches,
+        );
+    }
+
+    fn validate_pressure(
+        &self,
+        expected: &ExpectedProvenance,
+        mismatches: &mut Vec<ProvenanceMismatch>,
+    ) {
+        if self.pressure.sampler_healthy != Some(expected.sampler_healthy) {
             mismatches.push(ProvenanceMismatch::new(
-                "config.workflow_job_timeout_minutes",
-                self.config.workflow_job_timeout_minutes.to_string(),
-                expected.config.workflow_job_timeout_minutes.to_string(),
+                "pressure.sampler_healthy",
+                optional_bool(self.pressure.sampler_healthy),
+                expected.sampler_healthy.to_string(),
             ));
         }
+    }
+
+    #[must_use]
+    pub(super) fn validate_provenance(
+        &self,
+        expected: &ExpectedProvenance,
+    ) -> Vec<ProvenanceMismatch> {
+        let mut mismatches = Vec::new();
+        self.validate_identity(expected, &mut mismatches);
+        self.validate_config(expected, &mut mismatches);
+        compare_debug("runner", &self.runner, &expected.runner, &mut mismatches);
+        self.validate_selection(expected, &mut mismatches);
+        self.validate_policy(expected, &mut mismatches);
+        self.validate_timing(expected, &mut mismatches);
+        self.validate_pressure(expected, &mut mismatches);
+        mismatches
     }
 
     fn validate_selection(
@@ -460,101 +521,31 @@ impl Manifest {
         }
     }
 
-    fn validate_policy(
-        &self,
-        expected: &ExpectedProvenance,
-        mismatches: &mut Vec<ProvenanceMismatch>,
-    ) {
-        compare_debug(
-            "policy.features",
-            &self.policy.features,
-            &expected.policy.features,
-            mismatches,
-        );
-        compare_debug(
-            "policy.remove_env",
-            &self.policy.remove_env,
-            &expected.policy.remove_env,
-            mismatches,
-        );
-        compare_debug(
-            "policy.set_env",
-            &self.policy.set_env,
-            &expected.policy.set_env,
-            mismatches,
-        );
-        compare_debug(
-            "policy.raw_path_env",
-            &self.policy.raw_path_env,
-            &expected.policy.raw_path_env,
-            mismatches,
-        );
-        compare_debug(
-            "policy.evidence",
-            &self.policy.evidence,
-            &expected.policy.evidence,
-            mismatches,
-        );
-    }
-
-    fn validate_invariants(&self) -> Result<()> {
+    pub(super) fn write_atomic(&self, path: &Path) -> Result<()> {
+        self.validate_invariants()?;
+        let mut contents = serde_json::to_vec_pretty(self).context("serialize stress manifest")?;
+        contents.push(b'\n');
         ensure!(
-            valid_sha(&self.controller.sha),
-            "manifest controller SHA is invalid"
+            contents.len() <= Consts::MAX_MANIFEST_BYTES,
+            "stress manifest is {} bytes; maximum is {}",
+            contents.len(),
+            Consts::MAX_MANIFEST_BYTES,
         );
-        ensure!(
-            valid_sha(&self.subject.sha),
-            "manifest subject SHA is invalid"
-        );
-        ensure!(!self.mode.trim().is_empty(), "manifest mode is empty");
-        ensure!(
-            Path::new(&self.build.target_dir).is_absolute(),
-            "manifest build directory is not absolute: {}",
-            self.build.target_dir
-        );
-        ensure!(
-            !self.config.profile.trim().is_empty(),
-            "manifest nextest profile is empty"
-        );
-        ensure!(
-            !self.config.nextest.trim().is_empty(),
-            "manifest nextest configuration path is empty"
-        );
-        ensure!(
-            self.config.pressure_schema == PRESSURE_SCHEMA,
-            "manifest pressure schema is invalid"
-        );
-        ensure!(
-            self.config.workflow_job_timeout_minutes > 0,
-            "manifest job timeout is zero"
-        );
-        ensure!(
-            !self.selection.filter.trim().is_empty(),
-            "manifest filter is empty"
-        );
-        ensure!(self.selection.count > 0, "manifest count is zero");
-        ensure!(
-            !self.selection.test_threads.trim().is_empty(),
-            "manifest test-threads value is empty"
-        );
-        self.runner.validate()?;
-        validate_policy(&self.policy)?;
-        validate_timing_state(&self.timing, &self.pressure)?;
-        Ok(())
-    }
-
-    fn validate_pressure(
-        &self,
-        expected: &ExpectedProvenance,
-        mismatches: &mut Vec<ProvenanceMismatch>,
-    ) {
-        if self.pressure.sampler_healthy != Some(expected.sampler_healthy) {
-            mismatches.push(ProvenanceMismatch::new(
-                "pressure.sampler_healthy",
-                optional_bool(self.pressure.sampler_healthy),
-                expected.sampler_healthy.to_string(),
-            ));
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("create stress manifest directory {}", parent.display())
+            })?;
         }
+
+        let temporary = temporary_path(path)?;
+        let publication = write_and_publish(&temporary, path, &contents);
+        if publication.is_err() {
+            let _cleanup = fs::remove_file(&temporary);
+        }
+        publication
     }
 }
 

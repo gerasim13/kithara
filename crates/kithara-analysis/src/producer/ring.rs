@@ -57,15 +57,13 @@ impl Writer {
 
         let written = self.samples.push_iter(mono.take(frames));
         if written != frames {
-            // The vacancy was checked above and this is the only writer, so a
-            // short write means the iterator ran out.
             warn!(
                 frames,
                 written, "analysis ingest: range shorter than declared; dropped"
             );
             return false;
         }
-        self.spans.try_push(Span { start: at, frames }).is_ok()
+        self.spans.try_push(Span { frames, start: at }).is_ok()
     }
 }
 
@@ -94,16 +92,16 @@ impl Reader {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_test_utils::kithara;
 
     use super::open;
+    use crate::test_pools::pools;
 
     #[kithara::test]
     fn a_range_comes_out_the_way_it_went_in() {
         let (mut tx, mut rx) = open(64, 4);
-        let pool = SamplePool::default();
-        let mut out = pool.get_with(Vec::clear);
+        let pools = pools();
+        let mut out = pools.get::<f32>();
 
         assert!(tx.push(100, 4, [1.0, 2.0, 3.0, 4.0].into_iter()));
         assert!(tx.push(200, 2, [5.0, 6.0].into_iter()));
@@ -118,8 +116,8 @@ mod tests {
     #[kithara::test]
     fn a_full_ring_refuses_whole_ranges() {
         let (mut tx, mut rx) = open(8, 4);
-        let pool = SamplePool::default();
-        let mut out = pool.get_with(Vec::clear);
+        let pools = pools();
+        let mut out = pools.get::<f32>();
 
         assert!(tx.push(0, 8, core::iter::repeat_n(1.0, 8)));
         assert!(
@@ -135,8 +133,8 @@ mod tests {
     #[kithara::test]
     fn a_full_descriptor_ring_refuses_even_with_room_for_samples() {
         let (mut tx, mut rx) = open(64, 2);
-        let pool = SamplePool::default();
-        let mut out = pool.get_with(Vec::clear);
+        let pools = pools();
+        let mut out = pools.get::<f32>();
 
         assert!(tx.push(0, 1, core::iter::once(1.0)));
         assert!(tx.push(1, 1, core::iter::once(2.0)));
@@ -153,8 +151,8 @@ mod tests {
     #[kithara::test]
     fn draining_frees_the_room_it_read() {
         let (mut tx, mut rx) = open(8, 4);
-        let pool = SamplePool::default();
-        let mut out = pool.get_with(Vec::clear);
+        let pools = pools();
+        let mut out = pools.get::<f32>();
 
         assert!(tx.push(0, 8, core::iter::repeat_n(1.0, 8)));
         assert!(!tx.push(8, 4, core::iter::repeat_n(2.0, 4)));

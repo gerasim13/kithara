@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use kithara_platform::sync::Arc;
+use kithara_test_utils::kithara;
 
 use crate::{
     StorageError, StorageResult,
@@ -8,19 +9,13 @@ use crate::{
 };
 
 impl<D: DriverIo> ResourceCore<D> {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn read_at_inner(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
 
-        // Lock-free committed fast path: a committed resource exposes an
-        // immutable snapshot; read straight from it with no state mutex. This is
-        // an optimization over the authoritative locked slow path below: if a
-        // concurrent `reactivate` clears the snapshot between the
-        // `committed_len()` check and the read, `read_committed` returns
-        // `Ok(None)` and we fall through to the slow path (which reads correctly
-        // whether the resource is still committed or now active).
+        // WHY: Lock-free committed fast path: a committed resource exposes an immutable snapshot; read straight from it with no state mutex.
         if let Some(committed_len) = self.inner.driver.committed_len() {
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -94,7 +89,7 @@ impl<D: DriverIo> ResourceCore<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     pub(super) fn write_at_inner(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
             return Ok(());
@@ -137,8 +132,7 @@ impl<D: DriverIo> ResourceCore<D> {
                 .store(Arc::new(state.available.clone()));
         }
         self.inner.gate.notify_all();
-        // This write just replaced the generation a produce-core read may own;
-        // the write side pays the frees it parked.
+        // WHY: This write just replaced the generation a produce-core read may own; the write side pays the frees it parked.
         self.inner.retired.drain();
 
         if let Some(observer) = self.inner.observer.as_ref() {
@@ -170,12 +164,17 @@ mod tests {
             resource::state::ResourceCore,
             traits::DriverIo,
         },
+        test_pools::{byte_buffer, pools},
     };
 
     /// Open a fresh, uncommitted in-memory resource for the concurrency tests.
     fn open_mem() -> ResourceCore<MemDriver> {
-        ResourceCore::open(CancelToken::never(), MemOptions::builder().build())
-            .expect("open mem must succeed")
+        let pools = pools();
+        ResourceCore::open(
+            CancelToken::never(),
+            MemOptions::builder().buffer(byte_buffer(&pools)).build(),
+        )
+        .expect("open mem must succeed")
     }
 
     /// Open a fresh, uncommitted mmap-backed resource at `path` (mode/len at
@@ -202,9 +201,11 @@ mod tests {
     /// path blocks on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_read_does_not_take_state_mutex() {
+        let pools = pools();
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
             MemOptions::builder()
+                .buffer(byte_buffer(&pools))
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )
@@ -240,9 +241,11 @@ mod tests {
     /// on the held guard and times out.
     #[kithara::test(timeout(Duration::from_secs(5)))]
     fn committed_len_and_contains_do_not_take_state_mutex() {
+        let pools = pools();
         let core: ResourceCore<MemDriver> = ResourceCore::open(
             CancelToken::never(),
             MemOptions::builder()
+                .buffer(byte_buffer(&pools))
                 .initial_data(b"hello world".to_vec())
                 .build(),
         )

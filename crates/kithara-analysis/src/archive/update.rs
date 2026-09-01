@@ -4,19 +4,13 @@ use bytes::Bytes;
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct AnalysisFileWrite {
-    offset: u64,
     bytes: Bytes,
+    offset: u64,
 }
 
 impl AnalysisFileWrite {
     pub(super) const fn new(offset: u64, bytes: Bytes) -> Self {
-        Self { offset, bytes }
-    }
-
-    /// Absolute destination offset.
-    #[must_use]
-    pub const fn offset(&self) -> u64 {
-        self.offset
+        Self { bytes, offset }
     }
 
     /// Complete versioned `AnalysisProgress` payload.
@@ -24,25 +18,25 @@ impl AnalysisFileWrite {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// Absolute destination offset.
+    #[must_use]
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
 }
 
 /// One absolute fixed-header or fixed-index patch.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct AnalysisFilePatch {
-    offset: u64,
     bytes: Bytes,
+    offset: u64,
 }
 
 impl AnalysisFilePatch {
     pub(super) const fn new(offset: u64, bytes: Bytes) -> Self {
-        Self { offset, bytes }
-    }
-
-    /// Absolute destination offset.
-    #[must_use]
-    pub const fn offset(&self) -> u64 {
-        self.offset
+        Self { bytes, offset }
     }
 
     /// Replacement bytes for this fixed location.
@@ -50,14 +44,20 @@ impl AnalysisFilePatch {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    /// Absolute destination offset.
+    #[must_use]
+    pub const fn offset(&self) -> u64 {
+        self.offset
+    }
 }
 
 /// Ordered writes and patches for one atomic analysis-file replacement.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct AnalysisFileUpdate {
-    initial: Option<Bytes>,
     payload: AnalysisFileWrite,
+    initial: Option<Bytes>,
     patches: Vec<AnalysisFilePatch>,
     final_len: u64,
 }
@@ -70,11 +70,17 @@ impl AnalysisFileUpdate {
         final_len: u64,
     ) -> Self {
         Self {
-            initial,
             payload,
+            initial,
             patches,
             final_len,
         }
+    }
+
+    /// Exact length passed to the storage commit boundary.
+    #[must_use]
+    pub const fn final_len(&self) -> u64 {
+        self.final_len
     }
 
     /// Header plus zeroed fixed index for a brand-new file. `None` means the
@@ -84,21 +90,15 @@ impl AnalysisFileUpdate {
         self.initial.as_deref()
     }
 
-    /// The complete latest progress publication written at the fixed payload offset.
-    #[must_use]
-    pub const fn payload(&self) -> &AnalysisFileWrite {
-        &self.payload
-    }
-
     /// Ordered absolute index/header patches applied after the payload write.
     #[must_use]
     pub fn patches(&self) -> &[AnalysisFilePatch] {
         &self.patches
     }
 
-    /// Exact length passed to the storage commit boundary.
+    /// The complete latest progress publication written at the fixed payload offset.
     #[must_use]
-    pub const fn final_len(&self) -> u64 {
-        self.final_len
+    pub const fn payload(&self) -> &AnalysisFileWrite {
+        &self.payload
     }
 }

@@ -252,12 +252,14 @@ impl MapAxis {
 }
 
 /// A position tagged with its grid-native coordinate axis.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, derive_more::From)]
 #[non_exhaustive]
 pub enum MapPosition {
     /// A position in decoded asset-native frames.
+    #[from]
     Asset(AssetFrame),
     /// A position in signed session frames.
+    #[from]
     Session(SessionFrame),
 }
 
@@ -309,18 +311,6 @@ impl PartialOrd for MapPosition {
             (Self::Session(left), Self::Session(right)) => left.partial_cmp(&right),
             _ => None,
         }
-    }
-}
-
-impl From<AssetFrame> for MapPosition {
-    fn from(value: AssetFrame) -> Self {
-        Self::Asset(value)
-    }
-}
-
-impl From<SessionFrame> for MapPosition {
-    fn from(value: SessionFrame) -> Self {
-        Self::Session(value)
     }
 }
 

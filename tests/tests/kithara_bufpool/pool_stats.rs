@@ -1,73 +1,68 @@
-use kithara::{self, bufpool::*};
-use kithara_integration_tests::bufpool_ext::PoolShardTestExt;
+use kithara::{
+    self,
+    bufpool::{PoolConfig, PoolError},
+};
+use kithara_integration_tests::bufpool_ext::{pools, pools_with};
 
 #[kithara::test]
-fn test_pool_stats_tracks_hits() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
+fn returned_capacity_is_reused() {
+    let pools = pools();
+    let buffer = pools
+        .get_with_len::<u8>(64)
+        .expect("test bytes fit the region budget");
+    let ptr = buffer.as_ptr();
+    drop(buffer);
 
-    {
-        let mut buf = pool.get();
-        buf.push(1);
+    let reused = pools.get::<u8>();
+    assert!(reused.capacity() >= 64);
+    assert_eq!(reused.as_ptr(), ptr);
+}
+
+#[kithara::test]
+fn configured_initial_payload_is_accounted() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder()
+            .initial_buffers(8)
+            .initial_capacity(4_096)
+            .max_buffers(128)
+            .build(),
+    );
+
+    assert_eq!(pools.stats().allocated_bytes, 8 * 4_096 * 4);
+}
+
+#[kithara::test]
+fn overall_budget_rejection_is_reported() {
+    let pools = pools_with(
+        1_024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+
+    let error = pools
+        .get_with_len::<u8>(2_048)
+        .expect_err("request must exceed the shared budget");
+    assert!(matches!(error, PoolError::OverallBudgetExceeded { .. }));
+}
+
+#[kithara::test]
+fn shard_saturation_drops_excess_returns() {
+    let pools = pools_with(
+        1024 * 1024,
+        PoolConfig::builder().max_buffers(32).build(),
+        PoolConfig::builder().max_buffers(8).build(),
+    );
+    let mut buffers = Vec::new();
+    for _ in 0..3 {
+        buffers.push(
+            pools
+                .get_with_len::<u8>(64)
+                .expect("test bytes fit the region budget"),
+        );
     }
+    drop(buffers);
 
-    let _buf = pool.get();
-    let stats = pool.stats();
-    assert_eq!(stats.home_hits, 1);
-}
-
-#[kithara::test]
-fn test_pool_stats_tracks_misses() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-    let _buf = pool.get();
-    let stats = pool.stats();
-    assert_eq!(stats.alloc_misses, 1);
-}
-
-#[kithara::test]
-fn test_pool_stats_tracks_steals() {
-    let pool = Pool::<4, Vec<u8>>::new(128, 1024);
-    let home = pool.shard_index_of();
-    let other = (home + 1) % 4;
-
-    let mut buf = Vec::with_capacity(256);
-    buf.push(0);
-    pool.put(buf, other);
-
-    let _buf = pool.get();
-    let stats = pool.stats();
-    assert_eq!(stats.steal_hits, 1);
-}
-
-#[kithara::test]
-fn test_pool_stats_tracks_drops() {
-    let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = pool.shard_index_of();
-
-    for _ in 0..2 {
-        let mut buf = Vec::with_capacity(64);
-        buf.push(0);
-        pool.put(buf, shard);
-    }
-
-    let stats = pool.stats();
-    assert_eq!(stats.put_drops, 1);
-}
-
-#[kithara::test]
-fn test_pre_warm_fills_pool() {
-    let pool = SharedPool::<4, Vec<f32>>::new(128, 200_000);
-    pool.pre_warm(8, |v| v.resize(4096, 0.0));
-
-    let bufs: Vec<_> = (0..8).map(|_| pool.get()).collect();
-    let warmed = bufs.iter().filter(|buf| buf.capacity() >= 4096).count();
-    assert_eq!(warmed, 8);
-}
-
-#[kithara::test]
-fn test_pre_warm_respects_budget() {
-    let pool = SharedPool::<4, Vec<f32>>::with_byte_budget(128, 200_000, ByteBudget(10 * 1024));
-    pool.pre_warm(10, |v| v.resize(4096, 0.0));
-
-    let stats = pool.stats();
-    assert!(stats.allocated_bytes <= 10 * 1024 + 16384);
+    assert!(pools.stats().allocated_bytes <= 64);
 }

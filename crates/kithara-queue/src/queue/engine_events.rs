@@ -1,5 +1,6 @@
 use std::sync::PoisonError;
 
+use kithara_bufpool::HasPool;
 use kithara_events::{
     AdvanceReason, AudioEvent, Envelope, Event, ItemEvent, ItemRole, PlayerEvent, QueueEvent,
     TrackId, TrackStatus,
@@ -12,7 +13,10 @@ use super::{
     types::{CachedPosition, CrossfadeArm, Transition},
 };
 
-impl QueueControl {
+impl<S> QueueControl<S>
+where
+    S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
+{
     pub(super) fn advance_loaded_successor(&self, current_id: TrackId, transition: Transition) {
         let Some(next) = self.next_selectable_entry() else {
             return;
@@ -64,10 +68,8 @@ impl QueueControl {
             }
         }
         if lagged {
-            // `CurrentItemChanged` is edge-triggered and de-duplicated by
-            // `ItemQueue::announce_current_item`, so waiting cannot recover a drop.
-            // Resync after draining, as `Queue::seek` does; publishing mid-drain
-            // could overwrite the next unread slot and trigger another lag.
+            // WHY: `CurrentItemChanged` is edge-triggered and de-duplicated by `ItemQueue::announce_current_item`, so waiting cannot recover a
+            // drop.
             self.handle_current_item_changed();
         }
     }

@@ -11,8 +11,8 @@ use super::{
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
 
 struct TrackReadContext<'a> {
-    sink: RtSink<'a>,
     range: Range<usize>,
+    sink: RtSink<'a>,
 }
 
 #[derive(Clone, Copy)]
@@ -257,8 +257,8 @@ impl PlayerTrack {
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
-                    sink: sink.reborrow(),
                     range,
+                    sink: sink.reborrow(),
                 },
                 read_outcome,
             ),
@@ -266,8 +266,8 @@ impl PlayerTrack {
                 scratch_bufs,
                 mix_bufs,
                 TrackReadContext {
-                    sink: sink.reborrow(),
                     range,
+                    sink: sink.reborrow(),
                 },
                 PartialRead { duration, frames },
             ),

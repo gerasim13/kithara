@@ -1,15 +1,16 @@
 use kithara::{
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
-    host::{Host, bridge::MixTapWriter},
-};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
+    host::bridge::MixTapWriter,
+    platform::{
+        CancelToken,
+        sync::{Arc, atomic::AtomicU64},
+        time::Duration,
+    },
 };
 use ringbuf::{HeapRb, traits::Split};
 
 use super::state::{BroadcastResult, Packager};
+use crate::pools::AppHost;
 
 pub(crate) struct Backend;
 
@@ -24,7 +25,7 @@ trait BroadcastHost {
     fn disable_tap(&self) -> BroadcastResult<()>;
 }
 
-impl BroadcastHost for Host {
+impl BroadcastHost for AppHost {
     fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
         Ok(self.sample_rate()?.measured)
     }
@@ -50,7 +51,7 @@ impl Packager for Backend {
     }
 
     fn start(
-        host: &Host,
+        host: &AppHost,
         shutdown: &CancelToken,
         tap_lead: Duration,
     ) -> BroadcastResult<Option<Stream>> {
@@ -60,7 +61,7 @@ impl Packager for Backend {
         start(host, shutdown, &config, tap_lead).map(Some)
     }
 
-    fn release(host: &Host) -> BroadcastResult<()> {
+    fn release(host: &AppHost) -> BroadcastResult<()> {
         release(host)
     }
 
@@ -145,17 +146,18 @@ fn ring_capacity(config: &BroadcastConfig, tap_lead: Duration) -> BroadcastResul
 mod tests {
     use kithara::{
         audio::ConsumerWakeMode,
-        play::{Cmd, PlayError, Reply, SessionDispatcher, SessionHandle, SessionSampleRate},
-    };
-    use kithara_platform::{
-        sync::{
-            Mutex,
-            atomic::{AtomicU32, Ordering},
+        platform::{
+            sync::{
+                Mutex,
+                atomic::{AtomicU32, Ordering},
+            },
+            thread,
         },
-        thread,
+        play::{Cmd, PlayError, Reply, SessionDispatcher, SessionHandle, SessionSampleRate},
     };
 
     use super::*;
+    use crate::pools::AppPools;
 
     /// The lead every test that does not measure the ring starts on air with.
     const TAP_LEAD: Duration = Duration::from_secs(2);
@@ -177,12 +179,12 @@ mod tests {
         }
     }
 
-    impl SessionDispatcher for SampleRateSession {
+    impl SessionDispatcher<AppPools> for SampleRateSession {
         fn consumer_wake_mode(&self) -> ConsumerWakeMode {
             ConsumerWakeMode::RealtimeDeferred
         }
 
-        fn exec(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        fn exec(&self, cmd: Cmd<AppPools>) -> Result<Reply, PlayError> {
             match cmd {
                 Cmd::QuerySampleRate => {
                     let sample_rate = self.sample_rate.load(Ordering::Relaxed);
@@ -204,7 +206,7 @@ mod tests {
         }
     }
 
-    impl BroadcastHost for SessionHandle {
+    impl BroadcastHost for SessionHandle<AppPools> {
         fn measured_sample_rate(&self) -> BroadcastResult<Option<u32>> {
             Ok(self.sample_rate()?.measured)
         }

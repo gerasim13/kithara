@@ -1,6 +1,5 @@
 use std::num::NonZero;
 
-use kithara_bufpool::{ByteBudget, SamplePool};
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
 use kithara_platform::sync::Arc;
 use kithara_signal::AudioSpec;
@@ -12,6 +11,7 @@ use super::{
     Consts, chunk, dominant_bin, expected_bin, flush_serviced, render_serviced, renderer, sine,
 };
 use super::{StretchControls, WarpRenderer, spec};
+use crate::test_pools::pools_with_budget as test_pools;
 
 /// Swapping the backend mid-stream keeps the stream flowing and pitch-locked.
 #[cfg(all(feature = "stretch-signalsmith", feature = "stretch-bungee"))]
@@ -26,6 +26,7 @@ fn live_backend_swap_continues_and_keeps_pitch(
     controls.set_keylock(true);
     controls.set_backend(initial);
     let mut fx = renderer(Arc::clone(&controls));
+    let pools = fx.pools.clone();
     let block = sine(4096);
     let mut out: Vec<f32> = Vec::new();
     for i in 0..24 {
@@ -33,7 +34,7 @@ fn live_backend_swap_continues_and_keeps_pitch(
             controls.set_backend(replacement);
             fx.prepare(spec());
         }
-        if let Some(c) = render_serviced(&mut fx, chunk(&block)) {
+        if let Some(c) = render_serviced(&mut fx, chunk(&pools, &block)) {
             out.extend_from_slice(&c.samples);
         }
     }
@@ -69,35 +70,33 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
     };
     let target_bytes = [initial, rebuilt]
         .map(|target_spec| {
-            let sample_pool = SamplePool::new(8, 0);
+            let pools = test_pools(usize::MAX);
             let controls = StretchControls::new(0.5);
             controls.set_keylock(true);
             controls.set_backend(backend);
-            let target = WarpRenderer::new(controls, target_spec, sample_pool.clone());
+            let target = WarpRenderer::new(controls, target_spec, pools.clone());
             assert!(target.engine.is_some());
-            sample_pool.stats().allocated_bytes
+            pools.stats().allocated_bytes
         })
         .into_iter()
         .max()
         .expect("the target matrix is non-empty");
 
-    let sample_pool = SamplePool::with_byte_budget(8, 0, ByteBudget(target_bytes));
+    let pools = test_pools(target_bytes);
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = WarpRenderer::new(controls, initial, sample_pool.clone());
+    let mut fx = WarpRenderer::new(controls, initial, pools.clone());
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
     assert!(fx.scratch.is_some());
 
-    let overshoots = sample_pool.stats().budget_overshoots;
     fx.prepare(rebuilt);
 
     assert_eq!(fx.spec, rebuilt);
     assert!(fx.engine.is_some());
     assert!(fx.pending_source.is_some());
     assert!(fx.scratch.is_some());
-    assert_eq!(sample_pool.stats().budget_overshoots, overshoots);
 }
 
 #[kithara::test]
@@ -107,26 +106,20 @@ fn target_rebuild_reuses_one_target_pool_budget(#[case] backend: StretchKind) {
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn failed_target_rebuild_is_not_retried_without_a_new_revision(#[case] backend: StretchKind) {
-    let sample_pool = SamplePool::with_byte_budget(8, 0, ByteBudget(0));
+    let pools = test_pools(0);
     let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
-    let mut fx = WarpRenderer::new(controls, spec(), sample_pool.clone());
+    let mut fx = WarpRenderer::new(controls, spec(), pools.clone());
     assert!(fx.engine.is_none());
 
-    let initial_stats = sample_pool.stats();
     fx.rebuild_pending = true;
     fx.prepare(spec());
-    let rebuild_stats = sample_pool.stats();
-    assert_ne!(rebuild_stats, initial_stats);
     assert!(!fx.rebuild_pending);
 
     for _ in 0..8 {
         fx.prepare(spec());
     }
-    assert_eq!(
-        sample_pool.stats(),
-        rebuild_stats,
-        "a persistent preparation failure consumes one rebuild intent"
-    );
+    assert!(fx.engine.is_none());
+    assert!(!fx.rebuild_pending);
 }

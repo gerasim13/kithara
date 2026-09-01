@@ -63,7 +63,9 @@ firewheel-web-audio = { workspace = true, optional = true }
 
 [dev-dependencies]
 kithara-audio = { workspace = true, features = ["mock", "probe"] }
+kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-test-utils = { workspace = true, features = ["hang", "mock", "probe"] }
+wasm-bindgen-test = { workspace = true }
 
 [lints]
 workspace = true

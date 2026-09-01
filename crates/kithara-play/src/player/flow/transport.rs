@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use kithara_audio::SeekOutcome;
+use kithara_bufpool::HasPool;
 use kithara_platform::time::Duration;
 use tracing::{debug, warn};
 
@@ -22,7 +23,10 @@ pub struct SelectTransition {
     pub crossfade_seconds: f32,
 }
 
-impl PlayerRuntime {
+impl<S> PlayerRuntime<S>
+where
+    S: HasPool<f32>,
+{
     fn apply_autoplay(&self, autoplay: bool) {
         if autoplay {
             self.set_rate(self.default_rate());
@@ -53,14 +57,14 @@ impl PlayerRuntime {
     ///
     /// `false` means the slot held no resource, so nothing reached the
     /// processor and the item is not current.
-    fn load_current_item(&self) -> bool {
+    fn load_current_item(&self) -> Result<bool, PlayError> {
         let index = self.current_index();
-        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index) else {
-            return false;
+        let Some((item_id, _src, duration_seconds)) = self.enqueue_to_processor(index)? else {
+            return Ok(false);
         };
         self.publish_current_track_snapshot(duration_seconds);
         self.start_playback(item_id);
-        true
+        Ok(true)
     }
 
     /// Pause playback. The effective rate becomes `0.0` when RT applies the command.
@@ -86,17 +90,18 @@ impl PlayerRuntime {
 
         let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         let _ = self.send_to_slot(PlayerCmd::SetPrefetchDuration(self.prefetch_duration()));
-        let loaded = self.load_current_item();
+        let loaded = self.load_current_item().unwrap_or_else(|error| {
+            warn!(%error, "failed to allocate track playback buffers");
+            false
+        });
         let _ = self.send_to_slot(PlayerCmd::SetPlaybackRate(rate));
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
         self.enter_playing();
         self.set_status(PlayerStatus::ReadyToPlay);
-        // Resuming the same item is not a track change; announce gates on it.
-        // An empty slot means the item's load is still in flight: announcing it
-        // would mark the index current, and the select that plants the arriving
-        // resource would then take `select_item_with_crossfade`'s
-        // reselecting-current path and never enqueue it.
+        // WHY: Resuming the same item is not a track change; announce gates on it. An empty slot means the item's load is still in flight:
+        // announcing it would mark the index current, and the select that plants the arriving resource would then take
+        // `select_item_with_crossfade`'s reselecting-current path and never enqueue it.
         if loaded {
             self.announce_current_item(self.current_index());
         }
@@ -118,16 +123,15 @@ impl PlayerRuntime {
             return Err(PlayError::SlotNotFound(slot_id));
         };
 
-        // The `fetch_add` inside is the publication: storing the returned value back would let two
-        // concurrent seeks reinstate the older epoch.
+        // WHY: The `fetch_add` inside is the publication: storing the returned value back would let two concurrent seeks reinstate the older
+        // epoch.
         let seek_epoch = playback.next_seek_epoch();
 
         let target_secs = seconds.max(0.0);
         let target = Duration::from_secs_f64(target_secs);
 
-        // Begin here, on the control thread: minting the source epoch publishes an event and wakes
-        // the decode worker, both of which take locks. The processor's `PlayerCmd::Seek` then only
-        // re-bases the track's own buffers and media clock, lock-free.
+        // WHY: Begin here, on the control thread: minting the source epoch publishes an event and wakes the decode worker, both of which
+        // take locks.
         self.core.engine.begin_slot_seek(slot_id, target);
         let outcome = match self.duration_seconds() {
             Some(dur) if target_secs >= dur => SeekOutcome::PastEof {
@@ -144,8 +148,7 @@ impl PlayerRuntime {
             seek_epoch,
             seconds: target_secs,
         }) {
-            // Nothing will carry the re-base now, and the processor holds a
-            // track's natural end while a published seek outranks it.
+            // WHY: Nothing will carry the re-base now, and the processor holds a track's natural end while a published seek outranks it.
             playback.withdraw_seek_epoch(seek_epoch);
             return Err(err);
         }
@@ -194,14 +197,8 @@ impl PlayerRuntime {
             });
         }
 
-        // Re-selecting the already-current item: its resource was consumed by
-        // the load that made it current and now lives in the processor (it is
-        // the playing track). Like the armed case, an emptied slot here is
-        // expected, not stale — so the consumed-slot guard must not fire and we
-        // take the no-reload path (no `enqueue_to_processor`, no re-announce).
-        // Gated on `Playlist::last_announced` so it covers only an item
-        // already loaded as current, not a fresh select of the current index whose
-        // resource genuinely still sits in the slot.
+        // WHY: Re-selecting the already-current item: its resource was consumed by the load that made it current and now lives in the
+        // processor (it is the playing track).
         let reselecting_current =
             index == self.core.items.current_index() && self.core.items.is_announced(index);
         let has_resource = self.core.items.has_resource(index);
@@ -211,11 +208,8 @@ impl PlayerRuntime {
             .lock()
             .pending()
             .is_some_and(|p| !p.state.activated() && p.index == index);
-        // An armed (or current-and-loaded) item's resource already lives in the
-        // processor; otherwise the slot must still hold one —
-        // `enqueue_to_processor` takes it out, so an emptied slot means the
-        // caller's view of the item is stale. Fail before any bookkeeping so
-        // the UI cannot drift from the audio.
+        // WHY: An armed (or current-and-loaded) item's resource already lives in the processor; otherwise the slot must still hold one -
+        // `enqueue_to_processor` takes it out, so an emptied slot means the caller's view of the item is stale.
         if !armed_for_index && !reselecting_current && !has_resource {
             return Err(PlayError::ItemConsumed { index });
         }
@@ -235,7 +229,7 @@ impl PlayerRuntime {
         } else if !reselecting_current {
             self.unarm_next_internal(Some(index));
             self.core.items.set_current(index);
-            self.load_current_item();
+            self.load_current_item()?;
             self.announce_current_item(index);
         }
 
@@ -250,16 +244,18 @@ impl PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::{BytePool, SamplePool};
     use kithara_test_utils::kithara;
 
     use super::*;
-    use crate::{PlayWorker, PlayWorkerConfig, player::PlayerConfig, session::testing};
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        player::PlayerConfig,
+        session::testing,
+        test_pools::{TestPools, pools},
+    };
 
-    fn player() -> PlayerImpl {
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(BytePool::default(), SamplePool::default()).build(),
-        );
+    fn player() -> PlayerImpl<TestPools> {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
         PlayerImpl::new(
             PlayerConfig::builder()
                 .worker(worker)

@@ -1,7 +1,12 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_audio::AudioReader;
-use kithara_platform::{CancelGroup, CancelToken, sync::mpsc, tokio::sync::watch};
+use kithara_bufpool::HasPool;
+use kithara_platform::{
+    CancelGroup, CancelScope, CancelToken,
+    sync::{Mutex, mpsc},
+    tokio::sync::watch,
+};
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
     Dispatcher, DispatcherConfig, RayonConfig, TaskConfig, TaskError, TaskHandle, Worker,
@@ -18,15 +23,23 @@ use crate::{
 };
 
 pub struct AnalysisWorker {
-    active: bool,
-    chunk_seconds: NonZeroU32,
-    dispatcher: Dispatcher,
-    fingerprint: AnalysisFingerprint,
-    job_scope: CancelToken,
-    jobs: mpsc::Sender<Job>,
     resume_shape: (bool, bool),
-    task: TaskHandle,
+    fingerprint: AnalysisFingerprint,
+    dispatcher: Dispatcher,
+    chunk_seconds: NonZeroU32,
+    scope: CancelScope,
+    start_job: StartJob,
+    tasks: Mutex<Vec<ActiveTask>>,
     _base: Worker,
+    active: bool,
+}
+
+type StartJob =
+    Box<dyn Fn(Job, mpsc::Sender<()>) -> Result<TaskHandle, TaskError> + Send + Sync + 'static>;
+
+struct ActiveTask {
+    completion: mpsc::Receiver<()>,
+    _handle: TaskHandle,
 }
 
 /// An analysis pass opened before either decoder starts.
@@ -35,12 +48,12 @@ pub struct AnalysisWorker {
 /// therefore attach the producer to playback before it asynchronously opens
 /// the pass's fallback reader, then hand this value back to [`AnalysisWorker::start`].
 pub struct AnalysisPass {
-    cancel: CancelToken,
-    ingest: ring::Reader,
-    rate: NonZeroU32,
     token: AnalysisToken,
-    tx: watch::Sender<Option<AnalysisProgress>>,
+    cancel: CancelToken,
+    rate: NonZeroU32,
     resume: Option<AnalysisProgress>,
+    ingest: ring::Reader,
+    tx: watch::Sender<Option<AnalysisProgress>>,
 }
 
 /// Output of opening an analysis pass before its fallback reader starts.
@@ -59,18 +72,15 @@ impl AnalysisPass {
 }
 
 impl AnalysisWorker {
-    /// Construct the analysis dispatcher and its long-lived task.
+    /// Construct the analysis dispatcher used by independently admitted jobs.
     ///
-    /// # Errors
-    ///
-    /// Returns the base worker's canonical task admission error when the task
-    /// cannot be registered.
-    pub fn new<B>(config: AnalysisWorkerConfig<B>) -> Result<Self, TaskError>
+    pub fn new<B, S>(config: AnalysisWorkerConfig<B, S>) -> Self
     where
         B: ResamplerBackend,
+        S: HasPool<f32> + Send + Sync + 'static,
     {
         let AnalysisWorkerConfig {
-            builder,
+            mut builder,
             cancel,
             capacity,
             chunk_seconds,
@@ -85,8 +95,9 @@ impl AnalysisWorker {
             wait_timeout,
             worker,
         } = config;
+        let scope = CancelScope::new(cancel.clone());
         let (base, dispatcher_cancel) = if let Some(worker) = worker {
-            (worker, cancel.map(CancelGroup::from))
+            (worker, cancel.clone().map(CancelGroup::from))
         } else {
             let worker_config = cancel
                 .map_or_else(WorkerConfig::new, |cancel| {
@@ -94,7 +105,7 @@ impl AnalysisWorker {
                 })
                 .with_max_compute_tasks(max_compute_tasks)
                 .with_owned_pool(RayonConfig::new(
-                    NonZeroUsize::MIN,
+                    max_compute_tasks,
                     "kithara-analysis-compute",
                 ));
             (Worker::new(worker_config), None)
@@ -111,48 +122,72 @@ impl AnalysisWorker {
             dispatcher_config = dispatcher_config.with_cancel(cancel);
         }
         let dispatcher = base.dispatcher(dispatcher_config);
-        let pending = dispatcher.reserve(
-            TaskConfig::new()
-                .with_max_compute_tasks(max_compute_tasks)
-                .with_priority(priority),
-        )?;
-        let job_scope = pending.context().token().clone();
-        let context = pending.context().clone();
-        let (jobs, receiver) = mpsc::channel();
-        let node = AnalysisNode::new(
-            builder,
-            receiver,
-            context,
-            chunk_seconds,
-            producer_drain_limit,
-            publish_seconds,
-        );
-        let (fingerprint, active, resume_shape) = node.effective();
-        let task = pending.start(|_| node)?;
+        let _ = builder.take_detector();
+        let fingerprint = builder.fingerprint();
+        let active = !builder.is_empty();
+        let resume_shape = builder.resume_shape();
+        let task_config = TaskConfig::new()
+            .with_max_compute_tasks(max_compute_tasks)
+            .with_priority(priority);
+        let job_dispatcher = dispatcher.clone();
+        let start_job: StartJob = Box::new(move |job, completion| {
+            let pending = job_dispatcher.reserve(task_config.clone())?;
+            let (jobs, receiver) = mpsc::channel();
+            if jobs.send(job).is_err() {
+                return Err(TaskError::Stopped);
+            }
+            let job_builder = builder.clone();
+            pending.start(move |context| {
+                AnalysisNode::with_completion(
+                    job_builder,
+                    receiver,
+                    context,
+                    chunk_seconds,
+                    producer_drain_limit,
+                    publish_seconds,
+                    Some(completion),
+                )
+            })
+        });
 
-        Ok(Self {
+        Self {
             active,
             chunk_seconds,
             dispatcher,
             fingerprint,
-            job_scope,
-            jobs,
             resume_shape,
-            task,
+            scope,
+            start_job,
+            tasks: Mutex::new(Vec::new()),
             _base: base,
-        })
+        }
     }
 
-    /// Whether detector initialization left at least one effective analyzer.
+    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
+    /// another axis is refused. Returns where its snapshots arrive and the
+    /// producer another component may contribute decoded ranges through.
     #[must_use]
-    pub const fn is_active(&self) -> bool {
-        self.active
+    pub fn analyze(
+        &self,
+        reader: Box<dyn AudioReader>,
+        token: AnalysisToken,
+        rate: NonZeroU32,
+    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
+        let (rx, producer, pass) = self.open(token, rate);
+        self.start(pass, reader);
+        (rx, producer)
     }
 
     /// Identity of the analyzers that survived worker initialization.
     #[must_use]
     pub const fn fingerprint(&self) -> &AnalysisFingerprint {
         &self.fingerprint
+    }
+
+    /// Whether detector initialization left at least one effective analyzer.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        self.active
     }
 
     /// Open a pass and its bounded playback producer without waiting for the
@@ -171,7 +206,7 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
-            cancel: self.job_scope.child(),
+            cancel: self.scope.token().child(),
             ingest,
             rate,
             token,
@@ -179,50 +214,6 @@ impl AnalysisWorker {
             resume: None,
         };
         (rx, producer, pass)
-    }
-
-    /// Start an already-open pass with its fallback reader.
-    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        if pass.resume.is_some() {
-            warn!("analysis resume pass requires extent validation");
-            return;
-        }
-        self.submit_pass(pass, reader);
-    }
-
-    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
-        let AnalysisPass {
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        } = pass;
-        self.submit(Job {
-            reader,
-            cancel,
-            ingest,
-            rate,
-            token,
-            tx,
-            resume,
-        });
-    }
-
-    /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
-    /// another axis is refused. Returns where its snapshots arrive and the
-    /// producer another component may contribute decoded ranges through.
-    #[must_use]
-    pub fn analyze(
-        &self,
-        reader: Box<dyn AudioReader>,
-        token: AnalysisToken,
-        rate: NonZeroU32,
-    ) -> (watch::Receiver<Option<AnalysisProgress>>, AnalysisProducer) {
-        let (rx, producer, pass) = self.open(token, rate);
-        self.start(pass, reader);
-        (rx, producer)
     }
 
     /// Open a validated partial publication before its fallback reader is
@@ -263,7 +254,7 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
-            cancel: self.job_scope.child(),
+            cancel: self.scope.token().child(),
             ingest,
             rate,
             token,
@@ -271,6 +262,15 @@ impl AnalysisWorker {
             resume: Some(progress),
         };
         Ok((rx, producer, pass))
+    }
+
+    /// Start an already-open pass with its fallback reader.
+    pub fn start(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+        if pass.resume.is_some() {
+            warn!("analysis resume pass requires extent validation");
+            return;
+        }
+        self.submit_pass(pass, reader);
     }
 
     /// Start a resume pass only after its opened reader confirms the persisted
@@ -298,41 +298,71 @@ impl AnalysisWorker {
     }
 
     fn submit(&self, job: Job) {
-        if self.jobs.send(job).is_err() {
-            warn!("analysis worker stopped; job dropped");
-        } else {
-            self.task.control().wake();
+        self.tasks.lock().retain(|task| {
+            !matches!(
+                task.completion.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            )
+        });
+        let (completion, completed) = mpsc::channel();
+        match (self.start_job)(job, completion) {
+            Ok(handle) => self.tasks.lock().push(ActiveTask {
+                completion: completed,
+                _handle: handle,
+            }),
+            Err(error) => {
+                warn!(?error, "analysis job was not admitted");
+            }
         }
+    }
+
+    fn submit_pass(&self, pass: AnalysisPass, reader: Box<dyn AudioReader>) {
+        let AnalysisPass {
+            cancel,
+            ingest,
+            rate,
+            token,
+            tx,
+            resume,
+        } = pass;
+        self.submit(Job {
+            reader,
+            cancel,
+            ingest,
+            rate,
+            token,
+            tx,
+            resume,
+        });
     }
 }
 
 impl Drop for AnalysisWorker {
     fn drop(&mut self) {
+        self.scope.cancel();
         self.dispatcher.shutdown();
     }
 }
 
 #[cfg(all(test, feature = "analysis-beat", not(feature = "beat-nn")))]
 mod tests {
-    use kithara_bufpool::SamplePool;
     use kithara_platform::CancelToken;
     use kithara_resampler::NoResamplerBackend;
     use kithara_test_utils::kithara;
 
     use super::{AnalysisWorker, AnalysisWorkerConfig};
-    use crate::AnalyzerBuilder;
+    use crate::{AnalyzerBuilder, test_pools::pools};
 
     #[kithara::test(native, flash(false))]
     fn beat_without_a_detector_is_not_an_effective_analyzer() {
         let cancel = CancelToken::never();
         let worker = AnalysisWorker::new(
             AnalysisWorkerConfig::for_builder(
-                AnalyzerBuilder::<NoResamplerBackend>::new(SamplePool::default()).with_beat(),
+                AnalyzerBuilder::<NoResamplerBackend, _>::new(pools()).with_beat(),
             )
             .cancel(cancel)
             .build(),
-        )
-        .expect("analysis worker task is admitted");
+        );
 
         assert!(!worker.is_active());
         assert_eq!(worker.fingerprint().beat(), None);

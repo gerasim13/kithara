@@ -27,9 +27,9 @@ use super::offset::OffsetReader;
 /// only the latest polled window matters.
 #[derive(Default)]
 struct DemandCell {
-    start: AtomicU64,
-    end: AtomicU64,
     armed: AtomicBool,
+    end: AtomicU64,
+    start: AtomicU64,
 }
 
 impl DemandCell {
@@ -54,6 +54,7 @@ impl DemandCell {
 /// - Decoder to read via Read + Seek
 /// - `StreamAudioSource` to check `media_info()` for format changes
 pub(crate) struct SharedStream<T: StreamType> {
+    demand: Arc<DemandCell>,
     inner: Arc<Mutex<Stream<T>>>,
     /// Narrow byte-space handle. RT polls — phase, cursor, length, byte
     /// map — answer from here and never take `inner`: off-RT holders (a
@@ -64,13 +65,12 @@ pub(crate) struct SharedStream<T: StreamType> {
     /// Fixed-at-open handles the produce core reaches without `inner`;
     /// resolved once in [`Self::new`] before the stream enters the mutex.
     abr: Option<AbrHandle>,
-    variants: Option<Arc<dyn VariantControl>>,
-    peer_wake: Option<Arc<DeferredWake>>,
-    demand: Arc<DemandCell>,
     /// Construction mode for one decoder reader. Coordinator clones carry no
     /// gate; every opened reader receives a fresh gate so an off-RT rebuild
     /// cannot switch the active decoder to blocking I/O.
     construction_gate: Option<ConstructionGate>,
+    peer_wake: Option<Arc<DeferredWake>>,
+    variants: Option<Arc<dyn VariantControl>>,
 }
 
 impl<T: StreamType> SharedStream<T> {
@@ -80,82 +80,14 @@ impl<T: StreamType> SharedStream<T> {
         let variants = stream.variant_control();
         let peer_wake = stream.peer_wake();
         Self {
-            inner: Arc::new(Mutex::new(stream)),
             probe,
             abr,
             variants,
             peer_wake,
+            inner: Arc::new(Mutex::new(stream)),
             demand: Arc::default(),
             construction_gate: None,
         }
-    }
-
-    delegate! {
-        // Byte-space polls answered by the narrow probe, never the control
-        // mutex: RT-safe on the forbid-blocking produce core.
-        to self.probe {
-            /// Overall source readiness at current position.
-            pub(crate) fn phase(&self) -> SourcePhase;
-            /// Point-in-time readiness for a specific byte range — same
-            /// contract as [`Self::phase`].
-            pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
-            /// Current read position — the source's atomic cursor.
-            pub(crate) fn position(&self) -> u64;
-            /// Absolute byte cursor set — forwards to the inner source's
-            /// atomic, used post-seek when the audio FSM lands at a known
-            /// byte position.
-            pub(crate) fn set_position(&self, pos: u64);
-            /// Total length if known.
-            pub(crate) fn len(&self) -> Option<u64>;
-            /// Optional byte-map handle; the decoder factory uses it to
-            /// activate the segment-by-segment fMP4 path.
-            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
-        }
-        to self.abr {
-            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
-            #[call(clone)]
-            pub(crate) fn abr_handle(&self) -> Option<AbrHandle>;
-        }
-        to self.peer_wake {
-            /// The reader→peer wake handle — `Some` for segmented sources
-            /// (HLS) that push a downloader peer.
-            #[call(clone)]
-            pub(crate) fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
-        }
-    }
-
-    /// Header byte range for decoder recreate after a format change — via
-    /// the fixed variant-control handle; same answer as
-    /// [`Stream::format_change_segment_range`].
-    pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
-        format_change_segment_range(self.variants.as_deref())
-    }
-
-    pub(crate) fn has_variant_surface(&self) -> bool {
-        self.variants.is_some()
-    }
-
-    /// Real-time on-core seek (FSM recreate/boundary, decoder
-    /// `OffsetReader`): cursor math + cursor set through the probe, no
-    /// lock and no `prime_seek_range` spin on the forbid-blocking produce
-    /// core — the same [`resolve_seek_target`] math as the off-RT
-    /// [`Seek::seek`]. The load→resolve→store is not atomic: it relies on
-    /// the single-cursor-writer invariant — the produce core owns the
-    /// cursor except while it is parked in `RebuildingDecoder`, the only
-    /// window where the off-RT rebuild reader moves it instead.
-    ///
-    /// # Errors
-    ///
-    /// See [`resolve_seek_target`].
-    pub(crate) fn probe_seek(&self, pos: SeekFrom) -> io::Result<u64> {
-        let new_pos = resolve_seek_target(pos, self.probe.position(), self.probe.len())?;
-        self.probe.set_position(new_pos);
-        // The reader cursor moved on the produce core: arm the peer so it
-        // re-targets fetches around the new position. The shell flushes it.
-        if let Some(ref wake) = self.peer_wake {
-            wake.arm();
-        }
-        Ok(new_pos)
     }
 
     /// Record `range` as the window a parked decoder poll waits on.
@@ -170,6 +102,17 @@ impl<T: StreamType> SharedStream<T> {
         if let Some(range) = self.demand.take() {
             let _ = self.probe_wait(range);
         }
+    }
+
+    /// Header byte range for decoder recreate after a format change — via
+    /// the fixed variant-control handle; same answer as
+    /// [`Stream::format_change_segment_range`].
+    pub(crate) fn format_change_segment_range(&self) -> StreamResult<Range<u64>> {
+        format_change_segment_range(self.variants.as_deref())
+    }
+
+    pub(crate) fn has_variant_surface(&self) -> bool {
+        self.variants.is_some()
     }
 
     pub(crate) fn open_initial_reader(&self) -> OpenedReader {
@@ -201,6 +144,29 @@ impl<T: StreamType> SharedStream<T> {
         )
     }
 
+    /// Real-time on-core seek (FSM recreate/boundary, decoder
+    /// `OffsetReader`): cursor math + cursor set through the probe, no
+    /// lock and no `prime_seek_range` spin on the forbid-blocking produce
+    /// core — the same [`resolve_seek_target`] math as the off-RT
+    /// [`Seek::seek`]. The load→resolve→store is not atomic: it relies on
+    /// the single-cursor-writer invariant — the produce core owns the
+    /// cursor except while it is parked in `RebuildingDecoder`, the only
+    /// window where the off-RT rebuild reader moves it instead.
+    ///
+    /// # Errors
+    ///
+    /// See [`resolve_seek_target`].
+    pub(crate) fn probe_seek(&self, pos: SeekFrom) -> io::Result<u64> {
+        let new_pos = resolve_seek_target(pos, self.probe.position(), self.probe.len())?;
+        self.probe.set_position(new_pos);
+        // WHY: The reader cursor moved on the produce core: arm the peer so it re-targets fetches around the new position. The shell flushes
+        // it.
+        if let Some(ref wake) = self.peer_wake {
+            wake.arm();
+        }
+        Ok(new_pos)
+    }
+
     fn with_construction_gate(&self, construction_gate: ConstructionGate) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -210,6 +176,39 @@ impl<T: StreamType> SharedStream<T> {
             peer_wake: self.peer_wake.clone(),
             demand: Arc::clone(&self.demand),
             construction_gate: Some(construction_gate),
+        }
+    }
+
+    delegate! {
+        // WHY: Byte-space polls answered by the narrow probe, never the control mutex: RT-safe on the forbid-blocking produce core.
+        to self.probe {
+            /// Overall source readiness at current position.
+            pub(crate) fn phase(&self) -> SourcePhase;
+            /// Point-in-time readiness for a specific byte range — same
+            /// contract as [`Self::phase`].
+            pub(crate) fn phase_at(&self, range: Range<u64>) -> SourcePhase;
+            /// Current read position — the source's atomic cursor.
+            pub(crate) fn position(&self) -> u64;
+            /// Absolute byte cursor set — forwards to the inner source's
+            /// atomic, used post-seek when the audio FSM lands at a known
+            /// byte position.
+            pub(crate) fn set_position(&self, pos: u64);
+            /// Total length if known.
+            pub(crate) fn len(&self) -> Option<u64>;
+            /// Optional byte-map handle; the decoder factory uses it to
+            /// activate the segment-by-segment fMP4 path.
+            pub(crate) fn byte_map(&self) -> Option<Arc<dyn ByteMap>>;
+        }
+        to self.abr {
+            /// Runtime ABR handle — `Some` for adaptive sources (HLS).
+            #[call(clone)]
+            pub(crate) fn abr_handle(&self) -> Option<AbrHandle>;
+        }
+        to self.peer_wake {
+            /// The reader→peer wake handle — `Some` for segmented sources
+            /// (HLS) that push a downloader peer.
+            #[call(clone)]
+            pub(crate) fn peer_wake(&self) -> Option<Arc<DeferredWake>>;
         }
     }
 

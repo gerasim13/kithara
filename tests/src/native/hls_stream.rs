@@ -6,15 +6,15 @@ use cbc::{
     cipher::{BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7},
 };
 use kithara::{
-    bufpool::{BytePool, SamplePool},
+    encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource},
     platform::sync::Arc,
     stream::MediaInfo,
 };
-use kithara_encode::{EncodeError, EncodedTrack, EncoderFactory, PackagedEncodeRequest, PcmSource};
 use kithara_test_fixtures::signal::{self, Pcm, SweepMode, Wave};
 use num_traits::AsPrimitive;
 
 use crate::{
+    bufpool_ext::pools,
     fixture_protocol::{HlsRouteKind, HttpErrorRule, eval_http_error, generate_segment},
     fmp4::{PackagedVariantData, mux_packaged_variant},
     hls_spec::{
@@ -499,7 +499,6 @@ fn encode_packaged_variant(
         .sample_rate(packaged.sample_rate)
         .channels(packaged.channels)
         .build();
-
     let start_frame = usize::try_from(variant.start_frame).expect("start_frame must fit usize");
     let wave = match variant.signal {
         ResolvedPackagedSignal::Sawtooth => Wave::Sawtooth,
@@ -525,7 +524,8 @@ fn encode_packaged_variant(
     };
 
     EncoderFactory::encode_packaged(
-        &PackagedEncodeRequest::for_pools(BytePool::default(), SamplePool::default())
+        &pools(),
+        &PackagedEncodeRequest::builder()
             .pcm(&padded)
             .packets_per_segment(packets_per_segment)
             .media_info(media_info)

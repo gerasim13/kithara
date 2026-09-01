@@ -252,9 +252,9 @@ pub struct TableColumn {
     id: String,
     label: String,
     style: TableColumnStyle,
-    width: f32,
     #[serde(default)]
     flexible: bool,
+    width: f32,
 }
 
 impl TableColumn {
@@ -264,11 +264,11 @@ impl TableColumn {
         L: Into<String>,
     {
         Self {
-            id: id.into(),
-            label: label.into(),
             style,
             width,
             flexible,
+            id: id.into(),
+            label: label.into(),
         }
     }
 

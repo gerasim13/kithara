@@ -3,18 +3,21 @@ use std::{fmt, num::NonZeroU32, path::PathBuf};
 use bon::Builder;
 use kithara::{
     analysis::BeatAnalysisConfig,
-    assets::AssetStore,
+    drm::KeyProcessorRegistry,
     hls::SizeProbeMethod,
-    play::{PlayWorker, policy::DomainKeyPolicy},
+    platform::{CancelToken, sync::Arc, time::Duration},
+    play::policy::DomainKeyPolicy,
     prelude::PlaybackResamplerBackend,
     stream::dl::Downloader,
+    worker::Worker,
 };
-use kithara_drm::KeyProcessorRegistry;
-use kithara_platform::{CancelToken, sync::Arc, time::Duration};
-use kithara_worker::Worker;
 use url::Url;
 
-use crate::{baked, theme::Palette};
+use crate::{
+    baked,
+    pools::{AppStore, AppWorker},
+    theme::Palette,
+};
 
 /// App-owned snapshot of one DRM policy and its ordinary resolver registry.
 #[derive(Clone, Debug, fieldwork::Fieldwork)]
@@ -62,7 +65,7 @@ pub struct AppConfig {
     #[builder(default)]
     pub drm: AppDrm,
     /// App-wide shared asset store.
-    pub store: AssetStore,
+    pub store: AppStore,
     /// Source beat-analysis tunables.
     #[builder(default)]
     pub beat_analysis: BeatAnalysisConfig<PlaybackResamplerBackend>,
@@ -70,7 +73,7 @@ pub struct AppConfig {
     #[builder(default = NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN))]
     pub analysis_chunk_seconds: NonZeroU32,
     /// One playback worker shared by every deck in this app session.
-    pub worker: PlayWorker,
+    pub worker: AppWorker,
     /// Optional base runtime shared by playback, analysis, and app-owned
     /// background dispatchers. Production supplies one; focused consumers may
     /// let each domain worker own its standalone base.

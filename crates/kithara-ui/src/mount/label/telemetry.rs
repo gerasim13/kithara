@@ -29,10 +29,6 @@ mod host {
     impl Draws for Telemetry {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(self.format, self.framed, skin)
-        }
-
         /// A reading is the number its endpoint reports, so one with no number
         /// draws nothing rather than a zero nobody measured.
         fn data(&self, read: Reading<'_>) -> Option<f64> {
@@ -40,6 +36,10 @@ mod host {
                 Some(ReadValue::Scalar(value)) => Some(*value),
                 _ => None,
             }
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(self.format, self.framed, skin)
         }
     }
 }

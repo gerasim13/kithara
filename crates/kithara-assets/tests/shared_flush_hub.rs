@@ -24,13 +24,13 @@ fn shared_hub_flush_now_persists_every_store() {
     let dir = tempdir().unwrap();
     let hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
 
-    let store_a = AssetStore::builder()
+    let store_a = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().join("a"),
         })
         .flush_hub(hub.clone())
         .build();
-    let store_b = AssetStore::builder()
+    let store_b = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: dir.path().join("b"),
         })

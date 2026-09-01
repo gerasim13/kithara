@@ -13,13 +13,13 @@ const MAX_PRESSURE_RECORDS: usize = 100_000;
 
 #[derive(Debug, Deserialize)]
 struct PressureSample {
-    schema: String,
-    marker: PressureMarker,
-    timestamp_ms: u64,
-    load1: Option<f64>,
     metrics: BTreeMap<String, String>,
-    sampler_healthy: Option<bool>,
+    load1: Option<f64>,
     primary_exit_code: Option<i32>,
+    sampler_healthy: Option<bool>,
+    marker: PressureMarker,
+    schema: String,
+    timestamp_ms: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -32,16 +32,16 @@ enum PressureMarker {
 
 #[derive(Debug, Default)]
 struct PressureSummary {
+    counters: BTreeMap<String, CounterWindow>,
+    psi: BTreeMap<String, f64>,
     first_timestamp_ms: Option<u64>,
     last_timestamp_ms: Option<u64>,
     max_load: f64,
-    psi: BTreeMap<String, f64>,
-    counters: BTreeMap<String, CounterWindow>,
+    counter_regressions: usize,
     malformed: usize,
     nonmonotonic: usize,
-    counter_regressions: usize,
-    structure_errors: usize,
     samples: usize,
+    structure_errors: usize,
 }
 
 #[derive(Debug)]
@@ -52,9 +52,9 @@ struct CounterWindow {
 
 #[derive(Debug)]
 pub(super) struct PressurePoint {
-    timestamp_ms: u64,
-    load1: Option<f64>,
     psi: BTreeMap<String, f64>,
+    load1: Option<f64>,
+    timestamp_ms: u64,
 }
 
 pub(super) fn append(out: &mut String, path: &Path) -> (Vec<PressurePoint>, bool) {
@@ -295,9 +295,9 @@ pub(super) fn correlate(
             );
         }
         let key = AttemptKey {
+            iteration,
             suite: case.suite.clone(),
             name: case.name.clone(),
-            iteration,
         };
         if let Some(dossier) = dossiers.get_mut(&key) {
             dossier.pressure = if window.is_empty() {

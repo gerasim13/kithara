@@ -1,6 +1,6 @@
 use std::{num::NonZeroU32, ops::Range};
 
-use kithara_bufpool::{SampleBuffer, SamplePool};
+use kithara_bufpool::{HasPool, PoolError, PoolRegion, SampleBuffer};
 use kithara_platform::{maybe_send::WasmSend, sync::Arc};
 use kithara_signal::FrameCount;
 
@@ -59,37 +59,35 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    const fn scratch_frames(sample_rate: u32) -> FrameCount {
-        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
-    }
-
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two per-channel scratch buffers from the given sample pool, each holding
-    /// [`Self::scratch_frames`] frames.
-    #[must_use]
-    pub fn new(resource: Resource, src: Arc<str>, pool: &SamplePool) -> Self {
+    /// Allocates two per-channel scratch buffers through the given pool facade,
+    /// each holding [`Self::scratch_frames`] frames.
+    pub fn new<S>(
+        resource: Resource,
+        src: Arc<str>,
+        pools: &PoolRegion<S>,
+    ) -> Result<Self, PoolError>
+    where
+        S: HasPool<f32>,
+    {
         let buffer_frames = Self::scratch_frames(resource.spec().sample_rate.get()).get();
+        let left = pools.get_with_len::<f32>(buffer_frames)?;
+        let right = pools.get_with_len::<f32>(buffer_frames)?;
 
-        let channel_buffers = std::array::from_fn(|_| {
-            pool.get_with(|b: &mut Vec<f32>| {
-                let cap = b.capacity();
-                if cap < buffer_frames {
-                    b.reserve(buffer_frames - cap);
-                }
-                b.resize(buffer_frames, 0.0);
-            })
-        });
-
-        Self {
-            channel_buffers,
+        Ok(Self {
+            channel_buffers: [left, right],
             src,
             resource: WasmSend::new(resource),
             write_len: 0,
             write_pos: 0,
             eof_seen: false,
             failed: false,
-        }
+        })
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no
@@ -145,12 +143,6 @@ impl PlayerResource {
         eof_reached
     }
 
-    fn prefetch_target(&self, callback_frames: usize) -> usize {
-        self.write_len
-            .saturating_add(callback_frames)
-            .min(self.channel_buffers[0].len())
-    }
-
     /// Remaining buffered frames when the wrapped reader has reached EOF.
     ///
     /// `Some(0)` means the current read drained the last buffered frame exactly;
@@ -158,6 +150,16 @@ impl PlayerResource {
     #[must_use]
     pub fn frames_until_eof(&self) -> Option<usize> {
         self.eof_seen.then_some(self.write_len)
+    }
+
+    pub(crate) fn playback_rate(&self) -> f32 {
+        self.resource.get().playback_rate()
+    }
+
+    fn prefetch_target(&self, callback_frames: usize) -> usize {
+        self.write_len
+            .saturating_add(callback_frames)
+            .min(self.channel_buffers[0].len())
     }
 
     /// Read audio frames into the output buffers for the given range.
@@ -253,6 +255,10 @@ impl PlayerResource {
         self.failed = false;
     }
 
+    const fn scratch_frames(sample_rate: u32) -> FrameCount {
+        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
+    }
+
     /// Control-plane handle used to begin a seek off the audio thread.
     #[must_use]
     pub fn seek_handle(&self) -> Option<Arc<dyn kithara_audio::SeekBegin>> {
@@ -270,14 +276,6 @@ impl PlayerResource {
             /// Update the scheduling priority hint for the shared worker.
             pub(crate) fn set_service_class(&self, class: ServiceClass);
         }
-    }
-
-    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
-        self.resource.get().apply_playback_rate(rate)
-    }
-
-    pub(crate) fn playback_rate(&self) -> f32 {
-        self.resource.get().playback_rate()
     }
 }
 

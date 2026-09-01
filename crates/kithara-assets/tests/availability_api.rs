@@ -1,6 +1,5 @@
 //! Phase P-2 smoke tests for `AssetStore::{contains_range,
 //! available_ranges, final_len}`.
-
 mod support;
 
 use kithara_assets::{AcquisitionResult, AssetStore, StorageBackend, WriteSide};
@@ -14,7 +13,7 @@ const ROOT: &str = "availability-p2";
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_empty_aggregate_returns_empty() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -33,7 +32,7 @@ fn disk_store_empty_aggregate_returns_empty() {
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
 fn mem_store_empty_aggregate_returns_empty() {
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Memory)
         .build();
     let scope = store.scope::<Test>(&source(ROOT)).unwrap();
@@ -47,7 +46,7 @@ fn mem_store_empty_aggregate_returns_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_slow_path_finds_committed_file() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -75,7 +74,7 @@ fn disk_store_slow_path_finds_committed_file() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_store_missing_resource_returns_empty() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })
@@ -91,7 +90,7 @@ fn disk_store_missing_resource_returns_empty() {
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn remove_resource_clears_aggregate_remove_call() {
     let dir = tempdir().unwrap();
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(support::pools())
         .backend(StorageBackend::Disk {
             root: (dir.path()).into(),
         })

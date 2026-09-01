@@ -36,8 +36,8 @@ use crate::{
 /// things, the model that answers a reading, and the skin that sizes it.
 #[derive(Clone, Copy)]
 pub(crate) struct Resolving<'a> {
-    pub(crate) ctx: Ctx<'a, 'a>,
     pub(crate) skin: &'a Skin,
+    pub(crate) ctx: Ctx<'a, 'a>,
 }
 
 #[derive(Clone)]
@@ -117,15 +117,31 @@ pub(crate) enum HostedControlPlan {
 /// on screen when the deck was mounted.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct HeroWindow {
-    scale: f32,
-    progress: f32,
-    start: f32,
     end: f32,
-    wheel_positive: f32,
+    progress: f32,
+    scale: f32,
+    start: f32,
     wheel_non_positive: f32,
+    wheel_positive: f32,
 }
 
 impl HeroWindow {
+    /// The window a deck at `progress` shows at `zoom`, without a document to
+    /// read it from.
+    #[cfg(test)]
+    fn at(progress: f32, zoom: f32) -> Self {
+        let scale = clamp_zoom(zoom);
+        let visible = window_bounds(progress, scale);
+        Self {
+            scale,
+            progress,
+            start: visible.start,
+            end: visible.end,
+            wheel_positive: zoom_for_wheel(scale, 1.0),
+            wheel_non_positive: zoom_for_wheel(scale, 0.0),
+        }
+    }
+
     /// What the deck at `scope` is showing this frame.
     fn read(scope: &str, zoom: Option<&Binding>, ctx: Ctx<'_, '_>) -> Self {
         let progress = match ctx.get(&derived("deck.playback.position_normalized", scope)) {
@@ -146,22 +162,6 @@ impl HeroWindow {
 
     fn visible(self) -> Range<f32> {
         self.start..self.end
-    }
-
-    /// The window a deck at `progress` shows at `zoom`, without a document to
-    /// read it from.
-    #[cfg(test)]
-    fn at(progress: f32, zoom: f32) -> Self {
-        let scale = clamp_zoom(zoom);
-        let visible = window_bounds(progress, scale);
-        Self {
-            scale,
-            progress,
-            start: visible.start,
-            end: visible.end,
-            wheel_positive: zoom_for_wheel(scale, 1.0),
-            wheel_non_positive: zoom_for_wheel(scale, 0.0),
-        }
     }
 }
 
@@ -214,6 +214,153 @@ impl DividerPaths {
 }
 
 impl HostedControlPlan {
+    fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
+        match self {
+            Self::Activation { path } => descriptors.push(Descriptor::activation(path.clone())),
+            Self::Crossing { path } => descriptors.push(Descriptor::crossing(path.clone())),
+            Self::Segmented { path, item_count } => {
+                descriptors.push(Descriptor::segmented(path.clone(), *item_count));
+            }
+            Self::Picker {
+                path,
+                items,
+                selected,
+                ..
+            } => descriptors.push(Descriptor::picker(path.clone(), items.len(), *selected)),
+            Self::Tree(plan) => plan.append_descriptors(descriptors),
+            Self::Table(plan) => plan.append_descriptors(descriptors),
+            Self::Fader {
+                path,
+                style,
+                drag_step,
+                wheel,
+                ..
+            } => descriptors.push(Descriptor::fader(
+                path.clone(),
+                Hover::new(match style {
+                    FaderStyle::Default => CursorShape::Grab,
+                    FaderStyle::Volume => CursorShape::ResizeH,
+                }),
+                *drag_step,
+                *wheel,
+            )),
+            Self::Crossfader { path } => {
+                descriptors.push(Descriptor::crossfader(path.clone()));
+            }
+            Self::Knob {
+                path,
+                current,
+                drag_range,
+                wheel_step,
+            } => descriptors.push(Descriptor::knob(
+                path.clone(),
+                *current,
+                *drag_range,
+                *wheel_step,
+            )),
+            Self::StereoMeter { path } => {
+                descriptors.push(Descriptor::stereo_meter(path.clone()));
+            }
+            Self::VerticalVu { path } => {
+                descriptors.push(Descriptor::vertical_vu(path.clone()));
+            }
+            Self::Wave { path } => descriptors.push(Descriptor::wave(path.clone())),
+            Self::HeroWave { path, window, .. } => {
+                let window = window.get();
+                descriptors.push(Descriptor::hero_wave(
+                    path.clone(),
+                    window.scale,
+                    window.progress,
+                    window.visible(),
+                    window.wheel_positive,
+                    window.wheel_non_positive,
+                ));
+            }
+        }
+    }
+
+    /// What a module's `drop:` amounts to, wherever it is mounted.
+    ///
+    /// Both hosts ask here instead of each spelling out the path and the
+    /// gesture again, so a document that takes drops means one thing.
+    pub(in crate::render) fn crossing(instance: &str) -> Self {
+        Self::Crossing {
+            path: format!("{instance}/drop"),
+        }
+    }
+
+    fn descriptor_count(&self) -> usize {
+        if matches!(self, Self::Tree(_)) {
+            return TreePlan::DESCRIPTORS;
+        }
+        if let Self::Table(plan) = self {
+            return plan.descriptor_count();
+        }
+        1
+    }
+
+    pub(crate) fn descriptors(&self) -> Vec<Descriptor> {
+        let mut descriptors = Vec::with_capacity(self.descriptor_count());
+        self.append_descriptors(&mut descriptors);
+        descriptors
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gestures(&self) -> Gestures {
+        self.descriptors()
+            .iter()
+            .fold(Gestures::empty(), |gestures, descriptor| {
+                gestures.union(descriptor.gestures())
+            })
+    }
+
+    /// A hero wave showing a deck at `progress`, for a test that mounts one
+    /// without a document behind it.
+    #[cfg(test)]
+    pub(crate) fn hero_wave_at(path: &str, progress: f32, zoom: f32) -> Self {
+        Self::HeroWave {
+            path: path.to_owned(),
+            scope: String::new(),
+            zoom: None,
+            window: Cell::new(HeroWindow::at(progress, zoom)),
+        }
+    }
+
+    pub(in crate::render) fn path(&self) -> &str {
+        match self {
+            Self::Activation { path }
+            | Self::Crossing { path }
+            | Self::Segmented { path, .. }
+            | Self::Picker { path, .. }
+            | Self::Fader { path, .. }
+            | Self::Crossfader { path }
+            | Self::Knob { path, .. }
+            | Self::StereoMeter { path }
+            | Self::VerticalVu { path }
+            | Self::Wave { path }
+            | Self::HeroWave { path, .. } => path,
+            Self::Tree(plan) => &plan.path,
+            Self::Table(plan) => &plan.path,
+        }
+    }
+
+    /// Re-reads whatever this plan measures a gesture against.
+    ///
+    /// A host that rebuilds its tree every frame resolves the whole plan afresh
+    /// and never calls this. One that keeps a tree calls it instead, so a
+    /// standing control answers a hand the same way a newly mounted one would.
+    pub(crate) fn reread(&self, ctx: Ctx<'_, '_>) {
+        if let Self::HeroWave {
+            scope,
+            zoom,
+            window,
+            ..
+        } = self
+        {
+            window.set(HeroWindow::read(scope, zoom.as_ref(), ctx));
+        }
+    }
+
     pub(in crate::render) fn resolved(
         path: &str,
         spec: &ControlSpec,
@@ -222,8 +369,6 @@ impl HostedControlPlan {
         scope: &str,
         cx: Resolving<'_>,
     ) -> Option<Self> {
-        // The numbers a plan keeps are the ones this instance is dressed in,
-        // so what answers the pointer is the shape that was painted.
         let Resolving { ctx, skin } = cx;
         let skin = skin.at(path);
         match (spec, value) {
@@ -305,11 +450,11 @@ impl HostedControlPlan {
                     ),
                 };
                 Some(Self::Fader {
+                    drag_step,
+                    wheel,
                     path: path.to_owned(),
                     style: *style,
                     labelled: label.is_some(),
-                    drag_step,
-                    wheel,
                     metrics: skin.fader,
                 })
             }
@@ -332,162 +477,10 @@ impl HostedControlPlan {
                     path: path.to_owned(),
                 })
             }
-            // What a hand on a waveform does is what the document says it does.
-            // A deck is mounted before anything is loaded into it, and a host
-            // that keeps its tree decides this once: a wave that had to be
-            // carrying a track to answer would stay deaf for the life of the
-            // window, however many tracks were dropped on it afterwards.
             (ControlSpec::Wave { style, zoom, .. }, _) => {
                 Some(wave_plan(path, *style, zoom.as_ref(), scope, ctx))
             }
             _ => None,
-        }
-    }
-
-    /// A hero wave showing a deck at `progress`, for a test that mounts one
-    /// without a document behind it.
-    #[cfg(test)]
-    pub(crate) fn hero_wave_at(path: &str, progress: f32, zoom: f32) -> Self {
-        Self::HeroWave {
-            path: path.to_owned(),
-            scope: String::new(),
-            zoom: None,
-            window: Cell::new(HeroWindow::at(progress, zoom)),
-        }
-    }
-
-    /// Re-reads whatever this plan measures a gesture against.
-    ///
-    /// A host that rebuilds its tree every frame resolves the whole plan afresh
-    /// and never calls this. One that keeps a tree calls it instead, so a
-    /// standing control answers a hand the same way a newly mounted one would.
-    pub(crate) fn reread(&self, ctx: Ctx<'_, '_>) {
-        if let Self::HeroWave {
-            scope,
-            zoom,
-            window,
-            ..
-        } = self
-        {
-            window.set(HeroWindow::read(scope, zoom.as_ref(), ctx));
-        }
-    }
-
-    /// What a module's `drop:` amounts to, wherever it is mounted.
-    ///
-    /// Both hosts ask here instead of each spelling out the path and the
-    /// gesture again, so a document that takes drops means one thing.
-    pub(in crate::render) fn crossing(instance: &str) -> Self {
-        Self::Crossing {
-            path: format!("{instance}/drop"),
-        }
-    }
-
-    pub(crate) fn descriptors(&self) -> Vec<Descriptor> {
-        let mut descriptors = Vec::with_capacity(self.descriptor_count());
-        self.append_descriptors(&mut descriptors);
-        descriptors
-    }
-
-    #[cfg(test)]
-    pub(crate) fn gestures(&self) -> Gestures {
-        self.descriptors()
-            .iter()
-            .fold(Gestures::empty(), |gestures, descriptor| {
-                gestures.union(descriptor.gestures())
-            })
-    }
-
-    pub(in crate::render) fn path(&self) -> &str {
-        match self {
-            Self::Activation { path }
-            | Self::Crossing { path }
-            | Self::Segmented { path, .. }
-            | Self::Picker { path, .. }
-            | Self::Fader { path, .. }
-            | Self::Crossfader { path }
-            | Self::Knob { path, .. }
-            | Self::StereoMeter { path }
-            | Self::VerticalVu { path }
-            | Self::Wave { path }
-            | Self::HeroWave { path, .. } => path,
-            Self::Tree(plan) => &plan.path,
-            Self::Table(plan) => &plan.path,
-        }
-    }
-
-    fn descriptor_count(&self) -> usize {
-        if matches!(self, Self::Tree(_)) {
-            return TreePlan::DESCRIPTORS;
-        }
-        if let Self::Table(plan) = self {
-            return plan.descriptor_count();
-        }
-        1
-    }
-
-    fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
-        match self {
-            Self::Activation { path } => descriptors.push(Descriptor::activation(path.clone())),
-            Self::Crossing { path } => descriptors.push(Descriptor::crossing(path.clone())),
-            Self::Segmented { path, item_count } => {
-                descriptors.push(Descriptor::segmented(path.clone(), *item_count));
-            }
-            Self::Picker {
-                path,
-                items,
-                selected,
-                ..
-            } => descriptors.push(Descriptor::picker(path.clone(), items.len(), *selected)),
-            Self::Tree(plan) => plan.append_descriptors(descriptors),
-            Self::Table(plan) => plan.append_descriptors(descriptors),
-            Self::Fader {
-                path,
-                style,
-                drag_step,
-                wheel,
-                ..
-            } => descriptors.push(Descriptor::fader(
-                path.clone(),
-                Hover::new(match style {
-                    FaderStyle::Default => CursorShape::Grab,
-                    FaderStyle::Volume => CursorShape::ResizeH,
-                }),
-                *drag_step,
-                *wheel,
-            )),
-            Self::Crossfader { path } => {
-                descriptors.push(Descriptor::crossfader(path.clone()));
-            }
-            Self::Knob {
-                path,
-                current,
-                drag_range,
-                wheel_step,
-            } => descriptors.push(Descriptor::knob(
-                path.clone(),
-                *current,
-                *drag_range,
-                *wheel_step,
-            )),
-            Self::StereoMeter { path } => {
-                descriptors.push(Descriptor::stereo_meter(path.clone()));
-            }
-            Self::VerticalVu { path } => {
-                descriptors.push(Descriptor::vertical_vu(path.clone()));
-            }
-            Self::Wave { path } => descriptors.push(Descriptor::wave(path.clone())),
-            Self::HeroWave { path, window, .. } => {
-                let window = window.get();
-                descriptors.push(Descriptor::hero_wave(
-                    path.clone(),
-                    window.scale,
-                    window.progress,
-                    window.visible(),
-                    window.wheel_positive,
-                    window.wheel_non_positive,
-                ));
-            }
         }
     }
 }
@@ -538,11 +531,11 @@ fn context_bar_plan(
         .collect();
     let face = Context::new(skin).face_of(&mut text, items.iter().map(String::as_str));
     HostedControlPlan::Picker {
-        path: path.to_owned(),
         items,
-        item_height: skin.tree.scope_item_height,
         selected,
         face,
+        path: path.to_owned(),
+        item_height: skin.tree.scope_item_height,
     }
 }
 
@@ -558,9 +551,6 @@ fn wave_plan(
             path: path.to_owned(),
         };
     }
-    // The window is not a property of the document, it is what the deck reads
-    // this frame, so both hosts arrive at it the same way: the immediate one
-    // here, the retained one again whenever the frame moves under its tree.
     let plan = HostedControlPlan::HeroWave {
         path: path.to_owned(),
         scope: scope.to_owned(),
@@ -598,34 +588,6 @@ impl TreePlan {
 }
 
 impl TablePlan {
-    fn resolved(
-        path: &str,
-        declared_columns: &[TableColumn],
-        columns_state: Option<&Binding>,
-        _read: Option<&Binding>,
-        rows: &[TableRow<'_>],
-        cx: Resolving<'_>,
-    ) -> Self {
-        let Resolving { ctx, skin } = cx;
-        let state =
-            columns_state.map(|binding| (ctx.ui.resolve(binding.id), ctx.scope(Some(binding))));
-        let columns = column_layouts(declared_columns, &ctx, state, skin);
-        let rows = rows.iter().map(TableRowData::from).collect();
-        let plan = Self::new(path, rows, columns, skin);
-        #[cfg(feature = "masonry")]
-        plan.bind_source(TableSource::new(
-            declared_columns.to_vec(),
-            columns_state.map(|binding| {
-                (
-                    ctx.ui.resolve(binding.id).to_owned(),
-                    ctx.scope(Some(binding)).to_owned(),
-                )
-            }),
-            _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
-        ));
-        plan
-    }
-
     pub(super) fn new(
         path: &str,
         rows: Vec<TableRowData>,
@@ -642,25 +604,6 @@ impl TablePlan {
             #[cfg(feature = "masonry")]
             state: TableState::default(),
         }
-    }
-
-    pub(crate) fn columns(&self) -> Vec<ColumnLayout> {
-        self.picture.borrow().columns().to_vec()
-    }
-
-    pub(crate) fn row_count(&self) -> usize {
-        self.picture.borrow().rows().len()
-    }
-
-    fn descriptor_count(&self) -> usize {
-        let picture = self.picture.borrow();
-        picture
-            .columns()
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| column_resizable(picture.columns(), *index))
-            .count()
-            + 3
     }
 
     fn append_descriptors(&self, descriptors: &mut Vec<Descriptor>) {
@@ -697,7 +640,54 @@ impl TablePlan {
         }
     }
 
+    pub(crate) fn columns(&self) -> Vec<ColumnLayout> {
+        self.picture.borrow().columns().to_vec()
+    }
+
+    fn descriptor_count(&self) -> usize {
+        let picture = self.picture.borrow();
+        picture
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| column_resizable(picture.columns(), *index))
+            .count()
+            + 3
+    }
+
     pub(crate) fn divider_path(&self, column: &TableColumn) -> &str {
         self.divider_paths.get(column)
+    }
+
+    fn resolved(
+        path: &str,
+        declared_columns: &[TableColumn],
+        columns_state: Option<&Binding>,
+        _read: Option<&Binding>,
+        rows: &[TableRow<'_>],
+        cx: Resolving<'_>,
+    ) -> Self {
+        let Resolving { ctx, skin } = cx;
+        let state =
+            columns_state.map(|binding| (ctx.ui.resolve(binding.id), ctx.scope(Some(binding))));
+        let columns = column_layouts(declared_columns, &ctx, state, skin);
+        let rows = rows.iter().map(TableRowData::from).collect();
+        let plan = Self::new(path, rows, columns, skin);
+        #[cfg(feature = "masonry")]
+        plan.bind_source(TableSource::new(
+            declared_columns.to_vec(),
+            columns_state.map(|binding| {
+                (
+                    ctx.ui.resolve(binding.id).to_owned(),
+                    ctx.scope(Some(binding)).to_owned(),
+                )
+            }),
+            _read.map(|binding| ctx.ui.resolve(binding.key).to_owned()),
+        ));
+        plan
+    }
+
+    pub(crate) fn row_count(&self) -> usize {
+        self.picture.borrow().rows().len()
     }
 }

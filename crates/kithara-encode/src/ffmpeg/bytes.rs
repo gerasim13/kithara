@@ -23,9 +23,9 @@ use crate::{
 
 struct EncodeTarget {
     option_pairs: &'static [(&'static str, &'static str)],
-    codec: Id,
     ext: &'static str,
     mime: &'static str,
+    codec: Id,
     bit_rate: Option<usize>,
 }
 

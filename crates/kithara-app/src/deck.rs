@@ -1,16 +1,20 @@
 #[cfg(feature = "gui")]
 use kithara::play::effects::eq::{EqBandConfig, GainDb};
 use kithara::{
-    host::{Host, HostOwned},
+    host::HostOwned,
+    platform::{CancelToken, sync::Arc},
     play::{
         PlayError, PlayerConfig, PlayerImpl, StretchControls,
         effects::eq::generate_log_spaced_bands,
     },
+    queue::QueueConfig,
 };
-use kithara_platform::{CancelToken, sync::Arc};
-use kithara_queue::{Queue, QueueConfig};
 
-use crate::{config::AppConfig, mix::MixState};
+use crate::{
+    config::AppConfig,
+    mix::MixState,
+    pools::{AppHost, AppQueue},
+};
 
 /// EQ topology shared by every deck and its player graph.
 #[cfg(feature = "gui")]
@@ -79,7 +83,7 @@ pub struct DeckId(pub usize);
 /// One app deck: its own cancellation subtree, player, queue and tempo controls.
 pub struct Deck {
     cancel: CancelToken,
-    pub queue: HostOwned<Queue>,
+    pub queue: HostOwned<AppQueue>,
     pub timestretch: Arc<StretchControls>,
     pub id: DeckId,
 }
@@ -91,7 +95,7 @@ impl Deck {
     ///
     /// # Errors
     /// Returns [`PlayError`] when the Host rejects the new deck.
-    pub fn build(id: DeckId, config: &AppConfig, host: &mut Host) -> Result<Self, PlayError> {
+    pub fn build(id: DeckId, config: &AppConfig, host: &mut AppHost) -> Result<Self, PlayError> {
         let cancel = config.shutdown.child();
         let timestretch = StretchControls::new(1.0);
         let player = PlayerImpl::new(
@@ -103,7 +107,7 @@ impl Deck {
                 .worker(config.worker.clone())
                 .build(),
         );
-        let queue = Queue::new(
+        let queue = AppQueue::new(
             QueueConfig::builder()
                 .player(player)
                 .store(config.store.clone())
@@ -141,7 +145,7 @@ impl Drop for Deck {
 #[fieldwork(opt_in, get)]
 pub struct DeckSet {
     #[field(get)]
-    host: Host,
+    host: AppHost,
     #[field(get)]
     mix: MixState,
     #[field(get)]
@@ -151,7 +155,7 @@ pub struct DeckSet {
 
 impl DeckSet {
     #[must_use]
-    pub fn new(host: Host, decks: Vec<Deck>) -> Self {
+    pub fn new(host: AppHost, decks: Vec<Deck>) -> Self {
         let next_id = decks.iter().map(|deck| deck.id.0 + 1).max().unwrap_or(0);
         let mix = MixState::new(decks.len());
         Self {
@@ -301,23 +305,19 @@ impl Drop for DeckSet {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{
-        bufpool::Region,
-        host::HostConfig,
-        play::{PlayWorker, PlayWorkerConfig},
-    };
-    use kithara_queue::QueueConfig;
+    use kithara::{host::HostConfig, play::PlayWorkerConfig, queue::QueueConfig};
 
     use super::*;
+    use crate::pools::{self, AppWorker};
 
-    fn one_deck(id: DeckId, host: &mut Host, worker: &PlayWorker) -> Deck {
+    fn one_deck(id: DeckId, host: &mut AppHost, worker: &AppWorker) -> Deck {
         one_deck_under(id, host, worker, &CancelToken::root())
     }
 
     fn one_deck_under(
         id: DeckId,
-        host: &mut Host,
-        worker: &PlayWorker,
+        host: &mut AppHost,
+        worker: &AppWorker,
         parent: &CancelToken,
     ) -> Deck {
         let cancel = parent.child();
@@ -329,7 +329,7 @@ mod tests {
                 .worker(worker.clone())
                 .build(),
         );
-        let queue = Queue::new(
+        let queue = AppQueue::new(
             QueueConfig::builder()
                 .player(player)
                 .cancel(cancel.clone())
@@ -344,15 +344,14 @@ mod tests {
         }
     }
 
-    fn worker() -> PlayWorker {
-        let region = Region::default();
-        PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
+    fn worker() -> AppWorker {
+        AppWorker::new(
+            PlayWorkerConfig::builder(pools::build().expect("valid app pool policy")).build(),
         )
     }
 
     fn deck_set(count: usize) -> DeckSet {
-        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let worker = worker();
         let decks = (0..count)
             .map(|index| one_deck(DeckId(index), &mut host, &worker))
@@ -465,7 +464,7 @@ mod tests {
     #[kithara::test(native, flash(false))]
     fn removing_a_deck_cancels_only_its_subtree() {
         let app = CancelToken::root();
-        let mut host = Host::new(HostConfig::builder().build()).expect("test host");
+        let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
         let worker = worker();
         let decks = (0..2)
             .map(|index| one_deck_under(DeckId(index), &mut host, &worker, &app))

@@ -48,9 +48,9 @@ impl Sheet {
         if columns == 0 || rows == 0 || info.width % columns != 0 || info.height % rows != 0 {
             return Err(SheetError::Grid {
                 columns,
+                rows,
                 height: info.height,
                 name: name.to_owned(),
-                rows,
                 width: info.width,
             });
         }
@@ -93,15 +93,15 @@ fn read(name: &str, png: &[u8]) -> Result<(png::OutputInfo, Vec<u8>), SheetError
     let mut decoder = Decoder::new(png);
     decoder.set_transformations(Transformations::normalize_to_color8() | Transformations::ALPHA);
     let mut reader = decoder.read_info().map_err(|source| SheetError::Decode {
-        name: name.to_owned(),
         source,
+        name: name.to_owned(),
     })?;
     let mut pixels = vec![0; reader.output_buffer_size()];
     let info = reader
         .next_frame(&mut pixels)
         .map_err(|source| SheetError::Decode {
-            name: name.to_owned(),
             source,
+            name: name.to_owned(),
         })?;
     if info.color_type != ColorType::Rgba {
         return Err(SheetError::Colour {

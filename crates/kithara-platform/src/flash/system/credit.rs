@@ -42,15 +42,7 @@ fn in_async_poll() -> bool {
 #[track_caller]
 pub(crate) fn mark_dedicated() {
     ctx::set_dedicated(true);
-    // The pacer's `active` slot is taken EAGERLY by [`pre_count_dedicated`] on the
-    // PARENT thread at spawn time (closing the spawn→run gap). Here, on the child,
-    // we only claim the credit as `Running` to match that slot — no `active += 1`,
-    // or the slot would be double-counted. The first wrapped wait drops it
-    // (`Running -> Parked`, `active -= 1`); `on_participant_exit` settles it if the
-    // thread returns while `Running`.
     ctx::set_credit(Credit::Running);
-    // Name this pacer in the sync-holder dump for as long as it holds its slot
-    // `Running` (removed on its first park / on exit). Diagnostic only.
     FLASH.sync_holder_running();
 }
 
@@ -138,9 +130,8 @@ impl DedicatedSlot {
 
 impl Drop for DedicatedSlot {
     fn drop(&mut self) {
-        // Unconsumed reservation: no thread ever claimed the slot as its
-        // credit, so return the raw `active` reservation (and the named count)
-        // directly — the release may itself be the quiescent edge.
+        // WHY: Unconsumed reservation: no thread ever claimed the slot as its credit, so return the raw `active` reservation (and the named
+        // count) directly - the release may itself be the quiescent edge.
         FLASH.release_unclaimed_slot();
         if self.named {
             ACTIVE_NAMED_THREADS.fetch_sub(1, Ordering::Release);
@@ -275,10 +266,8 @@ impl WaitGuard<'_> {
 
 impl Drop for WaitGuard<'_> {
     fn drop(&mut self) {
-        // Mid-unwind the guard legitimately drops unconsumed (a panic between
-        // mint and settle — e.g. inside `WakeBatch::fire` or `Token::wait`);
-        // asserting there would double-panic into an abort and mask the root
-        // panic. The assert only polices the non-panicking path.
+        // WHY: Mid-unwind the guard legitimately drops unconsumed (a panic between mint and settle - e.g. inside `WakeBatch::fire` or
+        // `Token::wait`); asserting there would double-panic into an abort and mask the root panic.
         debug_assert!(
             std::thread::panicking(),
             "WaitGuard dropped without resume()/mark_running() — wrapped wait left unsettled"
@@ -308,36 +297,28 @@ impl FlashInner {
     ///   `active -= 1` and move to `Parked`.
     /// - `Parked`: unreachable — a thread waits on one thing at a time.
     pub(super) fn enter_wait_locked(&self, s: &mut Core) -> WaitGuard<'_> {
-        // The guard is minted LAST (after the transition's own debug_asserts),
-        // so an assertion panic here never double-panics in the guard's Drop.
+        // WHY: The guard is minted LAST (after the transition's own debug_asserts), so an assertion panic here never double-panics in the
+        // guard's Drop.
         if in_async_poll() {
             crate::no_block::forbid_bridged(ctx::cur_async().map(|(_, loc)| loc));
-            // Bridged wait: a runtime worker is blocking on the engine mid async-poll.
-            // The task it drives is parked for the block, so release its `active_async`
-            // slot (re-acquired by `resume_after_wait` on wake) — otherwise the slot
-            // pins the clock and the event that would unblock the wait can never fire.
+            // WHY: Bridged wait: a runtime worker is blocking on the engine mid async-poll. The task it drives is parked for the block, so
+            // release its `active_async` slot (re-acquired by `resume_after_wait` on wake) - otherwise the slot pins the clock and the event
+            // that would unblock the wait can never fire.
             debug_assert!(
                 s.registry.active_async > 0,
                 "bridged wait must be inside a counted async poll"
             );
             s.registry.active_async -= 1;
-            // Keep the diagnostic holder map exact: this task released its slot
-            // for the bridged block, so drop it (re-inserted on resume).
+            // WHY: Keep the diagnostic holder map exact: this task released its slot for the bridged block, so drop it (re-inserted on resume).
             if let Some((id, _)) = ctx::cur_async() {
                 s.registry.active_async_holders.remove(&id);
             }
-            // Releasing THIS task's slot is not enough when the blocking thread
-            // is its runtime's only poller: every OTHER task it drives is now
-            // unpollable too, and one left `Runnable` would pin the clock the
-            // wait needs to advance. Mark the thread so the advance rule can
-            // tell those tasks apart — see `Registry::pinning_async`.
+            // WHY: Releasing THIS task's slot is not enough when the blocking thread is its runtime's only poller: every OTHER task it drives is
+            // now unpollable too, and one left `Runnable` would pin the clock the wait needs to advance.
             s.registry.bridged.insert(current_thread_key());
         } else if !ctx::dedicated() {
-            // Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned
-            // task, the main/test thread, a raw `thread::spawn`): NOT a virtual-time
-            // pacer. Register the wakeup but stay OUT of `active` — entering it leaks
-            // (nothing balances the firer's wake bump, which `resume_after_wait` instead
-            // undoes). The clock is free to advance while such a thread blocks.
+            // WHY: Non-dedicated, non-async-poll thread (a tokio worker driving a raw-spawned task, the main/test thread, a raw
+            // `thread::spawn`): NOT a virtual-time pacer.
         } else {
             match ctx::credit() {
                 Credit::None => ctx::set_credit(Credit::Parked),
@@ -348,8 +329,7 @@ impl FlashInner {
                     );
                     s.registry.active -= 1;
                     ctx::set_credit(Credit::Parked);
-                    // This pacer no longer holds its `active` slot — drop it from
-                    // the diagnostic holder map (re-added when it resumes Running).
+                    // WHY: This pacer no longer holds its `active` slot - drop it from the diagnostic holder map (re-added when it resumes Running).
                     s.registry.active_sync_holders.remove(&current_thread_key());
                 }
                 Credit::Parked => {
@@ -425,13 +405,11 @@ impl FlashInner {
             );
             s.registry.active -= 1;
             s.registry.active_async += 1;
-            // Re-insert the holder dropped when this task entered the bridged
-            // wait (keeps the diagnostic map matched to the counter).
+            // WHY: Re-insert the holder dropped when this task entered the bridged wait (keeps the diagnostic map matched to the counter).
             if let Some((id, loc)) = ctx::cur_async() {
                 s.registry.active_async_holders.insert(id, loc);
             }
-            // The thread is a poller again: the tasks it drives pin the clock
-            // from here as usual.
+            // WHY: The thread is a poller again: the tasks it drives pin the clock from here as usual.
             s.registry.bridged.remove(&current_thread_key());
             drop(s);
             return;
@@ -449,7 +427,7 @@ impl FlashInner {
             return;
         }
         ctx::set_credit(Credit::Running);
-        // Pacer is `Running` again — restore it to the diagnostic holder map.
+        // WHY: Pacer is `Running` again - restore it to the diagnostic holder map.
         self.sync_holder_running();
     }
 

@@ -16,20 +16,20 @@ const SEPARATOR: &str = "\u{203a}";
 /// more than one — which scope it is in view of.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Context {
-    breadcrumb: Rgba,
-    breadcrumb_role: TextRoleSkin,
+    icon: Option<Mark>,
+    picker: Picker,
     background: Rgba,
-    content_height: f32,
+    breadcrumb: Rgba,
     divider: Rgba,
+    icon_color: Rgba,
+    separator: Rgba,
+    breadcrumb_role: TextRoleSkin,
+    separator_role: TextRoleSkin,
+    content_height: f32,
     divider_width: f32,
     gap: f32,
-    icon: Option<Mark>,
-    icon_color: Rgba,
     icon_size: f32,
     padding_x: f32,
-    picker: Picker,
-    separator: Rgba,
-    separator_role: TextRoleSkin,
     scope_gap: f32,
 }
 
@@ -37,15 +37,15 @@ pub(crate) struct Context {
 /// beside it when the document declared one.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Viewed {
-    pub(crate) breadcrumb: String,
     pub(crate) scope: Option<Scope>,
+    pub(crate) breadcrumb: String,
 }
 
 /// The words a scope picker offers, and which of them is picked.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Scope {
-    pub(crate) items: Vec<String>,
     pub(crate) selected: Option<usize>,
+    pub(crate) items: Vec<String>,
 }
 
 impl Context {
@@ -59,8 +59,6 @@ impl Context {
             divider: skin.rgba(metrics.context_divider),
             divider_width: metrics.context_divider_width,
             gap: metrics.context_gap,
-            // Decoration rather than content: the path is what this strip says,
-            // and a mark that cannot be read leaves the words where they are.
             icon: crate::module::IconName::Zvuk.mark(),
             icon_color: skin.rgba(metrics.context_icon_color),
             icon_size: metrics.context_icon_size,
@@ -72,6 +70,35 @@ impl Context {
                 color: metrics.scope_chevron_color,
                 ..metrics.scope_text
             },
+        }
+    }
+
+    /// Where in the strip the scope's face sits, when the document declared a
+    /// scope at all.
+    ///
+    /// The menu a host opens hangs off this box, not off the strip, so the
+    /// placement is answered here rather than measured a second time by
+    /// whoever raises the menu.
+    pub(crate) fn face(&self, text: &mut TextContext, data: &Viewed) -> Option<Rect> {
+        let scope = data.scope.as_ref()?;
+        Some(self.face_of(text, scope.items.iter().map(String::as_str)))
+    }
+
+    /// The same box for a scope named rather than read: what an engine plan
+    /// knows about a strip before anything is drawn.
+    pub(crate) fn face_of<'a>(
+        &self,
+        text: &mut TextContext,
+        items: impl IntoIterator<Item = &'a str>,
+    ) -> Rect {
+        let icon = self.icon.map_or(0.0, |icon| {
+            Marked::new(icon, self.icon_size).width(text) + self.scope_gap
+        });
+        Rect {
+            h: self.content_height,
+            w: self.picker.width(text, items),
+            x: self.padding_x + icon,
+            y: 0.0,
         }
     }
 
@@ -141,35 +168,6 @@ impl Context {
         );
     }
 
-    /// Where in the strip the scope's face sits, when the document declared a
-    /// scope at all.
-    ///
-    /// The menu a host opens hangs off this box, not off the strip, so the
-    /// placement is answered here rather than measured a second time by
-    /// whoever raises the menu.
-    pub(crate) fn face(&self, text: &mut TextContext, data: &Viewed) -> Option<Rect> {
-        let scope = data.scope.as_ref()?;
-        Some(self.face_of(text, scope.items.iter().map(String::as_str)))
-    }
-
-    /// The same box for a scope named rather than read: what an engine plan
-    /// knows about a strip before anything is drawn.
-    pub(crate) fn face_of<'a>(
-        &self,
-        text: &mut TextContext,
-        items: impl IntoIterator<Item = &'a str>,
-    ) -> Rect {
-        let icon = self.icon.map_or(0.0, |icon| {
-            Marked::new(icon, self.icon_size).width(text) + self.scope_gap
-        });
-        Rect {
-            h: self.content_height,
-            w: self.picker.width(text, items),
-            x: self.padding_x + icon,
-            y: 0.0,
-        }
-    }
-
     /// The same box where the strip actually landed.
     pub(crate) const fn placed(face: Rect, bounds: Rect) -> Rect {
         Rect {
@@ -226,8 +224,8 @@ mod tests {
             &mut list,
             &mut text,
             &Viewed {
-                breadcrumb: "All Tracks".to_owned(),
                 scope,
+                breadcrumb: "All Tracks".to_owned(),
             },
             BOUNDS,
         );

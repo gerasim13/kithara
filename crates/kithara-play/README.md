@@ -17,25 +17,40 @@
 The playback orchestration crate behind Kithara. It provides concrete player,
 engine, resource, session, and real-time rendering surfaces for queue, FFI, app,
 and test-harness crates. Enable `mock` for the `Equalizer` unimock helper.
+Enable `perf` on native profiling builds for permanent `hotpath` timing at the
+playback worker boundary; ordinary builds compile the probes out.
 
 ## Usage
 
 ```rust
 use kithara_assets::AssetStore;
-use kithara_bufpool::Region;
-use kithara_play::{PlayWorker, PlayWorkerConfig, ResourceConfig};
+use kithara_bufpool::{OverallBudget, PoolConfig, pool_schema};
+use kithara_play::{PlayWorker, PlayWorkerConfig, ResourceConfig, ResourceSrc};
 
-let region = Region::default();
-let worker = PlayWorker::new(
-    PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-);
-let resource: ResourceConfig = ResourceConfig::for_src(ResourceConfig::parse_src(
+pool_schema! {
+    pub AppPools {
+        bytes: u8,
+        samples: f32,
+    }
+}
+
+let config = || PoolConfig::builder().max_buffers(128).build();
+let pools = AppPools::builder(OverallBudget(64 * 1024 * 1024))
+    .bytes(config())
+    .samples(config())
+    .build()?;
+let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+let resource: ResourceConfig<AppPools> = ResourceConfig::for_src(ResourceSrc::parse(
     "https://example.com/track.m3u8",
 )?)
-    .store(AssetStore::builder().pool(region.byte_pool()).build())
+    .store(AssetStore::builder(pools).build())
     .worker(worker)
     .build();
 ```
+
+The composition root registers a closed pool schema once. Every playback
+component receives the cloneable `PoolRegion` facade, while byte and sample
+allocations continue to compete under one shared hard byte budget.
 
 `ResourceConfig` fields are crate-private. Configure resources with its `bon`
 builder and inspect caller-facing values through getters such as `source()`,

@@ -11,7 +11,6 @@ use kithara::platform::{thread, tokio::task::spawn_blocking};
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
-    bufpool::Region,
     decode::DecoderBackend,
     events::{AbrEvent, DownloaderEvent, Event, HlsEvent, RequestId},
     hls::{Hls, HlsConfig},
@@ -26,7 +25,9 @@ use kithara::{
     stream::Stream,
 };
 use kithara_integration_tests::{
-    TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto, mixed_codec_ladder_url, temp_dir,
+    TestServerHelper, TestTempDir, Xorshift64, abr_fast, auto,
+    bufpool_ext::{Pools, TestPools, pools},
+    mixed_codec_ladder_url, temp_dir,
 };
 use tracing::info;
 
@@ -184,25 +185,25 @@ fn snapshot(stats: &Arc<Mutex<LiveStats>>) -> LiveSnapshot {
 }
 
 async fn build_live_audio(
-    worker: &PlayWorker,
+    worker: &PlayWorker<TestPools>,
+    pools: &Pools,
     server: &TestServerHelper,
     encrypted: bool,
     cache_capacity: usize,
-) -> RegisteredAudio<Stream<Hls>> {
+) -> RegisteredAudio<Stream<Hls<TestPools>>, TestPools> {
     let url = mixed_codec_ladder_url(server, encrypted).await;
-    let store = AssetStore::builder()
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(cache_capacity).expect("nonzero"))
         .build();
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
     worker
         .open(
-            AudioConfig::<Hls>::for_stream(hls_config)
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
         )
@@ -211,7 +212,7 @@ async fn build_live_audio(
 }
 
 fn spawn_live_stats_task(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
 ) -> (Arc<Mutex<LiveStats>>, tokio::task::JoinHandle<()>) {
     let stats = Arc::new(Mutex::new(LiveStats::default()));
     let stats_bg = Arc::clone(&stats);
@@ -271,7 +272,7 @@ fn spawn_live_stats_task(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn warmup_until_variant_switch(
-    audio: &mut RegisteredAudio<Stream<Hls>>,
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
     stats: &Arc<Mutex<LiveStats>>,
     stage_prefix: &str,
 ) {
@@ -287,7 +288,10 @@ fn warmup_until_variant_switch(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<AudioChunk> {
+fn next_chunk(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    stage: &str,
+) -> Option<AudioChunk> {
     loop {
         match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
@@ -301,7 +305,10 @@ fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<A
 
 #[cfg(target_arch = "wasm32")]
 #[kithara::flash(true)]
-async fn next_chunk(audio: &mut RegisteredAudio<Stream<Hls>>, stage: &str) -> Option<AudioChunk> {
+async fn next_chunk(
+    audio: &mut RegisteredAudio<Stream<Hls<TestPools>>, TestPools>,
+    stage: &str,
+) -> Option<AudioChunk> {
     loop {
         match AudioRead::next_chunk(audio) {
             Ok(ChunkOutcome::Chunk(chunk)) => return Some(chunk),
@@ -325,26 +332,23 @@ async fn live_real_drm_playback_smoke() {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, true).await;
     info!(%url, "starting real DRM playback smoke");
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     info!("creating Audio<Stream<Hls>> for DRM asset");
     let mut audio = worker
         .open(
-            AudioConfig::<Hls>::for_stream(hls_config)
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
         )
@@ -421,23 +425,20 @@ async fn live_ephemeral_revisit_sequence_regression(
 
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, encrypted).await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
-    let config = AudioConfig::<Hls>::for_stream(hls_config)
+    let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .decoder(
             kithara::audio::AudioDecoderConfig::builder()
                 .backend(backend)
@@ -656,11 +657,9 @@ async fn live_real_stream_fixed_seek_window_regression(
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let mut audio = build_live_audio(&worker, &server, encrypted, 24).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let mut audio = build_live_audio(&worker, &pools, &server, encrypted, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     spawn_blocking(move || {
@@ -712,11 +711,9 @@ async fn live_real_stream_random_seek_prefix_regression(
     _abr_fast: kithara::abr::AbrSettings,
 ) {
     let server = TestServerHelper::new().await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let mut audio = build_live_audio(&worker, &server, encrypted, 24).await;
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let mut audio = build_live_audio(&worker, &pools, &server, encrypted, 24).await;
     let (stats, events_task) = spawn_live_stats_task(&mut audio);
 
     spawn_blocking(move || {
@@ -763,25 +760,22 @@ async fn live_real_stream_random_seek_prefix_regression(
 async fn live_real_stream_seek_resume_native(#[case] encrypted: bool, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, encrypted).await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(8).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = worker
         .open(
-            AudioConfig::<Hls>::for_stream(hls_config)
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
         )
@@ -861,34 +855,30 @@ async fn live_stress_real_stream_seek_read_cache(
     {
         let server = TestServerHelper::new().await;
         let url = mixed_codec_ladder_url(&server, encrypted).await;
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
+        let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let store = if ephemeral {
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Memory)
-                .pool(worker.byte_pool().clone())
                 .cache_capacity(NonZeroUsize::new(24).expect("nonzero"))
                 .build()
         } else {
-            AssetStore::builder()
+            AssetStore::builder(pools.clone())
                 .backend(StorageBackend::Disk {
                     root: temp_dir.path().to_path_buf(),
                 })
-                .pool(worker.byte_pool().clone())
                 .build()
         };
 
         let hls_config = HlsConfig::for_url(url)
             .store(store)
-            .pool(worker.byte_pool().clone())
+            .pools(pools.clone())
             .initial_abr_mode(auto(0))
             .build();
 
         let mut audio = worker
             .open(
-                AudioConfig::<Hls>::for_stream(hls_config)
+                AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                     .block_on_underrun(true)
                     .build(),
             )
@@ -1195,25 +1185,22 @@ async fn live_stress_real_stream_seek_read_cache(
 async fn live_ephemeral_small_cache_playback(#[case] encrypted: bool, #[case] label: &str) {
     let server = TestServerHelper::new().await;
     let url = mixed_codec_ladder_url(&server, encrypted).await;
-    let region = Region::default();
-    let worker = PlayWorker::new(
-        PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-    );
-    let store = AssetStore::builder()
+    let pools = pools();
+    let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+    let store = AssetStore::builder(pools.clone())
         .backend(StorageBackend::Memory)
-        .pool(worker.byte_pool().clone())
         .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
         .build();
 
     let hls_config = HlsConfig::for_url(url)
         .store(store)
-        .pool(worker.byte_pool().clone())
+        .pools(pools.clone())
         .initial_abr_mode(auto(0))
         .build();
 
     let mut audio = worker
         .open(
-            AudioConfig::<Hls>::for_stream(hls_config)
+            AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
                 .block_on_underrun(true)
                 .build(),
         )
@@ -1300,23 +1287,20 @@ async fn live_ephemeral_small_cache_seek_stress(
     {
         let server = TestServerHelper::new().await;
         let url = mixed_codec_ladder_url(&server, encrypted).await;
-        let region = Region::default();
-        let worker = PlayWorker::new(
-            PlayWorkerConfig::for_pools(region.byte_pool(), region.sample_pool()).build(),
-        );
-        let store = AssetStore::builder()
+        let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
+        let store = AssetStore::builder(pools.clone())
             .backend(StorageBackend::Memory)
-            .pool(worker.byte_pool().clone())
             .cache_capacity(NonZeroUsize::new(4).expect("nonzero"))
             .build();
 
         let hls_config = HlsConfig::for_url(url)
             .store(store)
-            .pool(worker.byte_pool().clone())
+            .pools(pools.clone())
             .initial_abr_mode(auto(0))
             .build();
 
-        let config = AudioConfig::<Hls>::for_stream(hls_config)
+        let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
             .decoder(
                 kithara::audio::AudioDecoderConfig::builder()
                     .backend(backend)

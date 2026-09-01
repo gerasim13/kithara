@@ -60,8 +60,6 @@ impl ControlPainter for Lottie {
         };
         let frame = data.frame;
         list.transformed(fitted(artwork.size(), bounds), |list| {
-            // An artwork that half draws is a picture nobody authored, so a
-            // refusal leaves the box as it found it rather than part-drawn.
             if let Err(error) = emit(artwork.composition(), frame, list) {
                 tracing::error!(%error, "artwork not drawn");
             }

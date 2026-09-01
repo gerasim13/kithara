@@ -125,11 +125,11 @@ where
                 let size = compiled_node_size_with_hidden(&cell.node, ctx.skin, snapshot);
                 let output = compiled(&cell.node, ctx, host);
                 mounted.push(SplitMount {
+                    size,
+                    output,
                     band: Band::new(cell.from, cell.until),
                     block: block_of(&cell.node),
                     weight: cell.weight,
-                    size,
-                    output,
                 });
             }
             host.split(*axis, *measure, mounted)
@@ -175,16 +175,11 @@ where
                         } else {
                             InputOwner::Leaf
                         },
-                        // A module standing at the window's edge hands its own
-                        // root the corners it stands at: with no shell of its
-                        // own, the root is what draws them.
                         round: if *chrome == ChromeStyle::Plain {
                             *round
                         } else {
                             FrameCorners::EMPTY
                         },
-                        // A module starts a fresh document: nothing outside it
-                        // can pose what it draws.
                         transform: Transform::IDENTITY,
                     },
                     ctx,
@@ -198,19 +193,19 @@ where
             });
             host.module(
                 Module {
+                    assign,
+                    footer,
+                    collapsed,
+                    chrome_hosted,
                     instance: *instance,
                     module: *module,
                     title: *title,
                     chip: *chip,
-                    assign,
                     chrome: *chrome,
                     frame: *frame,
                     corners: *corners,
                     round: *round,
-                    footer,
                     drop: drop.as_ref(),
-                    collapsed,
-                    chrome_hosted,
                 },
                 content,
             )
@@ -220,44 +215,44 @@ where
 
 #[derive(Clone, Copy)]
 struct Branch {
-    owner: InternId,
-    input_owner: InputOwner,
     /// The window corners the node this branch mounts stands at. Only a
     /// module's own root ever carries any: everything under it is inside the
     /// window, not at its edge.
     round: FrameCorners,
+    input_owner: InputOwner,
+    owner: InternId,
     /// Every enclosing object's pose, composed and resolved for this frame.
     transform: Transform,
 }
 
 #[derive(Clone, Copy)]
 struct PopoverNode<'a> {
-    path: InternId,
     open: &'a Binding,
-    at: PopoverAt,
-    align: PopoverAlign,
     anchor: &'a ExpandedNode,
     content: &'a ExpandedNode,
+    path: InternId,
     size: Option<SizeSpec>,
+    align: PopoverAlign,
+    at: PopoverAt,
 }
 
 #[derive(Clone, Copy)]
 struct RowNode<'a> {
-    measure: Option<MeasureAxis>,
+    active: Option<&'a Binding>,
+    active_background: Option<ColorRole>,
+    active_frame_color: Option<ColorRole>,
+    background: Option<ColorRole>,
+    background_alpha: Option<f32>,
+    frame: Option<FrameSides>,
+    frame_color: Option<ColorRole>,
     gap: Option<f32>,
-    align: TextAlign,
+    measure: Option<MeasureAxis>,
     pad: Option<f32>,
     pad_x: Option<f32>,
     pad_y: Option<f32>,
-    frame: Option<FrameSides>,
-    background: Option<ColorRole>,
-    background_alpha: Option<f32>,
-    active: Option<&'a Binding>,
-    active_background: Option<ColorRole>,
-    frame_color: Option<ColorRole>,
-    active_frame_color: Option<ColorRole>,
-    surface: Option<&'a SurfaceSpec>,
     size: Option<SizeSpec>,
+    surface: Option<&'a SurfaceSpec>,
+    align: TextAlign,
 }
 
 fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Group<'a> {
@@ -274,6 +269,8 @@ fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Gr
         .unwrap_or(ctx.skin.divider.color);
     Group {
         round,
+        background,
+        frame_color,
         axis: Axis::Horizontal,
         measure: node.measure,
         alignment: node.align,
@@ -281,9 +278,7 @@ fn row_group<'a>(node: RowNode<'a>, round: FrameCorners, ctx: Ctx<'_, '_>) -> Gr
         padding_x: node.pad_x.unwrap_or(padding),
         padding_y: node.pad_y.unwrap_or(padding),
         frame: node.frame,
-        background,
         background_alpha: node.background_alpha,
-        frame_color,
         frame_width: ctx.skin.divider.width,
         surface: node.surface,
         size: node.size,
@@ -322,11 +317,11 @@ where
 
 /// An adaptive block: the branches it chooses between and the box it keeps.
 struct Adaptive<'a> {
+    base: &'a ExpandedNode,
     node: &'a ExpandedNode,
     measure: &'a MeasureSpec,
-    size: Option<SizeSpec>,
-    base: &'a ExpandedNode,
     steps: &'a [(f32, ExpandedNode)],
+    size: Option<SizeSpec>,
 }
 
 /// How an adaptive block becomes host output.
@@ -511,10 +506,6 @@ where
 {
     let snapshot: &dyn Snapshot = &ctx;
     match node {
-        // A reveal says when its child stands, not what it is: the band is read
-        // by the flow that holds it, and the child mounts as itself. A placement
-        // outside a stage has no scene to snap onto and nothing that places it,
-        // so it mounts as its child too.
         ExpandedNode::Optional { child, .. }
         | ExpandedNode::Placed { child, .. }
         | ExpandedNode::Reveal { child, .. } => {
@@ -529,9 +520,9 @@ where
             &Adaptive {
                 node,
                 measure,
-                size: *size,
                 base,
                 steps,
+                size: *size,
             },
             address,
             branch,
@@ -549,12 +540,12 @@ where
             content,
         } => mount_popover(
             PopoverNode {
-                path: *path,
                 open,
-                at: *at,
-                align: *align,
                 anchor,
                 content,
+                path: *path,
+                at: *at,
+                align: *align,
                 size: effective_size(node, ctx.skin, snapshot),
             },
             address,
@@ -754,10 +745,10 @@ fn band_of(node: &ExpandedNode) -> Band {
 /// Where an object starts, where it ends, and what carries it between them.
 #[derive(Clone, Copy)]
 struct Track<'a> {
-    from: Pose,
-    to: Option<&'a Pose>,
-    phase: Option<&'a Binding>,
     motion: Option<&'a Motion<Binding>>,
+    phase: Option<&'a Binding>,
+    to: Option<&'a Pose>,
+    from: Pose,
 }
 
 impl Track<'_> {
@@ -768,8 +759,6 @@ impl Track<'_> {
     /// hands over. An object with no track, or one nobody drives, sits at the
     /// pose the document wrote down and stays there.
     fn resolve(self, ctx: Ctx<'_, '_>) -> Pose {
-        // Validation refuses an object carrying both, so nothing is chosen
-        // between here; one that somehow held both would sit still.
         let along = match (self.phase, self.motion) {
             (Some(phase), None) => scalar(ctx, phase),
             (None, Some(motion)) => scalar(ctx, &motion.clock).map(|at| motion.phase_at(at)),
