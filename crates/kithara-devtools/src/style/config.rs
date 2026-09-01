@@ -24,6 +24,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) dead_doc_refs: DeadDocRefsConfig,
     #[serde(default)]
+    pub(crate) doc_size: DocSizeConfig,
+    #[serde(default)]
     pub(crate) non_english_text: NonEnglishTextConfig,
     #[serde(default)]
     pub(crate) struct_field_order: StructFieldOrderConfig,
@@ -220,6 +222,28 @@ fn default_exclude_paths() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocSizeConfig {
+    /// Documents excluded from the size limits entirely.
+    #[serde(default)]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Per-class limits. The first rule whose globs match the document wins.
+    #[serde(default)]
+    pub(crate) limits: Vec<DocSizeLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocSizeLimit {
+    /// Line count above which the document is denied.
+    pub(crate) deny: usize,
+    /// Documents this rule applies to.
+    pub(crate) globs: Vec<String>,
+    /// Line count above which the document is reported.
+    pub(crate) warn: usize,
 }
 
 #[derive(Debug, Deserialize)]

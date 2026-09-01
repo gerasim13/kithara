@@ -57,3 +57,40 @@ exclude_paths = [
   "android/gradle/wrapper/**",
 ]
 allow_targets = []
+
+# Document size limits. Prose has no compiler, so an unbounded document grows
+# until it no longer fits an agent's context budget. Limits are per document
+# class because a crate contract and a crate overview carry different loads.
+# Symlinked aliases of a tracked document are excluded: they would report the
+# same content several times.
+[doc_size]
+exclude_paths = [
+  "CLAUDE.md",
+  "GEMINI.md",
+  "WARP.md",
+  "CONTEXT.md",
+  "ARCHITECTURE.md",
+  "docs/plans/**",
+  "docs/specs/**",
+  "docs/superpowers/**",
+]
+
+[[doc_size.limits]]
+globs = ["AGENTS.md"]
+warn = 150
+deny = 150
+
+[[doc_size.limits]]
+globs = ["**/CONTEXT.md"]
+warn = 300
+deny = 600
+
+[[doc_size.limits]]
+globs = ["docs/guides/**/*.md"]
+warn = 200
+deny = 400
+
+[[doc_size.limits]]
+globs = ["**/README.md"]
+warn = 150
+deny = 300
