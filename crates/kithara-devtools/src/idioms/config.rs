@@ -65,6 +65,8 @@ pub(crate) struct ThresholdsConfig {
     pub(crate) pointwise_loop: PointwiseLoopConfig,
     #[serde(default)]
     pub(crate) retry_fallback: RetryFallbackConfig,
+    #[serde(default)]
+    pub(crate) thin_wrapper_economy: ThinWrapperEconomyConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -480,6 +482,25 @@ impl Default for NoPassthroughBuilderConfig {
 
 const fn default_min_passthrough_fields() -> usize {
     4
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ThinWrapperEconomyConfig {
+    #[serde(default = "default_min_net_saved_lines")]
+    pub(crate) min_net_saved_lines: usize,
+}
+
+impl Default for ThinWrapperEconomyConfig {
+    fn default() -> Self {
+        Self {
+            min_net_saved_lines: default_min_net_saved_lines(),
+        }
+    }
+}
+
+const fn default_min_net_saved_lines() -> usize {
+    10
 }
 
 const fn default_true() -> bool {
