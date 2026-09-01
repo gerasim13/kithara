@@ -58,8 +58,6 @@ impl<'scene> VelloBackend<'scene> {
 fn image_data(image: &Image) -> Option<ImageData> {
     Some(ImageData {
         alpha_type: ImageAlphaType::Alpha,
-        // `Arc` here is kurbo's geometric arc, so the shared pointer is
-        // named through its module.
         data: Blob::new(sync::Arc::new(image.rgba()?.clone())),
         format: ImageFormat::Rgba8,
         height: image.height(),
@@ -498,9 +496,9 @@ mod tests {
 
     #[derive(Clone, Copy)]
     struct DrawFixture {
+        point: Pt,
         bounds: Rect,
         color: Rgba,
-        point: Pt,
         role: TextRoleSkin,
     }
 
@@ -512,13 +510,13 @@ mod tests {
             r: 0.75,
         };
         DrawFixture {
+            color,
             bounds: Rect {
                 h: 12.0,
                 w: 40.0,
                 x: 0.0,
                 y: 0.0,
             },
-            color,
             point: Pt { x: 4.0, y: 4.0 },
             role: TextRoleSkin {
                 color: ColorRole::Text,

@@ -32,6 +32,49 @@ impl AudioSpec {
         NonZeroUsize::new(usize::from(self.channels)).ok_or(SignalError::ChannelCountZero)
     }
 
+    /// Convert an absolute frame coordinate to duration without saturation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when the duration is not representable.
+    pub fn duration_for(self, frames: u64) -> Result<Duration, SignalError> {
+        time::duration_for(self.sample_rate, frames)
+    }
+
+    /// Convert a timestamp to its nearest absolute frame, rounded half-up.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when the absolute frame is not representable.
+    pub fn frame_at(self, timestamp: Duration) -> Result<u64, SignalError> {
+        time::frame_at(self.sample_rate, timestamp)
+    }
+
+    /// Convert an exact interleaved sample count to complete frames.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] for zero channels or an incomplete frame.
+    pub fn frame_count(self, samples: SampleCount) -> Result<FrameCount, SignalError> {
+        let channels = self.channel_count()?.get();
+        if !samples.get().is_multiple_of(channels) {
+            return Err(SignalError::IncompleteFrame {
+                channels,
+                samples: samples.get(),
+            });
+        }
+        Ok(FrameCount::new(samples.get() / channels))
+    }
+
+    /// Convert duration to whole frames without saturation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignalError`] when the frame count is not representable.
+    pub fn frames_for(self, duration: Duration) -> Result<FrameCount, SignalError> {
+        time::frames_for(self.sample_rate, duration).map(FrameCount::new)
+    }
+
     /// Convert frames to interleaved samples without saturating.
     ///
     /// # Errors
@@ -44,52 +87,9 @@ impl AudioSpec {
             .checked_mul(channels)
             .map(SampleCount::new)
             .ok_or_else(|| SignalError::SampleCountOverflow {
+                channels,
                 frames: frames.get(),
-                channels,
             })
-    }
-
-    /// Convert an exact interleaved sample count to complete frames.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] for zero channels or an incomplete frame.
-    pub fn frame_count(self, samples: SampleCount) -> Result<FrameCount, SignalError> {
-        let channels = self.channel_count()?.get();
-        if !samples.get().is_multiple_of(channels) {
-            return Err(SignalError::IncompleteFrame {
-                samples: samples.get(),
-                channels,
-            });
-        }
-        Ok(FrameCount::new(samples.get() / channels))
-    }
-
-    /// Convert an absolute frame coordinate to duration without saturation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when the duration is not representable.
-    pub fn duration_for(self, frames: u64) -> Result<Duration, SignalError> {
-        time::duration_for(self.sample_rate, frames)
-    }
-
-    /// Convert duration to whole frames without saturation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when the frame count is not representable.
-    pub fn frames_for(self, duration: Duration) -> Result<FrameCount, SignalError> {
-        time::frames_for(self.sample_rate, duration).map(FrameCount::new)
-    }
-
-    /// Convert a timestamp to its nearest absolute frame, rounded half-up.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignalError`] when the absolute frame is not representable.
-    pub fn frame_at(self, timestamp: Duration) -> Result<u64, SignalError> {
-        time::frame_at(self.sample_rate, timestamp)
     }
 }
 

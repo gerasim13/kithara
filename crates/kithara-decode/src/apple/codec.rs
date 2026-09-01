@@ -30,6 +30,7 @@ use crate::{
 /// Frame-level codec wrapping Apple's `AudioConverter`.
 pub(crate) struct AppleCodec {
     converter: AudioConverter,
+    spec: AudioSpec,
     input_state: Box<ConverterInputState>,
     /// Decoder-owned playback contract. Populated with the captured
     /// [`crate::GaplessInfo`] when `gapless` was requested in
@@ -39,7 +40,6 @@ pub(crate) struct AppleCodec {
     /// the post-first-chunk refresh changes from the init query (AAC
     /// reports priming only after consuming one input packet).
     last_prime_info: Option<kithara_apple::audio_toolbox::AudioConverterPrimeInfo>,
-    spec: AudioSpec,
     /// True once a source-rate-changing converter has reported no more
     /// SRC tail frames after true EOF.
     eof_drained: bool,
@@ -497,7 +497,7 @@ fn build_aac_input_format(track: &TrackInfo) -> DecodeResult<AppleInputFormat> {
         });
     }
 
-    // First byte 0x03 means a full ESDS body; otherwise wrap raw ASC.
+    // WHY: First byte 0x03 means a full ESDS body; otherwise wrap raw ASC.
     let esds = if track.extra_data.first() == Some(&0x03) {
         track.extra_data.clone()
     } else {
@@ -599,7 +599,7 @@ fn esds_wrap_asc(asc: &[u8]) -> DecodeResult<Vec<u8>> {
     let esd_body_len = 2 + 1 + 2 + dcd_body_len + 3;
     let esd_body: u8 = esd_body_len.try_into().map_err(|_| TOO_LONG)?;
 
-    // ES_Descriptor chain; field layout is documented in CONTEXT.md.
+    // WHY: ES_Descriptor chain; field layout is documented in CONTEXT.md.
     let header: [u8; 22] = [
         0x03, esd_body, 0x00, 0x00, 0x00, 0x04, dcd_body, 0x40, 0x15, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, dsi_body,
@@ -830,8 +830,6 @@ mod priming_table_tests {
 
 #[cfg(test)]
 mod output_rate_tests {
-    use std::{fs, path::Path};
-
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
@@ -853,10 +851,12 @@ mod output_rate_tests {
     }
 
     fn read_fixture(name: &str) -> Vec<u8> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/hls")
-            .join(name);
-        fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+        let route = format!("/hls/{name}");
+        let resource = kithara_test_fixtures::hls::long_plain()
+            .get(&route)
+            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+        std::fs::read(resource.path())
+            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
     }
 
     fn aac_lc_track() -> TrackInfo {
@@ -966,10 +966,12 @@ mod aac_lc_decode_tests {
     };
 
     fn read_fixture(name: &str) -> Vec<u8> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/hls")
-            .join(name);
-        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+        let route = format!("/hls/{name}");
+        let resource = kithara_test_fixtures::hls::long_plain()
+            .get(&route)
+            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+        std::fs::read(resource.path())
+            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
     }
 
     struct Consts;

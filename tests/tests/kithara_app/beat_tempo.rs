@@ -1,7 +1,6 @@
 //! Real-record regression tests for production beat analysis.
 //!
 //! Set `KITHARA_TEMPO_RECORDS` to `/path=bpm;/path=bpm` before running ignored tests.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;
@@ -81,8 +80,7 @@ async fn analyse(path: &str) -> TrackAnalysis {
         Consts::BUCKETS,
         BeatAnalysisConfig::default(),
         pools,
-    )
-    .unwrap_or_else(|error| panic!("analysis runner task was not admitted: {error}"));
+    );
     let mut rx = runner.analyze(config, "integration-track".into(), RATE, drop);
 
     // The runner emits the envelope before the beat grid.

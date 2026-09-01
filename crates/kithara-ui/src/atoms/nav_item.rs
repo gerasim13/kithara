@@ -32,8 +32,6 @@ impl NavItem {
                 content: skin.rgba(skin.nav.text.color),
                 marker: skin.rgba(skin.nav.marker_color),
             },
-            // A row nobody is on carries neither ground nor marker: it sits in
-            // the panel it is listed in.
             idle: Face {
                 background: TRANSPARENT,
                 content: skin.rgba(skin.nav.idle_text_color),
@@ -41,6 +39,17 @@ impl NavItem {
             },
             metrics: skin.nav,
             role: skin.nav.text,
+        }
+    }
+
+    fn marker(&self, bounds: Rect) -> Rect {
+        let padding = self.metrics.pad_y;
+        let inner_width = (bounds.w - padding * 2.0).max(0.0);
+        Rect {
+            h: (bounds.h - padding * 2.0).max(0.0),
+            w: self.metrics.marker_width.max(0.0).min(inner_width),
+            x: bounds.x + padding,
+            y: bounds.y + padding,
         }
     }
 
@@ -60,17 +69,6 @@ impl NavItem {
         list.fill_rect(bounds, face.background);
         list.fill_rect(marker, face.marker);
         self.paint_content(list, text, data, face.content, bounds, marker);
-    }
-
-    fn marker(&self, bounds: Rect) -> Rect {
-        let padding = self.metrics.pad_y;
-        let inner_width = (bounds.w - padding * 2.0).max(0.0);
-        Rect {
-            h: (bounds.h - padding * 2.0).max(0.0),
-            w: self.metrics.marker_width.max(0.0).min(inner_width),
-            x: bounds.x + padding,
-            y: bounds.y + padding,
-        }
     }
 
     fn paint_content(
@@ -117,8 +115,8 @@ mod tests {
     fn data(mark: Mark, active: bool) -> NavData {
         NavData {
             active,
-            label: "PRIMITIVES".to_owned(),
             mark,
+            label: "PRIMITIVES".to_owned(),
         }
     }
 

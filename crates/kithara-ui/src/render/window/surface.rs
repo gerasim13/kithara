@@ -10,9 +10,9 @@ use crate::{
 };
 
 pub(crate) struct WindowSurface {
+    cursor: CursorShape,
     height: Length,
     width: Length,
-    cursor: CursorShape,
     command: WindowCommand,
 }
 
@@ -142,18 +142,14 @@ impl<'a> crate::render::Widget<'a> for WindowSurface {
 }
 
 struct SurfaceProgram {
-    command: WindowCommand,
     cursor: CursorShape,
     height: Length,
     width: Length,
+    command: WindowCommand,
 }
 
 impl WindowLayerProgram for SurfaceProgram {
     type State = ();
-
-    fn size(&self) -> Size<Length> {
-        Size::new(self.width, self.height)
-    }
 
     fn layer(&self, _state: &(), bounds: Rect, _pointer: Option<Pt>) -> HostLayer<WindowCommand> {
         HostLayer::new(
@@ -165,6 +161,10 @@ impl WindowLayerProgram for SurfaceProgram {
 
     fn resources(&self) -> Option<&TextResources> {
         None
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(self.width, self.height)
     }
 }
 

@@ -58,14 +58,6 @@ impl TransportControl {
         }
     }
 
-    delegate::delegate! {
-        to self.observation {
-            #[expr(*$)]
-            #[call(read)]
-            pub(crate) fn observation(&mut self) -> TransportObservation;
-        }
-    }
-
     pub(crate) fn queue_abort<B: AudioBackend>(
         &self,
         ctx: &mut FirewheelCtx<B>,
@@ -94,6 +86,14 @@ impl TransportControl {
             )))),
         );
     }
+
+    delegate::delegate! {
+        to self.observation {
+            #[expr(*$)]
+            #[call(read)]
+            pub(crate) fn observation(&mut self) -> TransportObservation;
+        }
+    }
 }
 
 pub(crate) struct SessionTransportNode;
@@ -101,18 +101,18 @@ pub(crate) struct SessionTransportNode;
 impl AudioNode for SessionTransportNode {
     type Configuration = EmptyConfig;
 
-    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
-        AudioNodeInfo::new()
-            .debug_name("SessionTransport")
-            .is_pre_process()
-    }
-
     fn construct_processor(
         &self,
         _configuration: &Self::Configuration,
         _cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
         SessionTransportProcessor
+    }
+
+    fn info(&self, _configuration: &Self::Configuration) -> AudioNodeInfo {
+        AudioNodeInfo::new()
+            .debug_name("SessionTransport")
+            .is_pre_process()
     }
 }
 

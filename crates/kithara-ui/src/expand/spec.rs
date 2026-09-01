@@ -1,10 +1,3 @@
-//! How one document control node becomes a compiled `ControlSpec`.
-//!
-//! The walker in `machine` owns paths, substitution and the visitor; this owns
-//! the per-variant question of what a control compiles to. Keeping them apart
-//! means teaching the document a control touches one of the two rather than
-//! growing the file that does both.
-
 use super::{
     Binding, ControlSpec,
     binding_subst::{
@@ -38,9 +31,9 @@ fn context_bar_spec(
 
 struct StatusDotFields<'a> {
     label: &'a str,
+    active_tone: Option<Tone>,
     dot_size: Option<f32>,
     tone: Tone,
-    active_tone: Option<Tone>,
 }
 
 fn status_dot_spec(

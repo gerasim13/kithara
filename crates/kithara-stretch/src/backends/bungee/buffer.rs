@@ -50,13 +50,13 @@ pub(super) fn signal_error(error: SignalError) -> ElasticError {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct InputBuffer {
+    #[field(set, vis = "pub(super)")]
+    requested: InputChunk,
     analysis: PlanarBuffer,
     audio: PlanarBuffer,
     begin: i32,
     #[field(get, copy, vis = "pub(super)")]
     end: i32,
-    #[field(set, vis = "pub(super)")]
-    requested: InputChunk,
 }
 
 impl InputBuffer {
@@ -147,6 +147,10 @@ impl InputBuffer {
             .checked_add(input_frames_i32)
             .ok_or(ElasticError::SampleCountOverflow)?;
         Ok(())
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.set_position(0);
     }
 
     pub(super) fn prepare_source_capacity(&mut self, capacity: usize) -> Result<(), ElasticError> {
@@ -275,10 +279,6 @@ impl InputBuffer {
             mute_head,
             mute_tail,
         })
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.set_position(0);
     }
 
     pub(super) fn set_position(&mut self, position: i32) {

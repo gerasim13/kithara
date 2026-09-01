@@ -108,10 +108,10 @@ impl WaitGate for CondvarGate<u64> {
 /// Single-waiter edge gate: signal advances atomically, loads the waiter
 /// lock-free, and unparks. Its timed backstop preserves sequence progress.
 pub struct ThreadGate {
+    waiter: ArcSwapOption<Thread>,
     state: AtomicU64,
     waiter_id: AtomicU64,
     backend: thread::GateBackend,
-    waiter: ArcSwapOption<Thread>,
     retired_waiters: Mutex<Vec<Arc<Thread>>>,
 }
 
@@ -147,15 +147,6 @@ impl ThreadGate {
         }
     }
 
-    fn register(&self) {
-        let waiter_id = thread::current_thread_id();
-        if self.waiter_id.load(Ordering::Acquire) != waiter_id || self.waiter.load().is_none() {
-            self.publish_waiter();
-            self.waiter_id.store(waiter_id, Ordering::Release);
-        }
-        self.state.fetch_or(Self::WAITING, Ordering::SeqCst);
-    }
-
     /// Writer-held retirees make signal guard drops pure decrements; reclaim
     /// quiesced ones here, off the signal path.
     fn publish_waiter(&self) {
@@ -164,6 +155,15 @@ impl ThreadGate {
         if let Some(displaced) = self.waiter.swap(Some(Arc::new(thread::current()))) {
             retired.push(displaced);
         }
+    }
+
+    fn register(&self) {
+        let waiter_id = thread::current_thread_id();
+        if self.waiter_id.load(Ordering::Acquire) != waiter_id || self.waiter.load().is_none() {
+            self.publish_waiter();
+            self.waiter_id.store(waiter_id, Ordering::Release);
+        }
+        self.state.fetch_or(Self::WAITING, Ordering::SeqCst);
     }
 
     const fn sequence(state: u64) -> u64 {

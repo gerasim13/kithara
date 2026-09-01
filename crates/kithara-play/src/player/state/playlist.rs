@@ -4,8 +4,8 @@ use crate::resource::Resource;
 
 /// A queued resource plus the queue's identity for it.
 pub(crate) struct QueuedResource {
-    pub(crate) item_id: TrackId,
     pub(crate) resource: Resource,
+    pub(crate) item_id: TrackId,
 }
 
 #[derive(Default, fieldwork::Fieldwork)]
@@ -37,18 +37,6 @@ impl Playlist {
     pub(crate) fn clear_item(&mut self, index: usize) {
         if let Some(item) = self.items.get_mut(index) {
             *item = None;
-        }
-    }
-
-    delegate::delegate! {
-        to self.items {
-            #[expr($.is_some_and(Option::is_some))]
-            #[call(get)]
-            pub(crate) fn has_resource(&self, index: usize) -> bool;
-            pub(crate) const fn len(&self) -> usize;
-            #[expr($.and_then(Option::take))]
-            #[call(get_mut)]
-            pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource>;
         }
     }
 
@@ -97,6 +85,18 @@ impl Playlist {
 
     pub(crate) fn reserve(&mut self, count: usize) {
         self.items.resize_with(count, || None);
+    }
+
+    delegate::delegate! {
+        to self.items {
+            #[expr($.is_some_and(Option::is_some))]
+            #[call(get)]
+            pub(crate) fn has_resource(&self, index: usize) -> bool;
+            pub(crate) const fn len(&self) -> usize;
+            #[expr($.and_then(Option::take))]
+            #[call(get_mut)]
+            pub(crate) fn take(&mut self, index: usize) -> Option<QueuedResource>;
+        }
     }
 }
 

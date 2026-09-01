@@ -75,12 +75,12 @@ impl CrossfadeSettings {
 pub struct PlayerNodeProcessor {
     #[field(get, deref = false)]
     pub(super) playback: Arc<PlaybackShared>,
-    pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) crossfade: CrossfadeSettings,
     pub(super) cmd_rx: HeapCons<PlayerCmd>,
     pub(super) notif_tx: HeapProd<PlayerNotification>,
     pub(super) sample_rate: NonZeroU32,
     pub(super) render: RenderPass,
+    pub(super) tracks: TrackSlots<{ Self::MAX_TRACKS }>,
     pub(super) tracks_transitions: VecDeque<TrackTransition>,
     pub(super) prefetch_duration: f32,
     /// Last effective rate successfully delivered to the control thread.
@@ -134,6 +134,7 @@ impl PlayerNodeProcessor {
     {
         let last_notified_rate = inputs.playback.rate.load(Ordering::Relaxed);
         Self {
+            last_notified_rate,
             cmd_rx: inputs.cmd_rx,
             notif_tx: inputs.notif_tx,
             trash_tx: inputs.trash_tx,
@@ -142,7 +143,6 @@ impl PlayerNodeProcessor {
             render: RenderPass::new(pools, shape),
             crossfade: CrossfadeSettings::default(),
             prefetch_duration: 0.0,
-            last_notified_rate,
             tracks: TrackSlots::default(),
             tracks_transitions: VecDeque::with_capacity(Self::MAX_TRACKS),
             context_requirement,
@@ -158,12 +158,9 @@ impl PlayerNodeProcessor {
             .map(|(slot, track)| (slot, track.ended_at_eof()))
             .collect();
 
-        // Superpowered-style end-of-queue resume: if removing the finished tracks would empty the
-        // slot set (the queue has played out) and one of them reached *natural* EOF, keep that
-        // single track resident (warm) so a later in-range seek can revive it (`apply_seek`). It is
-        // reclaimed by `evict_tracks_if_needed` (Finished evicts first) when the next track loads.
-        // Tracks that finished via `stop()` or a faded-out crossfade (not `ended_at_eof`) are
-        // discarded as usual.
+        // WHY: Superpowered-style end-of-queue resume: if removing the finished tracks would empty the slot set (the queue has played out)
+        // and one of them reached *natural* EOF, keep that single track resident (warm) so a later in-range seek can revive it
+        // (`apply_seek`).
         let retain: Option<TrackSlot> = if finished.len() == self.tracks.len() {
             finished
                 .iter()
@@ -183,8 +180,7 @@ impl PlayerNodeProcessor {
             }
         }
 
-        // The retained track is `Finished`, so `render_audio` skips it and `is_playing()` stays
-        // false until a seek revives it.
+        // WHY: The retained track is `Finished`, so `render_audio` skips it and `is_playing()` stays false until a seek revives it.
         if self.tracks.len() == 0 || retain.is_some() {
             self.playback.playing.store(false, Ordering::SeqCst);
         }
@@ -289,6 +285,15 @@ impl PlayerNodeProcessor {
         self.publish_effective_rate(rate);
     }
 
+    fn retire(&mut self, track: PlayerTrack) {
+        let item_id = track.item_id();
+        let src = Arc::clone(track.src());
+        self.discard_track(track);
+        self.notif_tx
+            .try_push(PlayerNotification::Unloaded { src, item_id })
+            .ok();
+    }
+
     fn set_tracks_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
         self.tracks
             .iter()
@@ -299,15 +304,6 @@ impl PlayerNodeProcessor {
         if let Some(track) = self.tracks.remove_at(slot) {
             self.retire(track);
         }
-    }
-
-    fn retire(&mut self, track: PlayerTrack) {
-        let item_id = track.item_id();
-        let src = Arc::clone(track.src());
-        self.discard_track(track);
-        self.notif_tx
-            .try_push(PlayerNotification::Unloaded { src, item_id })
-            .ok();
     }
 
     fn update_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
@@ -332,10 +328,8 @@ impl PlayerNodeProcessor {
     /// the first render block, or every active track was a non-leading
     /// fade-in).
     fn update_position_duration(&self, leading_outcome: Option<(f64, f64)>) {
-        // Both windows come from the leading track's lock-free snapshots: the
-        // decoded frontier (always `>=` position) and the cached span the
-        // download side published. The queue view unions them into the
-        // buffered window the FFI polls for loaded ranges.
+        // WHY: Both windows come from the leading track's lock-free snapshots: the decoded frontier (always `>=` position) and the cached
+        // span the download side published.
         for (_, track) in self.tracks.iter() {
             if track.state().is_leading() {
                 self.playback

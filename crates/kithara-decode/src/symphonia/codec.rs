@@ -4,6 +4,7 @@ use kithara_bufpool::SampleBuffer;
 use kithara_platform::time::Duration;
 use kithara_signal::AudioSpec;
 use kithara_stream::AudioCodec;
+use kithara_test_utils::kithara;
 use symphonia::core::{
     audio::Channels,
     codecs::{
@@ -50,13 +51,13 @@ impl Consts {
 
 /// Frame codec backed by a symphonia codec registry decoder.
 pub(crate) struct SymphoniaCodec {
+    spec: AudioSpec,
     decoder: Box<dyn AudioDecoder>,
     /// Decoder-owned playback contract. Populated from container-level
     /// gapless metadata captured by the demuxer before the codec is
     /// opened; left empty otherwise.
     track_info: DecoderTrackInfo,
     codec: Option<AudioCodec>,
-    spec: AudioSpec,
     /// One-shot guard for first-frame diagnostic log — compares the
     /// declared [`AudioSpec`] (from container `TrackInfo`) against the
     /// actual `decoded.spec()` returned by the codec. Catches SBR/PS
@@ -173,7 +174,7 @@ impl SymphoniaCodec {
 }
 
 impl FrameCodec for SymphoniaCodec {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure(label = "decode.symphonia.codec")]
     fn decode_frame(
         &mut self,
         frame_data: &[u8],

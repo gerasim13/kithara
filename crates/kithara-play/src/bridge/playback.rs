@@ -67,6 +67,8 @@ pub struct PlaybackSnapshot {
     /// Whether playback is active.
     #[field(get = is_playing)]
     pub(crate) playing: bool,
+    /// Effective media seconds consumed per output second; `0.0` while paused.
+    pub(crate) rate: f32,
     /// Cached span in seconds: how much of the source is on disk. Independent
     /// of `frontier` — bytes land ahead of the decoder, and the decoder can run
     /// ahead of what the download side has reported.
@@ -77,8 +79,6 @@ pub struct PlaybackSnapshot {
     pub(crate) frontier: f64,
     /// Playback position in seconds.
     pub(crate) position: f64,
-    /// Effective media seconds consumed per output second; `0.0` while paused.
-    pub(crate) rate: f32,
     /// Current output sample rate.
     pub(crate) sample_rate: u32,
 }
@@ -97,8 +97,6 @@ pub struct PlaybackShared {
     pub frontier: AtomicF64,
     /// Playback position in seconds.
     pub position: AtomicF64,
-    /// Effective media seconds consumed per output second; `0.0` while paused.
-    pub(crate) rate: AtomicF32,
     /// Current output sample rate.
     pub sample_rate: AtomicU32,
     /// Number of audio-thread process calls.
@@ -107,6 +105,8 @@ pub struct PlaybackShared {
     pub seek_epoch: AtomicU64,
     #[cfg(feature = "probe")]
     render_boundary: RenderBoundaryCell,
+    /// Effective media seconds consumed per output second; `0.0` while paused.
+    pub(crate) rate: AtomicF32,
     metrics: RtMetrics,
 }
 
@@ -134,6 +134,23 @@ impl PlaybackShared {
             .wrapping_add(1)
     }
 
+    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
+    /// not guarantee about each other.
+    #[must_use]
+    pub fn snapshot(&self) -> PlaybackSnapshot {
+        let position = self.position.load(Ordering::Relaxed);
+        let frontier = self.frontier.load(Ordering::Relaxed).max(position);
+        PlaybackSnapshot {
+            position,
+            frontier,
+            cached: self.cached.load(Ordering::Relaxed),
+            duration: self.duration.load(Ordering::Relaxed),
+            rate: self.rate.load(Ordering::Relaxed),
+            sample_rate: self.sample_rate.load(Ordering::Relaxed),
+            playing: self.playing.load(Ordering::Relaxed),
+        }
+    }
+
     /// Withdraw an epoch whose `PlayerCmd::Seek` never reached the processor.
     ///
     /// Publishing promises the processor a re-base, and a track holds its
@@ -153,23 +170,6 @@ impl PlaybackShared {
                 Ordering::Relaxed,
             )
             .ok();
-    }
-
-    /// Read every live playback scalar once. See [`PlaybackSnapshot`] for what the fields do and do
-    /// not guarantee about each other.
-    #[must_use]
-    pub fn snapshot(&self) -> PlaybackSnapshot {
-        let position = self.position.load(Ordering::Relaxed);
-        let frontier = self.frontier.load(Ordering::Relaxed).max(position);
-        PlaybackSnapshot {
-            position,
-            frontier,
-            cached: self.cached.load(Ordering::Relaxed),
-            duration: self.duration.load(Ordering::Relaxed),
-            rate: self.rate.load(Ordering::Relaxed),
-            sample_rate: self.sample_rate.load(Ordering::Relaxed),
-            playing: self.playing.load(Ordering::Relaxed),
-        }
     }
 }
 

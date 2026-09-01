@@ -12,8 +12,8 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TableRowData {
-    cells: Vec<(String, TableCell)>,
     pub(crate) selected: bool,
+    cells: Vec<(String, TableCell)>,
 }
 
 impl From<&ReadRow<'_>> for TableRowData {
@@ -39,7 +39,7 @@ impl From<&ReadRow<'_>> for TableRowData {
 impl TableRowData {
     #[cfg(test)]
     pub(crate) fn new(cells: Vec<(String, TableCell)>, selected: bool) -> Self {
-        Self { cells, selected }
+        Self { selected, cells }
     }
 
     pub(super) fn cell(&self, id: &str) -> TableCell {
@@ -63,10 +63,10 @@ pub(crate) fn table_row_rect(
         index.mul_add(table_row_pitch(skin), body.y) - vertical_offset
     });
     Rect {
+        y,
         h: skin.table.row_height,
         w: table_content_width(columns, bounds.w),
         x: bounds.x - horizontal_offset,
-        y,
     }
 }
 
@@ -206,7 +206,7 @@ mod tests {
             skin.table.row_height / 2.0,
             skin,
         )
-        .unwrap_or_else(|| panic!("the partially visible first row must retain a hit rect"));
+        .expect("the partially visible first row must retain a hit rect");
 
         assert_eq!(clipped.y, table_body(bounds, skin).y);
         assert_eq!(clipped.h, skin.table.row_height / 2.0);
@@ -235,7 +235,7 @@ mod tests {
         let maximum = minimum_table_width(&columns) - bounds.w;
         let row = |offset| {
             table_visible_row_rect(bounds, &columns, row_count, 0, offset, 0.0, skin)
-                .unwrap_or_else(|| panic!("the first row must be visible"))
+                .expect("the first row must be visible")
         };
 
         assert_eq!(
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(row(partial).x + row(partial).w, partial_scrollbar.x);
 
         let scrollbar = table_vertical_scrollbar_rect(bounds, &columns, row_count, maximum, skin)
-            .unwrap_or_else(|| panic!("the rail must be visible at maximum horizontal scroll"));
+            .expect("the rail must be visible at maximum horizontal scroll");
         let visible = row(maximum);
         assert_eq!(visible.x + visible.w, scrollbar.x);
         let y = visible.y + visible.h / 2.0;

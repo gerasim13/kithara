@@ -4,7 +4,6 @@
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
-
 use std::{f32::consts::TAU, ops::RangeInclusive};
 
 use kithara_bufpool::testing::{pools as default_pools, pools_with_budget as pools};
@@ -1348,7 +1347,7 @@ mod facade {
 mod priming {
     use super::*;
 
-    type PlayingPair = (
+    type PrimedPair = (
         Box<dyn ElasticEngine>,
         Box<dyn ElasticEngine>,
         ElasticCapabilities,
@@ -1387,7 +1386,7 @@ mod priming {
             .expect("invariant: warmup request is valid")
     }
 
-    fn primed_playing_pair(backend: StretchKind) -> PlayingPair {
+    fn primed_playing_pair(backend: StretchKind) -> PrimedPair {
         const MAX_FRAMES: usize = 65_536;
 
         let mut reference = prepared_backend(backend, MAX_FRAMES, MAX_FRAMES);

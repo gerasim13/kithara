@@ -160,7 +160,7 @@ impl EventCollector {
     /// return, same hold window as before — keeps clippy's
     /// `significant_drop_tightening` from mis-suggesting an early drop
     /// inside the loop. Mirrors
-    /// `kithara_platform::flash::system::wake::wait_set`.
+    /// `kithara::platform::flash::system::wake::wait_set`.
     fn drain_locked(&self, mut rx: kithara::platform::sync::MutexGuard<'_, EventReceiver>) {
         use kithara::platform::tokio::sync::broadcast::error::TryRecvError;
         loop {

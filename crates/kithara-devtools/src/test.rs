@@ -375,17 +375,17 @@ pub(crate) enum NextestAction {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ConfiguredLane {
-    pub(crate) lane: String,
-    pub(crate) backend: String,
-    pub(crate) program: String,
-    pub(crate) prefix_args: Vec<String>,
-    pub(crate) suffix_args: Vec<String>,
-    pub(crate) feature_arg: String,
-    pub(crate) features: Vec<String>,
     /// A lane with no environment of its own records none, so a campaign that
     /// predates lane environments keeps comparing against the same runner.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) env: BTreeMap<String, String>,
+    pub(crate) backend: String,
+    pub(crate) feature_arg: String,
+    pub(crate) lane: String,
+    pub(crate) program: String,
+    pub(crate) features: Vec<String>,
+    pub(crate) prefix_args: Vec<String>,
+    pub(crate) suffix_args: Vec<String>,
 }
 
 pub(crate) fn nextest_lane_command_for(
@@ -487,11 +487,11 @@ impl ConfiguredLane {
 /// runner recorded by a campaign.
 #[derive(Clone, Copy)]
 struct NextestSpec<'a> {
-    program: &'a str,
+    env: &'a BTreeMap<String, String>,
     prefix_args: &'a [String],
     suffix_args: &'a [String],
     feature_arg: &'a str,
-    env: &'a BTreeMap<String, String>,
+    program: &'a str,
 }
 
 fn nextest_command(

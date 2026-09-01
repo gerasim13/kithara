@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use masonry::vello::{Renderer, peniko::ImageData, wgpu};
 use num_traits::cast::AsPrimitive as _;
 
@@ -11,24 +12,24 @@ use crate::draw::ImageId;
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct ShaderDeclaration {
-    frame: ShaderFrame,
     image: ImageData,
+    frame: ShaderFrame,
 }
 
 impl ShaderDeclaration {
     pub(crate) const fn new(frame: ShaderFrame, image: ImageData) -> Self {
-        Self { frame, image }
+        Self { image, frame }
     }
 }
 
 /// Executes retained document shaders into reusable textures before Vello.
 #[non_exhaustive]
 pub struct ShaderPass {
-    active: BTreeSet<ImageId>,
     programs: BTreeMap<Arc<str>, wgpu::RenderPipeline>,
     slots: BTreeMap<ImageId, Slot>,
-    stale: Vec<ImageId>,
+    active: BTreeSet<ImageId>,
     uniform_layout: wgpu::BindGroupLayout,
+    stale: Vec<ImageId>,
 }
 
 impl ShaderPass {
@@ -45,13 +46,31 @@ impl ShaderPass {
         }
     }
 
+    fn release_stale(&mut self, renderer: &mut Renderer) {
+        self.stale.clear();
+        self.stale.extend(
+            self.slots
+                .keys()
+                .filter(|image| !self.active.contains(*image))
+                .cloned(),
+        );
+        for image in self.stale.drain(..) {
+            let Some(slot) = self.slots.remove(&image) else {
+                continue;
+            };
+            if let Some(image) = slot.image {
+                drop(renderer.override_image(&image, None));
+            }
+        }
+    }
+
     /// Renders every declaration and installs its GPU texture into the Vello
     /// renderer's image registry. The following Vello render consumes those
     /// images at their scene-authored clip and z-order positions.
     ///
     /// Everything here is CPU work up to the submit; the shader programs
     /// themselves are timed by whoever fences the queue.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "shader.pass.cpu"))]
+    #[kithara::measure(label = "shader.pass.cpu")]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -151,36 +170,18 @@ impl ShaderPass {
         }
         self.release_stale(renderer);
     }
-
-    fn release_stale(&mut self, renderer: &mut Renderer) {
-        self.stale.clear();
-        self.stale.extend(
-            self.slots
-                .keys()
-                .filter(|image| !self.active.contains(*image))
-                .cloned(),
-        );
-        for image in self.stale.drain(..) {
-            let Some(slot) = self.slots.remove(&image) else {
-                continue;
-            };
-            if let Some(image) = slot.image {
-                drop(renderer.override_image(&image, None));
-            }
-        }
-    }
 }
 
 struct Slot {
-    image: Option<ImageData>,
-    size: [u32; 2],
     source: Arc<str>,
-    texture: wgpu::Texture,
     uniform_bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
-    uniform_bytes: Vec<u8>,
-    uniform_size: usize,
+    image: Option<ImageData>,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
+    uniform_bytes: Vec<u8>,
+    size: [u32; 2],
+    uniform_size: usize,
 }
 
 impl Slot {

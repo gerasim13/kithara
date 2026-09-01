@@ -83,8 +83,8 @@ pub(crate) struct PreparedPromotion {
 
 #[derive(Clone, Copy)]
 struct PromotionSpan {
-    join: PromotionJoin,
     overlap: OverlapSpan,
+    join: PromotionJoin,
 }
 
 #[derive(Clone, Copy)]
@@ -127,6 +127,19 @@ pub(crate) enum IncomingPrime {
 }
 
 impl super::core::ActiveDecode {
+    /// One `DecoderEvent::TransitionHold` per transition: the first held
+    /// pass announces it, later passes stay silent.
+    pub(crate) fn announce_transition_hold(&mut self) -> bool {
+        let Some(transition) = self.incoming.as_ref().map(IncomingDecode::transition) else {
+            return false;
+        };
+        if self.announced_hold == Some(transition) {
+            return false;
+        }
+        self.announced_hold = Some(transition);
+        true
+    }
+
     pub(crate) fn begin_incoming(
         &mut self,
         transition: VariantTransition,
@@ -143,6 +156,16 @@ impl super::core::ActiveDecode {
             .and_then(Into::into)
     }
 
+    pub(crate) fn flush_incoming_reader_signals(&mut self) {
+        match self.incoming.as_mut() {
+            Some(IncomingDecode::Priming { generation, .. })
+            | Some(IncomingDecode::Failed { generation, .. }) => {
+                generation.decoder_mut().flush_reader_signals();
+            }
+            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. }) | None => {}
+        }
+    }
+
     pub(crate) const fn has_live_incoming(&self) -> bool {
         matches!(
             self.incoming,
@@ -154,43 +177,12 @@ impl super::core::ActiveDecode {
         )
     }
 
-    /// One `DecoderEvent::TransitionHold` per transition: the first held
-    /// pass announces it, later passes stay silent.
-    pub(crate) fn announce_transition_hold(&mut self) -> bool {
-        let Some(transition) = self.incoming.as_ref().map(IncomingDecode::transition) else {
-            return false;
-        };
-        if self.announced_hold == Some(transition) {
-            return false;
-        }
-        self.announced_hold = Some(transition);
-        true
-    }
-
-    pub(crate) fn observe_source_exhaustion(&mut self) {
-        if self.active.is_source_exhausted() {
-            self.active.observe_exhaustion();
-        }
-    }
-
-    delegate::delegate! {
-        to self.incoming {
-            #[expr($.and_then(Into::into))]
-            #[call(take)]
-            pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration>;
-            #[expr($.map(IncomingDecode::transition))]
-            #[call(as_ref)]
-            pub(crate) fn incoming_transition(&self) -> Option<VariantTransition>;
-        }
-    }
-
-    pub(crate) fn flush_incoming_reader_signals(&mut self) {
-        match self.incoming.as_mut() {
-            Some(IncomingDecode::Priming { generation, .. })
-            | Some(IncomingDecode::Failed { generation, .. }) => {
-                generation.decoder_mut().flush_reader_signals();
-            }
-            Some(IncomingDecode::Preparing { .. } | IncomingDecode::Building { .. }) | None => {}
+    pub(crate) fn incoming_frontier(&self) -> Option<OutgoingFrontier> {
+        match self.incoming.as_ref()? {
+            IncomingDecode::Preparing { frontier, .. }
+            | IncomingDecode::Building { frontier, .. }
+            | IncomingDecode::Priming { frontier, .. } => Some(*frontier),
+            IncomingDecode::Failed { .. } => None,
         }
     }
 
@@ -232,15 +224,6 @@ impl super::core::ActiveDecode {
             return None;
         };
         generation.staged_span()
-    }
-
-    pub(crate) fn incoming_frontier(&self) -> Option<OutgoingFrontier> {
-        match self.incoming.as_ref()? {
-            IncomingDecode::Preparing { frontier, .. }
-            | IncomingDecode::Building { frontier, .. }
-            | IncomingDecode::Priming { frontier, .. } => Some(*frontier),
-            IncomingDecode::Failed { .. } => None,
-        }
     }
 
     pub(crate) fn install_incoming(
@@ -315,6 +298,12 @@ impl super::core::ActiveDecode {
             frontier,
         });
         true
+    }
+
+    pub(crate) fn observe_source_exhaustion(&mut self) {
+        if self.active.is_source_exhausted() {
+            self.active.observe_exhaustion();
+        }
     }
 
     pub(crate) fn prime_incoming(&mut self, outgoing_frontier: OutgoingFrontier) -> IncomingPrime {
@@ -460,6 +449,17 @@ impl super::core::ActiveDecode {
         }
         outcome
     }
+
+    delegate::delegate! {
+        to self.incoming {
+            #[expr($.and_then(Into::into))]
+            #[call(take)]
+            pub(crate) fn discard_incoming(&mut self) -> Option<DecoderGeneration>;
+            #[expr($.map(IncomingDecode::transition))]
+            #[call(as_ref)]
+            pub(crate) fn incoming_transition(&self) -> Option<VariantTransition>;
+        }
+    }
 }
 
 fn promotion_readiness(
@@ -532,11 +532,8 @@ fn promotion_readiness(
     }
     if outgoing_next >= incoming_end_time {
         if active.is_source_exhausted() && generation.is_finished() {
-            // Nothing exists past the cut on either side: the outgoing ran
-            // out of source at the frontier and the incoming ran out at or
-            // before it. Commit the switch at the end with an empty incoming
-            // tail instead of failing it as unlandable — the intent resolves
-            // and the track then ends on the promoted variant.
+            // WHY: Nothing exists past the cut on either side: the outgoing ran out of source at the frontier and the incoming ran out at or
+            // before it.
             debug!(
                 incoming_first,
                 incoming_end,
@@ -613,9 +610,8 @@ fn resolve_frontier(
     incoming_first: u64,
 ) -> Result<(u64, u32), PromotionReadiness> {
     match frontier {
-        // An exhausted outgoing can never establish (or advance) a frontier,
-        // so every "wait for the outgoing" answer below is a dead end; the
-        // switch degrades to a hard cut instead of wedging forever.
+        // WHY: An exhausted outgoing can never establish (or advance) a frontier, so every "wait for the outgoing" answer below is a dead
+        // end; the switch degrades to a hard cut instead of wedging forever.
         OutgoingFrontier::Awaiting if !active.is_source_exhausted() => {
             Err(PromotionReadiness::NeedIncoming)
         }
@@ -654,9 +650,8 @@ fn same_spec_join(
         });
     }
     if active.is_source_exhausted() {
-        // The join PCM would have to come from past the final decode
-        // head — it does not exist. Cut at the frontier instead of
-        // demanding PCM the outgoing can never produce.
+        // WHY: The join PCM would have to come from past the final decode head - it does not exist. Cut at the frontier instead of demanding
+        // PCM the outgoing can never produce.
         debug!(
             frames,
             incoming_next,
@@ -813,9 +808,8 @@ fn incoming_origin_from(
         incoming.timeline_gap()
     };
     let origin = incoming.timeline_origin_with_gap(mode, gap);
-    // The seam moves by exactly the AAC-LC default priming when the incoming
-    // track's own gapless metadata is missing: `origin` alone cannot say which
-    // of the two it is, so record the profile that produced it.
+    // WHY: The seam moves by exactly the AAC-LC default priming when the incoming track's own gapless metadata is missing: `origin`
+    // alone cannot say which of the two it is, so record the profile that produced it.
     debug!(
         origin,
         gap,

@@ -13,13 +13,13 @@ const RESUME_VERSION: u32 = 0x4b41_5201;
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct AnalysisProgress {
-    analysis: TrackAnalysis,
     resume: Option<AnalysisResume>,
+    analysis: TrackAnalysis,
 }
 
 impl AnalysisProgress {
     pub(crate) const fn new(analysis: TrackAnalysis, resume: Option<AnalysisResume>) -> Self {
-        Self { analysis, resume }
+        Self { resume, analysis }
     }
 
     /// Renderable analysis snapshot, kept separate from the potentially large
@@ -27,6 +27,24 @@ impl AnalysisProgress {
     #[must_use]
     pub const fn analysis(&self) -> &TrackAnalysis {
         &self.analysis
+    }
+
+    pub(crate) fn decode_resume(&self) -> Result<Option<ResumeState>, BlobError> {
+        self.validate_resume()?;
+        self.resume.as_ref().map(AnalysisResume::decode).transpose()
+    }
+
+    pub(crate) fn resume_meta(&self) -> Option<(NonZeroU64, (bool, bool))> {
+        self.resume
+            .as_ref()
+            .map(|resume| (resume.chunk_frames, resume.shape))
+    }
+
+    pub(crate) fn validate_resume(&self) -> Result<(), BlobError> {
+        match (self.analysis.is_settled(), &self.resume) {
+            (true, None) | (false, Some(_)) => Ok(()),
+            (true, Some(_)) | (false, None) => Err(BlobError::Corrupt),
+        }
     }
 
     delegate::delegate! {
@@ -39,24 +57,6 @@ impl AnalysisProgress {
             #[call(as_ref)]
             pub(crate) const fn resume(&self) -> Option<&AnalysisResume>;
         }
-    }
-
-    pub(crate) fn validate_resume(&self) -> Result<(), BlobError> {
-        match (self.analysis.is_settled(), &self.resume) {
-            (true, None) | (false, Some(_)) => Ok(()),
-            (true, Some(_)) | (false, None) => Err(BlobError::Corrupt),
-        }
-    }
-
-    pub(crate) fn resume_meta(&self) -> Option<(NonZeroU64, (bool, bool))> {
-        self.resume
-            .as_ref()
-            .map(|resume| (resume.chunk_frames, resume.shape))
-    }
-
-    pub(crate) fn decode_resume(&self) -> Result<Option<ResumeState>, BlobError> {
-        self.validate_resume()?;
-        self.resume.as_ref().map(AnalysisResume::decode).transpose()
     }
 }
 
@@ -80,10 +80,10 @@ impl From<AnalysisProgress> for TrackAnalysis {
 #[derive(Clone, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct AnalysisResume {
+    shape: (bool, bool),
     #[field(get, vis = "pub(crate)")]
     bytes: Arc<[u8]>,
     chunk_frames: NonZeroU64,
-    shape: (bool, bool),
 }
 
 impl AnalysisResume {
@@ -99,10 +99,14 @@ impl AnalysisResume {
         write_section(&mut writer, waveform);
         write_section(&mut writer, beat);
         Self {
-            bytes: Arc::from(bytes),
             chunk_frames,
+            bytes: Arc::from(bytes),
             shape: (waveform.is_some(), beat.is_some()),
         }
+    }
+
+    pub(crate) fn decode(&self) -> Result<ResumeState, BlobError> {
+        decode_resume(&self.bytes)
     }
 
     fn decode_bytes(bytes: &[u8]) -> Result<Self, BlobError> {
@@ -113,10 +117,6 @@ impl AnalysisResume {
             chunk_frames: state.chunk_frames,
             shape: (state.waveform.is_some(), state.beat.is_some()),
         })
-    }
-
-    pub(crate) fn decode(&self) -> Result<ResumeState, BlobError> {
-        decode_resume(&self.bytes)
     }
 }
 
@@ -141,8 +141,8 @@ impl fmt::Debug for AnalysisResume {
 
 pub(crate) struct ResumeState {
     pub(crate) chunk_frames: NonZeroU64,
-    pub(crate) waveform: Option<WaveformResume>,
     pub(crate) beat: Option<BeatResume>,
+    pub(crate) waveform: Option<WaveformResume>,
 }
 
 pub(crate) struct WaveformResume {
@@ -152,9 +152,9 @@ pub(crate) struct WaveformResume {
 }
 
 pub(crate) struct WaveformPartialResume {
-    pub(crate) index: u64,
     pub(crate) samples: Box<[f32]>,
     pub(crate) written: Coverage,
+    pub(crate) index: u64,
     pub(crate) seq: u64,
 }
 
@@ -220,16 +220,16 @@ impl WaveformResume {
 }
 
 pub(crate) struct BeatResume {
-    pub(crate) runs: Vec<BeatRunResume>,
-    pub(crate) dropped: Vec<(u64, u64)>,
-    pub(crate) windows: Vec<(usize, RawBeatsResume)>,
     pub(crate) short: BTreeSet<usize>,
+    pub(crate) dropped: Vec<(u64, u64)>,
+    pub(crate) runs: Vec<BeatRunResume>,
+    pub(crate) windows: Vec<(usize, RawBeatsResume)>,
 }
 
 pub(crate) struct BeatRunResume {
-    pub(crate) start: u64,
-    pub(crate) end: u64,
     pub(crate) mono: Box<[f32]>,
+    pub(crate) end: u64,
+    pub(crate) start: u64,
 }
 
 pub(crate) struct RawBeatsResume {
@@ -302,10 +302,10 @@ impl BeatResume {
             short.insert(index);
         }
         let resume = Self {
-            runs,
-            dropped,
-            windows,
             short,
+            dropped,
+            runs,
+            windows,
         };
         resume.validate()?;
         Ok(resume)
@@ -377,8 +377,8 @@ fn decode_resume(bytes: &[u8]) -> Result<ResumeState, BlobError> {
     reader.finish()?;
     Ok(ResumeState {
         chunk_frames,
-        waveform,
         beat,
+        waveform,
     })
 }
 

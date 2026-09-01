@@ -2,8 +2,6 @@ use num_traits::cast;
 
 use super::{SAW_PERIOD, phase};
 
-const SILENCE_THRESHOLD: f32 = 1.0e-4;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameClass {
     Ascending,
@@ -28,8 +26,8 @@ pub fn classify_windows(left: &[f32], window: usize, tol: f32) -> Vec<FrameClass
 
 #[derive(Clone, Copy, Debug)]
 pub struct Replay {
-    pub start_frame: usize,
     pub len: usize,
+    pub start_frame: usize,
     pub start_phase: usize,
 }
 
@@ -109,6 +107,7 @@ fn expected_phase_error(sample: f32, base_phase: usize, frame_offset: usize) -> 
 }
 
 fn is_silence(sample: f32) -> bool {
+    const SILENCE_THRESHOLD: f32 = 1.0e-4;
     sample.abs() < SILENCE_THRESHOLD
 }
 

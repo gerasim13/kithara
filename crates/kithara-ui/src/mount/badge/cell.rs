@@ -5,8 +5,8 @@ use crate::{ids::InternId, mount::Control, size::SizeSpec, skin::SkinDoc};
 /// One box of a grid, optionally captioned and optionally picked out.
 #[derive(Builder)]
 pub(crate) struct Cell {
-    pub(crate) highlighted: bool,
     pub(crate) label: Option<InternId>,
+    pub(crate) highlighted: bool,
 }
 
 impl Control for Cell {
@@ -29,10 +29,6 @@ mod host {
     impl Draws for Cell {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<CellData> {
             Some(CellData {
                 highlighted: self.highlighted,
@@ -40,6 +36,10 @@ mod host {
                     .label
                     .map(|label| read.ctx.ui.resolve(label).to_owned()),
             })
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }

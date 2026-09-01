@@ -428,10 +428,12 @@ violation fails the job. `permit()` and the RT attribute macros live in `kithara
 one Player. `kithara-host` owns every concrete native/web session, the existing
 `kithara-engine` thread, the Firewheel graph, and the root synchronization
 group. A Player is constructed as an unbound instance and receives an opaque,
-one-shot `SessionBinding` only when that instance is transferred through
-`Host::insert`; decorators may only delegate the binding to their resident
-Player. There is no standalone concrete production session constructor in this
-crate.
+one-shot `SessionBinding` only through `Host::insert`; decorators may only
+delegate the binding to their resident Player. Native insertion transfers the
+whole resident player. Wasm insertion transfers its `GroupState` and current
+desired level to the main-thread Host, which becomes their canonical
+owner, while the Worker Host retains the runtime and JS-bound resources. There
+is no standalone concrete production session constructor in this crate.
 
 `kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
 `SyncGroup` protocols; `kithara-play` owns one Player instance and
@@ -469,7 +471,7 @@ another snapshot.
 ## Session Mixing
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
-(`master_volume`, read by `start`). The session `SessionState` owns the *applied* graph gain (each
+(`master_volume`). The session `SessionState` owns the *applied* graph gain (each
 `PlayerState.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
 through `Host::apply_mix` / `HostCmd::ApplyMix`, which validates the whole vector - every level
 finite and in `0.0..=1.0`, every member owned by the Host, no member repeated, graph initialised for
@@ -491,8 +493,9 @@ Slot/content volume and session ducking keep their own taper; they are separate 
 The Host validates every canonical grid identity, level, and duplicate before
 mutating the graph. Desired Player levels are committed only after dispatch succeeds.
 `engine/mix.rs`, `Cmd::SetPlayerMasterVolumes`, and the matching session-handle method compile only
-for tests or the `probe` feature. They keep deterministic offline render tests on their existing
-lower `SessionDispatcher`; they are not a second production path. Removing that probe seam first
+for tests or the `probe` feature. The probe path registers an unstarted player before storing its
+level, so the first start uses that session value. This keeps deterministic offline render tests on
+their existing lower `SessionDispatcher`; it is not a second production path. Removing that seam first
 requires the existing offline harness to exercise canonical Host ownership while preserving its
 explicit `render` API; that test migration is separate from the production cutover.
 
@@ -592,6 +595,7 @@ resampler fields.
 | `client-wreq` | no | Forward the wreq HTTP backend to network-reaching deps |
 | `tls-rustls` | yes | Forward rustls TLS selection to network-reaching deps |
 | `tls-native` | no | Forward native TLS selection to network-reaching deps |
+| `perf` | no | Native `hotpath` timing for play/audio/decode; ordinary builds compile probes out |
 | `probe` | no | USDT runtime tracing opt-in (forwards nothing on its own) |
 | `mock` | no | Exposes the `mock` module (`EqualizerMock`) |
 

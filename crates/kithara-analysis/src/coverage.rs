@@ -21,6 +21,11 @@ impl FrameRange {
     }
 
     #[must_use]
+    pub const fn end(self) -> u64 {
+        self.end
+    }
+
+    #[must_use]
     pub const fn frames(self) -> u64 {
         self.end.saturating_sub(self.start)
     }
@@ -33,11 +38,6 @@ impl FrameRange {
     #[must_use]
     pub const fn start(self) -> u64 {
         self.start
-    }
-
-    #[must_use]
-    pub const fn end(self) -> u64 {
-        self.end
     }
 }
 
@@ -74,30 +74,6 @@ impl Coverage {
             .fold(0, |sum, run| sum.saturating_add(run.frames()))
     }
 
-    /// Add `range`, merging it with every run it touches.
-    pub fn insert(&mut self, range: FrameRange) {
-        if range.is_empty() {
-            return;
-        }
-
-        let first = self.runs.partition_point(|run| run.end < range.start);
-        let last = self.runs.partition_point(|run| run.start <= range.end);
-        let Some(overlapped) = self.runs.get(first..last).filter(|runs| !runs.is_empty()) else {
-            self.runs.insert(first, range);
-            return;
-        };
-
-        let merged = FrameRange {
-            end: overlapped
-                .iter()
-                .fold(range.end, |end, run| end.max(run.end)),
-            start: overlapped
-                .iter()
-                .fold(range.start, |start, run| start.min(run.start)),
-        };
-        self.runs.splice(first..last, [merged]);
-    }
-
     /// Highest covered source frame. At end of stream this is the source
     /// length, which is how a pass learns its extent without a duration.
     #[must_use]
@@ -127,6 +103,30 @@ impl Coverage {
             out.push(FrameRange::new(at, horizon - at));
         }
         out
+    }
+
+    /// Add `range`, merging it with every run it touches.
+    pub fn insert(&mut self, range: FrameRange) {
+        if range.is_empty() {
+            return;
+        }
+
+        let first = self.runs.partition_point(|run| run.end < range.start);
+        let last = self.runs.partition_point(|run| run.start <= range.end);
+        let Some(overlapped) = self.runs.get(first..last).filter(|runs| !runs.is_empty()) else {
+            self.runs.insert(first, range);
+            return;
+        };
+
+        let merged = FrameRange {
+            end: overlapped
+                .iter()
+                .fold(range.end, |end, run| end.max(run.end)),
+            start: overlapped
+                .iter()
+                .fold(range.start, |start, run| start.min(run.start)),
+        };
+        self.runs.splice(first..last, [merged]);
     }
 
     /// The observed ranges, in source order, disjoint and non-adjacent.

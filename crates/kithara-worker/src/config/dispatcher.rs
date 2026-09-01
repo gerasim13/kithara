@@ -9,24 +9,24 @@ use crate::{Observer, observer::Event};
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct DispatcherConfig {
+    pub(crate) observer: Box<dyn Observer>,
     #[field(with)]
     pub(crate) backpressure_poll_interval: Duration,
-    #[field(with, option_set_some)]
-    pub(crate) cancel: Option<CancelGroup>,
-    #[field(with)]
-    pub(crate) capacity: NonZeroUsize,
-    #[field(with)]
-    pub(crate) fairness_yield_interval: NonZeroU32,
     #[field(with)]
     pub(crate) idle_timeout: Duration,
-    pub(crate) name: String,
-    pub(crate) observer: Box<dyn Observer>,
     #[field(with)]
     pub(crate) slow_tick_threshold: Duration,
     #[field(with)]
+    pub(crate) wait_timeout: Duration,
+    #[field(with)]
+    pub(crate) fairness_yield_interval: NonZeroU32,
+    #[field(with)]
     pub(crate) task_burst: NonZeroU32,
     #[field(with)]
-    pub(crate) wait_timeout: Duration,
+    pub(crate) capacity: NonZeroUsize,
+    #[field(with, option_set_some)]
+    pub(crate) cancel: Option<CancelGroup>,
+    pub(crate) name: String,
 }
 
 impl DispatcherConfig {

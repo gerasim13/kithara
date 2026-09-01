@@ -7,11 +7,6 @@ use toml::{Table, Value};
 /// namespace.
 pub(crate) const ENCODERS: &[&str] = &["fdk-aac", "fdk-aac-sys", "ffmpeg-next", "ffmpeg-sys-next"];
 
-// Keeping byte-neutral crates separate makes every addition an explicit
-// cache-invalidation decision.
-pub(crate) const NON_ENCODING_DEPENDENCIES: &[&str] =
-    &["bon", "num-traits", "tempfile", "thiserror", "tracing"];
-
 pub(crate) struct Lockfile {
     packages: Vec<Value>,
 }
@@ -47,17 +42,12 @@ impl Lockfile {
                 let name = package.get("name").and_then(Value::as_str)?;
                 ENCODERS.contains(&name).then(|| {
                     let field = |key| package.get(key).and_then(Value::as_str).unwrap_or_default();
-                    // The checksum pins the exact bytes the version resolves to,
-                    // which a re-release under one version number would not.
                     format!("{name} {} {}", field("version"), field("checksum"))
                 })
             })
             .collect();
         resolved.sort();
 
-        // A crate leaving the lock under a name listed here would silently stop
-        // being tracked, and an untracked encoder change is a cache serving bytes
-        // it should not. Fail the build instead.
         if resolved.len() != ENCODERS.len() {
             return Err(format!(
                 "resolved {resolved:?} for {ENCODERS:?}; update ENCODERS to match the crates that \
@@ -69,6 +59,8 @@ impl Lockfile {
     }
 
     pub(crate) fn unclassified_encode_dependencies(&self) -> Result<BTreeSet<String>, String> {
+        const NON_ENCODING_DEPENDENCIES: &[&str] =
+            &["bon", "num-traits", "tempfile", "thiserror", "tracing"];
         let encoder = self
             .packages
             .iter()

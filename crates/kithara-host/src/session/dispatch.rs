@@ -309,7 +309,7 @@ fn apply_mix<B: AudioBackend, S>(
     controls::set_player_master_volumes(state, &projected)?;
     for &HostLevel { grid_id, level } in levels {
         let updated = state.root.with_group(grid_id, |member| {
-            member.dispatch(|player| player.set_host_level(level));
+            member.commit_host_level(level);
         });
         if updated.is_none() {
             return Err(PlayError::MixForeignSession);
@@ -435,6 +435,7 @@ mod tests {
     };
 
     use firewheel::{FirewheelCtx, StreamInfo, processor::FirewheelProcessor};
+    use kithara_bufpool::testing::{TestPools, pools};
     use kithara_events::EventBus;
     use kithara_platform::sync::{
         Arc,
@@ -448,9 +449,10 @@ mod tests {
     use crate::{
         bridge::MixTapWriter,
         session::{
+            graph::master_gain,
             protocol::{Cmd, Reply, SessionError},
             state::{Deck, MixTap, SessionState},
-            testing::{HostTestPools, attach_player, pools, state as test_state},
+            testing::{attach_player, state as test_state},
         },
     };
 
@@ -481,7 +483,7 @@ mod tests {
         _processor: Option<FirewheelProcessor<Self>>,
     }
 
-    type TestState = SessionState<RouteLossBackend, HostTestPools>;
+    type TestState = SessionState<RouteLossBackend, TestPools>;
 
     #[derive(Clone)]
     struct RouteLossConfig {
@@ -565,7 +567,7 @@ mod tests {
             .map_err(|err| err.to_string())
     }
 
-    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<HostTestPools> {
+    fn register_command(grid_id: kithara_warp::BeatGridId, sample_rate: u32) -> Cmd<TestPools> {
         Cmd::RegisterPlayer {
             grid_id,
             bus: EventBus::default(),
@@ -591,7 +593,7 @@ mod tests {
         player_id: u64,
         sample_rate: u32,
         response_budget_frames: usize,
-    ) -> Cmd<HostTestPools> {
+    ) -> Cmd<TestPools> {
         Cmd::StartPlayer {
             player_id,
             sample_rate,
@@ -603,11 +605,11 @@ mod tests {
         }
     }
 
-    fn accepted_start_command(player_id: u64, sample_rate: u32) -> Cmd<HostTestPools> {
+    fn accepted_start_command(player_id: u64, sample_rate: u32) -> Cmd<TestPools> {
         start_command(player_id, sample_rate, 639)
     }
 
-    fn deck(state: &TestState, index: usize) -> &Deck<HostTestPools> {
+    fn deck(state: &TestState, index: usize) -> &Deck<TestPools> {
         state
             .graph
             .deck(index)
@@ -646,7 +648,7 @@ mod tests {
         assert!(boundary_axis.epoch() > before_axis.epoch());
     }
 
-    fn deck_by_player_id(state: &TestState, player_id: u64) -> &Deck<HostTestPools> {
+    fn deck_by_player_id(state: &TestState, player_id: u64) -> &Deck<TestPools> {
         let index = state
             .graph
             .index_by_player(player_id)
@@ -1166,6 +1168,41 @@ mod tests {
             })
             .collect();
         run_host_cmd(state, HostCmd::ApplyMix { levels })
+    }
+
+    #[kithara::test]
+    fn host_mix_before_registration_becomes_the_start_level() {
+        route_loss(RouteLossProbe::reset);
+
+        let mut state = test_state(start_route_loss_stream);
+        let grid_id = attach_player(&mut state);
+        assert!(matches!(
+            run_host_cmd(
+                &mut state,
+                HostCmd::ApplyMix {
+                    levels: Box::new([HostLevel::new(grid_id, 0.4)]),
+                },
+            ),
+            HostReply::Ok
+        ));
+        let Reply::PlayerRegistered(player_id) = run_cmd(
+            &mut state,
+            register_command(grid_id, TestState::DEFAULT_SAMPLE_RATE),
+        ) else {
+            panic!("player registration must succeed")
+        };
+
+        start_player_cmd(&mut state, player_id);
+
+        assert_eq!(master_volume_of(&state, player_id), 0.4);
+        assert_eq!(
+            deck_by_player_id(&state, player_id)
+                .master_volume_memo
+                .as_ref()
+                .expect("started player has a volume node")
+                .volume,
+            master_gain(0.4),
+        );
     }
 
     #[kithara::test]

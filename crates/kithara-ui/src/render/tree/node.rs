@@ -31,51 +31,87 @@ use crate::{
 };
 
 pub(super) struct IcedHost<'a, 'r> {
-    ctx: Ctx<'a, 'r>,
     skin: &'a Skin,
+    ctx: Ctx<'a, 'r>,
 }
 
 impl<'a, 'r> IcedHost<'a, 'r> {
     pub(super) const fn new(ctx: Ctx<'a, 'r>, skin: &'a Skin) -> Self {
-        Self { ctx, skin }
+        Self { skin, ctx }
     }
 }
 
 impl<'a> DocumentHost for IcedHost<'a, '_> {
     type Output = Element<'a, UiEvent>;
 
-    fn split(
+    fn control(
         &mut self,
-        axis: Axis,
-        measure: Option<MeasureAxis>,
-        children: Vec<SplitMount<Self::Output>>,
+        path: InternId,
+        spec: &ControlSpec,
+        read: Option<&Binding>,
+        owner: InputOwner,
+        size: Option<SizeSpec>,
+        transform: Transform,
     ) -> Self::Output {
-        let flex = match axis {
-            Axis::Horizontal => Flex::row_weighted(children.into_iter().map(|cell| {
-                (
-                    cell.output,
-                    Size::new(main_length(cell.size.w), Length::Fill),
-                    cell.weight,
-                    cell.band,
-                )
-            })),
-            Axis::Vertical => Flex::column_weighted(children.into_iter().map(|cell| {
-                (
-                    cell.output,
-                    Size::new(Length::Fill, main_length(cell.size.h)),
-                    cell.weight,
-                    cell.band,
-                )
-            })),
-        };
-        container(
-            flex.measure(measure)
-                .width(Length::Fill)
-                .height(Length::Fill),
+        apply_size(
+            render_control(
+                path,
+                spec,
+                read,
+                self.ctx,
+                self.skin,
+                Placed { owner, transform },
+            ),
+            size,
         )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    }
+
+    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
+        let size = content_size(group.size());
+        let flex = match group.axis() {
+            Axis::Horizontal => Flex::row(
+                children
+                    .into_iter()
+                    .map(|child| (child.output, child.minimum, child.band)),
+            )
+            .spacing(group.gap())
+            .align(column_alignment(group.alignment()))
+            .width(size.0)
+            .height(size.1),
+            Axis::Vertical => Flex::column(
+                children
+                    .into_iter()
+                    .map(|child| (child.output, child.minimum, child.band)),
+            )
+            .spacing(group.gap())
+            .align(column_alignment(group.alignment()))
+            .width(size.0),
+        }
+        .measure(group.measure())
+        .padding(padding(group.padding_x(), group.padding_y()));
+        let element = wheeled(
+            bordered(
+                filled(
+                    container(flex).width(size.0).height(size.1),
+                    group.background(),
+                    group.background_alpha(),
+                    group.round(),
+                    self.skin,
+                ),
+                group.frame(),
+                (group.frame_color(), group.frame_width()),
+                size,
+                self.skin,
+            ),
+            group.surface(),
+            size,
+            self.ctx.ui,
+        );
+        apply_size(Rendered::leading(element), group.size())
+    }
+
+    fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output {
+        host::host(child, node, self.ctx, self.skin)
     }
 
     fn measured(&mut self, plan: MeasuredPlan, branches: Vec<Self::Output>) -> Self::Output {
@@ -142,48 +178,17 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         }
     }
 
-    fn group(&mut self, group: Group<'_>, children: Vec<GroupMount<Self::Output>>) -> Self::Output {
-        let size = content_size(group.size());
-        let flex = match group.axis() {
-            Axis::Horizontal => Flex::row(
-                children
-                    .into_iter()
-                    .map(|child| (child.output, child.minimum, child.band)),
-            )
-            .spacing(group.gap())
-            .align(column_alignment(group.alignment()))
-            .width(size.0)
-            .height(size.1),
-            Axis::Vertical => Flex::column(
-                children
-                    .into_iter()
-                    .map(|child| (child.output, child.minimum, child.band)),
-            )
-            .spacing(group.gap())
-            .align(column_alignment(group.alignment()))
-            .width(size.0),
-        }
-        .measure(group.measure())
-        .padding(padding(group.padding_x(), group.padding_y()));
-        let element = wheeled(
-            bordered(
-                filled(
-                    container(flex).width(size.0).height(size.1),
-                    group.background(),
-                    group.background_alpha(),
-                    group.round(),
-                    self.skin,
-                ),
-                group.frame(),
-                (group.frame_color(), group.frame_width()),
-                size,
-                self.skin,
-            ),
-            group.surface(),
-            size,
-            self.ctx.ui,
-        );
-        apply_size(Rendered::leading(element), group.size())
+    /// A placement is its own widget rather than a padded container: the
+    /// pointer has to reach the child where it stands, and a container would
+    /// have to take the whole scene to offer that room.
+    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
+        placed(
+            self.ctx.ui.resolve(placement.path).to_owned(),
+            placement.at,
+            placement.write.is_some(),
+            placement.snap,
+            child,
+        )
     }
 
     fn popover(
@@ -192,8 +197,6 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         anchor: Self::Output,
         content: &mut dyn FnMut(&mut Self) -> Self::Output,
     ) -> Self::Output {
-        // This tree is thrown away and built again every frame, so a shut
-        // surface is cheapest left unbuilt: the frame that opens it builds it.
         let content = if popover.is_open() {
             content(self)
         } else {
@@ -215,19 +218,6 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         )
         .into();
         apply_size(Rendered::leading(element), popover.size())
-    }
-
-    /// A placement is its own widget rather than a padded container: the
-    /// pointer has to reach the child where it stands, and a container would
-    /// have to take the whole scene to offer that room.
-    fn placed(&mut self, placement: PlacedMount<'_>, child: Self::Output) -> Self::Output {
-        placed(
-            self.ctx.ui.resolve(placement.path).to_owned(),
-            placement.at,
-            placement.write.is_some(),
-            placement.snap,
-            child,
-        )
     }
 
     fn pressable(
@@ -284,34 +274,42 @@ impl<'a> DocumentHost for IcedHost<'a, '_> {
         apply_size(Rendered::leading(element), size)
     }
 
+    fn split(
+        &mut self,
+        axis: Axis,
+        measure: Option<MeasureAxis>,
+        children: Vec<SplitMount<Self::Output>>,
+    ) -> Self::Output {
+        let flex = match axis {
+            Axis::Horizontal => Flex::row_weighted(children.into_iter().map(|cell| {
+                (
+                    cell.output,
+                    Size::new(main_length(cell.size.w), Length::Fill),
+                    cell.weight,
+                    cell.band,
+                )
+            })),
+            Axis::Vertical => Flex::column_weighted(children.into_iter().map(|cell| {
+                (
+                    cell.output,
+                    Size::new(Length::Fill, main_length(cell.size.h)),
+                    cell.weight,
+                    cell.band,
+                )
+            })),
+        };
+        container(
+            flex.measure(measure)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    }
+
     fn stage(&mut self, children: Vec<Self::Output>, size: Option<SizeSpec>) -> Self::Output {
         stage(children, size)
-    }
-
-    fn control(
-        &mut self,
-        path: InternId,
-        spec: &ControlSpec,
-        read: Option<&Binding>,
-        owner: InputOwner,
-        size: Option<SizeSpec>,
-        transform: Transform,
-    ) -> Self::Output {
-        apply_size(
-            render_control(
-                path,
-                spec,
-                read,
-                self.ctx,
-                self.skin,
-                Placed { owner, transform },
-            ),
-            size,
-        )
-    }
-
-    fn hosted(&mut self, node: &ExpandedNode, child: Self::Output) -> Self::Output {
-        host::host(child, node, self.ctx, self.skin)
     }
 
     fn window(
@@ -563,7 +561,7 @@ mod tests {
         let content = Layout::new(&node)
             .children()
             .next()
-            .unwrap_or_else(|| panic!("the viewport lays out the content it was given"));
+            .expect("the viewport lays out the content it was given");
         assert_eq!(content.bounds().y, 0.0);
     }
 }

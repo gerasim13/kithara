@@ -20,6 +20,13 @@ pub struct WaveBucket {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WaveformView<'a> {
     pub buckets: &'a [WaveBucket],
+    /// Track fractions the analysis has not covered, as `[start, end]` pairs.
+    pub unready: &'a [[f32; 2]],
+    pub beats: &'a [f32],
+    pub cues: &'a [f32],
+    pub downbeats: &'a [f32],
+    pub bpm: Option<f32>,
+    pub r#loop: Option<[f32; 2]>,
     /// What the model calls this run of buckets.
     ///
     /// A different value means a different run. A viewer that keeps a copy —
@@ -27,45 +34,38 @@ pub struct WaveformView<'a> {
     /// comparing a megabyte of buckets against its copy on every frame, so
     /// whoever writes the buckets must move this when it writes them.
     pub revision: u64,
-    pub beats: &'a [f32],
-    pub cues: &'a [f32],
-    pub downbeats: &'a [f32],
-    /// Track fractions the analysis has not covered, as `[start, end]` pairs.
-    pub unready: &'a [[f32; 2]],
-    pub bpm: Option<f32>,
-    pub r#loop: Option<[f32; 2]>,
 }
 
 /// One destination tempo drawn by a portal map.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PortalTarget {
-    pub bpm: f32,
     pub is_selected: bool,
+    pub bpm: f32,
 }
 
 /// Borrowed tempo-ratio map exposed to renderers.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PortalMapView<'a> {
-    pub master: f32,
-    pub min: f32,
-    pub max: f32,
     pub targets: &'a [PortalTarget],
+    pub master: f32,
+    pub max: f32,
+    pub min: f32,
 }
 
 /// Normalized lower and upper values exposed to a range control.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ScalarRange {
-    pub min: f32,
     pub max: f32,
+    pub min: f32,
 }
 
 /// Borrowed browser-tree row exposed to renderers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TreeRow<'a> {
     pub label: &'a str,
+    pub icon: IconName,
     pub count: Option<u32>,
     pub expanded: Option<bool>,
-    pub icon: IconName,
     pub muted: bool,
     pub selected: bool,
     pub depth: u8,
@@ -97,6 +97,11 @@ impl<'a> TableCell<'a> {
     }
 
     #[must_use]
+    pub const fn id(&self) -> &'a str {
+        self.id
+    }
+
+    #[must_use]
     pub const fn number(id: &'a str, value: u8) -> Self {
         Self {
             id,
@@ -110,11 +115,6 @@ impl<'a> TableCell<'a> {
             id,
             value: TableValue::Text(value),
         }
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> &'a str {
-        self.id
     }
 
     #[must_use]

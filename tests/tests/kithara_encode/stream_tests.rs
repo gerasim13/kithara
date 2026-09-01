@@ -3,9 +3,9 @@ use std::io::Cursor;
 use kithara::{
     self,
     decode::{DecoderChunkOutcome, DecoderConfig, DecoderFactory},
+    encode::{EncodedTrack, StreamBackend, StreamEncoder},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use kithara_encode::{EncodedTrack, StreamBackend, StreamEncoder};
 use kithara_integration_tests::bufpool_ext::{TestPools, pools};
 use kithara_test_fixtures::{
     fmp4::{GaplessEncoding, mux_audio_track},

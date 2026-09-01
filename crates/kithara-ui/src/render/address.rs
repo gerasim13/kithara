@@ -59,8 +59,6 @@ mod tests {
 
     use super::*;
 
-    const TEMPOS: [&str; 2] = ["120.0", "128.0"];
-
     struct Root;
     struct Decks;
     struct Playback(usize);
@@ -88,6 +86,8 @@ mod tests {
 
     impl<'a> Node<'a> for Tempo {
         fn read(&self) -> Option<ReadValue<'a>> {
+            const TEMPOS: [&str; 2] = ["120.0", "128.0"];
+
             TEMPOS.get(self.0).map(|tempo| ReadValue::Text(tempo))
         }
     }

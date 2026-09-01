@@ -14,13 +14,13 @@ impl Point {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Size<T = f32> {
-    pub(crate) width: T,
     pub(crate) height: T,
+    pub(crate) width: T,
 }
 
 impl<T> Size<T> {
     pub(crate) const fn new(width: T, height: T) -> Self {
-        Self { width, height }
+        Self { height, width }
     }
 }
 

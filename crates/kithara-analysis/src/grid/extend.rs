@@ -2,8 +2,6 @@ use num_traits::cast::ToPrimitive;
 
 use crate::{BeatArtifact, artifact::MarkedBeat};
 
-const FILL_THRESHOLD: f64 = 1.5;
-
 pub(crate) fn extend_over(grid: BeatArtifact, extent: u64, source_rate: u32) -> BeatArtifact {
     let Some(beat) = beat_period(grid.bpm(), source_rate) else {
         return grid;
@@ -83,6 +81,8 @@ fn spread(marks: &[u64], confidence: &[Option<f32>], period: f64, extent: u64) -
 }
 
 fn fill_between(out: &mut Vec<MarkedBeat>, from: u64, to: u64, period: f64) {
+    const FILL_THRESHOLD: f64 = 1.5;
+
     let Some(gap) = to.checked_sub(from).and_then(|gap| gap.to_f64()) else {
         return;
     };

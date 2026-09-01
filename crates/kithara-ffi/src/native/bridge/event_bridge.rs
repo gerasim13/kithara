@@ -1,12 +1,14 @@
-use kithara::play::{PlayerEvent, TimeControlStatus};
-use kithara_events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    thread::{JoinHandle, sleep, spawn},
-    time::Duration,
-    tokio,
-    tokio::sync::broadcast,
+use kithara::{
+    events::{Envelope, Event, EventReceiver, QueueEvent, TrackId, TrackStatus},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        thread::{JoinHandle, sleep, spawn},
+        time::Duration,
+        tokio,
+        tokio::sync::broadcast,
+    },
+    play::{PlayerEvent, TimeControlStatus},
 };
 
 use crate::{
@@ -377,13 +379,15 @@ impl Drop for EventBridge {
 mod tests {
     use std::sync::{Condvar, Mutex as StdMutex, PoisonError};
 
-    use kithara::play::{PlayWorkerConfig, PlayerConfig, PlayerImpl};
-    use kithara_events::{
-        AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
-        QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
+    use kithara::{
+        events::{
+            AdvanceReason, Event, EventBus, FileError, FileEvent, HlsError, HlsEvent, ItemRole,
+            QueueEvent, QueueRepeatMode, SlotId, TrackId, TrackRef, TrackStatus,
+        },
+        platform::sync::{Arc, Mutex},
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        queue::{QueueConfig, test_utils::QueueProbe},
     };
-    use kithara_platform::sync::{Arc, Mutex};
-    use kithara_queue::{QueueConfig, test_utils::QueueProbe};
 
     use super::*;
     use crate::{
@@ -819,7 +823,7 @@ mod tests {
             }
             false
         };
-        kithara_platform::time::timeout(Duration::from_millis(timeout_ms), wait)
+        kithara::platform::time::timeout(Duration::from_millis(timeout_ms), wait)
             .await
             .unwrap_or(false)
     }
@@ -841,7 +845,7 @@ mod tests {
         let queue = owner.control().clone();
         let id = queue.register_for_test();
         queue.mark_played_for_test(id);
-        queue.set_repeat(kithara_queue::RepeatMode::One);
+        queue.set_repeat(kithara::queue::RepeatMode::One);
         queue.set_rate(1.0);
 
         let mut events = queue.subscribe();

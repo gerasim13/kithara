@@ -17,17 +17,17 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct TableFace {
-    table: Table<ColumnLayout>,
     #[field(get, vis = "pub(crate)")]
     skin: Skin,
+    table: Table<ColumnLayout>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Drawn {
-    pub(crate) columns: Vec<ColumnLayout>,
-    pub(crate) horizontal: f32,
     pub(crate) hovered: Option<usize>,
     pub(crate) pressed: Option<usize>,
+    pub(crate) columns: Vec<ColumnLayout>,
+    pub(crate) horizontal: f32,
     pub(crate) vertical: f32,
 }
 
@@ -48,13 +48,6 @@ impl TableFace {
         Self {
             table: Table::new(columns, rows),
             skin: skin.clone(),
-        }
-    }
-
-    delegate::delegate! {
-        to self.table {
-            pub(crate) fn columns(&self) -> &[ColumnLayout];
-            pub(crate) fn rows(&self) -> &[TableRow];
         }
     }
 
@@ -98,47 +91,6 @@ impl TableFace {
             content.finish()
         }
     }
-    fn paint_header(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        bounds: Rect,
-        horizontal: f32,
-        columns: &[ColumnLayout],
-    ) {
-        let header = Rect {
-            h: self.skin.table.header_height,
-            w: table_content_width(columns, bounds.w),
-            x: -horizontal,
-            y: bounds.y,
-        };
-        list.fill_rect(header, self.skin.rgba(self.skin.table.header_fill));
-        for (column, cell) in column_cells(bounds, columns, horizontal) {
-            let align = if column.column.style() == TableColumnStyle::Index {
-                TextAlign::Right
-            } else {
-                TextAlign::Left
-            };
-            paint_text(
-                list,
-                text,
-                column.column.label(),
-                Rect {
-                    h: header.h,
-                    ..cell
-                },
-                (
-                    &self.skin,
-                    self.skin.table.header_text,
-                    self.skin.table.cell_padding_x,
-                    align,
-                ),
-            );
-        }
-        for divider in table_dividers(bounds, columns, horizontal, &self.skin) {
-            list.fill_rect(divider.paint, self.skin.rgba(self.skin.table.divider_color));
-        }
-    }
 
     fn paint_body(
         &self,
@@ -161,72 +113,6 @@ impl TableFace {
         }
         list.clip(body, rows.finish());
     }
-
-    fn paint_row(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        index: usize,
-        bounds: Rect,
-        interaction: (Option<usize>, Option<usize>),
-        columns: &[ColumnLayout],
-    ) {
-        let (hovered, pressed) = (interaction.0 == Some(index), interaction.1 == Some(index));
-        let row = &self.rows()[index];
-        let frame = self.skin.table.row_frame;
-        let row_fill = self.skin.table.row_fill;
-        let fill = if pressed {
-            self.skin.tint(row_fill.pressed)
-        } else if row.selected() {
-            self.skin.rgba(self.skin.table.row_selected_fill)
-        } else if hovered {
-            self.skin.tint(row_fill.hovered)
-        } else {
-            self.skin.tint(row_fill.idle)
-        };
-        list.fill_rounded_rect(bounds, frame.radius, fill);
-        paint_frame(list, bounds, frame, &self.skin);
-        for (column_index, (column, cell)) in column_cells(
-            Rect {
-                w: bounds.w,
-                x: bounds.x,
-                ..bounds
-            },
-            columns,
-            0.0,
-        )
-        .enumerate()
-        {
-            self.paint_cell(
-                list,
-                text,
-                index,
-                row,
-                (column.column.style(), column_index, cell),
-            );
-        }
-        for divider in table_dividers(
-            Rect {
-                h: self.skin.table.header_height,
-                w: bounds.w,
-                x: bounds.x,
-                y: 0.0,
-            },
-            columns,
-            0.0,
-            &self.skin,
-        ) {
-            list.fill_rect(
-                Rect {
-                    h: bounds.h,
-                    y: bounds.y,
-                    ..divider.paint
-                },
-                self.skin.rgba(self.skin.table.divider_color),
-            );
-        }
-    }
-
     fn paint_cell(
         &self,
         list: &mut DrawListBuilder,
@@ -336,6 +222,120 @@ impl TableFace {
                     ),
                 );
             }
+        }
+    }
+
+    fn paint_header(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        bounds: Rect,
+        horizontal: f32,
+        columns: &[ColumnLayout],
+    ) {
+        let header = Rect {
+            h: self.skin.table.header_height,
+            w: table_content_width(columns, bounds.w),
+            x: -horizontal,
+            y: bounds.y,
+        };
+        list.fill_rect(header, self.skin.rgba(self.skin.table.header_fill));
+        for (column, cell) in column_cells(bounds, columns, horizontal) {
+            let align = if column.column.style() == TableColumnStyle::Index {
+                TextAlign::Right
+            } else {
+                TextAlign::Left
+            };
+            paint_text(
+                list,
+                text,
+                column.column.label(),
+                Rect {
+                    h: header.h,
+                    ..cell
+                },
+                (
+                    &self.skin,
+                    self.skin.table.header_text,
+                    self.skin.table.cell_padding_x,
+                    align,
+                ),
+            );
+        }
+        for divider in table_dividers(bounds, columns, horizontal, &self.skin) {
+            list.fill_rect(divider.paint, self.skin.rgba(self.skin.table.divider_color));
+        }
+    }
+
+    fn paint_row(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        index: usize,
+        bounds: Rect,
+        interaction: (Option<usize>, Option<usize>),
+        columns: &[ColumnLayout],
+    ) {
+        let (hovered, pressed) = (interaction.0 == Some(index), interaction.1 == Some(index));
+        let row = &self.rows()[index];
+        let frame = self.skin.table.row_frame;
+        let row_fill = self.skin.table.row_fill;
+        let fill = if pressed {
+            self.skin.tint(row_fill.pressed)
+        } else if row.selected() {
+            self.skin.rgba(self.skin.table.row_selected_fill)
+        } else if hovered {
+            self.skin.tint(row_fill.hovered)
+        } else {
+            self.skin.tint(row_fill.idle)
+        };
+        list.fill_rounded_rect(bounds, frame.radius, fill);
+        paint_frame(list, bounds, frame, &self.skin);
+        for (column_index, (column, cell)) in column_cells(
+            Rect {
+                w: bounds.w,
+                x: bounds.x,
+                ..bounds
+            },
+            columns,
+            0.0,
+        )
+        .enumerate()
+        {
+            self.paint_cell(
+                list,
+                text,
+                index,
+                row,
+                (column.column.style(), column_index, cell),
+            );
+        }
+        for divider in table_dividers(
+            Rect {
+                h: self.skin.table.header_height,
+                w: bounds.w,
+                x: bounds.x,
+                y: 0.0,
+            },
+            columns,
+            0.0,
+            &self.skin,
+        ) {
+            list.fill_rect(
+                Rect {
+                    h: bounds.h,
+                    y: bounds.y,
+                    ..divider.paint
+                },
+                self.skin.rgba(self.skin.table.divider_color),
+            );
+        }
+    }
+
+    delegate::delegate! {
+        to self.table {
+            pub(crate) fn columns(&self) -> &[ColumnLayout];
+            pub(crate) fn rows(&self) -> &[TableRow];
         }
     }
 }
@@ -568,9 +568,9 @@ fn column_cells(
                 0.0
             };
         let rect = Rect {
+            x,
             h: bounds.h,
             w: width,
-            x,
             y: bounds.y,
         };
         x += width;
@@ -755,7 +755,7 @@ mod tests {
                 DrawCmd::Clip { region, list } if *region == body => Some(list),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("Table rows must be scoped to the body clip"));
+            .expect("Table rows must be scoped to the body clip");
         let row_bottom = clipped.commands().iter().find_map(|command| match command {
             DrawCmd::Fill {
                 geom: Geom::Rect(rect) | Geom::RoundedRect { rect, .. },

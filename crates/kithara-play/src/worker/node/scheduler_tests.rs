@@ -131,18 +131,19 @@ where
     let seek_obs = source.seek_observe();
     let seek_epoch = seek_obs.epoch();
     let node = DecoderNode {
+        seek_obs,
+        source,
+        port,
+        preload_chunks,
         emit: Arc::new(DeferredBus::<Event>::new(EventBus::new(8), 8)),
         playhead: Arc::new(PlayheadState::new()) as Arc<dyn PlayheadWrite>,
         preload_gate: Arc::clone(&preload_gate),
-        seek_obs,
-        source,
+        retired_chunk: None,
         runtime: DecoderRuntime {
             seek_epoch,
             ..Default::default()
         },
-        port,
         engine_load: None,
-        preload_chunks,
     };
     (node, pop, preload_gate)
 }
@@ -170,6 +171,16 @@ struct PlaybackScheduler {
 }
 
 impl PlaybackScheduler {
+    fn register<S>(&self, node: DecoderNode<S>) -> Result<TaskHandle, kithara_worker::TaskError>
+    where
+        S: AudioSource<Chunk = AudioChunk>,
+    {
+        self.dispatcher.register(
+            TaskConfig::new().with_priority(ServiceClass::Audible.into()),
+            |_| node,
+        )
+    }
+
     fn start(name: String, cancel: CancelToken, capacity: std::num::NonZeroUsize) -> Self {
         let worker = Worker::new(WorkerConfig::new().with_cancel(cancel));
         let dispatcher = worker.dispatcher(
@@ -181,16 +192,6 @@ impl PlaybackScheduler {
             dispatcher,
             _worker: worker,
         }
-    }
-
-    fn register<S>(&self, node: DecoderNode<S>) -> Result<TaskHandle, kithara_worker::TaskError>
-    where
-        S: AudioSource<Chunk = AudioChunk>,
-    {
-        self.dispatcher.register(
-            TaskConfig::new().with_priority(ServiceClass::Audible.into()),
-            |_| node,
-        )
     }
 
     fn unregister(task: TaskHandle) {

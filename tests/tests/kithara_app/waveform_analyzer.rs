@@ -2,7 +2,6 @@
 //! WAV end to end through the production `TrackAnalysisRunner` (resource
 //! open + shared analysis-worker thread) and assert the source-analysis
 //! contract.
-
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::num::NonZeroU32;
@@ -49,8 +48,7 @@ async fn run_analysis(
         buckets,
         BeatAnalysisConfig::default(),
         pools,
-    )
-    .ok()?;
+    );
     let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).

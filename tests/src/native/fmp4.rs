@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
-use kithara::platform::sync::Arc;
-use kithara_encode::EncodedTrack;
+use kithara::{encode::EncodedTrack, platform::sync::Arc};
 use kithara_test_fixtures::fmp4::{Fmp4MuxError, GaplessEncoding, mux_audio_track};
 
 use crate::rfc6381::Rfc6381Ext;

@@ -12,8 +12,8 @@ use std::{
 /// anything. A caller builds one, so its fields stay open.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Geometry {
-    pub height: u32,
     pub scale: f64,
+    pub height: u32,
     pub width: u32,
 }
 
@@ -56,12 +56,10 @@ pub fn read_geometry(dir: &Path) -> Option<Geometry> {
 ///
 /// # Errors
 /// Fails when the file cannot be written or the rows do not fill the frame.
-pub fn write_png<'row>(
-    path: &Path,
-    width: u32,
-    height: u32,
-    rows: impl Iterator<Item = &'row [u8]>,
-) -> Result<(), String> {
+pub fn write_png<'row, Rows>(path: &Path, width: u32, height: u32, rows: Rows) -> Result<(), String>
+where
+    Rows: Iterator<Item = &'row [u8]>,
+{
     let file = File::create(path).map_err(|error| format!("create {}: {error}", path.display()))?;
     let mut encoder = png::Encoder::new(BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);

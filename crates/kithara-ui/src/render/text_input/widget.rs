@@ -80,10 +80,10 @@ where
     P: Program<UiEvent, Theme, Renderer, State = TextInputState>,
 {
     canvas: Canvas<P, UiEvent>,
-    input_layout: TextInputLayout,
     owner: InputOwner,
     path: String,
     query: String,
+    input_layout: TextInputLayout,
 }
 
 impl<P> TextInputWidget<P>
@@ -118,8 +118,27 @@ impl<P> IcedWidget<UiEvent, Theme, Renderer> for TextInputWidget<P>
 where
     P: Program<UiEvent, Theme, Renderer, State = TextInputState>,
 {
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<TextInputState>()
+    fn diff(&self, tree: &mut Tree) {
+        tree.state.downcast_mut::<TextInputState>().reconcile(
+            &self.path,
+            &self.query,
+            self.input_layout.clone(),
+            self.owner,
+        );
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.custom(
+            None,
+            layout.bounds(),
+            tree.state.downcast_mut::<TextInputState>(),
+        );
     }
 
     fn state(&self) -> widget::tree::State {
@@ -131,13 +150,31 @@ where
         ))
     }
 
-    fn diff(&self, tree: &mut Tree) {
-        tree.state.downcast_mut::<TextInputState>().reconcile(
-            &self.path,
-            &self.query,
-            self.input_layout.clone(),
-            self.owner,
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<TextInputState>()
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, UiEvent>,
+        viewport: &Rectangle,
+    ) {
+        self.canvas.update(
+            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
         );
+        if matches!(self.owner, InputOwner::Leaf)
+            && matches!(event, Event::Window(window::Event::RedrawRequested(_)))
+        {
+            let state = tree.state.downcast_ref::<TextInputState>();
+            let request = iced_interact::input_method(state.input_method(layout.bounds()));
+            shell.request_input_method(&request);
+        }
     }
 
     delegate::delegate! {
@@ -170,51 +207,14 @@ where
             );
         }
     }
-
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
-        viewport: &Rectangle,
-    ) {
-        self.canvas.update(
-            tree, event, layout, cursor, renderer, clipboard, shell, viewport,
-        );
-        if matches!(self.owner, InputOwner::Leaf)
-            && matches!(event, Event::Window(window::Event::RedrawRequested(_)))
-        {
-            let state = tree.state.downcast_ref::<TextInputState>();
-            let request = iced_interact::input_method(state.input_method(layout.bounds()));
-            shell.request_input_method(&request);
-        }
-    }
-
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        _renderer: &Renderer,
-        operation: &mut dyn Operation,
-    ) {
-        operation.custom(
-            None,
-            layout.bounds(),
-            tree.state.downcast_mut::<TextInputState>(),
-        );
-    }
 }
 
 #[derive(Default, fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct TextInputState {
     engine: Option<Engine>,
-    input_layout: TextInputLayout,
     path: String,
+    input_layout: TextInputLayout,
     #[field(get, vis = "pub(super)")]
     snapshot: TextInputSnapshot,
 }
@@ -224,6 +224,12 @@ impl TextInputState {
         let mut state = Self::default();
         state.reconcile(path, query, input_layout, owner);
         state
+    }
+
+    fn input_method(&self, bounds: Rectangle) -> Option<InputMethodRequest<'_>> {
+        let engine = self.engine.as_ref()?;
+        let target = Target::new(&self.path, Hit::new(None, bounds.into()));
+        engine.input_method(&[target])
     }
 
     fn reconcile(
@@ -257,15 +263,6 @@ impl TextInputState {
         }
     }
 
-    delegate::delegate! {
-        to self.engine {
-            #[call(as_ref)]
-            pub(super) const fn engine(&self) -> Option<&Engine>;
-            #[call(as_mut)]
-            pub(super) fn engine_mut(&mut self) -> Option<&mut Engine>;
-        }
-    }
-
     pub(super) fn refresh(&mut self) {
         if let Some(snapshot) = self
             .engine
@@ -276,15 +273,18 @@ impl TextInputState {
         }
     }
 
-    fn input_method(&self, bounds: Rectangle) -> Option<InputMethodRequest<'_>> {
-        let engine = self.engine.as_ref()?;
-        let target = Target::new(&self.path, Hit::new(None, bounds.into()));
-        engine.input_method(&[target])
-    }
-
     fn sync(&mut self, path: &str, snapshot: TextInputSnapshot) {
         if self.path == path {
             self.snapshot = snapshot;
+        }
+    }
+
+    delegate::delegate! {
+        to self.engine {
+            #[call(as_ref)]
+            pub(super) const fn engine(&self) -> Option<&Engine>;
+            #[call(as_mut)]
+            pub(super) fn engine_mut(&mut self) -> Option<&mut Engine>;
         }
     }
 }

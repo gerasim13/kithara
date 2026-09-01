@@ -31,10 +31,10 @@ pub enum PointerOwnership {
 #[fieldwork(opt_in, get, with)]
 pub struct Outcome<T = f32> {
     value: Option<T>,
-    #[field(get(copy), vis = "pub")]
-    propagation: Propagation,
     #[field(get(copy), with, vis = "pub")]
     ownership: PointerOwnership,
+    #[field(get(copy), vis = "pub")]
+    propagation: Propagation,
 }
 
 impl<T> Outcome<T> {
@@ -55,13 +55,22 @@ impl<T> Outcome<T> {
         }
     }
 
-    /// Produces a typed value and stops this event without changing pointer ownership.
+    /// Reports whether this event stops at the component.
     #[must_use]
-    pub const fn set(value: T) -> Self {
-        Self {
-            value: Some(value),
-            propagation: Propagation::Captured,
-            ownership: PointerOwnership::Unchanged,
+    pub const fn is_captured(&self) -> bool {
+        matches!(self.propagation, Propagation::Captured)
+    }
+
+    /// Maps the typed value without changing propagation or ownership.
+    #[must_use]
+    pub fn map<U, F>(self, map: F) -> Outcome<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        Outcome {
+            value: self.value.map(map),
+            propagation: self.propagation,
+            ownership: self.ownership,
         }
     }
 
@@ -76,29 +85,20 @@ impl<T> Outcome<T> {
         }
     }
 
-    /// Reports whether this event stops at the component.
+    /// Produces a typed value and stops this event without changing pointer ownership.
     #[must_use]
-    pub const fn is_captured(&self) -> bool {
-        matches!(self.propagation, Propagation::Captured)
+    pub const fn set(value: T) -> Self {
+        Self {
+            value: Some(value),
+            propagation: Propagation::Captured,
+            ownership: PointerOwnership::Unchanged,
+        }
     }
 
     /// Takes the typed value, if the component produced one.
     #[must_use]
     pub fn value(self) -> Option<T> {
         self.value
-    }
-
-    /// Maps the typed value without changing propagation or ownership.
-    #[must_use]
-    pub fn map<U, F>(self, map: F) -> Outcome<U>
-    where
-        F: FnOnce(T) -> U,
-    {
-        Outcome {
-            value: self.value.map(map),
-            propagation: self.propagation,
-            ownership: self.ownership,
-        }
     }
 }
 

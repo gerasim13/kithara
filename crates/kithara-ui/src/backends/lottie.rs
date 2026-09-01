@@ -5,7 +5,6 @@
 //! of it agrees. Pixels can: the same artwork at the same frame is painted
 //! twice into the same rasteriser, once by velato itself and once by the
 //! neutral list, and the two pictures are compared.
-
 use std::fmt::{self, Display, Formatter};
 
 use kithara_test_utils::kithara;
@@ -61,12 +60,12 @@ fn seam(frame: f64) -> Vec<u8> {
 /// carried here so a failure on a machine this branch cannot rasterise on is
 /// still evidence.
 struct Apart {
-    pixels: usize,
+    first: Option<(usize, [u8; 4], [u8; 4])>,
     /// The largest single-channel difference anywhere.
     worst: u8,
     /// How many of them are inside flat paint rather than on an edge.
     flat: usize,
-    first: Option<(usize, [u8; 4], [u8; 4])>,
+    pixels: usize,
 }
 
 impl Display for Apart {

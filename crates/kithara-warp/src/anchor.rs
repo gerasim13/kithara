@@ -59,18 +59,18 @@ impl SessionFrame {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct SessionAnchor {
-    /// Returns the frame this anchor was established on.
-    #[field(get, copy)]
-    frame: SessionFrame,
-    /// Returns the session beat playing at [`Self::frame`].
-    #[field(get, copy)]
-    beat: SessionBeat,
-    /// Returns the committed tempo in beats per second.
-    #[field(get, copy)]
-    beats_per_second: f64,
     /// Returns the session sample rate this anchor counts frames in.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Returns the session beat playing at [`Self::frame`].
+    #[field(get, copy)]
+    beat: SessionBeat,
+    /// Returns the frame this anchor was established on.
+    #[field(get, copy)]
+    frame: SessionFrame,
+    /// Returns the committed tempo in beats per second.
+    #[field(get, copy)]
+    beats_per_second: f64,
 }
 
 impl SessionAnchor {
@@ -95,10 +95,10 @@ impl SessionAnchor {
             return Err(CoordinateError::NonInvertibleRate);
         }
         Ok(Self {
-            frame,
-            beat,
-            beats_per_second,
             sample_rate,
+            beat,
+            frame,
+            beats_per_second,
         })
     }
 
@@ -116,6 +116,12 @@ impl SessionAnchor {
         SessionBeat::new(f64::from(self.beat) + frames * self.beats_per_frame())
     }
 
+    /// Session beats one output frame advances at this tempo.
+    #[must_use]
+    pub fn beats_per_frame(self) -> f64 {
+        self.beats_per_second / f64::from(self.sample_rate.get())
+    }
+
     /// Inverse of [`Self::beat_at`], rounded to the nearest frame.
     ///
     /// # Errors
@@ -131,12 +137,6 @@ impl SessionAnchor {
             .checked_add(frames)
             .map(SessionFrame::new)
             .ok_or(CoordinateError::NonFinite)
-    }
-
-    /// Session beats one output frame advances at this tempo.
-    #[must_use]
-    pub fn beats_per_frame(self) -> f64 {
-        self.beats_per_second / f64::from(self.sample_rate.get())
     }
 }
 

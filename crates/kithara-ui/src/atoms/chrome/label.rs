@@ -23,37 +23,15 @@ pub(crate) fn footer_role(skin: &Skin) -> TextRoleSkin {
 /// the skin its own way.
 #[derive(Clone, PartialEq)]
 pub(crate) struct ChromeLabel {
+    frame: FrameSkin,
     background: Rgba,
     border: Rgba,
     color: Rgba,
-    frame: FrameSkin,
-    padding_x: f32,
     role: TextRoleSkin,
+    padding_x: f32,
 }
 
 impl ChromeLabel {
-    /// The accent box that names the module.
-    pub(crate) fn chip(skin: &Skin) -> Self {
-        let metrics = skin.chrome;
-        Self::new(
-            skin,
-            metrics.chip_background,
-            metrics.chip_frame,
-            metrics.chip_text,
-        )
-    }
-
-    /// The title beside the chip.
-    pub(crate) fn title(skin: &Skin) -> Self {
-        let metrics = skin.chrome;
-        Self::new(
-            skin,
-            metrics.title_background,
-            metrics.title_frame,
-            metrics.title_text,
-        )
-    }
-
     fn new(skin: &Skin, background: ColorRole, frame: FrameSkin, role: TextRoleSkin) -> Self {
         Self {
             background: skin.rgba(background),
@@ -63,6 +41,17 @@ impl ChromeLabel {
             padding_x: skin.chrome.chip_pad,
             role,
         }
+    }
+
+    /// The accent box that names the module.
+    pub(crate) fn chip(skin: &Skin) -> Self {
+        let metrics = skin.chrome;
+        Self::new(
+            skin,
+            metrics.chip_background,
+            metrics.chip_frame,
+            metrics.chip_text,
+        )
     }
 
     /// The box the label asks for: its run, unwrapped, and the padding either
@@ -94,6 +83,17 @@ impl ChromeLabel {
             }),
             self.color,
         );
+    }
+
+    /// The title beside the chip.
+    pub(crate) fn title(skin: &Skin) -> Self {
+        let metrics = skin.chrome;
+        Self::new(
+            skin,
+            metrics.title_background,
+            metrics.title_frame,
+            metrics.title_text,
+        )
     }
 }
 

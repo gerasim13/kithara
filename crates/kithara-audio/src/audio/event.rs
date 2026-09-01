@@ -53,28 +53,6 @@ impl AudioEvents {
         }
     }
 
-    delegate::delegate! {
-        to self.emit {
-            pub(super) fn bus(&self) -> &EventBus;
-        }
-    }
-
-    fn publish(&mut self, event: AudioEvent) {
-        match self.wake_mode {
-            ConsumerWakeMode::RealtimeDeferred => {
-                self.emit.enqueue(event.into());
-                self.wake_pending = true;
-            }
-            ConsumerWakeMode::ImmediateOffRt => self.emit.bus().publish(event),
-        }
-    }
-
-    pub(super) const fn take_wake_pending(&mut self) -> bool {
-        let pending = self.wake_pending;
-        self.wake_pending = false;
-        pending
-    }
-
     pub(super) fn commit_read(
         &mut self,
         session: &super::core::Session,
@@ -181,6 +159,22 @@ impl AudioEvents {
         });
     }
 
+    fn publish(&mut self, event: AudioEvent) {
+        match self.wake_mode {
+            ConsumerWakeMode::RealtimeDeferred => {
+                self.emit.enqueue(event.into());
+                self.wake_pending = true;
+            }
+            ConsumerWakeMode::ImmediateOffRt => self.emit.bus().publish(event),
+        }
+    }
+
+    pub(super) const fn take_wake_pending(&mut self) -> bool {
+        let pending = self.wake_pending;
+        self.wake_pending = false;
+        pending
+    }
+
     pub(super) const fn reset_underrun(&mut self) {
         self.underrun_active = false;
     }
@@ -191,6 +185,12 @@ impl AudioEvents {
             Self::deferred(&EventBus::new(16)),
             ConsumerWakeMode::RealtimeDeferred,
         )
+    }
+
+    delegate::delegate! {
+        to self.emit {
+            pub(super) fn bus(&self) -> &EventBus;
+        }
     }
 }
 
@@ -343,11 +343,11 @@ fn gapless_span(track_info: &kithara_decode::DecoderTrackInfo) -> Option<Gapless
 #[derive(Clone, Copy)]
 pub(crate) struct DecoderChangedEventData<'a> {
     pub(crate) track_info: &'a kithara_decode::DecoderTrackInfo,
+    pub(crate) spec: AudioSpec,
     pub(crate) backend: DecodeBackend,
     pub(crate) cause: DecoderChangeCause,
     pub(crate) duration: Option<Duration>,
     pub(crate) media_info: Option<&'a MediaInfo>,
-    pub(crate) spec: AudioSpec,
     pub(crate) base_offset: u64,
     pub(crate) epoch: u64,
 }

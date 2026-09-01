@@ -55,27 +55,6 @@ impl<T> Outlet<T> {
         self.push_or_park(item)
     }
 
-    /// Whether one item can enter the ring without occupying overflow.
-    pub(crate) fn can_push_direct(&self) -> bool {
-        self.overflow.is_none() && !self.producer.is_full()
-    }
-
-    /// Push directly into the ring without using overflow.
-    ///
-    /// # Panics
-    ///
-    /// Panics when the single producer did not reserve ring capacity first.
-    pub(crate) fn push_direct(&mut self, item: T) {
-        assert!(
-            self.overflow.is_none(),
-            "direct ring admission requires an empty overflow slot"
-        );
-        match self.try_push_ring(item) {
-            Ok(()) => {}
-            Err(_) => panic!("direct ring admission requires reserved capacity"),
-        }
-    }
-
     /// Flush any deferred work owned by the wake signal.
     pub(crate) fn flush_wake_signals(&self) {
         if let Some(wake) = &self.wake {
@@ -114,16 +93,6 @@ impl<T> Outlet<T> {
             self.overflow.is_none(),
             "push_or_park called with non-empty overflow"
         );
-        match self.try_push_ring(item) {
-            Ok(()) => true,
-            Err(item) => {
-                self.overflow = Some(item);
-                false
-            }
-        }
-    }
-
-    fn try_push_ring(&mut self, item: T) -> Result<(), T> {
         let was_empty = self.producer.is_empty();
         match self.producer.try_push(item) {
             Ok(()) => {
@@ -131,9 +100,12 @@ impl<T> Outlet<T> {
                 if was_empty {
                     self.notify_data_available();
                 }
-                Ok(())
+                true
             }
-            Err(item) => Err(item),
+            Err(item) => {
+                self.overflow = Some(item);
+                false
+            }
         }
     }
 
@@ -160,8 +132,14 @@ impl<T> Outlet<T> {
         to self.overflow {
             /// Whether an item is currently parked in the overflow slot.
             #[call(is_some)]
-            #[cfg(test)]
             pub(crate) const fn has_pending(&self) -> bool;
+            /// Discard the parked overflow item, returning it to the caller.
+            ///
+            /// Useful when a producer needs to invalidate previously enqueued data
+            /// (e.g. on a seek epoch change) without waiting for the consumer to
+            /// drain the ring.
+            #[call(take)]
+            pub(crate) const fn take_pending(&mut self) -> Option<T>;
         }
     }
 }
@@ -292,15 +270,14 @@ mod tests {
     }
 
     #[kithara::test]
-    fn direct_push_never_occupies_overflow() {
-        let (mut out, mut inl) = connect::<i32>(1, None);
+    fn take_pending_clears_overflow() {
+        let (mut out, _inl) = connect::<i32>(1, None);
 
-        assert!(out.can_push_direct());
-        out.push_direct(1);
-        assert!(!out.can_push_direct());
+        assert_eq!(out.try_push(1), Ok(()));
+        assert_eq!(out.try_push(2), Ok(()));
+        assert_eq!(out.take_pending(), Some(2));
         assert!(!out.has_pending());
-        assert_eq!(inl.try_pop(), Some(1));
-        assert!(out.can_push_direct());
+        assert_eq!(out.take_pending(), None);
     }
 
     #[kithara::test]

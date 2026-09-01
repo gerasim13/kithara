@@ -7,7 +7,6 @@
 //! headless harness rasterises through a different renderer than the
 //! application does. This module rasterises instead, through the renderer the
 //! application actually uses, and looks at a pixel.
-
 use futures_lite::future::block_on;
 use iced::{
     Color, Pixels, Size, Vector,
@@ -44,28 +43,19 @@ use crate::{
 struct Fixture;
 
 impl Fixture {
-    /// The surface they paint into. Narrow enough that every width the two
-    /// rasterisers and the sampler ask for converts exactly.
-    const SURFACE: (u16, u16) = (96, 96);
-
-    /// Where the control sits on it. A widget almost never starts at the
-    /// window's origin, and the defect this module exists for only appears when
-    /// it does not.
-    const ORIGIN: (f32, f32) = (24.0, 24.0);
-
-    /// The clip, and a rectangle wholly inside it.
-    const REGION: Rect = Rect {
+    /// A box whose four right angles the join shapes.
+    const CORNER: Rect = Rect {
         h: 40.0,
         w: 40.0,
-        x: 12.0,
-        y: 12.0,
+        x: 24.0,
+        y: 24.0,
     };
 
-    const INSIDE: Rect = Rect {
-        h: 20.0,
-        w: 20.0,
-        x: 22.0,
-        y: 22.0,
+    const HOLE: Rect = Rect {
+        h: 16.0,
+        w: 16.0,
+        x: 24.0,
+        y: 24.0,
     };
 
     /// What the clip contains: white, so every channel is high.
@@ -76,14 +66,21 @@ impl Fixture {
         r: 1.0,
     };
 
-    /// What is drawn under it, outside any clip: red, so a single channel tells
-    /// which of the two won.
-    const UNDER: Rgba = Rgba {
-        a: 1.0,
-        b: 0.0,
-        g: 0.0,
-        r: 1.0,
+    const INSIDE: Rect = Rect {
+        h: 20.0,
+        w: 20.0,
+        x: 22.0,
+        y: 22.0,
     };
+
+    /// How wide the pen is when a test asks about its ends and corners. Wide
+    /// enough that what a cap or a join adds is several pixels across.
+    const NIB: f32 = 12.0;
+
+    /// Where the control sits on it. A widget almost never starts at the
+    /// window's origin, and the defect this module exists for only appears when
+    /// it does not.
+    const ORIGIN: (f32, f32) = (24.0, 24.0);
 
     /// The outer square of a ring, and the square that must be a hole in it.
     const OUTER: Rect = Rect {
@@ -93,26 +90,28 @@ impl Fixture {
         y: 8.0,
     };
 
-    const HOLE: Rect = Rect {
-        h: 16.0,
-        w: 16.0,
-        x: 24.0,
-        y: 24.0,
+    /// The clip, and a rectangle wholly inside it.
+    const REGION: Rect = Rect {
+        h: 40.0,
+        w: 40.0,
+        x: 12.0,
+        y: 12.0,
     };
-
-    /// How wide the pen is when a test asks about its ends and corners. Wide
-    /// enough that what a cap or a join adds is several pixels across.
-    const NIB: f32 = 12.0;
 
     /// A line whose free ends the cap shapes.
     const RULE: (Pt, Pt) = (Pt { x: 20.0, y: 8.0 }, Pt { x: 40.0, y: 8.0 });
 
-    /// A box whose four right angles the join shapes.
-    const CORNER: Rect = Rect {
-        h: 40.0,
-        w: 40.0,
-        x: 24.0,
-        y: 24.0,
+    /// The surface they paint into. Narrow enough that every width the two
+    /// rasterisers and the sampler ask for converts exactly.
+    const SURFACE: (u16, u16) = (96, 96);
+
+    /// What is drawn under it, outside any clip: red, so a single channel tells
+    /// which of the two won.
+    const UNDER: Rgba = Rgba {
+        a: 1.0,
+        b: 0.0,
+        g: 0.0,
+        r: 1.0,
     };
 }
 
@@ -452,7 +451,7 @@ fn through_iced(list: &DrawList) -> Vec<u8> {
         Pixels(14.0),
         Some("wgpu"),
     ))
-    .unwrap_or_else(|| panic!("iced must give a wgpu renderer without a window"));
+    .expect("iced must give a wgpu renderer without a window");
     let mut frame = Frame::new(
         &renderer,
         Size::new(f32::from(Fixture::SURFACE.0), f32::from(Fixture::SURFACE.1)),
@@ -523,9 +522,9 @@ pub(crate) fn rasterise_at(
             scene,
             &texture.create_view(&TextureViewDescriptor::default()),
             &RenderParams {
-                base_color: base,
                 width,
                 height,
+                base_color: base,
                 antialiasing_method: AaConfig::Area,
             },
         )

@@ -3,7 +3,6 @@
 //! network download. This exercises the production
 //! `kithara_app::waveform::TrackAnalysisRunner` (open + preload + shared
 //! analysis-worker decode), not a bare `Resource`.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
@@ -119,8 +118,7 @@ async fn waveform_and_player_share_one_get() {
         WAVEFORM_BUCKETS,
         BeatAnalysisConfig::default(),
         pools,
-    )
-    .expect("analysis runner task is admitted");
+    );
     let mut analysis_rx = runner.analyze(waveform_cfg, "shared-download-track".into(), RATE, drop);
 
     let player = worker.open(player_cfg).await.expect("open player audio");

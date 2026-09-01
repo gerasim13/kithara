@@ -294,17 +294,15 @@ pub(super) fn single_box(
     path: &NodePath,
     origin: &SourceUri,
 ) -> Result<(), UiDocError> {
-    // A track is judged by both ends: an object that starts still and travels
-    // to a turn still turns.
     let travels = to.is_some_and(|to| !to.is_still());
     if transform.is_still() && !travels {
         return Ok(());
     }
     if let Some(child) = native_pass(child) {
         return Err(UiDocError::ObjectNative {
+            child,
             origin: origin.clone(),
             path: path.render(),
-            child,
         });
     }
     let turns = transform.turns() || to.is_some_and(Pose::turns);

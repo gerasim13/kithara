@@ -6,106 +6,8 @@ use super::{
 };
 
 impl DecoderGeneration {
-    pub(crate) fn prepare_holdback(&mut self, spec: AudioSpec, join_frames: u64) -> StageResult {
-        self.holdback = None;
-        let Some(slots) = usize::try_from(join_frames)
-            .ok()
-            .and_then(|frames| frames.checked_add(1))
-        else {
-            return StageResult::NeedMore;
-        };
-        if self.staged.capacity() < slots {
-            self.staged.reserve_exact(slots - self.staged.len());
-        }
-        let holdback = Holdback {
-            join_frames,
-            slots,
-            spec,
-        };
-        if let Some(failure) = self.validate_staged_holdback(holdback) {
-            return StageResult::Invalid(Box::new(failure));
-        }
-        self.holdback = Some(holdback);
-        self.drain_holdback()
-    }
-
-    pub(crate) fn push_holdback(&mut self, chunk: AudioChunk) -> StageResult {
-        if self.gapless.has_output() {
-            return StageResult::Invalid(Box::new(stage_failure(
-                chunk,
-                "transition holdback has undrained gapless output",
-            )));
-        }
-        if matches!(self.holdback_progress(), StageProgress::Ready) {
-            return StageResult::Invalid(Box::new(stage_failure(
-                chunk,
-                "transition holdback is already ready",
-            )));
-        }
-        self.gapless.push(chunk);
-        self.drain_holdback()
-    }
-
-    pub(crate) fn next_with_holdback(&mut self) -> StageOutput {
-        match self.pump_holdback() {
-            StageResult::Ready => StageOutput::Output(self.staged.pop_front()),
-            StageResult::NeedMore => StageOutput::Output(None),
-            StageResult::Invalid(failure) => StageOutput::Invalid(*failure),
-        }
-    }
-
-    fn validate_staged_holdback(&mut self, holdback: Holdback) -> Option<StageFailure> {
-        #[cfg(test)]
-        self.record_staged_scan();
-
-        let mut staged_end = None;
-        let mut invalid = None;
-        for (index, chunk) in self.staged.iter().enumerate() {
-            let Some((start, end)) = chunk_range(chunk, holdback.spec) else {
-                let detail = if chunk.spec() == holdback.spec {
-                    "invalid PCM metadata in transition holdback"
-                } else {
-                    "mixed PCM spec in transition holdback"
-                };
-                invalid = Some((index, detail));
-                break;
-            };
-            if index >= holdback.slots {
-                invalid = Some((index, "transition holdback capacity exceeded"));
-                break;
-            }
-            if staged_end.is_some_and(|expected| expected != start) {
-                invalid = Some((index, "discontinuous PCM in transition holdback"));
-                break;
-            }
-            staged_end = Some(end);
-        }
-        if let Some((index, detail)) = invalid {
-            return self
-                .staged
-                .remove(index)
-                .map(|chunk| stage_failure(chunk, detail));
-        }
-        None
-    }
-
     fn drain_holdback(&mut self) -> StageResult {
         self.pump_holdback()
-    }
-
-    fn pump_holdback(&mut self) -> StageResult {
-        loop {
-            let progress = self.holdback_progress();
-            if matches!(progress, StageProgress::Ready) {
-                return StageResult::Ready;
-            }
-            let Some(chunk) = self.gapless.next() else {
-                return StageResult::NeedMore;
-            };
-            if let Some(failure) = self.push_holdback_chunk(chunk) {
-                return StageResult::Invalid(Box::new(failure));
-            }
-        }
     }
 
     fn holdback_progress(&self) -> StageProgress {
@@ -132,6 +34,69 @@ impl DecoderGeneration {
         } else {
             StageProgress::NeedMore
         }
+    }
+
+    pub(crate) fn next_with_holdback(&mut self) -> StageOutput {
+        match self.pump_holdback() {
+            StageResult::Ready => StageOutput::Output(self.staged.pop_front()),
+            StageResult::NeedMore => StageOutput::Output(None),
+            StageResult::Invalid(failure) => StageOutput::Invalid(*failure),
+        }
+    }
+
+    pub(crate) fn prepare_holdback(&mut self, spec: AudioSpec, join_frames: u64) -> StageResult {
+        self.holdback = None;
+        let Some(slots) = usize::try_from(join_frames)
+            .ok()
+            .and_then(|frames| frames.checked_add(1))
+        else {
+            return StageResult::NeedMore;
+        };
+        if self.staged.capacity() < slots {
+            self.staged.reserve_exact(slots - self.staged.len());
+        }
+        let holdback = Holdback {
+            join_frames,
+            slots,
+            spec,
+        };
+        if let Some(failure) = self.validate_staged_holdback(holdback) {
+            return StageResult::Invalid(Box::new(failure));
+        }
+        self.holdback = Some(holdback);
+        self.drain_holdback()
+    }
+
+    fn pump_holdback(&mut self) -> StageResult {
+        loop {
+            let progress = self.holdback_progress();
+            if matches!(progress, StageProgress::Ready) {
+                return StageResult::Ready;
+            }
+            let Some(chunk) = self.gapless.next() else {
+                return StageResult::NeedMore;
+            };
+            if let Some(failure) = self.push_holdback_chunk(chunk) {
+                return StageResult::Invalid(Box::new(failure));
+            }
+        }
+    }
+
+    pub(crate) fn push_holdback(&mut self, chunk: AudioChunk) -> StageResult {
+        if self.gapless.has_output() {
+            return StageResult::Invalid(Box::new(stage_failure(
+                chunk,
+                "transition holdback has undrained gapless output",
+            )));
+        }
+        if matches!(self.holdback_progress(), StageProgress::Ready) {
+            return StageResult::Invalid(Box::new(stage_failure(
+                chunk,
+                "transition holdback is already ready",
+            )));
+        }
+        self.gapless.push(chunk);
+        self.drain_holdback()
     }
 
     fn push_holdback_chunk(&mut self, chunk: AudioChunk) -> Option<StageFailure> {
@@ -174,5 +139,40 @@ impl DecoderGeneration {
     pub(super) fn record_staged_scan(&self) {
         self.staged_scan_count
             .set(self.staged_scan_count.get().saturating_add(1));
+    }
+
+    fn validate_staged_holdback(&mut self, holdback: Holdback) -> Option<StageFailure> {
+        #[cfg(test)]
+        self.record_staged_scan();
+
+        let mut staged_end = None;
+        let mut invalid = None;
+        for (index, chunk) in self.staged.iter().enumerate() {
+            let Some((start, end)) = chunk_range(chunk, holdback.spec) else {
+                let detail = if chunk.spec() == holdback.spec {
+                    "invalid PCM metadata in transition holdback"
+                } else {
+                    "mixed PCM spec in transition holdback"
+                };
+                invalid = Some((index, detail));
+                break;
+            };
+            if index >= holdback.slots {
+                invalid = Some((index, "transition holdback capacity exceeded"));
+                break;
+            }
+            if staged_end.is_some_and(|expected| expected != start) {
+                invalid = Some((index, "discontinuous PCM in transition holdback"));
+                break;
+            }
+            staged_end = Some(end);
+        }
+        if let Some((index, detail)) = invalid {
+            return self
+                .staged
+                .remove(index)
+                .map(|chunk| stage_failure(chunk, detail));
+        }
+        None
     }
 }

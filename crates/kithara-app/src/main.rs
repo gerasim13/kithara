@@ -8,8 +8,10 @@ use kithara::{
     assets::{FlushHub, FlushPolicy, StorageBackend},
     host::HostConfig,
     net::{HttpClient, NetOptions},
+    platform::{CancelToken, thread, tokio},
     play::PlayWorkerConfig,
     stream::dl::{Downloader, DownloaderConfig},
+    worker::{RayonConfig, Worker, WorkerConfig},
 };
 use kithara_app::{
     baked,
@@ -19,21 +21,11 @@ use kithara_app::{
     pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
-use kithara_platform::{CancelToken, thread, tokio};
-use kithara_worker::{RayonConfig, Worker, WorkerConfig};
 
 /// Kithara — audio player application.
 #[derive(Parser)]
 #[command(name = "kithara", about = "Audio player")]
 struct Args {
-    /// Audio files or URLs to play.
-    tracks: Vec<String>,
-
-    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
-    /// Enabled by default during testing phase.
-    #[arg(long, default_value_t = true)]
-    insecure: bool,
-
     /// Which host draws the studio. A build without the `masonry` feature has
     /// only the immediate one.
     #[arg(long, value_enum, default_value_t)]
@@ -43,6 +35,14 @@ struct Args {
     /// beside the executable.
     #[arg(long)]
     ui_package: Option<std::path::PathBuf>,
+
+    /// Audio files or URLs to play.
+    tracks: Vec<String>,
+
+    /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
+    /// Enabled by default during testing phase.
+    #[arg(long, default_value_t = true)]
+    insecure: bool,
 }
 
 /// Where a release lays its UI documents out: beside the executable.
@@ -74,9 +74,6 @@ fn main() -> AppResult {
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
 
-    // App master root held for the whole process: it goes into `AppConfig` and
-    // every subsystem derives from `shutdown.child()`, so a frontend
-    // `config.shutdown.cancel()` propagates through the whole app subtree.
     let shutdown = CancelToken::root();
     let pools = pools::build()?;
     let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);

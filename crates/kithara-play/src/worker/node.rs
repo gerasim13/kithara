@@ -31,10 +31,13 @@ pub(crate) struct DecoderNode<S> {
     playhead: Arc<dyn PlayheadWrite>,
     preload_gate: Arc<PreloadGate>,
     seek_obs: Arc<dyn SeekObserve>,
-    source: S,
     runtime: DecoderRuntime,
-    port: ProducerPort,
     engine_load: Option<Arc<EngineLoad>>,
+    /// Chunk displaced by a seek inside the checked tick. The scheduler shell
+    /// reclaims it in `recycle` before the next tick.
+    retired_chunk: Option<AudioChunk>,
+    port: ProducerPort,
+    source: S,
     preload_chunks: usize,
 }
 
@@ -55,7 +58,7 @@ impl<S> DecoderNode<S> {
         }
 
         self.runtime.chunks_sent += 1;
-        if self.runtime.chunks_sent >= self.preload_chunks {
+        if self.runtime.chunks_sent >= self.preload_chunks && !self.port.has_pending() {
             self.complete_preload();
         }
     }
@@ -135,6 +138,14 @@ where
             return;
         }
 
+        if let Some(Fetch::Data { data, .. }) = self.port.take_pending() {
+            if self.retired_chunk.is_some() {
+                mem::forget(data);
+                debug_assert!(false, "scheduler skipped the required post-tick recycle");
+            } else {
+                self.retired_chunk = Some(data);
+            }
+        }
         self.preload_gate.rearm();
         self.runtime = DecoderRuntime {
             seek_epoch: current,
@@ -152,13 +163,14 @@ where
         let seek_epoch = seek_obs.epoch();
         Self {
             seek_obs,
+            engine_load,
             source: lane.source,
+            retired_chunk: None,
             port: lane.port,
             playhead: lane.playhead,
             emit: lane.emit,
             preload_gate: lane.preload_gate,
             preload_chunks: lane.preload_chunks,
-            engine_load,
             runtime: DecoderRuntime {
                 seek_epoch,
                 ..Default::default()
@@ -176,18 +188,21 @@ where
     }
 
     fn recycle(&mut self) {
+        if let Some(chunk) = self.retired_chunk.take() {
+            self.source.retire_chunk(chunk);
+        }
         self.port.recycle();
         let _ = self.source.prepare_deferred();
         self.source.finish_deferred();
         self.port.flush_wake();
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure(label = "play.decoder.tick")]
     #[kithara::rtsan_forbid_blocking]
     fn tick(&mut self) -> TickResult {
         self.sync_seek_epoch();
 
-        if !self.port.can_push_direct() {
+        if !self.port.flush() {
             return TickResult::Backpressured;
         }
 
@@ -211,14 +226,20 @@ where
                     ),
                     _ => (None, None),
                 };
-                self.port.push_direct(fetch);
-                if let Some((source_end, epoch)) = source_end {
-                    self.source.commit_source_end(source_end, epoch);
+                if self.port.try_push(fetch) {
+                    if let Some((source_end, epoch)) = source_end {
+                        self.source.commit_source_end(source_end, epoch);
+                    }
+                    if let Some(frontier) = decoded_frontier {
+                        self.playhead.set_decoded_frontier(frontier);
+                    }
+                    self.mark_preload_progress();
+                } else {
+                    debug_assert!(
+                        false,
+                        "producer output rejected - overflow invariant violated"
+                    );
                 }
-                if let Some(frontier) = decoded_frontier {
-                    self.playhead.set_decoded_frontier(frontier);
-                }
-                self.mark_preload_progress();
                 TickResult::Progress
             }
 
@@ -237,20 +258,35 @@ where
             TrackStep::Eof => {
                 let epoch = self.source.decode_epoch();
                 let marker = Fetch::eof(epoch);
-                self.port.push_direct(marker);
-                self.complete_preload();
-                self.emit
-                    .enqueue(AudioEvent::EndOfStream { seek_epoch: epoch }.into());
-                self.runtime.eof_sent = true;
-                TickResult::Progress
+                if self.port.try_push(marker) {
+                    self.complete_preload();
+                    self.emit
+                        .enqueue(AudioEvent::EndOfStream { seek_epoch: epoch }.into());
+                    self.runtime.eof_sent = true;
+                    TickResult::Progress
+                } else {
+                    debug_assert!(false, "EOF marker rejected - overflow invariant violated");
+                    TickResult::Waiting
+                }
             }
 
             TrackStep::Failed => {
                 let epoch = self.source.decode_epoch();
                 let marker = Fetch::failure(epoch);
-                self.port.push_direct(marker);
-                self.complete_preload();
-                TickResult::Done
+                if self.port.try_push(marker) {
+                    self.complete_preload();
+                    if self.port.has_pending() {
+                        TickResult::Progress
+                    } else {
+                        TickResult::Done
+                    }
+                } else {
+                    debug_assert!(
+                        false,
+                        "Failed marker rejected - overflow invariant violated"
+                    );
+                    TickResult::Waiting
+                }
             }
         };
         self.maybe_emit_worker_telemetry(Instant::now());
@@ -266,3 +302,4 @@ where
 mod scheduler_tests;
 #[cfg(test)]
 mod tests;
+use std::mem;

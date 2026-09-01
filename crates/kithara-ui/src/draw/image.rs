@@ -34,13 +34,34 @@ impl ImageId {
 /// the only one that can draw it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Image {
-    height: u32,
     id: ImageId,
     rgba: Option<Arc<[u8]>>,
+    height: u32,
     width: u32,
 }
 
 impl Image {
+    /// Creates a picture whose pixels live on the device under this identity.
+    #[must_use]
+    pub const fn external(id: ImageId, width: u32, height: u32) -> Self {
+        Self {
+            height,
+            id,
+            width,
+            rgba: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    #[must_use]
+    pub const fn id(&self) -> &ImageId {
+        &self.id
+    }
+
     /// Creates a picture from pixels, or nothing when they do not fill the size.
     ///
     /// A short buffer is a defect in whatever produced it, not something to
@@ -55,30 +76,9 @@ impl Image {
         Some(Self {
             height,
             id,
+            width,
             rgba: Some(rgba),
-            width,
         })
-    }
-
-    /// Creates a picture whose pixels live on the device under this identity.
-    #[must_use]
-    pub const fn external(id: ImageId, width: u32, height: u32) -> Self {
-        Self {
-            height,
-            id,
-            rgba: None,
-            width,
-        }
-    }
-
-    #[must_use]
-    pub const fn height(&self) -> u32 {
-        self.height
-    }
-
-    #[must_use]
-    pub const fn id(&self) -> &ImageId {
-        &self.id
     }
 
     /// The pixels, or nothing when they live on the device.

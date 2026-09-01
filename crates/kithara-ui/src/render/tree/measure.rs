@@ -19,17 +19,17 @@ use crate::{
 };
 
 pub(super) struct Flex<'a> {
+    align: Alignment,
     axis: Axis,
+    height: Length,
+    width: Length,
     /// The axis whose room decides which children stand, when they come and go
     /// with the room at all.
     measure: Option<MeasureAxis>,
-    spacing: f32,
     padding: Padding,
-    width: Length,
-    height: Length,
-    align: Alignment,
-    children: Vec<Element<'a, UiEvent>>,
     child_layouts: Vec<ChildLayout>,
+    children: Vec<Element<'a, UiEvent>>,
+    spacing: f32,
 }
 
 #[derive(Clone, Copy)]
@@ -52,15 +52,9 @@ struct State {
 }
 
 impl<'a> Flex<'a> {
-    pub(super) fn row(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>, Band)>,
-    ) -> Self {
-        Self::with_children(
-            Axis::Horizontal,
-            children
-                .into_iter()
-                .map(|(child, main_minimum, band)| (child, None, main_minimum, None, band)),
-        )
+    pub(super) fn align(mut self, alignment: Alignment) -> Self {
+        self.align = alignment;
+        self
     }
 
     pub(super) fn column(
@@ -68,6 +62,76 @@ impl<'a> Flex<'a> {
     ) -> Self {
         Self::with_children(
             Axis::Vertical,
+            children
+                .into_iter()
+                .map(|(child, main_minimum, band)| (child, None, main_minimum, None, band)),
+        )
+    }
+
+    pub(super) fn column_weighted(
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
+    ) -> Self {
+        Self::with_children(
+            Axis::Vertical,
+            children
+                .into_iter()
+                .map(|(child, declared, main_weight, band)| {
+                    (child, Some(declared), None, Some(main_weight), band)
+                }),
+        )
+    }
+
+    pub(super) fn height(mut self, height: Length) -> Self {
+        self.height = height;
+        self
+    }
+
+    /// Names the axis whose room decides which children stand.
+    pub(super) const fn measure(mut self, axis: Option<MeasureAxis>) -> Self {
+        self.measure = axis;
+        self
+    }
+
+    /// The room this flow keeps for itself around its children.
+    ///
+    /// The flow owns its padding rather than sitting inside a padded container,
+    /// so a band is read against the box the document declared. See
+    /// `render/masonry/flex.rs`, which reads the same number.
+    pub(super) const fn padding(mut self, padding: Padding) -> Self {
+        self.padding = padding;
+        self
+    }
+
+    fn push(
+        mut self,
+        child: Element<'a, UiEvent>,
+        declared: Option<Size<Length>>,
+        main_minimum: Option<f32>,
+        main_weight: Option<f32>,
+        band: Band,
+    ) -> Self {
+        let size_hint = declared.unwrap_or_else(|| child.as_widget().size_hint());
+
+        if !size_hint.is_void() {
+            self.width = self.width.enclose(size_hint.width);
+            self.height = self.height.enclose(size_hint.height);
+            self.children.push(child);
+            self.child_layouts.push(ChildLayout {
+                band,
+                declared,
+                main_minimum,
+                main_weight,
+            });
+        }
+
+        self
+    }
+
+    pub(super) fn row(
+        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Option<f32>, Band)>,
+    ) -> Self {
+        Self::with_children(
+            Axis::Horizontal,
             children
                 .into_iter()
                 .map(|(child, main_minimum, band)| (child, None, main_minimum, None, band)),
@@ -87,17 +151,14 @@ impl<'a> Flex<'a> {
         )
     }
 
-    pub(super) fn column_weighted(
-        children: impl IntoIterator<Item = (Element<'a, UiEvent>, Size<Length>, f32, Band)>,
-    ) -> Self {
-        Self::with_children(
-            Axis::Vertical,
-            children
-                .into_iter()
-                .map(|(child, declared, main_weight, band)| {
-                    (child, Some(declared), None, Some(main_weight), band)
-                }),
-        )
+    pub(super) fn spacing(mut self, spacing: f32) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
+    pub(super) fn width(mut self, width: Length) -> Self {
+        self.width = width;
+        self
     }
 
     fn with_children(
@@ -132,92 +193,12 @@ impl<'a> Flex<'a> {
 
         flex
     }
-
-    fn push(
-        mut self,
-        child: Element<'a, UiEvent>,
-        declared: Option<Size<Length>>,
-        main_minimum: Option<f32>,
-        main_weight: Option<f32>,
-        band: Band,
-    ) -> Self {
-        let size_hint = declared.unwrap_or_else(|| child.as_widget().size_hint());
-
-        if !size_hint.is_void() {
-            self.width = self.width.enclose(size_hint.width);
-            self.height = self.height.enclose(size_hint.height);
-            self.children.push(child);
-            self.child_layouts.push(ChildLayout {
-                band,
-                declared,
-                main_minimum,
-                main_weight,
-            });
-        }
-
-        self
-    }
-
-    /// The room this flow keeps for itself around its children.
-    ///
-    /// The flow owns its padding rather than sitting inside a padded container,
-    /// so a band is read against the box the document declared. See
-    /// `render/masonry/flex.rs`, which reads the same number.
-    pub(super) const fn padding(mut self, padding: Padding) -> Self {
-        self.padding = padding;
-        self
-    }
-
-    pub(super) fn spacing(mut self, spacing: f32) -> Self {
-        self.spacing = spacing;
-        self
-    }
-
-    pub(super) fn width(mut self, width: Length) -> Self {
-        self.width = width;
-        self
-    }
-
-    pub(super) fn height(mut self, height: Length) -> Self {
-        self.height = height;
-        self
-    }
-
-    pub(super) fn align(mut self, alignment: Alignment) -> Self {
-        self.align = alignment;
-        self
-    }
-
-    /// Names the axis whose room decides which children stand.
-    pub(super) const fn measure(mut self, axis: Option<MeasureAxis>) -> Self {
-        self.measure = axis;
-        self
-    }
 }
 
 /// What a flow remembers between passes, and how it reads it back. A flow is
 /// built afresh from the document for every view, so the storage below lives
 /// in the state its tree keeps for it rather than in the flow itself.
 impl<'a> Flex<'a> {
-    /// Records in `into` which children stand in the room this flow turned out
-    /// to have. A flow that measures nothing stands all of them.
-    fn stand(&self, limits: &layout::Limits, into: &mut Vec<bool>) {
-        into.clear();
-        let Some(axis) = self.measure else {
-            into.resize(self.children.len(), true);
-            return;
-        };
-        let room = match axis {
-            MeasureAxis::Width => limits.max().width,
-            MeasureAxis::Height => limits.max().height,
-        };
-        into.extend(
-            self.child_layouts
-                .iter()
-                .map(|child| child.band.stands(room)),
-        );
-    }
-
     /// Refills what this flow keeps between passes: which children the room
     /// reached, and which child each item the solver asks about is.
     fn record(&self, limits: &layout::Limits, state: &mut State) {
@@ -268,6 +249,25 @@ impl<'a> Flex<'a> {
                 standing(stood, index).then_some((child, state, bounds))
             })
     }
+
+    /// Records in `into` which children stand in the room this flow turned out
+    /// to have. A flow that measures nothing stands all of them.
+    fn stand(&self, limits: &layout::Limits, into: &mut Vec<bool>) {
+        into.clear();
+        let Some(axis) = self.measure else {
+            into.resize(self.children.len(), true);
+            return;
+        };
+        let room = match axis {
+            MeasureAxis::Width => limits.max().width,
+            MeasureAxis::Height => limits.max().height,
+        };
+        into.extend(
+            self.child_layouts
+                .iter()
+                .map(|child| child.band.stands(room)),
+        );
+    }
 }
 
 /// The padding a box of this room can actually spend.
@@ -295,83 +295,12 @@ fn standing(stood: Option<&[bool]>, index: usize) -> bool {
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
-    fn size(&self) -> Size<Length> {
-        Size::new(self.width, self.height)
+    fn children(&self) -> Vec<Tree> {
+        self.children.iter().map(Tree::new).collect()
     }
 
-    fn size_hint(&self) -> Size<Length> {
-        Size::new(self.width, self.height)
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let limits = match self.axis {
-            Axis::Horizontal => *limits,
-            Axis::Vertical => limits.max_width(f32::INFINITY),
-        };
-        let Tree {
-            state,
-            children: trees,
-            ..
-        } = tree;
-        let state = state.downcast_mut::<State>();
-        self.record(&limits, state);
-        let State { shown, slots } = &*state;
-        // A box cannot give away more room than it has, so the padding this
-        // flow spends is the padding its box can hold.
-        // `render/masonry/flex.rs` fits its own the same way.
-        let padding = fitted_padding(self.padding, limits.max());
-        let solver_limits = limits.into();
-        let items = slots
-            .iter()
-            .map(|slot| {
-                let child = &self.child_layouts[*slot];
-                let declared = child
-                    .declared
-                    .unwrap_or_else(|| self.children[*slot].as_widget().size());
-                child.main_weight.map_or_else(
-                    || solve::Item::new(declared.into(), child.main_minimum),
-                    |weight| solve::Item::weighted(declared.into(), weight),
-                )
-            })
-            .collect::<Vec<solve::Item>>();
-        let mut measure = IcedMeasure {
-            children: &mut self.children,
-            child_layouts: &self.child_layouts,
-            slots,
-            trees,
-            renderer,
-            nodes: vec![layout::Node::default(); shown.len()],
-        };
-        let Distribution {
-            size,
-            items: placements,
-        } = solve::resolve(
-            Input {
-                axis: self.axis,
-                limits: &solver_limits,
-                width: self.width.into(),
-                height: self.height.into(),
-                padding: padding.into(),
-                spacing: self.spacing,
-                align_items: self.align.into(),
-                items,
-            },
-            &mut measure,
-        );
-        let mut nodes = measure.nodes;
-
-        // A cell that does not stand keeps its empty node, so every child holds
-        // the same place in the layout whether the room reached it or not.
-        for (slot, placement) in slots.iter().zip(placements) {
-            nodes[*slot].move_to_mut(placement.offset);
-        }
-
-        layout::Node::with_children(size.into(), nodes)
+    fn diff(&self, tree: &mut Tree) {
+        tree.diff_children(&self.children);
     }
 
     fn draw(
@@ -396,20 +325,88 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         }
     }
 
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<State>()
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let limits = match self.axis {
+            Axis::Horizontal => *limits,
+            Axis::Vertical => limits.max_width(f32::INFINITY),
+        };
+        let Tree {
+            state,
+            children: trees,
+            ..
+        } = tree;
+        let state = state.downcast_mut::<State>();
+        self.record(&limits, state);
+        let State { shown, slots } = &*state;
+        let padding = fitted_padding(self.padding, limits.max());
+        let solver_limits = limits.into();
+        let items = slots
+            .iter()
+            .map(|slot| {
+                let child = &self.child_layouts[*slot];
+                let declared = child
+                    .declared
+                    .unwrap_or_else(|| self.children[*slot].as_widget().size());
+                child.main_weight.map_or_else(
+                    || solve::Item::new(declared.into(), child.main_minimum),
+                    |weight| solve::Item::weighted(declared.into(), weight),
+                )
+            })
+            .collect::<Vec<solve::Item>>();
+        let mut measure = IcedMeasure {
+            slots,
+            trees,
+            renderer,
+            children: &mut self.children,
+            child_layouts: &self.child_layouts,
+            nodes: vec![layout::Node::default(); shown.len()],
+        };
+        let Distribution {
+            size,
+            items: placements,
+        } = solve::resolve(
+            Input {
+                items,
+                axis: self.axis,
+                limits: &solver_limits,
+                width: self.width.into(),
+                height: self.height.into(),
+                padding: padding.into(),
+                spacing: self.spacing,
+                align_items: self.align.into(),
+            },
+            &mut measure,
+        );
+        let mut nodes = measure.nodes;
+
+        for (slot, placement) in slots.iter().zip(placements) {
+            nodes[*slot].move_to_mut(placement.offset);
+        }
+
+        layout::Node::with_children(size.into(), nodes)
     }
 
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(State::default())
-    }
-
-    fn children(&self) -> Vec<Tree> {
-        self.children.iter().map(Tree::new).collect()
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(&self.children);
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.shown(tree, layout)
+            .map(|(child, tree, layout)| {
+                child
+                    .as_widget()
+                    .mouse_interaction(tree, layout, cursor, viewport, renderer)
+            })
+            .max()
+            .unwrap_or_default()
     }
 
     fn operate(
@@ -433,42 +430,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
         });
     }
 
-    fn update(
-        &mut self,
-        tree: &mut Tree,
-        event: &Event,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
-        shell: &mut Shell<'_, UiEvent>,
-        viewport: &Rectangle,
-    ) {
-        for (child, tree, layout) in self.shown_mut(tree, layout) {
-            child.as_widget_mut().update(
-                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
-            );
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.shown(tree, layout)
-            .map(|(child, tree, layout)| {
-                child
-                    .as_widget()
-                    .mouse_interaction(tree, layout, cursor, viewport, renderer)
-            })
-            .max()
-            .unwrap_or_default()
-    }
-
     fn overlay<'a>(
         &'a mut self,
         tree: &'a mut Tree,
@@ -486,6 +447,40 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Flex<'_> {
             })
             .collect();
         (!floating.is_empty()).then(|| overlay::Group::with_children(floating).overlay())
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(self.width, self.height)
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        Size::new(self.width, self.height)
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(State::default())
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<State>()
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, UiEvent>,
+        viewport: &Rectangle,
+    ) {
+        for (child, tree, layout) in self.shown_mut(tree, layout) {
+            child.as_widget_mut().update(
+                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
+            );
+        }
     }
 }
 
@@ -572,13 +567,13 @@ impl From<solve::Limits> for layout::Limits {
 }
 
 struct IcedMeasure<'a, 'element> {
-    children: &'a mut [Element<'element, UiEvent>],
+    renderer: &'a Renderer,
     child_layouts: &'a [ChildLayout],
+    children: &'a mut [Element<'element, UiEvent>],
+    trees: &'a mut [Tree],
     /// Which child each item the solver asks about actually is: the solver sees
     /// only the cells that stand.
     slots: &'a [usize],
-    trees: &'a mut [Tree],
-    renderer: &'a Renderer,
     nodes: Vec<layout::Node>,
 }
 
@@ -616,9 +611,9 @@ impl Measure for IcedMeasure<'_, '_> {
 /// the branch that stands is measured, drawn, and driven, and the others keep an
 /// empty node so a branch holds the same place from one frame to the next.
 pub(super) struct Measured<'a> {
-    branches: Vec<Element<'a, UiEvent>>,
     plan: Plan,
     size: Size<Length>,
+    branches: Vec<Element<'a, UiEvent>>,
 }
 
 #[derive(Default)]
@@ -629,10 +624,17 @@ struct Drawn {
 impl<'a> Measured<'a> {
     pub(super) fn new(branches: Vec<Element<'a, UiEvent>>, plan: Plan, size: Size<Length>) -> Self {
         Self {
-            branches,
             plan,
             size,
+            branches,
         }
+    }
+
+    fn drawn(&self, tree: &Tree) -> usize {
+        tree.state
+            .downcast_ref::<Drawn>()
+            .drawn
+            .min(self.branches.len().saturating_sub(1))
     }
 
     fn pick(&self, room: Size) -> usize {
@@ -644,13 +646,6 @@ impl<'a> Measured<'a> {
             .branch(value)
             .min(self.branches.len().saturating_sub(1))
     }
-
-    fn drawn(&self, tree: &Tree) -> usize {
-        tree.state
-            .downcast_ref::<Drawn>()
-            .drawn
-            .min(self.branches.len().saturating_sub(1))
-    }
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
@@ -660,39 +655,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
 
     fn diff(&self, tree: &mut Tree) {
         tree.diff_children(&self.branches);
-    }
-
-    fn size(&self) -> Size<Length> {
-        self.size
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(Drawn::default())
-    }
-
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<Drawn>()
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let limits = limits.width(self.size.width).height(self.size.height);
-        let drawn = self.pick(limits.max());
-        tree.state.downcast_mut::<Drawn>().drawn = drawn;
-
-        let mut nodes = vec![LayoutNode::default(); self.branches.len()];
-        let node = self.branches[drawn].as_widget_mut().layout(
-            &mut tree.children[drawn],
-            renderer,
-            &limits,
-        );
-        let size = limits.resolve(self.size.width, self.size.height, node.size());
-        nodes[drawn] = node;
-        LayoutNode::with_children(size, nodes)
     }
 
     fn draw(
@@ -720,6 +682,27 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
         );
     }
 
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let limits = limits.width(self.size.width).height(self.size.height);
+        let drawn = self.pick(limits.max());
+        tree.state.downcast_mut::<Drawn>().drawn = drawn;
+
+        let mut nodes = vec![LayoutNode::default(); self.branches.len()];
+        let node = self.branches[drawn].as_widget_mut().layout(
+            &mut tree.children[drawn],
+            renderer,
+            &limits,
+        );
+        let size = limits.resolve(self.size.width, self.size.height, node.size());
+        nodes[drawn] = node;
+        LayoutNode::with_children(size, nodes)
+    }
+
     fn mouse_interaction(
         &self,
         tree: &Tree,
@@ -741,6 +724,37 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
                     renderer,
                 )
             })
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, UiEvent, Theme, Renderer>> {
+        let drawn = self.drawn(tree);
+        let bounds = layout.children().nth(drawn)?;
+        self.branches[drawn].as_widget_mut().overlay(
+            &mut tree.children[drawn],
+            bounds,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.size
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(Drawn::default())
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<Drawn>()
     }
 
     fn update(
@@ -768,25 +782,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Measured<'_> {
             shell,
             viewport,
         );
-    }
-
-    fn overlay<'b>(
-        &'b mut self,
-        tree: &'b mut Tree,
-        layout: Layout<'b>,
-        renderer: &Renderer,
-        viewport: &Rectangle,
-        translation: Vector,
-    ) -> Option<overlay::Element<'b, UiEvent, Theme, Renderer>> {
-        let drawn = self.drawn(tree);
-        let bounds = layout.children().nth(drawn)?;
-        self.branches[drawn].as_widget_mut().overlay(
-            &mut tree.children[drawn],
-            bounds,
-            renderer,
-            viewport,
-            translation,
-        )
     }
 }
 

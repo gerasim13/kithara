@@ -287,13 +287,6 @@ where
         })
     }
 
-    delegate::delegate! {
-        to self.anchor.as_widget() {
-            fn size(&self) -> Size<Length>;
-            fn size_hint(&self) -> Size<Length>;
-        }
-    }
-
     fn state(&self) -> tree::State {
         tree::State::new(State::default())
     }
@@ -328,6 +321,13 @@ where
             shell,
             viewport,
         );
+    }
+
+    delegate::delegate! {
+        to self.anchor.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+        }
     }
 }
 
@@ -931,7 +931,7 @@ mod tests {
                 &viewport,
                 Vector::new(36.0, 0.0),
             )
-            .unwrap_or_else(|| panic!("an open Anchored widget must expose its popover overlay"));
+            .expect("an open Anchored widget must expose its popover overlay");
         let overlay_node = overlay.as_overlay_mut().layout(&renderer, Consts::VIEWPORT);
         let surface = Layout::new(&overlay_node).children().next().map_or_else(
             || panic!("the Anchored overlay group must contain its popover surface"),

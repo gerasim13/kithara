@@ -31,10 +31,10 @@ impl Consts {
     const MERGE_RATIO_EPS: f64 = 1e-3;
     const MIN_BAR_RATIO: f64 = 0.5;
     const MIN_BEAT_GAPS: usize = 8;
-    const MIN_MAP_BEATS: usize = 2;
     const MIN_DOWNBEATS: usize = 2;
     const MIN_GAP_RATIO: f64 = 0.7;
     const MIN_LEAF_BARS: usize = 8;
+    const MIN_MAP_BEATS: usize = 2;
     const OUTLIER_RATIO: f64 = 0.04;
     const OUTLIER_WINDOW: usize = 4;
     const RESIDUAL_MS: f64 = 18.0;
@@ -95,8 +95,6 @@ pub(crate) fn build_grid_with(
     buffers: &mut GridBuffers,
 ) -> Result<BeatArtifact, PoolError> {
     let sr = f64::from(sample_rate);
-    // Both lookups below binary-search these, and both asserts downstream
-    // assume it. `normalize_marks` is what guarantees it on the live path.
     debug_assert!(
         is_sorted(&raw.beats) && is_sorted(&raw.downbeats),
         "build_grid needs detector marks sorted by position"
@@ -146,8 +144,6 @@ pub(crate) fn build_grid_with(
     let nominal_seed = median(&buffers.gaps, &mut buffers.sorted)?;
     let downbeats = marks_to_frames(&buffers.positions, &raw.downbeats, sr);
 
-    // Degraded mode (per plan): too short / no stable tempo region means no
-    // trustworthy piecewise grid — report tempo only, no segments.
     let Some((anchor_idx, nominal_bar)) = find_stable_window(
         &buffers.positions,
         nominal_seed,
@@ -233,8 +229,6 @@ fn beats_bpm(
     Ok((beat > 0.0).then(|| Consts::SECS_PER_MIN / beat))
 }
 
-// Cleaning only drops and reorders, so a survivor is one the detector reported
-// and its confidence is recoverable by exact lookup; a miss means that broke.
 fn marks_to_frames(positions: &[f32], detected: &[BeatMark], sample_rate: f64) -> Vec<MarkedBeat> {
     let mut out: Vec<MarkedBeat> = Vec::with_capacity(positions.len());
     for &position in positions {

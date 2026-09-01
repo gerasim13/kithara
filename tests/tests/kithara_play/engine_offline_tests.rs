@@ -1,7 +1,6 @@
 //! An injected offline session dispatcher replaces the cpal output stream, so
 //! this half asks nothing of the machine and belongs in the ordinary gate
 //! rather than a lane.
-
 use kithara::{
     events::EventBus,
     play::{EngineConfig, EngineImpl},

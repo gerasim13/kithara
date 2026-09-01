@@ -13,17 +13,11 @@ pub struct LoadedSource {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct LoadedBytes {
-    pub uri: SourceUri,
     pub bytes: Arc<[u8]>,
+    pub uri: SourceUri,
 }
 
 pub trait SourceResolver {
-    /// Loads `rel`, resolved against the directory containing `base`.
-    ///
-    /// # Errors
-    /// Returns [`UiDocError`] when the path escapes the root or is unavailable.
-    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError>;
-
     /// Loads `rel` as bytes, resolved against `base` on the same terms.
     ///
     /// A picture is not a document: a skin that names one reads it through
@@ -33,6 +27,12 @@ pub trait SourceResolver {
     /// # Errors
     /// Returns [`UiDocError`] when the path escapes the root or is unavailable.
     fn bytes(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedBytes, UiDocError>;
+
+    /// Loads `rel`, resolved against the directory containing `base`.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError`] when the path escapes the root or is unavailable.
+    fn load(&self, base: Option<&SourceUri>, rel: &str) -> Result<LoadedSource, UiDocError>;
 }
 
 pub(crate) fn base_dir(base: Option<&SourceUri>) -> &str {

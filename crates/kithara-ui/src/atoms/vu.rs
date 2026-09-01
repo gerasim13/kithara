@@ -9,11 +9,11 @@ use crate::{
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct VerticalVu {
-    metrics: VuVerticalSkin,
+    ticks: Option<TickRail>,
     palette: RenderPalette,
     thumb_color: Rgba,
     thumb_notch_color: Rgba,
-    ticks: Option<TickRail>,
+    metrics: VuVerticalSkin,
 }
 
 impl VerticalVu {
@@ -83,10 +83,10 @@ impl VerticalVu {
         let y = bounds.y + ((1.0 - volume.clamp(0.0, 1.0)) * travel).round();
         list.fill_rect(
             Rect {
+                y,
                 h: self.metrics.thumb_height,
                 w: bounds.w,
                 x: bounds.x,
-                y,
             },
             self.thumb_color,
         );

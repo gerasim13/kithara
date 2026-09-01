@@ -17,6 +17,10 @@ mod kithara {
 pub trait AudioSource: Send + 'static {
     type Chunk: Send + 'static;
 
+    /// Commit the decoded-source boundary after rendered audio is accepted by
+    /// the final producer port.
+    fn commit_source_end(&mut self, _source_end: SourceEnd, _epoch: u64) {}
+
     /// Decode epoch assigned to the most recent source work.
     /// May lag the live seek epoch until the source applies the seek.
     fn decode_epoch(&self) -> u64 {
@@ -28,18 +32,14 @@ pub trait AudioSource: Send + 'static {
         None
     }
 
+    /// Finish deferred source publication after decorators are serviced.
+    fn finish_deferred(&mut self) {}
+
     /// Resolve the active output format before producer decorators are serviced.
     /// Sources without a split shell keep the default no-op phases.
     fn prepare_deferred(&mut self) -> Option<AudioSpec> {
         None
     }
-
-    /// Finish deferred source publication after decorators are serviced.
-    fn finish_deferred(&mut self) {}
-
-    /// Commit the decoded-source boundary after rendered audio is accepted by
-    /// the final producer port.
-    fn commit_source_end(&mut self, _source_end: SourceEnd, _epoch: u64) {}
 
     /// Reclaim a discarded chunk from scheduler `recycle`, outside the checked
     /// producer tick.
@@ -72,16 +72,16 @@ impl<S> AudioSourceExt for S where S: AudioSource + ?Sized {}
 #[fieldwork(get, copy)]
 #[non_exhaustive]
 pub struct SourceDiscontinuity {
-    /// Monotonic lane-local reset revision.
-    revision: u64,
     /// Output format active after the reset.
     spec: AudioSpec,
+    /// Monotonic lane-local reset revision.
+    revision: u64,
 }
 
 impl SourceDiscontinuity {
     /// Construct a reset stamp at the active decoded format.
     #[must_use]
     pub const fn new(revision: u64, spec: AudioSpec) -> Self {
-        Self { revision, spec }
+        Self { spec, revision }
     }
 }

@@ -53,8 +53,7 @@ fn offering_a_decoded_range_neither_blocks_nor_allocates() {
         )
         .cancel(cancel)
         .build(),
-    )
-    .expect("analysis worker task is admitted");
+    );
     let (_analysis, mut producer) =
         worker.analyze(stalled_reader(spec(rate)), "rt-track".into(), rate);
 

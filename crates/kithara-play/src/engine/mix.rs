@@ -58,12 +58,12 @@ where
 
     let levels: Vec<PlayerLevel> = inputs
         .iter()
-        .filter_map(|&(engine, level)| {
+        .map(|&(engine, level)| {
             engine
-                .registered_player_id()
+                .ensure_player_id()
                 .map(|id| PlayerLevel::new(id, level))
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     session.set_player_master_volumes(levels)?;
 

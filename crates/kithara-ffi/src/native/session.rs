@@ -2,9 +2,9 @@ use std::sync::OnceLock;
 
 use kithara::{
     host::{HostConfig, HostOwned},
+    platform::sync::Mutex,
     play::{PlayError, player::PlayerControlSource},
 };
-use kithara_platform::sync::Mutex;
 
 use crate::pools::{FfiHost, FfiPools};
 

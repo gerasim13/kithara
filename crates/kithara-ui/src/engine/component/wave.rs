@@ -31,14 +31,14 @@ impl Endpoint {
 }
 
 pub(in crate::engine) struct HeroWaveComponent {
-    path: String,
+    modifiers: Modifiers,
+    visible: Range<f32>,
     drag: Scalar,
     drag_state: ScalarState,
-    modifiers: Modifiers,
+    path: String,
     loop_active: bool,
-    visible: Range<f32>,
-    wheel_positive: f32,
     wheel_non_positive: f32,
+    wheel_positive: f32,
 }
 
 impl HeroWaveComponent {
@@ -52,23 +52,14 @@ impl HeroWaveComponent {
     ) -> Self {
         Self {
             path,
+            visible,
+            wheel_positive,
+            wheel_non_positive,
             drag: plain_drag(scale, progress),
             drag_state: ScalarState::default(),
             modifiers: Modifiers::default(),
             loop_active: false,
-            visible,
-            wheel_positive,
-            wheel_non_positive,
         }
-    }
-
-    pub(super) fn reconcile(mut self, next: Self) -> Self {
-        self.path = next.path;
-        self.drag = next.drag;
-        self.visible = next.visible;
-        self.wheel_positive = next.wheel_positive;
-        self.wheel_non_positive = next.wheel_non_positive;
-        self
     }
 
     fn position(&self, hit: &Hit) -> Option<f32> {
@@ -80,15 +71,29 @@ impl HeroWaveComponent {
                 .clamp(0.0, 1.0)
         })
     }
+
+    pub(super) fn reconcile(mut self, next: Self) -> Self {
+        self.path = next.path;
+        self.drag = next.drag;
+        self.visible = next.visible;
+        self.wheel_positive = next.wheel_positive;
+        self.wheel_non_positive = next.wheel_non_positive;
+        self
+    }
 }
 
 impl Component for HeroWaveComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn cancel_pointer(&mut self) {
+        self.loop_active = false;
+        self.drag_state.cancel_pointer();
     }
 
-    fn kind(&self) -> Kind {
-        Kind::HeroWave
+    fn captures_pointer(&self) -> bool {
+        self.loop_active || self.drag_state.captures_pointer()
+    }
+
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        self.drag.cursor(&self.drag_state, hit)
     }
 
     fn handle(
@@ -145,17 +150,12 @@ impl Component for HeroWaveComponent {
         }
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        self.drag.cursor(&self.drag_state, hit)
+    fn kind(&self) -> Kind {
+        Kind::HeroWave
     }
 
-    fn captures_pointer(&self) -> bool {
-        self.loop_active || self.drag_state.captures_pointer()
-    }
-
-    fn cancel_pointer(&mut self) {
-        self.loop_active = false;
-        self.drag_state.cancel_pointer();
+    fn path(&self) -> &str {
+        &self.path
     }
 }
 

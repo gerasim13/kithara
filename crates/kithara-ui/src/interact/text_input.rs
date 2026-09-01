@@ -5,8 +5,8 @@ use crate::draw::Rect;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct CaretStop {
-    index: usize,
     x: f32,
+    index: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, fieldwork::Fieldwork)]
@@ -33,13 +33,22 @@ impl TextInputLayout {
         text_size: f32,
     ) -> Self {
         Self {
-            carets: carets
-                .into_iter()
-                .map(|(index, x)| CaretStop { index, x })
-                .collect(),
             line_height,
             line_y,
             text_size,
+            carets: carets
+                .into_iter()
+                .map(|(index, x)| CaretStop { x, index })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn caret(&self, index: usize, area: Rect) -> Rect {
+        Rect {
+            h: self.line_height,
+            w: 1.0,
+            x: area.x + self.x(index).floor(),
+            y: area.y + self.line_y,
         }
     }
 
@@ -68,15 +77,6 @@ impl TextInputLayout {
             .find(|caret| caret.index == index)
             .map_or(0.0, |caret| caret.x)
     }
-
-    pub(crate) fn caret(&self, index: usize, area: Rect) -> Rect {
-        Rect {
-            h: self.line_height,
-            w: 1.0,
-            x: area.x + self.x(index).floor(),
-            y: area.y + self.line_y,
-        }
-    }
 }
 
 pub(crate) struct PreeditRef<'a> {
@@ -85,7 +85,7 @@ pub(crate) struct PreeditRef<'a> {
 }
 
 pub(crate) struct InputMethodRequest<'a> {
-    pub(crate) caret: Rect,
     pub(crate) preedit: Option<PreeditRef<'a>>,
+    pub(crate) caret: Rect,
     pub(crate) text_size: f32,
 }

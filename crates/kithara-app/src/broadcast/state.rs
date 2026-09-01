@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use kithara_platform::{CancelToken, time::Duration};
+use kithara::platform::{CancelToken, time::Duration};
 
 use crate::pools::AppHost;
 

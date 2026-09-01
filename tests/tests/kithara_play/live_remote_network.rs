@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
+
 //! The two `resource_regressions` cases that read a real remote stream instead
 //! of a fixture: one through `Resource` directly, one through the full
 //! `PlayerImpl` flow the GUI uses. Their local mirrors stay in
@@ -7,7 +8,6 @@
 //! need the corporate VPN on top.
 //!
 //! Compiled only into `suite_network`, which needs the `network` feature.
-
 use std::num::NonZeroUsize;
 
 use kithara::{

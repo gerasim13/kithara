@@ -7,11 +7,11 @@ use crate::{
 };
 
 pub(in crate::engine) struct ItemComponent {
-    count: usize,
-    control_path: String,
     drag: ItemDrag,
     index: Option<usize>,
+    control_path: String,
     path: String,
+    count: usize,
 }
 
 impl ItemComponent {
@@ -25,6 +25,14 @@ impl ItemComponent {
         }
     }
 
+    pub(super) fn pressed_index(&self) -> Option<usize> {
+        if self.drag.is_held() {
+            self.index
+        } else {
+            None
+        }
+    }
+
     pub(super) fn reconcile(mut self, next: Self) -> Self {
         if self.index.is_some_and(|index| index >= next.count) {
             self.drag = ItemDrag::default();
@@ -35,27 +43,29 @@ impl ItemComponent {
         self.path = next.path;
         self
     }
-
-    pub(super) fn pressed_index(&self) -> Option<usize> {
-        if self.drag.is_held() {
-            self.index
-        } else {
-            None
-        }
-    }
 }
 
 impl Component for ItemComponent {
-    fn path(&self) -> &str {
-        &self.path
+    fn cancel_pointer(&mut self) {
+        self.drag = ItemDrag::default();
+        self.index = None;
+    }
+
+    fn captures_pointer(&self) -> bool {
+        false
+    }
+
+    fn cursor(&self, hit: &Hit) -> CursorShape {
+        let drag = self.drag.cursor();
+        if drag == CursorShape::None && hit.over() {
+            CursorShape::Pointer
+        } else {
+            drag
+        }
     }
 
     fn event_path(&self) -> &str {
         &self.control_path
-    }
-
-    fn kind(&self) -> Kind {
-        Kind::Item
     }
 
     fn handle(
@@ -114,21 +124,11 @@ impl Component for ItemComponent {
         (outcome, None)
     }
 
-    fn cursor(&self, hit: &Hit) -> CursorShape {
-        let drag = self.drag.cursor();
-        if drag == CursorShape::None && hit.over() {
-            CursorShape::Pointer
-        } else {
-            drag
-        }
+    fn kind(&self) -> Kind {
+        Kind::Item
     }
 
-    fn captures_pointer(&self) -> bool {
-        false
-    }
-
-    fn cancel_pointer(&mut self) {
-        self.drag = ItemDrag::default();
-        self.index = None;
+    fn path(&self) -> &str {
+        &self.path
     }
 }

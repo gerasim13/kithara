@@ -32,6 +32,16 @@ pub(crate) struct PopoverState {
 }
 
 impl PopoverState {
+    pub(crate) fn bank(&self, point: Point) {
+        self.press.set(Some(point));
+    }
+
+    /// Whether the document holds this surface open, which is the latch alone
+    /// and says nothing about whether the surface has anywhere to stand.
+    pub(crate) fn is_open(&self) -> bool {
+        self.open.get()
+    }
+
     pub(crate) fn latch(&self, open: bool) {
         let was_open = self.open.replace(open);
         if open && !was_open {
@@ -39,20 +49,10 @@ impl PopoverState {
         }
     }
 
-    pub(crate) fn bank(&self, point: Point) {
-        self.press.set(Some(point));
-    }
-
     /// Takes up where the node this surface hangs on stands, or nothing when
     /// it stands nowhere.
     pub(crate) fn set_anchor(&self, anchor: Option<MasonryRect>) {
         self.anchor.set(anchor);
-    }
-
-    /// Whether the document holds this surface open, which is the latch alone
-    /// and says nothing about whether the surface has anywhere to stand.
-    pub(crate) fn is_open(&self) -> bool {
-        self.open.get()
     }
 
     /// The box this surface hangs on while it stands, and nothing when it does
@@ -74,18 +74,18 @@ impl PopoverState {
 }
 
 pub(crate) struct PopoverLayer {
+    surface_size: MasonrySize,
     align: PopoverAlign,
     at: PopoverAt,
+    state: Rc<PopoverState>,
     background: Rgba,
     border: Rgba,
+    cap: Rgba,
+    declared: solve::Size<solve::Length>,
+    child: WidgetPod<Node>,
     border_radius: f32,
     border_width: f32,
-    cap: Rgba,
     cap_height: f32,
-    child: WidgetPod<Node>,
-    declared: solve::Size<solve::Length>,
-    state: Rc<PopoverState>,
-    surface_size: MasonrySize,
 }
 
 impl PopoverLayer {
@@ -101,6 +101,8 @@ impl PopoverLayer {
         Self {
             align,
             at,
+            declared,
+            state,
             background: skin.rgba(skin.pop.background),
             border: skin.rgba(frame.border),
             border_radius: frame.radius,
@@ -108,8 +110,6 @@ impl PopoverLayer {
             cap: skin.rgba(skin.pop.cap_color),
             cap_height: skin.pop.cap_height,
             child: content.to_pod(),
-            declared,
-            state,
             surface_size: MasonrySize::ZERO,
         }
     }
@@ -118,19 +118,58 @@ impl PopoverLayer {
 impl Widget for PopoverLayer {
     type Action = HostAction;
 
-    fn on_pointer_event(
-        &mut self,
-        ctx: &mut EventCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        event: &PointerEvent,
-    ) {
-        if matches!(event, PointerEvent::Down(_)) {
-            ctx.set_handled();
-        }
+    fn accepts_pointer_interaction(&self) -> bool {
+        true
     }
 
-    fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
-        ctx.register_child(&mut self.child);
+    fn accessibility(
+        &mut self,
+        _ctx: &mut AccessCtx<'_>,
+        _props: &PropertiesRef<'_>,
+        _node: &mut AccessNode,
+    ) {
+    }
+
+    fn accessibility_role(&self) -> Role {
+        Role::Dialog
+    }
+
+    fn children_ids(&self) -> ChildrenIds {
+        ChildrenIds::from_slice(&[self.child.id()])
+    }
+
+    fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
+        let Some(anchor) = self.state.standing() else {
+            self.state.surface.set(MasonryRect::ZERO);
+            return;
+        };
+        let position = place(
+            anchor,
+            (self.at == PopoverAt::Pointer)
+                .then(|| self.state.pointer.get())
+                .flatten(),
+            self.surface_size,
+            ctx.size(),
+            self.align,
+        );
+        self.state
+            .surface
+            .set(MasonryRect::from_origin_size(position, self.surface_size));
+        ctx.set_animated_child_scroll_translation(
+            &mut self.child,
+            Vec2::new(position.x, position.y),
+        );
+    }
+
+    fn find_widget_under_pointer<'ctx>(
+        &'ctx self,
+        ctx: QueryCtx<'ctx>,
+        pos: Point,
+    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
+        if !self.state.surface().contains(pos) {
+            return None;
+        }
+        find_widget_under_pointer(self, ctx, pos)
     }
 
     fn layout(
@@ -140,11 +179,6 @@ impl Widget for PopoverLayer {
         constraints: &BoxConstraints,
     ) -> MasonrySize {
         let viewport = constraints.max();
-        // A surface that does not stand stands aside rather than being left out
-        // of the tree, and this is the one place that decides it: the child is
-        // stashed, so Masonry skips it for layout, paint and accessibility, and
-        // the surface keeps no size, so the box composed from it is empty and
-        // nothing lands in it.
         let standing = self.state.standing().is_some();
         ctx.set_stashed(&mut self.child, !standing);
         if !standing {
@@ -182,33 +216,22 @@ impl Widget for PopoverLayer {
         viewport
     }
 
-    fn compose(&mut self, ctx: &mut ComposeCtx<'_>) {
-        let Some(anchor) = self.state.standing() else {
-            self.state.surface.set(MasonryRect::ZERO);
-            return;
-        };
-        let position = place(
-            anchor,
-            (self.at == PopoverAt::Pointer)
-                .then(|| self.state.pointer.get())
-                .flatten(),
-            self.surface_size,
-            ctx.size(),
-            self.align,
-        );
-        self.state
-            .surface
-            .set(MasonryRect::from_origin_size(position, self.surface_size));
-        ctx.set_animated_child_scroll_translation(
-            &mut self.child,
-            Vec2::new(position.x, position.y),
-        );
+    fn make_trace_span(&self, id: WidgetId) -> Span {
+        trace_span!("KitharaPopoverLayer", id = id.trace())
+    }
+
+    fn on_pointer_event(
+        &mut self,
+        ctx: &mut EventCtx<'_>,
+        _props: &mut PropertiesMut<'_>,
+        event: &PointerEvent,
+    ) {
+        if matches!(event, PointerEvent::Down(_)) {
+            ctx.set_handled();
+        }
     }
 
     fn paint(&mut self, _ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
-        // The chrome is this layer's own, so an empty box does not stand it
-        // down the way it stands the content down: drawn against one it would
-        // still put a shape in the picture for a menu nobody opened.
         if self.state.standing().is_none() {
             return;
         }
@@ -234,39 +257,8 @@ impl Widget for PopoverLayer {
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
 
-    fn accessibility_role(&self) -> Role {
-        Role::Dialog
-    }
-
-    fn accessibility(
-        &mut self,
-        _ctx: &mut AccessCtx<'_>,
-        _props: &PropertiesRef<'_>,
-        _node: &mut AccessNode,
-    ) {
-    }
-
-    fn children_ids(&self) -> ChildrenIds {
-        ChildrenIds::from_slice(&[self.child.id()])
-    }
-
-    fn accepts_pointer_interaction(&self) -> bool {
-        true
-    }
-
-    fn find_widget_under_pointer<'ctx>(
-        &'ctx self,
-        ctx: QueryCtx<'ctx>,
-        pos: Point,
-    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
-        if !self.state.surface().contains(pos) {
-            return None;
-        }
-        find_widget_under_pointer(self, ctx, pos)
-    }
-
-    fn make_trace_span(&self, id: WidgetId) -> Span {
-        trace_span!("KitharaPopoverLayer", id = id.trace())
+    fn register_children(&mut self, ctx: &mut RegisterCtx<'_>) {
+        ctx.register_child(&mut self.child);
     }
 }
 

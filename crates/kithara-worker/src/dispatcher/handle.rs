@@ -42,6 +42,25 @@ pub struct Dispatcher {
 }
 
 impl Dispatcher {
+    /// Return whether this dispatcher subtree has been cancelled.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.inner.cancel.is_cancelled()
+    }
+
+    /// Reserve and submit a task in one call.
+    ///
+    /// # Errors
+    ///
+    /// Returns a task admission or dispatcher lifecycle failure.
+    pub fn register<T, F>(&self, config: TaskConfig, factory: F) -> Result<TaskHandle, TaskError>
+    where
+        T: Task,
+        F: FnOnce(TaskContext) -> T,
+    {
+        self.reserve(config)?.start(factory)
+    }
+
     pub(crate) fn start(
         config: DispatcherConfig,
         cancel: CancelToken,
@@ -64,20 +83,20 @@ impl Dispatcher {
         } = config;
         let budgets = SchedulerBudgets {
             backpressure_poll_interval,
-            fairness_yield_interval: fairness_yield_interval.get(),
             idle_timeout,
             slow_tick_threshold,
-            task_burst: task_burst.get(),
             wait_timeout,
+            fairness_yield_interval: fairness_yield_interval.get(),
+            task_burst: task_burst.get(),
         };
         let inner = Arc::new(DispatcherInner {
+            cmd_tx,
+            compute,
+            runtime,
             admission: Mutex::new(Admission::Open),
             cancel: cancel.clone(),
             capacity: Arc::new(Capacity::new(capacity.get())),
-            cmd_tx,
-            compute,
             next_id: AtomicU64::new(1),
-            runtime,
             wake: wake.clone(),
         });
         let cancel_group = domain_cancel.map_or_else(
@@ -99,6 +118,12 @@ impl Dispatcher {
         Self { inner }
     }
 
+    /// Restricted immediate and deferred wake capability.
+    #[must_use]
+    pub fn wake_handle(&self) -> Wake {
+        self.inner.wake.clone()
+    }
+
     delegate::delegate! {
         to self.inner {
             /// Reserve capacity and derive a task context before constructing the task.
@@ -113,41 +138,16 @@ impl Dispatcher {
             pub fn shutdown(&self);
         }
     }
-
-    /// Reserve and submit a task in one call.
-    ///
-    /// # Errors
-    ///
-    /// Returns a task admission or dispatcher lifecycle failure.
-    pub fn register<T, F>(&self, config: TaskConfig, factory: F) -> Result<TaskHandle, TaskError>
-    where
-        T: Task,
-        F: FnOnce(TaskContext) -> T,
-    {
-        self.reserve(config)?.start(factory)
-    }
-
-    /// Restricted immediate and deferred wake capability.
-    #[must_use]
-    pub fn wake_handle(&self) -> Wake {
-        self.inner.wake.clone()
-    }
-
-    /// Return whether this dispatcher subtree has been cancelled.
-    #[must_use]
-    pub fn is_cancelled(&self) -> bool {
-        self.inner.cancel.is_cancelled()
-    }
 }
 
 struct DispatcherInner {
-    admission: Mutex<Admission>,
-    cancel: CancelToken,
     capacity: Arc<Capacity>,
-    cmd_tx: mpsc::Sender<Command>,
     compute: Arc<ComputeRuntime>,
     next_id: AtomicU64,
+    cancel: CancelToken,
+    admission: Mutex<Admission>,
     runtime: Option<Handle>,
+    cmd_tx: mpsc::Sender<Command>,
     wake: Wake,
 }
 
@@ -158,6 +158,21 @@ enum Admission {
 }
 
 impl DispatcherInner {
+    fn register(&self, slot: Slot) -> Result<(), TaskError> {
+        let mut admission = self.admission.lock();
+        if *admission == Admission::Closed || self.cancel.is_cancelled() {
+            drop(admission);
+            drop(slot);
+            return Err(TaskError::Stopped);
+        }
+        let sent = self.cmd_tx.send(Command::Register(slot));
+        if sent.is_err() {
+            *admission = Admission::Closed;
+        }
+        drop(admission);
+        sent.map_err(|_| TaskError::Stopped)
+    }
+
     fn reserve(self: &Arc<Self>, config: TaskConfig) -> Result<PendingTask, TaskError> {
         let admission = self.admission.lock();
         if *admission == Admission::Closed || self.cancel.is_cancelled() {
@@ -197,10 +212,10 @@ impl DispatcherInner {
             cancel_guards,
             context,
             id,
+            token,
             inner: Arc::clone(self),
             reservation: Some(reservation),
             submitted: false,
-            token,
         })
     }
 
@@ -223,21 +238,6 @@ impl DispatcherInner {
         drop(admission);
         self.wake.wake();
     }
-
-    fn register(&self, slot: Slot) -> Result<(), TaskError> {
-        let mut admission = self.admission.lock();
-        if *admission == Admission::Closed || self.cancel.is_cancelled() {
-            drop(admission);
-            drop(slot);
-            return Err(TaskError::Stopped);
-        }
-        let sent = self.cmd_tx.send(Command::Register(slot));
-        if sent.is_err() {
-            *admission = Admission::Closed;
-        }
-        drop(admission);
-        sent.map_err(|_| TaskError::Stopped)
-    }
 }
 
 impl Drop for DispatcherInner {
@@ -248,13 +248,13 @@ impl Drop for DispatcherInner {
 
 /// Capacity reservation with a derived task context not yet submitted.
 pub struct PendingTask {
-    cancel_guards: Vec<CancelWakerGuard>,
+    inner: Arc<DispatcherInner>,
+    token: CancelToken,
+    reservation: Option<Reservation>,
     context: TaskContext,
     id: TaskId,
-    inner: Arc<DispatcherInner>,
-    reservation: Option<Reservation>,
+    cancel_guards: Vec<CancelWakerGuard>,
     submitted: bool,
-    token: CancelToken,
 }
 
 impl PendingTask {
@@ -292,13 +292,13 @@ impl PendingTask {
             return Err(TaskError::Stopped);
         };
         let slot = Slot {
+            task,
             _cancel_guards: mem::take(&mut self.cancel_guards),
             cancel: self.context.cancel_group().clone(),
             control: self.context.control(),
             id: self.id,
             is_terminal: false,
             priority: self.context.control().priority(),
-            task,
             token: self.token.clone(),
         };
         self.inner.register(slot)?;
@@ -325,14 +325,20 @@ impl Drop for PendingTask {
 
 /// Non-cloneable ownership handle for one admitted task.
 pub struct TaskHandle {
+    token: CancelToken,
     _reservation: Reservation,
     control: TaskControl,
     id: TaskId,
     inner: Weak<DispatcherInner>,
-    token: CancelToken,
 }
 
 impl TaskHandle {
+    /// Stable task identifier.
+    #[must_use]
+    pub const fn id(&self) -> TaskId {
+        self.id
+    }
+
     delegate::delegate! {
         to self.control {
             /// Clone the restricted priority and wake control.
@@ -342,12 +348,6 @@ impl TaskHandle {
             /// Cancel only this task subtree.
             pub fn cancel(&self);
         }
-    }
-
-    /// Stable task identifier.
-    #[must_use]
-    pub const fn id(&self) -> TaskId {
-        self.id
     }
 }
 

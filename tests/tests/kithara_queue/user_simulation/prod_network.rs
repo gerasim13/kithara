@@ -1,5 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
+
 //! The user-simulation scenarios that drive real production tracks: HE-AAC v2
 //! behind AES-128 with per-segment key signing, reached over the live CDN with
 //! credentials baked at build time. Reproduces by script what the user
@@ -8,7 +9,6 @@
 //! Compiled only into `suite_network`, which needs the `network` feature.
 //! Everything here is on the public internet: the scenario that reached the
 //! corporate slicer moved out with the rest of what CI cannot serve.
-
 use kithara::{
     assets::{AssetStore, FlushHub, FlushPolicy, StorageBackend},
     decode::DecoderBackend,
@@ -49,10 +49,10 @@ const PROD_DRM_TRACK_ALT: &str = "https://cdn-hls-slicer.zvuk.com/drm/track/5807
 /// the binary uses. The resolver picks up baked credentials and the
 /// `zvuk-prod` keyserver provider.
 fn prod_drm_spec(url: &str, ctx: &ProdCtx) -> TrackSource<AppPools> {
-    crate::kithara_queue::app_track_source(
+    crate::kithara::queue::app_track_source(
         url,
         &ctx.config,
-        crate::kithara_queue::app_disk_asset_store(&ctx.config, ctx.cache.path()),
+        crate::kithara::queue::app_disk_asset_store(&ctx.config, ctx.cache.path()),
         DecoderBackend::Symphonia,
         AbrMode::Auto(None),
         None,

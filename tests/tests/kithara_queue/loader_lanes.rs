@@ -1,7 +1,6 @@
 //! Per-track load-attempt contracts around user selection: promotion of
 //! a parked `Pending` track past a hung background lane, single download
 //! session per track, and lane release on a superseded selection.
-
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 

@@ -31,8 +31,7 @@ impl SeqVersion {
             let start = self.version.load(Ordering::Acquire);
             if start & 1 == 0 {
                 let out = f();
-                // Pin the Relaxed body loads in `f` before the version recheck:
-                // AArch64 load-load reordering could otherwise accept a torn
+                // WHY: Pin the Relaxed body loads in `f` before the version recheck: AArch64 load-load reordering could otherwise accept a torn
                 // snapshot from a concurrent writer.
                 fence(Ordering::Acquire);
                 if self.version.load(Ordering::Acquire) == start {
@@ -99,8 +98,8 @@ impl SeqAnchorCell {
                     self.anchor.load(Ordering::Relaxed),
                 )
             });
-            // The body is coherent with `generation` iff `active` is still `generation` after
-            // the snapshot. Generations are monotonic, so there is no ABA.
+            // WHY: The body is coherent with `generation` iff `active` is still `generation` after the snapshot. Generations are monotonic, so
+            // there is no ABA.
             if self.active.load(Ordering::Acquire) == generation {
                 return Some(AnchorEntry {
                     segment,
@@ -118,7 +117,7 @@ impl SeqAnchorCell {
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1);
         if generation == 0 {
-            // 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
+            // WHY: 2^64 SETs is unreachable in practice; keep 0 reserved for absent.
             self.next_gen
                 .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1)
@@ -140,8 +139,6 @@ impl SeqAnchorCell {
         self.active.store(generation, Ordering::Release);
     }
 }
-
-const NONE_ANCHOR: u64 = u64::MAX;
 
 /// Lock-free, allocation-free seek-alias snapshot. The base `{segment, anchor}`
 /// is a single-writer [`SeqAnchorCell`] (on-core SET/CLEAR); `exact_anchor` is
@@ -170,10 +167,12 @@ impl AliasSnapshot {
 }
 
 impl AtomicSeekAlias {
+    const NONE_ANCHOR: u64 = u64::MAX;
+
     pub(super) const fn new() -> Self {
         Self {
             base: SeqAnchorCell::new(),
-            exact_anchor: AtomicU64::new(NONE_ANCHOR),
+            exact_anchor: AtomicU64::new(Self::NONE_ANCHOR),
             exact_gen: AtomicU64::new(0),
         }
     }
@@ -181,7 +180,8 @@ impl AtomicSeekAlias {
     pub(super) fn clear(&self) {
         self.base.clear();
         self.exact_gen.store(0, Ordering::Release);
-        self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
+        self.exact_anchor
+            .store(Self::NONE_ANCHOR, Ordering::Relaxed);
     }
 
     pub(super) fn clear_if_generation(&self, generation: u64) -> bool {
@@ -196,11 +196,11 @@ impl AtomicSeekAlias {
 
     pub(super) fn load(&self) -> Option<AliasSnapshot> {
         let base = self.base.load()?;
-        // Accept `exact_anchor` only when its tag matches the live base
-        // generation; a stale resolver leaves a mismatching tag we ignore.
+        // WHY: Accept `exact_anchor` only when its tag matches the live base generation; a stale resolver leaves a mismatching tag we
+        // ignore.
         let exact_anchor = if self.exact_gen.load(Ordering::Acquire) == base.generation {
             match self.exact_anchor.load(Ordering::Relaxed) {
-                NONE_ANCHOR => None,
+                Self::NONE_ANCHOR => None,
                 value => Some(value),
             }
         } else {
@@ -232,7 +232,8 @@ impl AtomicSeekAlias {
     /// anchor before the new generation goes live.
     pub(super) fn set(&self, anchor: u64, segment: u32) {
         self.exact_gen.store(0, Ordering::Release);
-        self.exact_anchor.store(NONE_ANCHOR, Ordering::Relaxed);
+        self.exact_anchor
+            .store(Self::NONE_ANCHOR, Ordering::Relaxed);
         self.base.set(segment, anchor);
     }
 }

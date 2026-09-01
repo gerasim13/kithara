@@ -15,10 +15,10 @@ struct Consts;
 impl Consts {
     /// Caps queued output at 128 `KiB`; full queues apply backpressure to readers.
     const CHANNEL_DEPTH: usize = 8;
-    /// Amortizes reads without accumulating a complete stress log in memory.
-    const READ_BUFFER_BYTES: usize = 16 * 1024;
     /// Bounds reader-failure detection latency while the sibling stream is idle.
     const READER_POLL_INTERVAL: Duration = Duration::from_millis(20);
+    /// Amortizes reads without accumulating a complete stress log in memory.
+    const READ_BUFFER_BYTES: usize = 16 * 1024;
 }
 
 #[derive(Clone, Copy)]
@@ -37,29 +37,36 @@ impl Stream {
 }
 
 struct Chunk {
-    bytes: Vec<u8>,
     stream: Stream,
+    bytes: Vec<u8>,
 }
 
 struct OutputWriter<'a> {
-    log: File,
     log_path: &'a Path,
+    log: File,
     stderr: io::StderrLock<'a>,
     stdout: io::StdoutLock<'a>,
 }
 
 impl OutputWriter<'_> {
+    fn flush_log(&mut self) -> Result<()> {
+        self.log
+            .flush()
+            .with_context(|| format!("flush stress log {}", self.log_path.display()))
+    }
+
+    fn flush_stderr(&mut self) -> Result<()> {
+        self.stderr.flush().context("flush child stderr")
+    }
+
+    fn flush_stdout(&mut self) -> Result<()> {
+        self.stdout.flush().context("flush child stdout")
+    }
+
     fn write_log(&mut self, bytes: &[u8]) -> Result<()> {
         self.log
             .write_all(bytes)
             .with_context(|| format!("write stress log {}", self.log_path.display()))
-    }
-
-    fn write_stdout(&mut self, bytes: &[u8]) -> Result<()> {
-        self.stdout
-            .write_all(bytes)
-            .context("stream child stdout")?;
-        self.stdout.flush().context("flush child stdout")
     }
 
     fn write_stderr(&mut self, bytes: &[u8]) -> Result<()> {
@@ -69,18 +76,11 @@ impl OutputWriter<'_> {
         self.stderr.flush().context("flush child stderr")
     }
 
-    fn flush_log(&mut self) -> Result<()> {
-        self.log
-            .flush()
-            .with_context(|| format!("flush stress log {}", self.log_path.display()))
-    }
-
-    fn flush_stdout(&mut self) -> Result<()> {
+    fn write_stdout(&mut self, bytes: &[u8]) -> Result<()> {
+        self.stdout
+            .write_all(bytes)
+            .context("stream child stdout")?;
         self.stdout.flush().context("flush child stdout")
-    }
-
-    fn flush_stderr(&mut self) -> Result<()> {
-        self.stderr.flush().context("flush child stderr")
     }
 }
 
@@ -271,8 +271,8 @@ fn read_stream<R: Read>(mut reader: R, stream: Stream, sender: &SyncSender<Chunk
         }
         sender
             .send(Chunk {
-                bytes: buffer[..count].to_vec(),
                 stream,
+                bytes: buffer[..count].to_vec(),
             })
             .map_err(|_| anyhow!("forward child {} to output writer", stream.name()))?;
     }
@@ -454,11 +454,11 @@ mod tests {
     struct FailingWriter;
 
     impl Write for FailingWriter {
-        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+        fn flush(&mut self) -> io::Result<()> {
             Err(io::Error::other("injected sink failure"))
         }
 
-        fn flush(&mut self) -> io::Result<()> {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
             Err(io::Error::other("injected sink failure"))
         }
     }

@@ -24,7 +24,6 @@ fn worker(pools: Pools, parent: &CancelToken) -> AnalysisWorker {
             .cancel(parent.clone())
             .build(),
     )
-    .expect("analysis worker task is admitted")
 }
 
 #[kithara::test(tokio)]
@@ -93,6 +92,33 @@ async fn preempted_job_sends_nothing_and_next_job_runs() {
 }
 
 #[kithara::test(tokio)]
+async fn pending_job_does_not_block_an_independent_job() {
+    let pools = pools();
+    let master = CancelToken::root();
+    let worker = worker(pools.clone(), &master);
+
+    let (_pending_rx, _pending_producer) = worker.analyze(
+        Box::new(FakeReader::stalled(10_000)),
+        "pending-track".into(),
+        super::fixtures::spec().sample_rate,
+    );
+    let (mut live_rx, _live_producer) = worker.analyze(
+        Box::new(FakeReader::chunked(&pools, &sine(8192), 3)),
+        "live-track".into(),
+        super::fixtures::spec().sample_rate,
+    );
+
+    kithara_platform::time::timeout(
+        kithara_platform::time::Duration::from_secs(2),
+        live_rx.changed(),
+    )
+    .await
+    .expect("an independent analysis job must not wait behind a pending reader")
+    .expect("live analysis job publishes a result");
+    assert!(live_rx.borrow().is_some());
+}
+
+#[kithara::test(tokio)]
 async fn job_token_belongs_to_worker_scope() {
     let pools = pools();
     let master = CancelToken::root();
@@ -119,8 +145,7 @@ fn shared_base_outlives_analysis_dispatcher_and_analysis_cancel_stays_local() {
             .worker(base.clone())
             .cancel(cancel.token())
             .build(),
-    )
-    .expect("analysis worker task is admitted");
+    );
     let (_rx, _producer, pass) =
         worker.open("scoped-track".into(), super::fixtures::spec().sample_rate);
     let job = pass.cancel_token().clone();

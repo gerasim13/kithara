@@ -139,23 +139,23 @@ impl CountingWake {
 }
 
 impl WorkerWake for CountingWake {
-    fn wake(&self) {
+    fn defer(&self) {
         self.0.fetch_add(1, Ordering::Release);
     }
 
-    fn defer(&self) {
+    fn wake(&self) {
         self.0.fetch_add(1, Ordering::Release);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WorkerWake for BlockingWake {
+    fn defer(&self) {}
+
     fn wake(&self) {
         self.entered.wait();
         self.release.wait();
     }
-
-    fn defer(&self) {}
 }
 
 impl Wake for CountingWake {

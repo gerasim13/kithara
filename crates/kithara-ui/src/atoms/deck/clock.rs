@@ -8,8 +8,6 @@ use crate::{
     skin::TextRoleSkin,
 };
 
-const SECONDS_PER_MINUTE: u64 = 60;
-
 /// A pair of clock readings, centred on the deep panel behind them.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Clock {
@@ -63,6 +61,8 @@ impl Clock {
 /// Seconds as minutes and seconds, both zero-padded so the reading keeps one
 /// width as the track plays.
 pub(crate) fn clock_reading(seconds: f64) -> String {
+    const SECONDS_PER_MINUTE: u64 = 60;
+
     let total = seconds.max(0.0).floor().to_u64().unwrap_or(0);
     let minutes = total / SECONDS_PER_MINUTE;
     let seconds = total % SECONDS_PER_MINUTE;

@@ -7,11 +7,11 @@ use crate::{
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct Knob {
+    metrics: KnobSkin,
     body_border: Rgba,
     body_fill: Rgba,
     indicator: Rgba,
     label: Rgba,
-    metrics: KnobSkin,
     track: Rgba,
     value_color: Rgba,
 }

@@ -22,15 +22,15 @@ pub enum PassOutcome {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PassReport {
-    pub active_tasks: usize,
-    pub backpressured_tasks: usize,
-    pub done_tasks: usize,
     pub first_backpressured_task: Option<TaskId>,
     pub first_progress_task: Option<TaskId>,
     pub first_upstream_pending_task: Option<TaskId>,
     pub first_waiting_priority: Option<Priority>,
     pub first_waiting_task: Option<TaskId>,
     pub outcome: PassOutcome,
+    pub active_tasks: usize,
+    pub backpressured_tasks: usize,
+    pub done_tasks: usize,
     pub progress_tasks: usize,
     pub upstream_pending_tasks: usize,
     pub waiting_tasks: usize,

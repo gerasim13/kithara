@@ -536,22 +536,15 @@ impl Reads for DemoReads {
     fn get(&self, endpoint: &str) -> Option<ReadValue<'_>> {
         // The menu axes are genuinely per-window, per-module and per-row, so
         // they answer the scoped key before it is dropped below.
-        if let Some(value) = self.menu.get(endpoint) {
-            return Some(value);
-        }
-        if let Some(value) = self.context.get(endpoint) {
-            return Some(value);
-        }
-        if let Some(value) = self.quality.get(endpoint) {
-            return Some(value);
-        }
-        if let Some(value) = self.clock.get(endpoint) {
-            return Some(value);
-        }
-        if let Some(value) = self.pivot.get(endpoint) {
-            return Some(value);
-        }
-        if let Some(value) = self.scene.get(endpoint) {
+        if let Some(value) = self
+            .menu
+            .get(endpoint)
+            .or_else(|| self.context.get(endpoint))
+            .or_else(|| self.quality.get(endpoint))
+            .or_else(|| self.clock.get(endpoint))
+            .or_else(|| self.pivot.get(endpoint))
+            .or_else(|| self.scene.get(endpoint))
+        {
             return Some(value);
         }
         // The gallery hosts one virtual deck: every scope suffix resolves to

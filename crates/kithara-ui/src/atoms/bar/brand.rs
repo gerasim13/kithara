@@ -16,8 +16,8 @@ const LETTERS: [&str; 7] = ["K", "I", "T", "H", "A", "R", "A"];
 pub(crate) struct Brand {
     metrics: GlobalBarSkin,
     panel: Rgba,
-    role: TextRoleSkin,
     text: Rgba,
+    role: TextRoleSkin,
 }
 
 impl Brand {

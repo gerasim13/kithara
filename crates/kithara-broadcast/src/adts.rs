@@ -4,19 +4,19 @@ use crate::{BroadcastError, BroadcastResult};
 
 #[derive(Debug)]
 pub(crate) struct AdtsPacker {
-    sample_rate_index: u8,
     channel_config: u8,
+    sample_rate_index: u8,
 }
 
 impl AdtsPacker {
-    pub(crate) const HEADER_LEN: usize = 7;
-
-    pub(crate) const MAX_PAYLOAD: usize = (1 << 13) - 1 - Self::HEADER_LEN;
-
     const CHANNEL_CONFIGS: RangeInclusive<u8> = 1..=6;
+
     const FULLNESS_HIGH_BITS: u8 = 0x1F;
+
     const FULLNESS_LOW_BITS: u8 = 0x3F;
+    pub(crate) const HEADER_LEN: usize = 7;
     const HEADER_LEN_U16: u16 = 7;
+    pub(crate) const MAX_PAYLOAD: usize = (1 << 13) - 1 - Self::HEADER_LEN;
     const PROFILE_AAC_LC: u8 = 1;
     const SAMPLE_RATES: [u32; 13] = [
         96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025,
@@ -35,8 +35,8 @@ impl AdtsPacker {
             .ok_or(BroadcastError::UnsupportedChannels { channels })?;
 
         Ok(Self {
-            sample_rate_index,
             channel_config,
+            sample_rate_index,
         })
     }
 

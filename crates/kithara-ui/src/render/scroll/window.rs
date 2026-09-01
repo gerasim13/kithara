@@ -33,38 +33,6 @@ impl Window {
         }
     }
 
-    /// Takes the measured content and window, and answers where the content
-    /// now starts. A window that grew past the end of the travel pulls the
-    /// content back down with it rather than leaving blank space below.
-    pub(crate) fn measured(&mut self, content: f32, extent: f32) -> f32 {
-        self.content = content;
-        self.extent = extent;
-        self.offset = self.offset.clamp(0.0, self.travel());
-        self.offset
-    }
-
-    /// Moves the window, answering whether it actually moved.
-    ///
-    /// A wheel at either end of the travel is not consumed, so it continues to
-    /// whatever encloses this viewport instead of being swallowed by a window
-    /// that has nowhere left to go.
-    pub(crate) fn wheel(&mut self, input: Input<'_>) -> bool {
-        let Input::Wheel(scroll) = input else {
-            return false;
-        };
-        let steps = wheel::steps(&mut self.accum, scroll);
-        if steps == 0.0 {
-            return false;
-        }
-        let next = steps.mul_add(STEP, self.offset).clamp(0.0, self.travel());
-        std::mem::replace(&mut self.offset, next) != next
-    }
-
-    const fn travel(&self) -> f32 {
-        let travel = self.content - self.extent;
-        if travel > 0.0 { travel } else { 0.0 }
-    }
-
     /// Draws the indicator over the window's own right edge.
     ///
     /// A window with nothing hidden below it draws nothing: an indicator that
@@ -82,6 +50,38 @@ impl Window {
             self.offset / travel,
             list,
         );
+    }
+
+    /// Takes the measured content and window, and answers where the content
+    /// now starts. A window that grew past the end of the travel pulls the
+    /// content back down with it rather than leaving blank space below.
+    pub(crate) fn measured(&mut self, content: f32, extent: f32) -> f32 {
+        self.content = content;
+        self.extent = extent;
+        self.offset = self.offset.clamp(0.0, self.travel());
+        self.offset
+    }
+
+    const fn travel(&self) -> f32 {
+        let travel = self.content - self.extent;
+        if travel > 0.0 { travel } else { 0.0 }
+    }
+
+    /// Moves the window, answering whether it actually moved.
+    ///
+    /// A wheel at either end of the travel is not consumed, so it continues to
+    /// whatever encloses this viewport instead of being swallowed by a window
+    /// that has nowhere left to go.
+    pub(crate) fn wheel(&mut self, input: Input<'_>) -> bool {
+        let Input::Wheel(scroll) = input else {
+            return false;
+        };
+        let steps = wheel::steps(&mut self.accum, scroll);
+        if steps == 0.0 {
+            return false;
+        }
+        let next = steps.mul_add(STEP, self.offset).clamp(0.0, self.travel());
+        std::mem::replace(&mut self.offset, next) != next
     }
 }
 

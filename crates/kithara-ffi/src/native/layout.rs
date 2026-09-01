@@ -1,7 +1,9 @@
 use std::{fmt, path::PathBuf};
 
-use kithara_assets::{AssetLayout, AssetResource, AssetSource};
-use kithara_platform::sync::Arc;
+use kithara::{
+    assets::{AssetLayout, AssetResource, AssetSource},
+    platform::sync::Arc,
+};
 use url::Url;
 
 use crate::layout::{FfiAssetLayout, FfiAssetResource, FfiAssetSource};
@@ -108,7 +110,7 @@ mod tests {
         sync::atomic::{AtomicUsize, Ordering},
     };
 
-    use kithara_assets::{
+    use kithara::assets::{
         AcquisitionResult, AssetLayoutRegistry, AssetsError, ReadSide, ResourceAcquisition,
         StorageBackend, WriteSide,
     };
@@ -302,7 +304,7 @@ mod tests {
         assert_eq!(path_calls.load(Ordering::Relaxed), 1);
     }
 
-    #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
     fn foreign_layout_dictates_real_on_disk_root_and_path() {
         struct FixedLayout;
 
@@ -345,7 +347,7 @@ mod tests {
         assert!(dir.path().join("foreign-root/custom/audio.mp3").exists());
     }
 
-    #[kithara::test(native, timeout(kithara_platform::time::Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(kithara::platform::time::Duration::from_secs(5)))]
     #[case("../escape")]
     #[case("/absolute/path")]
     #[case("")]

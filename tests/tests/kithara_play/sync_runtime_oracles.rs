@@ -10,7 +10,7 @@ use kithara_integration_tests::{
 };
 
 use super::sync_product_matrix::{
-    BLOCK_FRAMES, CHANNELS, ONE_DECK, ProductHarness, Provider, SHARED_DEADLINE,
+    BLOCK_FRAMES, CHANNELS, HlsProtection, ONE_DECK, ProductHarness, Provider, SHARED_DEADLINE,
     SHARED_DEADLINE_CONTROL, SyncCase,
 };
 
@@ -311,7 +311,7 @@ async fn bound_sync_render_is_rtsan_clean() {
 }
 
 async fn shared_worker_capture(case: SyncCase) -> CommandRun {
-    let mut harness = ProductHarness::new(case, Provider::HlsMp3, 0).await;
+    let mut harness = ProductHarness::new(case, Provider::HlsMp3(HlsProtection::Plain), 0).await;
     harness.run_operations(case).await;
     harness.ride_tempo(case).await;
     if harness

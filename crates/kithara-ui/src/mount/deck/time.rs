@@ -24,10 +24,6 @@ mod host {
     impl Draws for Time {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// A clock with no position to show draws nothing rather than zeros:
         /// a deck with no track is empty, not at the start of one.
         fn data(&self, read: Reading<'_>) -> Option<Elapsed> {
@@ -38,6 +34,10 @@ mod host {
                 duration: seconds(read, "deck.playback.duration_secs"),
                 position: seconds(read, "deck.playback.position_secs"),
             })
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 

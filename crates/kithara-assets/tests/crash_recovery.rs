@@ -8,6 +8,7 @@ use kithara_assets::{
     AcquisitionResult, AssetScope, AssetStore, FlushHub, FlushPolicy, ResourceKey, StorageBackend,
     WriteSide,
 };
+use kithara_bufpool::testing::TestPools;
 use kithara_platform::{CancelToken, time::Duration};
 use kithara_test_utils::kithara;
 use support::{Test, resource, source};
@@ -49,7 +50,7 @@ fn availability_bin(root: &Path) -> std::path::PathBuf {
     root.join("_index/availability.bin")
 }
 
-type TestAssetScope = AssetScope<support::pools::TestPools>;
+type TestAssetScope = AssetScope<TestPools>;
 
 fn segment_path(root: &Path, scope: &TestAssetScope, key: &ResourceKey) -> std::path::PathBuf {
     root.join(scope.asset_root())

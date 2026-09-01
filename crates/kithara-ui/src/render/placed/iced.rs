@@ -24,20 +24,20 @@ pub(crate) fn placed<'a>(
     child: Element<'a, UiEvent>,
 ) -> Element<'a, UiEvent> {
     Element::new(Placed {
-        path,
-        at,
-        carried,
-        snap,
         child,
+        snap,
+        at,
+        path,
+        carried,
     })
 }
 
 struct Placed<'a> {
-    path: String,
-    at: Pt,
-    carried: bool,
-    snap: Option<Snap>,
     child: Element<'a, UiEvent>,
+    snap: Option<Snap>,
+    at: Pt,
+    path: String,
+    carried: bool,
 }
 
 impl Placed<'_> {
@@ -61,46 +61,12 @@ impl Placed<'_> {
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
-    fn tag(&self) -> tree::Tag {
-        tree::Tag::of::<Carry>()
-    }
-
-    fn state(&self) -> tree::State {
-        tree::State::new(Carry::default())
-    }
-
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.child)]
     }
 
     fn diff(&self, tree: &mut Tree) {
         tree.diff_children(std::slice::from_ref(&self.child));
-    }
-
-    /// A placement fills the stage it is in and puts its child inside that,
-    /// which is what lets the child stand anywhere in the scene rather than
-    /// only where a container would have put it.
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let room = limits.max();
-        let child = self
-            .child
-            .as_widget_mut()
-            .layout(
-                &mut tree.children[0],
-                renderer,
-                &layout::Limits::new(Size::ZERO, room),
-            )
-            .move_to(Point::new(self.at.x, self.at.y));
-        layout::Node::with_children(room, vec![child])
     }
 
     fn draw(
@@ -127,6 +93,25 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
         );
     }
 
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let room = limits.max();
+        let child = self
+            .child
+            .as_widget_mut()
+            .layout(
+                &mut tree.children[0],
+                renderer,
+                &layout::Limits::new(Size::ZERO, room),
+            )
+            .move_to(Point::new(self.at.x, self.at.y));
+        layout::Node::with_children(room, vec![child])
+    }
+
     fn mouse_interaction(
         &self,
         tree: &Tree,
@@ -149,6 +134,21 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Placed<'_> {
             viewport,
             renderer,
         )
+    }
+
+    /// A placement fills the stage it is in and puts its child inside that,
+    /// which is what lets the child stand anywhere in the scene rather than
+    /// only where a container would have put it.
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(Carry::default())
+    }
+
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<Carry>()
     }
 
     fn update(

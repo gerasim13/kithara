@@ -5,8 +5,8 @@ use crate::layout::Axis;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Allocation {
-    extent: f32,
     is_pinned: bool,
+    extent: f32,
 }
 
 impl Allocation {
@@ -71,12 +71,6 @@ pub(super) fn allocate(items: &[Item], axis: Axis, remaining: f32) -> Vec<Alloca
     }
 
     let weight_sum = remaining_weight(items, &allocations, axis);
-    // Shares meet on whole pixels, each one taken as the distance from the edge
-    // before it: an edge left on a fraction is rounded twice by the host that
-    // places the cells, once as one cell's end and once as the next one's
-    // start, and the pixel between the two roundings is a pixel neither cell
-    // paints. The last share keeps the fraction so the row still ends where the
-    // room does.
     let last = items
         .iter()
         .zip(&allocations)

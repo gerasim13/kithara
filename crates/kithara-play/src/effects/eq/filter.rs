@@ -54,12 +54,12 @@ impl Lr4 {
 }
 
 pub(crate) struct CrossoverFilters {
-    allpass: Vec<Section>,
     crossover_freqs: SampleBuffer,
-    highpass: Vec<Lr4>,
-    history: [f32; Consts::HISTORY_LEN],
-    lowpass: Vec<Lr4>,
     lowpass_scratch: SampleBuffer,
+    allpass: Vec<Section>,
+    highpass: Vec<Lr4>,
+    lowpass: Vec<Lr4>,
+    history: [f32; Consts::HISTORY_LEN],
     sample_rate: f32,
     history_pos: usize,
 }
@@ -94,10 +94,10 @@ impl CrossoverFilters {
             allpass,
             crossover_freqs,
             highpass,
-            history: [0.0; Consts::HISTORY_LEN],
             lowpass,
             lowpass_scratch,
             sample_rate,
+            history: [0.0; Consts::HISTORY_LEN],
             history_pos: 0,
         })
     }

@@ -145,13 +145,11 @@ kithara = { workspace = true, features = ["stretch-bungee"] }
 # only: the crate's LSP client builds file URLs, which `url` offers everywhere
 # but wasm.
 kithara-devtools = { workspace = true }
+
 # fdk-aac came from kithara-decode defaults before Phase 2 (workspace
 # default-features=false). HE-AAC v2 fMP4 fixtures in rapid-scrub /
 # stress-seek tests decode through the symphonia path, and without fdk-aac
 # they are reported as LC-only, so add it explicitly.
-kithara-encode = { workspace = true, features = ["client-reqwest", "fdk-aac", "ffmpeg", "tls-rustls"] }
-kithara-stretch = { workspace = true, default-features = false, features = ["stretch-bungee"] }
-
 assert_no_alloc = { workspace = true }
 axum = { workspace = true }
 
@@ -207,11 +205,12 @@ kithara = { workspace = true, features = [
     "symphonia",
     "stretch-signalsmith",
     "backend-cpal",
+    "encode",
+    "ffmpeg",
     "tokio-net",
     "tokio-rt-multi-thread",
 ] }
 kithara-app = { workspace = true, default-features = false, features = ["analysis-waveform", "beat-nn", "lib-only"] }
-kithara-stretch = { workspace = true, default-features = false, features = ["stretch-signalsmith"] }
 kithara-test-fixtures = { workspace = true }
 
 # `v4` mints the random tokens the test server hands out; the workspace

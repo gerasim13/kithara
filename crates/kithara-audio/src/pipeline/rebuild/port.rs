@@ -120,16 +120,6 @@ impl<T: StreamType> RebuildPort<T> {
         self.pending.is_none()
     }
 
-    delegate::delegate! {
-        to self.deps.replacement_completion {
-            #[cfg(test)]
-            #[call(clone)]
-            pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>>;
-            #[call(pop)]
-            pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete>;
-        }
-    }
-
     const fn next_build(&mut self) -> BuildId {
         let build = BuildId::new(self.next_build);
         self.next_build = self.next_build.wrapping_add(1);
@@ -249,6 +239,16 @@ impl<T: StreamType> RebuildPort<T> {
     pub(crate) fn wake(&self) {
         self.deps.wake.wake();
     }
+
+    delegate::delegate! {
+        to self.deps.replacement_completion {
+            #[cfg(test)]
+            #[call(clone)]
+            pub(crate) fn completion(&self) -> Arc<ArrayQueue<DecoderBuildComplete>>;
+            #[call(pop)]
+            pub(crate) fn pop_replacement_completion(&self) -> Option<DecoderBuildComplete>;
+        }
+    }
 }
 
 fn run<T: StreamType>(job: PendingJob<T>) {
@@ -294,8 +294,7 @@ fn run<T: StreamType>(job: PendingJob<T>) {
             pending_head_skip,
             deps.gapless_mode,
         );
-        // A generation built here has nothing buffered yet, and this runs on the off-RT builder, so
-        // the sink has nothing to carry.
+        // WHY: A generation built here has nothing buffered yet, and this runs on the off-RT builder, so the sink has nothing to carry.
         if landing.is_some_and(|landing| !landing.is_zero()) {
             generation.notify_seek(&DropChunks);
         }

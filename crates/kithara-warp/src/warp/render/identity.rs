@@ -50,7 +50,9 @@ where
     }
 
     #[doc(hidden)]
-    pub const fn prepare(&mut self, _spec: AudioSpec) {}
+    pub const fn accepts_input(&self) -> bool {
+        true
+    }
 
     #[doc(hidden)]
     pub const fn prepare_terminal(&mut self) {}
@@ -61,9 +63,7 @@ where
     }
 
     #[doc(hidden)]
-    pub const fn accepts_input(&self) -> bool {
-        true
-    }
+    pub const fn prepare(&mut self, _spec: AudioSpec) {}
 
     #[doc(hidden)]
     pub fn prepare_quantum(

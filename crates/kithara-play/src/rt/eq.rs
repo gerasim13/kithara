@@ -96,15 +96,15 @@ impl<S> MasterEqNode<S> {
         }
     }
 
+    #[must_use]
+    pub fn band_count(&self) -> usize {
+        self.bands.len()
+    }
+
     pub fn set_gain(&mut self, index: usize, gain_db: GainDb) {
         if let Some(band) = self.bands.get_mut(index) {
             band.gain_db = f32::from(gain_db);
         }
-    }
-
-    #[must_use]
-    pub fn band_count(&self) -> usize {
-        self.bands.len()
     }
 }
 

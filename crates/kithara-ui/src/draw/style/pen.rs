@@ -37,9 +37,9 @@ impl Pen {
     #[must_use]
     pub const fn new(width: f32) -> Self {
         Self {
+            width,
             cap: LineCap::Butt,
             join: LineJoin::Miter,
-            width,
         }
     }
 

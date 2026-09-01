@@ -30,14 +30,14 @@ use crate::{
 /// dropped only when the list that came out differs, which is the same bargain
 /// the retained host takes for the same leaf.
 pub(crate) struct Custom<'a> {
+    skin: &'a Skin,
     kind: &'a str,
     kinds: Option<&'a CustomKinds>,
-    skin: &'a Skin,
 }
 
 impl<'a> Custom<'a> {
     pub(crate) const fn new(kind: &'a str, kinds: Option<&'a CustomKinds>, skin: &'a Skin) -> Self {
-        Self { kind, kinds, skin }
+        Self { skin, kind, kinds }
     }
 }
 
@@ -59,19 +59,16 @@ impl Probe for Redrawn {
 }
 
 struct CustomState {
-    kind: String,
-    widget: RefCell<Option<Box<dyn MountedCustom<UiEvent>>>>,
-    paint: PaintState<()>,
     drawn: Option<IcedInstant>,
+    paint: PaintState<()>,
+    widget: RefCell<Option<Box<dyn MountedCustom<UiEvent>>>>,
+    kind: String,
 }
 
 impl CustomState {
     fn new(kind: &str, kinds: Option<&CustomKinds>) -> Self {
         let widget = kinds.and_then(|kinds| kinds.make(kind));
         if widget.is_none() {
-            // Compiling the document already refused an unregistered kind, so
-            // reaching here means this host was handed a different registry
-            // than the one that validated it.
             tracing::error!(kind, "no registered widget for this kind");
         }
         Self {
@@ -91,17 +88,6 @@ impl CustomState {
 }
 
 impl Custom<'_> {
-    /// The state for this leaf, rebuilt when the place it stands in changed
-    /// hands: every custom leaf shares one state tag, so the kind is the only
-    /// thing that says whether the widget behind it is still the right one.
-    fn state_for<'s>(&self, tree: &'s mut Tree) -> &'s mut CustomState {
-        let state = tree.state.downcast_mut::<CustomState>();
-        if state.kind != self.kind {
-            *state = CustomState::new(self.kind, self.kinds);
-        }
-        state
-    }
-
     fn list(&self, state: &CustomState, bounds: Rect) -> DrawList {
         let mut list = DrawListBuilder::default();
         state.paint.shaped(self.skin.text_resources(), |text| {
@@ -116,49 +102,20 @@ impl Custom<'_> {
         });
         list.finish()
     }
+
+    /// The state for this leaf, rebuilt when the place it stands in changed
+    /// hands: every custom leaf shares one state tag, so the kind is the only
+    /// thing that says whether the widget behind it is still the right one.
+    fn state_for<'s>(&self, tree: &'s mut Tree) -> &'s mut CustomState {
+        let state = tree.state.downcast_mut::<CustomState>();
+        if state.kind != self.kind {
+            *state = CustomState::new(self.kind, self.kinds);
+        }
+        state
+    }
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
-    fn size(&self) -> IcedSize<Length> {
-        IcedSize::new(Length::Fill, Length::Fill)
-    }
-
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<CustomState>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(CustomState::new(self.kind, self.kinds))
-    }
-
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        _renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
-        let resources = self.skin.text_resources();
-        let state = self.state_for(tree);
-        let asked = SizeLimits::new(
-            Size2::new(limits.min().width, limits.min().height),
-            Size2::new(limits.max().width, limits.max().height),
-        );
-        let intrinsic = state.paint.shaped(resources, |text| {
-            state
-                .widget
-                .borrow_mut()
-                .as_mut()
-                .map_or_else(Size2::default, |widget| {
-                    widget.measure(&mut TextMeasurer::new(text), asked)
-                })
-        });
-        layout::Node::new(limits.resolve(
-            Length::Fill,
-            Length::Fill,
-            IcedSize::new(intrinsic.w, intrinsic.h),
-        ))
-    }
-
     fn draw(
         &self,
         tree: &Tree,
@@ -190,6 +147,46 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
         );
     }
 
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        _renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let resources = self.skin.text_resources();
+        let state = self.state_for(tree);
+        let asked = SizeLimits::new(
+            Size2::new(limits.min().width, limits.min().height),
+            Size2::new(limits.max().width, limits.max().height),
+        );
+        let intrinsic = state.paint.shaped(resources, |text| {
+            state
+                .widget
+                .borrow_mut()
+                .as_mut()
+                .map_or_else(Size2::default, |widget| {
+                    widget.measure(&mut TextMeasurer::new(text), asked)
+                })
+        });
+        layout::Node::new(limits.resolve(
+            Length::Fill,
+            Length::Fill,
+            IcedSize::new(intrinsic.w, intrinsic.h),
+        ))
+    }
+
+    fn size(&self) -> IcedSize<Length> {
+        IcedSize::new(Length::Fill, Length::Fill)
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(CustomState::new(self.kind, self.kinds))
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<CustomState>()
+    }
+
     fn update(
         &mut self,
         tree: &mut Tree,
@@ -207,8 +204,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Custom<'_> {
                 .drawn
                 .replace(*now)
                 .map(|last| now.duration_since(last));
-            // Read before the tick, the way the retained host does: a widget
-            // that stops asking still gets the frame it already asked for.
             let asked = state.repaint();
             if let Some(elapsed) = elapsed
                 && let Some(published) = state
@@ -298,10 +293,6 @@ mod tests {
     impl CustomWidget for PressExtension {
         type Action = ();
 
-        fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
-            Size2::new(40.0, 40.0)
-        }
-
         fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<Self::Action> {
             let Input::Pointer(pointer) = input else {
                 return Outcome::IGNORED;
@@ -310,6 +301,10 @@ mod tests {
                 return Outcome::set(()).with_ownership(PointerOwnership::Claim);
             }
             Outcome::IGNORED
+        }
+
+        fn measure(&mut self, _text: &mut TextMeasurer<'_>, _limits: SizeLimits) -> Size2 {
+            Size2::new(40.0, 40.0)
         }
 
         fn paint(

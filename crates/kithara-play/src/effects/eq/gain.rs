@@ -16,9 +16,9 @@ impl Consts {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 struct SmoothedGain {
-    filter: SmoothingFilter,
     #[field(get(copy), vis = "pub(crate)")]
     target: GainDb,
+    filter: SmoothingFilter,
     target_linear: f32,
 }
 
@@ -26,8 +26,8 @@ impl SmoothedGain {
     fn new(target: GainDb) -> Self {
         let linear = target.linear();
         Self {
-            filter: SmoothingFilter::new(linear),
             target,
+            filter: SmoothingFilter::new(linear),
             target_linear: linear,
         }
     }
@@ -72,12 +72,12 @@ impl SmoothedGain {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(crate) struct GainBank {
+    coeff: SmoothingFilterCoeff,
     gains: Vec<SmoothedGain>,
     #[field(get, vis = "pub(crate)")]
     bypass_active: bool,
     #[field(get, vis = "pub(crate)")]
     silence_active: bool,
-    coeff: SmoothingFilterCoeff,
     block_counter: usize,
 }
 
@@ -97,22 +97,6 @@ impl GainBank {
 
     fn all_settled_at(&self, target: GainDb) -> bool {
         !self.gains.is_empty() && self.gains.iter().all(|gain| gain.settled_at(target))
-    }
-
-    delegate::delegate! {
-        to self.gains {
-            #[cfg(test)]
-            #[expr($.any(SmoothedGain::is_smoothing))]
-            #[call(iter)]
-            pub(crate) fn is_smoothing(&self) -> bool;
-            pub(crate) const fn len(&self) -> usize;
-            #[expr($.current())]
-            #[call(index)]
-            pub(crate) fn linear(&self, band: usize) -> f32;
-            #[expr($.map(SmoothedGain::target))]
-            #[call(get)]
-            pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
-        }
     }
 
     fn refresh_fastpath(&mut self) {
@@ -157,6 +141,22 @@ impl GainBank {
 
     pub(crate) fn update_sample_rate(&mut self, sample_rate: f32) {
         self.coeff = smoothing_coeff(sample_rate);
+    }
+
+    delegate::delegate! {
+        to self.gains {
+            #[cfg(test)]
+            #[expr($.any(SmoothedGain::is_smoothing))]
+            #[call(iter)]
+            pub(crate) fn is_smoothing(&self) -> bool;
+            pub(crate) const fn len(&self) -> usize;
+            #[expr($.current())]
+            #[call(index)]
+            pub(crate) fn linear(&self, band: usize) -> f32;
+            #[expr($.map(SmoothedGain::target))]
+            #[call(get)]
+            pub(crate) fn target(&self, band: usize) -> Option<GainDb>;
+        }
     }
 }
 

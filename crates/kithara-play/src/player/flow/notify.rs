@@ -85,66 +85,6 @@ where
         }
     }
 
-    /// Bug #5's dispatch-side sibling: a natural end minted at an older
-    /// epoch describes a position the user has already left — a newer
-    /// published seek revives the track (`apply_seek`), and delivering the
-    /// stale end would hand the queue an `ItemDidPlayToEnd` it answers with
-    /// an auto-advance out from under the accepted seek. Compared with `!=`,
-    /// not `<`: epochs wrap, and `withdraw_seek_epoch` legally steps the
-    /// published value back. `Stop` and `Failed` are never fenced — a broken
-    /// source stays broken across a seek, and a slot without playback state
-    /// has nothing to outrank the end.
-    fn natural_end_outranked_by_seek(
-        &self,
-        slot_id: SlotId,
-        notification: &PlayerNotification,
-    ) -> bool {
-        let PlayerNotification::PlaybackStopped {
-            reason: TrackPlaybackStopReason::Eof,
-            seek_epoch,
-            ..
-        } = notification
-        else {
-            return false;
-        };
-        self.core
-            .engine
-            .slot_playback(slot_id)
-            .is_some_and(|playback| playback.seek_epoch.load(Ordering::SeqCst) != *seek_epoch)
-    }
-
-    /// Name the item a start or stop notification is about, together with
-    /// its role in the arena. `None` for notifications that do not name an
-    /// item at all.
-    ///
-    /// Slot identity answers only half of the role: a slot is a processor
-    /// holding an arena, and `commit_next` promotes the successor *inside*
-    /// the current slot, leaving it in the phase as the activated
-    /// `PendingNext`. So an item in the held slot carrying an identity other
-    /// than the promoted one is the item promoted over — it sits inside the
-    /// leading slot, but it is not what the listener is hearing.
-    fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> Option<ItemRole> {
-        let (src, id) = match notification {
-            PlayerNotification::PlaybackStarted { src, item_id }
-            | PlayerNotification::PlaybackStopped { src, item_id, .. } => (src, *item_id),
-            _ => return None,
-        };
-        let track = TrackRef::new(id, slot_id, Arc::clone(src));
-        if self.slot() != Some(slot_id) {
-            return Some(ItemRole::Background(track));
-        }
-        let promoted = self
-            .phase
-            .lock()
-            .pending()
-            .filter(|pending| pending.state.activated())
-            .map(|pending| pending.item_id);
-        Some(match promoted {
-            Some(promoted) if promoted != track.id => ItemRole::Outgoing(track),
-            _ => ItemRole::Leading(track),
-        })
-    }
-
     fn finalize_handover_if_armed(&self) {
         let pending = self.phase.lock().pending_mut().and_then(Option::take);
         let Some(pending) = pending else {
@@ -206,6 +146,66 @@ where
                 let _ = self.arm_next(next_index);
             }
         }
+    }
+
+    /// Name the item a start or stop notification is about, together with
+    /// its role in the arena. `None` for notifications that do not name an
+    /// item at all.
+    ///
+    /// Slot identity answers only half of the role: a slot is a processor
+    /// holding an arena, and `commit_next` promotes the successor *inside*
+    /// the current slot, leaving it in the phase as the activated
+    /// `PendingNext`. So an item in the held slot carrying an identity other
+    /// than the promoted one is the item promoted over — it sits inside the
+    /// leading slot, but it is not what the listener is hearing.
+    fn item_role(&self, slot_id: SlotId, notification: &PlayerNotification) -> Option<ItemRole> {
+        let (src, id) = match notification {
+            PlayerNotification::PlaybackStarted { src, item_id }
+            | PlayerNotification::PlaybackStopped { src, item_id, .. } => (src, *item_id),
+            _ => return None,
+        };
+        let track = TrackRef::new(id, slot_id, Arc::clone(src));
+        if self.slot() != Some(slot_id) {
+            return Some(ItemRole::Background(track));
+        }
+        let promoted = self
+            .phase
+            .lock()
+            .pending()
+            .filter(|pending| pending.state.activated())
+            .map(|pending| pending.item_id);
+        Some(match promoted {
+            Some(promoted) if promoted != track.id => ItemRole::Outgoing(track),
+            _ => ItemRole::Leading(track),
+        })
+    }
+
+    /// Bug #5's dispatch-side sibling: a natural end minted at an older
+    /// epoch describes a position the user has already left — a newer
+    /// published seek revives the track (`apply_seek`), and delivering the
+    /// stale end would hand the queue an `ItemDidPlayToEnd` it answers with
+    /// an auto-advance out from under the accepted seek. Compared with `!=`,
+    /// not `<`: epochs wrap, and `withdraw_seek_epoch` legally steps the
+    /// published value back. `Stop` and `Failed` are never fenced — a broken
+    /// source stays broken across a seek, and a slot without playback state
+    /// has nothing to outrank the end.
+    fn natural_end_outranked_by_seek(
+        &self,
+        slot_id: SlotId,
+        notification: &PlayerNotification,
+    ) -> bool {
+        let PlayerNotification::PlaybackStopped {
+            reason: TrackPlaybackStopReason::Eof,
+            seek_epoch,
+            ..
+        } = notification
+        else {
+            return false;
+        };
+        self.core
+            .engine
+            .slot_playback(slot_id)
+            .is_some_and(|playback| playback.seek_epoch.load(Ordering::SeqCst) != *seek_epoch)
     }
 
     /// Process audio-thread notifications, emitting `ItemDidPlayToEnd`
@@ -323,9 +323,9 @@ mod tests {
     struct Items;
 
     impl Items {
+        const BACKGROUND: TrackId = TrackId(9);
         const OUTGOING: TrackId = TrackId(7);
         const PROMOTED: TrackId = TrackId(8);
-        const BACKGROUND: TrackId = TrackId(9);
     }
 
     /// A started player holding one slot — the slot the phase calls current.
@@ -368,9 +368,9 @@ mod tests {
         reason: TrackPlaybackStopReason,
     ) -> PlayerNotification {
         PlayerNotification::PlaybackStopped {
-            src: Arc::from(src),
             item_id,
             reason,
+            src: Arc::from(src),
             seek_epoch: 0,
         }
     }

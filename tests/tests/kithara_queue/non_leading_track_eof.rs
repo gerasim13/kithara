@@ -7,7 +7,6 @@
 //! outgoing half of a crossfade, reaches its own end while the current
 //! track has minutes left. The player names the role in `item`; only
 //! `ItemRole::Leading` may advance the queue.
-
 use std::num::NonZero;
 
 use kithara::{

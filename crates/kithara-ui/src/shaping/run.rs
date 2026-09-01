@@ -4,17 +4,17 @@ use super::GlyphFace;
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Glyph {
-    pub id: u32,
     pub x: f32,
     pub y: f32,
+    pub id: u32,
 }
 
 /// A stretch of a shaped run drawn with one resolved face.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GlyphSegment {
     face: GlyphFace,
-    normalized_coords: Vec<i16>,
     glyphs: Vec<Glyph>,
+    normalized_coords: Vec<i16>,
 }
 
 impl GlyphSegment {
@@ -25,8 +25,8 @@ impl GlyphSegment {
     ) -> Self {
         Self {
             face,
-            normalized_coords,
             glyphs,
+            normalized_coords,
         }
     }
 
@@ -36,16 +36,16 @@ impl GlyphSegment {
         &self.face
     }
 
-    /// Returns the normalized variation coordinates used while shaping.
-    #[must_use]
-    pub fn normalized_coords(&self) -> &[i16] {
-        &self.normalized_coords
-    }
-
     /// Returns the positioned glyphs in visual order.
     #[must_use]
     pub fn glyphs(&self) -> &[Glyph] {
         &self.glyphs
+    }
+
+    /// Returns the normalized variation coordinates used while shaping.
+    #[must_use]
+    pub fn normalized_coords(&self) -> &[i16] {
+        &self.normalized_coords
     }
 }
 
@@ -73,16 +73,16 @@ impl GlyphRun {
         }
     }
 
-    /// Returns the single-face segments in visual order.
-    #[must_use]
-    pub fn segments(&self) -> &[GlyphSegment] {
-        &self.segments
-    }
-
     /// Returns the measured layout height in logical pixels.
     #[must_use]
     pub const fn height(&self) -> f32 {
         self.height
+    }
+
+    /// Returns the single-face segments in visual order.
+    #[must_use]
+    pub fn segments(&self) -> &[GlyphSegment] {
+        &self.segments
     }
 
     /// Returns the font size in logical pixels.

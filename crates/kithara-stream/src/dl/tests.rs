@@ -60,9 +60,9 @@ impl Abr for MockPeer {
 impl Peer for MockPeer {}
 
 struct ScheduledAbrPeer {
-    cancel: CancelToken,
     state: Arc<AbrState>,
     wake: Arc<Notify>,
+    cancel: CancelToken,
 }
 
 impl Abr for ScheduledAbrPeer {
@@ -703,8 +703,8 @@ async fn poll_next_respects_max_concurrent() {
     let dl = Downloader::new(config);
     let gate = CompletionGate::new(TOTAL_CMDS);
     let handle = dl.register(Arc::new(FloodPeer {
-        cancel: CancelToken::never(),
         url,
+        cancel: CancelToken::never(),
         remaining: Mutex::new(TOTAL_CMDS),
         gate: Arc::clone(&gate),
     }));
@@ -954,9 +954,9 @@ type CompletionLog = Arc<Mutex<Vec<(PeerTag, usize)>>>;
 /// tag when the response arrives. `priority()` reads the shared
 /// `SeekState` activity so a mid-stream flip of `set_playing` is observable.
 struct TaggedPriorityPeer {
-    cancel: CancelToken,
     gate: Arc<CompletionGate>,
     seek: Arc<SeekState>,
+    cancel: CancelToken,
     completion_log: CompletionLog,
     remaining: Mutex<usize>,
     tag: PeerTag,
@@ -973,10 +973,10 @@ impl TaggedPriorityPeer {
         completion_log: &CompletionLog,
     ) -> Self {
         Self {
-            cancel: CancelToken::never(),
             tag,
             seek,
             url,
+            cancel: CancelToken::never(),
             remaining: Mutex::new(cmds),
             gate: Arc::clone(gate),
             completion_log: Arc::clone(completion_log),

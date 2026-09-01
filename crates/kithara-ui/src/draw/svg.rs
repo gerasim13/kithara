@@ -93,6 +93,13 @@ struct Fit {
 }
 
 impl Fit {
+    fn point(self, point: Point) -> Option<Pt> {
+        Some(Pt {
+            x: self.offset.x + (point.x.to_f32()? - self.origin.x) * self.scale,
+            y: self.offset.y + (point.y.to_f32()? - self.origin.y) * self.scale,
+        })
+    }
+
     fn read(view_box: &str) -> Result<Self, SvgError> {
         let mut numbers = view_box
             .split([',', ' ', '\t', '\n', '\r'])
@@ -118,13 +125,6 @@ impl Fit {
             },
             origin: Pt { x, y },
             scale: side.recip(),
-        })
-    }
-
-    fn point(self, point: Point) -> Option<Pt> {
-        Some(Pt {
-            x: self.offset.x + (point.x.to_f32()? - self.origin.x) * self.scale,
-            y: self.offset.y + (point.y.to_f32()? - self.origin.y) * self.scale,
         })
     }
 }

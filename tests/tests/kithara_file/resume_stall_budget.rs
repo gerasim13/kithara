@@ -4,7 +4,6 @@
 //! A file gap-resume loop that makes zero progress must surface a terminal
 //! `FileEvent::Error` within a bounded number of re-fetches. Models a host
 //! that serves the head of a file and then blackholes every follow-up.
-
 use std::{
     io,
     sync::{

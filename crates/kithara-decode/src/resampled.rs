@@ -10,6 +10,7 @@ use kithara_signal::{
     AudioChunk, AudioChunkInfo, AudioSpec, FrameCount, PlanarBuffer, sanitize_sample,
 };
 use kithara_stream::AudioCodec;
+use kithara_test_utils::kithara;
 use smallvec::SmallVec;
 
 use crate::{
@@ -108,7 +109,7 @@ where
         })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn append_chunk(&mut self, chunk: &AudioChunk) -> DecodeResult<()> {
         let spec = chunk.spec();
         let source_spec_changed = spec != self.source_spec;
@@ -148,7 +149,7 @@ where
         usize::from(self.source_spec.channels)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn drain_ready(&mut self) -> DecodeResult<Option<AudioChunk>> {
         loop {
             let input_frames = self.resampler.input_frames_next();
@@ -238,7 +239,7 @@ where
         self.finish_output()
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn interleave(&self, frames: FrameCount) -> DecodeResult<SampleBuffer> {
         let mut samples = self.pools.get::<f32>();
         let sample_count = self.target_spec.sample_count(frames)?.get();
@@ -247,7 +248,7 @@ where
         Ok(samples)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn process_block(&mut self, input_frames: usize) -> DecodeResult<ResamplerProcess> {
         let channels = self.channels();
         let output_frames = self.resampler.output_frames_next();
@@ -366,7 +367,7 @@ where
         )
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure(label = "decode.resampled.next")]
     fn next_chunk(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {
             match self.decoder.next_chunk()? {

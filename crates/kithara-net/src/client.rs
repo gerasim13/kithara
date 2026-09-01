@@ -14,7 +14,7 @@ use kithara_platform::{
 use url::Url;
 
 mod kithara {
-    pub(crate) use kithara_test_macros::flash;
+    pub(crate) use kithara_test_macros::{flash, measure};
 }
 
 use crate::{
@@ -314,8 +314,8 @@ impl RawHttp {
             let resume = RangeSpec::new(abs, resume_end);
             Box::pin(async move {
                 let stream = me.raw_body(url, Some(resume), headers, true).await?;
-                // `206` → body already starts at `abs` (skip 0); `200` → server
-                // ignored Range and re-sent from zero, drop the consumed prefix.
+                // WHY: `206` -> body already starts at `abs` (skip 0); `200` -> server ignored Range and re-sent from zero, drop the consumed
+                // prefix.
                 let skip = if stream.is_partial() { 0 } else { abs };
                 Ok(Resumed { stream, skip })
             })
@@ -503,7 +503,7 @@ impl Net for HttpClient {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Net for RawHttp {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.as_str());
         let resp = self
@@ -512,7 +512,7 @@ impl Net for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn get_range(
         &self,
         url: Url,
@@ -525,7 +525,7 @@ impl Net for RawHttp {
         Ok(self.wrap_resumable(first, url, range.start, range.end, headers))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         let req = self.head_request(&url);
         let req = self.apply_headers(req, headers, AcceptEncodingPolicy::Identity);
@@ -564,7 +564,7 @@ impl Net for RawHttp {
         Ok(out)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn post_bytes(
         &self,
         url: Url,
@@ -578,7 +578,7 @@ impl Net for RawHttp {
         body_bytes(resp, self.options.inactivity_timeout).await
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     async fn stream(
         &self,
         url: Url,
@@ -587,7 +587,7 @@ impl Net for RawHttp {
         let first = self
             .raw_body(url.clone(), None, headers.clone(), false)
             .await?;
-        // Full GET; a resume re-fetches `bytes=consumed-` (base 0).
+        // WHY: Full GET; a resume re-fetches `bytes=consumed-` (base 0).
         Ok(self.wrap_resumable(first, url, 0, None, headers))
     }
 }

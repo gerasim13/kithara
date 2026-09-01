@@ -8,6 +8,8 @@ use super::{ir::DrawCmd, list::DrawList, style::Paint};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Caps {
+    /// Draws externally owned images.
+    pub can_draw_images: bool,
     /// Scopes drawing to a rectangle.
     pub clip: bool,
     /// Ramps a fill along a line.
@@ -16,8 +18,6 @@ pub struct Caps {
     pub outline: bool,
     /// Ramps a fill out from a centre.
     pub radial_gradient: bool,
-    /// Draws externally owned images.
-    pub can_draw_images: bool,
 }
 
 impl Caps {
@@ -61,10 +61,10 @@ impl Caps {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Needs {
     pub(super) clip: bool,
+    pub(super) images: bool,
     pub(super) linear_gradient: bool,
     pub(super) outline: bool,
     pub(super) radial_gradient: bool,
-    pub(super) images: bool,
 }
 
 impl Needs {

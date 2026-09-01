@@ -19,10 +19,10 @@ pub(crate) struct Binary {
 /// to rebuild the control.
 #[derive(Clone, PartialEq)]
 struct Face {
-    border: Rgba,
+    frame: FrameSkin,
     /// The idle switch has no body of its own: it is a frame around nothing.
     fill: Option<Rgba>,
-    frame: FrameSkin,
+    border: Rgba,
     thumb: Rgba,
 }
 
@@ -34,29 +34,6 @@ struct Thumb {
 }
 
 impl Binary {
-    pub(crate) fn toggle(skin: &Skin) -> Self {
-        let metrics = skin.toggle;
-        Self {
-            active: Face {
-                border: skin.rgba(metrics.active_frame.border),
-                fill: metrics.active.fill.map(|role| skin.rgba(role)),
-                frame: metrics.active_frame,
-                thumb: skin.rgba(metrics.active.content),
-            },
-            idle: Face {
-                border: skin.rgba(metrics.inactive_frame.border),
-                fill: metrics.idle.fill.map(|role| skin.rgba(role)),
-                frame: metrics.inactive_frame,
-                thumb: skin.rgba(metrics.idle.content),
-            },
-            thumb: Some(Thumb {
-                inset: metrics.thumb_inset,
-                radius: metrics.thumb_radius,
-                size: metrics.thumb_size,
-            }),
-        }
-    }
-
     pub(crate) fn checkbox(skin: &Skin) -> Self {
         let metrics = skin.checkbox;
         Self {
@@ -100,6 +77,29 @@ impl Binary {
             thumb.radius,
             face.thumb,
         );
+    }
+
+    pub(crate) fn toggle(skin: &Skin) -> Self {
+        let metrics = skin.toggle;
+        Self {
+            active: Face {
+                border: skin.rgba(metrics.active_frame.border),
+                fill: metrics.active.fill.map(|role| skin.rgba(role)),
+                frame: metrics.active_frame,
+                thumb: skin.rgba(metrics.active.content),
+            },
+            idle: Face {
+                border: skin.rgba(metrics.inactive_frame.border),
+                fill: metrics.idle.fill.map(|role| skin.rgba(role)),
+                frame: metrics.inactive_frame,
+                thumb: skin.rgba(metrics.idle.content),
+            },
+            thumb: Some(Thumb {
+                inset: metrics.thumb_inset,
+                radius: metrics.thumb_radius,
+                size: metrics.thumb_size,
+            }),
+        }
     }
 }
 

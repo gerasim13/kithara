@@ -61,7 +61,7 @@ struct Network {
     #[serde(default = "default_size_probe_method")]
     size_probe_method: String,
     /// `Accept-Encoding` algorithms the HTTP client offers. Mapped to
-    /// the `kithara_net::Compression` bitflags. Empty list ships as
+    /// the `kithara::net::Compression` bitflags. Empty list ships as
     /// `Compression::empty()` (Accept-Encoding negotiation disabled).
     #[serde(default = "default_compression")]
     compression: Vec<String>,
@@ -343,7 +343,7 @@ fn emit_asset_layouts(code: &mut String, rules: &[CacheIdentityRule]) {
          pub fn build_baked_asset_layouts() -> ::kithara::assets::AssetLayoutRegistry {\n\
          use ::kithara::assets::{AssetLayout, AssetLayoutRegistry};\n\
          use ::kithara::play::policy::{QueryIdentityLayout, QueryIdentityRule};\n\
-         use ::kithara_platform::sync::Arc;\n\
+         use ::kithara::platform::sync::Arc;\n\
          let layout = Arc::new(QueryIdentityLayout::new([\n",
     );
     for rule in rules {
@@ -390,9 +390,9 @@ fn emit_drm_policy(
         "#[must_use]\n\
          pub fn build_baked_drm_policy() -> ::kithara::play::policy::DomainKeyPolicy {\n\
          use ::std::collections::HashMap;\n\
-         use ::kithara_platform::sync::Arc;\n\
+         use ::kithara::platform::sync::Arc;\n\
          use ::kithara::play::policy::{DomainKeyPolicy, DomainKeyRule};\n\
-         use ::kithara_drm::{KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
+         use ::kithara::drm::{KeyRequest, KeyRequestFactory, KeyProcessor, UniqueBinaryCipher};\n\
          use ::bytes::Bytes;\n\
          use ::rand::prelude::*;\n\
          let mut rules = Vec::new();\n",

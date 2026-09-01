@@ -10,6 +10,11 @@ use crate::{
     session::{self as host_session, RootView, protocol::HostCmdMsg, web::WebSessionState},
 };
 
+fn assert_message_send<S: Send + Sync>() {
+    const fn assert_send<T: Send>() {}
+    assert_send::<HostCmdMsg<S>>();
+}
+
 /// Worker-side endpoint for the canonical Host owned by the main thread.
 pub struct HostSender<S> {
     id: BeatGridId,
@@ -58,6 +63,7 @@ pub fn worker_host_channel<S: HasPool<f32> + Send + Sync + 'static>(
     host: &Host<S>,
 ) -> Result<(HostSender<S>, HostReceiver<S>), PlayError> {
     assert_main_thread("worker_host_channel");
+    assert_message_send::<S>();
     let (id, root_view) = host.remote_identity();
     let (tx, rx) = host_session::worker_channel();
     let state = host
@@ -88,7 +94,10 @@ pub fn remote_host<S: HasPool<f32> + Send + Sync + 'static>(sender: HostSender<S
 ///
 /// # Errors
 /// Returns an error for a remote Host or failed audio-context initialisation.
-pub fn warm_up_audio<S>(host: &Host<S>) -> Result<(), PlayError> {
+pub fn warm_up_audio<S>(host: &Host<S>) -> Result<(), PlayError>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
     assert_main_thread("warm_up_audio");
     let state = host
         .web_state()

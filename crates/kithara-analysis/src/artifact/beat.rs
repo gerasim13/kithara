@@ -25,17 +25,17 @@ pub(crate) type MarkedBeat = (u64, Option<f32>);
 #[derive(Debug, Clone, Copy, PartialEq, fieldwork::Fieldwork)]
 #[fieldwork(get, vis = "pub(crate)")]
 pub(crate) struct FitRegion {
-    start_frame: u64,
-    end_frame: u64,
     ratio_correction: f64,
+    end_frame: u64,
+    start_frame: u64,
 }
 
 impl FitRegion {
     pub(crate) const fn new(start_frame: u64, end_frame: u64, ratio_correction: f64) -> Self {
         Self {
-            start_frame,
-            end_frame,
             ratio_correction,
+            end_frame,
+            start_frame,
         }
     }
 }
@@ -50,13 +50,13 @@ impl FitRegion {
 #[fieldwork(opt_in, get)]
 pub struct BeatArtifact {
     #[field(get)]
-    beats: Arc<[u64]>,
-    #[field(get)]
     beat_confidence: Arc<[Option<f32>]>,
     #[field(get)]
-    downbeats: Arc<[u64]>,
+    beats: Arc<[u64]>,
     #[field(get)]
     downbeat_confidence: Arc<[Option<f32>]>,
+    #[field(get)]
+    downbeats: Arc<[u64]>,
     regions: Vec<FitRegion>,
     #[field(get, copy)]
     bpm: f64,
@@ -76,6 +76,11 @@ impl BeatArtifact {
         Self::with_regions(bpm, beats, downbeats, Vec::new())
     }
 
+    #[cfg(any(test, all(not(target_arch = "wasm32"), feature = "analysis-beat")))]
+    pub(crate) fn regions(&self) -> &[FitRegion] {
+        &self.regions
+    }
+
     pub(crate) fn with_regions(
         bpm: f64,
         beats: Vec<MarkedBeat>,
@@ -88,18 +93,13 @@ impl BeatArtifact {
             Arc::from_iter(downbeats.iter().map(|(_, confidence)| *confidence));
         let downbeats = Arc::from_iter(downbeats.into_iter().map(|(frame, _)| frame));
         Self {
-            beats,
             beat_confidence,
-            downbeats,
+            beats,
             downbeat_confidence,
+            downbeats,
             regions,
             bpm,
         }
-    }
-
-    #[cfg(any(test, all(not(target_arch = "wasm32"), feature = "analysis-beat")))]
-    pub(crate) fn regions(&self) -> &[FitRegion] {
-        &self.regions
     }
 
     /// Appends the versioned artifact encoding to caller-owned storage.
@@ -172,18 +172,16 @@ mod bytes_tests {
     use crate::blob::to_bytes;
 
     const V2_FIXTURE: &[u8] = &[
-        0x02, 0x00, 0x00, 0x00, // version
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5e, 0x40, // 120 BPM
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // two beats
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 0
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x5e, 0x40, // 120 BPM
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // frame 0
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, // observed, confidence 1
         0x22, 0x56, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 22_050
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // extrapolated
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // one downbeat
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 0
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // frame 0
         0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3f, // observed, confidence 1
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // one fit region
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // start 0
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, // start 0
         0x44, 0xac, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // end 44_100
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x3f, // ratio 1
     ];

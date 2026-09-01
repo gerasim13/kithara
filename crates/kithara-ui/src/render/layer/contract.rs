@@ -9,7 +9,9 @@ use crate::{
 pub(crate) trait WindowLayerProgram {
     type State: Default + 'static;
 
-    fn size(&self) -> Size<Length>;
+    fn hit_layer(&self, state: &Self::State, bounds: Rect) -> HostLayer<WindowCommand> {
+        self.layer(state, bounds, None)
+    }
 
     fn layer(
         &self,
@@ -18,9 +20,9 @@ pub(crate) trait WindowLayerProgram {
         pointer: Option<Pt>,
     ) -> HostLayer<WindowCommand>;
 
-    fn hit_layer(&self, state: &Self::State, bounds: Rect) -> HostLayer<WindowCommand> {
-        self.layer(state, bounds, None)
-    }
+    fn resources(&self) -> Option<&TextResources>;
+
+    fn size(&self) -> Size<Length>;
 
     fn update(
         &self,
@@ -31,6 +33,4 @@ pub(crate) trait WindowLayerProgram {
     ) -> (Outcome<WindowCommand>, bool) {
         (layer.handle(input, pointer), false)
     }
-
-    fn resources(&self) -> Option<&TextResources>;
 }

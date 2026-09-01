@@ -21,9 +21,30 @@ struct TagIds;
 
 impl TagIds {
     const INFO: [u8; 4] = *b"Info";
+    const LEN: usize = 4;
     const VBRI: [u8; 4] = *b"VBRI";
     const XING: [u8; 4] = *b"Xing";
 }
+
+struct XingLayout;
+
+impl XingLayout {
+    const BYTES_FLAG: u32 = 0x2;
+    const QUALITY_FLAG: u32 = 0x8;
+    const TOC_FLAG: u32 = 0x4;
+    const TOC_LEN: usize = 100;
+}
+
+struct LameLayout;
+
+impl LameLayout {
+    const DECODER_DELAY: u32 = 529;
+    const ENCODER_ID_LEN: usize = 4;
+    const ENCODER_LEN: usize = 9;
+    const TRIM_BITS: u32 = 12;
+}
+
+const VBRI_TAG_OFFSET: usize = 36;
 
 /// The LAME tag is an extension to the Xing/Info tag.
 pub(crate) struct LameTag {
@@ -33,14 +54,12 @@ pub(crate) struct LameTag {
 
 /// Timing information from a Xing/Info tag in an MP3 file.
 pub(crate) struct XingInfoTag {
-    pub(crate) num_frames: Option<u32>,
     pub(crate) lame: Option<LameTag>,
+    pub(crate) num_frames: Option<u32>,
 }
 
 /// Try to read a Xing/Info tag from the provided MPEG frame.
 pub(crate) fn try_read_info_tag(buf: &[u8], header: &FrameHeader) -> Option<XingInfoTag> {
-    // The Info header is a completely optional piece of information. Therefore, flatten an error
-    // reading the tag into a None.
     try_read_info_tag_inner(buf, header).ok().flatten()
 }
 
@@ -50,30 +69,23 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
     /// The minimal LAME extension size up to the encoding delay and padding fields.
     const MIN_LAME_EXT_LEN: u64 = 24;
 
-    // Do a quick check that this is a Xing/Info tag.
     if !is_maybe_info_tag(buf, header) {
         return Ok(None);
     }
 
-    // The position of the Xing/Info tag relative to the end of the header. This is equal to the
-    // side information length for the frame.
     let offset = header.side_info_len();
 
-    // Start the CRC with the header and side information.
     let mut crc16 = Crc16AnsiLe::new(0);
     crc16.process_buf_bytes(&buf[..offset + MPEG_HEADER_LEN]);
 
-    // Start reading the Xing/Info tag after the side information.
     let mut reader = MonitorStream::new(BufReader::new(&buf[offset + MPEG_HEADER_LEN..]), crc16);
 
-    // Check for Xing/Info header.
     let id = reader.read_quad_bytes()?;
 
     if id != TagIds::XING && id != TagIds::INFO {
         return Ok(None);
     }
 
-    // Flags indicates what information is provided in this Xing/Info tag.
     let flags = reader.read_be_u32()?;
 
     let num_frames = if flags & 0x1 != 0 {
@@ -82,110 +94,90 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
         None
     };
 
-    if flags & 0x2 != 0 {
+    if flags & XingLayout::BYTES_FLAG != 0 {
         let _num_bytes = reader.read_be_u32()?;
     }
 
-    if flags & 0x4 != 0 {
-        let mut toc = [0; 100];
+    if flags & XingLayout::TOC_FLAG != 0 {
+        let mut toc = [0; XingLayout::TOC_LEN];
         reader.read_buf_exact(&mut toc)?;
     }
 
-    if flags & 0x8 != 0 {
+    if flags & XingLayout::QUALITY_FLAG != 0 {
         let _quality = reader.read_be_u32()?;
     }
 
-    // The LAME extension may not always be present, or complete. The important fields in the
-    // extension are within the first 24 bytes. Therefore, try to read those if they're available.
     let lame = if reader.inner().bytes_available() >= MIN_LAME_EXT_LEN {
-        // Encoder string.
-        let mut encoder = [0; 9];
+        let mut encoder = [0; LameLayout::ENCODER_LEN];
         reader.read_buf_exact(&mut encoder)?;
 
-        // Revision.
         let _revision = reader.read_u8()?;
 
-        // Lowpass filter value.
         let _lowpass = reader.read_u8()?;
 
         let _replaygain_peak = reader.read_be_u32()?;
         let _replaygain_radio = reader.read_be_u16()?;
         let _replaygain_audiophile = reader.read_be_u16()?;
 
-        // Encoding flags & ATH type.
         let _encoding_flags = reader.read_u8()?;
 
-        // Arbitrary bitrate.
         let _abr = reader.read_u8()?;
 
         let (enc_delay, enc_padding) = {
             let trim = reader.read_be_u24()?;
 
-            if encoder[..4] == *b"LAME" || encoder[..4] == *b"Lavf" || encoder[..4] == *b"Lavc" {
-                let delay = 528 + 1 + (trim >> 12);
-                let padding = trim & ((1 << 12) - 1);
+            if encoder[..LameLayout::ENCODER_ID_LEN] == *b"LAME"
+                || encoder[..LameLayout::ENCODER_ID_LEN] == *b"Lavf"
+                || encoder[..LameLayout::ENCODER_ID_LEN] == *b"Lavc"
+            {
+                let delay = LameLayout::DECODER_DELAY + (trim >> LameLayout::TRIM_BITS);
+                let padding = trim & ((1 << LameLayout::TRIM_BITS) - 1);
 
-                (delay, padding.saturating_sub(528 + 1))
+                (delay, padding.saturating_sub(LameLayout::DECODER_DELAY))
             } else {
                 (0, 0)
             }
         };
 
-        // If possible, attempt to read the extra fields of the extension if they weren't
-        // truncated.
         let crc = if reader.inner().bytes_available() >= LAME_EXT_LEN - MIN_LAME_EXT_LEN {
-            // Flags.
             let _misc = reader.read_u8()?;
 
-            // MP3 gain.
             let _mp3_gain = reader.read_u8()?;
 
-            // Preset and surround info.
             let _surround_info = reader.read_be_u16()?;
 
-            // Music length.
             let _music_len = reader.read_be_u32()?;
 
-            // Music (audio) CRC.
             let _music_crc = reader.read_be_u16()?;
 
-            // The tag CRC. LAME always includes this CRC regardless of the protection bit, but
-            // other encoders may only do so if the protection bit is set.
-            if header.has_crc || encoder[..4] == *b"LAME" {
-                // Read the CRC using the inner reader to not change the computed CRC.
+            if header.has_crc || encoder[..LameLayout::ENCODER_ID_LEN] == *b"LAME" {
+                // WHY: The stored CRC is not part of the checksum it validates.
                 Some(reader.inner_mut().read_be_u16()?)
             } else {
-                // No CRC is present.
                 None
             }
         } else {
-            // The tag is truncated. No CRC will be present.
             info!("xing tag lame extension is truncated");
             None
         };
 
-        // If there was no CRC written, then assume the tag is correct. Otherwise, use the CRC.
-        // Accept a written CRC of 0, which de facto means to ignore the CRC.
         let is_tag_ok = crc.is_none_or(|crc| crc == 0 || crc == reader.monitor().crc());
 
         if is_tag_ok {
-            // The CRC matched or is not present.
             Some(LameTag {
                 enc_delay,
                 enc_padding,
             })
         } else {
-            // The CRC did not match, this is probably not a LAME tag.
             warn!("xing tag lame extension crc mismatch");
             None
         }
     } else {
-        // Frame not large enough for a LAME tag.
         info!("xing tag too small for lame extension");
         None
     };
 
-    Ok(Some(XingInfoTag { num_frames, lame }))
+    Ok(Some(XingInfoTag { lame, num_frames }))
 }
 
 /// Perform a fast check to see if the packet contains a Xing/Info tag. If this returns true, the
@@ -193,28 +185,22 @@ fn try_read_info_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Xi
 pub(crate) fn is_maybe_info_tag(buf: &[u8], header: &FrameHeader) -> bool {
     const MIN_XING_TAG_LEN: usize = 8;
 
-    // Only supported with layer 3 packets.
     if header.layer != MpegLayer::Layer3 {
         return false;
     }
 
-    // The position of the Xing/Info tag relative to the start of the packet. This is equal to the
-    // side information length for the frame.
     let offset = header.side_info_len() + MPEG_HEADER_LEN;
 
-    // The packet must be big enough to contain a tag.
     if buf.len() < offset + MIN_XING_TAG_LEN {
         return false;
     }
 
-    // The tag ID must be present and correct.
-    let id = &buf[offset..offset + 4];
+    let id = &buf[offset..offset + TagIds::LEN];
 
     if id != TagIds::XING && id != TagIds::INFO {
         return false;
     }
 
-    // The side information should be zeroed.
     !buf[MPEG_HEADER_LEN..offset].iter().any(|&b| b != 0)
 }
 
@@ -225,37 +211,30 @@ pub(crate) struct VbriTag {
 
 /// Try to read a VBRI tag from the provided MPEG frame.
 pub(crate) fn try_read_vbri_tag(buf: &[u8], header: &FrameHeader) -> Option<VbriTag> {
-    // The VBRI header is a completely optional piece of information. Therefore, flatten an error
-    // reading the tag into a None.
     try_read_vbri_tag_inner(buf, header).ok().flatten()
 }
 
 fn try_read_vbri_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<VbriTag>> {
-    // Do a quick check that this is a VBRI tag.
     if !is_maybe_vbri_tag(buf, header) {
         return Ok(None);
     }
 
     let mut reader = BufReader::new(buf);
 
-    // The VBRI tag is always 32 bytes after the header.
-    reader.ignore_bytes(MPEG_HEADER_LEN as u64 + 32)?;
+    reader.ignore_bytes(VBRI_TAG_OFFSET as u64)?;
 
-    // Check for the VBRI signature.
     let id = reader.read_quad_bytes()?;
 
     if id != TagIds::VBRI {
         return Ok(None);
     }
 
-    // The version is always 1.
     let version = reader.read_be_u16()?;
 
     if version != 1 {
         return Ok(None);
     }
 
-    // Delay is a two-byte big-endian floating-point value.
     let _delay = reader.read_be_u16()?;
     let _quality = reader.read_be_u16()?;
 
@@ -269,26 +248,20 @@ fn try_read_vbri_tag_inner(buf: &[u8], header: &FrameHeader) -> Result<Option<Vb
 /// packet should be parsed fully to ensure it is in fact a tag.
 pub(crate) fn is_maybe_vbri_tag(buf: &[u8], header: &FrameHeader) -> bool {
     const MIN_VBRI_TAG_LEN: usize = 26;
-    const VBRI_TAG_OFFSET: usize = 36;
-
-    // Only supported with layer 3 packets.
     if header.layer != MpegLayer::Layer3 {
         return false;
     }
 
-    // The packet must be big enough to contain a tag.
     if buf.len() < VBRI_TAG_OFFSET + MIN_VBRI_TAG_LEN {
         return false;
     }
 
-    // The tag ID must be present and correct.
-    let id = &buf[VBRI_TAG_OFFSET..VBRI_TAG_OFFSET + 4];
+    let id = &buf[VBRI_TAG_OFFSET..VBRI_TAG_OFFSET + TagIds::LEN];
 
     if id != TagIds::VBRI {
         return false;
     }
 
-    // The bytes preceding the VBRI tag (mostly the side information) should be all 0.
     !buf[MPEG_HEADER_LEN..VBRI_TAG_OFFSET]
         .iter()
         .any(|&b| b != 0)

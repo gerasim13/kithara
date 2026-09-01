@@ -129,7 +129,7 @@ where
     /// `&Frame<'_>`) so the caller can release the demuxer borrow before
     /// invoking this — needed because `Frame<'_>` borrows into the
     /// demuxer state and would conflict with `&mut self` here.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::probe(timestamp, frames)]
     fn build_chunk(
         &mut self,
@@ -195,7 +195,7 @@ where
         Ok(DecoderChunkOutcome::Chunk(chunk))
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn emit_chunk_signal(&mut self, outcome: &DecoderChunkOutcome) {
         let signal = match outcome {
             DecoderChunkOutcome::Chunk(_) => ReaderChunkSignal::Chunk,
@@ -224,7 +224,7 @@ where
         }
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure(label = "decode.composed.next")]
     #[kithara::hang_watchdog]
     fn next_chunk_inner(&mut self) -> DecodeResult<DecoderChunkOutcome> {
         loop {

@@ -58,11 +58,11 @@ struct State {
     stall: Duration,
     expected_len: Option<u64>,
     observer: Option<Observer>,
-    partial: bool,
+    representation_total: Option<u64>,
     refetch: Refetch,
     policy: RetryPolicy,
     resource: Url,
-    representation_total: Option<u64>,
+    partial: bool,
     /// Resume re-fetches already performed, bounded by `policy.max_retries`.
     resumes: u32,
     consumed: u64,
@@ -170,10 +170,9 @@ impl State {
     /// bytes to yield — `None` when the chunk was prefix only (still
     /// progress: the stall timer re-arms on the next chunk await).
     fn take(&mut self, mut bytes: Bytes) -> Option<Bytes> {
-        // `usize -> u64` is a widening cast (lossless on every target), so
-        // `AsPrimitive` is infallible; `u64 -> usize` can narrow, so it goes
-        // through checked `ToPrimitive` — `min` caps the skip at the chunk
-        // length, so it always fits and the fallback is a valid split point.
+        // WHY: `usize -> u64` is a widening cast (lossless on every target), so `AsPrimitive` is infallible; `u64 -> usize` can narrow, so
+        // it goes through checked `ToPrimitive` - `min` caps the skip at the chunk length, so it always fits and the fallback is a valid
+        // split point.
         let received: u64 = bytes.len().as_();
         let skip = self.to_skip.min(received);
         self.to_skip -= skip;
@@ -247,15 +246,15 @@ pub(crate) fn resumable_body(
         expected_len,
         observer,
         partial,
-        inner: first,
         resource,
+        inner: first,
         representation_total: response_total,
         consumed: 0,
         to_skip: 0,
         resumes: 0,
     };
-    // `Option<State>` is the unfold's alive/finished switch: a terminal error
-    // is yielded together with `None`, so the next poll ends the stream.
+    // WHY: `Option<State>` is the unfold's alive/finished switch: a terminal error is yielded together with `None`, so the next poll
+    // ends the stream.
     Box::pin(stream::unfold(Some(state), |st| async move {
         let mut st = st?;
         loop {
@@ -308,9 +307,9 @@ mod tests {
     /// Fires once, on the `at`-th stall. Which stall matters: only the second
     /// one onwards is followed by a real backoff wait.
     struct StallSignal {
-        at: u64,
         seen: AtomicU64,
         signal: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        at: u64,
     }
 
     impl StallSignal {

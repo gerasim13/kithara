@@ -13,12 +13,12 @@ use crate::{
 };
 
 pub(super) struct TextInputPaint<'a> {
-    layout: TextInputLayout,
+    skin: &'a Skin,
     placeholder: &'a str,
     placeholder_run: GlyphRun,
-    query: String,
     query_run: GlyphRun,
-    skin: &'a Skin,
+    query: String,
+    layout: TextInputLayout,
 }
 
 impl<'a> TextInputPaint<'a> {
@@ -41,38 +41,10 @@ impl<'a> TextInputPaint<'a> {
             layout,
             placeholder,
             placeholder_run,
-            query: query.to_owned(),
             query_run,
             skin,
+            query: query.to_owned(),
         }
-    }
-
-    pub(super) fn layout(&self) -> TextInputLayout {
-        self.layout.clone()
-    }
-
-    #[cfg(feature = "iced")]
-    pub(super) fn geometry(
-        &self,
-        snapshot: &crate::engine::TextInputSnapshot,
-        renderer: &Renderer,
-        bounds: Rectangle,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        crate::backends::replay_ordered(
-            &self.commands(
-                snapshot,
-                Rect {
-                    h: bounds.height,
-                    w: bounds.width,
-                    x: 0.0,
-                    y: 0.0,
-                },
-            ),
-            &mut frame,
-            self.skin.text_resources(),
-        );
-        vec![frame.into_geometry()]
     }
 
     #[cfg(feature = "iced")]
@@ -130,6 +102,34 @@ impl<'a> TextInputPaint<'a> {
         }
         list.clip(bounds, content.finish());
         list.finish()
+    }
+
+    #[cfg(feature = "iced")]
+    pub(super) fn geometry(
+        &self,
+        snapshot: &crate::engine::TextInputSnapshot,
+        renderer: &Renderer,
+        bounds: Rectangle,
+    ) -> Vec<Geometry> {
+        let mut frame = Frame::new(renderer, bounds.size());
+        crate::backends::replay_ordered(
+            &self.commands(
+                snapshot,
+                Rect {
+                    h: bounds.height,
+                    w: bounds.width,
+                    x: 0.0,
+                    y: 0.0,
+                },
+            ),
+            &mut frame,
+            self.skin.text_resources(),
+        );
+        vec![frame.into_geometry()]
+    }
+
+    pub(super) fn layout(&self) -> TextInputLayout {
+        self.layout.clone()
     }
 
     #[cfg(feature = "iced")]

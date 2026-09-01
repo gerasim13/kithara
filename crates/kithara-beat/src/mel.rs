@@ -28,7 +28,7 @@ impl MelExtractor {
     ///
     /// Output shape `[1, T, 128]`, `T ≈ samples.len() / 441` (hop 441 = 50 fps).
     pub(crate) fn extract<S>(
-        &mut self,
+        &self,
         samples: &[f32],
         pools: &PoolRegion<S>,
     ) -> Result<Tensor, BeatError>

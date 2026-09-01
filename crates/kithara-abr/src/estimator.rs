@@ -83,8 +83,13 @@ impl ThroughputEstimator {
     const SLOW_HALF_LIFE_SECS: f64 = 10.0;
 
     #[must_use]
-    // ast-grep-ignore: style.prefer-default-derive
     pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for ThroughputEstimator {
+    fn default() -> Self {
         Self {
             inner: Mutex::new(ThroughputInner {
                 fast_ewma: Ewma::new(Self::FAST_HALF_LIFE_SECS),
@@ -93,12 +98,6 @@ impl ThroughputEstimator {
                 bytes_sampled: 0,
             }),
         }
-    }
-}
-
-impl Default for ThroughputEstimator {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

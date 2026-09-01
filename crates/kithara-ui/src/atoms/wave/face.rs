@@ -19,31 +19,32 @@ use crate::{
 /// and — on the hero wave — the panel naming what is loaded.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Wave {
+    overlay_palette: OverlayPalette,
     background: Rgba,
     border: Rgba,
     cache_strip: Rgba,
     cue_badge: Rgba,
     cue_text: Rgba,
-    metrics: WaveSkin,
-    overlay_palette: OverlayPalette,
     palette: WavePalette,
+    metrics: WaveSkin,
     style: WaveStyle,
 }
 
 /// What the wave is handed each frame.
 #[derive(Clone, PartialEq)]
 pub(crate) struct Drawn {
+    pub(crate) overlay: Option<OverlayData>,
+    pub(crate) waveform: Option<WaveformData>,
     /// How far the host says the track is held, as a share of its length.
     pub(crate) cached: f32,
-    pub(crate) overlay: Option<OverlayData>,
     pub(crate) progress: f32,
-    pub(crate) waveform: Option<WaveformData>,
     pub(crate) zoom: f32,
 }
 
 impl Wave {
     pub(crate) fn new(style: WaveStyle, skin: &Skin) -> Self {
         Self {
+            style,
             background: skin.rgba(skin.wave.background),
             border: skin.rgba(skin.wave.frame.border),
             cache_strip: Rgba {
@@ -67,29 +68,7 @@ impl Wave {
                 band_mid: skin.rgba(skin.wave.band_mid_color),
                 band_high: skin.rgba(skin.wave.band_high_color),
             },
-            style,
         }
-    }
-
-    pub(crate) const fn hero(&self) -> bool {
-        matches!(self.style, WaveStyle::Hero)
-    }
-
-    pub(crate) fn paint(
-        &self,
-        list: &mut DrawListBuilder,
-        text: &mut TextContext,
-        data: &Drawn,
-        bounds: Rect,
-        show_overlay: bool,
-    ) {
-        self.face(data).paint(list, text, bounds, show_overlay);
-    }
-
-    /// Where the naming panel sits, so a host can tell whether the pointer is
-    /// on it.
-    pub(crate) fn overlay_bounds(&self, data: &Drawn, bounds: Rect) -> Rect {
-        self.face(data).overlay_bounds(bounds)
     }
 
     fn face<'a>(&'a self, data: &'a Drawn) -> WavePaint<'a> {
@@ -126,9 +105,39 @@ impl Wave {
             zoom: data.zoom,
         }
     }
+
+    pub(crate) const fn hero(&self) -> bool {
+        matches!(self.style, WaveStyle::Hero)
+    }
+
+    /// Where the naming panel sits, so a host can tell whether the pointer is
+    /// on it.
+    pub(crate) fn overlay_bounds(&self, data: &Drawn, bounds: Rect) -> Rect {
+        self.face(data).overlay_bounds(bounds)
+    }
+
+    pub(crate) fn paint(
+        &self,
+        list: &mut DrawListBuilder,
+        text: &mut TextContext,
+        data: &Drawn,
+        bounds: Rect,
+        show_overlay: bool,
+    ) {
+        self.face(data).paint(list, text, bounds, show_overlay);
+    }
 }
 
 impl Drawn {
+    /// What a reading shows when there is nothing to show.
+    const EM_DASH: &str = "\u{2014}";
+
+    pub(crate) fn has_waveform(&self) -> bool {
+        self.waveform
+            .as_ref()
+            .is_some_and(|waveform| !waveform.buckets.is_empty())
+    }
+
     /// Reads what a deck's wave shows: the shape from its own endpoint, the
     /// playhead and — on the hero wave — the words beside it from siblings in
     /// the same scope.
@@ -160,12 +169,12 @@ impl Drawn {
                     .to_owned(),
                 bpm: waveform
                     .and_then(|view| view.bpm)
-                    .map_or_else(|| EM_DASH.to_owned(), |value| format!("{value:.2}")),
+                    .map_or_else(|| Self::EM_DASH.to_owned(), |value| format!("{value:.2}")),
                 key: read_text(reads, &derived("deck.track.key", scope))
-                    .unwrap_or(EM_DASH)
+                    .unwrap_or(Self::EM_DASH)
                     .to_owned(),
                 remain: read_text(reads, &derived("deck.playback.remain", scope))
-                    .unwrap_or(EM_DASH)
+                    .unwrap_or(Self::EM_DASH)
                     .to_owned(),
                 badge: badge.unwrap_or_default().to_owned(),
             }),
@@ -173,27 +182,6 @@ impl Drawn {
             waveform: waveform.map(WaveformData::from),
             zoom: clamp_zoom(zoom),
         }
-    }
-
-    #[cfg(any(feature = "masonry", test))]
-    pub(crate) fn set_waveform(&mut self, view: WaveformView<'_>) -> bool {
-        let waveform_changed = self
-            .waveform
-            .as_ref()
-            .is_none_or(|waveform| !waveform.matches(view));
-        if waveform_changed {
-            self.waveform = Some(WaveformData::from(view));
-        }
-        let bpm = view
-            .bpm
-            .map_or_else(|| EM_DASH.to_owned(), |value| format!("{value:.2}"));
-        let bpm_changed = self.overlay.as_mut().is_some_and(|overlay| {
-            bpm != overlay.bpm && {
-                overlay.bpm = bpm;
-                true
-            }
-        });
-        waveform_changed || bpm_changed
     }
 
     #[cfg(any(feature = "masonry", test))]
@@ -224,10 +212,10 @@ impl Drawn {
                     .to_owned(),
                 bpm: overlay.bpm.clone(),
                 key: read_text(reads, &derived("deck.track.key", scope))
-                    .unwrap_or(EM_DASH)
+                    .unwrap_or(Self::EM_DASH)
                     .to_owned(),
                 remain: read_text(reads, &derived("deck.playback.remain", scope))
-                    .unwrap_or(EM_DASH)
+                    .unwrap_or(Self::EM_DASH)
                     .to_owned(),
                 badge: overlay.badge.clone(),
             };
@@ -236,15 +224,27 @@ impl Drawn {
         changed
     }
 
-    pub(crate) fn has_waveform(&self) -> bool {
-        self.waveform
+    #[cfg(any(feature = "masonry", test))]
+    pub(crate) fn set_waveform(&mut self, view: WaveformView<'_>) -> bool {
+        let waveform_changed = self
+            .waveform
             .as_ref()
-            .is_some_and(|waveform| !waveform.buckets.is_empty())
+            .is_none_or(|waveform| !waveform.matches(view));
+        if waveform_changed {
+            self.waveform = Some(WaveformData::from(view));
+        }
+        let bpm = view
+            .bpm
+            .map_or_else(|| Self::EM_DASH.to_owned(), |value| format!("{value:.2}"));
+        let bpm_changed = self.overlay.as_mut().is_some_and(|overlay| {
+            bpm != overlay.bpm && {
+                overlay.bpm = bpm;
+                true
+            }
+        });
+        waveform_changed || bpm_changed
     }
 }
-
-/// What a reading shows when there is nothing to show.
-const EM_DASH: &str = "\u{2014}";
 
 fn overlay_palette(skin: &Skin) -> OverlayPalette {
     let metrics = skin.wave.overlay;
@@ -391,7 +391,7 @@ mod tests {
         let reads = reads();
         let value = reads
             .get("deck.playback.waveform")
-            .unwrap_or_else(|| panic!("the fixture must report a waveform"));
+            .expect("the fixture must report a waveform");
         (
             Wave::new(WaveStyle::Hero, skin),
             Drawn::read(
@@ -433,7 +433,7 @@ mod tests {
         let overlay = data
             .overlay
             .as_ref()
-            .unwrap_or_else(|| panic!("a hero wave must keep its naming panel"));
+            .expect("a hero wave must keep its naming panel");
         assert_eq!(overlay.title, "Updated");
         assert_eq!(overlay.artist, "file");
         assert_eq!(overlay.key, "9A");
@@ -452,12 +452,12 @@ mod tests {
         let buckets = data
             .waveform
             .as_ref()
-            .unwrap_or_else(|| panic!("the fixture must own waveform samples"))
+            .expect("the fixture must own waveform samples")
             .buckets
             .as_ptr();
         let value = reads
             .get("deck.playback.waveform")
-            .unwrap_or_else(|| panic!("the fixture must report a waveform"));
+            .expect("the fixture must report a waveform");
         let ReadValue::Waveform(mut view) = value else {
             panic!("the waveform endpoint must report a waveform");
         };
@@ -541,7 +541,7 @@ mod tests {
         let reads = reads();
         let value = reads
             .get("deck.playback.waveform")
-            .unwrap_or_else(|| panic!("the fixture must report a waveform"));
+            .expect("the fixture must report a waveform");
         let painter = Wave::new(WaveStyle::Default, skin);
         let data = Drawn::read(
             WaveStyle::Default,
@@ -570,7 +570,7 @@ mod tests {
                 } if rect.h == bounds.h && rect.w < skin.wave.playhead_marker_width => Some(*color),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("a plain wave must draw its playhead"))
+            .expect("a plain wave must draw its playhead")
     }
 
     #[kithara::test]

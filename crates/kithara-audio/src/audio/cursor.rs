@@ -22,9 +22,9 @@ pub(super) struct CursorRead {
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub(super) struct ChunkCursor {
-    interleaved: Option<SampleBuffer>,
     #[field(get, vis = "pub(super)", copy)]
     spec: AudioSpec,
+    interleaved: Option<SampleBuffer>,
     current_chunk_consumed_frames: u64,
 }
 
@@ -106,7 +106,7 @@ impl ChunkCursor {
         })
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::hang_watchdog]
     pub(super) fn read(
         &mut self,

@@ -29,17 +29,17 @@ pub enum SyncUnavailable {
 #[fieldwork(get)]
 #[non_exhaustive]
 pub struct TrackBinding {
+    /// Immutable asset-grid snapshot used by every binding calculation.
+    snapshot: BeatGridSnapshot,
+    /// Track beat anchoring this binding.
+    #[field(get, copy)]
+    track_anchor: MapPoint<Beat>,
     /// Audible direction encoded by this binding.
     #[field(get, copy)]
     direction: PlaybackDirection,
     /// Session beat anchoring this binding.
     #[field(get, copy)]
     session_anchor: SessionBeat,
-    /// Track beat anchoring this binding.
-    #[field(get, copy)]
-    track_anchor: MapPoint<Beat>,
-    /// Immutable asset-grid snapshot used by every binding calculation.
-    snapshot: BeatGridSnapshot,
 }
 
 impl TrackBinding {
@@ -64,10 +64,10 @@ impl TrackBinding {
             return Err(SyncUnavailable::StaleAnchor { expected, given });
         }
         Ok(Self {
+            snapshot,
+            track_anchor,
             direction,
             session_anchor,
-            track_anchor,
-            snapshot,
         })
     }
 

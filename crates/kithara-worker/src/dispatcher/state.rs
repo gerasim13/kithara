@@ -17,15 +17,15 @@ pub(super) struct Reservation {
 }
 
 pub(super) struct Capacity {
-    active: AtomicUsize,
     pub(super) limit: usize,
+    active: AtomicUsize,
 }
 
 impl Capacity {
     pub(super) fn new(limit: usize) -> Self {
         Self {
-            active: AtomicUsize::new(0),
             limit,
+            active: AtomicUsize::new(0),
         }
     }
 
@@ -55,14 +55,14 @@ pub(super) enum Command {
 }
 
 pub(super) struct Slot {
-    pub(super) _cancel_guards: Vec<CancelWakerGuard>,
+    pub(super) task: Box<dyn Task>,
     pub(super) cancel: CancelGroup,
+    pub(super) token: CancelToken,
+    pub(super) priority: Priority,
     pub(super) control: TaskControl,
     pub(super) id: TaskId,
+    pub(super) _cancel_guards: Vec<CancelWakerGuard>,
     pub(super) is_terminal: bool,
-    pub(super) priority: Priority,
-    pub(super) task: Box<dyn Task>,
-    pub(super) token: CancelToken,
 }
 
 impl Slot {
@@ -87,9 +87,9 @@ impl Drop for Slot {
 #[derive(Clone, Copy)]
 pub(super) struct SchedulerBudgets {
     pub(super) backpressure_poll_interval: Duration,
-    pub(super) fairness_yield_interval: u32,
     pub(super) idle_timeout: Duration,
     pub(super) slow_tick_threshold: Duration,
-    pub(super) task_burst: u32,
     pub(super) wait_timeout: Duration,
+    pub(super) fairness_yield_interval: u32,
+    pub(super) task_burst: u32,
 }

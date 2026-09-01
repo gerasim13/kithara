@@ -7,7 +7,6 @@
 //! not mark a queue entry failed on its behalf.
 //!
 //! [`non_leading_track_eof`]: super::non_leading_track_eof
-
 use std::num::NonZero;
 
 use kithara::{

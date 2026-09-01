@@ -1,7 +1,6 @@
 //! The lifecycle contract runs through the same Host graph with a cpal backend.
 //! A test-only dispatcher owns that graph so the production Host never exposes
 //! its resident engine or raw session.
-
 use firewheel::{FirewheelCtx, cpal::CpalBackend};
 use kithara::{
     audio::ConsumerWakeMode,

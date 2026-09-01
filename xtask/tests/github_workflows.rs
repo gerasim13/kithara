@@ -13,7 +13,7 @@ use syn::{
 const CHECKOUT: &str = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
 const DOWNLOAD_ARTIFACT: &str =
     "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
-const INSTALL_ACTION: &str = "taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d";
+const INSTALL_ACTION: &str = "taiki-e/install-action@742a3317eac7bd62f91cd888b4eead5e784ba833";
 const UPLOAD_ARTIFACT: &str = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const STRESS_RAW_DIR: &str = "${{ runner.temp }}/kithara-stress/raw";
 const HEAVY_LINUX_GROUP: &str = "heavy-linux-${{ github.repository }}";

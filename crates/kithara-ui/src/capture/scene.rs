@@ -22,12 +22,12 @@ use crate::{
 /// the two hosts page by page.
 pub struct Offscreen {
     device: Device,
-    height: u32,
     queue: Queue,
     renderer: Renderer,
     shaders: ShaderPass,
     texture: Texture,
     vis: VisPass,
+    height: u32,
     width: u32,
 }
 
@@ -74,12 +74,12 @@ impl Offscreen {
         let vis = VisPass::new(&device, TextureFormat::Rgba8Unorm);
         Ok(Self {
             device,
-            height,
             queue,
             renderer,
             shaders,
             texture,
             vis,
+            height,
             width,
         })
     }

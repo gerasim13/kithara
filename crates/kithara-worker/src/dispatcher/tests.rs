@@ -48,8 +48,8 @@ impl Task for CountingTask {
 }
 
 struct BackpressureCountingTask {
-    first_tick: Option<mpsc::Sender<()>>,
     ticks: Arc<AtomicUsize>,
+    first_tick: Option<mpsc::Sender<()>>,
 }
 
 impl Task for BackpressureCountingTask {
@@ -63,8 +63,8 @@ impl Task for BackpressureCountingTask {
 }
 
 struct BlockingTask {
-    release: mpsc::Receiver<()>,
     started: Option<mpsc::Sender<()>>,
+    release: mpsc::Receiver<()>,
 }
 
 impl Task for BlockingTask {
@@ -82,17 +82,17 @@ struct LifecycleTask {
 }
 
 impl Task for LifecycleTask {
-    fn tick(&mut self) -> TickResult {
-        self.events.send("tick").ok();
-        TickResult::Done
+    fn on_cancel(&mut self) {
+        self.events.send("cancel").ok();
     }
 
     fn recycle(&mut self) {
         self.events.send("recycle").ok();
     }
 
-    fn on_cancel(&mut self) {
-        self.events.send("cancel").ok();
+    fn tick(&mut self) -> TickResult {
+        self.events.send("tick").ok();
+        TickResult::Done
     }
 }
 
@@ -102,15 +102,15 @@ struct DeferredWaitingTask {
 }
 
 impl Task for DeferredWaitingTask {
-    fn tick(&mut self) -> TickResult {
-        self.pending = true;
-        TickResult::Waiting
-    }
-
     fn recycle(&mut self) {
         if mem::take(&mut self.pending) {
             self.events.send("recycle").ok();
         }
+    }
+
+    fn tick(&mut self) -> TickResult {
+        self.pending = true;
+        TickResult::Waiting
     }
 }
 
@@ -120,6 +120,10 @@ struct RecyclingTask {
 }
 
 impl Task for RecyclingTask {
+    fn recycle(&mut self) {
+        self.events.send("recycle").ok();
+    }
+
     fn tick(&mut self) -> TickResult {
         self.events.send("tick").ok();
         self.ticks += 1;
@@ -129,10 +133,6 @@ impl Task for RecyclingTask {
             TickResult::Progress
         }
     }
-
-    fn recycle(&mut self) {
-        self.events.send("recycle").ok();
-    }
 }
 
 struct TerminalDeferredTask {
@@ -141,25 +141,31 @@ struct TerminalDeferredTask {
 }
 
 impl Task for TerminalDeferredTask {
-    fn tick(&mut self) -> TickResult {
-        self.pending = true;
-        TickResult::Done
-    }
-
     fn recycle(&mut self) {
         if mem::take(&mut self.pending) {
             self.flushed.store(true, Ordering::Release);
         }
     }
+
+    fn tick(&mut self) -> TickResult {
+        self.pending = true;
+        TickResult::Done
+    }
 }
 
 struct ReportingTask {
-    events: mpsc::Sender<(&'static str, &'static str, u64)>,
     label: &'static str,
+    events: mpsc::Sender<(&'static str, &'static str, u64)>,
     ticked: bool,
 }
 
 impl Task for ReportingTask {
+    fn on_cancel(&mut self) {
+        self.events
+            .send((self.label, "cancel", thread::current_thread_id()))
+            .ok();
+    }
+
     fn tick(&mut self) -> TickResult {
         if !self.ticked {
             self.ticked = true;
@@ -168,12 +174,6 @@ impl Task for ReportingTask {
                 .ok();
         }
         TickResult::Backpressured
-    }
-
-    fn on_cancel(&mut self) {
-        self.events
-            .send((self.label, "cancel", thread::current_thread_id()))
-            .ok();
     }
 }
 
@@ -331,8 +331,8 @@ fn scheduler_does_not_busy_spin_on_backpressure() {
         .register(TaskConfig::new(), {
             let ticks = Arc::clone(&ticks);
             move |_| BackpressureCountingTask {
-                first_tick: Some(first_tick),
                 ticks,
+                first_tick: Some(first_tick),
             }
         })
         .expect("backpressured task submission");

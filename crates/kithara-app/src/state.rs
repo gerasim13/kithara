@@ -7,17 +7,17 @@ use kithara::{
     abr::AbrHandle,
     analysis::FrameRange,
     events::{AbrMode, BpmInfo, DjEvent, Event, MediaTime, PlayerEvent, SlotId, VariantInfo},
+    platform::{
+        CancelToken,
+        sync::{Arc, Mutex},
+        time::Duration,
+        tokio::task,
+    },
     play::{StretchControls, effects::eq::GainDb},
     prelude::EngineLoadSnapshot,
+    queue::{QueueEvent, TrackEntry},
     stream::AudioCodec,
 };
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, Mutex},
-    time::Duration,
-    tokio::task,
-};
-use kithara_queue::{QueueEvent, TrackEntry};
 use num_traits::{ToPrimitive, cast::AsPrimitive};
 
 use crate::{
@@ -217,7 +217,7 @@ fn unready_ranges(analysis: &TrackAnalysis) -> Arc<[[f32; 2]]> {
 /// UI thread cover values that the UI commits optimistically (seek
 /// scrub, crossfade slider, etc.) before the engine echoes them back.
 ///
-/// Synchronisation uses [`kithara_platform::sync::Mutex`] (a sync
+/// Synchronisation uses [`kithara::platform::sync::Mutex`] (a sync
 /// `parking_lot` mutex) instead of `tokio::sync::Mutex`. The previous
 /// design called `blocking_lock` from inside the iced runtime, which
 /// would panic; this one avoids `await`s while the lock is held.

@@ -18,18 +18,18 @@ default = ["gui", "analysis-waveform", "beat-nn", "stretch-signalsmith"]
 # HTTP stack lands in each build. The dev-only kithara-net mirrors the same
 # per-target split (see the target `dev-dependencies` below) so test builds
 # stay single-stack too.
-client-reqwest = ["kithara/client-reqwest", "kithara-queue/client-reqwest"]
-client-wreq = ["kithara/client-wreq", "kithara-queue/client-wreq"]
-tls-rustls = ["kithara/tls-rustls", "kithara-queue/tls-rustls"]
-tls-native = ["kithara/tls-native", "kithara-queue/tls-native"]
+client-reqwest = ["kithara/client-reqwest"]
+client-wreq = ["kithara/client-wreq"]
+tls-rustls = ["kithara/tls-rustls"]
+tls-native = ["kithara/tls-native"]
 # Put the session mix on air over live HLS. Off by default; with it off the
 # bar's phase machine compiles against a packager that has no stream values.
 broadcast = ["kithara/broadcast", "dep:ringbuf"]
-gui = ["dep:iced", "dep:kithara-ui"]
+gui = ["dep:iced", "kithara/ui-iced"]
 # Draw the studio through the retained host (masonry + Vello) instead of the
 # immediate one. Both hosts read the same documents and the same state; only
 # the window and the paint pass differ.
-masonry = ["gui", "kithara-ui/masonry"]
+masonry = ["gui", "kithara/ui-masonry"]
 # NN beat/downbeat detection.
 beat-nn = ["kithara/beat-nn"]
 # Waveform analysis for the deck overview.
@@ -51,13 +51,8 @@ stretch-bungee = ["kithara/stretch-bungee"]
 stretch-all = ["stretch-signalsmith", "stretch-bungee"]
 
 [dependencies]
-kithara = { workspace = true, default-features = false, features = ["file", "hls", "resample-rubato"] }
-kithara-drm = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-queue = { workspace = true, default-features = false }
+kithara = { workspace = true, default-features = false, features = ["file", "hls", "queue", "resample-rubato", "worker"] }
 kithara-test-utils = { workspace = true }
-kithara-ui = { workspace = true, features = ["iced"], optional = true }
-kithara-worker = { workspace = true }
 
 delegate = { workspace = true }
 
@@ -69,7 +64,7 @@ fieldwork = { workspace = true }
 # for the iOS framework closure. Keeping them off iOS lets the workspace-hack
 # leave env-filter (and regex/regex-automata/aho-corasick) out of the iOS build.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "ios")))'.dependencies]
-kithara-platform = { workspace = true, features = ["signal"] }
+kithara = { workspace = true, default-features = false, features = ["signal"] }
 kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspace-hack" }
 
 bon = { workspace = true }
@@ -110,17 +105,15 @@ serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
-kithara = { workspace = true, default-features = false, features = ["probe"] }
+kithara = { workspace = true, default-features = false, features = ["probe", "ui-capture"] }
 kithara-test-macros = { workspace = true }
 kithara-test-utils = { workspace = true, features = ["mock", "probe", "hang"] }
-# The studio parity capture is the toolkit's harness, not this crate's.
-kithara-ui = { workspace = true, features = ["capture"] }
 
 futures = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))'.dev-dependencies]
-kithara-net = { workspace = true, default-features = false, features = ["client-reqwest", "tls-rustls"] }
+kithara = { workspace = true, default-features = false, features = ["client-reqwest", "net", "tls-rustls"] }
 
 # Dev-only kithara-net mirrors the per-target production backend so test
 # builds stay single-stack: macOS tests run wreq (matching the `apple`
@@ -128,7 +121,7 @@ kithara-net = { workspace = true, default-features = false, features = ["client-
 # split a fixed client-reqwest dev-dep would unify with the macOS wreq
 # production path and compile both stacks into the test binary.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-kithara-net = { workspace = true, default-features = false, features = ["client-wreq"] }
+kithara = { workspace = true, default-features = false, features = ["client-wreq", "net"] }
 
 [lints]
 workspace = true

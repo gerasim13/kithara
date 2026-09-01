@@ -13,37 +13,14 @@ pub(super) struct Router {
 }
 
 impl Router {
-    pub(super) const fn captures_pointer(&self) -> bool {
-        self.capture.is_some()
-    }
-
     pub(super) fn captures(&self, path: &str) -> bool {
         self.capture
             .as_ref()
             .is_some_and(|identity| identity.path == path)
     }
 
-    pub(super) fn focused_path(&self) -> Option<&str> {
-        self.focus.as_deref()
-    }
-
-    pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {
-        let missing = self.capture.as_ref().is_some_and(|identity| {
-            !components
-                .iter()
-                .any(|component| component.has_identity(identity))
-        });
-        if missing {
-            self.capture = None;
-        }
-        let missing = self.focus.as_ref().is_some_and(|path| {
-            !components
-                .iter()
-                .any(|component| component.path() == path && component.focusable())
-        });
-        if missing {
-            self.focus = None;
-        }
+    pub(super) const fn captures_pointer(&self) -> bool {
+        self.capture.is_some()
     }
 
     pub(super) fn clear_focus(&mut self, components: &mut [RetainedComponent]) {
@@ -62,6 +39,40 @@ impl Router {
         {
             self.capture = None;
         }
+    }
+
+    pub(super) fn cursor(
+        &self,
+        components: &[RetainedComponent],
+        targets: &[Target<'_>],
+    ) -> CursorShape {
+        if let Some(identity) = &self.capture {
+            let component = components
+                .iter()
+                .find(|component| component.has_identity(identity));
+            let target = targets.iter().find(|target| target.path == identity.path);
+            return component
+                .zip(target)
+                .map_or(CursorShape::None, |(component, target)| {
+                    component.cursor(&target.hit)
+                });
+        }
+
+        targets
+            .iter()
+            .rev()
+            .filter_map(|target| {
+                components
+                    .iter()
+                    .find(|component| component.path() == target.path)
+                    .map(|component| component.cursor(&target.hit))
+            })
+            .find(|cursor| *cursor != CursorShape::None)
+            .unwrap_or(CursorShape::None)
+    }
+
+    pub(super) fn focused_path(&self) -> Option<&str> {
+        self.focus.as_deref()
     }
 
     pub(super) fn handle(
@@ -146,34 +157,23 @@ impl Router {
         None
     }
 
-    pub(super) fn cursor(
-        &self,
-        components: &[RetainedComponent],
-        targets: &[Target<'_>],
-    ) -> CursorShape {
-        if let Some(identity) = &self.capture {
-            let component = components
+    pub(super) fn reconcile(&mut self, components: &[RetainedComponent]) {
+        let missing = self.capture.as_ref().is_some_and(|identity| {
+            !components
                 .iter()
-                .find(|component| component.has_identity(identity));
-            let target = targets.iter().find(|target| target.path == identity.path);
-            return component
-                .zip(target)
-                .map_or(CursorShape::None, |(component, target)| {
-                    component.cursor(&target.hit)
-                });
+                .any(|component| component.has_identity(identity))
+        });
+        if missing {
+            self.capture = None;
         }
-
-        targets
-            .iter()
-            .rev()
-            .filter_map(|target| {
-                components
-                    .iter()
-                    .find(|component| component.path() == target.path)
-                    .map(|component| component.cursor(&target.hit))
-            })
-            .find(|cursor| *cursor != CursorShape::None)
-            .unwrap_or(CursorShape::None)
+        let missing = self.focus.as_ref().is_some_and(|path| {
+            !components
+                .iter()
+                .any(|component| component.path() == path && component.focusable())
+        });
+        if missing {
+            self.focus = None;
+        }
     }
 }
 
@@ -183,8 +183,8 @@ fn emission(
     outcome: Outcome<EngineEvent>,
 ) -> Option<Emission> {
     (outcome != Outcome::IGNORED).then_some(Emission {
-        path,
         child,
         outcome,
+        path,
     })
 }

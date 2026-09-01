@@ -51,15 +51,15 @@ impl Retired {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.snapshots.is_empty()
+    }
+
     pub(super) fn retire(&self, snapshot: Arc<RangeSet<u64>>) {
         if let Err(snapshot) = self.snapshots.push(snapshot) {
             self.overflowed.store(true, Ordering::Release);
             mem::forget(snapshot);
         }
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_empty(&self) -> bool {
-        self.snapshots.is_empty()
     }
 }

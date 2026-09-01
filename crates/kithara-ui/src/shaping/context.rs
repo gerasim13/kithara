@@ -29,9 +29,9 @@ pub struct TextContext {
 #[derive(Clone, Copy)]
 struct FaceStyle {
     font: FontId,
+    weight: FontWeight,
     size: f32,
     spacing: f32,
-    weight: FontWeight,
 }
 
 impl TextContext {
@@ -68,74 +68,6 @@ impl From<&TextResources> for TextContext {
 }
 
 impl TextContext {
-    /// Shapes and measures text with embedded primary faces and configured fallbacks.
-    ///
-    /// `max_width` is `None` for an unbounded line or `Some(width)` for line
-    /// breaking. The role travels whole rather than as a face and a size,
-    /// because `spacing` is letter tracking: a signature that took those loose
-    /// let a caller shape text and drop the tracking the skin declared, which
-    /// is what every string rendered through iced did.
-    #[must_use]
-    pub fn shape(&mut self, content: &str, role: TextRoleSkin, max_width: Option<f32>) -> GlyphRun {
-        self.shape_run(
-            content,
-            FaceStyle {
-                font: select(role.font, role.weight),
-                size: role.size,
-                spacing: role.spacing,
-                weight: role.weight,
-            },
-            max_width,
-        )
-    }
-
-    #[cfg(feature = "render")]
-    pub(crate) fn shape_lucide(&mut self, content: &str, size: f32) -> GlyphRun {
-        self.shape_run(
-            content,
-            FaceStyle {
-                font: FontId::Lucide,
-                size,
-                spacing: 0.0,
-                weight: FontWeight::Normal,
-            },
-            None,
-        )
-    }
-
-    #[cfg(feature = "render")]
-    pub(crate) fn shape_input(
-        &mut self,
-        content: &str,
-        role: TextRoleSkin,
-    ) -> (GlyphRun, Vec<(usize, f32)>) {
-        let style = FaceStyle {
-            font: select(role.font, role.weight),
-            size: role.size,
-            spacing: role.spacing,
-            weight: role.weight,
-        };
-        let layout = self.build_layout(content, style, None);
-        let carets = content
-            .grapheme_indices(true)
-            .map(|(index, _)| index)
-            .chain(std::iter::once(content.len()))
-            .map(|index| {
-                let cursor = Cursor::from_byte_index(&layout, index, Affinity::Downstream);
-                (
-                    index,
-                    AsPrimitive::<f32>::as_(cursor.geometry(&layout, 1.0).x0),
-                )
-            })
-            .collect();
-        (self.glyph_run(&layout, style), carets)
-    }
-
-    fn shape_run(&mut self, content: &str, style: FaceStyle, max_width: Option<f32>) -> GlyphRun {
-        let layout = self.build_layout(content, style, max_width);
-        self.glyph_run(&layout, style)
-    }
-
     fn build_layout(
         &mut self,
         content: &str,
@@ -176,6 +108,74 @@ impl TextContext {
         }
         GlyphRun::new(segments, layout.height(), style.size, layout.width())
     }
+
+    /// Shapes and measures text with embedded primary faces and configured fallbacks.
+    ///
+    /// `max_width` is `None` for an unbounded line or `Some(width)` for line
+    /// breaking. The role travels whole rather than as a face and a size,
+    /// because `spacing` is letter tracking: a signature that took those loose
+    /// let a caller shape text and drop the tracking the skin declared, which
+    /// is what every string rendered through iced did.
+    #[must_use]
+    pub fn shape(&mut self, content: &str, role: TextRoleSkin, max_width: Option<f32>) -> GlyphRun {
+        self.shape_run(
+            content,
+            FaceStyle {
+                font: select(role.font, role.weight),
+                size: role.size,
+                spacing: role.spacing,
+                weight: role.weight,
+            },
+            max_width,
+        )
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn shape_input(
+        &mut self,
+        content: &str,
+        role: TextRoleSkin,
+    ) -> (GlyphRun, Vec<(usize, f32)>) {
+        let style = FaceStyle {
+            font: select(role.font, role.weight),
+            size: role.size,
+            spacing: role.spacing,
+            weight: role.weight,
+        };
+        let layout = self.build_layout(content, style, None);
+        let carets = content
+            .grapheme_indices(true)
+            .map(|(index, _)| index)
+            .chain(std::iter::once(content.len()))
+            .map(|index| {
+                let cursor = Cursor::from_byte_index(&layout, index, Affinity::Downstream);
+                (
+                    index,
+                    AsPrimitive::<f32>::as_(cursor.geometry(&layout, 1.0).x0),
+                )
+            })
+            .collect();
+        (self.glyph_run(&layout, style), carets)
+    }
+
+    #[cfg(feature = "render")]
+    pub(crate) fn shape_lucide(&mut self, content: &str, size: f32) -> GlyphRun {
+        self.shape_run(
+            content,
+            FaceStyle {
+                size,
+                font: FontId::Lucide,
+                spacing: 0.0,
+                weight: FontWeight::Normal,
+            },
+            None,
+        )
+    }
+
+    fn shape_run(&mut self, content: &str, style: FaceStyle, max_width: Option<f32>) -> GlyphRun {
+        let layout = self.build_layout(content, style, max_width);
+        self.glyph_run(&layout, style)
+    }
 }
 
 const fn parley_weight(weight: FontWeight) -> ParleyWeight {
@@ -210,11 +210,11 @@ mod tests {
 
     fn role(family: FontFamily, weight: FontWeight, size: f32, spacing: f32) -> TextRoleSkin {
         TextRoleSkin {
-            color: ColorRole::Text,
-            font: family,
             size,
             spacing,
             weight,
+            color: ColorRole::Text,
+            font: family,
         }
     }
 

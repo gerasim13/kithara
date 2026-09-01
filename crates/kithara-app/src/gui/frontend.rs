@@ -1,12 +1,14 @@
 use std::{error::Error, num::NonZeroUsize};
 
 use iced::{Size, window::Settings};
-use kithara_platform::{
-    sync::{Arc, Mutex},
-    time::Duration,
+use kithara::{
+    platform::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    },
+    ui::render::fonts,
+    worker::{DispatcherConfig, TaskConfig},
 };
-use kithara_ui::render::fonts;
-use kithara_worker::{DispatcherConfig, TaskConfig};
 #[cfg(feature = "masonry")]
 use num_traits::cast::AsPrimitive;
 
@@ -121,19 +123,19 @@ pub(crate) fn window_settings(min: Size) -> Settings {
 }
 
 struct Boot {
-    broadcast: crate::broadcast::Broadcaster,
     config: AppConfig,
+    ui: AppUi,
+    broadcast: crate::broadcast::Broadcaster,
     catalog: Catalog,
     session: DeckSet,
     decks: Decks,
-    ui: AppUi,
 }
 
 /// GUI frontend for the studio.
 pub struct GuiFrontend {
-    broadcast: Option<crate::broadcast::Broadcaster>,
     config: AppConfig,
     host: Host,
+    broadcast: Option<crate::broadcast::Broadcaster>,
 }
 
 impl GuiFrontend {
@@ -143,14 +145,14 @@ impl GuiFrontend {
     /// Returns an error if GUI initialization fails.
     pub fn new(config: &AppConfig, host: Host) -> Result<Self, FrontendError> {
         Ok(Self {
-            broadcast: None,
             host,
+            broadcast: None,
             config: config.clone(),
         })
     }
 
     /// Gives the bar's REC cell a session to put on air.
-    pub fn attach_broadcast(&mut self, shutdown: kithara_platform::CancelToken) {
+    pub fn attach_broadcast(&mut self, shutdown: kithara::platform::CancelToken) {
         self.broadcast = Some(crate::broadcast::Broadcaster::new(
             shutdown,
             self.config.broadcast_tap_lead,
@@ -181,8 +183,6 @@ impl GuiFrontend {
             TaskConfig::new(),
         ))?;
 
-        // The CLI tracks start on the first deck; every deck gets its own
-        // controller, listener and analysis worker.
         if let Some(first) = session.decks().first() {
             first
                 .queue
@@ -204,12 +204,12 @@ impl GuiFrontend {
             .collect();
 
         let boot = Boot {
+            session,
+            ui,
             broadcast: self
                 .broadcast
                 .take()
                 .ok_or("broadcast service was not configured")?,
-            session,
-            ui,
             decks: Decks::new(controllers).ok_or("no decks to render")?,
             catalog: Catalog::new(config.tracks.clone()),
             config: config.clone(),

@@ -10,13 +10,13 @@ use crate::traits::SeekBegin;
 /// nudges the peer and wakes the worker. Each takes a lock, so the audio thread only runs
 /// [`Audio::sync_seek`](super::Audio::sync_seek).
 pub struct SeekHandle {
-    bus: EventBus,
-    peer_wake: Option<Arc<DeferredWake>>,
     playhead: Arc<dyn PlayheadWrite>,
     preload_gate: Arc<PreloadGate>,
     seek: Arc<dyn SeekControl>,
-    seek_prepare: Option<Arc<dyn SeekPrepare>>,
     wake: Arc<dyn kithara_stream::WorkerWake>,
+    bus: EventBus,
+    peer_wake: Option<Arc<DeferredWake>>,
+    seek_prepare: Option<Arc<dyn SeekPrepare>>,
 }
 
 impl SeekHandle {
@@ -31,13 +31,13 @@ impl SeekHandle {
             wake,
         } = parts;
         Self {
-            bus,
-            peer_wake,
             playhead,
             preload_gate,
             seek,
-            seek_prepare,
             wake,
+            bus,
+            peer_wake,
+            seek_prepare,
         }
     }
 }
@@ -75,11 +75,11 @@ impl SeekBegin for SeekHandle {
 }
 
 pub(super) struct SeekHandleParts {
-    pub(super) bus: EventBus,
-    pub(super) peer_wake: Option<Arc<DeferredWake>>,
     pub(super) playhead: Arc<dyn PlayheadWrite>,
     pub(super) preload_gate: Arc<PreloadGate>,
     pub(super) seek: Arc<dyn SeekControl>,
-    pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
     pub(super) wake: Arc<dyn kithara_stream::WorkerWake>,
+    pub(super) bus: EventBus,
+    pub(super) peer_wake: Option<Arc<DeferredWake>>,
+    pub(super) seek_prepare: Option<Arc<dyn SeekPrepare>>,
 }

@@ -15,24 +15,24 @@ use crate::{
 };
 
 pub(crate) struct Flex {
+    alignment: solve::Alignment,
+    main_alignment: solve::Alignment,
     axis: Axis,
+    height: solve::Length,
+    width: solve::Length,
     /// The axis whose room decides which children stand, when they come and go
     /// with the room at all.
     measure: Option<MeasureAxis>,
-    width: solve::Length,
-    height: solve::Length,
     padding: solve::Padding,
-    spacing: f32,
-    alignment: solve::Alignment,
-    main_alignment: solve::Alignment,
     children: Vec<ChildLayout>,
+    /// Which child each item the solver asks about actually is, refilled
+    /// beside `stands`.
+    slots: Vec<usize>,
     /// Which children the room reached, refilled at every layout. A retained
     /// flow is laid out again for every frame that resizes it, so this is
     /// storage the widget keeps rather than a list it builds each time.
     stands: Vec<bool>,
-    /// Which child each item the solver asks about actually is, refilled
-    /// beside `stands`.
-    slots: Vec<usize>,
+    spacing: f32,
 }
 
 #[derive(Clone)]
@@ -43,23 +43,29 @@ pub(crate) struct ChildLayout {
     /// question - whether this child is in the picture - and neither of them
     /// rebuilds the flow to answer it.
     block: Option<Rc<BlockState>>,
-    natural: solve::Size<solve::Length>,
     declared: Option<solve::Size<solve::Length>>,
     main_minimum: Option<f32>,
     main_weight: Option<f32>,
+    natural: solve::Size<solve::Length>,
 }
 
 impl ChildLayout {
+    /// The block that says whether the document shows this child at all.
+    pub(crate) fn blocked(mut self, block: Option<Rc<BlockState>>) -> Self {
+        self.block = block;
+        self
+    }
+
     pub(crate) const fn natural(
         natural: solve::Size<solve::Length>,
         main_minimum: Option<f32>,
     ) -> Self {
         Self {
+            natural,
+            main_minimum,
             band: Band::ALWAYS,
             block: None,
-            natural,
             declared: None,
-            main_minimum,
             main_weight: None,
         }
     }
@@ -70,9 +76,9 @@ impl ChildLayout {
         main_weight: f32,
     ) -> Self {
         Self {
+            natural,
             band: Band::ALWAYS,
             block: None,
-            natural,
             declared: Some(declared),
             main_minimum: None,
             main_weight: Some(main_weight),
@@ -82,12 +88,6 @@ impl ChildLayout {
     /// The band of room this child stands in.
     pub(crate) const fn within(mut self, band: Band) -> Self {
         self.band = band;
-        self
-    }
-
-    /// The block that says whether the document shows this child at all.
-    pub(crate) fn blocked(mut self, block: Option<Rc<BlockState>>) -> Self {
-        self.block = block;
         self
     }
 }
@@ -104,38 +104,17 @@ impl Flex {
     ) -> Self {
         Self {
             axis,
-            measure: None,
             width,
             height,
             padding,
             spacing,
             alignment,
-            main_alignment: solve::Alignment::Start,
             children,
+            measure: None,
+            main_alignment: solve::Alignment::Start,
             stands: Vec::new(),
             slots: Vec::new(),
         }
-    }
-
-    /// Names the axis whose room decides which children stand.
-    pub(crate) const fn measure(mut self, axis: Option<MeasureAxis>) -> Self {
-        self.measure = axis;
-        self
-    }
-
-    /// Records which children stand: the ones the room reached and the
-    /// document did not hide.
-    fn stand(&mut self, limits: solve::Limits) {
-        self.stands.clear();
-        let room = self.measure.map(|axis| match axis {
-            MeasureAxis::Width => limits.max().width,
-            MeasureAxis::Height => limits.max().height,
-        });
-        self.stands.extend(self.children.iter().map(|child| {
-            let reached = room.is_none_or(|room| child.band.stands(room));
-            let shown = !child.block.as_ref().is_some_and(|block| block.is_hidden());
-            reached && shown
-        }));
     }
 
     pub(crate) const fn align_main(mut self, alignment: solve::Alignment) -> Self {
@@ -160,15 +139,6 @@ impl Flex {
                 .enumerate()
                 .filter_map(|(index, on)| on.then_some(index)),
         );
-        // A cell the room did not reach is stashed, not placed at an empty box:
-        // an empty box still lets every leaf inside it draw at its own natural
-        // size, and it drew them at the flow's own origin. Masonry skips a
-        // stashed child for layout, paint and accessibility, which is what the
-        // immediate host does by leaving the cell out of the flow entirely.
-        //
-        // This stands before the solver, which measures a standing cell by
-        // laying it out: a cell the room has just grown to reach has to be back
-        // in the picture before anything asks it for a size.
         for (index, on) in self.stands.iter().enumerate() {
             ctx.set_stashed(&mut children[index], !on);
         }
@@ -186,13 +156,14 @@ impl Flex {
             .collect();
         let mut measure = MasonryMeasure {
             children,
+            ctx,
             layouts: &self.children,
             stood: vec![None; self.slots.len()],
             slots: &self.slots,
-            ctx,
         };
         let Distribution { size, mut items } = solve::resolve(
             Input {
+                items,
                 axis: self.axis,
                 limits: &inner_limits,
                 width: self.width,
@@ -200,7 +171,6 @@ impl Flex {
                 padding: solve::Padding::default(),
                 spacing: self.spacing,
                 align_items: self.alignment,
-                items,
             },
             &mut measure,
         );
@@ -247,11 +217,33 @@ impl Flex {
             .resolve(self.width, self.height, size)
             .expand(fitted)
     }
+
+    /// Names the axis whose room decides which children stand.
+    pub(crate) const fn measure(mut self, axis: Option<MeasureAxis>) -> Self {
+        self.measure = axis;
+        self
+    }
+
+    /// Records which children stand: the ones the room reached and the
+    /// document did not hide.
+    fn stand(&mut self, limits: solve::Limits) {
+        self.stands.clear();
+        let room = self.measure.map(|axis| match axis {
+            MeasureAxis::Width => limits.max().width,
+            MeasureAxis::Height => limits.max().height,
+        });
+        self.stands.extend(self.children.iter().map(|child| {
+            let reached = room.is_none_or(|room| child.band.stands(room));
+            let shown = !child.block.as_ref().is_some_and(|block| block.is_hidden());
+            reached && shown
+        }));
+    }
 }
 
 struct MasonryMeasure<'a, 'ctx> {
-    children: &'a mut [WidgetPod<Node>],
+    ctx: &'a mut LayoutCtx<'ctx>,
     layouts: &'a [ChildLayout],
+    children: &'a mut [WidgetPod<Node>],
     /// Which child each item the solver asks about actually is: the solver sees
     /// only the cells that stand.
     slots: &'a [usize],
@@ -266,7 +258,6 @@ struct MasonryMeasure<'a, 'ctx> {
     /// standing right, and asking Masonry for that same box again is answered
     /// from its own layout cache rather than by walking the cell again.
     stood: Vec<Option<(solve::Limits, solve::Size)>>,
-    ctx: &'a mut LayoutCtx<'ctx>,
 }
 
 impl Measure for MasonryMeasure<'_, '_> {

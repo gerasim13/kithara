@@ -102,7 +102,15 @@ where
         let clock = Clock::default();
         let view = ViewState::default();
         let ui = compile_document(&app, &config, &doc, &view)?;
-        let root = mount(&app, &config, &state, &ui, size, scale, clock, &view)?;
+        let root = mount(
+            &app,
+            &config,
+            &state,
+            &ui,
+            root_options(size, scale),
+            clock,
+            &view,
+        )?;
         let screens = Screens::new(doc.screen_cache, ui);
         Ok(Self {
             app,
@@ -494,7 +502,7 @@ where
                 }
                 Ok(true) => {}
                 Err(error) => {
-                    tracing::error!(%error, "page did not follow the state that turns it")
+                    tracing::error!(%error, "page did not follow the state that turns it");
                 }
             }
             return;
@@ -550,8 +558,7 @@ where
             &self.config,
             &self.state,
             self.screens.shown(),
-            self.size,
-            self.scale,
+            root_options(self.size, self.scale),
             self.clock,
             &self.view,
         )?;
@@ -601,8 +608,7 @@ fn mount<Application>(
     config: &Config<'_>,
     state: &MasonryState,
     ui: &CompiledUi,
-    size: PhysicalSize<u32>,
-    scale: f64,
+    options: RenderRootOptions,
     clock: Clock,
     view: &ViewState,
 ) -> Result<MasonryRoot<UiEvent>, RunError>
@@ -617,19 +623,20 @@ where
         let host = MasonryHost::new(ctx, skin).with_state(state.clone());
         document::render(&ui.root, ctx, host)
     });
-    MasonryRoot::new(
-        node,
-        RenderRootOptions {
-            default_properties: Arc::new(default_property_set()),
-            use_system_fonts: false,
-            size_policy: WindowSizePolicy::User,
-            size,
-            scale_factor: scale,
-            test_font: None,
-        },
-    )
-    .map(|root| root.with_animates(ui.animates))
-    .map_err(|error| RunError::Host(error.to_string()))
+    MasonryRoot::new(node, options)
+        .map(|root| root.with_animates(ui.animates))
+        .map_err(|error| RunError::Host(error.to_string()))
+}
+
+fn root_options(size: PhysicalSize<u32>, scale_factor: f64) -> RenderRootOptions {
+    RenderRootOptions {
+        default_properties: Arc::new(default_property_set()),
+        use_system_fonts: false,
+        size_policy: WindowSizePolicy::User,
+        size,
+        scale_factor,
+        test_font: None,
+    }
 }
 
 fn pointer_info() -> PointerInfo {

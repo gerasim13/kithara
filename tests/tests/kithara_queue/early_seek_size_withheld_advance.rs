@@ -16,7 +16,6 @@
 //! blocks.
 //! Auto-advance is observed as a `Queue::current_index()` change against a
 //! multi-track queue.
-
 use std::num::NonZeroU32;
 
 use kithara::{

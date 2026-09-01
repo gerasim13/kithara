@@ -42,8 +42,8 @@ pub(crate) fn scope_picker<'a>(
     let selected = picker_selected_index(value, items.len());
     Element::new(PickerWidget {
         anchor,
-        face: Box::new(face),
         owner,
+        face: Box::new(face),
         paint: Rc::new(PickerPaint::new(items, selected, skin)),
         path: path.to_owned(),
     })
@@ -71,8 +71,8 @@ pub(crate) fn sync_picker(path: &str, snapshot: PickerSnapshot) -> impl Operatio
 }
 
 struct PickerWidget<'a> {
-    anchor: Element<'a, UiEvent>,
     face: Box<dyn Fn(Rect) -> Rect + 'a>,
+    anchor: Element<'a, UiEvent>,
     owner: InputOwner,
     paint: Rc<PickerPaint<'a>>,
     path: String,
@@ -134,19 +134,6 @@ impl PickerWidget<'_> {
 }
 
 impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
-    fn tag(&self) -> widget::tree::Tag {
-        widget::tree::Tag::of::<PickerState>()
-    }
-
-    fn state(&self) -> widget::tree::State {
-        widget::tree::State::new(PickerState::new(
-            &self.path,
-            self.paint.item_count(),
-            self.paint.selected(),
-            self.owner,
-        ))
-    }
-
     fn children(&self) -> Vec<Tree> {
         vec![Tree::new(&self.anchor)]
     }
@@ -159,30 +146,6 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
             self.paint.selected(),
             self.owner,
         );
-    }
-
-    delegate::delegate! {
-        to self.anchor.as_widget() {
-            fn size(&self) -> Size<Length>;
-            fn size_hint(&self) -> Size<Length>;
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        tree: &Tree,
-        layout: Layout<'_>,
-        cursor: mouse::Cursor,
-        viewport: &Rectangle,
-        renderer: &Renderer,
-    ) -> mouse::Interaction {
-        self.anchor.as_widget().mouse_interaction(
-            &tree.children[0],
-            layout,
-            cursor,
-            viewport,
-            renderer,
-        )
     }
 
     fn draw(
@@ -215,6 +178,71 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         self.anchor
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.anchor.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut Tree,
+        layout: Layout<'_>,
+        _renderer: &Renderer,
+        operation: &mut dyn Operation,
+    ) {
+        operation.custom(
+            None,
+            layout.bounds(),
+            tree.state.downcast_mut::<PickerState>(),
+        );
+    }
+
+    fn overlay<'a>(
+        &'a mut self,
+        tree: &'a mut Tree,
+        layout: Layout<'a>,
+        _renderer: &Renderer,
+        _viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
+        let anchor = self.face_bounds(layout.bounds()) + translation;
+        let state = tree.state.downcast_mut::<PickerState>();
+        state.snapshot().open.then(|| {
+            overlay::Element::new(Box::new(PickerPortal {
+                anchor,
+                state,
+                owner: self.owner,
+                paint: &self.paint,
+                path: &self.path,
+            }))
+        })
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(PickerState::new(
+            &self.path,
+            self.paint.item_count(),
+            self.paint.selected(),
+            self.owner,
+        ))
+    }
+
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<PickerState>()
     }
 
     fn update(
@@ -255,39 +283,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
         }
     }
 
-    fn operate(
-        &mut self,
-        tree: &mut Tree,
-        layout: Layout<'_>,
-        _renderer: &Renderer,
-        operation: &mut dyn Operation,
-    ) {
-        operation.custom(
-            None,
-            layout.bounds(),
-            tree.state.downcast_mut::<PickerState>(),
-        );
-    }
-
-    fn overlay<'a>(
-        &'a mut self,
-        tree: &'a mut Tree,
-        layout: Layout<'a>,
-        _renderer: &Renderer,
-        _viewport: &Rectangle,
-        translation: Vector,
-    ) -> Option<overlay::Element<'a, UiEvent, Theme, Renderer>> {
-        let anchor = self.face_bounds(layout.bounds()) + translation;
-        let state = tree.state.downcast_mut::<PickerState>();
-        state.snapshot().open.then(|| {
-            overlay::Element::new(Box::new(PickerPortal {
-                anchor,
-                owner: self.owner,
-                paint: &self.paint,
-                path: &self.path,
-                state,
-            }))
-        })
+    delegate::delegate! {
+        to self.anchor.as_widget() {
+            fn size(&self) -> Size<Length>;
+            fn size_hint(&self) -> Size<Length>;
+        }
     }
 }
 
@@ -295,11 +295,11 @@ impl IcedWidget<UiEvent, Theme, Renderer> for PickerWidget<'_> {
 #[fieldwork(opt_in, get)]
 pub(super) struct PickerState {
     engine: Option<Engine>,
-    path: String,
     #[field(get, vis = "pub(super)", copy)]
     snapshot: PickerSnapshot,
     #[field(get, vis = "pub(super)")]
     text: RefCell<Option<TextContext>>,
+    path: String,
 }
 
 impl Default for PickerState {
@@ -336,6 +336,10 @@ impl PickerState {
         state
     }
 
+    pub(super) fn engine_mut(&mut self) -> Option<&mut Engine> {
+        self.engine.as_mut()
+    }
+
     fn reconcile(
         &mut self,
         path: &str,
@@ -353,10 +357,6 @@ impl PickerState {
             }
             InputOwner::Engine => self.engine = None,
         }
-    }
-
-    pub(super) fn engine_mut(&mut self) -> Option<&mut Engine> {
-        self.engine.as_mut()
     }
 
     pub(super) fn refresh(&mut self, path: &str) {

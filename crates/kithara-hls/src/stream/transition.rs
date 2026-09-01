@@ -176,9 +176,8 @@ where
         let Some(slot) = state.incoming.take() else {
             return;
         };
-        // With `abort_intent` the pending decision dies with the slot and no
-        // tick source re-derives it — this line is the only witness of a
-        // switch that ends without ever committing.
+        // WHY: With `abort_intent` the pending decision dies with the slot and no tick source re-derives it - this line is the only witness
+        // of a switch that ends without ever committing.
         debug!(
             transition = ?slot.transition,
             abort_intent,
@@ -476,10 +475,8 @@ where
                     }
                     PendingAbrClaim::Ready(_) => match slot.session.is_ready() {
                         Ok(false) => {
-                            // Owed a wake, but not from here: `wake_peer` takes
-                            // the peer's state lock, and the peer holds that
-                            // across `prepare_for_seek`, which takes the
-                            // transition lock this arm is standing on.
+                            // WHY: Owed a wake, but not from here: `wake_peer` takes the peer's state lock, and the peer holds that across `prepare_for_seek`,
+                            // which takes the transition lock this arm is standing on.
                             wake_when_unlocked = Some(Arc::clone(&slot.session));
                             Ok(VariantReaderTake::Preparing)
                         }

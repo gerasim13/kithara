@@ -142,6 +142,17 @@ pub trait SyncGroup: BeatGrid {
     /// Concrete synchronization-group type accepted as a direct child.
     type NestedGroup: SyncGroup;
 
+    /// Commits an operation as audibly applied and returns the resulting sync state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
+    /// does not match the currently prepared operation.
+    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
+
+    /// Returns the canonical control-plane view of this group's sync state.
+    fn status(&self) -> SyncStatusSnapshot;
+
     /// Returns one immutable topology snapshot for a complete calculation.
     ///
     /// # Errors
@@ -160,15 +171,4 @@ pub trait SyncGroup: BeatGrid {
         &mut self,
         operation: SyncOperation<Self::NestedGroup>,
     ) -> Result<SyncAdmission, SyncRejected<Self::NestedGroup>>;
-
-    /// Returns the canonical control-plane view of this group's sync state.
-    fn status(&self) -> SyncStatusSnapshot;
-
-    /// Commits an operation as audibly applied and returns the resulting sync state.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SyncError`] when the acknowledgement is stale, duplicate, or
-    /// does not match the currently prepared operation.
-    fn acknowledge(&mut self, applied: SyncApplied) -> Result<SyncStatusSnapshot, SyncError>;
 }

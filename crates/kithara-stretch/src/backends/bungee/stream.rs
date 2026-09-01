@@ -11,21 +11,21 @@ use crate::{ElasticConfig, ElasticError, ElasticRateEnvelope};
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in)]
 pub(super) struct StreamCore {
-    pub(super) anchor: Option<f64>,
-    pub(super) cue_grain_pending: bool,
+    pub(super) rate_envelope: ElasticRateEnvelope,
     pub(super) input: InputBuffer,
+    pub(super) native: NativeStretcher,
+    pub(super) anchor: Option<f64>,
+    pub(super) output_chunk: Option<NativeOutput>,
+    pub(super) output: PlanarBuffer,
+    pub(super) request: Request,
+    pub(super) cue_grain_pending: bool,
+    pub(super) request_pending: bool,
+    pub(super) unprimed_started: bool,
+    pub(super) samples_needed: f64,
+    pub(super) output_consumed: usize,
+    pub(super) source_latency_frames: usize,
     #[field(get, copy, vis = "pub(super)")]
     max_input_frames: usize,
-    pub(super) native: NativeStretcher,
-    pub(super) output: PlanarBuffer,
-    pub(super) output_chunk: Option<NativeOutput>,
-    pub(super) output_consumed: usize,
-    pub(super) request: Request,
-    pub(super) request_pending: bool,
-    pub(super) rate_envelope: ElasticRateEnvelope,
-    pub(super) samples_needed: f64,
-    pub(super) source_latency_frames: usize,
-    pub(super) unprimed_started: bool,
 }
 
 impl StreamCore {
@@ -69,16 +69,6 @@ impl StreamCore {
         self.input.prepare_source_capacity(capacity)
     }
 
-    pub(super) fn source_latency_frames(&self) -> Result<usize, ElasticError> {
-        let (history, lookahead) = self.input.requested_window(self.request.position)?;
-        if history > 0 && history == lookahead {
-            return Ok(history);
-        }
-        Err(ElasticError::EnginePreparation(
-            "Bungee reported an unsupported asymmetric input window",
-        ))
-    }
-
     pub(super) fn set_source_latency_frames(&mut self, frames: usize) -> Result<(), ElasticError> {
         if frames == 0 || frames > self.max_input_frames / 2 {
             return Err(ElasticError::EnginePreparation(
@@ -87,6 +77,16 @@ impl StreamCore {
         }
         self.source_latency_frames = frames;
         Ok(())
+    }
+
+    pub(super) fn source_latency_frames(&self) -> Result<usize, ElasticError> {
+        let (history, lookahead) = self.input.requested_window(self.request.position)?;
+        if history > 0 && history == lookahead {
+            return Ok(history);
+        }
+        Err(ElasticError::EnginePreparation(
+            "Bungee reported an unsupported asymmetric input window",
+        ))
     }
 }
 

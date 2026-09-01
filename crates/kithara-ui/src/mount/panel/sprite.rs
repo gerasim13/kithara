@@ -61,16 +61,16 @@ mod host {
     impl Draws for Sprite {
         type Painter = Face;
 
-        fn painter(&self, _skin: &Skin) -> Face {
-            Face
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<Option<Image>> {
             Some(frame(
                 read.skin.sheet(read.ctx.ui.resolve(self.sheet)),
                 self.seconds,
                 seconds(read.value),
             ))
+        }
+
+        fn painter(&self, _skin: &Skin) -> Face {
+            Face
         }
 
         /// A retained host mounts a leaf once and then only hears about it

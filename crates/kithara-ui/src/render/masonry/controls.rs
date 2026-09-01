@@ -44,39 +44,28 @@ use crate::{
 /// because they need direct cursor and capture ownership, which that contract
 /// does not expose.
 pub(crate) trait MasonryControl {
+    fn accepts_input(&self) -> bool;
+
+    fn cursor(&self, _hit: &Hit) -> CursorShape {
+        CursorShape::None
+    }
+
     /// Draws into a box-local list, offset by every enclosing object's pose.
     fn draw_list(&mut self, bounds: Rect, transform: Transform) -> DrawList;
+
+    /// Takes the hover edge the host observed and reports whether the control
+    /// now draws differently.
+    fn hover(&mut self, _hovered: bool) -> bool {
+        false
+    }
+
+    fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction>;
 
     /// How big the control is on the axes it settles for itself. A zero on an
     /// axis leaves it to the row, which is what a leaf that cannot measure has
     /// always answered on both.
     fn measure(&mut self) -> crate::solve::Size {
         crate::solve::Size::ZERO
-    }
-
-    fn input(&mut self, input: Input<'_>, hit: &Hit) -> Outcome<HostAction>;
-
-    fn accepts_input(&self) -> bool;
-
-    /// Takes what the control's endpoint now ctx, and reports whether the
-    /// control draws differently for it. This is the one way a mounted control
-    /// learns a new value; no control is special-cased anywhere above it.
-    fn set_read(&mut self, _value: &ReadValue<'_>) -> bool {
-        false
-    }
-
-    fn refresh(&mut self, _ctx: Ctx<'_, '_>) -> bool {
-        false
-    }
-
-    fn cursor(&self, _hit: &Hit) -> CursorShape {
-        CursorShape::None
-    }
-
-    /// Takes the hover edge the host observed and reports whether the control
-    /// now draws differently.
-    fn hover(&mut self, _hovered: bool) -> bool {
-        false
     }
 
     /// Whether the pointer resting on this control changes what it draws.
@@ -88,8 +77,19 @@ pub(crate) trait MasonryControl {
         false
     }
 
+    fn refresh(&mut self, _ctx: Ctx<'_, '_>) -> bool {
+        false
+    }
+
     fn repaint(&self) -> Repaint {
         Repaint::None
+    }
+
+    /// Takes what the control's endpoint now ctx, and reports whether the
+    /// control draws differently for it. This is the one way a mounted control
+    /// learns a new value; no control is special-cased anywhere above it.
+    fn set_read(&mut self, _value: &ReadValue<'_>) -> bool {
+        false
     }
 }
 
@@ -110,8 +110,8 @@ mod table_projection {
     };
 
     struct MissingEngineProjection {
-        bounds: Rect,
         engine: Engine,
+        bounds: Rect,
     }
 
     impl TableProjection for MissingEngineProjection {
@@ -226,9 +226,9 @@ mod flags {
                 Box::new(Painted::new(
                     NavItem::new(skin),
                     NavData {
+                        mark,
                         active: false,
                         label: "MIXER".to_owned(),
-                        mark,
                     },
                     skin,
                 )),
@@ -443,7 +443,7 @@ mod dragged {
                 } => Some(value),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("a move after a press must publish a scalar"))
+            .expect("a move after a press must publish a scalar")
     }
 
     fn at(y: f32) -> Hit {

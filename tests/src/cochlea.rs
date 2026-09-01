@@ -6,9 +6,10 @@ use cochlea_features::{
 use num_traits::cast;
 use serde::Serialize;
 
-const BEAT_MARKER_THRESHOLD: f32 = 0.6;
+const BEAT_MARKER_RATIO: f32 = 0.65;
 const BEATS_PER_BAR: usize = 4;
-const DOWNBEAT_MARKER_THRESHOLD: f32 = 0.8;
+const DOWNBEAT_MARKER_RATIO: f32 = 0.9;
+const MARKER_CLUSTER_MS: usize = 100;
 const SECONDS_PER_MINUTE: f64 = 60.0;
 const TEMPO_TOLERANCE_BPM: f64 = 0.5;
 const WINDOW_MS: f64 = 5.0;
@@ -289,7 +290,7 @@ pub fn synchronization_failures(
             ));
         }
 
-        let (markers, downbeats) = rhythm_markers(samples, channel_count);
+        let (markers, downbeats) = rhythm_markers(samples, channel_count, sample_rate);
         let Some(&first) = markers.first() else {
             failures.push(format!("{label}: track {index} has no exact beat markers"));
             continue;
@@ -340,18 +341,50 @@ pub fn synchronization_failures(
     failures
 }
 
-fn rhythm_markers(samples: &[f32], channels: usize) -> (Vec<usize>, Vec<usize>) {
-    let mut beats = Vec::new();
-    let mut downbeats = Vec::new();
+fn rhythm_markers(samples: &[f32], channels: usize, sample_rate: u32) -> (Vec<usize>, Vec<usize>) {
+    let track_peak = samples
+        .chunks_exact(channels)
+        .map(|values| values.iter().map(|sample| sample.abs()).fold(0.0, f32::max))
+        .fold(0.0, f32::max);
+    if track_peak <= f32::EPSILON {
+        return (Vec::new(), Vec::new());
+    }
+
+    let threshold = track_peak * BEAT_MARKER_RATIO;
+    let cluster_gap =
+        usize::try_from(sample_rate).expect("sample rate fits usize") * MARKER_CLUSTER_MS / 1_000;
+    let mut markers = Vec::new();
+    let mut active: Option<(usize, f32, usize)> = None;
     for (frame, values) in samples.chunks_exact(channels).enumerate() {
         let peak = values.iter().map(|sample| sample.abs()).fold(0.0, f32::max);
-        if peak >= BEAT_MARKER_THRESHOLD {
-            beats.push(frame);
+        if peak < threshold {
+            continue;
         }
-        if peak >= DOWNBEAT_MARKER_THRESHOLD {
-            downbeats.push(frame);
+        match active {
+            Some((best_frame, best_peak, last_frame)) if frame - last_frame <= cluster_gap => {
+                active = Some(if peak > best_peak {
+                    (frame, peak, frame)
+                } else {
+                    (best_frame, best_peak, frame)
+                });
+            }
+            Some((best_frame, best_peak, _)) => {
+                markers.push((best_frame, best_peak));
+                active = Some((frame, peak, frame));
+            }
+            None => active = Some((frame, peak, frame)),
         }
     }
+    if let Some((frame, peak, _)) = active {
+        markers.push((frame, peak));
+    }
+
+    let downbeat_threshold = track_peak * DOWNBEAT_MARKER_RATIO;
+    let downbeats = markers
+        .iter()
+        .filter_map(|(frame, peak)| (*peak >= downbeat_threshold).then_some(*frame))
+        .collect();
+    let beats = markers.into_iter().map(|(frame, _)| frame).collect();
     (beats, downbeats)
 }
 

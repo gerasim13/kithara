@@ -7,12 +7,28 @@ use crate::coverage::{Coverage, FrameRange};
 
 #[derive(Default)]
 pub(crate) struct Schedule {
-    // A seek that snapped into covered audio leaves its gap untouched, so
-    // without this the same position is chosen forever.
+    // WHY: Retire seeks that snap into covered audio or they repeat forever.
     barren: BTreeSet<u64>,
 }
 
 impl Schedule {
+    pub(crate) fn barren(&mut self, at: u64) {
+        self.barren.insert(at);
+    }
+
+    fn gap_target(&self, coverage: &Coverage, extent: u64, window: Option<u64>) -> Option<u64> {
+        let mut widest: Option<FrameRange> = None;
+        for gap in coverage.gaps(extent) {
+            if self.barren.contains(&aim(gap, window)) {
+                continue;
+            }
+            if widest.is_none_or(|held| gap.frames() > held.frames()) {
+                widest = Some(gap);
+            }
+        }
+        widest.map(|gap| aim(gap, window))
+    }
+
     pub(crate) fn next(
         &self,
         coverage: &Coverage,
@@ -26,7 +42,7 @@ impl Schedule {
         let identities = extent.div_ceil(window);
         let mut regions = 2;
 
-        // Visit the centres of 2, 4, 8, ... regions before linear leftovers.
+        // WHY: Region centres spread early work before scanning leftovers.
         while regions < identities {
             for region in 0..regions {
                 let identity = region_midpoint(identities, regions, region);
@@ -40,10 +56,6 @@ impl Schedule {
         (0..identities)
             .find_map(|identity| self.untouched(coverage, extent, window, identity))
             .or_else(|| self.gap_target(coverage, extent, Some(window)))
-    }
-
-    pub(crate) fn barren(&mut self, at: u64) {
-        self.barren.insert(at);
     }
 
     fn untouched(
@@ -60,35 +72,15 @@ impl Schedule {
             && !overlaps(coverage, FrameRange::new(at, frames)))
         .then_some(at)
     }
-
-    fn gap_target(&self, coverage: &Coverage, extent: u64, window: Option<u64>) -> Option<u64> {
-        let mut widest: Option<FrameRange> = None;
-        for gap in coverage.gaps(extent) {
-            if self.barren.contains(&aim(gap, window)) {
-                continue;
-            }
-            if widest.is_none_or(|held| gap.frames() > held.frames()) {
-                widest = Some(gap);
-            }
-        }
-        widest.map(|gap| aim(gap, window))
-    }
 }
 
 #[derive(Default)]
 pub(crate) struct Extent {
-    reported: Option<u64>,
     reachable: Option<u64>,
+    reported: Option<u64>,
 }
 
 impl Extent {
-    pub(crate) const fn restore(frames: u64) -> Self {
-        Self {
-            reported: Some(frames),
-            reachable: None,
-        }
-    }
-
     pub(crate) fn frames(&self) -> Option<u64> {
         let reported = self.reported?;
         Some(self.reachable.map_or(reported, |limit| reported.min(limit)))
@@ -96,6 +88,13 @@ impl Extent {
 
     pub(crate) fn report(&mut self, duration: Option<Duration>, rate: NonZeroU32) {
         self.reported = self.reported.max(extent_frames(duration, rate));
+    }
+
+    pub(crate) const fn restore(frames: u64) -> Self {
+        Self {
+            reported: Some(frames),
+            reachable: None,
+        }
     }
 
     pub(crate) fn unreachable(&mut self, frame: u64) {

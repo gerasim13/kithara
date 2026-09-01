@@ -49,26 +49,26 @@ pub struct OrphansArgs {
 /// One target of one package. `cargo modules` analyzes a single target per
 /// run, so a package with a library and binaries needs one run per target.
 struct Job {
-    package: String,
-    label: String,
-    selector: Vec<String>,
     src: PathBuf,
+    label: String,
+    package: String,
+    selector: Vec<String>,
 }
 
 /// A module the tool reported, at the file it named.
 #[derive(Clone)]
 struct Finding {
-    module: String,
     path: PathBuf,
+    module: String,
 }
 
 /// One target's sweep once the source has been consulted.
 struct Report {
-    package: String,
-    label: String,
-    orphans: Vec<Finding>,
-    declared: Vec<PathBuf>,
     failure: Option<String>,
+    label: String,
+    package: String,
+    declared: Vec<PathBuf>,
+    orphans: Vec<Finding>,
 }
 
 impl Report {
@@ -86,9 +86,9 @@ impl Report {
 /// A package's targets taken together.
 #[derive(Default)]
 struct Merged {
-    orphans: Vec<Finding>,
     declared: HashSet<PathBuf>,
     failures: Vec<String>,
+    orphans: Vec<Finding>,
 }
 
 pub(crate) fn run(args: &OrphansArgs, ctx: &Ctx) -> Result<()> {
@@ -316,9 +316,9 @@ fn examine(job: &Job, root: &Path) -> Report {
     };
     let (orphans, filtered) = split(found, &declared);
     Report {
+        orphans,
         package: job.package.clone(),
         label: job.label.clone(),
-        orphans,
         declared: filtered,
         failure: None,
     }
@@ -403,9 +403,9 @@ fn scope(metadata: &Metadata, wanted: &[String], excluded: &[String]) -> (Vec<Jo
                 continue;
             };
             jobs.push(Job {
-                package: name.clone(),
                 label,
                 selector,
+                package: name.clone(),
                 src: src.clone(),
             });
         }
@@ -526,10 +526,10 @@ mod tests {
 
     fn report(label: &str, orphans: Vec<Finding>, declared: Vec<PathBuf>) -> Report {
         Report {
-            package: "x".to_owned(),
-            label: label.to_owned(),
             orphans,
             declared,
+            package: "x".to_owned(),
+            label: label.to_owned(),
             failure: None,
         }
     }

@@ -1,11 +1,11 @@
 use kithara::{
     broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
     host::bridge::MixTapWriter,
-};
-use kithara_platform::{
-    CancelToken,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
+    platform::{
+        CancelToken,
+        sync::{Arc, atomic::AtomicU64},
+        time::Duration,
+    },
 };
 use ringbuf::{HeapRb, traits::Split};
 
@@ -146,14 +146,14 @@ fn ring_capacity(config: &BroadcastConfig, tap_lead: Duration) -> BroadcastResul
 mod tests {
     use kithara::{
         audio::ConsumerWakeMode,
-        play::{Cmd, PlayError, Reply, SessionDispatcher, SessionHandle, SessionSampleRate},
-    };
-    use kithara_platform::{
-        sync::{
-            Mutex,
-            atomic::{AtomicU32, Ordering},
+        platform::{
+            sync::{
+                Mutex,
+                atomic::{AtomicU32, Ordering},
+            },
+            thread,
         },
-        thread,
+        play::{Cmd, PlayError, Reply, SessionDispatcher, SessionHandle, SessionSampleRate},
     };
 
     use super::*;

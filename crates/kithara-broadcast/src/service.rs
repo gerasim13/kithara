@@ -27,8 +27,8 @@ pub struct BroadcastStatus {
     /// The stream is still taking audio; `false` once the tail is a VOD
     /// playlist.
     pub is_live: bool,
-    pub segments: u64,
     pub dropped_samples: u64,
+    pub segments: u64,
 }
 
 /// Live HLS origin entry point.
@@ -59,39 +59,27 @@ impl Broadcast {
         let join = thread::spawn_named("kithara-broadcast-worker", move || worker.run());
 
         Ok(BroadcastHandle {
-            url: Arc::from(format!("http://{addr}/master.m3u8")),
             origin,
             counters,
             stop,
-            worker: Mutex::new(Some(join)),
             scope,
+            url: Arc::from(format!("http://{addr}/master.m3u8")),
+            worker: Mutex::new(Some(join)),
         })
     }
 }
 
 /// Handle owning a live broadcast and its threads.
 pub struct BroadcastHandle {
-    url: Arc<str>,
-    origin: Arc<Origin>,
     counters: Arc<Counters>,
+    origin: Arc<Origin>,
     stop: Arc<AtomicBool>,
-    worker: Mutex<Option<JoinHandle<()>>>,
+    url: Arc<str>,
     scope: CancelScope,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl BroadcastHandle {
-    /// Master playlist URL a player joins the stream at.
-    #[must_use]
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-
-    /// Cancel token the broadcast's threads run under.
-    #[must_use]
-    pub fn token(&self) -> CancelToken {
-        self.scope.token()
-    }
-
     /// What the origin is serving right now.
     #[must_use]
     pub fn status(&self) -> BroadcastStatus {
@@ -115,25 +103,37 @@ impl BroadcastHandle {
             tracing::error!("the broadcast worker panicked");
         }
     }
+
+    /// Cancel token the broadcast's threads run under.
+    #[must_use]
+    pub fn token(&self) -> CancelToken {
+        self.scope.token()
+    }
+
+    /// Master playlist URL a player joins the stream at.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
 }
 
 struct Worker<F> {
+    counters: Arc<Counters>,
+    origin: Arc<Origin>,
+    stop: Arc<AtomicBool>,
+    token: CancelToken,
+    poll_interval: Duration,
     feed: F,
+    window: LiveWindow,
     encoder: Option<StreamEncoder>,
     segmenter: Segmenter,
-    window: LiveWindow,
-    origin: Arc<Origin>,
-    counters: Arc<Counters>,
-    token: CancelToken,
-    stop: Arc<AtomicBool>,
     samples: Vec<f32>,
-    poll_interval: Duration,
 }
 
 #[derive(Debug, Default)]
 struct Counters {
-    segments: AtomicU64,
     dropped: AtomicU64,
+    segments: AtomicU64,
 }
 
 impl<F: LivePcmFeed> Worker<F> {
@@ -171,26 +171,63 @@ impl<F: LivePcmFeed> Worker<F> {
         })
     }
 
-    fn run(mut self) {
-        while !self.token.is_cancelled() {
-            let ended = match self.pump() {
-                Ok(ended) => ended,
-                Err(error) => {
-                    tracing::error!(%error, "the live packager stopped");
-                    break;
+    fn drain_feed(&mut self) -> bool {
+        loop {
+            if self.token.is_cancelled() {
+                return false;
+            }
+            match self.pump() {
+                Ok(true) => return true,
+                Ok(false) => {
+                    if self.samples.is_empty() {
+                        thread::paced_backoff(self.poll_interval);
+                    }
                 }
-            };
-            if ended || self.stop.load(Ordering::Acquire) {
-                break;
+                Err(error) => {
+                    tracing::error!(%error, "the live packager stopped draining");
+                    return true;
+                }
             }
-            if self.samples.is_empty() {
-                thread::paced_backoff(self.poll_interval);
-            }
+        }
+    }
+
+    fn end(mut self) {
+        self.feed.close();
+        if !self.drain_feed() {
+            return;
+        }
+        self.finish_encoder();
+        if let Some(segment) = self.segmenter.flush() {
+            self.publish(segment);
         }
 
-        if !self.token.is_cancelled() {
-            self.end();
+        self.window.finish();
+        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
+    }
+
+    fn finish_encoder(&mut self) {
+        if let Some(encoder) = self.encoder.take() {
+            match encoder.finish() {
+                Ok(units) => {
+                    for unit in &units {
+                        match self.segmenter.push(unit) {
+                            Ok(Some(segment)) => self.publish(segment),
+                            Ok(None) => {}
+                            Err(error) => {
+                                tracing::error!(%error, "the live packager dropped a tail unit");
+                            }
+                        }
+                    }
+                }
+                Err(error) => tracing::error!(%error, "the live encoder failed to drain"),
+            }
         }
+    }
+
+    fn publish(&mut self, segment: Segment) {
+        self.window.push(segment);
+        self.counters.segments.fetch_add(1, Ordering::Relaxed);
+        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
     }
 
     fn pump(&mut self) -> BroadcastResult<bool> {
@@ -218,63 +255,26 @@ impl<F: LivePcmFeed> Worker<F> {
         Ok(chunk.has_ended)
     }
 
-    fn end(mut self) {
-        self.feed.close();
-        if !self.drain_feed() {
-            return;
-        }
-        self.finish_encoder();
-        if let Some(segment) = self.segmenter.flush() {
-            self.publish(segment);
-        }
-
-        self.window.finish();
-        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
-    }
-
-    fn drain_feed(&mut self) -> bool {
-        loop {
-            if self.token.is_cancelled() {
-                return false;
-            }
-            match self.pump() {
-                Ok(true) => return true,
-                Ok(false) => {
-                    if self.samples.is_empty() {
-                        thread::paced_backoff(self.poll_interval);
-                    }
-                }
+    fn run(mut self) {
+        while !self.token.is_cancelled() {
+            let ended = match self.pump() {
+                Ok(ended) => ended,
                 Err(error) => {
-                    tracing::error!(%error, "the live packager stopped draining");
-                    return true;
+                    tracing::error!(%error, "the live packager stopped");
+                    break;
                 }
+            };
+            if ended || self.stop.load(Ordering::Acquire) {
+                break;
+            }
+            if self.samples.is_empty() {
+                thread::paced_backoff(self.poll_interval);
             }
         }
-    }
 
-    fn finish_encoder(&mut self) {
-        if let Some(encoder) = self.encoder.take() {
-            match encoder.finish() {
-                Ok(units) => {
-                    for unit in &units {
-                        match self.segmenter.push(unit) {
-                            Ok(Some(segment)) => self.publish(segment),
-                            Ok(None) => {}
-                            Err(error) => {
-                                tracing::error!(%error, "the live packager dropped a tail unit");
-                            }
-                        }
-                    }
-                }
-                Err(error) => tracing::error!(%error, "the live encoder failed to drain"),
-            }
+        if !self.token.is_cancelled() {
+            self.end();
         }
-    }
-
-    fn publish(&mut self, segment: Segment) {
-        self.window.push(segment);
-        self.counters.segments.fetch_add(1, Ordering::Relaxed);
-        self.origin.snapshot.store(Arc::new(self.window.snapshot()));
     }
 }
 
@@ -313,13 +313,17 @@ mod tests {
     impl VecFeed {
         fn new(chunks: impl IntoIterator<Item = (u64, Vec<f32>)>, ends: bool) -> Self {
             Self {
-                chunks: chunks.into_iter().collect(),
                 ends,
+                chunks: chunks.into_iter().collect(),
             }
         }
     }
 
     impl LivePcmFeed for VecFeed {
+        fn close(&mut self) {
+            self.ends = true;
+        }
+
         fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
             match self.chunks.pop_front() {
                 Some((dropped, samples)) => {
@@ -335,16 +339,12 @@ mod tests {
                 },
             }
         }
-
-        fn close(&mut self) {
-            self.ends = true;
-        }
     }
 
     struct BurstFeed {
         chunks: VecDeque<Vec<f32>>,
-        ready: bool,
         closed: bool,
+        ready: bool,
     }
 
     impl BurstFeed {
@@ -358,6 +358,10 @@ mod tests {
     }
 
     impl LivePcmFeed for BurstFeed {
+        fn close(&mut self) {
+            self.closed = true;
+        }
+
         fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
             self.ready = !self.ready;
             if self.ready
@@ -369,10 +373,6 @@ mod tests {
                 dropped: 0,
                 has_ended: self.closed && self.chunks.is_empty(),
             }
-        }
-
-        fn close(&mut self) {
-            self.closed = true;
         }
     }
 

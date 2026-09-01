@@ -118,10 +118,6 @@ impl PlayerResource {
     /// Number of stereo output channels.
     const STEREO_CHANNELS: usize = 2;
 
-    const fn scratch_frames(sample_rate: u32) -> FrameCount {
-        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
-    }
-
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
     /// Allocates two per-channel scratch buffers through the given pool facade,
@@ -150,6 +146,10 @@ impl PlayerResource {
             eof_seen: false,
             failed: false,
         })
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.resource.get().apply_playback_rate(rate)
     }
 
     /// Cached span in seconds: how much of the source is on disk and needs no
@@ -371,6 +371,10 @@ impl PlayerResource {
         self.resource.get().clear_render();
         self.eof_seen = false;
         self.failed = false;
+    }
+
+    const fn scratch_frames(sample_rate: u32) -> FrameCount {
+        FrameCount::new(sample_rate as usize / Self::BUFFER_DURATION_DIVISOR)
     }
 
     /// Control-plane handle used to begin a seek off the audio thread.

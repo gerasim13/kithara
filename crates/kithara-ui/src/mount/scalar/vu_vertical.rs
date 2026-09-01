@@ -29,10 +29,6 @@ mod host {
     impl Draws for VuVertical {
         type Painter = VerticalVu;
 
-        fn painter(&self, skin: &Skin) -> VerticalVu {
-            VerticalVu::new(self.ticks, skin)
-        }
-
         fn data(&self, read: Reading<'_>) -> Option<StereoLevels> {
             match read.value {
                 Some(ReadValue::Stereo(levels)) => Some(*levels),
@@ -47,6 +43,10 @@ mod host {
                     .track(Track::AbsoluteVertical)
                     .build(),
             )
+        }
+
+        fn painter(&self, skin: &Skin) -> VerticalVu {
+            VerticalVu::new(self.ticks, skin)
         }
     }
 }

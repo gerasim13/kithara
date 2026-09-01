@@ -1,12 +1,12 @@
 use std::{
     num::NonZeroUsize,
     ops::Range,
-    path::Path,
     sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use kithara_bufpool::PoolRegion;
 use kithara_decode::{DecoderConfig, DecoderFactory as DecodeFactory, GaplessMode};
+use kithara_hls::parse_media_playlist;
 use kithara_platform::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -22,6 +22,7 @@ use kithara_stream::{
     VariantReaderTake, VariantTransition, WorkerWake,
 };
 use kithara_test_utils::kithara;
+use url::Url;
 
 use crate::{
     pipeline::{
@@ -48,10 +49,9 @@ fn produced_data(fetch: Fetch<AudioChunk>) -> AudioChunk {
 struct Consts;
 
 impl Consts {
-    const CAPTURE_END_SEGMENT: u64 = 6;
+    const CAPTURE_END_SEGMENT: usize = 6;
     const CHANNELS: usize = 2;
     const SAMPLE_RATE: u32 = 44_100;
-    const SEGMENT_DURATION_SECS: u64 = 6;
     const SLQ_VARIANT: usize = 0;
     const SMQ_VARIANT: usize = 1;
     const SPLICE_SEGMENT: u32 = 3;
@@ -240,6 +240,14 @@ struct ReadyProbe {
 }
 
 impl SourceProbe for ReadyProbe {
+    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
+        Some(Arc::clone(&self.state) as Arc<dyn ByteMap>)
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(u64::try_from(self.state.active_layout().blob.len()).expect("blob length fits u64"))
+    }
+
     fn phase(&self) -> SourcePhase {
         SourcePhase::Ready
     }
@@ -254,14 +262,6 @@ impl SourceProbe for ReadyProbe {
 
     fn set_position(&self, pos: u64) {
         self.position.store(pos, Ordering::Release);
-    }
-
-    fn len(&self) -> Option<u64> {
-        Some(u64::try_from(self.state.active_layout().blob.len()).expect("blob length fits u64"))
-    }
-
-    fn byte_map(&self) -> Option<Arc<dyn ByteMap>> {
-        Some(Arc::clone(&self.state) as Arc<dyn ByteMap>)
     }
 }
 
@@ -290,13 +290,6 @@ impl Source for SpliceSource {
         SourcePhase::Ready
     }
 
-    fn probe(&self) -> Arc<dyn SourceProbe> {
-        Arc::new(ReadyProbe {
-            position: Arc::clone(&self.position),
-            state: Arc::clone(&self.state),
-        })
-    }
-
     fn playhead_read(&self) -> Arc<dyn PlayheadRead> {
         Arc::clone(&self.playhead) as Arc<dyn PlayheadRead>
     }
@@ -307,6 +300,13 @@ impl Source for SpliceSource {
 
     fn position(&self) -> u64 {
         self.position.load(Ordering::Acquire)
+    }
+
+    fn probe(&self) -> Arc<dyn SourceProbe> {
+        Arc::new(ReadyProbe {
+            position: Arc::clone(&self.position),
+            state: Arc::clone(&self.state),
+        })
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome> {
@@ -377,38 +377,57 @@ impl StreamType for SpliceStream {
 struct TestWake;
 
 impl WorkerWake for TestWake {
-    fn wake(&self) {}
-
     fn defer(&self) {}
+
+    fn wake(&self) {}
 }
 
 fn asset_bytes(name: &str) -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../assets/hls")
-        .join(name);
-    std::fs::read(&path).unwrap_or_else(|err| panic!("read {path:?}: {err}"))
+    let route = format!("/hls/{name}");
+    let resource = kithara_test_fixtures::hls::long_plain()
+        .get(&route)
+        .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+    std::fs::read(resource.path())
+        .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
 }
 
 fn build_variant_layout(label: &str, variant_index: usize) -> VariantLayout {
+    let playlist_name = format!("index-{label}-a1.m3u8");
+    let playlist_url = Url::parse(&format!("https://fixture.invalid/hls/{playlist_name}"))
+        .expect("fixture playlist URL is valid");
+    let playlist = parse_media_playlist(playlist_url, &asset_bytes(&playlist_name))
+        .expect("generated HLS media playlist is valid");
+    assert!(
+        playlist.segments.len() >= Consts::TOTAL_SEGMENTS,
+        "generated HLS fixture must contain {} segments",
+        Consts::TOTAL_SEGMENTS,
+    );
     let init = asset_bytes(&format!("init-{label}-a1.mp4"));
     let init_len = u64::try_from(init.len()).expect("init length fits u64");
     let mut blob = init;
     let mut byte_cursor = init_len;
+    let mut decode_time = Duration::ZERO;
     let mut segments = Vec::new();
-    for segment_number in 1..=Consts::TOTAL_SEGMENTS {
-        let bytes = asset_bytes(&format!("segment-{segment_number}-{label}-a1.m4s"));
+    for (segment_index, segment) in playlist
+        .segments
+        .into_iter()
+        .take(Consts::TOTAL_SEGMENTS)
+        .enumerate()
+    {
+        let bytes = asset_bytes(&segment.uri);
         let start = byte_cursor;
         let end = start + u64::try_from(bytes.len()).expect("segment length fits u64");
-        let segment_index = u32::try_from(segment_number - 1).expect("segment index fits u32");
+        let segment_index = u32::try_from(segment_index).expect("segment index fits u32");
         segments.push(SegmentDescriptor::new(
             start..end,
-            Duration::from_secs(u64::from(segment_index) * Consts::SEGMENT_DURATION_SECS),
-            Duration::from_secs(Consts::SEGMENT_DURATION_SECS),
+            decode_time,
+            segment.duration,
             segment_index,
             variant_index,
         ));
         blob.extend_from_slice(&bytes);
         byte_cursor = end;
+        decode_time = decode_time.saturating_add(segment.duration);
     }
     VariantLayout {
         blob,
@@ -556,12 +575,24 @@ fn peak_first_diff(left: &[f32], center: usize, half: usize) -> f32 {
     peak
 }
 
-fn segment_boundary_frame(segment: usize) -> usize {
-    let seconds = u64::try_from(segment)
-        .unwrap_or(u64::MAX)
-        .saturating_mul(Consts::SEGMENT_DURATION_SECS);
-    let frames = seconds.saturating_mul(u64::from(Consts::SAMPLE_RATE));
-    usize::try_from(frames).unwrap_or(usize::MAX)
+fn segment_boundary_frame(state: &SpliceState, segment: usize) -> usize {
+    let boundary = state
+        .active_layout()
+        .segments
+        .get(segment)
+        .expect("segment boundary exists in fixture");
+    let frames = boundary.decode_time.as_secs_f64() * f64::from(Consts::SAMPLE_RATE);
+    num_traits::cast(frames.round()).expect("segment boundary frame fits usize")
+}
+
+fn segment_end(state: &SpliceState, segment: u32) -> Duration {
+    let index = usize::try_from(segment).expect("segment index fits usize");
+    let descriptor = state
+        .active_layout()
+        .segments
+        .get(index)
+        .expect("splice segment exists in fixture");
+    descriptor.decode_time.saturating_add(descriptor.duration)
 }
 
 // splice-continuity contract: RED = audible click on variant switch
@@ -573,31 +604,26 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
         build_variant_layout("smq", Consts::SMQ_VARIANT),
     ])
     .await;
-    let splice_time =
-        Duration::from_secs(u64::from(Consts::SPLICE_SEGMENT) * Consts::SEGMENT_DURATION_SECS);
-    let capture_frames = usize::try_from(
-        Consts::CAPTURE_END_SEGMENT
-            .saturating_mul(Consts::SEGMENT_DURATION_SECS)
-            .saturating_mul(u64::from(Consts::SAMPLE_RATE)),
-    )
-    .expect("capture frame count fits usize");
+    let splice_time = segment_end(&state, Consts::SPLICE_SEGMENT - 1);
+    let capture_frames = segment_boundary_frame(&state, Consts::CAPTURE_END_SEGMENT);
     let mut left = Vec::with_capacity(capture_frames);
     let mut switched = false;
     let mut splice_frame = None;
+    let mut last_segment = None;
+    let mut last_end = Duration::ZERO;
 
     while left.len() < capture_frames {
         run_pending_rebuild_inline(&mut source);
         match source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
+                last_segment = chunk.meta.segment_index;
+                last_end = chunk.meta.end_timestamp;
                 append_left_channel(&mut left, &chunk);
                 source
                     .playhead
                     .advance(&crate::audio::chunk_position(&chunk.meta));
-                if !switched
-                    && chunk.meta.segment_index == Some(Consts::SPLICE_SEGMENT - 1)
-                    && chunk.meta.end_timestamp >= splice_time
-                {
+                if !switched && chunk.meta.end_timestamp >= splice_time {
                     state.switch_to(Consts::SMQ_VARIANT);
                     switched = true;
                     splice_frame = Some(left.len());
@@ -609,7 +635,11 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
         }
     }
 
-    assert!(switched, "test must trigger the slq -> smq splice");
+    assert!(
+        switched,
+        "test must trigger the slq -> smq splice: rendered={} last_segment={last_segment:?} last_end={last_end:?}",
+        left.len(),
+    );
     let splice_frame = splice_frame.expect("splice frame should be captured");
     if let Some(landing) = state.warmup_landing() {
         println!(
@@ -621,7 +651,7 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
     let mut control_peak = 0.0_f32;
     let mut control_count = 0usize;
     for k in 1..Consts::TOTAL_SEGMENTS {
-        let boundary = segment_boundary_frame(k);
+        let boundary = segment_boundary_frame(&state, k);
         if boundary >= left.len() || boundary.abs_diff(splice_frame) <= 4096 {
             continue;
         }
@@ -646,31 +676,26 @@ async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
 async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
     let SpliceFixture { mut source, state } =
         splice_source(vec![build_variant_layout("slq", Consts::SLQ_VARIANT)]).await;
-    let recreate_after =
-        Duration::from_secs(u64::from(Consts::SPLICE_SEGMENT) * Consts::SEGMENT_DURATION_SECS);
-    let capture_frames = usize::try_from(
-        Consts::CAPTURE_END_SEGMENT
-            .saturating_mul(Consts::SEGMENT_DURATION_SECS)
-            .saturating_mul(u64::from(Consts::SAMPLE_RATE)),
-    )
-    .expect("capture frame count fits usize");
+    let recreate_after = segment_end(&state, Consts::SPLICE_SEGMENT - 1);
+    let capture_frames = segment_boundary_frame(&state, Consts::CAPTURE_END_SEGMENT);
     let mut left = Vec::with_capacity(capture_frames);
     let mut recreated = false;
     let mut recreate_frame = None;
+    let mut last_segment = None;
+    let mut last_end = Duration::ZERO;
 
     while left.len() < capture_frames {
         run_pending_rebuild_inline(&mut source);
         match source.step_track() {
             TrackStep::Produced(fetch) => {
                 let chunk = produced_data(fetch);
+                last_segment = chunk.meta.segment_index;
+                last_end = chunk.meta.end_timestamp;
                 append_left_channel(&mut left, &chunk);
                 source
                     .playhead
                     .advance(&crate::audio::chunk_position(&chunk.meta));
-                if !recreated
-                    && chunk.meta.segment_index == Some(Consts::SPLICE_SEGMENT - 1)
-                    && chunk.meta.end_timestamp >= recreate_after
-                {
+                if !recreated && chunk.meta.end_timestamp >= recreate_after {
                     let active = state.active_index();
                     assert_eq!(
                         active,
@@ -705,7 +730,11 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
         }
     }
 
-    assert!(recreated, "test must trigger the same-variant recreate");
+    assert!(
+        recreated,
+        "test must trigger the same-variant recreate: rendered={} last_segment={last_segment:?} last_end={last_end:?}",
+        left.len(),
+    );
     assert_eq!(
         state.active_index(),
         Consts::SLQ_VARIANT,
@@ -716,7 +745,7 @@ async fn hls_aac_lc_same_variant_recreate_continuity_metric() {
     let mut control_peak = 0.0_f32;
     let mut control_count = 0usize;
     for k in 1..Consts::TOTAL_SEGMENTS {
-        let boundary = segment_boundary_frame(k);
+        let boundary = segment_boundary_frame(&state, k);
         if boundary >= left.len() || boundary.abs_diff(recreate_frame) <= 4096 {
             continue;
         }

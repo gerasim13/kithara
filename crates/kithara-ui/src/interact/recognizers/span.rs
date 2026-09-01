@@ -33,19 +33,31 @@ pub(crate) struct SpanState {
 }
 
 impl SpanState {
-    pub(crate) const fn captures_pointer(&self) -> bool {
-        self.held.is_some()
-    }
-
     #[cfg(feature = "masonry")]
     pub(crate) fn cancel_pointer(&mut self) {
         self.held = None;
+    }
+
+    pub(crate) const fn captures_pointer(&self) -> bool {
+        self.held.is_some()
     }
 }
 
 impl Span {
     pub(crate) const fn new(hover: Hover, min: f32, max: f32) -> Self {
         Self { hover, max, min }
+    }
+
+    pub(crate) fn cursor(&self, state: &SpanState, hit: &Hit) -> CursorShape {
+        self.hover.cursor(state.captures_pointer(), hit)
+    }
+
+    fn nearest(&self, value: f32) -> Edge {
+        if (value - self.min).abs() <= (value - self.max).abs() {
+            Edge::Min
+        } else {
+            Edge::Max
+        }
     }
 
     pub(crate) fn on_input(
@@ -89,18 +101,6 @@ impl Span {
             | Input::ModifiersChanged(_)
             | Input::Pointer(_)
             | Input::Wheel(_) => Outcome::IGNORED,
-        }
-    }
-
-    pub(crate) fn cursor(&self, state: &SpanState, hit: &Hit) -> CursorShape {
-        self.hover.cursor(state.captures_pointer(), hit)
-    }
-
-    fn nearest(&self, value: f32) -> Edge {
-        if (value - self.min).abs() <= (value - self.max).abs() {
-            Edge::Min
-        } else {
-            Edge::Max
         }
     }
 }

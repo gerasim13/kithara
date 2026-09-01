@@ -16,10 +16,10 @@ use crate::{
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SheetDoc {
-    pub columns: u32,
-    pub rows: u32,
     /// Where the picture is, relative to the skin that names it.
     pub source: String,
+    pub columns: u32,
+    pub rows: u32,
 }
 
 /// Every picture a skin carries, by the name a document asks for it by.
@@ -68,14 +68,6 @@ fn rebase(sheets: &mut BTreeMap<String, SheetDoc>, origin: &SourceUri) -> Result
 }
 
 impl PictureDoc {
-    /// Resolves every picture path against the document that named it.
-    ///
-    /// # Errors
-    /// Returns [`UiDocError::RootEscape`] when a path leaves the source root.
-    pub(crate) fn rebase(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {
-        rebase(&mut self.sheets, origin)
-    }
-
     /// Takes every picture the patch names, keeping the rest.
     ///
     /// A name the patch restates is the picture that name now means, which is
@@ -83,6 +75,14 @@ impl PictureDoc {
     /// leaves alone.
     pub(crate) fn patch(&mut self, patch: PicturePatch) {
         self.sheets.extend(patch.sheets);
+    }
+
+    /// Resolves every picture path against the document that named it.
+    ///
+    /// # Errors
+    /// Returns [`UiDocError::RootEscape`] when a path leaves the source root.
+    pub(crate) fn rebase(&mut self, origin: &SourceUri) -> Result<(), UiDocError> {
+        rebase(&mut self.sheets, origin)
     }
 }
 

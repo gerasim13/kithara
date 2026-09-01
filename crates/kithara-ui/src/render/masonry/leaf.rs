@@ -61,18 +61,6 @@ pub(super) enum Leaf {
 
 /// The two leaves that need nothing but the size they were declared at.
 impl<Action> MasonryNode<Action> {
-    /// A leaf that occupies its declared size and paints nothing.
-    pub(super) fn empty(declared: Size<Length>) -> Self {
-        Self::document(
-            NodeLayout::Leaf(Leaf::Empty),
-            declared,
-            Vec::new(),
-            false,
-            None,
-            None,
-        )
-    }
-
     /// A leaf that paints and handles the pointer itself.
     pub(super) fn control_leaf(
         control: impl MasonryControl + 'static,
@@ -87,9 +75,86 @@ impl<Action> MasonryNode<Action> {
             None,
         )
     }
+
+    /// A leaf that occupies its declared size and paints nothing.
+    pub(super) fn empty(declared: Size<Length>) -> Self {
+        Self::document(
+            NodeLayout::Leaf(Leaf::Empty),
+            declared,
+            Vec::new(),
+            false,
+            None,
+            None,
+        )
+    }
 }
 
 impl Leaf {
+    pub(crate) fn accepts_input(&self) -> bool {
+        if let Self::Control(control) = self {
+            return control.accepts_input();
+        }
+        matches!(self, Self::Custom { .. })
+    }
+
+    pub(crate) fn accepts_text_input(&self) -> bool {
+        matches!(self, Self::Custom { widget, .. } if widget.accepts_text_input())
+    }
+
+    pub(crate) fn added(&self, ctx: &mut UpdateCtx<'_>) {
+        if matches!(self.repaint(), Repaint::NextFrame | Repaint::Continuous) {
+            ctx.request_anim_frame();
+        }
+    }
+
+    pub(crate) fn animate(&self, ctx: &mut UpdateCtx<'_>, repaint: Repaint) {
+        if repaint != Repaint::None {
+            ctx.request_paint_only();
+        }
+        if self.repaint() == Repaint::Continuous {
+            ctx.request_anim_frame();
+        }
+    }
+
+    pub(crate) fn cursor(&self, hit: &Hit) -> CursorShape {
+        match self {
+            Self::Control(control) => control.cursor(hit),
+            Self::Empty
+            | Self::Text { .. }
+            | Self::Custom { .. }
+            | Self::Shader(_)
+            | Self::Vis(_) => CursorShape::None,
+        }
+    }
+
+    pub(crate) fn frame(&mut self, elapsed: Duration) -> Option<HostAction> {
+        match self {
+            Self::Custom { widget, .. } => widget.frame(elapsed),
+            Self::Empty | Self::Control(_) | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => {
+                None
+            }
+        }
+    }
+
+    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
+        match self {
+            Self::Control(control) => control.hover(hovered),
+            Self::Custom { .. }
+            | Self::Empty
+            | Self::Text { .. }
+            | Self::Shader(_)
+            | Self::Vis(_) => false,
+        }
+    }
+
+    pub(crate) fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<HostAction> {
+        match self {
+            Self::Control(control) => control.input(input, &hit),
+            Self::Custom { widget, .. } => widget.input(input, hit),
+            Self::Empty | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => Outcome::IGNORED,
+        }
+    }
+
     pub(crate) fn measure(&mut self, limits: crate::solve::Limits) -> Size {
         match self {
             Self::Empty | Self::Shader(_) | Self::Vis(_) => Size::ZERO,
@@ -101,13 +166,6 @@ impl Leaf {
                 text,
                 ..
             } => {
-                // Shaped unbounded, because this is the width the run asks its
-                // parent for, the same contract `atoms::text::Text` states for
-                // the other host. A run shaped against the room it was offered
-                // asks for the width its broken lines happen to need, and a
-                // parent that grants exactly that leaves the line no way back.
-                // `paint` shapes against the box it was given instead, so a
-                // squeezed run still breaks rather than overflowing.
                 let run = text.shape(content, *role, None);
                 Size::new(run.width() + *padding_x * 2.0, run.height())
             }
@@ -169,41 +227,21 @@ impl Leaf {
         replay(&list.finish(), &mut VelloBackend::new(scene));
     }
 
-    pub(crate) fn added(&self, ctx: &mut UpdateCtx<'_>) {
-        if matches!(self.repaint(), Repaint::NextFrame | Repaint::Continuous) {
-            ctx.request_anim_frame();
-        }
+    /// Whether this leaf draws differently while the pointer rests on it.
+    pub(crate) fn reads_pointer(&self) -> bool {
+        matches!(self, Self::Control(control) if control.reads_pointer())
     }
 
-    pub(crate) fn animate(&self, ctx: &mut UpdateCtx<'_>, repaint: Repaint) {
-        if repaint != Repaint::None {
-            ctx.request_paint_only();
-        }
-        if self.repaint() == Repaint::Continuous {
-            ctx.request_anim_frame();
-        }
-    }
-
-    pub(crate) fn input(&mut self, input: Input<'_>, hit: Hit) -> Outcome<HostAction> {
+    pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
         match self {
-            Self::Control(control) => control.input(input, &hit),
-            Self::Custom { widget, .. } => widget.input(input, hit),
-            Self::Empty | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => Outcome::IGNORED,
-        }
-    }
-
-    pub(crate) fn frame(&mut self, elapsed: Duration) -> Option<HostAction> {
-        match self {
-            Self::Custom { widget, .. } => widget.frame(elapsed),
-            Self::Empty | Self::Control(_) | Self::Text { .. } | Self::Shader(_) | Self::Vis(_) => {
-                None
-            }
+            Self::Control(control) => control.refresh(ctx),
+            Self::Shader(shader) => shader.refresh(ctx),
+            Self::Vis(vis) => vis.refresh(ctx),
+            Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
         }
     }
 
     pub(crate) fn repaint(&self) -> Repaint {
-        // A shader is not here: it draws its uniforms, and a refresh that read
-        // new ones asks for the paint itself.
         if matches!(self, Self::Vis(_)) {
             return Repaint::Continuous;
         }
@@ -214,17 +252,6 @@ impl Leaf {
             return Repaint::default();
         };
         widget.repaint()
-    }
-
-    pub(crate) fn hover(&mut self, hovered: bool) -> bool {
-        match self {
-            Self::Control(control) => control.hover(hovered),
-            Self::Custom { .. }
-            | Self::Empty
-            | Self::Text { .. }
-            | Self::Shader(_)
-            | Self::Vis(_) => false,
-        }
     }
 
     /// Takes what this leaf's endpoint now ctx. This is the one way a mounted
@@ -242,42 +269,6 @@ impl Leaf {
                 _ => false,
             },
             Self::Custom { .. } | Self::Empty | Self::Shader(_) | Self::Vis(_) => false,
-        }
-    }
-
-    pub(crate) fn refresh(&mut self, ctx: Ctx<'_, '_>) -> bool {
-        match self {
-            Self::Control(control) => control.refresh(ctx),
-            Self::Shader(shader) => shader.refresh(ctx),
-            Self::Vis(vis) => vis.refresh(ctx),
-            Self::Custom { .. } | Self::Empty | Self::Text { .. } => false,
-        }
-    }
-
-    pub(crate) fn accepts_input(&self) -> bool {
-        if let Self::Control(control) = self {
-            return control.accepts_input();
-        }
-        matches!(self, Self::Custom { .. })
-    }
-
-    /// Whether this leaf draws differently while the pointer rests on it.
-    pub(crate) fn reads_pointer(&self) -> bool {
-        matches!(self, Self::Control(control) if control.reads_pointer())
-    }
-
-    pub(crate) fn accepts_text_input(&self) -> bool {
-        matches!(self, Self::Custom { widget, .. } if widget.accepts_text_input())
-    }
-
-    pub(crate) fn cursor(&self, hit: &Hit) -> CursorShape {
-        match self {
-            Self::Control(control) => control.cursor(hit),
-            Self::Empty
-            | Self::Text { .. }
-            | Self::Custom { .. }
-            | Self::Shader(_)
-            | Self::Vis(_) => CursorShape::None,
         }
     }
 
@@ -304,10 +295,10 @@ pub(crate) struct WindowLeafLayer<Program>
 where
     Program: WindowLayerProgram,
 {
+    program: Program,
     geometry: Rc<Cell<MasonryRect>>,
     map_event: Rc<dyn Fn(UiEvent) -> HostAction>,
     pointer: Rc<Cell<Option<Pt>>>,
-    program: Program,
     state: Program::State,
 }
 
@@ -327,33 +318,6 @@ where
             pointer,
             program,
             state: Program::State::default(),
-        }
-    }
-
-    /// What this leaf draws and routes over the box its anchor published, or
-    /// nothing at all while the anchor has no box.
-    ///
-    /// A window layer is a root of its own, so Masonry's stashing never reaches
-    /// it and the anchor's box is the only word it gets on whether the branch
-    /// it belongs to is on screen. A branch that was never laid out, or that
-    /// was stashed after it was, leaves an empty box behind, and a program
-    /// handed one would draw its row against the window origin instead of
-    /// standing aside with the branch it came from.
-    fn layer(&self, paint: bool) -> HostLayer<WindowCommand> {
-        let area = self.geometry.get();
-        let bounds = Rect {
-            x: area.x0.as_(),
-            y: area.y0.as_(),
-            w: area.width().as_(),
-            h: area.height().as_(),
-        };
-        if bounds.w <= 0.0 || bounds.h <= 0.0 {
-            return HostLayer::new(bounds, DrawList::default(), Vec::new());
-        }
-        if paint {
-            self.program.layer(&self.state, bounds, self.pointer.get())
-        } else {
-            self.program.hit_layer(&self.state, bounds)
         }
     }
 
@@ -391,6 +355,33 @@ where
             MOUSE, button, phase, at, clicks,
         )))
     }
+
+    /// What this leaf draws and routes over the box its anchor published, or
+    /// nothing at all while the anchor has no box.
+    ///
+    /// A window layer is a root of its own, so Masonry's stashing never reaches
+    /// it and the anchor's box is the only word it gets on whether the branch
+    /// it belongs to is on screen. A branch that was never laid out, or that
+    /// was stashed after it was, leaves an empty box behind, and a program
+    /// handed one would draw its row against the window origin instead of
+    /// standing aside with the branch it came from.
+    fn layer(&self, paint: bool) -> HostLayer<WindowCommand> {
+        let area = self.geometry.get();
+        let bounds = Rect {
+            x: area.x0.as_(),
+            y: area.y0.as_(),
+            w: area.width().as_(),
+            h: area.height().as_(),
+        };
+        if bounds.w <= 0.0 || bounds.h <= 0.0 {
+            return HostLayer::new(bounds, DrawList::default(), Vec::new());
+        }
+        if paint {
+            self.program.layer(&self.state, bounds, self.pointer.get())
+        } else {
+            self.program.hit_layer(&self.state, bounds)
+        }
+    }
 }
 
 impl<Program> Widget for WindowLeafLayer<Program>
@@ -398,6 +389,49 @@ where
     Program: WindowLayerProgram + 'static,
 {
     type Action = HostAction;
+
+    fn accessibility(
+        &mut self,
+        _ctx: &mut AccessCtx<'_>,
+        _props: &PropertiesRef<'_>,
+        _node: &mut AccessNode,
+    ) {
+    }
+
+    fn accessibility_role(&self) -> Role {
+        Role::GenericContainer
+    }
+
+    fn children_ids(&self) -> ChildrenIds {
+        ChildrenIds::new()
+    }
+
+    fn find_widget_under_pointer<'ctx>(
+        &'ctx self,
+        ctx: QueryCtx<'ctx>,
+        pos: Point,
+    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
+        self.layer(false)
+            .action_at(self.pointer.get())
+            .and_then(|_| find_widget_under_pointer(self, ctx, pos))
+    }
+
+    fn get_cursor(&self, _ctx: &QueryCtx<'_>, _pos: Point) -> CursorIcon {
+        cursor_icon(self.layer(false).cursor_at(self.pointer.get()))
+    }
+
+    fn layout(
+        &mut self,
+        _ctx: &mut LayoutCtx<'_>,
+        _props: &mut PropertiesMut<'_>,
+        constraints: &BoxConstraints,
+    ) -> MasonrySize {
+        constraints.max()
+    }
+
+    fn make_trace_span(&self, id: WidgetId) -> Span {
+        trace_span!("KitharaWindowLeafLayer", id = id.trace())
+    }
 
     fn on_pointer_event(
         &mut self,
@@ -431,17 +465,6 @@ where
         }
     }
 
-    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
-
-    fn layout(
-        &mut self,
-        _ctx: &mut LayoutCtx<'_>,
-        _props: &mut PropertiesMut<'_>,
-        constraints: &BoxConstraints,
-    ) -> MasonrySize {
-        constraints.max()
-    }
-
     fn paint(&mut self, _ctx: &mut PaintCtx<'_>, _props: &PropertiesRef<'_>, scene: &mut Scene) {
         let layer = self.layer(true);
         if layer.draw().commands().is_empty() {
@@ -459,49 +482,13 @@ where
         );
     }
 
-    fn accessibility_role(&self) -> Role {
-        Role::GenericContainer
-    }
-
-    fn accessibility(
-        &mut self,
-        _ctx: &mut AccessCtx<'_>,
-        _props: &PropertiesRef<'_>,
-        _node: &mut AccessNode,
-    ) {
-    }
-
-    fn children_ids(&self) -> ChildrenIds {
-        ChildrenIds::new()
-    }
-
-    fn get_cursor(&self, _ctx: &QueryCtx<'_>, _pos: Point) -> CursorIcon {
-        cursor_icon(self.layer(false).cursor_at(self.pointer.get()))
-    }
-
-    fn find_widget_under_pointer<'ctx>(
-        &'ctx self,
-        ctx: QueryCtx<'ctx>,
-        pos: Point,
-    ) -> Option<WidgetRef<'ctx, dyn Widget>> {
-        self.layer(false)
-            .action_at(self.pointer.get())
-            .and_then(|_| find_widget_under_pointer(self, ctx, pos))
-    }
-
-    fn make_trace_span(&self, id: WidgetId) -> Span {
-        trace_span!("KitharaWindowLeafLayer", id = id.trace())
-    }
+    fn register_children(&mut self, _ctx: &mut RegisterCtx<'_>) {}
 }
 
 pub(crate) struct DragProgram;
 
 impl WindowLayerProgram for DragProgram {
     type State = ();
-
-    fn size(&self) -> Size<Length> {
-        Size::new(Length::Fill, Length::Fill)
-    }
 
     fn layer(&self, _state: &(), bounds: Rect, _pointer: Option<Pt>) -> HostLayer<WindowCommand> {
         HostLayer::new(
@@ -517,6 +504,10 @@ impl WindowLayerProgram for DragProgram {
 
     fn resources(&self) -> Option<&TextResources> {
         None
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(Length::Fill, Length::Fill)
     }
 }
 

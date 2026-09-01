@@ -30,16 +30,14 @@ pub(super) fn check_thresholds(
     for (index, from) in steps.into_iter().enumerate() {
         if from <= below || !from.is_finite() {
             return Err(UiDocError::AdaptiveStepOrder {
-                origin: origin.clone(),
-                path: path.render(),
                 from,
                 index,
+                origin: origin.clone(),
+                path: path.render(),
             });
         }
         below = from;
     }
-    // Every accepted step is finite and above the one before it, so a
-    // threshold that stayed at negative infinity means there were no steps.
     if !below.is_finite() {
         return Err(UiDocError::AdaptiveWithoutSteps {
             origin: origin.clone(),
@@ -161,17 +159,17 @@ pub(super) fn check_reveal(
     }
     if !from.is_finite() || from < 0.0 {
         return Err(UiDocError::RevealThreshold {
+            from,
             origin: origin.clone(),
             path: path.render(),
-            from,
         });
     }
     match until {
         Some(until) if !until.is_finite() || until <= from => Err(UiDocError::RevealBand {
-            origin: origin.clone(),
-            path: path.render(),
             from,
             until,
+            origin: origin.clone(),
+            path: path.render(),
         }),
         _ => Ok(()),
     }

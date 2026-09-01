@@ -12,7 +12,6 @@ use crate::{
     blob::{MAX_PREALLOC, Reader},
 };
 
-pub(super) const ANALYSIS_FILE_VERSION: u32 = 0x4b41_4603;
 pub(super) const FINGERPRINT_MAX: usize = 1024;
 pub(super) const INDEX_ENTRY_LEN: usize = 1;
 const HEADER_FIELDS_LEN: usize = 88;
@@ -22,10 +21,10 @@ pub(super) const HEADER_LEN: usize = HEADER_FIELDS_LEN + 2 * (size_of::<u32>() +
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct AnalysisFileSpec {
-    source_sample_rate: NonZeroU32,
-    extent: u64,
-    chunk_frames: NonZeroU64,
     fingerprint: AnalysisFingerprint,
+    source_sample_rate: NonZeroU32,
+    chunk_frames: NonZeroU64,
+    extent: u64,
 }
 
 impl AnalysisFileSpec {
@@ -43,13 +42,31 @@ impl AnalysisFileSpec {
     ) -> Result<Self, AnalysisFileError> {
         validate_fingerprint(&fingerprint)?;
         let spec = Self {
-            source_sample_rate,
-            extent,
-            chunk_frames,
             fingerprint,
+            source_sample_rate,
+            chunk_frames,
+            extent,
         };
         spec.layout()?;
         Ok(spec)
+    }
+
+    /// Fixed analysis chunk size in source frames.
+    #[must_use]
+    pub const fn chunk_frames(&self) -> NonZeroU64 {
+        self.chunk_frames
+    }
+
+    /// Stable source extent used to size the fixed index.
+    #[must_use]
+    pub const fn extent(&self) -> u64 {
+        self.extent
+    }
+
+    /// Exact active analyzer fingerprints.
+    #[must_use]
+    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
+        &self.fingerprint
     }
 
     /// Derive a file identity from a snapshot once its extent is known.
@@ -71,38 +88,6 @@ impl AnalysisFileSpec {
         )
     }
 
-    /// Source-frame axis of every payload in the file.
-    #[must_use]
-    pub const fn source_sample_rate(&self) -> NonZeroU32 {
-        self.source_sample_rate
-    }
-
-    /// Stable source extent used to size the fixed index.
-    #[must_use]
-    pub const fn extent(&self) -> u64 {
-        self.extent
-    }
-
-    /// Fixed analysis chunk size in source frames.
-    #[must_use]
-    pub const fn chunk_frames(&self) -> NonZeroU64 {
-        self.chunk_frames
-    }
-
-    /// Exact active analyzer fingerprints.
-    #[must_use]
-    pub const fn fingerprint(&self) -> &AnalysisFingerprint {
-        &self.fingerprint
-    }
-
-    /// Whether the stored frame count exactly matches a configured wall-clock
-    /// chunk duration on the stored source-rate axis.
-    #[must_use]
-    pub fn matches_chunk_duration(&self, duration: Duration) -> bool {
-        u128::from(self.chunk_frames.get()) * 1_000_000_000
-            == u128::from(self.source_sample_rate.get()) * duration.as_nanos()
-    }
-
     fn layout(&self) -> Result<Layout, AnalysisFileError> {
         let chunk_count = self.extent.div_ceil(self.chunk_frames.get());
         let count = usize::try_from(chunk_count).map_err(|_| AnalysisFileError::TooLarge)?;
@@ -122,6 +107,20 @@ impl AnalysisFileSpec {
                 .map_err(|_| AnalysisFileError::TooLarge)?,
         })
     }
+
+    /// Whether the stored frame count exactly matches a configured wall-clock
+    /// chunk duration on the stored source-rate axis.
+    #[must_use]
+    pub fn matches_chunk_duration(&self, duration: Duration) -> bool {
+        u128::from(self.chunk_frames.get()) * 1_000_000_000
+            == u128::from(self.source_sample_rate.get()) * duration.as_nanos()
+    }
+
+    /// Source-frame axis of every payload in the file.
+    #[must_use]
+    pub const fn source_sample_rate(&self) -> NonZeroU32 {
+        self.source_sample_rate
+    }
 }
 
 /// Parsed indexed analysis file and its latest complete snapshot payload.
@@ -129,9 +128,9 @@ impl AnalysisFileSpec {
 #[non_exhaustive]
 pub struct AnalysisFile {
     spec: AnalysisFileSpec,
+    latest: AnalysisProgress,
     header: Header,
     index: Vec<IndexEntry>,
-    latest: AnalysisProgress,
 }
 
 impl AnalysisFile {
@@ -145,6 +144,12 @@ impl AnalysisFile {
         progress: &AnalysisProgress,
     ) -> Result<AnalysisFileUpdate, AnalysisFileError> {
         build_update(spec, None, progress)
+    }
+
+    /// Latest full analysis snapshot stored in the file.
+    #[must_use]
+    pub const fn latest(&self) -> &AnalysisProgress {
+        &self.latest
     }
 
     /// Parse a committed file and derive its source axis and fixed layout from
@@ -222,10 +227,16 @@ impl AnalysisFile {
         validate_index_coverage(&spec, &index, analysis)?;
         Ok(Self {
             spec,
+            latest,
             header,
             index,
-            latest,
         })
+    }
+
+    /// Immutable file identity used during parse and update.
+    #[must_use]
+    pub const fn spec(&self) -> &AnalysisFileSpec {
+        &self.spec
     }
 
     /// Build a replacement generation with a newer complete snapshot payload.
@@ -240,18 +251,6 @@ impl AnalysisFile {
         progress: &AnalysisProgress,
     ) -> Result<AnalysisFileUpdate, AnalysisFileError> {
         build_update(&self.spec, Some(self), progress)
-    }
-
-    /// Immutable file identity used during parse and update.
-    #[must_use]
-    pub const fn spec(&self) -> &AnalysisFileSpec {
-        &self.spec
-    }
-
-    /// Latest full analysis snapshot stored in the file.
-    #[must_use]
-    pub const fn latest(&self) -> &AnalysisProgress {
-        &self.latest
     }
 }
 
@@ -270,21 +269,23 @@ struct Layout {
 
 #[derive(Clone, Debug)]
 struct Header {
-    settled: bool,
-    latest_revision: u64,
-    source_sample_rate: NonZeroU32,
-    extent: u64,
-    chunk_frames: NonZeroU64,
-    chunk_count: u64,
-    index_offset: u64,
-    payload_offset: u64,
-    payload_end: u64,
-    latest_payload_offset: u64,
-    latest_payload_len: u64,
     fingerprint: AnalysisFingerprint,
+    source_sample_rate: NonZeroU32,
+    chunk_frames: NonZeroU64,
+    settled: bool,
+    chunk_count: u64,
+    extent: u64,
+    index_offset: u64,
+    latest_payload_len: u64,
+    latest_payload_offset: u64,
+    latest_revision: u64,
+    payload_end: u64,
+    payload_offset: u64,
 }
 
 impl Header {
+    const VERSION: u32 = 0x4b41_4603;
+
     fn base(spec: &AnalysisFileSpec, layout: Layout) -> Self {
         Self {
             settled: false,
@@ -302,37 +303,13 @@ impl Header {
         }
     }
 
-    fn encode(&self) -> Result<Bytes, AnalysisFileError> {
-        let mut out = BytesMut::with_capacity(HEADER_LEN);
-        push_u32(&mut out, ANALYSIS_FILE_VERSION);
-        out.put_u8(u8::from(self.settled));
-        out.extend_from_slice(&[0; 3]);
-        push_u64(&mut out, self.latest_revision);
-        push_u32(&mut out, self.source_sample_rate.get());
-        out.extend_from_slice(&[0; 4]);
-        push_u64(&mut out, self.extent);
-        push_u64(&mut out, self.chunk_frames.get());
-        push_u64(&mut out, self.chunk_count);
-        push_u64(&mut out, self.index_offset);
-        push_u64(&mut out, self.payload_offset);
-        push_u64(&mut out, self.payload_end);
-        push_u64(&mut out, self.latest_payload_offset);
-        push_u64(&mut out, self.latest_payload_len);
-        push_fingerprint(&mut out, self.fingerprint.waveform())?;
-        push_fingerprint(&mut out, self.fingerprint.beat())?;
-        if out.len() != HEADER_LEN {
-            return Err(AnalysisFileError::Corrupt);
-        }
-        Ok(out.freeze())
-    }
-
     fn decode(bytes: &[u8]) -> Result<Self, AnalysisFileError> {
         let mut reader = Reader::new(bytes);
         let version = reader.read_u32().map_err(|_| AnalysisFileError::Corrupt)?;
-        if version != ANALYSIS_FILE_VERSION {
+        if version != Self::VERSION {
             return Err(AnalysisFileError::Version {
                 found: version,
-                expected: ANALYSIS_FILE_VERSION,
+                expected: Self::VERSION,
             });
         }
         let settled = reader.read_bool().map_err(|_| AnalysisFileError::Corrupt)?;
@@ -383,6 +360,30 @@ impl Header {
         })
     }
 
+    fn encode(&self) -> Result<Bytes, AnalysisFileError> {
+        let mut out = BytesMut::with_capacity(HEADER_LEN);
+        push_u32(&mut out, Self::VERSION);
+        out.put_u8(u8::from(self.settled));
+        out.extend_from_slice(&[0; 3]);
+        push_u64(&mut out, self.latest_revision);
+        push_u32(&mut out, self.source_sample_rate.get());
+        out.extend_from_slice(&[0; 4]);
+        push_u64(&mut out, self.extent);
+        push_u64(&mut out, self.chunk_frames.get());
+        push_u64(&mut out, self.chunk_count);
+        push_u64(&mut out, self.index_offset);
+        push_u64(&mut out, self.payload_offset);
+        push_u64(&mut out, self.payload_end);
+        push_u64(&mut out, self.latest_payload_offset);
+        push_u64(&mut out, self.latest_payload_len);
+        push_fingerprint(&mut out, self.fingerprint.waveform())?;
+        push_fingerprint(&mut out, self.fingerprint.beat())?;
+        if out.len() != HEADER_LEN {
+            return Err(AnalysisFileError::Corrupt);
+        }
+        Ok(out.freeze())
+    }
+
     fn validate(&self, layout: Layout, byte_len: usize) -> Result<(), AnalysisFileError> {
         if self.chunk_count != layout.chunk_count
             || self.index_offset != layout.index_offset
@@ -411,19 +412,19 @@ impl Header {
 struct IndexEntry(bool);
 
 impl IndexEntry {
-    const fn is_empty(self) -> bool {
-        !self.0
+    fn decode(bytes: &[u8]) -> Result<Self, AnalysisFileError> {
+        let mut reader = Reader::new(bytes);
+        let entry = Self(reader.read_bool().map_err(|_| AnalysisFileError::Corrupt)?);
+        reader.finish().map_err(|_| AnalysisFileError::Corrupt)?;
+        Ok(entry)
     }
 
     fn encode(self) -> [u8; INDEX_ENTRY_LEN] {
         [u8::from(self.0)]
     }
 
-    fn decode(bytes: &[u8]) -> Result<Self, AnalysisFileError> {
-        let mut reader = Reader::new(bytes);
-        let entry = Self(reader.read_bool().map_err(|_| AnalysisFileError::Corrupt)?);
-        reader.finish().map_err(|_| AnalysisFileError::Corrupt)?;
-        Ok(entry)
+    const fn is_empty(self) -> bool {
+        !self.0
     }
 }
 

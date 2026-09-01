@@ -907,9 +907,9 @@ fn skin() -> &'static Skin {
 /// reads it.
 const BLUE_PAGE: Rgba = Rgba {
     a: 1.0,
-    b: 0x56 as f32 / 255.0,
-    g: 0x34 as f32 / 255.0,
-    r: 0x12 as f32 / 255.0,
+    b: 86.0 / 255.0,
+    g: 52.0 / 255.0,
+    r: 18.0 / 255.0,
 };
 
 /// A skin of its own, told apart from the fixture one by the page colour it

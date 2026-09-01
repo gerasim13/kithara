@@ -23,6 +23,15 @@ pub(crate) struct TestPcm {
 
 impl TestPcm {
     #[cfg(feature = "ffmpeg")]
+    pub(crate) fn from_bytes(bytes: Vec<u8>, sample_rate: u32, channels: u16) -> Self {
+        Self {
+            bytes,
+            channels,
+            sample_rate,
+        }
+    }
+
+    #[cfg(feature = "ffmpeg")]
     pub(crate) fn from_samples(samples: &[i16], sample_rate: u32, channels: u16) -> Self {
         Self::from_bytes(
             samples
@@ -34,13 +43,11 @@ impl TestPcm {
         )
     }
 
-    #[cfg(feature = "ffmpeg")]
-    pub(crate) fn from_bytes(bytes: Vec<u8>, sample_rate: u32, channels: u16) -> Self {
-        Self {
-            bytes,
-            channels,
-            sample_rate,
-        }
+    pub(crate) fn samples_f32(&self) -> Vec<f32> {
+        self.bytes
+            .chunks_exact(size_of::<i16>())
+            .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE)
+            .collect()
     }
 
     pub(crate) fn sawtooth(frames: usize, sample_rate: u32, channels: u16) -> Self {
@@ -58,13 +65,6 @@ impl TestPcm {
             channels,
             sample_rate,
         }
-    }
-
-    pub(crate) fn samples_f32(&self) -> Vec<f32> {
-        self.bytes
-            .chunks_exact(size_of::<i16>())
-            .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])) / I16_SCALE)
-            .collect()
     }
 }
 

@@ -31,11 +31,11 @@ impl Consts {
         8_000, 7_350,
     ];
 
+    /// Maximum ADTS frame size encoded by its 13-bit frame-length field.
+    const MAX_ADTS_FRAME_BYTES: usize = 0x1fff;
     /// Pre-allocated per-frame PCM buffer. AAC frames are at most
     /// 2048 samples × 2 channels for HE-AAC v2.
     const MAX_SAMPLES: usize = 8192;
-    /// Maximum ADTS frame size encoded by its 13-bit frame-length field.
-    const MAX_ADTS_FRAME_BYTES: usize = 0x1fff;
 }
 
 fn sample_rate_index(rate: u32) -> u8 {
@@ -200,8 +200,8 @@ pub(crate) struct AacDecoder {
     /// (each packet carries its own header — bare HLS AAC, .aac
     /// files).
     transport: Transport,
-    adts: [u8; Consts::MAX_ADTS_FRAME_BYTES],
     pcm: [i16; Consts::MAX_SAMPLES],
+    adts: [u8; Consts::MAX_ADTS_FRAME_BYTES],
     /// First-decode-only refresh: rebuild [`Self::buf`] and capture
     /// `outputDelay` once the decoder reports authoritative metadata.
     metadata_validated: bool,
@@ -386,14 +386,7 @@ impl AudioDecoder for AacDecoder {
     }
 
     fn reset(&mut self) {
-        // Re-create the fdk-aac C decoder so its MDCT/QMF/SBR overlap-add
-        // state returns to cold (zero). The C handle exposes no mid-stream
-        // flush, so resetting only `delay_remaining` / `metadata_validated`
-        // would leave the prior overlap tail in place and let the first
-        // post-seek access unit decode against stale state — emitting a
-        // ~2-AU phase-shifted (or contaminated) first chunk that races on
-        // pre-seek decode depth. Rebuild keeps it deterministic; the 2-AU
-        // seek pre-roll back-off re-warms it for mid-stream seeks.
+        // WHY: Re-create the fdk-aac C decoder so its MDCT/QMF/SBR overlap-add state returns to cold (zero).
         match Self::build_decoder(self.transport, &self.codec_params) {
             Ok(decoder) => self.decoder = decoder,
             Err(e) => tracing::warn!(

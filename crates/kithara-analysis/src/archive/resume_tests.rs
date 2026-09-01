@@ -20,7 +20,7 @@ const SAMPLE_RATE: u32 = 64;
 struct FixtureDetector;
 
 impl BeatDetector for FixtureDetector {
-    fn detect(&mut self, _mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
+    fn detect(&self, _mono_window: &[f32]) -> Result<RawBeats, BeatDetectError> {
         Ok(RawBeats {
             beats: vec![BeatMark::at(0.25)],
             downbeats: vec![BeatMark::at(0.25)],

@@ -153,6 +153,12 @@ where
 {
     type Reader = LeaseReader<W::Reader, L>;
 
+    fn abandon(mut self) {
+        self.inner.abandon();
+        // WHY: Sweeping here would delete partial bytes still owned by the successor.
+        self.cleanup.disarm();
+    }
+
     fn commit(mut self, final_len: Option<u64>) -> StorageResult<LeaseReader<W::Reader, L>> {
         let reader_inner = self.inner.commit(final_len)?;
         if let Some(live) = &self.cleanup.live {
@@ -193,16 +199,7 @@ where
         self.cleanup
             .events
             .publish_failed(self.cleanup.resource_key.as_ref(), &reason);
-        // Explicit failure remains observable through `resource_state`; only
-        // silent abandonment removes a partial resource.
-        self.cleanup.disarm();
-    }
-
-    fn abandon(mut self) {
-        self.inner.abandon();
-        // Disarmed rather than swept: the hook declines to remove only a
-        // *committed* resource, so here it would delete the partial bytes the
-        // successor is still writing.
+        // WHY: Explicit failure remains observable through `resource_state`; only silent abandonment removes a partial resource.
         self.cleanup.disarm();
     }
 

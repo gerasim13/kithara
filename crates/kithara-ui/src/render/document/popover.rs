@@ -9,37 +9,25 @@ use crate::{
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct Popover<'a> {
-    pub(super) path: InternId,
-    pub(super) at: PopoverAt,
-    pub(super) align: PopoverAlign,
-    pub(super) open: bool,
     pub(super) flag: &'a Binding,
+    pub(super) path: InternId,
     pub(super) size: Option<SizeSpec>,
+    pub(super) align: PopoverAlign,
+    pub(super) at: PopoverAt,
+    pub(super) open: bool,
 }
 
 impl<'a> Popover<'a> {
-    /// Event path published by the anchor.
-    #[must_use]
-    pub const fn path(&self) -> InternId {
-        self.path
-    }
-
-    /// Geometry the overlay opens from.
-    #[must_use]
-    pub const fn at(&self) -> PopoverAt {
-        self.at
-    }
-
     /// Edge alignment against the opening geometry.
     #[must_use]
     pub const fn align(&self) -> PopoverAlign {
         self.align
     }
 
-    /// Whether the document holds the overlay open right now.
+    /// Geometry the overlay opens from.
     #[must_use]
-    pub const fn is_open(&self) -> bool {
-        self.open
+    pub const fn at(&self) -> PopoverAt {
+        self.at
     }
 
     /// What [`Self::is_open`] was read from.
@@ -51,6 +39,18 @@ impl<'a> Popover<'a> {
     #[must_use]
     pub const fn flag(&self) -> &'a Binding {
         self.flag
+    }
+
+    /// Whether the document holds the overlay open right now.
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// Event path published by the anchor.
+    #[must_use]
+    pub const fn path(&self) -> InternId {
+        self.path
     }
 
     /// Effective in-flow size, inherited from the anchor.

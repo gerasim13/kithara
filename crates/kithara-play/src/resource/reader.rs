@@ -10,7 +10,7 @@ use kithara_events::EventBus;
 use kithara_platform::{CancelToken, sync::Arc, time::Duration};
 use kithara_signal::AudioSpec;
 use kithara_stream::{Stream, StreamType};
-use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher};
+use kithara_warp::{PresentationFrontier, RenderContext, RenderPublisher, StretchControls};
 use tracing::warn;
 
 use super::{ResourceConfig, SourceType};
@@ -62,16 +62,15 @@ use crate::{
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, get)]
 pub struct Resource {
-    /// Per-track cancel guard, declared first so reader teardown observes
-    /// cancellation. Disarmed when the live reader moves into analysis.
-    cancel: CancelGuard,
-    pub(crate) inner: Box<dyn AudioReader>,
-    priority: Option<TrackPriority>,
     render_publisher: Option<RenderPublisher>,
     #[field(get, deref = false)]
     src: Arc<str>,
     #[field(get = event_bus)]
     bus: EventBus,
+    priority: Option<TrackPriority>,
+    #[field(with)]
+    playback_rate: PlaybackRate,
+    reader: ReaderOwner,
 }
 
 /// Cancels the wrapped per-track token on drop. A `Resource` field rather than
@@ -79,6 +78,36 @@ pub struct Resource {
 /// `inner` out of the wrapper after [`disarm`](CancelGuard::disarm)ing. Passive
 /// when `None`.
 struct CancelGuard(Option<CancelToken>);
+
+/// Cancels before dropping the reader; tuple fields drop in declaration order.
+struct ReaderOwner(CancelGuard, Box<dyn AudioReader>);
+
+enum PlaybackRate {
+    Fixed,
+    Warp(Arc<StretchControls>),
+}
+
+impl PlaybackRate {
+    fn for_warp(controls: Arc<StretchControls>) -> Self {
+        Self::Warp(controls)
+    }
+
+    fn apply(&self, requested: f32) -> f32 {
+        if let Self::Warp(controls) = self {
+            controls.set_speed(requested);
+        }
+        self.into()
+    }
+}
+
+impl From<&PlaybackRate> for f32 {
+    fn from(rate: &PlaybackRate) -> Self {
+        match rate {
+            PlaybackRate::Fixed => 1.0,
+            PlaybackRate::Warp(controls) => controls.speed(),
+        }
+    }
+}
 
 impl CancelGuard {
     /// Disarm so dropping the guard cancels nothing — used when the live reader
@@ -169,7 +198,7 @@ impl Resource {
                 Self::from_stream_audio(track, src, &worker).await?
             }
         };
-        resource.cancel = CancelGuard(cancel);
+        resource.reader.0 = CancelGuard(cancel);
         Ok(resource)
     }
 
@@ -185,20 +214,22 @@ impl Resource {
     /// `"unknown"`.
     #[must_use]
     pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+        let preload = reader.preload_gate().is_none();
         let bus = reader.event_bus().clone();
-        let mut inner: Box<dyn AudioReader> = Box::new(reader);
+        let inner: Box<dyn AudioReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
-        if let Err(e) = inner.preload() {
-            warn!(src = %src, error = %e, "resource preload failed");
-        }
-        Self {
-            inner,
+        let mut resource = Self {
+            src,
+            bus,
             priority: None,
             render_publisher: None,
-            bus,
-            src,
-            cancel: CancelGuard(None),
+            playback_rate: PlaybackRate::Fixed,
+            reader: ReaderOwner(CancelGuard(None), inner),
+        };
+        if preload && let Err(error) = resource.reader.1.preload() {
+            warn!(src = %resource.src, %error, "resource preload failed");
         }
+        resource
     }
 
     /// Create a resource from a concrete stream-backed audio config.
@@ -217,10 +248,15 @@ impl Resource {
         S: HasPool<u8> + HasPool<f32> + Send + Sync + 'static,
         crate::RegisteredAudio<Stream<T>, S>: AudioReader + 'static,
     {
+        let warp_controls = Arc::clone(config.warp().stretch());
         let audio = worker.open(config).await?;
         let priority = audio.priority();
         let render_publisher = audio.publisher();
-        let mut resource = Self::from_reader(audio, Some(src));
+        let mut resource = Self::from_reader(audio, Some(src))
+            .with_playback_rate(PlaybackRate::for_warp(warp_controls));
+        if let Err(error) = resource.preload().await {
+            warn!(src = %resource.src, %error, "resource preload failed");
+        }
         resource.priority = Some(priority);
         resource.render_publisher = Some(render_publisher);
         Ok(resource)
@@ -230,6 +266,10 @@ impl Resource {
         if let Some(publisher) = &self.render_publisher {
             publisher.clear();
         }
+    }
+
+    pub(crate) fn apply_playback_rate(&self, rate: f32) -> f32 {
+        self.playback_rate.apply(rate)
     }
 
     pub(crate) fn publish_render(&self, context: &RenderContext, frontier: PresentationFrontier) {
@@ -254,10 +294,10 @@ impl Resource {
     /// producer channel closed or the initial fill hit a decoder
     /// failure.
     pub async fn preload(&mut self) -> Result<(), DecodeError> {
-        if let Some(gate) = self.inner.preload_gate() {
-            gate.wait_for_epoch(self.inner.preload_epoch()).await;
+        if let Some(gate) = self.reader.1.preload_gate() {
+            gate.wait_for_epoch(self.reader.1.preload_epoch()).await;
         }
-        self.inner.preload()
+        self.reader.1.preload()
     }
 
     /// Subscribe to unified events.
@@ -270,7 +310,7 @@ impl Resource {
     }
 
     delegate! {
-        to self.inner {
+        to self.reader.1 {
             /// Runtime ABR handle for adaptive sources (HLS). `None` for files.
             #[must_use]
             pub fn abr_handle(&self) -> Option<kithara_abr::AbrHandle>;
@@ -325,9 +365,8 @@ impl Resource {
 /// loops. Teardown then rides the analysis run-scope cancel.
 impl From<Resource> for Box<dyn AudioReader> {
     fn from(resource: Resource) -> Self {
-        let Resource {
-            inner, mut cancel, ..
-        } = resource;
+        let Resource { reader, .. } = resource;
+        let ReaderOwner(mut cancel, inner) = reader;
         cancel.disarm();
         inner
     }
@@ -672,7 +711,7 @@ mod tests {
         let audio_sub = track.child(); // Audio subtree A = T.child()
 
         let mut resource = Resource::from_reader(EofReader::default(), None);
-        resource.cancel = CancelGuard(Some(track.clone()));
+        resource.reader.0 = CancelGuard(Some(track.clone()));
 
         assert!(!stream_sub.is_cancelled() && !audio_sub.is_cancelled());
         drop(resource);
@@ -698,7 +737,7 @@ mod tests {
         let state = Arc::new(AtomicU8::new(DropState::NOT_DROPPED));
         let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
         let mut resource = Resource::from_reader(reader, None);
-        resource.cancel = CancelGuard(Some(track));
+        resource.reader.0 = CancelGuard(Some(track));
 
         drop(resource);
 
@@ -711,7 +750,7 @@ mod tests {
         let state = Arc::new(AtomicU8::new(DropState::NOT_DROPPED));
         let reader = EofReader::with_drop_probe(track.clone(), Arc::clone(&state));
         let mut resource = Resource::from_reader(reader, None);
-        resource.cancel = CancelGuard(Some(track.clone()));
+        resource.reader.0 = CancelGuard(Some(track.clone()));
 
         let reader: Box<dyn AudioReader> = resource.into();
 

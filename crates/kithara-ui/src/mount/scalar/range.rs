@@ -24,10 +24,6 @@ mod host {
     impl Draws for Range {
         type Painter = Face;
 
-        fn painter(&self, skin: &Skin) -> Face {
-            Face::new(skin)
-        }
-
         /// An unbound range is an empty box rather than a full rail: the host
         /// has not said where either handle sits.
         fn data(&self, read: Reading<'_>) -> Option<ScalarRange> {
@@ -44,6 +40,10 @@ mod host {
                     .value(*data)
                     .build(),
             )
+        }
+
+        fn painter(&self, skin: &Skin) -> Face {
+            Face::new(skin)
         }
     }
 }
