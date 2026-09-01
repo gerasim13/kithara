@@ -14,6 +14,7 @@ use kithara_warp::{
     SyncGroupSnapshot, SyncMember, SyncMemberKind, SyncOperation, SyncRejected, SyncStatusSnapshot,
     TopologyOperation,
 };
+use struct_patch::Patch;
 
 #[cfg(any(test, feature = "probe"))]
 use crate::api::SessionDuckingMode;
@@ -34,8 +35,12 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 };
 
 /// Configuration for the shared output session owned by [`Host`].
-#[derive(Clone, Copy, Builder, fieldwork::Fieldwork)]
+#[derive(Clone, Copy, Builder, Patch, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[patch(name = "HostSettings")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
 #[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct HostConfig {
@@ -317,5 +322,24 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
             "host topology operation did not change topology".into(),
         )),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::{HostConfig, HostSettings};
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_the_sample_rate() {
+        let settings: HostSettings =
+            serde_yaml_ng::from_str("sample_rate: 48000\n").expect("the document types");
+        let mut config = HostConfig::builder().build();
+
+        config.apply(settings);
+
+        assert_eq!(config.sample_rate().get(), 48_000);
     }
 }
