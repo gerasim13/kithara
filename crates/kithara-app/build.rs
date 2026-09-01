@@ -409,12 +409,12 @@ fn emit_drm_policy(
 }
 
 fn emit_provider(code: &mut String, p: &DrmProvider, env_map: &HashMap<String, String>) {
-    let cipher_expr = resolve_secret(
-        Some(p.cipher_key.as_str()),
-        None,
-        env_map,
-        &format!("provider `{}` cipher", p.name),
-    );
+    let label = format!("provider `{}` cipher", p.name);
+    let cipher_expr = if parse_env_ref(&p.cipher_key).is_some() {
+        resolve_secret(None, Some(p.cipher_key.as_str()), env_map, &label)
+    } else {
+        resolve_secret(Some(p.cipher_key.as_str()), None, env_map, &label)
+    };
     let domains = p
         .domains
         .iter()
