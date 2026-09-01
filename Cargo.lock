@@ -5506,6 +5506,9 @@ dependencies = [
  "kithara-test-macros",
  "kithara-test-utils",
  "rayon",
+ "serde",
+ "serde_yaml_ng",
+ "struct-patch",
  "thiserror 2.0.18",
  "tracing",
 ]

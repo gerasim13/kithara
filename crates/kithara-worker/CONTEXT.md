@@ -49,3 +49,15 @@ must not submit blocking work there. A domain `Task::tick` may delegate to an
 inherent method carrying that domain's real-time sanitizer annotation; the base
 dispatcher adds no hidden work around the call. Heavy work crosses only the
 bounded compute seam.
+
+## Configuration document entry point
+
+`WorkerSettings` is the second way in: a configuration document types into it
+and `apply` writes only `max_compute_tasks`, leaving whatever `cancel`,
+`runtime`, and `pool` the builder already assembled standing. Those three
+fields are wiring, not settings, and carry `#[patch(skip)]` for it.
+`ComputePoolSettings` is what a document may say about the compute pool on its
+own, reached at the app's top-level `compute_pool:` key rather than nested
+under `worker`. `Shared` is absent from it on purpose: it carries a live
+`rayon::ThreadPool` only code can hand over, and a document has no way to name
+one.

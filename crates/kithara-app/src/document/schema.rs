@@ -5,6 +5,7 @@ use kithara::broadcast::BroadcastSettings;
 use kithara::{
     analysis::BeatAnalysisSettingsPatch, assets::FlushSettings, hls::SizeProbeMethod,
     host::HostSettings, net::NetSettings, stream::dl::DownloaderSettings,
+    worker::ComputePoolSettings,
 };
 use serde::Deserialize;
 
@@ -27,6 +28,7 @@ pub(crate) struct Document {
     pub(crate) beat: BeatAnalysisSettingsPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
+    pub(crate) compute_pool: Option<ComputePoolSettings>,
     pub(crate) downloader: DownloaderSettings,
     pub(crate) drm: Drm,
     pub(crate) flush: FlushSettings,
@@ -117,7 +119,7 @@ pub(crate) enum SeedAlphabet {
 mod tests {
     use kithara::hls::SizeProbeMethod;
 
-    use super::Document;
+    use super::{ComputePoolSettings, Document};
     use crate::baked::BAKED_DOCUMENT;
 
     #[kithara::test(native, flash(false))]
@@ -153,6 +155,26 @@ mod tests {
 
         assert_eq!(document.network.size_probe_method, SizeProbeMethod::Head);
         assert!(document.playlist.tracks.is_empty());
+        assert!(
+            document.compute_pool.is_none(),
+            "a document naming no compute pool leaves the crate default standing"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_compute_pool_document_names_the_owned_mode() {
+        let document: Document = serde_yaml_ng::from_str(
+            "compute_pool:\n  mode: owned\n  name: analysis\n  threads: 2\n",
+        )
+        .expect("a valid compute-pool document parses");
+
+        match document.compute_pool {
+            Some(ComputePoolSettings::Owned { name, threads }) => {
+                assert_eq!(name, "analysis");
+                assert_eq!(threads.get(), 2);
+            }
+            other => panic!("expected an owned compute pool, got {other:?}"),
+        }
     }
 
     #[kithara::test(native, flash(false))]
