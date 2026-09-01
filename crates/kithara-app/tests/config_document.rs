@@ -38,8 +38,9 @@ fn the_shipped_document_configures_the_application() {
         !config.tracks().is_empty(),
         "the shipped playlist reaches the application"
     );
-    assert!(
-        config.should_accept_invalid_certs(),
+    assert_eq!(
+        config.net().is_insecure,
+        Some(true),
         "the shipped document accepts test-server certificates"
     );
     config
@@ -58,8 +59,9 @@ fn a_file_changes_the_playlist_without_touching_the_rest() {
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
     assert_eq!(config.tracks(), ["https://example.test/one.mp3"]);
-    assert!(
-        config.should_accept_invalid_certs(),
+    assert_eq!(
+        config.net().is_insecure,
+        Some(true),
         "a field the overlay never names keeps its baked value"
     );
 }

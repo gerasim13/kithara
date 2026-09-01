@@ -31,8 +31,8 @@ struct Args {
     tracks: Vec<String>,
 
     /// Accept invalid TLS certificates (self-signed, expired). For test servers only.
-    /// An override on top of the document's `network.should_accept_invalid_certs`:
-    /// `true` here forces it on regardless of the document.
+    /// An override on top of the document's `net.is_insecure`: `true` here
+    /// forces it on regardless of the document.
     #[arg(long)]
     insecure: bool,
 
@@ -129,11 +129,12 @@ fn main() -> AppResult {
             .worker(base_worker.clone())
             .build(),
     );
-    let insecure = args.insecure || document.should_accept_invalid_certs();
-    let net = NetOptions::builder()
-        .is_insecure(insecure)
-        .compression(document.compression())
-        .build();
+    let mut net = NetOptions::builder().build();
+    net.apply(document.net());
+    if args.insecure {
+        net.is_insecure = true;
+    }
+    let should_accept_invalid_certs = net.is_insecure;
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
     );
@@ -171,7 +172,7 @@ fn main() -> AppResult {
         } else {
             args.tracks
         })
-        .should_accept_invalid_certs(insecure)
+        .should_accept_invalid_certs(should_accept_invalid_certs)
         .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
         .build();
     config.apply(settings);

@@ -4,7 +4,7 @@ use std::{
 };
 
 use kithara::{
-    assets::AssetLayoutRegistry, hls::SizeProbeMethod, net::Compression,
+    assets::AssetLayoutRegistry, hls::SizeProbeMethod, net::NetSettings,
     play::policy::DomainKeyPolicy,
 };
 use serde_yaml_ng::Value;
@@ -178,19 +178,10 @@ impl Config {
         &self.document.playlist.tracks
     }
 
-    /// Whether the HTTP client accepts invalid certificates. Test servers only.
+    /// The HTTP options the document names.
     #[must_use]
-    pub fn should_accept_invalid_certs(&self) -> bool {
-        self.document
-            .network
-            .should_accept_invalid_certs
-            .unwrap_or_default()
-    }
-
-    /// `Accept-Encoding` algorithms the HTTP client offers.
-    #[must_use]
-    pub fn compression(&self) -> Compression {
-        self.document.network.compression
+    pub fn net(&self) -> NetSettings {
+        self.document.net.clone()
     }
 
     /// HLS size-probe strategy.
@@ -259,7 +250,11 @@ fn schema_detail(source: &Value) -> String {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use kithara::{hls::SizeProbeMethod, net::Compression};
+    use kithara::{
+        hls::SizeProbeMethod,
+        net::{Compression, NetOptions},
+    };
+    use struct_patch::Patch as _;
     use tempfile::TempDir;
 
     use super::{BAKED_PATH, Config, LoadError};
@@ -317,13 +312,14 @@ mod tests {
         );
     }
 
-    /// Staged transfer, in force until the task that moves the read: `network`
-    /// and `net` both name the compression setting, and `network` is the only
-    /// one the application resolves through. `net` is declared and typed so the
-    /// crate's own section parses, and nothing reads it yet; the task that
-    /// deletes `network` inverts this assertion.
+    /// `network` moved `compression` to `net`: the overlay's value must reach
+    /// the options the application builds, not the crate's own
+    /// `NetOptions::compression` default (`Compression::all()`). `ZSTD` alone
+    /// is a value that default cannot produce, so a regression that silently
+    /// falls back to the crate default is caught rather than matched by
+    /// coincidence.
     #[kithara::test(native, flash(false))]
-    fn the_net_section_does_not_yet_move_the_compression_the_app_reads() {
+    fn the_net_section_compression_reaches_the_options_the_app_builds() {
         let dir = tempdir();
         let path = write(
             &dir,
@@ -333,16 +329,34 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
+        let mut net = NetOptions::builder().build();
+        net.apply(config.net());
+
         assert_eq!(
-            config.document.net.compression,
-            Some(Compression::ZSTD),
-            "the overlay's value reaches the typed `net` section"
+            net.compression,
+            Compression::ZSTD,
+            "the document's `net.compression` reaches the options the app builds"
         );
-        assert_eq!(
-            config.compression(),
-            Compression::GZIP.union(Compression::DEFLATE),
-            "`network` stays the only section the application reads"
+    }
+
+    /// The proof the duplicate key is gone rather than merely unread: `network`
+    /// no longer declares `compression`, so naming it there is refused by
+    /// `deny_unknown_fields` instead of silently parsing and being ignored.
+    #[kithara::test(native, flash(false))]
+    fn a_network_compression_key_is_rejected() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "network-compression-stale",
+            "network:\n  compression: [zstd]\n",
         );
+
+        let error =
+            Config::load_with(Some(&path), None, &env).expect_err("compression moved to `net`");
+
+        let report = error.to_string();
+        assert!(matches!(error, LoadError::Schema { .. }), "{report}");
+        assert!(report.contains("compression"), "{report}");
     }
 
     #[kithara::test(native, flash(false))]

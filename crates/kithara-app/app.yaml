@@ -14,24 +14,11 @@
 # `strings` output.
 
 network:
-  should_accept_invalid_certs: true
-  compression: [gzip, deflate]
   size_probe_method: range_get
 
-# HTTP options the shared downloader is built with. Named here so the section
-# parses; every value stays at the crate's own default until something is
-# written under it.
-net: {}
-
-# Shared output session configuration. Named here so the section parses;
-# every value stays at the crate's own default until something is written
-# under it.
-host: {}
-
-# Background flush-worker tunables for the shared AssetStore. Named here so
-# the section parses; every value stays at the crate's own default until
-# something is written under it.
-flush: {}
+net:
+  compression: [gzip, deflate]
+  is_insecure: true
 
 # Remote media identity used by the shared AssetStore. Rules are ordered and
 # use exact hosts, `*.domain` subdomains, or `*`. Only listed query parameters

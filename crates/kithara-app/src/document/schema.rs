@@ -3,11 +3,8 @@ use std::collections::BTreeMap;
 #[cfg(feature = "broadcast")]
 use kithara::broadcast::BroadcastSettings;
 use kithara::{
-    analysis::BeatAnalysisSettingsPatch,
-    assets::FlushSettings,
-    hls::SizeProbeMethod,
-    host::HostSettings,
-    net::{Compression, NetSettings},
+    analysis::BeatAnalysisSettingsPatch, assets::FlushSettings, hls::SizeProbeMethod,
+    host::HostSettings, net::NetSettings,
 };
 use serde::Deserialize;
 
@@ -45,26 +42,10 @@ pub(crate) struct Playback {
     pub(crate) crossfade_seconds: Option<f32>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Network {
-    /// Read as the list of algorithm names `kithara-net` names its flags by.
-    pub(crate) compression: Compression,
-    pub(crate) should_accept_invalid_certs: Option<bool>,
     pub(crate) size_probe_method: SizeProbeMethod,
-}
-
-impl Default for Network {
-    /// A document that names no coding offers none. `Compression` has no
-    /// `Default` of its own because the option's built default is every
-    /// coding, and that is not what a silent document asks for.
-    fn default() -> Self {
-        Self {
-            compression: Compression::empty(),
-            should_accept_invalid_certs: None,
-            size_probe_method: SizeProbeMethod::default(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -133,7 +114,7 @@ pub(crate) enum SeedAlphabet {
 
 #[cfg(test)]
 mod tests {
-    use kithara::{hls::SizeProbeMethod, net::Compression};
+    use kithara::hls::SizeProbeMethod;
 
     use super::Document;
     use crate::baked::BAKED_DOCUMENT;
@@ -174,10 +155,10 @@ mod tests {
     }
 
     #[kithara::test(native, flash(false))]
-    fn an_empty_compression_list_disables_negotiation() {
-        let document: Document =
-            serde_yaml_ng::from_str("network:\n  compression: []\n").expect("valid document");
+    fn a_network_compression_key_is_rejected() {
+        let error = serde_yaml_ng::from_str::<Document>("network:\n  compression: []\n")
+            .expect_err("compression moved to the net section");
 
-        assert_eq!(document.network.compression, Compression::empty());
+        assert!(error.to_string().contains("compression"), "{error}");
     }
 }
