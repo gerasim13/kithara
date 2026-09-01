@@ -46,14 +46,12 @@ pub struct OfflinePlayerOptions {
 
 impl OfflinePlayerHarness {
     pub fn with_sample_rate(options: OfflinePlayerOptions, sample_rate: u32) -> Self {
-        let output_block_frames = options
-            .output_block_frames
-            .map_or(super::session::OFFLINE_BLOCK_FRAMES, |frames| {
-                usize::try_from(frames.get()).expect("offline block size fits usize")
-            });
-        let session = Arc::new(OfflineSession::new_manual_with_block_frames(
-            output_block_frames,
-        ));
+        let session = Arc::new(match options.output_block_frames {
+            Some(output_block_frames) => OfflineSession::new_manual_with_block_frames(
+                usize::try_from(output_block_frames.get()).expect("offline block size fits usize"),
+            ),
+            None => OfflineSession::new_manual(),
+        });
         let session_dispatcher = Arc::clone(&session) as Arc<dyn SessionDispatcher<TestPools>>;
         let pools = pools();
         let worker = PlayWorker::new(PlayWorkerConfig::builder(pools).build());

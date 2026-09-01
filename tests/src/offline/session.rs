@@ -3,7 +3,7 @@ use std::{num::NonZeroU32, ops::RangeInclusive};
 use kithara::{
     audio::ConsumerWakeMode,
     bufpool::HasPool,
-    host::testing::GraphSession,
+    host::{HostConfig, testing::GraphSession},
     platform::{
         sync::{
             Arc, Mutex,
@@ -81,14 +81,14 @@ where
     /// thread never calls [`render`](Self::render).
     #[must_use]
     pub fn new() -> Self {
-        Self::spawn(true, OFFLINE_BLOCK_FRAMES)
+        Self::spawn(true, default_output_block_frames())
     }
 
     /// Manual mode: the worker only dispatches commands; the audio
     /// graph advances only when [`render`](Self::render) is called.
     #[must_use]
     pub fn new_manual() -> Self {
-        Self::new_manual_with_block_frames(OFFLINE_BLOCK_FRAMES)
+        Self::new_manual_with_block_frames(default_output_block_frames())
     }
 
     /// Manual mode with the audio callback size used by the scenario.
@@ -138,9 +138,9 @@ where
         Ok(MixTapProbe { drops, pcm: pcm_rx })
     }
 
-    /// Synchronously drive one render iteration. Returns
-    /// stereo-interleaved samples, or an empty `Vec` if the firewheel
-    /// context has not been initialised yet (no player started).
+    /// Synchronously render exactly `frames` frames, split into callbacks no
+    /// larger than the session's declared output block. Returns stereo-interleaved
+    /// samples, or an empty `Vec` if no player has started the firewheel context.
     /// `no_block`: sync command-reply bridge to the dedicated offline render thread; flash coordinates the bridged wait.
     #[kithara::allow_block]
     pub fn render(&self, frames: usize) -> Vec<f32> {
@@ -259,13 +259,18 @@ fn offline_session_thread<S>(
             usize::try_from(block_frames).expect("offline block size fits usize"),
         );
     } else {
-        run_manual(&mut state, cmd_rx);
+        run_manual(
+            &mut state,
+            cmd_rx,
+            usize::try_from(block_frames).expect("offline block size fits usize"),
+        );
     }
 }
 
 fn run_manual<S>(
     state: &mut GraphSession<OfflineBackend, S>,
     cmd_rx: &mpsc::Receiver<OfflineMsg<S>>,
+    block_frames: usize,
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
@@ -276,7 +281,7 @@ fn run_manual<S>(
                 let _ = reply_tx.send(reply);
             }
             OfflineMsg::Render { frames, reply_tx } => {
-                let block = render_block(state, frames);
+                let block = render_frames(state, frames, block_frames);
                 let _ = reply_tx.send(block);
             }
             OfflineMsg::Shutdown => break,
@@ -304,15 +309,38 @@ fn run_auto<S>(
                 let _ = reply_tx.send(reply);
             }
             Ok(OfflineMsg::Render { frames, reply_tx }) => {
-                let block = render_block(state, frames);
+                let block = render_frames(state, frames, block_frames);
                 let _ = reply_tx.send(block);
             }
             Ok(OfflineMsg::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = render_block(state, block_frames);
+                let _ = render_frames(state, OFFLINE_BLOCK_FRAMES, block_frames);
             }
         }
     }
+}
+
+fn default_output_block_frames() -> usize {
+    usize::try_from(HostConfig::builder().build().output_block_frames().get())
+        .expect("offline block size fits usize")
+}
+
+fn render_frames<S>(
+    state: &mut GraphSession<OfflineBackend, S>,
+    frames: usize,
+    block_frames: usize,
+) -> Vec<f32>
+where
+    S: HasPool<f32> + Send + Sync + 'static,
+{
+    let mut output = Vec::new();
+    let mut remaining = frames;
+    while remaining > 0 {
+        let frames = remaining.min(block_frames);
+        output.extend(render_block(state, frames));
+        remaining -= frames;
+    }
+    output
 }
 
 fn render_block<S>(state: &mut GraphSession<OfflineBackend, S>, frames: usize) -> Vec<f32>
@@ -342,6 +370,22 @@ mod tests {
         assert_eq!(
             session.consumer_wake_mode(),
             ConsumerWakeMode::RealtimeDeferred
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn default_offline_session_uses_host_callback_geometry() {
+        let session = OfflineSession::<TestPools>::new();
+        let Reply::StreamShape(shape) = session
+            .exec(Cmd::QueryStreamShape)
+            .expect("offline session answers the stream-shape query")
+        else {
+            panic!("offline session answers with its stream shape");
+        };
+
+        assert_eq!(
+            shape.max_block_frames,
+            HostConfig::builder().build().output_block_frames()
         );
     }
 
