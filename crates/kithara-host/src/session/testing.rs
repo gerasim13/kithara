@@ -182,7 +182,7 @@ fn attach_player_with_id<B, S>(
     state.publish_root();
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_arch = "wasm32"))]
 pub(crate) fn fixture_member(grid_id: BeatGridId, sample_rate: NonZeroU32) -> PlayerMember {
     let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
     let player = PlayerImpl::new(

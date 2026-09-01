@@ -43,6 +43,7 @@ fn test_node<S>(
         emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
         preload_chunks: 1,
         engine_load: None,
+        retired_chunk: None,
         runtime: DecoderRuntime::default(),
     }
 }
@@ -94,7 +95,9 @@ fn decoder_node_eof_under_backpressure() {
     let gate = Arc::new(PreloadGate::default());
     let (mut port, mut pop) = ProducerPort::probe(1);
 
-    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.has_pending());
 
     let source = Unimock::new((
         AudioSourceMock::step_track.stub(|each| {
@@ -118,10 +121,14 @@ fn decoder_node_eof_under_backpressure() {
     assert_eq!(node.tick(), TickResult::Backpressured);
     assert!(!node.runtime.eof_sent);
 
-    assert!(pop().is_some(), "the queued data must drain first");
+    let _ = node.port.take_pending();
 
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.runtime.eof_sent);
+    assert!(node.port.has_pending());
+
+    assert!(pop().is_some(), "the queued data must drain first");
+    assert!(node.port.flush(), "the EOF marker must leave overflow");
     assert!(matches!(pop(), Some(Fetch::NaturalEof { .. })));
     assert_eq!(node.tick(), TickResult::Backpressured);
 
@@ -208,6 +215,7 @@ fn decoder_node_records_engine_load_on_produced() {
         emit: Arc::new(DeferredBus::new(EventBus::new(8), 8)),
         preload_chunks: 1,
         engine_load: Some(Arc::clone(&meter)),
+        retired_chunk: None,
         runtime: DecoderRuntime::default(),
     };
 
@@ -243,6 +251,7 @@ fn worker_telemetry_throttles_immediate_repeats() {
         emit: Arc::clone(&emit),
         preload_chunks: 1,
         engine_load: Some(meter),
+        retired_chunk: None,
         runtime: DecoderRuntime::default(),
     };
 
@@ -363,8 +372,9 @@ fn eof_marker_and_deferred_event_keep_the_decode_epoch() {
 #[kithara::test]
 fn decoded_frontier_advances_only_after_final_port_admission() {
     let pools = pools();
-    let (mut port, mut pop) = ProducerPort::probe(1);
-    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
+    let (mut port, _pop) = ProducerPort::probe(1);
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
     let end = Duration::from_millis(750);
     let mut chunk = empty_chunk(&pools);
     chunk.meta.end_timestamp = end;
@@ -385,7 +395,7 @@ fn decoded_frontier_advances_only_after_final_port_admission() {
     assert_eq!(node.tick(), TickResult::Backpressured);
     assert_eq!(playhead.decoded_frontier(), Duration::ZERO);
 
-    assert!(pop().is_some());
+    let _ = node.port.take_pending();
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(playhead.decoded_frontier(), end);
 }
@@ -393,8 +403,9 @@ fn decoded_frontier_advances_only_after_final_port_admission() {
 #[kithara::test]
 fn source_end_commits_only_after_final_port_admission() {
     let pools = pools();
-    let (mut port, mut pop) = ProducerPort::probe(1);
-    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
+    let (mut port, _pop) = ProducerPort::probe(1);
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
     let source_end = SourceEnd::new(
         12_345,
         NonZeroU32::new(44_100).expect("test sample rate is non-zero"),
@@ -416,7 +427,7 @@ fn source_end_commits_only_after_final_port_admission() {
     assert_eq!(node.tick(), TickResult::Backpressured);
     assert!(commits.lock().is_empty());
 
-    assert!(pop().is_some());
+    let _ = node.port.take_pending();
     assert_eq!(node.tick(), TickResult::Progress);
     assert_eq!(commits.lock().as_slice(), &[(source_end, 7)]);
 }
@@ -427,13 +438,16 @@ fn decoder_node_preload_gate_waits_for_ring_capacity() {
     let gate = Arc::new(PreloadGate::default());
     let (mut port, mut pop) = ProducerPort::probe(1);
 
-    port.push_direct(Fetch::data(empty_chunk(&pools), 0));
+    assert!(port.try_push(Fetch::data(empty_chunk(&pools), 0)));
 
-    let source = Unimock::new(
+    let source = Unimock::new((
         AudioSourceMock::step_track
             .next_call(matching!())
             .returns(TrackStep::Produced(Fetch::data(empty_chunk(&pools), 0))),
-    );
+        AudioSourceMock::step_track
+            .next_call(matching!())
+            .returns(TrackStep::Blocked(WaitingReason::Waiting)),
+    ));
 
     let mut node = test_node(
         source,
@@ -442,15 +456,18 @@ fn decoder_node_preload_gate_waits_for_ring_capacity() {
         Arc::new(SeekState::new()) as Arc<dyn SeekObserve>,
     );
 
-    assert_eq!(node.tick(), TickResult::Backpressured);
-    assert_eq!(node.runtime.chunks_sent, 0);
+    assert_eq!(node.tick(), TickResult::Progress);
+    assert_eq!(node.runtime.chunks_sent, 1);
     assert!(!node.runtime.preloaded);
     assert!(!gate.is_ready());
 
-    assert!(pop().is_some());
+    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert!(!node.runtime.preloaded);
+    assert!(!gate.is_ready());
 
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert_eq!(node.runtime.chunks_sent, 1);
+    let _ = pop();
+
+    assert_eq!(node.tick(), TickResult::Waiting);
     assert!(node.runtime.preloaded);
     assert!(gate.is_ready());
 }
@@ -480,7 +497,7 @@ fn decoder_node_live_upstream_demand_does_not_tick_hang_wait() {
 fn decoder_node_seek_rearms_preload_gate() {
     let pools = pools();
     let gate = Arc::new(PreloadGate::default());
-    let (port, mut pop) = ProducerPort::probe(1);
+    let (port, mut pop) = ProducerPort::probe(2);
 
     let seek_state = Arc::new(SeekState::new());
     let source = Unimock::new((
@@ -508,20 +525,11 @@ fn decoder_node_seek_rearms_preload_gate() {
 
     let epoch = SeekControl::begin(&*seek_state, Duration::from_secs(1));
 
-    assert_eq!(node.tick(), TickResult::Backpressured);
+    assert_eq!(node.tick(), TickResult::Progress);
     assert!(!node.runtime.preloaded, "seek resets the preload runtime");
     assert!(!gate.is_ready(), "sync_seek_epoch closes the gate");
 
-    assert!(
-        pop().is_some(),
-        "consumer discards the stale pre-seek chunk"
-    );
-
-    assert_eq!(node.tick(), TickResult::Progress);
-    assert!(
-        !node.runtime.preloaded,
-        "source first applies the seek epoch"
-    );
+    let _ = pop();
 
     assert_eq!(node.tick(), TickResult::Progress);
     assert!(node.runtime.preloaded);

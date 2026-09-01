@@ -241,14 +241,14 @@ mod tests {
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGrid, StretchControls, WarpConfig};
+    use kithara_warp::{StretchControls, WarpConfig};
 
     use super::*;
     use crate::{
         PlayWorkerConfig,
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
-        player::{PlayerConfig, PlayerMember},
+        player::PlayerConfig,
         resource::{ResourceConfig, ResourceSrc},
         session::testing,
         test_pools::{TestPools, pools},
