@@ -152,7 +152,14 @@ where
         let current_kind = controls.backend();
         let plan = controls.region_plan();
         let speed = controls.speed();
-        let target = Self::prepare_target(current_kind, spec, &pools, None, None);
+        let target = Self::prepare_target(
+            current_kind,
+            spec,
+            &pools,
+            config.render_quantum_frames(),
+            None,
+            None,
+        );
         Self {
             context,
             committed: None,

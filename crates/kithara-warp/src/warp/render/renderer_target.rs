@@ -20,6 +20,7 @@ where
         kind: StretchKind,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
+        render_quantum_frames: std::num::NonZeroUsize,
         reusable_pending: Option<SampleBuffer>,
         reusable_scratch: Option<SampleBuffer>,
     ) -> PreparedTarget {
@@ -37,7 +38,7 @@ where
                     .ensure_len(pending_samples.get())
                     .map_err(|_| ElasticError::PoolCapacity)?;
                 pending.clear();
-                let scratch_samples = Self::scratch_samples(engine.as_ref(), spec)?;
+                let scratch_samples = Self::scratch_samples(spec, render_quantum_frames)?;
                 let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
                 scratch
                     .ensure_len(scratch_samples.get())
@@ -74,13 +75,11 @@ where
     }
 
     fn scratch_samples(
-        engine: &dyn ElasticEngine,
         spec: AudioSpec,
+        render_quantum_frames: std::num::NonZeroUsize,
     ) -> Result<SampleCount, ElasticError> {
-        let capabilities = engine.capabilities();
-        capabilities
-            .max_output_frames()
-            .max(capabilities.terminal_chunk_frames().saturating_add(1))
+        render_quantum_frames
+            .get()
             .checked_mul(usize::from(spec.channels.max(1)))
             .map(SampleCount::new)
             .ok_or(ElasticError::SampleCountOverflow)
@@ -91,11 +90,11 @@ where
             drop(self.deferred_scratch.take());
             return;
         }
-        let Some(engine) = self.engine.as_deref() else {
+        if self.engine.is_none() {
             drop(self.deferred_scratch.take());
             return;
-        };
-        let required = match Self::scratch_samples(engine, self.spec) {
+        }
+        let required = match Self::scratch_samples(self.spec, self.render_quantum_frames) {
             Ok(required) => required,
             Err(error) => {
                 warn!(%error, "time-stretch output scratch sizing failed");
@@ -139,8 +138,14 @@ where
             let reusable_pending = self.pending_source.take();
             let reusable_scratch = self.scratch.take();
             drop(self.engine.take());
-            let target =
-                Self::prepare_target(kind, spec, &self.pools, reusable_pending, reusable_scratch);
+            let target = Self::prepare_target(
+                kind,
+                spec,
+                &self.pools,
+                self.render_quantum_frames,
+                reusable_pending,
+                reusable_scratch,
+            );
             self.engine = target.engine;
             self.pending_source = target.pending_source;
             self.scratch = target.scratch;

@@ -61,6 +61,29 @@ where
         )
     }
 
+    fn settled_output_quantum_limit(&self, applied_speed: SmoothedParam, target: f32) -> usize {
+        let output_limit = self.output_quantum_limit();
+        if !applied_speed.has_settled_at(target) {
+            return output_limit;
+        }
+        let Some(capabilities) = self.engine.as_ref().map(|engine| engine.capabilities()) else {
+            return output_limit;
+        };
+        let envelope = capabilities.rate_envelope();
+        let minimum = envelope.min_source_frames_per_output();
+        let maximum = envelope.max_source_frames_per_output();
+        let rate = if minimum.to_f32() == Some(target) {
+            minimum
+        } else if maximum.to_f32() == Some(target) {
+            maximum
+        } else {
+            return output_limit;
+        };
+        envelope
+            .largest_request_at(rate, capabilities.max_source_frames(), output_limit)
+            .map_or(output_limit, |request| request.output_frames())
+    }
+
     fn build_exact_plan(
         &self,
         meta: AudioChunkInfo,
@@ -131,7 +154,7 @@ where
         if remaining == 0 {
             return Err(ElasticError::EmptySource);
         }
-        let output_limit = self.output_quantum_limit();
+        let output_limit = self.settled_output_quantum_limit(applied_speed, rate.speed());
         let full = self.build_exact_plan(meta, output_limit, applied_speed, cursor, rate)?;
         if Self::exact_source_frames(&full)? <= remaining {
             return Ok(Some(full));

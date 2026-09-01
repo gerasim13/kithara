@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 
 use bon::bon;
 use kithara_bufpool::PoolRegion;
-use num_traits::{Float, ToPrimitive};
+use num_traits::ToPrimitive;
 
 use super::{ElasticError, ElasticRateEnvelope};
 use crate::StretchKind;
@@ -13,8 +13,6 @@ impl Consts {
     const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
     const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
     const MAX_PHASE_ERROR: f64 = 1.0;
-    // i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
-    const RATE_FRACTION_DEPTH: u8 = 64;
     const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
     const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.05;
 }
@@ -186,7 +184,7 @@ impl ElasticShape {
             .min(Consts::MAX_SOURCE_FRAMES_PER_OUTPUT)
             .min(max_source_frames_f64);
         let rate_envelope = ElasticRateEnvelope::try_from(min_rate..=max_rate)?;
-        if !has_representable_request(rate_envelope, max_source_frames, max_output_frames) {
+        if !rate_envelope.has_representable_request(max_source_frames, max_output_frames) {
             return Err(ElasticError::InvalidRateEnvelope {
                 max: max_rate,
                 min: min_rate,
@@ -201,106 +199,6 @@ impl ElasticShape {
             sample_rate,
         })
     }
-}
-
-fn has_representable_request(
-    envelope: ElasticRateEnvelope,
-    max_source_frames: usize,
-    max_output_frames: usize,
-) -> bool {
-    let accepted_minimum = envelope.min_source_frames_per_output().next_down();
-    let accepted_maximum = envelope.max_source_frames_per_output().next_up();
-    // Convert the accepted f64 edges into their exact division-rounding basins.
-    let Some(minimum) = binary_midpoint(accepted_minimum.next_down(), accepted_minimum) else {
-        return false;
-    };
-    let Some(maximum) = binary_midpoint(accepted_maximum, accepted_maximum.next_up()) else {
-        return false;
-    };
-    let Some((_, denominator)) = simplest_fraction(minimum, maximum, Consts::RATE_FRACTION_DEPTH)
-    else {
-        return false;
-    };
-    let Ok(max_output_frames) = u128::try_from(max_output_frames) else {
-        return false;
-    };
-    if denominator > max_output_frames {
-        return false;
-    }
-    let Some(scaled_minimum) = minimum.0.checked_mul(denominator) else {
-        return false;
-    };
-    let source_frames =
-        scaled_minimum / minimum.1 + u128::from(!scaled_minimum.is_multiple_of(minimum.1));
-    let Some(scaled_source) = source_frames.checked_mul(maximum.1) else {
-        return false;
-    };
-    let Some(scaled_maximum) = maximum.0.checked_mul(denominator) else {
-        return false;
-    };
-    let Ok(max_source_frames) = u128::try_from(max_source_frames) else {
-        return false;
-    };
-    source_frames > 0 && source_frames <= max_source_frames && scaled_source <= scaled_maximum
-}
-
-fn binary_midpoint(left: f64, right: f64) -> Option<(u128, u128)> {
-    let left = binary_fraction(left)?;
-    let right = binary_fraction(right)?;
-    let denominator = left.1.max(right.1);
-    let numerator = left
-        .0
-        .checked_mul(denominator / left.1)?
-        .checked_add(right.0.checked_mul(denominator / right.1)?)?;
-    Some((numerator, denominator.checked_mul(2)?))
-}
-
-fn binary_fraction(value: f64) -> Option<(u128, u128)> {
-    if !value.is_finite() || value <= 0.0 {
-        return None;
-    }
-    let (mantissa, exponent, sign) = value.integer_decode();
-    if sign <= 0 {
-        return None;
-    }
-    let mantissa = u128::from(mantissa);
-    if exponent >= 0 {
-        Some((mantissa.checked_shl(u32::try_from(exponent).ok()?)?, 1))
-    } else {
-        Some((
-            mantissa,
-            1_u128.checked_shl(u32::from(exponent.unsigned_abs()))?,
-        ))
-    }
-}
-
-fn simplest_fraction(
-    minimum: (u128, u128),
-    maximum: (u128, u128),
-    depth: u8,
-) -> Option<(u128, u128)> {
-    if depth == 0 {
-        return None;
-    }
-    let whole = minimum.0 / minimum.1;
-    let maximum_whole = maximum.0 / maximum.1;
-    if whole < maximum_whole {
-        return Some((whole.checked_add(1)?, 1));
-    }
-    let minimum_remainder = minimum.0 % minimum.1;
-    if minimum_remainder == 0 {
-        return Some((whole, 1));
-    }
-    let maximum_remainder = maximum.0 % maximum.1;
-    let (numerator, denominator) = simplest_fraction(
-        (maximum.1, maximum_remainder),
-        (minimum.1, minimum_remainder),
-        depth - 1,
-    )?;
-    Some((
-        whole.checked_mul(numerator)?.checked_add(denominator)?,
-        numerator,
-    ))
 }
 
 /// [`kithara_signal::AudioSpec`] represents channel counts with `u16`.
