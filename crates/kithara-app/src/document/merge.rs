@@ -82,4 +82,14 @@ mod tests {
         assert_eq!(base["a"]["b"], Value::from(1));
         assert_eq!(base["a"]["c"], Value::from(2));
     }
+
+    #[kithara::test(native, flash(false))]
+    fn an_overlay_null_blanks_the_value_and_keeps_the_key() {
+        let mut base = yaml("a: 1\nb: 2\n");
+
+        merge(&mut base, yaml("a: null\n"));
+
+        assert_eq!(base["a"], Value::Null);
+        assert_eq!(base["b"], Value::from(2));
+    }
 }
