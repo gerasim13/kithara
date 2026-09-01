@@ -104,8 +104,10 @@ pub struct AbrSettings {
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
+    #[patch(skip_wrap)]
     pub initial_throughput_bps: Option<u64>,
     /// Global data-saver cap.
+    #[patch(skip_wrap)]
     pub max_bandwidth_bps: Option<u64>,
     /// Minimum relative delta (0.0–1.0) between `BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_DELTA_RATIO)]
@@ -291,6 +293,30 @@ mod tests {
         assert!((settings.up_hysteresis_ratio - 1.8).abs() < f64::EPSILON);
         assert!(
             (settings.down_hysteresis_ratio - 0.55).abs() < f64::EPSILON,
+            "a silent field must keep its value"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_already_optional_knob_takes_a_bare_number_from_the_document() {
+        let patch: AbrSettingsPatch =
+            serde_yaml_ng::from_str("max_bandwidth_bps: 5000000\n").expect("the document types");
+        // Seeded away from the built default of `Some(2_000_000)`, so the
+        // assertion below can tell "left alone" from "reset to the default".
+        let mut settings = AbrSettings::builder()
+            .initial_throughput_bps(Some(750_000))
+            .build();
+
+        settings.apply(patch);
+
+        assert_eq!(
+            settings.max_bandwidth_bps,
+            Some(5_000_000),
+            "an `Option<u64>` field carries `skip_wrap`, so the document names the number bare"
+        );
+        assert_eq!(
+            settings.initial_throughput_bps,
+            Some(750_000),
             "a silent field must keep its value"
         );
     }
