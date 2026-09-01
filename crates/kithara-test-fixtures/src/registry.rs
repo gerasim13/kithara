@@ -1,17 +1,30 @@
+use crate::context::BuildContext;
+
+pub(crate) enum AssetBuild {
+    Ready(Vec<u8>),
+    Unavailable(String),
+}
+
 /// One registered asset case, submitted by `#[kithara::asset]`.
 pub(crate) struct AssetDef {
     /// Produces the asset's bytes.
-    pub(crate) build: fn() -> Vec<u8>,
+    pub(crate) build: for<'a> fn(BuildContext<'a>, &'a [&'a [u8]]) -> AssetBuild,
     /// Case name from `#[case::name(...)]`.
     pub(crate) case: &'static str,
     /// MIME type served with the asset.
     pub(crate) content_type: &'static str,
+    /// Accessor names that must be materialized before this asset.
+    pub(crate) dependencies: &'static [&'static str],
     /// Bake the bytes into the binary instead of reading them from the store.
     pub(crate) embed: bool,
+    /// Environment variables that invalidate this producer.
+    pub(crate) env: &'static [&'static str],
     /// File extension inside the store.
     pub(crate) ext: &'static str,
     /// Generator function name.
     pub(crate) func: &'static str,
+    /// Keep the build green when the producer reports unavailable.
+    pub(crate) optional: bool,
 }
 
 inventory::collect!(AssetDef);

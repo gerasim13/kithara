@@ -53,7 +53,7 @@ impl BeatPredictor {
     ///
     /// Returns `(beat_logits, downbeat_logits)`, each of length T.
     pub(crate) fn predict<S>(
-        &mut self,
+        &self,
         mel: &Tensor,
         pools: &PoolRegion<S>,
     ) -> Result<(SampleBuffer, SampleBuffer), BeatError>

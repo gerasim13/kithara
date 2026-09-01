@@ -1,6 +1,7 @@
 use std::num::NonZeroU32;
 
 use kithara_bufpool::{HasPool, PoolRegion};
+use kithara_platform::sync::Arc;
 use kithara_resampler::ResamplerBackend;
 
 use crate::{
@@ -11,8 +12,9 @@ use crate::{
     progress::BeatResume,
 };
 
-pub(crate) type Detector = Box<dyn BeatDetector>;
+pub(crate) type Detector = Arc<dyn BeatDetector>;
 
+#[derive(Clone)]
 struct BeatConfig<B>
 where
     B: ResamplerBackend,
@@ -22,12 +24,13 @@ where
     detector: Option<DetectorConfig>,
 }
 
+#[derive(Clone)]
 enum DetectorConfig {
     Default,
-    #[cfg(test)]
-    Custom(Detector),
+    Ready(Detector),
 }
 
+#[derive(Clone)]
 pub(crate) struct Config<B>(Option<BeatConfig<B>>)
 where
     B: ResamplerBackend;
@@ -59,13 +62,14 @@ where
     where
         S: HasPool<f32> + Send + Sync + 'static,
     {
-        let source = self.0.as_mut()?.detector.take()?;
+        let source = self.0.as_mut()?.detector.clone()?;
         let detector = match source {
             DetectorConfig::Default => default_beat_detector(pools),
-            #[cfg(test)]
-            DetectorConfig::Custom(detector) => Some(detector),
+            DetectorConfig::Ready(detector) => Some(detector.clone()),
         };
-        if detector.is_none() {
+        if let Some(detector) = &detector {
+            self.0.as_mut()?.detector = Some(DetectorConfig::Ready(detector.clone()));
+        } else {
             self.0 = None;
         }
         detector
@@ -88,14 +92,14 @@ where
     #[cfg(test)]
     pub(crate) fn with_detector(
         &mut self,
-        detector: Detector,
+        detector: Box<dyn BeatDetector>,
         params: GridParams,
         resampler: BeatAnalysisConfig<B>,
     ) {
         self.0 = Some(BeatConfig {
             params,
             resampler,
-            detector: Some(DetectorConfig::Custom(detector)),
+            detector: Some(DetectorConfig::Ready(Arc::from(detector))),
         });
     }
 }
@@ -138,7 +142,7 @@ where
     {
         let analyzer = self.0.as_mut()?;
         match detector {
-            Some(detector) => analyzer.snapshot(pools, detector.as_mut(), ending, extent),
+            Some(detector) => analyzer.snapshot(pools, detector.as_ref(), ending, extent),
             None => analyzer.snapshot_deferred(ending, extent),
         }
     }
@@ -155,7 +159,7 @@ where
     {
         if let Some(analyzer) = &mut self.0 {
             match detector {
-                Some(detector) => analyzer.push(pools, pcm, channels, at, detector.as_mut()),
+                Some(detector) => analyzer.push(pools, pcm, channels, at, detector.as_ref()),
                 None => analyzer.push_deferred(pools, pcm, channels, at),
             }
         }
@@ -204,6 +208,6 @@ where
 
 pub(crate) use crate::beat::{DetectOutput as DetectionOutput, DetectRequest as DetectionRequest};
 
-pub(crate) fn detect(request: DetectionRequest, detector: &mut Detector) -> DetectionOutput {
-    request.detect(detector.as_mut())
+pub(crate) fn detect(request: DetectionRequest, detector: &Detector) -> DetectionOutput {
+    request.detect(detector.as_ref())
 }

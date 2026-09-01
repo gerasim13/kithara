@@ -830,8 +830,6 @@ mod priming_table_tests {
 
 #[cfg(test)]
 mod output_rate_tests {
-    use std::{fs, path::Path};
-
     use kithara_stream::AudioCodec;
     use kithara_test_utils::kithara;
 
@@ -853,10 +851,12 @@ mod output_rate_tests {
     }
 
     fn read_fixture(name: &str) -> Vec<u8> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/hls")
-            .join(name);
-        fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+        let route = format!("/hls/{name}");
+        let resource = kithara_test_fixtures::hls::long_plain()
+            .get(&route)
+            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+        std::fs::read(resource.path())
+            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
     }
 
     fn aac_lc_track() -> TrackInfo {
@@ -966,10 +966,12 @@ mod aac_lc_decode_tests {
     };
 
     fn read_fixture(name: &str) -> Vec<u8> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../assets/hls")
-            .join(name);
-        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+        let route = format!("/hls/{name}");
+        let resource = kithara_test_fixtures::hls::long_plain()
+            .get(&route)
+            .unwrap_or_else(|| panic!("generated HLS fixture has no `{route}`"));
+        std::fs::read(resource.path())
+            .unwrap_or_else(|error| panic!("read {}: {error}", resource.path().display()))
     }
 
     struct Consts;

@@ -39,7 +39,7 @@ pub(crate) struct DetectOutput {
 }
 
 impl DetectRequest {
-    pub(crate) fn detect(self, detector: &mut dyn BeatDetector) -> DetectOutput {
+    pub(crate) fn detect(self, detector: &dyn BeatDetector) -> DetectOutput {
         DetectOutput {
             result: detector.detect(&self.input),
             window: self.window,
@@ -138,7 +138,7 @@ where
     pub(crate) fn snapshot<S>(
         &mut self,
         pools: &PoolRegion<S>,
-        detector: &mut dyn BeatDetector,
+        detector: &dyn BeatDetector,
         ending: bool,
     ) -> Result<BeatArtifact, BeatDetectError>
     where
@@ -187,7 +187,7 @@ where
         pcm: &[f32],
         channels: usize,
         at: u64,
-        detector: &mut dyn BeatDetector,
+        detector: &dyn BeatDetector,
     ) where
         S: HasPool<f32>,
     {
@@ -368,7 +368,7 @@ where
     fn detect<S>(
         &mut self,
         pools: &PoolRegion<S>,
-        detector: &mut dyn BeatDetector,
+        detector: &dyn BeatDetector,
         trailing: bool,
     ) -> Result<(), BeatDetectError>
     where
@@ -526,7 +526,7 @@ mod tests {
             pcm: &[f32],
             channels: usize,
             at: u64,
-            detector: &mut dyn BeatDetector,
+            detector: &dyn BeatDetector,
         ) {
             self.analyzer
                 .push_interleaved(&self.pools, pcm, channels, at, detector);
@@ -534,7 +534,7 @@ mod tests {
 
         fn snapshot(
             &mut self,
-            detector: &mut dyn BeatDetector,
+            detector: &dyn BeatDetector,
             ending: bool,
         ) -> Result<crate::BeatArtifact, BeatDetectError> {
             self.analyzer.snapshot(&self.pools, detector, ending)
@@ -575,7 +575,7 @@ mod tests {
         analyzer: &mut Pass,
         pcm: &[f32],
         frames_per_chunk: usize,
-        detector: &mut dyn BeatDetector,
+        detector: &dyn BeatDetector,
     ) {
         let mut at = 0;
         for chunk in pcm.chunks(frames_per_chunk * 2) {
