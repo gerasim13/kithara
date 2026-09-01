@@ -94,3 +94,31 @@ deny = 400
 globs = ["**/README.md"]
 warn = 150
 deny = 300
+
+[doc_staleness]
+# Platform, upstream, and illustrative names the workspace sources never define.
+allow_terms = [
+  "Constraints",
+  "HTTPMaximumConnectionsPerHost",
+  "LICENSE",
+  "LockFileEx",
+  "MediaExtractor",
+  "MpaDecoder",
+  "MyFileAssetLayout",
+  "MyHlsAssetLayout",
+  "SetGlobalDefault",
+  "StateFlow",
+  "set_default",
+  "unused_self",
+]
+exclude_paths = [
+  "CLAUDE.md",
+  "GEMINI.md",
+  "WARP.md",
+  "CONTEXT.md",
+  "ARCHITECTURE.md",
+  "docs/plans/**",
+  "docs/specs/**",
+  "docs/superpowers/**",
+]
+include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md"]

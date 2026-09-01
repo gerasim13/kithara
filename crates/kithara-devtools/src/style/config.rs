@@ -26,6 +26,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) doc_size: DocSizeConfig,
     #[serde(default)]
+    pub(crate) doc_staleness: DocStalenessConfig,
+    #[serde(default)]
     pub(crate) non_english_text: NonEnglishTextConfig,
     #[serde(default)]
     pub(crate) struct_field_order: StructFieldOrderConfig,
@@ -233,6 +235,21 @@ pub(crate) struct DocSizeConfig {
     /// Per-class limits. The first rule whose globs match the document wins.
     #[serde(default)]
     pub(crate) limits: Vec<DocSizeLimit>,
+}
+
+/// Documented identifiers that no longer exist in the workspace sources.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocStalenessConfig {
+    /// Backticked terms that are prose or external names, not workspace code.
+    #[serde(default)]
+    pub(crate) allow_terms: Vec<String>,
+    /// Documents excluded from the check entirely.
+    #[serde(default)]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Documents the check reads.
+    #[serde(default)]
+    pub(crate) include_globs: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
