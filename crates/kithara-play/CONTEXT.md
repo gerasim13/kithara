@@ -4,17 +4,15 @@ Contracts and invariants for the kithara-play crate; the README is the overview.
 
 ## Planes & Ownership
 
-- `api/` - stable public shapes; `bridge/` - cross-plane protocol and shared RT handles
-  (`NodeInputs` / `SlotControl`, `PlaybackShared`, `SharedEq`, `PlayerCmd`, `PlayerNotification`),
-  plus a re-export of the session protocol.
+- `api/` - stable public shapes; `bridge/` - cross-plane protocol, shared RT
+  handles, and a re-export of the session protocol.
 - `policy/` - domain-aware cache identity and DRM key-request routing.
-- `resource/` - source detection, `ResourceConfig`, reader construction.
+- `resource/` - source detection and reader construction.
 - `player/` - playlist and parameter state in `state/`, transitions in `flow/`.
-- `worker/` - shared `PlayWorker`, per-track `DecoderNode`, final producer
-  admission, registration leases, and `EngineLoad`; generic dispatch lives in
-  `kithara-worker`.
-- `effects/` - the post-Warp per-track `AudioEffect` chain, terminal drain, EQ
-  primitives, and limiter primitives.
+- `worker/` - the shared play worker, per-track decoder node, final producer
+  admission, and registration leases; generic dispatch is `kithara-worker`.
+- `effects/` - the post-Warp per-track effect chain, terminal drain, EQ and
+  limiter primitives.
 - `engine/` - session registration, slot table, mix batch.
 - `rt/` - lock-free Firewheel nodes; per-track state under `rt/track/`.
 - `session/` - the lower object-safe protocol and Player-side binding handle;
@@ -174,7 +172,7 @@ master-volume node, removes the old EQ, and submits one graph update. The audio
 thread never allocates, locks, or reconstructs filters for a layout change.
 
 `EngineImpl` owns the current `EqBandConfig` vector before registration and uses
-it for `eq_band_count`; after registration the session's `PlayerState` owns the
+it for `eq_band_count`; after registration the session's `Deck` owns the
 live graph projection. `SharedEq` is the control-plane gain mirror shared by
 the session and slot handles; no audio processor reads it, and the DSP takes its
 gains from the session's node event queue instead. Reading and writing one gain
@@ -448,7 +446,7 @@ another snapshot.
 
 Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
 (`master_volume`). The session `SessionState` owns the *applied* graph gain (each
-`PlayerState.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
+`Deck.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
 through `Host::apply_mix` / `HostCmd::ApplyMix`, which validates the whole vector - every level
 finite and in `0.0..=1.0`, every member owned by the Host, no member repeated, graph initialised for
 started players
@@ -553,27 +551,12 @@ resampler fields.
 
 ## Feature Flags
 
-| Feature | Default | Effect |
-| --- | --- | --- |
-| `backend-cpal` | yes | CPAL output via `firewheel/cpal` |
-| `backend-web-audio` | no | WebAudio backend (wasm32); implies `symphonia` |
-| `wasm-bindgen` | no | WASM bindings via `firewheel/wasm-bindgen` |
-| `symphonia` | yes | Software decode forwarded to `kithara-audio` / `kithara-decode` |
-| `fdk-aac` | no | FDK-AAC decode forwarding |
-| `webcodecs` | no | WebCodecs decode forwarding |
-| `apple` | no | Apple AudioToolbox decode; does not imply Rubato |
-| `apple-fused-src` | no | Apple fused decode+SRC via decoder-embedded resampler placement |
-| `resample-rubato` | yes | Default fixed-ratio Rubato backend |
-| `resample-glide` | no | Glide resampler backend for explicit config selection |
-| `stretch-signalsmith` | yes | Forward the Signalsmith engine to the warp-owned time-stretch renderer |
-| `stretch-bungee` | no | Forward the Bungee engine to the warp-owned time-stretch renderer |
-| `client-reqwest` | yes | Forward the reqwest HTTP backend to network-reaching deps |
-| `client-wreq` | no | Forward the wreq HTTP backend to network-reaching deps |
-| `tls-rustls` | yes | Forward rustls TLS selection to network-reaching deps |
-| `tls-native` | no | Forward native TLS selection to network-reaching deps |
-| `perf` | no | Native `hotpath` timing for play/audio/decode; ordinary builds compile probes out |
-| `probe` | no | USDT runtime tracing opt-in (forwards nothing on its own) |
-| `mock` | no | Exposes the `mock` module (`EqualizerMock`) |
+`Cargo.toml` owns the feature list and the defaults. Only the non-obvious parts
+belong here: `backend-web-audio` implies `symphonia`, `apple` does not imply
+Rubato, `probe` forwards nothing on its own, `perf` compiles its timing probes
+out of ordinary builds, and `mock` exposes `EqualizerMock`. The decode,
+resampler, stretch, HTTP-client, and TLS features are forwarding switches that
+select a backend in a lower crate rather than adding behaviour here.
 
 `src/guard.rs` hard-fails misconfigured builds: wasm32 requires `backend-web-audio`,
 `wasm-bindgen`, and a resampler backend (`resample-rubato` or `resample-glide`); non-wasm
@@ -591,16 +574,15 @@ that playback (re)started. A bare `play()` resuming the already-current item mus
 consumers (the queue, which re-publishes `QueueEvent::CurrentTrackChanged`, and FFI observers)
 treat it as a track switch and do real work, e.g. re-analysing the waveform.
 
-`Playlist` owns both the current index and the announce-dedup state. Its
-`last_announced: Option<usize>` starts as `None`; `mark_announced` records an index and reports
-whether it changed. `ItemQueue::announce_current_item` is the sole event publisher and emits only
-when that report is true, so first activation announces but a resume does not. Genuine track moves
-(`commit_next`, `advance_to_next_item`, the handover finaliser, and the select/jump path) route
-through that publisher. Playlist mutations that can change identity under a reused index (`clear`,
-`remove_at`, and replacement of the announced index) reset the dedup state to `None`, so the next
-`play()` re-announces. `play()` announces only when the item actually loaded - an empty slot means
-the load is still in flight, and announcing would make the arriving resource take the
-reselecting-current path and never be enqueued.
+`Playlist` owns both the current index and the announce-dedup state, and
+`ItemQueue::announce_current_item` is the sole event publisher: it emits only
+when the announced index actually changed, so first activation announces and a
+resume does not. Every genuine track move routes through that publisher, and a
+mutation that can change identity under a reused index resets the dedup state so
+the next `play()` re-announces. `play()` announces only when the item actually
+loaded - an empty slot means the load is still in flight, and announcing would
+make the arriving resource take the reselecting-current path and never be
+enqueued.
 
 ## Invariants
 
@@ -615,8 +597,8 @@ reselecting-current path and never be enqueued.
 ## Testing And Integration
 
 The offline render backend for deterministic engine/player tests lives in
-`kithara-integration-tests::offline` (`tests/src/offline/`), not here. Enable `mock` for the
+`kithara-integration-tests::offline`, not here. Enable `mock` for the
 `Equalizer` unimock helper. `session::testing::test_session()` provides an in-process dispatcher
 for unit tests.
 
-Public failures propagate as `Result<T, PlayError>`; no `unwrap()` / `expect()` in production code.
+Public failures propagate as `Result<T, PlayError>`.
