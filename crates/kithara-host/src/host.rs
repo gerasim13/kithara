@@ -26,9 +26,20 @@ use crate::{
     },
 };
 
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
+struct Defaults {
+    output_block_frames: NonZeroU32,
+    sample_rate: NonZeroU32,
+}
+
+const DEFAULTS: Defaults = Defaults {
+    output_block_frames: match NonZeroU32::new(128) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    },
+    sample_rate: match NonZeroU32::new(44_100) {
+        Some(sample_rate) => sample_rate,
+        None => unreachable!(),
+    },
 };
 
 /// Configuration for the shared output session owned by [`Host`].
@@ -38,9 +49,13 @@ const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
 #[non_exhaustive]
 pub struct HostConfig {
     /// Initial device-rate hint. Physical route changes may update it later.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    #[builder(default = DEFAULTS.sample_rate)]
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Desired CPAL output callback size in frames. The backend may clamp or ignore it.
+    #[builder(default = DEFAULTS.output_block_frames)]
+    #[field(get, copy)]
+    output_block_frames: NonZeroU32,
 }
 
 /// Typed command proxy for one player value exclusively resident in a Host.
@@ -318,5 +333,22 @@ fn require_topology_change(result: Result<SyncAdmission, PlayError>) -> Result<(
             "host topology operation did not change topology".into(),
         )),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn host_config_output_block_frames_default_and_override() {
+        let default = HostConfig::builder().build();
+        assert_eq!(default.output_block_frames(), DEFAULTS.output_block_frames);
+
+        let frames = NonZeroU32::new(256).expect("test block size is non-zero");
+        let configured = HostConfig::builder().output_block_frames(frames).build();
+        assert_eq!(configured.output_block_frames(), frames);
     }
 }
