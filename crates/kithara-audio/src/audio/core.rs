@@ -11,6 +11,7 @@ use kithara_signal::AudioSpec;
 use kithara_stream::{
     DeferredWake, PlayheadWrite, SeekControl, SeekObserve, SeekPrepare, WorkerWake,
 };
+use kithara_test_utils::kithara;
 
 use super::{
     AudioControl, AudioRead, AudioSession, ChunkOutcome, DecodeError, PendingReason, PreloadGate,
@@ -190,6 +191,7 @@ impl<S> Audio<S> {
     /// # Errors
     ///
     /// Returns [`DecodeError`] when the producer reports a failure or closes early.
+    #[kithara::measure(label = "audio.read")]
     pub fn read(&mut self, buf: &mut [f32]) -> Result<ReadOutcome, DecodeError> {
         self.sync_seek();
         let recv = recv_ctx(&self.session, &self.runtime);
@@ -303,7 +305,7 @@ impl<S: kithara_platform::maybe_send::MaybeSend> AudioRead for Audio<S> {
         Self::read(self, buf)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_planar<'a>(
         &mut self,
         output: &'a mut [&'a mut [f32]],

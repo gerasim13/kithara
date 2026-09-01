@@ -60,6 +60,7 @@ impl<S> Deck<S> {
         bus: EventBus,
         eq_layout: Vec<EqBandConfig>,
         pools: PoolRegion<S>,
+        master_volume: f32,
     ) -> Self {
         let (eq_layout, gains) = prepare_eq_layout(eq_layout);
         let band_count = eq_layout.len();
@@ -73,7 +74,7 @@ impl<S> Deck<S> {
             grid_id,
             master_eq_memo: None,
             master_eq_node_id: None,
-            master_volume: 1.0,
+            master_volume,
             master_volume_memo: None,
             master_volume_node_id: None,
             next_slot_id: 1,
@@ -267,12 +268,21 @@ pub(super) fn register_player<B: AudioBackend, S>(
     let next_player_id = player_id
         .checked_add(1)
         .ok_or(SessionError::PlayerIdExhausted)?;
-    if state.root.with_group(grid_id, |_| ()).is_none() {
-        return Err(SessionError::Graph(
-            "player must be attached to the host before graph registration".to_owned(),
-        ));
+    let master_volume = state
+        .root
+        .with_group(grid_id, PlayerMember::host_level)
+        .ok_or_else(|| {
+            SessionError::Graph(
+                "player must be attached to the host before graph registration".to_owned(),
+            )
+        })?;
+    if !master_volume.is_finite() || !(0.0..=1.0).contains(&master_volume) {
+        return Err(SessionError::MasterVolumeOutOfRange {
+            player_id,
+            level: master_volume,
+        });
     }
-    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools);
+    let deck = Deck::new(player_id, grid_id, bus, eq_layout, pools, master_volume);
     state.graph.insert(deck)?;
     state.next_player_id = next_player_id;
     debug!(

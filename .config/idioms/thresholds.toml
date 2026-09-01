@@ -50,6 +50,9 @@ severity = "deny"
 blocking_impl_attrs = ["async_trait", "uniffi::export", "wasm_bindgen"]
 qualified_deref_remaps = [{ field_type = "PathBuf", scoped_name = "Path" }]
 
+[thin_wrapper_economy]
+min_net_saved_lines = 10
+
 [retry_fallback]
 # retry_fallback flags retry/fallback vocabulary to catch try-A-else-B chains
 # that paper over state bugs. Exact allowed identifiers are legitimate project

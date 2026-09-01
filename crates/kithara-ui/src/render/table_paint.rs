@@ -5,6 +5,7 @@ use iced::{
     mouse::Cursor,
     widget::canvas::{self, Frame, Geometry},
 };
+use kithara_test_macros as kithara;
 
 use super::super::{Marked, Marks, Probe, Skin, UiEvent, controls::RetainedCanvasState};
 use crate::{
@@ -46,32 +47,6 @@ impl TablePaint {
         }
     }
 
-    /// The marks the table's rows, header and footer come to, built afresh.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.table.commands"))]
-    fn commands(&self, text: &mut TextContext, bounds: Rect, drawn: &Drawn) -> DrawList {
-        self.face.commands(text, bounds, drawn)
-    }
-
-    pub(super) fn config(&self) -> TableConfig {
-        let skin = self.face.skin();
-        TableConfig {
-            body_inset: skin.table.header_height
-                + skin.table.footer_height
-                + skin.table.grid_gap * 2.0,
-            content_height: table_content_height(self.face.rows().len(), skin),
-            content_width: minimum_table_width(self.face.columns()),
-            divider_columns: self
-                .face
-                .columns()
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| column_resizable(self.face.columns(), *index))
-                .map(|(_, column)| column.column.clone())
-                .collect(),
-            row_count: self.face.rows().len(),
-        }
-    }
-
     pub(super) fn geometry(
         &self,
         state: &TableState,
@@ -95,11 +70,11 @@ impl TablePaint {
             &self.face,
         );
         let drawn = Drawn {
+            columns: self.face.columns().to_vec(),
             horizontal,
             hovered,
-            vertical,
-            columns: self.face.columns().to_vec(),
             pressed: state.pressed_index,
+            vertical,
         };
         state.mark(bounds, &drawn, &self.face, || {
             self.commands(text, bounds, &drawn)
@@ -112,12 +87,38 @@ impl TablePaint {
             .unwrap_or_default()
     }
 
+    /// The marks the table's rows, header and footer come to, built afresh.
+    #[kithara::measure(label = "iced.table.commands")]
+    fn commands(&self, text: &mut TextContext, bounds: Rect, drawn: &Drawn) -> DrawList {
+        self.face.commands(text, bounds, drawn)
+    }
+
     /// Those marks turned into triangles the renderer can hand the GPU. Run
     /// only when the kept geometry was dropped, which is what makes a table
     /// nothing changed cost nothing to draw.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.table.tessellate"))]
+    #[kithara::measure(label = "iced.table.tessellate")]
     fn tessellate(&self, frame: &mut Frame, list: &DrawList) {
         replay_ordered(list, frame, self.face.skin().text_resources());
+    }
+
+    pub(super) fn config(&self) -> TableConfig {
+        let skin = self.face.skin();
+        TableConfig {
+            body_inset: skin.table.header_height
+                + skin.table.footer_height
+                + skin.table.grid_gap * 2.0,
+            content_height: table_content_height(self.face.rows().len(), skin),
+            content_width: minimum_table_width(self.face.columns()),
+            divider_columns: self
+                .face
+                .columns()
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| column_resizable(self.face.columns(), *index))
+                .map(|(_, column)| column.column.clone())
+                .collect(),
+            row_count: self.face.rows().len(),
+        }
     }
 }
 
@@ -138,20 +139,20 @@ impl canvas::Program<UiEvent> for TablePaint {
 
 #[derive(Default)]
 pub(super) struct TableState {
-    pub(super) row_drag: ItemDrag,
-    pub(super) drag_index: Option<usize>,
-    pub(super) pressed_index: Option<usize>,
-    pub(super) horizontal: ScrollState,
-    pub(super) vertical: ScrollState,
+    configured: bool,
     pub(super) dividers: Vec<(TableColumn, ScalarState)>,
+    pub(super) horizontal: ScrollState,
+    path: String,
     /// The marks, kept behind the state they were built from, and the geometry
     /// tessellated from them. A table is the one canvas this host drew from
     /// scratch every frame; a painted control has held both since it learned
     /// not to.
     marks: Marks<TableMarks>,
+    pub(super) drag_index: Option<usize>,
+    pub(super) pressed_index: Option<usize>,
+    pub(super) row_drag: ItemDrag,
     text: RefCell<Option<TextContext>>,
-    path: String,
-    configured: bool,
+    pub(super) vertical: ScrollState,
 }
 
 /// The state the table's marks were built from, kept whole so that the next
@@ -163,9 +164,9 @@ pub(super) struct TableState {
 /// out that nothing did.
 #[derive(PartialEq)]
 struct TableKey<Drawing, Face> {
+    bounds: Rect,
     drawn: Drawing,
     face: Face,
-    bounds: Rect,
 }
 
 /// The key a table keeps between frames.
@@ -201,10 +202,10 @@ impl Probe for TableKey<&Drawn, &Rc<TableFace>> {
 
 #[derive(Clone)]
 pub(super) struct TableConfig {
-    divider_columns: Vec<TableColumn>,
     body_inset: f32,
     content_height: f32,
     content_width: f32,
+    divider_columns: Vec<TableColumn>,
     row_count: usize,
 }
 
@@ -221,29 +222,12 @@ impl TableState {
     ) -> Marked {
         self.marks.mark(
             TableKey {
+                bounds,
                 drawn,
                 face,
-                bounds,
             },
             build,
         )
-    }
-
-    fn paint_offsets(&self) -> (f32, f32) {
-        (self.horizontal.offset(), self.vertical.offset())
-    }
-
-    pub(super) fn rebind(&mut self, path: &str) {
-        if self.path != path {
-            self.path = path.to_owned();
-            self.configured = false;
-            self.dividers.clear();
-            self.drag_index = None;
-            self.horizontal = ScrollState::default();
-            self.pressed_index = None;
-            self.row_drag = ItemDrag::default();
-            self.vertical = ScrollState::default();
-        }
     }
 
     pub(super) fn reconcile(&mut self, path: &str, config: &TableConfig) {
@@ -314,6 +298,23 @@ impl TableState {
             self.pressed_index = pressed;
             self.vertical.sync_offset(vertical);
         }
+    }
+
+    pub(super) fn rebind(&mut self, path: &str) {
+        if self.path != path {
+            self.path = path.to_owned();
+            self.configured = false;
+            self.dividers.clear();
+            self.drag_index = None;
+            self.horizontal = ScrollState::default();
+            self.pressed_index = None;
+            self.row_drag = ItemDrag::default();
+            self.vertical = ScrollState::default();
+        }
+    }
+
+    fn paint_offsets(&self) -> (f32, f32) {
+        (self.horizontal.offset(), self.vertical.offset())
     }
 }
 

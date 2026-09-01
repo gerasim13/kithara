@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use kithara_platform::sync::Arc;
+use kithara_test_utils::kithara;
 
 use crate::{
     StorageError, StorageResult,
@@ -81,7 +82,7 @@ impl DriverIo for MemDriver {
         Ok(())
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let state = self.state.lock();
 
@@ -129,7 +130,7 @@ impl DriverIo for MemDriver {
         state.len
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         if committed {
             return Err(StorageError::Failed(

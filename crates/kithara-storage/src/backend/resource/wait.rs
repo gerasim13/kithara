@@ -19,7 +19,7 @@ use crate::{
 const WAIT_HANG_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl<D: DriverIo> ResourceCore<D> {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    #[kithara::measure]
     #[kithara::hang_watchdog(timeout = WAIT_HANG_TIMEOUT)]
     pub(super) fn wait_range_inner(
         &self,

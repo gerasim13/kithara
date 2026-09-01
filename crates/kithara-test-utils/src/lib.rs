@@ -24,7 +24,7 @@ pub mod test;
 
 pub mod kithara {
     pub use kithara_test_macros::{
-        Probe, allow_block, asset, fixture, flash, hang_watchdog, mock, no_block, probe,
+        Probe, allow_block, asset, fixture, flash, hang_watchdog, measure, mock, no_block, probe,
         rtsan_allow_blocking, rtsan_forbid_blocking, test,
     };
 }

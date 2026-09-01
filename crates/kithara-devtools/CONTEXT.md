@@ -81,6 +81,19 @@ and inline-module globs (`lint_exclude.modules`). Unparseable files contribute n
 ranges — their violations are kept. `lint_exclude.scan_all_rules` names ast-grep rule
 IDs that re-run over the full tree, tests included.
 
+`idioms/thin_wrapper_economy` owns synchronous one-expression free helpers. It
+counts resolved direct calls, simulates replacing every call and deleting the helper,
+and compares formatted nonblank source lines; the configured minimum is net savings,
+after paying for the helper definition. Formatting is an in-memory `rustfmt` stdin/stdout
+measurement rooted at the workspace and never writes source. Even scoped runs scan the
+full workspace before filtering findings, so omitted callers cannot make a metric look
+exact. Ambiguous symbols and non-call references are not assigned invented savings.
+The check is diagnostic-only. A syntax-only rewrite cannot preserve Rust semantics for
+trait lookup, never coercion, or `#[track_caller]`; autofix requires compiler-backed
+callee resolution rather than another partial resolver in devtools.
+Multi-statement logging proxies remain owned by `rust.no-thin-sync-wrapper`.
+Attributed helpers are excluded because attributes can change call or code-generation semantics.
+
 ## Architecture visualization (`viz`)
 
 `viz` has no required nested subcommand. It builds one lossless source-evidence graph,

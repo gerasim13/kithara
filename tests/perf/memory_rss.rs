@@ -69,7 +69,6 @@ fn physical_memory() -> Option<usize> {
 ///
 /// Only [`Self::Eof`] leaves a complete measurement behind. The other two
 /// truncate it, and a truncated drain cannot say whether RSS settled.
-#[derive(Debug)]
 enum DrainEnd {
     Eof,
     Failed(DecodeError),

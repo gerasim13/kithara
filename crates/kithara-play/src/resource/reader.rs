@@ -217,19 +217,21 @@ impl Resource {
     /// `"unknown"`.
     #[must_use]
     pub fn from_reader<R: AudioReader + 'static>(reader: R, src: Option<Arc<str>>) -> Self {
+        let preload = reader.preload_gate().is_none();
         let bus = reader.event_bus().clone();
-        let mut inner: Box<dyn AudioReader> = Box::new(reader);
+        let inner: Box<dyn AudioReader> = Box::new(reader);
         let src = src.unwrap_or_else(|| Arc::from("unknown"));
-        if let Err(e) = inner.preload() {
-            warn!(src = %src, error = %e, "resource preload failed");
-        }
-        Self {
+        let mut resource = Self {
             src,
             bus,
             priority: None,
             playback_rate: PlaybackRate::Fixed,
             reader: ReaderOwner(CancelGuard(None), inner),
+        };
+        if preload && let Err(error) = resource.reader.1.preload() {
+            warn!(src = %resource.src, %error, "resource preload failed");
         }
+        resource
     }
 
     /// Create a resource from a concrete stream-backed audio config.
@@ -253,6 +255,9 @@ impl Resource {
         let priority = audio.priority();
         let mut resource = Self::from_reader(audio, Some(src))
             .with_playback_rate(PlaybackRate::for_warp(warp_controls));
+        if let Err(error) = resource.preload().await {
+            warn!(src = %resource.src, %error, "resource preload failed");
+        }
         resource.priority = Some(priority);
         Ok(resource)
     }

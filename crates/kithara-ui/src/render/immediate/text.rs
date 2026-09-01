@@ -7,6 +7,7 @@ use iced::{
         widget::{self, Tree},
     },
 };
+use kithara_test_macros as kithara;
 
 use crate::{
     atoms::text::Text as TextAtom,
@@ -159,7 +160,7 @@ impl IcedWidget<UiEvent, Theme, Renderer> for Painted<'_> {
     /// the most expensive thing on a page of prose. The list a paragraph draws
     /// is kept and the geometry behind it reused, exactly as a painted control
     /// does: a page whose words did not change pays for them once.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "iced.text.draw"))]
+    #[kithara::measure(label = "iced.text.draw")]
     fn draw(
         &self,
         tree: &Tree,

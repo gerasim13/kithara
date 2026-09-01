@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kithara_platform::sync::Arc;
+use kithara_test_macros as kithara;
 use masonry::vello::{Renderer, peniko::ImageData, wgpu};
 use num_traits::cast::AsPrimitive as _;
 
@@ -69,7 +70,7 @@ impl ShaderPass {
     ///
     /// Everything here is CPU work up to the submit; the shader programs
     /// themselves are timed by whoever fences the queue.
-    #[cfg_attr(feature = "perf", hotpath::measure(label = "shader.pass.cpu"))]
+    #[kithara::measure(label = "shader.pass.cpu")]
     pub fn render(
         &mut self,
         device: &wgpu::Device,

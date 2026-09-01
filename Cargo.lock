@@ -5007,6 +5007,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "triple_buffer",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -5134,6 +5135,7 @@ dependencies = [
  "kithara-workspace-hack",
  "loom",
  "parking_lot",
+ "parking_lot_core",
  "pin-project-lite",
  "tokio",
  "tokio_with_wasm",
@@ -5160,6 +5162,7 @@ dependencies = [
  "firewheel",
  "firewheel-core",
  "hex",
+ "hotpath",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -5414,6 +5417,7 @@ dependencies = [
  "iced_wgpu",
  "kithara-bufpool",
  "kithara-platform",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-workspace-hack",
  "kurbo 0.12.0",

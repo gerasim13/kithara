@@ -7,6 +7,7 @@ use kithara_stream::{
     Activity, OpenedVariantReader, OutgoingDisposition, PlayheadWrite, SeekControl, SeekObserve,
     StreamType, VariantControl, VariantPromotion, VariantReaderTake, VariantTransition,
 };
+use kithara_test_utils::kithara;
 use tracing::{debug, trace, warn};
 
 pub(crate) use crate::pipeline::{
@@ -600,6 +601,7 @@ impl<T: StreamType> AudioSource for StreamAudioSource<T> {
         Arc::clone(&self.seek_obs)
     }
 
+    #[kithara::measure(label = "audio.track.step")]
     fn step_track(&mut self) -> TrackStep<AudioChunk> {
         track::dispatch(self)
     }

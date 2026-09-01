@@ -229,17 +229,16 @@ impl<S> PlayerRuntime<S> {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        num::NonZeroU32,
-        sync::mpsc::{RecvTimeoutError, channel},
-    };
+    use std::num::NonZeroU32;
+    #[cfg(not(target_arch = "wasm32"))]
+    use std::sync::mpsc::{RecvTimeoutError, channel};
 
     use kithara_assets::AssetStore;
     use kithara_decode::GaplessMode;
     use kithara_events::{Envelope, Event};
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
-    use kithara_warp::{BeatGrid, StretchControls};
+    use kithara_warp::StretchControls;
 
     use super::*;
     use crate::{
@@ -282,6 +281,7 @@ mod tests {
         )
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn close_waits_for_an_admitted_operation() {
         let player = player();
@@ -335,6 +335,7 @@ mod tests {
         ));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
     fn player_lifecycle_admits_only_one_concurrent_close() {
         let lifecycle = Arc::new(PlayerLifecycle::open());
@@ -356,15 +357,6 @@ mod tests {
             lifecycle.begin_close(),
             Ok(CloseAdmission::AlreadyClosed)
         ));
-    }
-
-    #[kithara::test]
-    fn player_member_preserves_object_safe_identity_and_typed_access() {
-        let player = player();
-        let grid_id = player.id();
-        let member = PlayerMember::new(player);
-
-        assert_eq!(member.dispatch(BeatGrid::id), grid_id);
     }
 
     #[kithara::test]

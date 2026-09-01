@@ -235,6 +235,7 @@ impl Demuxer for SymphoniaDemuxer {
     }
 
     #[kithara::probe]
+    #[kithara::measure(label = "decode.symphonia.demux")]
     fn next_frame(&mut self) -> DecodeResult<DemuxOutcome<'_>> {
         self.current_packet = None;
         // WHY: A previous read stranded bytes inside `MediaSourceStream` at a not-ready boundary (it consumed ring bytes into a packet that

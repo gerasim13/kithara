@@ -20,6 +20,7 @@ use crate::{
     },
 };
 
+#[kithara::measure(label = "audio.decode.step")]
 #[kithara::hang_watchdog]
 pub(crate) fn tick<T: StreamType>(
     core: &mut ActiveDecode,
