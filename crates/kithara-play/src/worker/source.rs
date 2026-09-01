@@ -784,7 +784,9 @@ mod tests {
     where
         T: AudioSource<Chunk = AudioChunk>,
     {
-        let config = kithara_warp::WarpConfig::builder().build();
+        let config = kithara_warp::WarpConfig::builder()
+            .render_quantum_frames(NonZeroUsize::new(64).expect("fixture quantum is non-zero"))
+            .build();
         let warp = kithara_warp::Warp::new((), &config);
         let renderer = warp.quantum_renderer(spec, pools.clone());
         let drain = EffectDrain::new(effects.len(), pools)
