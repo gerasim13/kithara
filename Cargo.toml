@@ -395,6 +395,7 @@ tempfile = "3.27.0"
 thirtyfour = { version = "0.37.1", features = ["bidi"] }
 thiserror = "2.0.18"
 thunderdome = { version = "0.6.1", default-features = false }
+tiny_http = "0.12.0"
 tokio = { version = "1.52.3", default-features = false }
 tokio-stream = "0.1.18"
 tokio_with_wasm = { version = "0.9", features = ["full"] }

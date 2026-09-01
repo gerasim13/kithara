@@ -28,6 +28,20 @@ where
     pools: PoolRegion<S>,
 }
 
+impl<B, S> Clone for AnalyzerBuilder<B, S>
+where
+    B: ResamplerBackend,
+{
+    fn clone(&self) -> Self {
+        Self {
+            beat: self.beat.clone(),
+            waveform: self.waveform,
+            beat_config: self.beat_config.clone(),
+            pools: self.pools.clone(),
+        }
+    }
+}
+
 impl<B, S> AnalyzerBuilder<B, S>
 where
     B: ResamplerBackend,

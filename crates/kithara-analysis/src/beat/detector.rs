@@ -42,6 +42,6 @@ pub(crate) enum BeatDetectError {
 }
 
 #[cfg_attr(test, kithara_test_macros::mock(api = [BeatDetectorMock]))]
-pub(crate) trait BeatDetector: Send {
-    fn detect(&mut self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError>;
+pub(crate) trait BeatDetector: Send + Sync {
+    fn detect(&self, mono_window: &[f32]) -> Result<RawBeats, BeatDetectError>;
 }

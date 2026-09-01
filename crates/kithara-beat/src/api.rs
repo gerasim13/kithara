@@ -77,7 +77,7 @@ where
     /// # Errors
     /// [`BeatError::Inference`] when a model run fails or emits an
     /// unexpected output shape.
-    pub fn analyze(&mut self, mono_22050: &[f32]) -> Result<RawBeats, BeatError> {
+    pub fn analyze(&self, mono_22050: &[f32]) -> Result<RawBeats, BeatError> {
         let mel = self.mel.extract(mono_22050, &self.pools)?;
         let (beat_logits, downbeat_logits) = self.predictor.predict(&mel, &self.pools)?;
         let (beats, downbeats) = self.picker.decode(&beat_logits, &downbeat_logits)?;

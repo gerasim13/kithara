@@ -48,8 +48,7 @@ async fn run_analysis(
         buckets,
         BeatAnalysisConfig::default(),
         pools,
-    )
-    .ok()?;
+    );
     let mut rx = runner.analyze(config, "waveform-track".into(), RATE, drop);
 
     // Staged analysis can emit twice (waveform, then waveform+beat).

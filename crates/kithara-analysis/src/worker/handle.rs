@@ -1,8 +1,12 @@
-use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU32, NonZeroU64};
 
 use kithara_audio::AudioReader;
 use kithara_bufpool::HasPool;
-use kithara_platform::{CancelGroup, CancelToken, sync::mpsc, tokio::sync::watch};
+use kithara_platform::{
+    CancelGroup, CancelScope, CancelToken,
+    sync::{Mutex, mpsc},
+    tokio::sync::watch,
+};
 use kithara_resampler::ResamplerBackend;
 use kithara_worker::{
     Dispatcher, DispatcherConfig, RayonConfig, TaskConfig, TaskError, TaskHandle, Worker,
@@ -21,13 +25,21 @@ use crate::{
 pub struct AnalysisWorker {
     resume_shape: (bool, bool),
     fingerprint: AnalysisFingerprint,
-    job_scope: CancelToken,
     dispatcher: Dispatcher,
     chunk_seconds: NonZeroU32,
-    jobs: mpsc::Sender<Job>,
-    task: TaskHandle,
+    scope: CancelScope,
+    start_job: StartJob,
+    tasks: Mutex<Vec<ActiveTask>>,
     _base: Worker,
     active: bool,
+}
+
+type StartJob =
+    Box<dyn Fn(Job, mpsc::Sender<()>) -> Result<TaskHandle, TaskError> + Send + Sync + 'static>;
+
+struct ActiveTask {
+    completion: mpsc::Receiver<()>,
+    _handle: TaskHandle,
 }
 
 /// An analysis pass opened before either decoder starts.
@@ -60,19 +72,15 @@ impl AnalysisPass {
 }
 
 impl AnalysisWorker {
-    /// Construct the analysis dispatcher and its long-lived task.
+    /// Construct the analysis dispatcher used by independently admitted jobs.
     ///
-    /// # Errors
-    ///
-    /// Returns the base worker's canonical task admission error when the task
-    /// cannot be registered.
-    pub fn new<B, S>(config: AnalysisWorkerConfig<B, S>) -> Result<Self, TaskError>
+    pub fn new<B, S>(config: AnalysisWorkerConfig<B, S>) -> Self
     where
         B: ResamplerBackend,
         S: HasPool<f32> + Send + Sync + 'static,
     {
         let AnalysisWorkerConfig {
-            builder,
+            mut builder,
             cancel,
             capacity,
             chunk_seconds,
@@ -87,8 +95,9 @@ impl AnalysisWorker {
             wait_timeout,
             worker,
         } = config;
+        let scope = CancelScope::new(cancel.clone());
         let (base, dispatcher_cancel) = if let Some(worker) = worker {
-            (worker, cancel.map(CancelGroup::from))
+            (worker, cancel.clone().map(CancelGroup::from))
         } else {
             let worker_config = cancel
                 .map_or_else(WorkerConfig::new, |cancel| {
@@ -96,7 +105,7 @@ impl AnalysisWorker {
                 })
                 .with_max_compute_tasks(max_compute_tasks)
                 .with_owned_pool(RayonConfig::new(
-                    NonZeroUsize::MIN,
+                    max_compute_tasks,
                     "kithara-analysis-compute",
                 ));
             (Worker::new(worker_config), None)
@@ -113,36 +122,45 @@ impl AnalysisWorker {
             dispatcher_config = dispatcher_config.with_cancel(cancel);
         }
         let dispatcher = base.dispatcher(dispatcher_config);
-        let pending = dispatcher.reserve(
-            TaskConfig::new()
-                .with_max_compute_tasks(max_compute_tasks)
-                .with_priority(priority),
-        )?;
-        let job_scope = pending.context().token().clone();
-        let context = pending.context().clone();
-        let (jobs, receiver) = mpsc::channel();
-        let node = AnalysisNode::new(
-            builder,
-            receiver,
-            context,
-            chunk_seconds,
-            producer_drain_limit,
-            publish_seconds,
-        );
-        let (fingerprint, active, resume_shape) = node.effective();
-        let task = pending.start(|_| node)?;
+        let _ = builder.take_detector();
+        let fingerprint = builder.fingerprint();
+        let active = !builder.is_empty();
+        let resume_shape = builder.resume_shape();
+        let task_config = TaskConfig::new()
+            .with_max_compute_tasks(max_compute_tasks)
+            .with_priority(priority);
+        let job_dispatcher = dispatcher.clone();
+        let start_job: StartJob = Box::new(move |job, completion| {
+            let pending = job_dispatcher.reserve(task_config.clone())?;
+            let (jobs, receiver) = mpsc::channel();
+            if jobs.send(job).is_err() {
+                return Err(TaskError::Stopped);
+            }
+            let job_builder = builder.clone();
+            pending.start(move |context| {
+                AnalysisNode::with_completion(
+                    job_builder,
+                    receiver,
+                    context,
+                    chunk_seconds,
+                    producer_drain_limit,
+                    publish_seconds,
+                    Some(completion),
+                )
+            })
+        });
 
-        Ok(Self {
+        Self {
             active,
             chunk_seconds,
             dispatcher,
             fingerprint,
-            job_scope,
-            jobs,
             resume_shape,
-            task,
+            scope,
+            start_job,
+            tasks: Mutex::new(Vec::new()),
             _base: base,
-        })
+        }
     }
 
     /// Open a pass on `rate`, the axis its ranges are measured on; a chunk on
@@ -188,11 +206,11 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
+            cancel: self.scope.token().child(),
             ingest,
             rate,
             token,
             tx,
-            cancel: self.job_scope.child(),
             resume: None,
         };
         (rx, producer, pass)
@@ -236,11 +254,11 @@ impl AnalysisWorker {
         let (writer, ingest) = ring::open_for(rate);
         let producer = AnalysisProducer::new(writer, rate, token.clone());
         let pass = AnalysisPass {
+            cancel: self.scope.token().child(),
             ingest,
             rate,
             token,
             tx,
-            cancel: self.job_scope.child(),
             resume: Some(progress),
         };
         Ok((rx, producer, pass))
@@ -280,10 +298,21 @@ impl AnalysisWorker {
     }
 
     fn submit(&self, job: Job) {
-        if self.jobs.send(job).is_err() {
-            warn!("analysis worker stopped; job dropped");
-        } else {
-            self.task.control().wake();
+        self.tasks.lock().retain(|task| {
+            !matches!(
+                task.completion.try_recv(),
+                Err(mpsc::TryRecvError::Disconnected)
+            )
+        });
+        let (completion, completed) = mpsc::channel();
+        match (self.start_job)(job, completion) {
+            Ok(handle) => self.tasks.lock().push(ActiveTask {
+                completion: completed,
+                _handle: handle,
+            }),
+            Err(error) => {
+                warn!(?error, "analysis job was not admitted");
+            }
         }
     }
 
@@ -310,6 +339,7 @@ impl AnalysisWorker {
 
 impl Drop for AnalysisWorker {
     fn drop(&mut self) {
+        self.scope.cancel();
         self.dispatcher.shutdown();
     }
 }
@@ -332,8 +362,7 @@ mod tests {
             )
             .cancel(cancel)
             .build(),
-        )
-        .expect("analysis worker task is admitted");
+        );
 
         assert!(!worker.is_active());
         assert_eq!(worker.fingerprint().beat(), None);
