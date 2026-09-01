@@ -208,7 +208,7 @@ where
             trace_stream_info(state, "query-sample-rate");
             Reply::SampleRate(SessionSampleRate::new(
                 measured,
-                state.requested_shape.sample_rate.get(),
+                state.requested_sample_rate,
             ))
         }
         Cmd::QueryStreamShape => Reply::StreamShape(stream_shape(state)),
@@ -230,7 +230,7 @@ fn stream_shape<B: AudioBackend, S>(state: &SessionState<B, S>) -> StreamShape {
 
 pub(super) fn tick_session<B: AudioBackend, S>(state: &mut SessionState<B, S>) -> Reply {
     if state.stream_needs_restart {
-        match restart_stream(state, state.requested_shape.sample_rate.get()) {
+        match restart_stream(state, state.requested_sample_rate) {
             Ok(()) => {}
             Err(err) => {
                 warn!(?err, "[KITHARA-ROUTE] deferred stream restart failed");
@@ -331,10 +331,10 @@ pub(super) fn handle_update_error<B: AudioBackend, S>(
             );
             trace!(
                 ?reason,
-                requested_sample_rate = state.requested_shape.sample_rate.get(),
+                requested_sample_rate = state.requested_sample_rate,
                 "[KITHARA-ROUTE] firewheel update reported stopped stream"
             );
-            match restart_stream(state, state.requested_shape.sample_rate.get()) {
+            match restart_stream(state, state.requested_sample_rate) {
                 Ok(()) => Reply::Ok,
                 Err(restart_err) => Reply::Err(SessionError::RestartFailed {
                     reason: format!("{reason:?}"),
@@ -363,7 +363,7 @@ pub(super) fn invalidate_audio_route<B: AudioBackend, S>(
         return Reply::Ok;
     }
     state.stream_needs_restart = true;
-    match restart_stream(state, state.requested_shape.sample_rate.get()) {
+    match restart_stream(state, state.requested_sample_rate) {
         Ok(()) => Reply::Ok,
         Err(err) => Reply::Err(SessionError::RestartFailed {
             reason: reason.to_owned(),
@@ -379,22 +379,24 @@ pub(super) fn restart_stream<B: AudioBackend, S>(
     if state.ctx.is_none() {
         return Err(SessionError::NoContext);
     }
-    let sample_rate = NonZeroU32::new(sample_rate).unwrap_or(state.requested_shape.sample_rate);
+    let shape_sample_rate =
+        NonZeroU32::new(sample_rate).unwrap_or(state.requested_shape.sample_rate);
     debug!(sample_rate, "[KITHARA-ROUTE] restarting firewheel stream");
-    if transport::prepare_route_restart(state, sample_rate.get())?
+    if transport::prepare_route_restart(state, sample_rate)?
         == transport::RouteRestartStatus::Pending
     {
         trace!("[KITHARA-ROUTE] waiting for the previous stream processor to stop");
         return Ok(());
     }
     let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-    (state.start_stream_fn)(fw_ctx, sample_rate.get()).map_err(SessionError::StreamStart)?;
+    (state.start_stream_fn)(fw_ctx, sample_rate).map_err(SessionError::StreamStart)?;
     state.reserved_session_grid = None;
-    state.requested_shape.sample_rate = sample_rate;
+    state.requested_sample_rate = sample_rate;
+    state.requested_shape.sample_rate = shape_sample_rate;
     state.stream_needs_restart = false;
     trace_stream_info(state, "restart-stream");
     debug!(
-        sample_rate = sample_rate.get(),
+        sample_rate,
         "[KITHARA-ROUTE] firewheel stream restart complete"
     );
     Ok(())
@@ -419,7 +421,7 @@ pub(super) fn trace_stream_info<B: AudioBackend, S>(
     } else {
         trace!(
             context,
-            requested_sample_rate = state.requested_shape.sample_rate.get(),
+            requested_sample_rate = state.requested_sample_rate,
             requested_max_block_frames = state.requested_shape.max_block_frames.get(),
             stream_needs_restart = state.stream_needs_restart,
             "[KITHARA-ROUTE] session stream-info unavailable"
