@@ -17,8 +17,8 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
+    config::{AppConfig, AppDrm},
+    document::Config,
     pools::{AppPools, build as app_pools},
 };
 use kithara_integration_tests::{
@@ -54,11 +54,12 @@ async fn shared_ctx() -> &'static Ctx {
         );
         let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
         let shutdown = CancelToken::never();
+        let document = Config::load(None, None).expect("the shipped configuration loads");
         let store = AssetStore::builder(pools.clone())
             .cancel(shutdown.child())
             .backend(StorageBackend::default())
             .flush_hub(flush_hub)
-            .layouts(baked::build_baked_asset_layouts())
+            .layouts(document.asset_layouts())
             .build();
         let worker = PlayWorker::new(
             PlayWorkerConfig::builder(pools)
@@ -66,6 +67,11 @@ async fn shared_ctx() -> &'static Ctx {
                 .build(),
         );
         let config = AppConfig::builder()
+            .drm(AppDrm::new(
+                document
+                    .drm_policy()
+                    .expect("the shipped providers are valid"),
+            ))
             .downloader(downloader)
             .shutdown(shutdown)
             .worker(worker.clone())

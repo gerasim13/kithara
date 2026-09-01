@@ -16,7 +16,10 @@ use super::{
     policy::{PolicyError, drm_policy},
     schema::Document,
 };
-use crate::baked::{BAKED_DOCUMENT, baked_env};
+use crate::{
+    baked::{BAKED_DOCUMENT, baked_env},
+    config::AppSettings,
+};
 
 /// Path the baked document is reported under in parse errors.
 const BAKED_PATH: &str = "<baked app.yaml>";
@@ -186,6 +189,15 @@ impl Config {
     #[must_use]
     pub fn crossfade_seconds(&self) -> Option<f32> {
         self.document.playback.crossfade_seconds
+    }
+
+    /// Knobs the document sets on the built [`AppConfig`]. Fields the document
+    /// never names stay `None`, leaving what the builder produced in place.
+    ///
+    /// [`AppConfig`]: crate::config::AppConfig
+    #[must_use]
+    pub fn app_settings(&self) -> AppSettings {
+        self.document.app.clone()
     }
 
     /// The media-identity registry the asset store reads.

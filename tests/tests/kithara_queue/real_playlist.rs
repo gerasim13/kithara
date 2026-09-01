@@ -17,8 +17,8 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
+    config::{AppConfig, AppDrm},
+    document::Config,
     pools::{AppPools, build as app_pools},
 };
 use kithara_integration_tests::{
@@ -82,11 +82,12 @@ async fn shared_test_ctx() -> &'static TestCtx {
             );
             let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
             let shutdown = CancelToken::never();
+            let document = Config::load(None, None).expect("the shipped configuration loads");
             let store = AssetStore::builder(pools.clone())
                 .cancel(shutdown.child())
                 .backend(StorageBackend::default())
                 .flush_hub(flush_hub)
-                .layouts(baked::build_baked_asset_layouts())
+                .layouts(document.asset_layouts())
                 .build();
             let worker = PlayWorker::new(
                 PlayWorkerConfig::builder(pools)
@@ -94,6 +95,11 @@ async fn shared_test_ctx() -> &'static TestCtx {
                     .build(),
             );
             let config = AppConfig::builder()
+                .drm(AppDrm::new(
+                    document
+                        .drm_policy()
+                        .expect("the shipped providers are valid"),
+                ))
                 .downloader(downloader)
                 .shutdown(shutdown)
                 .worker(worker.clone())
@@ -478,7 +484,7 @@ where
     res.unwrap_or_else(|_| panic!("no matching queue event within {deadline:?}"))
 }
 
-/// Drive `AppConfig::DEFAULT_TRACKS` (all 10 URLs including DRM) end-
+/// Drive the shipped playlist (all its URLs, including DRM) end-
 /// to-end: play first, pause/resume, seek, manual crossfade, auto-
 /// advance through the rest, `QueueEnded` on the last. Per-track
 /// failures are collected and reported in a structured final panic
@@ -497,7 +503,10 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
     kithara_integration_tests::apple_warmup::warm_if_apple(backend);
 
     let ctx = shared_test_ctx().await;
-    let urls: Vec<&'static str> = baked::BAKED_TRACKS.to_vec();
+    let urls = Config::load(None, None)
+        .expect("the shipped configuration loads")
+        .tracks()
+        .to_vec();
     assert!(urls.len() >= 3, "need ≥3 tracks for scenario");
 
     ctx.queue.set_crossfade_duration(2.0);
@@ -596,7 +605,7 @@ async fn queue_playlist_behavior(#[case] backend: DecoderBackend) {
 
     let mut per_track: Vec<(String, Result<(), String>)> = Vec::new();
     for i in 1..urls.len() {
-        let url = urls[i];
+        let url = &urls[i];
         let result: Result<(), String> =
             async {
                 wait_for_status(

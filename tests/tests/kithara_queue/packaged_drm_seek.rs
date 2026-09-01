@@ -11,13 +11,12 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
-    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl},
+    play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
     queue::{Queue, QueueConfig, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
+    config::{AppConfig, AppDrm},
     pools::{AppPools, build as app_pools},
 };
 use kithara_integration_tests::{
@@ -150,7 +149,6 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
         .build();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools)
@@ -158,6 +156,8 @@ async fn run_seek_scenario(url: &Url, backend: DecoderBackend, abr: AbrMode, tem
             .build(),
     );
     let config = AppConfig::builder()
+        // The fixture serves its own AES-128 keys; no provider claims 127.0.0.1.
+        .drm(AppDrm::new(DomainKeyPolicy::new(Vec::new())))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker.clone())

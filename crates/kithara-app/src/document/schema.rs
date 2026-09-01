@@ -3,11 +3,14 @@ use std::collections::BTreeMap;
 use kithara::{hls::SizeProbeMethod, net::Compression};
 use serde::{Deserialize, Serialize};
 
+use crate::config::AppSettings;
+
 /// Everything one configuration document can say. Sections default to empty, so
 /// a document names only what it changes.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Document {
+    pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
     pub(crate) drm: Drm,
     pub(crate) network: Network,

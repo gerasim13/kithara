@@ -10,7 +10,11 @@ use kithara::{
     queue::TrackSource,
     stream::dl::{Downloader, DownloaderConfig},
 };
-use kithara_app::{baked, config::AppConfig, pools::build as app_pools};
+use kithara_app::{
+    config::{AppConfig, AppDrm},
+    document::Config,
+    pools::build as app_pools,
+};
 use kithara_integration_tests::{
     TestTempDir, kithara, offline::OfflinePlayer, swallow_detector::assert_no_committed_swallow,
 };
@@ -83,11 +87,12 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
     );
     let flush_hub = FlushHub::new(CancelToken::never(), FlushPolicy::default());
     let shutdown = CancelToken::never();
+    let document = Config::load(None, None).expect("the shipped configuration loads");
     let store = AssetStore::builder(pools.clone())
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
+        .layouts(document.asset_layouts())
         .build();
     let worker = PlayWorker::new(
         PlayWorkerConfig::builder(pools)
@@ -95,6 +100,11 @@ async fn zvuk_prod_flac_no_swallow(#[case] backend: DecoderBackend) {
             .build(),
     );
     let config = AppConfig::builder()
+        .drm(AppDrm::new(
+            document
+                .drm_policy()
+                .expect("the shipped providers are valid"),
+        ))
         .downloader(downloader)
         .shutdown(shutdown)
         .worker(worker)

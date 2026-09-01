@@ -12,15 +12,16 @@ use kithara::{
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_app::{
-    baked,
-    config::AppConfig,
+    config::{AppConfig, AppDrm},
     deck::{Deck, DeckId, DeckSet},
+    document::Config,
     gui::{self, GuiFrontend},
     pools::{self, AppHost, AppStore, AppWorker},
     tracing_init::init_tracing,
 };
 use kithara_platform::{CancelToken, thread, tokio};
 use kithara_worker::{RayonConfig, Worker, WorkerConfig};
+use struct_patch::Patch as _;
 
 /// Kithara — audio player application.
 #[derive(Parser)]
@@ -43,11 +44,25 @@ struct Args {
     /// beside the executable.
     #[arg(long)]
     ui_package: Option<std::path::PathBuf>,
+
+    /// Configuration document to read. Defaults to `kithara.yaml` beside the
+    /// executable when one is there.
+    #[arg(long)]
+    config: Option<std::path::PathBuf>,
+
+    /// Print the effective configuration and exit.
+    #[arg(long)]
+    dump_config: bool,
 }
 
 /// Where a release lays its UI documents out: beside the executable.
 fn shipped_ui_package() -> Option<std::path::PathBuf> {
     Some(std::env::current_exe().ok()?.parent()?.join("assets/ui"))
+}
+
+/// Where an installation leaves its configuration: beside the executable.
+fn config_beside_binary() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.parent()?.join("kithara.yaml"))
 }
 
 type AppError = Box<dyn std::error::Error + Send + Sync>;
@@ -70,6 +85,21 @@ fn main() -> AppResult {
     suppress_macos_system_logs();
 
     let args = Args::parse();
+    // Reported through `Display` and not returned: `main`'s error is printed
+    // with `Debug`, which drops the readable list of unset `$KITHARA_...`
+    // names. Tracing is not up yet either, so this goes to stderr directly.
+    let document = match Config::load(args.config.as_deref(), config_beside_binary().as_deref()) {
+        Ok(document) => document,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    if args.dump_config {
+        println!("{}", document.dump());
+        return Ok(());
+    }
+
     init_tracing(&["info"])?;
     let runtime = tokio::runtime::Runtime::new()?;
     let _runtime_guard = runtime.enter();
@@ -94,8 +124,8 @@ fn main() -> AppResult {
             .build(),
     );
     let net = NetOptions::builder()
-        .is_insecure(args.insecure || baked::BAKED_SHOULD_ACCEPT_INVALID_CERTS)
-        .compression(baked::BAKED_COMPRESSION)
+        .is_insecure(args.insecure || document.should_accept_invalid_certs())
+        .compression(document.compression())
         .build();
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(net, pools.clone(), shutdown.child())).build(),
@@ -105,18 +135,26 @@ fn main() -> AppResult {
         .cancel(shutdown.child())
         .backend(StorageBackend::default())
         .flush_hub(flush_hub)
-        .layouts(baked::build_baked_asset_layouts())
+        .layouts(document.asset_layouts())
         .build();
-    let config = AppConfig::builder()
+    let mut config = AppConfig::builder()
+        .drm(AppDrm::new(document.drm_policy()?))
         .downloader(downloader)
         .shutdown(shutdown.clone())
         .worker(worker)
         .base_worker(base_worker)
         .store(store)
-        .maybe_tracks((!args.tracks.is_empty()).then_some(args.tracks))
+        .size_probe_method(document.size_probe_method())
+        .maybe_crossfade_seconds(document.crossfade_seconds())
+        .tracks(if args.tracks.is_empty() {
+            document.tracks().to_vec()
+        } else {
+            args.tracks
+        })
         .should_accept_invalid_certs(args.insecure)
         .maybe_ui_package(args.ui_package.or_else(shipped_ui_package))
         .build();
+    config.apply(document.app_settings());
 
     let mut host = AppHost::new(HostConfig::builder().build())?;
     let decks = vec![

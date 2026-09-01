@@ -531,7 +531,7 @@ mod tests {
         file::File,
         host::HostConfig,
         net::{HttpClient, NetOptions},
-        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl},
+        play::{PlayWorkerConfig, PlayerConfig, PlayerImpl, policy::DomainKeyPolicy},
         prelude::ResourceSrc,
         stream::dl::{Downloader, DownloaderConfig},
     };
@@ -793,6 +793,7 @@ mod tests {
         let pools = test_pools();
         let worker = AppWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         crate::config::AppConfig::builder()
+            .drm(crate::config::AppDrm::new(DomainKeyPolicy::new(Vec::new())))
             .downloader(Downloader::new(
                 DownloaderConfig::for_client(HttpClient::new(
                     NetOptions::builder().build(),

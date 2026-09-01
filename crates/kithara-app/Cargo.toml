@@ -77,6 +77,7 @@ bytes = { workspace = true }
 clap = { workspace = true }
 crabtime = { workspace = true }
 derive_more = { workspace = true }
+humantime-serde = { workspace = true }
 iced = { workspace = true, optional = true }
 num-traits = { workspace = true }
 obfstr = { workspace = true }
@@ -84,6 +85,7 @@ rand = { workspace = true }
 serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 sha2 = { workspace = true }
+struct-patch = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url = { workspace = true }
@@ -108,7 +110,6 @@ kithara = { workspace = true, default-features = false, features = ["apple", "cl
 ringbuf = { workspace = true, optional = true }
 
 [build-dependencies]
-serde = { workspace = true }
 serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
