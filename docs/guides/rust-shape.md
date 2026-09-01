@@ -76,11 +76,15 @@ let session = Session::new(SessionConfig {
 
 ## Comments And Documentation
 
-- Keep in-code comments short and local, and do not restate the obvious.
+- A comment carries one of the allowed markers (`SAFETY:`, `WHY:`, `NOTE:`,
+  `TODO:`, `FIXME:`, `HACK:`) or it is removed. `comment_hygiene` enforces this.
+- Prose does not fix unclear code. If a comment is needed to follow the logic,
+  rename, split, or retype the code until it is not.
 - No large comment blocks at the top of files, no separator or banner comments.
-- Contracts, invariants, lifecycle, protocol, or cache explanations belong in
-  the owning crate `CONTEXT.md`; `README.md` stays an overview that points to
-  it.
+- An invariant is pinned by a test, not by a paragraph: a test fails when the
+  invariant breaks, and a paragraph silently starts lying. Only what neither the
+  code shape nor a test can carry belongs in the owning crate `CONTEXT.md`, and
+  `README.md` stays an overview that points to it.
 
 ## File Size And Decomposition
 

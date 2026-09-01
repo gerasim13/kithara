@@ -35,8 +35,10 @@ Every fact below has one owner. Link to the owner; do not restate it.
 
 - Minimal magic and hidden dependencies. Predictability, testability, and
   reproducibility come first, and components stay loosely coupled.
-- Code is the source of truth. A crate `README.md` is an overview; contracts
-  belong in the owning crate `CONTEXT.md`.
+- Code is the only source of truth. An entry in `CONTEXT.md` is admissible only
+  when it cannot be expressed in the shape of the code or pinned by a test. An
+  explanation that exists because the code is unclear means the code is wrong,
+  and a comment without a marker is removed rather than kept.
 
 ## Non-Negotiables
 

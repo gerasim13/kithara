@@ -14,8 +14,9 @@ the change that lands the work, and keep it short.
 
 ## Next
 
-- `crates/kithara-ui/CONTEXT.md` is the only denied document, at 155 KB against
-  a 48 KB budget and four times the next largest crate contract.
+- `comment_hygiene` reports nothing for `kithara-devtools` although the crate
+  holds unmarked comment blocks, and 292 `WHY:` prefixes satisfy the rule
+  without removing a comment. Both need a fix before the check can be trusted.
 - Clear the 18 stale identifiers `doc_staleness` reports, then promote it to
   deny.
 - Work through the 16 warn-level documents.
