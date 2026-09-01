@@ -121,6 +121,17 @@ These are suitable for local pre-commit feedback.
   existing CI thresholds or latency budgets. A high score is a refactoring
   candidate, never proof of behavioral equivalence.
 
+## Dependency Policy
+
+- Declare dependency versions only in the root `Cargo.toml` under
+  `[workspace.dependencies]`, and reference them from crates with
+  `{ workspace = true }`.
+- Do not add duplicate or overlapping crates when the workspace or standard
+  library already covers the need, and do not pull in a heavy crate for a small
+  utility without checking cost first.
+- If a new dependency is unavoidable, justify it in the task, plan, or PR
+  description and add it to `[workspace.dependencies]` first.
+
 ## Dependency And Surface Tools
 
 - `cargo-deny`: licenses, bans, advisories, and source policy.

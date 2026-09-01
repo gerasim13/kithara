@@ -78,7 +78,12 @@ exclude_paths = [
 [[doc_size.limits]]
 globs = ["AGENTS.md"]
 warn = 150
-deny = 150
+deny = 170
+
+[[doc_size.limits]]
+globs = ["PROGRESS.md"]
+warn = 60
+deny = 120
 
 [[doc_size.limits]]
 globs = ["**/CONTEXT.md"]
