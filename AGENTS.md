@@ -82,7 +82,7 @@ exposes domain modules only, and recipes live under `.config/just/`.
 
 - Format: `just fmt`; check-only `just fmt check`.
 - Compile and Clippy: `just check`; `just check clippy`.
-- Lint: `just lint`; `just lint fast` is the commit gate; `just lint full`.
+- Lint: `just lint`; `just lint fast`; `just lint full`.
 - Autofix: most ratchets rewrite under `--fix` (`arch` also needs `--apply`).
   Reach for it before hand-editing; `docs/guides/tooling.md` lists them.
 - Duplication report: `just lint similarity [<crate>/src ...]`.
@@ -97,9 +97,8 @@ exposes domain modules only, and recipes live under `.config/just/`.
 - Platforms: `just platform apple|android|wasm ...`.
 - Cached xtask access is exceptional: `just tooling xtask <subcommand>`.
 
-Flags and output contracts for `arch viz` and `quality assess` live in
-`docs/guides/tooling.md` and `docs/skills/quality-assessment/SKILL.md`; read the
-printed `manifest.json` before using either as evidence.
+Read the printed `manifest.json` before using `arch viz` or `quality assess` as
+evidence; `docs/guides/tooling.md` owns their flags.
 
 ## Agent Red-Flag Gate
 
@@ -127,8 +126,9 @@ A change is done only when all of these hold:
 
 - A test that failed before the change now passes, and it pins the contract
   rather than an incidental detail.
-- `just fmt check` and `just lint fast` are clean, with no new baseline entries
-  and no lint suppressions.
+- `just fmt check`, `just lint fast`, and `just lint style` are clean, with no
+  new baseline entries and no lint suppressions. No gate runs `style`; the
+  commit hook stops at `lint fast`.
 - The acceptance target named in the task packet passes, and the claim cites
   harness output, not a scoped probe.
 - Documents describing the changed contract are updated in the same change.

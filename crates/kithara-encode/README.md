@@ -30,8 +30,7 @@ let encoded = encoder.encode_bytes(BytesEncodeRequest {
 ## Key types
 
 - `StreamEncoder` — streaming AAC-LC encoder; interleaved f32 in, access units out.
-- `EncoderFactory` — entry point; creates byte-oriented and packaged encoders.
-- `InnerEncoder` — encoder trait returned by the factory.
+- `EncoderFactory` — entry point; encodes to complete bytes or to packaged access units.
 - `BytesEncodeRequest` / `BytesEncodeTarget` — byte-encoding inputs.
 - `PackagedEncodeRequest` — packaged access-unit encoding input.
 - `EncodedBytes` / `EncodedTrack` — encoded outputs (complete bytes and packaged access units).

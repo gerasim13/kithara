@@ -98,6 +98,7 @@ allow_terms = [
   "Constraints",
   "HTTPMaximumConnectionsPerHost",
   "LICENSE",
+  "LOOM_MAX_PREEMPTIONS",
   "LockFileEx",
   "MediaExtractor",
   "MpaDecoder",
@@ -105,6 +106,7 @@ allow_terms = [
   "MyHlsAssetLayout",
   "SetGlobalDefault",
   "StateFlow",
+  "Stretcher",
   "set_default",
   "unused_self",
 ]

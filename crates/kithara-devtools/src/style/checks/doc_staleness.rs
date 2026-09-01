@@ -92,7 +92,7 @@ fn scan_content(
         if allowed.contains(ident.as_str()) || known(&ident) || !reported.insert(ident.clone()) {
             continue;
         }
-        violations.push(Violation::warn(
+        violations.push(Violation::deny(
             ID,
             format!("{rel}::{ident}"),
             format!("{rel} documents `{ident}`, which no longer exists in the sources"),
@@ -166,13 +166,13 @@ mod tests {
     }
 
     #[test]
-    fn warns_when_a_documented_identifier_is_absent_from_the_sources() {
+    fn denies_a_documented_identifier_absent_from_the_sources() {
         let src = "The `MissingType` owns the queue.\n";
 
         let violations = scan_content(&config(), "crates/demo/CONTEXT.md", src, &|_| false);
 
         assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].severity, Severity::Warn);
+        assert_eq!(violations[0].severity, Severity::Deny);
     }
 
     #[test]

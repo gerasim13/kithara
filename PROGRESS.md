@@ -9,8 +9,8 @@ the change that lands the work, and keep it short.
 ## In Flight
 
 - Harness and document revision. `AGENTS.md` now routes instead of restating,
-  and the `style` namespace budgets documents by size with `doc_size` and
-  catches drift with `doc_staleness`.
+  and the `style` namespace budgets documents by size with `doc_size` and blocks
+  drift with `doc_staleness`, whose queue is at zero.
 
 ## Next
 
@@ -23,8 +23,10 @@ the change that lands the work, and keep it short.
   `trait_item_order` 188, `struct_init_order` 91. One `just lint style --fix`
   clears them, but it rewrites declarations across every crate, so it wants its
   own change rather than a ride inside another one.
-- Clear the 12 stale identifiers `doc_staleness` reports, then promote it to
-  deny.
+- Wire `just lint style` to a gate. Nothing runs it today - not the commit hook,
+  not a CI lane - which is why the ratchet drifted unseen. A warm run is 58 s:
+  too much for every commit, nothing for a lane. The lane catalog owns that
+  change, so it does not belong in this one.
 - Work through the 17 warn-level documents.
 
 ## Blocked
