@@ -8,9 +8,13 @@ the change that lands the work, and keep it short.
 
 ## In Flight
 
-- Harness and document revision. `AGENTS.md` now routes instead of restating,
-  and the `style` namespace budgets documents by size with `doc_size` and blocks
-  drift with `doc_staleness`, whose queue is at zero.
+- Harness and document revision. `AGENTS.md` routes instead of restating, and
+  the `style` namespace now budgets documents with `doc_size` and blocks drift
+  with `doc_staleness`, which reads every document under `docs` as well as
+  `AGENTS.md`, crate `CONTEXT.md`, and `README.md`. Both queues are at zero: 17
+  documents came in under budget, and rewriting them turned up claims the
+  sources contradict - a wrong feature list, a file that no longer exists, an
+  inverted description of a known leak.
 
 ## Next
 
@@ -27,7 +31,6 @@ the change that lands the work, and keep it short.
   not a CI lane - which is why the ratchet drifted unseen. A warm run is 58 s:
   too much for every commit, nothing for a lane. The lane catalog owns that
   change, so it does not belong in this one.
-- Work through the 17 warn-level documents.
 
 ## Blocked
 
