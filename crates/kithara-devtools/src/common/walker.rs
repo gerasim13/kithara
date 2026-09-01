@@ -15,11 +15,26 @@ use super::{project::ProjectConfig, scope::Scope};
 /// # Errors
 ///
 /// Returns an error if a directory entry cannot be read while walking `dir`.
-pub fn walk_rs_files(dir: &Path) -> Result<Vec<PathBuf>> {
+pub fn walk_rs_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    walk_rs_files_inner(dir, &mut out)?;
+    collect_rs_files(root, &mut out)?;
     out.sort();
     Ok(out)
+}
+
+fn is_rs_file(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()) == Some("rs")
+}
+
+/// A root is either a directory to walk or a single `.rs` file. Scope roots
+/// come from `--path`, which accepts a file, so a root that is not a directory
+/// must still be collected rather than silently yielding nothing.
+fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    if is_rs_file(root) && root.is_file() {
+        out.push(root.to_path_buf());
+        return Ok(());
+    }
+    walk_rs_files_inner(root, out)
 }
 
 fn walk_rs_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -31,7 +46,7 @@ fn walk_rs_files_inner(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry.path();
         if path.is_dir() {
             walk_rs_files_inner(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+        } else if is_rs_file(&path) {
             out.push(path);
         }
     }
@@ -61,7 +76,7 @@ pub fn workspace_rs_files_scoped(workspace_root: &Path, scope: &Scope) -> Result
     let mut out = Vec::new();
     let excludes = WorkspaceScanExcludes::from_root(workspace_root)?;
     for root in scope.roots(workspace_root) {
-        walk_rs_files_inner(&root, &mut out)?;
+        collect_rs_files(&root, &mut out)?;
     }
     out.retain(|path| !excludes.matches(path));
     out.sort();
@@ -225,5 +240,47 @@ impl WorkspaceScanExcludes {
         }
         let rel = relative_to(&self.workspace_root, path);
         matches_any(&self.patterns, rel)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_root_yields_that_file() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let file = root.path().join("lib.rs");
+        fs::write(&file, "fn main() {}").expect("write");
+
+        let found = walk_rs_files(&file).expect("walk");
+
+        assert_eq!(found, vec![file]);
+    }
+
+    #[test]
+    fn a_non_rust_file_root_yields_nothing() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let file = root.path().join("notes.md");
+        fs::write(&file, "text").expect("write");
+
+        let found = walk_rs_files(&file).expect("walk");
+
+        assert!(found.is_empty(), "expected no files, got {found:?}");
+    }
+
+    #[test]
+    fn a_directory_root_yields_its_rust_files() {
+        let root = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(root.path().join("nested")).expect("mkdir");
+        let top = root.path().join("lib.rs");
+        let nested = root.path().join("nested").join("mod.rs");
+        fs::write(&top, "").expect("write");
+        fs::write(&nested, "").expect("write");
+        fs::write(root.path().join("README.md"), "").expect("write");
+
+        let found = walk_rs_files(root.path()).expect("walk");
+
+        assert_eq!(found, vec![top, nested]);
     }
 }
