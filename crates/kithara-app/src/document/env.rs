@@ -28,7 +28,7 @@ impl std::error::Error for MissingEnv {}
 ///
 /// # Errors
 /// Returns every name that resolved to nothing.
-pub fn expand(
+pub(crate) fn expand(
     value: &mut Value,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), MissingEnv> {

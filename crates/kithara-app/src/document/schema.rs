@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// a document names only what it changes.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Document {
+pub(crate) struct Document {
     pub(crate) assets: Assets,
     pub(crate) drm: Drm,
     pub(crate) network: Network,
@@ -23,7 +23,7 @@ pub(crate) struct Playback {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct Network {
+pub(crate) struct Network {
     pub(crate) compression: Vec<CompressionAlgorithm>,
     pub(crate) should_accept_invalid_certs: Option<bool>,
     pub(crate) size_probe_method: SizeProbeMethod,
@@ -33,7 +33,7 @@ impl Network {
     /// Fold the declared algorithms into the flags the HTTP client offers. An
     /// empty list is `Compression::empty()` -- negotiation off.
     #[must_use]
-    pub fn compression(&self) -> Compression {
+    pub(crate) fn compression(&self) -> Compression {
         self.compression
             .iter()
             .fold(Compression::empty(), |flags, &algorithm| {

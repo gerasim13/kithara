@@ -274,6 +274,7 @@ fn collect_documents(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
 fn emit_document(code: &mut String, yaml_src: &str) {
     writeln!(code, "pub const BAKED_DOCUMENT: &str = {yaml_src:?};")
         .expect("write to String never fails");
+    code.push_str("#[must_use]\npub fn baked_env(_name: &str) -> Option<String> {\n    None\n}\n");
 }
 
 fn emit_scalars(code: &mut String, app: &AppConfig) {

@@ -3,7 +3,7 @@ use serde_yaml_ng::Value;
 /// Lay `over` on top of `base`. Mappings merge key by key so a document names
 /// only what it changes; every other value replaces what it covers, because a
 /// list of tracks or of compression algorithms is one setting, not an append.
-pub fn merge(base: &mut Value, over: Value) {
+pub(crate) fn merge(base: &mut Value, over: Value) {
     match (base, over) {
         (Value::Mapping(base), Value::Mapping(over)) => {
             for (key, value) in over {
