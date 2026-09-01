@@ -52,7 +52,7 @@ impl AppDrm {
 #[derive(Clone, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
 #[patch(name = "AppSettings")]
-#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)))]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
 #[patch(attribute(non_exhaustive))]
 #[non_exhaustive]

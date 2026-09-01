@@ -241,12 +241,40 @@ into every blob and a mismatch is a miss, so `WAVEFORM_MAX_BUCKETS` and runtime 
 on their own. Because the identity is the source location and not the bytes, a file overwritten in place keeps
 its entry until the version is bumped — acceptable for a library of stable files.
 
-## Baked DRM secrets
+## Configuration document
 
-`build.rs` bakes `app.yaml` provider secrets from the process env (workspace `.env` as fallback) into
-`kithara_app::baked`. A missing `$KITHARA_*` reference degrades silently by design: the cipher key bakes as an
-empty string, headers referencing the variable are omitted, and the binary compiles but the key server rejects
-its requests. That is the intended mode for every build that never talks to a real key server, which is why it
-is not a warning. Builds that do — the CI `network*` lanes, release pipelines — set `KITHARA_DRM_REQUIRE` (any
-non-empty value): an upfront pass validates every env reference in `app.yaml`, not only the providers a given
-lane exercises, and fails the build listing all missing variables.
+The application is configured by a document, in two layers. `crates/kithara-app/app.yaml` is what this build
+ships with: `build.rs` embeds its text verbatim and the application parses that same text at startup, so the
+build decides nothing about what a field means. A `kithara.yaml` beside the executable is laid over it, and
+`--config <path>` names one explicitly; the explicit path must exist, the conventional one may be absent. The
+second layer is how a deployed binary is reconfigured without a rebuild.
+
+The pipeline is merge → expand → type, and the order is what keeps secrets out of the logs. Merging and
+expansion both work on the untyped YAML tree, and only the expanded tree is deserialized into
+`document::schema::Document`. A schema failure is therefore reported from the *pre*-expansion tree, so the
+message names `$KITHARA_DRM_PROD_KEY` rather than the value behind it. `Config` keeps that pre-expansion tree
+and prints it from both `Config::dump` (`--dump-config`) and its own `Debug`; the typed tree carries resolved
+secrets and is deserialize-only, so nothing serializes it.
+
+The merge contract (`document::merge`) is: two mappings merge key by key, so a document names only what it
+changes. Every other pair replaces — a sequence such as `playlist.tracks` or `network.compression` is one
+setting taken whole, never appended to. An explicit `null` under a named key blanks that key's value and keeps
+the key. An overlay file with nothing in it — empty, comments only, a bare `---` — contributes nothing and
+leaves the shipped document standing, because the root carries no key and so nothing there could have been
+named for blanking. An overlay whose root is a scalar or a sequence is refused as `LoadError::Schema` naming
+that one file.
+
+Secrets are never inlined in a document. A provider's `cipher_key`, and any header value, may be a
+`$KITHARA_...` reference; the values live in the gitignored workspace `.env` or in the build shell. At run time
+a reference resolves from the process environment first and from the table `build.rs` baked behind it second. A
+reference that resolves nowhere — unset, or set to an empty string — stops startup rather than degrading, and
+`MissingEnv` names every unresolved reference at once with the position it sits at
+(`drm.providers[0].cipher_key`). The position is load-bearing: expansion runs over the merged tree, so without
+it an operator cannot tell which of the two documents to fix.
+
+`build.rs` emits that second resolution table as the crate-private `baked::baked_env`. It carries only the
+names this build found a value for, wrapping each in `obfstr!()` so a shipped secret is not a plain run of
+bytes in `strings` output; a name it had no value for is answered `None` and refused at startup. Builds that
+talk to a real key server — the CI `network*` lanes, release pipelines — set `KITHARA_DRM_REQUIRE` (any
+non-empty value): an upfront pass then validates every reference in the document, the whole tree rather than
+the DRM providers alone, and fails the build listing all missing names with their positions.

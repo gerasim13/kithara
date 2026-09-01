@@ -115,7 +115,20 @@ impl Config {
 
         let overlay_path = Self::overlay_path(explicit, beside)?;
         if let Some(path) = overlay_path.as_deref() {
-            merge(&mut source, Self::read(path)?);
+            match Self::read(path)? {
+                // A named key's explicit `null` blanks that key; the root has no
+                // key, so an empty file is a file left to fill in later, not an
+                // override that wipes the document.
+                Value::Null => {}
+                over @ Value::Mapping(_) => merge(&mut source, over),
+                _ => {
+                    return Err(LoadError::Schema {
+                        resource: path.display().to_string(),
+                        detail: "the root of a configuration document must be a mapping"
+                            .to_string(),
+                    });
+                }
+            }
         }
 
         let mut expanded = source.clone();
@@ -247,7 +260,7 @@ mod tests {
     use kithara::hls::SizeProbeMethod;
     use tempfile::TempDir;
 
-    use super::{Config, LoadError};
+    use super::{BAKED_PATH, Config, LoadError};
 
     fn tempdir() -> TempDir {
         tempfile::tempdir().expect("a temporary directory")
@@ -299,6 +312,47 @@ mod tests {
         assert!(
             !config.tracks().is_empty(),
             "a section the overlay never names keeps its baked value"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_empty_overlay_leaves_the_baked_document_in_force() {
+        let dir = tempdir();
+        let path = write(&dir, "empty", "");
+
+        let config = Config::load_with(Some(&path), None, &env).expect("an empty overlay loads");
+
+        assert_eq!(config.size_probe_method(), SizeProbeMethod::RangeGet);
+        assert!(
+            !config.tracks().is_empty(),
+            "a file with nothing in it overrides nothing"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_overlay_of_comments_alone_leaves_the_baked_document_in_force() {
+        let dir = tempdir();
+        let path = write(&dir, "comments", "# fill this in later\n");
+
+        let config = Config::load_with(Some(&path), None, &env).expect("an empty overlay loads");
+
+        assert!(!config.tracks().is_empty());
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_overlay_whose_root_is_a_sequence_names_that_file() {
+        let dir = tempdir();
+        let path = write(&dir, "sequence-root", "- a\n- b\n");
+
+        let error =
+            Config::load_with(Some(&path), None, &env).expect_err("a document root is a mapping");
+
+        let report = error.to_string();
+        assert!(matches!(error, LoadError::Schema { .. }), "{report}");
+        assert!(report.contains("sequence-root.yaml"), "{report}");
+        assert!(
+            !report.contains(BAKED_PATH),
+            "one file is at fault, not the merge: {report}"
         );
     }
 

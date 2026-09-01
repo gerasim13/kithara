@@ -1,13 +1,20 @@
 use std::collections::BTreeMap;
 
 use kithara::{hls::SizeProbeMethod, net::Compression};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::config::AppSettings;
 
 /// Everything one configuration document can say. Sections default to empty, so
 /// a document names only what it changes.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+///
+/// Deserialize-only on purpose: by the time a document is typed its references
+/// are resolved, so this tree holds cipher keys and header secrets in the clear.
+/// Rendering the configuration is [`Config::dump`]'s job, and it prints the
+/// pre-expansion source instead.
+///
+/// [`Config::dump`]: crate::document::Config::dump
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Document {
     pub(crate) app: AppSettings,
@@ -18,13 +25,13 @@ pub(crate) struct Document {
     pub(crate) playlist: Playlist,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Playback {
     pub(crate) crossfade_seconds: Option<f32>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Network {
     pub(crate) compression: Vec<CompressionAlgorithm>,
@@ -47,7 +54,7 @@ impl Network {
 
 /// One `Accept-Encoding` algorithm. Named rather than spelled as bit flags,
 /// because a document reads as a list of names.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum CompressionAlgorithm {
     Gzip,
@@ -68,32 +75,32 @@ impl From<CompressionAlgorithm> for Compression {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Assets {
     pub(crate) cache_identity: Vec<CacheIdentityRule>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CacheIdentityRule {
     pub(crate) domains: Vec<String>,
     pub(crate) query_parameters: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Playlist {
     pub(crate) tracks: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Drm {
     pub(crate) providers: Vec<DrmProvider>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DrmProvider {
     pub(crate) name: String,
@@ -108,7 +115,7 @@ pub(crate) struct DrmProvider {
 }
 
 /// Shape of the per-request `X-Encrypted-Key` salt.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct SeedSpec {
     pub(crate) alphabet: SeedAlphabet,
@@ -124,7 +131,7 @@ impl Default for SeedSpec {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SeedAlphabet {
     #[default]

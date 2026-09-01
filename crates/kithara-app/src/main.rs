@@ -161,6 +161,10 @@ fn main() -> AppResult {
         .base_worker(base_worker)
         .store(store)
         .size_probe_method(document.size_probe_method())
+        // The same value tracing is running on, so a document that names no
+        // directives still leaves the built configuration agreeing with the
+        // process; one that names them has `apply` put back exactly this.
+        .log_directives(directives)
         .maybe_crossfade_seconds(document.crossfade_seconds())
         .tracks(if args.tracks.is_empty() {
             document.tracks().to_vec()

@@ -17,6 +17,8 @@ const GENERATED_HEADER: &str = "X-Encrypted-Key";
 pub enum PolicyError {
     /// The document set the header the request factory generates.
     ReservedHeader { provider: String },
+    /// A salt of no length leaves the cipher key unsalted.
+    EmptySeed { provider: String },
     /// A hex salt of odd length cannot come from whole bytes.
     OddHexSeed { provider: String, length: usize },
 }
@@ -27,6 +29,10 @@ impl fmt::Display for PolicyError {
             Self::ReservedHeader { provider } => write!(
                 f,
                 "provider `{provider}` must not set `{GENERATED_HEADER}` -- it is generated per request from the cipher key"
+            ),
+            Self::EmptySeed { provider } => write!(
+                f,
+                "provider `{provider}` seed.length must be greater than zero -- an empty salt sends `{GENERATED_HEADER}` blank and ciphers on the bare key"
             ),
             Self::OddHexSeed { provider, length } => write!(
                 f,
@@ -54,6 +60,11 @@ pub(crate) fn drm_policy(drm: &Drm) -> Result<DomainKeyPolicy, PolicyError> {
 fn rule(provider: &DrmProvider) -> Result<DomainKeyRule, PolicyError> {
     if provider.headers.contains_key(GENERATED_HEADER) {
         return Err(PolicyError::ReservedHeader {
+            provider: provider.name.clone(),
+        });
+    }
+    if provider.seed.length == 0 {
+        return Err(PolicyError::EmptySeed {
             provider: provider.name.clone(),
         });
     }
@@ -113,7 +124,10 @@ mod tests {
     use url::Url;
 
     use super::{PolicyError, drm_policy};
-    use crate::{baked::BAKED_DOCUMENT, document::schema::Document};
+    use crate::{
+        baked::BAKED_DOCUMENT,
+        document::schema::{Document, Drm},
+    };
 
     const PROVIDER: &str = concat!(
         "drm:\n  providers:\n    - name: example\n",
@@ -217,15 +231,38 @@ mod tests {
         assert!(matches!(error, PolicyError::ReservedHeader { .. }));
     }
 
-    #[kithara::test(native, flash(false))]
-    fn an_odd_hex_salt_length_is_refused() {
-        let document: Document = serde_yaml_ng::from_str(concat!(
-            "drm:\n  providers:\n    - name: example\n      domains: [example.com]\n",
-            "      cipher_key: secret\n      seed:\n        length: 7\n        alphabet: hex\n",
+    /// One provider whose only distinguishing feature is its declared seed.
+    fn seed(length: usize, alphabet: &str) -> Drm {
+        let document: Document = serde_yaml_ng::from_str(&format!(
+            concat!(
+                "drm:\n  providers:\n    - name: example\n      domains: [example.com]\n",
+                "      cipher_key: secret\n",
+                "      seed:\n        length: {length}\n        alphabet: {alphabet}\n",
+            ),
+            length = length,
+            alphabet = alphabet
         ))
         .expect("valid document");
+        document.drm
+    }
 
-        let error = drm_policy(&document.drm).expect_err("hex needs whole bytes");
+    #[kithara::test(native, flash(false))]
+    fn a_hex_salt_of_no_length_is_refused() {
+        let error = drm_policy(&seed(0, "hex")).expect_err("an empty salt is not a salt");
+
+        assert!(matches!(error, PolicyError::EmptySeed { .. }), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_alphanumeric_salt_of_no_length_is_refused() {
+        let error = drm_policy(&seed(0, "alphanumeric")).expect_err("an empty salt is not a salt");
+
+        assert!(matches!(error, PolicyError::EmptySeed { .. }), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn an_odd_hex_salt_length_is_refused() {
+        let error = drm_policy(&seed(7, "hex")).expect_err("hex needs whole bytes");
 
         assert!(matches!(error, PolicyError::OddHexSeed { length: 7, .. }));
     }

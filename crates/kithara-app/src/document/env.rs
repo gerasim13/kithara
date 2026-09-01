@@ -2,17 +2,19 @@ use std::{collections::BTreeSet, fmt};
 
 use serde_yaml_ng::Value;
 
-/// Names a document referenced that no source resolved. Carries every name, so
-/// one startup reports the whole gap instead of the first hole in it.
+/// Names a document referenced that no source resolved, each with the position
+/// it sits at. Carries every pair, so one startup reports the whole gap instead
+/// of the first hole in it. Expansion runs over the merged tree, so the position
+/// is what tells an operator which of the two documents to fix.
 #[derive(Debug)]
 #[non_exhaustive]
-pub struct MissingEnv(BTreeSet<String>);
+pub struct MissingEnv(BTreeSet<(String, String)>);
 
 impl fmt::Display for MissingEnv {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("unset environment variables referenced by the configuration:")?;
-        for name in &self.0 {
-            write!(f, "\n  {name}")?;
+        for (name, path) in &self.0 {
+            write!(f, "\n  {name} ({path})")?;
         }
         Ok(())
     }
@@ -27,13 +29,13 @@ impl std::error::Error for MissingEnv {}
 /// rejected request, which is harder to read than a refusal to start.
 ///
 /// # Errors
-/// Returns every name that resolved to nothing.
+/// Returns every name that resolved to nothing, with the position it sits at.
 pub(crate) fn expand(
     value: &mut Value,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<(), MissingEnv> {
     let mut missing = BTreeSet::new();
-    walk(value, lookup, &mut missing);
+    walk(value, "", lookup, &mut missing);
     if missing.is_empty() {
         Ok(())
     } else {
@@ -41,25 +43,35 @@ pub(crate) fn expand(
     }
 }
 
+/// `path` spells the position the way `build.rs::collect_refs` does -- a dot
+/// before a mapping key, `[i]` for a sequence index -- so a reference reads the
+/// same whether the build refused it or the startup did.
 fn walk(
     value: &mut Value,
+    path: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
-    missing: &mut BTreeSet<String>,
+    missing: &mut BTreeSet<(String, String)>,
 ) {
     match value {
         Value::String(text) => {
-            if let Some(rendered) = render(text, lookup, missing) {
+            if let Some(rendered) = render(text, path, lookup, missing) {
                 *text = rendered;
             }
         }
         Value::Sequence(items) => {
-            for item in items {
-                walk(item, lookup, missing);
+            for (index, item) in items.iter_mut().enumerate() {
+                walk(item, &format!("{path}[{index}]"), lookup, missing);
             }
         }
         Value::Mapping(entries) => {
-            for (_, entry) in entries.iter_mut() {
-                walk(entry, lookup, missing);
+            for (key, entry) in entries.iter_mut() {
+                let key = key.as_str().unwrap_or("?");
+                let child = if path.is_empty() {
+                    key.to_string()
+                } else {
+                    format!("{path}.{key}")
+                };
+                walk(entry, &child, lookup, missing);
             }
         }
         _ => {}
@@ -71,14 +83,15 @@ fn walk(
 /// stays in place for the error path to report against.
 fn render(
     text: &str,
+    path: &str,
     lookup: &dyn Fn(&str) -> Option<String>,
-    missing: &mut BTreeSet<String>,
+    missing: &mut BTreeSet<(String, String)>,
 ) -> Option<String> {
     if !text.contains("${") {
         let name = text.strip_prefix('$')?;
         let found = resolve(name, lookup);
         if found.is_none() {
-            missing.insert(name.to_string());
+            missing.insert((name.to_string(), path.to_string()));
         }
         return found;
     }
@@ -99,7 +112,7 @@ fn render(
         if let Some(value) = resolve(name, lookup) {
             rendered.push_str(&value);
         } else {
-            missing.insert(name.to_string());
+            missing.insert((name.to_string(), path.to_string()));
             resolved = false;
         }
         rest = &tail[end + 1..];
@@ -189,6 +202,20 @@ mod tests {
         let report = missing.to_string();
         assert!(report.contains("KITHARA_ONE"), "{report}");
         assert!(report.contains("KITHARA_TWO"), "{report}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_missing_name_is_reported_with_the_position_it_sits_at() {
+        let pairs = env(&[]);
+        let mut value: Value = serde_yaml_ng::from_str(
+            "drm:\n  providers:\n    - cipher_key: $KITHARA_DEFINITELY_UNSET\n",
+        )
+        .expect("valid yaml");
+
+        let missing = expand(&mut value, &lookup(&pairs)).expect_err("the name is unset");
+
+        let report = missing.to_string();
+        assert!(report.contains("drm.providers[0].cipher_key"), "{report}");
     }
 
     #[kithara::test(native, flash(false))]

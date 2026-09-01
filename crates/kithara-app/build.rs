@@ -123,26 +123,38 @@ fn emit_document(code: &mut String, yaml_src: &str) {
     .expect("write to String never fails");
 }
 
-/// Emit the second place a reference is resolved from. Values are wrapped with
-/// `obfstr!()` so a shipped secret is not a plain run of bytes in `strings`
-/// output. A name the build had no value for still gets an arm answering
-/// `None`, so a startup that needs it names it instead of failing later.
+/// Emit the second place a reference is resolved from. The table carries only
+/// the names this build found a value for and answers `None` to everything
+/// else, so a name it had nothing for reaches the startup unresolved and is
+/// named there. Values are wrapped with `obfstr!()` so a shipped secret is not
+/// a plain run of bytes in `strings` output.
 fn emit_env_table(code: &mut String, refs: &[(String, String)], env_map: &HashMap<String, String>) {
     let mut names: Vec<&String> = refs.iter().map(|(_, name)| name).collect();
     names.sort_unstable();
     names.dedup();
+    let resolved: Vec<(&String, &String)> = names
+        .into_iter()
+        .filter_map(|name| Some((name, env_map.get(name).filter(|value| !value.is_empty())?)))
+        .collect();
+
+    // A build that resolved nothing -- every lane without credentials -- has no
+    // table to match against, and a `match` left with one wildcard arm is not a
+    // table either.
+    if resolved.is_empty() {
+        code.push_str(
+            "#[must_use]\npub(crate) fn baked_env(_name: &str) -> Option<String> {\n    None\n}\n",
+        );
+        return;
+    }
 
     code.push_str(
         "#[must_use]\npub(crate) fn baked_env(name: &str) -> Option<String> {\n    match name {\n",
     );
-    for name in names {
-        match env_map.get(name).filter(|value| !value.is_empty()) {
-            Some(value) => writeln!(
-                code,
-                "        {name:?} => Some(::obfstr::obfstr!({value:?}).to_string()),"
-            ),
-            None => writeln!(code, "        {name:?} => None,"),
-        }
+    for (name, value) in resolved {
+        writeln!(
+            code,
+            "        {name:?} => Some(::obfstr::obfstr!({value:?}).to_string()),"
+        )
         .expect("write to String never fails");
     }
     code.push_str("        _ => None,\n    }\n}\n");
