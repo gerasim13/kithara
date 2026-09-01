@@ -37,7 +37,10 @@ bon = { workspace = true }
 dashmap = { workspace = true }
 delegate = { workspace = true }
 fieldwork = { workspace = true }
+humantime-serde = { workspace = true }
 num-traits = { workspace = true }
+serde = { workspace = true }
+struct-patch = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 unimock = { workspace = true, optional = true }
@@ -48,6 +51,7 @@ kithara-workspace-hack = { version = "0.0.1-alpha4", path = "../kithara-workspac
 [dev-dependencies]
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 proptest = { workspace = true }
+serde_yaml_ng = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }
 

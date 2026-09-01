@@ -13,6 +13,7 @@ use kithara_platform::{
     time::Duration,
 };
 use kithara_test_utils::kithara;
+use struct_patch::Patch;
 
 use super::peer::PeerEntry;
 use crate::{
@@ -57,37 +58,49 @@ impl kithara_test_utils::probe::IntoProbeArg for AbrPeerId {
 }
 
 /// ABR controller settings.
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Debug, Builder, Patch)]
 #[builder(state_mod(vis = "pub"))]
+#[patch(name = "AbrSettingsPatch")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct AbrSettings {
     /// Minimum interval between `AbrEvent::BandwidthEstimate` emits.
     #[builder(default = Defaults::BANDWIDTH_EMIT_MIN_INTERVAL)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub bandwidth_emit_min_interval: Duration,
     /// Minimum absolute delta between `BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_DELTA)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub buffer_emit_min_delta: Duration,
     /// Minimum interval between `AbrEvent::BufferAhead` emits.
     #[builder(default = Defaults::BUFFER_EMIT_MIN_INTERVAL)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub buffer_emit_min_interval: Duration,
     /// Minimum buffer-ahead required before an up-switch is allowed.
     #[builder(default = Defaults::MIN_BUFFER_FOR_UP_SWITCH)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub min_buffer_for_up_switch: Duration,
     /// Minimum interval between variant switches.
     #[builder(default = Defaults::MIN_SWITCH_INTERVAL)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub min_switch_interval: Duration,
     /// Minimum interval between `AbrEvent::ThroughputSample` emits. Every
     /// sample still reaches the estimator; this bounds only how often the
     /// raw per-fetch rate is published to the bus.
     #[builder(default = Defaults::THROUGHPUT_SAMPLE_MIN_INTERVAL)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub throughput_sample_min_interval: Duration,
     /// Buffer-ahead at or below this threshold forces an urgent down-switch.
     #[builder(default = Defaults::URGENT_DOWNSWITCH_BUFFER)]
+    #[patch(attribute(serde(with = "humantime_serde::option")))]
     pub urgent_downswitch_buffer: Duration,
     /// Optional parent cancellation token for the controller scope.
     ///
     /// `Some` derives a child scope from the supplied parent; `None` gives the
     /// controller a standalone scope.
+    #[patch(skip)]
     pub cancel: Option<CancelToken>,
     /// Seed throughput estimate (bps) applied at controller construction.
     #[builder(required, default = Some(Defaults::INITIAL_THROUGHPUT_BPS))]
@@ -254,5 +267,42 @@ impl AbrController {
 impl Drop for AbrController {
     fn drop(&mut self) {
         self.scope.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_platform::time::Duration;
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::{AbrSettings, AbrSettingsPatch};
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_hysteresis_it_names() {
+        let patch: AbrSettingsPatch =
+            serde_yaml_ng::from_str("up_hysteresis_ratio: 1.8\n").expect("the document types");
+        // Seeded away from the built default of 0.8, so the assertion below can
+        // tell "left alone" from "reset to the default".
+        let mut settings = AbrSettings::builder().down_hysteresis_ratio(0.55).build();
+
+        settings.apply(patch);
+
+        assert!((settings.up_hysteresis_ratio - 1.8).abs() < f64::EPSILON);
+        assert!(
+            (settings.down_hysteresis_ratio - 0.55).abs() < f64::EPSILON,
+            "a silent field must keep its value"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_reads_a_duration_knob_from_humantime_text() {
+        let patch: AbrSettingsPatch =
+            serde_yaml_ng::from_str("min_switch_interval: 45s\n").expect("the document types");
+        let mut settings = AbrSettings::builder().build();
+
+        settings.apply(patch);
+
+        assert_eq!(settings.min_switch_interval, Duration::from_secs(45));
     }
 }
