@@ -254,12 +254,29 @@ pub struct LintExcludeConfig {
     /// debt, not test code. `#[cfg(test)]` blocks are stripped automatically
     /// (AST) on top of this — no glob can match inline test modules.
     pub paths: Vec<String>,
+    /// Build tooling, dropped by [`Self::runtime_paths`] alone: it is not a
+    /// runtime path, so architecture and idiom rules have nothing to say about
+    /// it, and their lexical rules misfire on the lint engine's own sources,
+    /// which carry the patterns they detect. `style` keeps these files.
+    pub tooling_paths: Vec<String>,
     /// ast-grep rule IDs that must scan the FULL tree — tests included —
     /// bypassing [`Self::paths`]. Hard-correctness bans (e.g. `arch.no-direct-time`)
     /// where test code is NOT exempt: routing time through one primitive only
     /// works if tests obey it too. Run in a second ast-grep pass per rule with
     /// no exclude globs; the rule's own `files:` / `ignores:` scope it.
     pub scan_all_rules: Vec<String>,
+}
+
+impl LintExcludeConfig {
+    /// What `arch`, `idioms`, and ast-grep drop: test code plus build tooling.
+    /// `style` applies [`Self::paths`] alone, so tooling source stays under the
+    /// comment, document, and ordering rules.
+    #[must_use]
+    pub fn runtime_paths(&self) -> Vec<String> {
+        let mut out = self.paths.clone();
+        out.extend(self.tooling_paths.iter().cloned());
+        out
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1048,6 +1065,51 @@ complete_only = true
         let policy = &config.quality.assessment.not_applicable_tools[0];
         assert_eq!(policy.tool, "cargo-mutants");
         assert_eq!(policy.reason, "not actionable for this workspace");
+    }
+
+    #[test]
+    fn runtime_paths_carry_the_tooling_globs_and_paths_do_not() {
+        let config = load(
+            r#"
+[lint_exclude]
+paths = ["**/tests/**"]
+tooling_paths = ["crates/kithara-devtools/**"]
+"#,
+        )
+        .expect("lint exclude config");
+
+        assert_eq!(config.lint_exclude.paths, ["**/tests/**"]);
+        assert_eq!(
+            config.lint_exclude.runtime_paths(),
+            ["**/tests/**", "crates/kithara-devtools/**"]
+        );
+    }
+
+    #[test]
+    fn style_keeps_the_tooling_globs_this_repo_excludes_from_architecture() {
+        let config = ProjectConfig::load(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .as_path(),
+        )
+        .expect("the repo config loads");
+
+        assert!(
+            !config
+                .lint_exclude
+                .paths
+                .iter()
+                .any(|p| p.contains("kithara-devtools")),
+            "a devtools glob in `paths` would hide the crate from `style` too"
+        );
+        assert!(
+            config
+                .lint_exclude
+                .runtime_paths()
+                .iter()
+                .any(|p| p.contains("kithara-devtools")),
+            "architecture and idiom rules do not apply to build tooling"
+        );
     }
 
     #[test]

@@ -82,7 +82,7 @@ pub(crate) fn run(args: &AstGrepArgs, ctx: &Ctx) -> Result<()> {
 /// `not: inside cfg(test)` clause.)
 fn add_exclude_globs(cmd: &mut Command, ctx: &Ctx) {
     let project = &ctx.config;
-    for pat in &project.lint_exclude.paths {
+    for pat in &project.lint_exclude.runtime_paths() {
         cmd.arg("--globs").arg(format!("!{pat}"));
     }
     for pat in cfg_test_module_globs(&ctx.root) {

@@ -2505,11 +2505,14 @@ paths = [
   "crates/kithara-test-macros/**",
   "crates/kithara-integration-tests/**",
   "crates/kithara-fuzz/**",
-  # Build tooling, not production runtime code. Its source is the lint engine
-  # itself (check files carry the very patterns they detect), so it is exempt
-  # from the production ratchet exactly like the `xtask` bin at the repo root.
-  "crates/kithara-devtools/**",
 ]
+# Build tooling. It is not a runtime path, so the runtime-architecture rules do
+# not apply: `arch`, `idioms`, and ast-grep drop these on top of `paths`. Its
+# lexical checks would also misfire on the lint engine's own sources, which
+# carry the very patterns they detect. `style` does NOT drop them - comment
+# hygiene, doc size, and ordering are about the source an agent reads, and
+# tooling source is read like any other.
+tooling_paths = ["crates/kithara-devtools/**"]
 modules = []
 # Hard-correctness rules that must scan the FULL tree (tests included),
 # bypassing the `paths` exclusions above. Each runs in a second ast-grep pass
