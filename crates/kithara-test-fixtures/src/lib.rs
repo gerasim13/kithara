@@ -14,6 +14,10 @@
 // the wasm lane reaches the rest through `SignalAsset` over HTTP.
 pub mod asset;
 pub mod assets;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod hls;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use hls::manifest as hls_manifest;
 pub mod signal;
 pub mod signal_asset;
 // The gapless request shape is shared with wasm; the native-only fMP4 muxer is
@@ -22,7 +26,11 @@ pub mod fmp4;
 // Read by this crate's build script through `#[path]`, and still by the
 // integration suite's; declared here so its own tests keep running.
 #[cfg(test)]
+mod context;
+#[cfg(test)]
 mod encoders;
+#[cfg(test)]
+mod graph;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 

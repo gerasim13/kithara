@@ -15,7 +15,6 @@ use kithara_platform::{
     },
 };
 use kithara_queue::QueueEvent;
-use kithara_worker::TaskError;
 use tracing::warn;
 
 use crate::{
@@ -41,13 +40,7 @@ pub(crate) async fn listen(
     mut rx: EventReceiver,
     persistence: AnalysisPersistence,
 ) {
-    let mut driver = match AnalysisController::new(&cancel, &config, Some(persistence)) {
-        Ok(driver) => driver,
-        Err(error) => {
-            warn!(%error, "analysis worker stopped before its controller was created");
-            return;
-        }
-    };
+    let mut driver = AnalysisController::new(&cancel, &config, Some(persistence));
 
     // Analyse whatever is already loaded; later tracks arrive as events.
     driver.on_tracks_changed(&queue, &state, &config);
@@ -141,7 +134,7 @@ impl AnalysisController {
         cancel: &CancelToken,
         config: &AppConfig,
         persistence: Option<AnalysisPersistence>,
-    ) -> Result<Self, TaskError> {
+    ) -> Self {
         let runner = TrackAnalysisRunner::new(
             cancel,
             config.base_worker.clone(),
@@ -149,8 +142,8 @@ impl AnalysisController {
             config.waveform_max_buckets,
             config.beat_analysis.clone(),
             config.worker.pools().clone(),
-        )?;
-        Ok(Self {
+        );
+        Self {
             cache: TrackAnalysisCache::new(
                 runner.fingerprint().clone(),
                 config.worker.pools().clone(),
@@ -160,7 +153,7 @@ impl AnalysisController {
             runner,
             activity: None,
             pending: VecDeque::new(),
-        })
+        }
     }
 
     /// Persist a closed run before allowing the next analysis to start.
@@ -682,8 +675,7 @@ mod tests {
     ) -> (AnalysisController, watch::Sender<Option<AnalysisProgress>>) {
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
-        let mut controller = AnalysisController::new(&cancel, &config, persistence)
-            .expect("analysis controller fixture starts");
+        let mut controller = AnalysisController::new(&cancel, &config, persistence);
         let (tx, rx) = watch::channel(value.map(progress));
         controller.activity = Some(Activity::Running(Run {
             shown_revision: None,
@@ -820,8 +812,7 @@ mod tests {
         let state = state_with_current(&[TrackId::from(1)], 0);
         let cancel = CancelToken::root();
         let config = app_config(&cancel);
-        let mut controller = AnalysisController::new(&cancel, &config, None)
-            .expect("analysis controller fixture starts");
+        let mut controller = AnalysisController::new(&cancel, &config, None);
 
         controller.on_tracks_changed(&queue, &state, &config);
 

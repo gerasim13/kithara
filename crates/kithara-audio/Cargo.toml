@@ -104,6 +104,7 @@ kithara-audio = { path = ".", default-features = false, features = ["mock", "pro
 kithara-bufpool = { workspace = true, features = ["test-utils"] }
 kithara-decode = { workspace = true, features = ["mock", "probe", "symphonia"] }
 kithara-storage = { workspace = true }
+kithara-test-fixtures = { workspace = true }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 aes = { workspace = true }

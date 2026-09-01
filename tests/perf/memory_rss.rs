@@ -17,7 +17,7 @@ use kithara::{
 use kithara_integration_tests::{
     TestServerHelper, TestTempDir, auto,
     bufpool_ext::{TestPools, pools},
-    mixed_codec_ladder, temp_dir,
+    temp_dir,
 };
 #[cfg(not(target_os = "linux"))]
 use memory_stats::memory_stats;
@@ -43,18 +43,11 @@ impl Consts {
     /// has to clear it or warmup gets read off the ramp and every drain looks
     /// like a leak.
     const SETTLE_READS: usize = 257;
-    /// The ladder these measurements drain, sized by two facts. A quarter of
-    /// it has to outrun `SETTLE_READS`, and it has to encode cold inside the
-    /// 30 s this test declares alongside three drains - encoding the full
-    /// production ladder cold took 18-23 s when `thread_budget` tried it.
-    const LADDER_SEGMENTS: usize = 25;
-    const LADDER_SEGMENT_SECS: f64 = 4.0;
     const RSS_BUDGET_MB: usize = 30;
     const LEAK_TOLERANCE_MB: usize = 5;
 }
 
 #[cfg(target_os = "linux")]
-/// Exact aggregate RSS without reparsing every VMA after every audio read.
 fn physical_memory() -> Option<usize> {
     std::fs::read_to_string("/proc/self/smaps_rollup")
         .ok()?
@@ -121,23 +114,14 @@ impl Drain {
     }
 }
 
-/// Serves the production ladder, shortened to `Consts::LADDER_SEGMENTS`, and
-/// hands back its master URL.
+/// Serves the build-cached production ladder and hands back its master URL.
 ///
 /// The shape is the production one - three AAC-LC variants under a FLAC one -
 /// so `auto` is offered the same codec boundary to cross that it is offered in
 /// production, and a codec switch reallocates decoder state. Only the length is
 /// ours.
-async fn ladder_url(server: &TestServerHelper) -> Url {
-    server
-        .create_hls(
-            mixed_codec_ladder()
-                .segments_per_variant(Consts::LADDER_SEGMENTS)
-                .segment_duration_secs(Consts::LADDER_SEGMENT_SECS),
-        )
-        .await
-        .expect("create the ladder these measurements drain")
-        .master_url()
+fn ladder_url(server: &TestServerHelper) -> Url {
+    server.asset("hls-rss/master.m3u8")
 }
 
 /// Reads `audio` to the end of the stream, sampling RSS after every read.
@@ -183,12 +167,11 @@ fn drain_sampling_rss<A: AudioRead>(audio: &mut A) -> Drain {
 async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
     let _guard = HotpathGuardBuilder::new("rss_budget").build();
     let mut run_deltas = Vec::with_capacity(Consts::BUDGET_RUNS);
+    let server = TestServerHelper::new().await;
+    let url = ladder_url(&server);
 
     for run in 0..Consts::BUDGET_RUNS {
         let baseline_rss = physical_memory().expect("RSS measurement unsupported");
-
-        let server = TestServerHelper::new().await;
-        let url = ladder_url(&server).await;
 
         let pools = pools();
         let store = AssetStore::builder(pools.clone())
@@ -196,7 +179,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
                 root: temp_dir.path().into(),
             })
             .build();
-        let hls_config = HlsConfig::for_url(url)
+        let hls_config = HlsConfig::for_url(url.clone())
             .store(store)
             .pools(pools.clone())
             .initial_abr_mode(auto(0))
@@ -226,8 +209,6 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
             samples.len(),
             drain.elapsed,
         );
-
-        drop(server);
     }
 
     let min_delta = run_deltas.iter().copied().min().unwrap_or(0);
@@ -261,7 +242,7 @@ async fn test_hls_playback_rss_within_budget(temp_dir: TestTempDir) {
 async fn test_hls_playback_no_rss_leak(temp_dir: TestTempDir) {
     let _guard = HotpathGuardBuilder::new("rss_leak").build();
     let server = TestServerHelper::new().await;
-    let url = ladder_url(&server).await;
+    let url = ladder_url(&server);
 
     let pools = pools();
     let store = AssetStore::builder(pools.clone())

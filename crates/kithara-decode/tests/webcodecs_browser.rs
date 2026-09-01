@@ -13,7 +13,9 @@ use kithara_resampler::NoResamplerBackend;
 use kithara_signal::AudioSpec;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use kithara_test_fixtures::{
-    assets::{flac_unknown_length_saw_6s, he_aac_v1, he_aac_v2, signal_mp3_track_sine440_187s},
+    assets::{
+        aac_lc, flac_unknown_length_saw_6s, he_aac_v1, he_aac_v2, signal_mp3_track_sine440_187s,
+    },
     signal::{SignalDirection, detect_direction},
 };
 use kithara_test_utils::kithara;
@@ -22,8 +24,6 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{AudioDecoder, AudioDecoderConfig, AudioDecoderSupport};
 
-const AAC_INIT: &[u8] = include_bytes!("../../../assets/hls/init-slq-a1.mp4");
-const AAC_SEGMENT: &[u8] = include_bytes!("../../../assets/hls/segment-1-slq-a1.m4s");
 const EXPECTED_CHANNELS: u16 = 2;
 const EXPECTED_SAMPLE_RATE: u32 = 44_100;
 const MP3_FRAME_TOLERANCE: usize = 2 * 1_152;
@@ -257,11 +257,9 @@ async fn eof_tail_drain() {
 async fn aac_parity() {
     prepare_webcodecs("mp4a.40.2").await;
 
-    let mut bytes = Vec::with_capacity(AAC_INIT.len() + AAC_SEGMENT.len());
-    bytes.extend_from_slice(AAC_INIT);
-    bytes.extend_from_slice(AAC_SEGMENT);
-    let webcodecs = decode_aac(&bytes, DecoderBackend::WebCodecs).await;
-    let symphonia = decode_aac(&bytes, DecoderBackend::Symphonia).await;
+    let bytes = aac_lc().bytes();
+    let webcodecs = decode_aac(bytes, DecoderBackend::WebCodecs).await;
+    let symphonia = decode_aac(bytes, DecoderBackend::Symphonia).await;
 
     assert_common_parity("aac-lc", &webcodecs, &symphonia, AAC_FRAME_TOLERANCE);
     tracing::info!(
@@ -350,22 +348,17 @@ fn webcodecs_runtime_ready(codec: &str) -> bool {
             decoder_config(DecoderBackend::WebCodecs),
         )
         .is_ok(),
-        "mp4a.40.2" => {
-            let mut bytes = Vec::with_capacity(AAC_INIT.len() + AAC_SEGMENT.len());
-            bytes.extend_from_slice(AAC_INIT);
-            bytes.extend_from_slice(AAC_SEGMENT);
-            DecoderFactory::create_from_media_info(
-                Cursor::new(bytes),
-                &MediaInfo::builder()
-                    .codec(AudioCodec::AacLc)
-                    .container(ContainerFormat::Fmp4)
-                    .sample_rate(EXPECTED_SAMPLE_RATE)
-                    .channels(EXPECTED_CHANNELS)
-                    .build(),
-                decoder_config(DecoderBackend::WebCodecs),
-            )
-            .is_ok()
-        }
+        "mp4a.40.2" => DecoderFactory::create_from_media_info(
+            Cursor::new(aac_lc().bytes()),
+            &MediaInfo::builder()
+                .codec(AudioCodec::AacLc)
+                .container(ContainerFormat::Fmp4)
+                .sample_rate(EXPECTED_SAMPLE_RATE)
+                .channels(EXPECTED_CHANNELS)
+                .build(),
+            decoder_config(DecoderBackend::WebCodecs),
+        )
+        .is_ok(),
         "mp4a.40.5" => DecoderFactory::create_from_media_info(
             Cursor::new(he_aac_v1().bytes()),
             &aac_media_info(AudioCodec::AacHe),

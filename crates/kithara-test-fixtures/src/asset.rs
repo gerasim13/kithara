@@ -1,5 +1,7 @@
 use std::{path::Path, sync::OnceLock};
 
+use thiserror::Error;
+
 /// One generated asset as the manifest records it.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -12,6 +14,33 @@ pub struct AssetEntry {
     pub path: &'static str,
     /// MIME type declared by the generator.
     pub content_type: &'static str,
+    /// Redacted build-time reason an optional asset is unavailable.
+    pub unavailable: Option<&'static str>,
+}
+
+/// Failure to access one generated or hydrated fixture.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum AssetError {
+    /// An optional producer did not materialize this asset.
+    #[error("fixture `{name}` is unavailable: {reason}")]
+    Unavailable {
+        /// Generated accessor name.
+        name: &'static str,
+        /// Redacted build-time failure.
+        reason: &'static str,
+    },
+    /// A required on-disk entry disappeared after the build.
+    #[error("fixture `{name}` is missing from {path}: {source}")]
+    Read {
+        /// Generated accessor name.
+        name: &'static str,
+        /// Expected store path.
+        path: &'static str,
+        /// Filesystem failure.
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Handle to one generated asset.
@@ -48,21 +77,40 @@ impl Asset {
     ///
     /// # Panics
     ///
-    /// Panics when the store entry is missing. That means the build script did
-    /// not run for this build: run `cargo build -p kithara-test-fixtures`.
+    /// Panics when an optional asset is unavailable or a store entry is
+    /// missing. A missing required entry means the build script did not run for
+    /// this build: run `cargo build -p kithara-test-fixtures`.
     #[must_use]
     pub fn bytes(&self) -> &'static [u8] {
+        self.try_bytes().unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    /// Bytes of the asset, or the redacted reason an optional producer failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AssetError::Unavailable`] for an optional asset that was not
+    /// hydrated and [`AssetError::Read`] when an on-disk entry disappeared.
+    pub fn try_bytes(&self) -> Result<&'static [u8], AssetError> {
+        if let Some(reason) = self.entry.unavailable {
+            return Err(AssetError::Unavailable {
+                name: self.entry.name,
+                reason,
+            });
+        }
         match self.source {
-            Source::Embedded(bytes) => bytes,
-            Source::OnDisk(cell) => cell.get_or_init(|| {
-                std::fs::read(self.entry.path).unwrap_or_else(|error| {
-                    panic!(
-                        "kithara-test-fixtures: asset `{}` is missing from the store at {} ({error}); \
-                         run `cargo build -p kithara-test-fixtures` to materialize it",
-                        self.entry.name, self.entry.path,
-                    )
-                })
-            }),
+            Source::Embedded(bytes) => Ok(bytes),
+            Source::OnDisk(cell) => {
+                if let Some(bytes) = cell.get() {
+                    return Ok(bytes);
+                }
+                let loaded = std::fs::read(self.entry.path).map_err(|source| AssetError::Read {
+                    name: self.entry.name,
+                    path: self.entry.path,
+                    source,
+                })?;
+                Ok(cell.get_or_init(|| loaded))
+            }
         }
     }
 
@@ -79,5 +127,33 @@ impl Asset {
             Source::Embedded(_) => None,
             Source::OnDisk(_) => Some(Path::new(self.entry.path)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::{Asset, AssetEntry, AssetError, OnceLock};
+
+    #[kithara::test(native, flash(false))]
+    fn unavailable_asset_returns_the_build_failure() {
+        static ENTRY: AssetEntry = AssetEntry {
+            name: "remote_reference",
+            id: "remote-id",
+            path: "/missing/remote.m3u8",
+            content_type: "application/vnd.apple.mpegurl",
+            unavailable: Some("HTTP 403; refresh KITHARA_TOKEN"),
+        };
+        static BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+        let asset = Asset::on_disk(&ENTRY, &BYTES);
+
+        assert!(matches!(
+            asset.try_bytes(),
+            Err(AssetError::Unavailable {
+                name: "remote_reference",
+                reason: "HTTP 403; refresh KITHARA_TOKEN",
+            })
+        ));
     }
 }

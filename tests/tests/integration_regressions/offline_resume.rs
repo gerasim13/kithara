@@ -1,7 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{fs, path::PathBuf};
-
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event},
@@ -25,6 +23,7 @@ use kithara_integration_tests::{
     temp_dir,
     waits::{wait_for_event, wait_for_loader_done_event, wait_for_position_event},
 };
+use kithara_test_fixtures::hls::long_plain;
 
 /// Playback failing to resume once connectivity returns does not reproduce in
 /// the core: with connectivity restored the engine resumes on its own. This
@@ -107,11 +106,12 @@ fn paced_master(server: &PrivateTestServer) -> String {
     const INITIALIZATION: &str = "init-slq-a1.mp4";
     const PLAYLIST_TYPE: Option<&'static str> = Some("application/vnd.apple.mpegurl");
 
-    let hls = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repo root from tests/")
-        .join("assets/hls");
-    let playlist = fs::read_to_string(hls.join(VARIANT)).expect("read the packaged variant");
+    let bundle = long_plain();
+    let playlist_resource = bundle
+        .get(&format!("/hls/{VARIANT}"))
+        .expect("generated HLS variant");
+    let playlist = std::fs::read_to_string(playlist_resource.path())
+        .expect("read the generated packaged variant");
 
     let mut rewritten = Vec::new();
     for line in playlist.split('\n') {
@@ -119,7 +119,10 @@ fn paced_master(server: &PrivateTestServer) -> String {
             let init = server.helper().asset(&format!("hls/{INITIALIZATION}"));
             rewritten.push(line.replace(INITIALIZATION, init.as_str()));
         } else if !line.is_empty() && !line.starts_with('#') {
-            let bytes = fs::read(hls.join(line)).expect("read a packaged segment");
+            let resource = bundle
+                .get(&format!("/hls/{line}"))
+                .expect("generated HLS segment");
+            let bytes = std::fs::read(resource.path()).expect("read a generated packaged segment");
             let handle = server.helper().register_behavior(FixtureBehavior {
                 content: Content::StaticBytes {
                     bytes: Arc::new(bytes),

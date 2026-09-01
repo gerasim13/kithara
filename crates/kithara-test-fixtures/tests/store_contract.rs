@@ -14,9 +14,23 @@ fn the_registry_is_not_empty() {
 }
 
 #[kithara::test(native, flash(false))]
-fn every_manifest_entry_is_materialized() {
+fn every_manifest_entry_is_materialized_or_explicitly_unavailable() {
     for entry in assets::MANIFEST {
         let path = std::path::Path::new(entry.path);
+        if let Some(reason) = entry.unavailable {
+            assert!(
+                !reason.is_empty(),
+                "asset {} has an empty failure",
+                entry.name
+            );
+            assert!(
+                !path.exists(),
+                "unavailable asset {} unexpectedly exists at {}",
+                entry.name,
+                entry.path,
+            );
+            continue;
+        }
         let bytes = std::fs::read(path)
             .unwrap_or_else(|error| panic!("asset {} at {}: {error}", entry.name, entry.path));
         assert!(!bytes.is_empty(), "asset {} is empty", entry.name);

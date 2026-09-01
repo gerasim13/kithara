@@ -42,7 +42,7 @@ where
         pcm: &[f32],
         channels: usize,
         at: u64,
-        detector: &mut dyn BeatDetector,
+        detector: &dyn BeatDetector,
     ) where
         S: HasPool<f32>,
     {
@@ -88,7 +88,7 @@ where
     pub(crate) fn snapshot<S>(
         &mut self,
         pools: &PoolRegion<S>,
-        detector: &mut dyn BeatDetector,
+        detector: &dyn BeatDetector,
         ending: bool,
         extent: Option<u64>,
     ) -> Option<(BeatArtifact, Vec<FrameRange>)>
