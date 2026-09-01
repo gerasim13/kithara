@@ -257,9 +257,10 @@ and prints it from both `Config::dump` (`--dump-config`) and its own `Debug`; th
 secrets and is deserialize-only, so nothing serializes it.
 
 The merge contract (`document::merge`) is: two mappings merge key by key, so a document names only what it
-changes. Every other pair replaces — a sequence such as `playlist.tracks` or `network.compression` is one
+changes. Every other pair replaces — a sequence such as `playlist.tracks` or `net.compression` is one
 setting taken whole, never appended to. An explicit `null` under a named key blanks that key's value and keeps
-the key. An overlay file with nothing in it — empty, comments only, a bare `---` — contributes nothing and
+the key; under a crate section that means the field types as `None`, which is the same as never naming it, so
+the crate's own default stands. An overlay file with nothing in it — empty, comments only, a bare `---` — contributes nothing and
 leaves the shipped document standing, because the root carries no key and so nothing there could have been
 named for blanking. An overlay whose root is a scalar or a sequence is refused as `LoadError::Schema` naming
 that one file.
@@ -283,11 +284,15 @@ the DRM providers alone, and fails the build listing all missing names with thei
 
 A section names the crate that owns the setting and carries that crate's own patch type, so a value is spelled once, in
 the crate that defines it. `net` is the first of them: it is `kithara::net::NetSettings`, and what it may say is the
-`kithara-net` contract rather than this crate's.
+`kithara-net` contract rather than this crate's. `main` builds `NetOptions` from the crate default, applies that
+section, and only then lets `--insecure` force verification off; the flag is an override that can turn verification
+off and never back on.
 
-`network` predates that shape and still exists. Until the task that moves the read, `network.compression` and
-`net.compression` both name the compression setting, which is two sections for one value — allowed only as the staged
-transfer it is, and only under one rule: `network` stays the only section `main` resolves through. `net` is declared and
-typed so the section parses and a document may be written against it, and nothing reads it yet. A test in
-`document::load` holds that rule; the task that deletes `network` inverts it, and a failure before then says the
-transfer half-happened.
+`network` predates that shape and is most of the way out. `compression` and `is_insecure` have moved to `net`, and
+naming either under `network` is now refused by `deny_unknown_fields` rather than parsed and ignored — that refusal is
+what makes the move a move rather than a second reader going quiet. Two tests hold it: one in `document::schema` at the
+type, one in `document::load` through the whole merge-expand-type pipeline.
+
+What is left of `network` is `size_probe_method`, which is not a `kithara-net` field at all — it is
+`kithara::hls::SizeProbeMethod`, and it belongs to the `hls` section. When that section arrives it takes the field and
+`network` goes with it. Until then `network` is a one-field holding pen, not a second source of truth.
