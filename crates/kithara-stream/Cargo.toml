@@ -39,6 +39,9 @@ delegate = { workspace = true }
 derive_more = { workspace = true }
 fieldwork = { workspace = true }
 futures = { workspace = true }
+humantime-serde = { workspace = true }
+serde = { workspace = true }
+struct-patch = { workspace = true }
 thiserror = { workspace = true }
 thunderdome = { workspace = true }
 tracing = { workspace = true }
@@ -62,6 +65,7 @@ kithara-stream = { path = ".", default-features = false }
 kithara-test-utils = { path = "../kithara-test-utils", features = ["mock", "probe", "hang"] }
 
 dashmap = { workspace = true }
+serde_yaml_ng = { workspace = true }
 tempfile = { workspace = true }
 unimock = { workspace = true }
 wasm-bindgen-test = { workspace = true }

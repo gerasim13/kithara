@@ -69,7 +69,7 @@ Dual-track EWMA — fast (2 s half-life) and slow (10 s half-life); estimate = `
 
 `AbrSettingsPatch` is the second entry point: a configuration document types into it and `apply` writes past the builder, so a document can compose a setting the builder would have refused. One thing it cannot express — `initial_throughput_bps` and `max_bandwidth_bps` are already `Option<u64>` and carry `#[patch(skip_wrap)]`, so a document sets a value but cannot blank one: `initial_throughput_bps: null` reads as "leave it alone", not as the cold-start path above. The cold start stays a builder-only choice.
 
-`AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); `initial_throughput_bps(Some(value))` sets the seed and `initial_throughput_bps(None)` explicitly disables it.
+`AbrSettings` is the facade configuration for the controller: it carries both algorithm parameters and injected resources such as the optional parent `CancelToken`. It is `#[non_exhaustive]` and built with `AbrSettings::builder()…build()` (`Default` goes through the builder); `initial_throughput_bps(Some(value))` sets the seed and `initial_throughput_bps(None)` explicitly disables it. `AbrSettings` also implements `PartialEq` by hand, comparing every field but `cancel` — `kithara-stream::dl::DownloaderConfig` nests it behind `#[patch(name = "AbrSettingsPatch")]`, and `struct_patch`'s `Patch::into_patch_by_diff` needs the nested field's original type to be comparable to type-check, even though nothing in this crate calls diff.
 
 ## Ownership
 

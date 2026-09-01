@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use kithara::broadcast::BroadcastSettings;
 use kithara::{
     abr::AbrSettingsPatch, analysis::BeatAnalysisSettingsPatch, assets::FlushSettings,
-    hls::SizeProbeMethod, host::HostSettings, net::NetSettings,
+    hls::SizeProbeMethod, host::HostSettings, net::NetSettings, stream::dl::DownloaderSettings,
 };
 use serde::Deserialize;
 
@@ -28,6 +28,7 @@ pub(crate) struct Document {
     pub(crate) beat: BeatAnalysisSettingsPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
+    pub(crate) downloader: DownloaderSettings,
     pub(crate) drm: Drm,
     pub(crate) flush: FlushSettings,
     pub(crate) host: HostSettings,
