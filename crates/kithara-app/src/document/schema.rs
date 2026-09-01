@@ -32,7 +32,6 @@ pub(crate) struct Document {
     pub(crate) beat: BeatAnalysisSettingsPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
-    pub(crate) compute_pool: Option<ComputePoolSettings>,
     pub(crate) downloader: DownloaderSettings,
     pub(crate) drm: Drm,
     pub(crate) flush: FlushSettings,
@@ -42,6 +41,7 @@ pub(crate) struct Document {
     pub(crate) playback: Playback,
     pub(crate) playlist: Playlist,
     pub(crate) worker: WorkerSettings,
+    pub(crate) worker_pool: Option<ComputePoolSettings>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -163,8 +163,12 @@ mod tests {
         assert_eq!(document.network.size_probe_method, SizeProbeMethod::Head);
         assert!(document.playlist.tracks.is_empty());
         assert!(
-            document.compute_pool.is_none(),
+            document.worker_pool.is_none(),
             "a document naming no compute pool leaves the crate default standing"
+        );
+        assert!(
+            document.worker.max_compute_tasks.is_none(),
+            "a document naming no worker section leaves the crate default standing"
         );
     }
 
@@ -178,19 +182,19 @@ mod tests {
             Some(4)
         );
         assert!(
-            document.compute_pool.is_none(),
+            document.worker_pool.is_none(),
             "naming the worker section does not name a pool"
         );
     }
 
     #[kithara::test(native, flash(false))]
-    fn a_compute_pool_document_names_the_owned_mode() {
+    fn a_worker_pool_document_names_the_owned_mode() {
         let document: Document = serde_yaml_ng::from_str(
-            "compute_pool:\n  mode: owned\n  name: analysis\n  threads: 2\n",
+            "worker_pool:\n  mode: owned\n  name: analysis\n  threads: 2\n",
         )
         .expect("a valid compute-pool document parses");
 
-        match document.compute_pool {
+        match document.worker_pool {
             Some(ComputePoolSettings::Owned { name, threads }) => {
                 assert_eq!(name, "analysis");
                 assert_eq!(threads.get(), 2);

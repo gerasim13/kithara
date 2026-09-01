@@ -119,7 +119,7 @@ fn main() -> AppResult {
         .with_max_compute_tasks(compute_threads)
         .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute"));
     worker_config.apply(document.worker());
-    if let Some(pool) = document.compute_pool() {
+    if let Some(pool) = document.worker_pool() {
         worker_config = worker_config.with_pool_settings(pool);
     }
     let base_worker = Worker::new(worker_config);

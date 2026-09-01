@@ -59,7 +59,7 @@ impl WorkerConfig {
     #[must_use]
     pub fn with_pool_settings(mut self, settings: ComputePoolSettings) -> Self {
         self.pool = match settings {
-            ComputePoolSettings::Disabled => PoolConfig::Disabled,
+            ComputePoolSettings::Disabled {} => PoolConfig::Disabled,
             #[cfg(not(target_arch = "wasm32"))]
             ComputePoolSettings::Owned { name, threads } => {
                 PoolConfig::OwnedLazy(RayonConfig::new(threads, name))
@@ -90,12 +90,12 @@ pub(crate) enum PoolConfig {
 #[serde(rename_all = "snake_case", deny_unknown_fields, tag = "mode")]
 #[non_exhaustive]
 pub enum ComputePoolSettings {
-    Disabled,
+    /// An empty struct variant, not a unit one: serde checks
+    /// `deny_unknown_fields` against a variant's own field list, and a unit
+    /// variant has none, so `mode: disabled` would swallow any key beside it.
+    Disabled {},
     #[cfg(not(target_arch = "wasm32"))]
-    Owned {
-        name: String,
-        threads: NonZeroUsize,
-    },
+    Owned { name: String, threads: NonZeroUsize },
 }
 
 /// Configuration for a Rayon pool built on first admitted compute work.
@@ -162,7 +162,7 @@ mod tests {
                 assert_eq!(name, "analysis");
                 assert_eq!(threads.get(), 2);
             }
-            ComputePoolSettings::Disabled => panic!("expected the owned variant"),
+            ComputePoolSettings::Disabled {} => panic!("expected the owned variant"),
         }
     }
 
@@ -172,6 +172,14 @@ mod tests {
             .expect_err("a document cannot name a live pool it does not own");
 
         assert!(error.to_string().contains("shared"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_disabled_pool_refuses_a_key_it_cannot_use() {
+        let error = serde_yaml_ng::from_str::<ComputePoolSettings>("mode: disabled\nthreads: 4\n")
+            .expect_err("a key the disabled mode cannot use must not be dropped in silence");
+
+        assert!(error.to_string().contains("threads"), "{error}");
     }
 
     #[kithara::test(native, flash(false))]
