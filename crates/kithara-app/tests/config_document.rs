@@ -1,12 +1,37 @@
 //! What the shipped document promises the application, end to end.
 
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use kithara_app::document::Config;
+use tempfile::TempDir;
+
+/// Every test here overlays the DRM section with a provider whose cipher key
+/// is an inline literal. The shipped providers reference `$KITHARA_...` names
+/// that only a build holding credentials resolves, and a test that passes or
+/// fails on what the machine happens to export is not a test. The shipped
+/// providers' own validity and salt shapes are pinned in `document::policy`,
+/// which reads the baked document without expanding it.
+const NEUTRAL_DRM: &str = concat!(
+    "drm:\n  providers:\n    - name: test\n",
+    "      domains: [keys.test]\n      cipher_key: not-a-secret\n",
+);
+
+fn tempdir() -> TempDir {
+    tempfile::tempdir().expect("a temporary directory")
+}
+
+fn write(dir: &TempDir, contents: &str) -> PathBuf {
+    let path = dir.path().join("overlay.yaml");
+    fs::write(&path, contents).expect("write the test document");
+    path
+}
 
 #[kithara::test(native, flash(false))]
 fn the_shipped_document_configures_the_application() {
-    let config = Config::load(None, None).expect("the baked document stands alone");
+    let dir = tempdir();
+    let path = write(&dir, NEUTRAL_DRM);
+
+    let config = Config::load(Some(&path), None).expect("the baked document stands alone");
 
     assert!(
         !config.tracks().is_empty(),
@@ -23,12 +48,11 @@ fn the_shipped_document_configures_the_application() {
 
 #[kithara::test(native, flash(false))]
 fn a_file_changes_the_playlist_without_touching_the_rest() {
-    let path = std::env::temp_dir().join("kithara-config-e2e-playlist.yaml");
-    fs::write(
-        &path,
-        "playlist:\n  tracks: [https://example.test/one.mp3]\n",
-    )
-    .expect("write the test document");
+    let dir = tempdir();
+    let path = write(
+        &dir,
+        &format!("{NEUTRAL_DRM}playlist:\n  tracks: [https://example.test/one.mp3]\n"),
+    );
 
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
@@ -41,9 +65,11 @@ fn a_file_changes_the_playlist_without_touching_the_rest() {
 
 #[kithara::test(native, flash(false))]
 fn the_app_section_reaches_the_config_patch() {
-    let path = std::env::temp_dir().join("kithara-config-e2e-app.yaml");
-    fs::write(&path, "app:\n  eq_bands: 5\n  broadcast_tap_lead: 750ms\n")
-        .expect("write the test document");
+    let dir = tempdir();
+    let path = write(
+        &dir,
+        &format!("{NEUTRAL_DRM}app:\n  eq_bands: 5\n  broadcast_tap_lead: 750ms\n"),
+    );
 
     let config = Config::load(Some(&path), None).expect("the overlay loads");
 
@@ -61,8 +87,8 @@ fn the_app_section_reaches_the_config_patch() {
 
 #[kithara::test(native, flash(false))]
 fn an_unknown_app_knob_is_refused() {
-    let path = std::env::temp_dir().join("kithara-config-e2e-unknown.yaml");
-    fs::write(&path, "app:\n  eq_band: 5\n").expect("write the test document");
+    let dir = tempdir();
+    let path = write(&dir, &format!("{NEUTRAL_DRM}app:\n  eq_band: 5\n"));
 
     let error = Config::load(Some(&path), None).expect_err("a typo must not pass silently");
 

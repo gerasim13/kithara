@@ -245,7 +245,7 @@ mod tests {
     /// answers 418 on deviation. Nothing else pins the shipped shape.
     #[kithara::test(native, flash(false))]
     fn the_shipped_prod_provider_salts_with_eight_lowercase_hex_characters() {
-        let salt = shipped_salt("https://zvuk.com/keyserver/key");
+        let salt = shipped_salt("https://cdn-hls-slicer.zvuk.com/drm/track/0/key.bin");
 
         assert_eq!(salt.len(), 8);
         assert!(
@@ -259,7 +259,7 @@ mod tests {
     /// the stage shape is pinned separately from prod's.
     #[kithara::test(native, flash(false))]
     fn the_shipped_stage_provider_salts_with_sixteen_alphanumeric_characters() {
-        let salt = shipped_salt("https://zvq.me/keyserver/key");
+        let salt = shipped_salt("https://ecs-stage-slicer-01.zvq.me/drm/track/0/key.bin");
 
         assert_eq!(salt.len(), 16);
         assert!(salt.chars().all(|c| c.is_ascii_alphanumeric()), "{salt}");

@@ -54,6 +54,7 @@ impl AppDrm {
 #[patch(name = "AppSettings")]
 #[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)))]
 #[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
 #[non_exhaustive]
 pub struct AppConfig {
     /// App-owned DRM policy and its opaque key-request registry.
