@@ -78,6 +78,8 @@ let session = Session::new(SessionConfig {
 
 - A comment carries one of the allowed markers (`SAFETY:`, `WHY:`, `NOTE:`,
   `TODO:`, `FIXME:`, `HACK:`) or it is removed. `comment_hygiene` enforces this.
+  `just lint style --check comment_hygiene --fix` removes the trivial ones for
+  you; what it leaves is a judgement, not a licence to prefix a marker.
 - Prose does not fix unclear code. If a comment is needed to follow the logic,
   rename, split, or retype the code until it is not.
 - No large comment blocks at the top of files, no separator or banner comments.

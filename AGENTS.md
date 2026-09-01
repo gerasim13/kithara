@@ -83,6 +83,8 @@ exposes domain modules only, and recipes live under `.config/just/`.
 - Format: `just fmt`; check-only `just fmt check`.
 - Compile and Clippy: `just check`; `just check clippy`.
 - Lint: `just lint`; `just lint fast` is the commit gate; `just lint full`.
+- Autofix: most ratchets rewrite under `--fix` (`arch` also needs `--apply`).
+  Reach for it before hand-editing; `docs/guides/tooling.md` lists them.
 - Duplication report: `just lint similarity [<crate>/src ...]`.
 - Test: `just test`; `just test run <args>`; `just test all` adds doc-tests.
 - UI suites: `just test ui`; through a real window, `just test ui-window`.

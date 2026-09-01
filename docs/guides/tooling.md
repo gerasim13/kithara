@@ -13,41 +13,69 @@ policy. Keep `AGENTS.md` short; put command details here.
 
 These are suitable for local pre-commit feedback.
 
+## Autofix
+
+Every ratchet that can rewrite code does so under `--fix`. Prefer it to editing
+by hand: it changes exactly what the check flagged, and the diff is the review.
+
+- `just lint style --fix`, `just lint idioms --fix`, and `just lint all --fix`
+  (both namespaces at once) rewrite in place, then re-run the checks so the
+  printed report is what remains.
+- `just lint arch --fix` only prints the plan; add `--apply` to write.
+- `just lint ast-grep --fix` applies the rules that declare a `fix:` block in
+  `.config/ast-grep/*.yml`. The rest stay reporting-only.
+- `just lint typos --fix` and `just lint audit-clippy --fix` apply their own
+  tools' machine-applicable suggestions.
+- `just ci audit --autofix` runs the whole chain - fmt, Clippy twice, typos,
+  ast-grep, xtask lint - before the read-only audit.
+
+Every `--fix` refuses to run on a dirty tree. Commit first, so the diff holds
+only what the tool did; `--allow-dirty` mixes its edits into yours. The three
+lint namespaces scope with `--crate <name>` or `--path <path>`, which takes a
+directory or a single file; `typos`, `ast-grep`, and `similarity` take their
+paths positionally.
+
+| Namespace | Check | Rewrite |
+| --- | --- | --- |
+| `style` | `comment_hygiene` | deletes comments carrying no marker |
+| `style` | `struct_field_order`, `struct_init_order`, `trait_item_order` | reorders declarations and literals |
+| `idioms` | `derivable_from`, `derivable_display`, `derivable_deref`, `derivable_getter`, `derivable_delegation` | collapses a hand-written impl onto the repo macro |
+| `arch` | `dead_exports` | deletes an unused export (needs `--apply`) |
+
+`comment_hygiene --fix` deletes conservatively: one `//` line, at most 30
+characters, no digit, backtick, bracket, `=`, `:`, or second capital. Longer
+prose is left alone because a deleted sentence is irreversible. A clean fix run
+therefore is not a clean file - what remains is a decision you owe, and adding a
+marker to silence the check is the worse of the two answers. `comment_hygiene`
+reports size and density separately for exactly that reason, and neither has an
+autofix.
+
 ## Architecture Analysis
 
 - `just arch viz` automatically collects the workspace source graph, runs all
   configured runtime scenarios, asks rust-analyzer to resolve selected calls,
   and writes the Mermaid diagram, linked crate/hotspot-subsystem pages, and
   graph-derived complexity report below `target/architecture/<revision>/`.
-- Scope and detail are independent. Exact common commands are:
-  `just arch viz --lod 0` for crates; `just arch viz --crate <package>` for
-  automatic LOD 1 subsystems; `just arch viz --crate <package> --module <path>`
-  for automatic LOD 2 abstractions; `just arch viz --crate <package> --lod 3`
-  for constructors, boundary methods, resources, messages, and tasks; and
-  `just arch viz --crate <package> --module <path> --lod 4` for the complete
-  focused call graph. A crate scope hides Cargo dependencies and incoming
-  callers while keeping concrete outgoing public interactions as compact
-  external ports.
-- `--view hierarchy|ownership` changes only the projection. `--semantic off|required`, `--runtime off`, `--scenario <name>`, and `--trace <jsonl>`
-  control evidence collection.
+- Scope and detail are independent: `--crate`/`--module` choose what, `--lod`
+  chooses how deep. `just arch viz --help` owns the flags but not what the
+  levels hold - 0 crates, 1 subsystems, 2 abstractions, 3 constructors,
+  boundary methods, resources, messages, and tasks, 4 the complete focused call
+  graph. A crate scope hides Cargo dependencies and incoming callers while
+  keeping concrete outgoing public interactions as compact external ports.
+- `--view` changes only the projection; `--semantic`, `--runtime`, `--scenario`,
+  and `--trace` control evidence collection.
 - `[architecture.filters]` supplies project-default crate/module exclusions.
   Repeat `--exclude-crate <glob>` or `--exclude-module <glob>` for additive
   one-off exclusions. Excluded runtime-test packages may still produce
   evidence, but they do not enter semantic selection, the diagram,
   `projection.json`, findings, or architecture counters. `manifest.json`
   records the effective filters and excluded counts.
-- `metrics.json` contains resolved-static and candidate profiles for the
-  selected scope and every generated contour. It reports coupling, cohesion,
-  propagation, cycles, depth, bottlenecks, ownership, boundary alignment,
-  abstractness, and the experimental ACI. Runtime evidence is an overlay and
-  cannot change the stable score. Boundary concentration and external coupling
-  enter the ACI in proportion to actual boundary load. The ACI is diagnostic,
-  not a CI budget.
-- There is no diagram node budget. Hidden methods are lifted to their visible
-  abstraction with count, method pairs, origins, and evidence retained in
-  `projection.json`. LOD 4 writes an index plus linked contour pages instead of
-  dropping nodes. Optional and target-gated Cargo edges use the distinct
-  `conditional` evidence style.
+- `metrics.json` holds resolved-static and candidate profiles for the scope and
+  every generated contour. Runtime evidence is an overlay and cannot change the
+  stable score. The ACI is diagnostic, not a CI budget.
+- There is no diagram node budget. A hidden method is lifted to its visible
+  abstraction and its evidence is retained in `projection.json`; LOD 4 writes an
+  index plus linked contour pages rather than dropping nodes.
 - Read `manifest.json` before using a result as architecture evidence.
   Every schema-v5 status preserves a reusable static projection. `complete` and
   `runtime-enriched` include their named overlays; `truncated` names an
@@ -77,13 +105,11 @@ These are suitable for local pre-commit feedback.
 - Standard runs the portable format, compiler/lint, quality, unused-public,
   test, similarity, and architecture stages independently. Full `health` and
   dependency/API/security sweeps belong to `--depth deep`.
-- `--profile complete` includes integration tests, test/tooling crates, xtask,
-  devtools, and other project-default exclusions. `--depth deep` runs the
-  configured heavyweight analyzers and project/platform scenarios.
-- Scope with `--crate <package>` or
-  `--module <package>::<module-path>`. Compare with an earlier report using
-  `--baseline <assessment.json-or-directory>`. `--reuse-existing` deliberately
-  skips refresh and only federates compatible existing artifacts.
+- `--profile complete` adds what `product` excludes by project default:
+  integration tests, test and tooling crates, xtask, and devtools. `--depth
+  deep` adds the heavyweight analyzers and project/platform scenarios.
+  `--reuse-existing` skips every refresh and federates only compatible existing
+  artifacts. `just quality assess --help` owns the rest.
 - A global unversioned report is not treated as reusable evidence merely
   because the file exists. Fresh stages must create or update their declared
   artifacts; otherwise the assessment is `partial`.
