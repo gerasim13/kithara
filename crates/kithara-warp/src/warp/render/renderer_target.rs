@@ -7,6 +7,7 @@ use super::renderer::WarpRenderer;
 
 #[derive(Default)]
 pub(super) struct PreparedTarget {
+    pub(super) activation_scratch: Option<SampleBuffer>,
     pub(super) engine: Option<Box<dyn ElasticEngine>>,
     pub(super) pending_source: Option<SampleBuffer>,
     pub(super) scratch: Option<SampleBuffer>,
@@ -20,11 +21,18 @@ where
         kind: StretchKind,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
-        render_quantum_frames: std::num::NonZeroUsize,
-        reusable_pending: Option<SampleBuffer>,
-        reusable_scratch: Option<SampleBuffer>,
+        source_frame_limit: usize,
+        scratch_frame_limit: usize,
+        reusable: PreparedTarget,
     ) -> PreparedTarget {
-        let result = Self::config_for(kind, spec, pools)
+        let PreparedTarget {
+            activation_scratch: reusable_activation_scratch,
+            engine: reusable_engine,
+            pending_source: reusable_pending,
+            scratch: reusable_scratch,
+        } = reusable;
+        drop(reusable_engine);
+        let result = Self::config_for(kind, spec, pools, source_frame_limit, scratch_frame_limit)
             .and_then(build_engine)
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
@@ -38,16 +46,25 @@ where
                     .ensure_len(pending_samples.get())
                     .map_err(|_| ElasticError::PoolCapacity)?;
                 pending.clear();
-                let scratch_samples = Self::scratch_samples(spec, render_quantum_frames)?;
+                let scratch_samples = Self::scratch_samples(spec, scratch_frame_limit)?;
                 let mut scratch = reusable_scratch.unwrap_or_else(|| pools.get::<f32>());
                 scratch
                     .ensure_len(scratch_samples.get())
                     .map_err(|_| ElasticError::PoolCapacity)?;
                 scratch.clear();
-                Ok((engine, pending, scratch))
+                let activation_samples =
+                    Self::scratch_samples(spec, engine.capabilities().latency().output_frames())?;
+                let mut activation_scratch =
+                    reusable_activation_scratch.unwrap_or_else(|| pools.get::<f32>());
+                activation_scratch
+                    .ensure_len(activation_samples.get())
+                    .map_err(|_| ElasticError::PoolCapacity)?;
+                activation_scratch.clear();
+                Ok((engine, pending, scratch, activation_scratch))
             });
         match result {
-            Ok((engine, pending, scratch)) => PreparedTarget {
+            Ok((engine, pending, scratch, activation_scratch)) => PreparedTarget {
+                activation_scratch: Some(activation_scratch),
                 engine: Some(engine),
                 pending_source: Some(pending),
                 scratch: Some(scratch),
@@ -63,23 +80,24 @@ where
         backend: StretchKind,
         spec: AudioSpec,
         pools: &PoolRegion<S>,
+        source_frame_limit: usize,
+        output_frame_limit: usize,
     ) -> Result<ElasticConfig<S>, ElasticError> {
         ElasticConfig::builder()
             .backend(backend)
             .sample_rate(spec.sample_rate.get())
             .channels(usize::from(spec.channels.max(1)))
             .pools(pools.clone())
-            .max_source_frames(Self::MAX_SOURCE_FRAMES)
-            .max_output_frames(Self::MAX_OUTPUT_FRAMES)
+            .max_source_frames(source_frame_limit)
+            .max_output_frames(output_frame_limit)
             .build()
     }
 
     fn scratch_samples(
         spec: AudioSpec,
-        render_quantum_frames: std::num::NonZeroUsize,
+        scratch_frame_limit: usize,
     ) -> Result<SampleCount, ElasticError> {
-        render_quantum_frames
-            .get()
+        scratch_frame_limit
             .checked_mul(usize::from(spec.channels.max(1)))
             .map(SampleCount::new)
             .ok_or(ElasticError::SampleCountOverflow)
@@ -94,7 +112,7 @@ where
             drop(self.deferred_scratch.take());
             return;
         }
-        let required = match Self::scratch_samples(self.spec, self.render_quantum_frames) {
+        let required = match Self::scratch_samples(self.spec, self.scratch_frame_limit) {
             Ok(required) => required,
             Err(error) => {
                 warn!(%error, "time-stretch output scratch sizing failed");
@@ -112,6 +130,14 @@ where
         }
         scratch.clear();
         self.scratch = Some(scratch);
+    }
+
+    /// Recycle render scratch while preserving the terminal quantum's sampled
+    /// controls and prepared plan.
+    #[doc(hidden)]
+    pub fn prepare_terminal(&mut self) {
+        drop(self.retired_engine.take());
+        self.service_scratch();
     }
 
     /// Service backend/spec changes and deferred destruction from the
@@ -135,17 +161,21 @@ where
             self.rebuild_pending = false;
             drop(self.deferred_scratch.take());
             self.clear_render_state();
-            let reusable_pending = self.pending_source.take();
-            let reusable_scratch = self.scratch.take();
-            drop(self.engine.take());
+            let reusable = PreparedTarget {
+                activation_scratch: self.activation_scratch.take(),
+                engine: self.engine.take(),
+                pending_source: self.pending_source.take(),
+                scratch: self.scratch.take(),
+            };
             let target = Self::prepare_target(
                 kind,
                 spec,
                 &self.pools,
-                self.render_quantum_frames,
-                reusable_pending,
-                reusable_scratch,
+                self.source_frame_limit,
+                self.scratch_frame_limit,
+                reusable,
             );
+            self.activation_scratch = target.activation_scratch;
             self.engine = target.engine;
             self.pending_source = target.pending_source;
             self.scratch = target.scratch;

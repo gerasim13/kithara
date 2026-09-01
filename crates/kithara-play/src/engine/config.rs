@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, num::NonZeroUsize};
 
 use bon::Builder;
 use kithara_bufpool::PoolRegion;
@@ -10,11 +10,30 @@ use crate::{
     session::SessionDispatcher,
 };
 
+struct Consts;
+
+impl Consts {
+    const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(441) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+    const DEFAULT_RENDER_QUANTUM_FRAMES: NonZeroUsize = match NonZeroUsize::new(64) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+}
+
 /// Configuration for the audio engine.
 #[derive(Builder)]
 #[builder(state_mod(vis = "pub"))]
 #[non_exhaustive]
 pub struct EngineConfig<S> {
+    /// Internal copy of the player-owned response contract.
+    #[builder(skip = Consts::DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    pub(crate) response_budget_frames: NonZeroUsize,
+    /// Internal copy of the resident Warp render quantum.
+    #[builder(skip = Consts::DEFAULT_RENDER_QUANTUM_FRAMES)]
+    pub(crate) render_quantum_frames: NonZeroUsize,
     /// Stable synchronization identity of the owning player.
     pub(crate) grid_id: BeatGridId,
     /// Master cancel token for the engine. The worker scheduler derives a
@@ -43,6 +62,8 @@ pub struct EngineConfig<S> {
 impl<S> Clone for EngineConfig<S> {
     fn clone(&self) -> Self {
         Self {
+            response_budget_frames: self.response_budget_frames,
+            render_quantum_frames: self.render_quantum_frames,
             grid_id: self.grid_id,
             cancel: self.cancel.clone(),
             session: self.session.clone(),
@@ -62,6 +83,8 @@ impl<S> fmt::Debug for EngineConfig<S> {
             .field("channels", &self.channels)
             .field("sample_rate", &self.sample_rate)
             .field("max_slots", &self.max_slots)
+            .field("response_budget_frames", &self.response_budget_frames)
+            .field("render_quantum_frames", &self.render_quantum_frames)
             .field("pools", &self.pools)
             .finish_non_exhaustive()
     }

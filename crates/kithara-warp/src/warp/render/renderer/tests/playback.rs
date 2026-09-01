@@ -2,8 +2,9 @@ use std::num::{NonZero, NonZeroU32, NonZeroUsize};
 
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec, FrameCount};
-use kithara_stretch::StretchKind;
+use kithara_stretch::{ElasticRequest, StretchKind};
 use kithara_test_utils::kithara;
+use num_traits::ToPrimitive;
 
 use super::{
     Consts, StretchControls, WarpRenderer, chunk, chunk_at, dominant_bin, expected_bin, f64_of,
@@ -103,11 +104,88 @@ fn render_quantum_frames(fx: &mut WarpRenderer, input: &[f32], frame_offset: u64
     case::signalsmith(StretchKind::Signalsmith)
 )]
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
-fn short_tail_then_four_x_quantums_stay_inside_the_rate_envelope(#[case] backend: StretchKind) {
+fn rate_transition_partitions_stay_inside_the_rate_envelope(#[case] backend: StretchKind) {
     const QUANTUM_FRAMES: usize = 128;
-    const FULL_SOURCE_FRAMES: usize = QUANTUM_FRAMES * 4;
+    const PARTITIONS: [usize; 3] = [510, 508, 510];
 
-    let controls = StretchControls::new(4.0);
+    let controls = StretchControls::new(0.5);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(Arc::clone(&controls))
+        .render_quantum_frames(
+            NonZeroUsize::new(QUANTUM_FRAMES).expect("fixture quantum is non-zero"),
+        )
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
+    let mut frame_offset = 0_u64;
+    for (index, frames) in PARTITIONS.into_iter().enumerate() {
+        if index == 1 {
+            controls.set_speed(4.0);
+        }
+        let source = sine(frames);
+        let _ = render_quantum_frames(&mut renderer, &source, frame_offset);
+        assert!(renderer.accepts_input(), "{backend:?}: engine retired");
+        frame_offset = frame_offset
+            .checked_add(u64::try_from(frames).expect("fixture frame count fits u64"))
+            .expect("fixture frame offset fits u64");
+    }
+    assert_eq!(
+        renderer.source_frames_admitted, frame_offset,
+        "{backend:?}: source progress reset at the declared 4x edge"
+    );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn minimum_speed_quantum_preserves_the_declared_rate(#[case] backend: StretchKind) {
+    const SOURCE_FRAMES: usize = 3;
+    const OUTPUT_FRAMES: usize = 60;
+
+    let controls = StretchControls::new(StretchControls::MIN_SPEED);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(NonZeroUsize::new(64).expect("fixture render quantum is non-zero"))
+        .build();
+    let pools = pools();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools.clone());
+    renderer.prepare(spec());
+    let source = sine(WarpRenderer::MAX_SOURCE_FRAMES);
+    let meta = chunk_at(&pools, &source, 0).meta;
+
+    let prepared = renderer
+        .prepare_quantum(meta, WarpRenderer::MAX_SOURCE_FRAMES)
+        .expect("minimum-speed source quantum is representable");
+    assert_eq!(
+        prepared.get(),
+        SOURCE_FRAMES,
+        "{backend:?}: 3/60 must preserve the declared 0.05 minimum rate"
+    );
+
+    let channels = usize::from(Consts::CH);
+    let input = chunk_at(&pools, &source[..SOURCE_FRAMES * channels], 0);
+    let output = renderer
+        .render_quantum(input)
+        .expect("minimum-speed quantum emits its exact output span");
+    assert_eq!(output.frames(), OUTPUT_FRAMES);
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn renderer_emits_the_configured_output_quantum(#[case] backend: StretchKind) {
+    const QUANTUM_FRAMES: usize = 64;
+
+    let controls = StretchControls::new(0.5);
     controls.set_keylock(true);
     controls.set_backend(backend);
     let config = WarpConfig::builder()
@@ -116,18 +194,26 @@ fn short_tail_then_four_x_quantums_stay_inside_the_rate_envelope(#[case] backend
             NonZeroUsize::new(QUANTUM_FRAMES).expect("fixture quantum is non-zero"),
         )
         .build();
-    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
-    let short_tail = sine(3);
-    assert_eq!(render_quantum_frames(&mut renderer, &short_tail, 0), 0);
-
-    let source = sine(FULL_SOURCE_FRAMES * 2);
-    assert!(render_quantum_frames(&mut renderer, &source, 3) > 0);
-    assert!(renderer.accepts_input(), "{backend:?}: engine retired");
-    assert_eq!(
-        renderer.source_frames_admitted,
-        u64::try_from(3 + FULL_SOURCE_FRAMES * 2).expect("fixture frame count fits u64"),
-        "{backend:?}: source progress reset at the declared 4x edge"
+    let pools = pools();
+    let mut renderer = Warp::new((), &config).quantum_renderer(spec(), pools.clone());
+    renderer.prepare(spec());
+    let source = sine(WarpRenderer::MAX_SOURCE_FRAMES);
+    let meta = chunk_at(&pools, &source, 0).meta;
+    let source_frames = renderer
+        .prepare_quantum(meta, WarpRenderer::MAX_SOURCE_FRAMES)
+        .expect("active quantum is representable")
+        .get();
+    let channels = usize::from(Consts::CH);
+    let output = renderer
+        .render_quantum(chunk_at(&pools, &source[..source_frames * channels], 0))
+        .expect("active quantum emits stretched samples");
+    assert!(renderer.active, "fixture must activate {backend:?}");
+    assert_eq!(output.frames(), QUANTUM_FRAMES);
+    assert!(
+        output.samples.capacity() <= QUANTUM_FRAMES * channels,
+        "{backend:?}: worker scratch exceeded its configured output quantum"
     );
+    assert!(output.samples.iter().all(|sample| sample.is_finite()));
 }
 
 fn run_keylocked_with_tail(kind: StretchKind, speed: f32, in_frames: usize) -> (Vec<f32>, usize) {
@@ -197,14 +283,197 @@ fn half_speed_and_unity_contracts(#[case] backend: StretchKind) {
 }
 
 #[kithara::test]
-fn unity_passthrough_admits_the_whole_source_chunk() {
+fn unity_passthrough_is_bounded_by_the_render_quantum() {
     let mut renderer = renderer(StretchControls::new(1.0));
     let frames = renderer.render_quantum_frames.get() * 2;
 
     assert_eq!(
         renderer.prepare_quantum(AudioChunkInfo::default(), frames),
-        Some(FrameCount::new(frames)),
+        Some(FrameCount::new(renderer.render_quantum_frames.get())),
     );
+}
+
+#[kithara::test]
+#[cfg_attr(
+    feature = "stretch-signalsmith",
+    case::signalsmith(StretchKind::Signalsmith)
+)]
+#[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
+fn primed_output_continues_the_passthrough_frontier(#[case] backend: StretchKind) {
+    const BLOCK_FRAMES: usize = 64;
+    const ACTIVE_REMAINING: usize = 4096;
+
+    let controls = StretchControls::new(1.0);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder().stretch(Arc::clone(&controls)).build();
+    let mut renderer = Warp::new((), &config).quantum_renderer(spec(), pools());
+    let pools = renderer.pools.clone();
+    let latency = renderer
+        .engine
+        .as_ref()
+        .expect("compiled backend is available")
+        .capabilities()
+        .latency();
+    let history_frames = latency.source_frames();
+    let output_frames = latency.output_frames();
+    assert!(history_frames >= BLOCK_FRAMES);
+    let gap_start = BLOCK_FRAMES * 2;
+    let cue = gap_start + history_frames + BLOCK_FRAMES;
+    let total_frames = cue
+        .checked_add(history_frames)
+        .and_then(|frames| frames.checked_add(output_frames.saturating_mul(4)))
+        .and_then(|frames| frames.checked_add(ACTIVE_REMAINING))
+        .expect("fixture frame count fits usize");
+    let source = sine(total_frames);
+    let channels = usize::from(Consts::CH);
+
+    let first = chunk_at(&pools, &source[..BLOCK_FRAMES * channels], 0);
+    let first_ptr = first.samples.as_ptr();
+    let first = render_serviced(&mut renderer, first).expect("unity source is presented");
+    assert_eq!(
+        first.samples.as_ptr(),
+        first_ptr,
+        "passthrough keeps ownership"
+    );
+
+    let mut frame = gap_start;
+    while frame < cue {
+        let frames = BLOCK_FRAMES.min(cue - frame);
+        let start = frame * channels;
+        let end = (frame + frames) * channels;
+        let input = chunk_at(
+            &pools,
+            &source[start..end],
+            u64::try_from(frame).expect("fixture frame offset fits u64"),
+        );
+        let input_ptr = input.samples.as_ptr();
+        let output = render_serviced(&mut renderer, input).expect("unity source is presented");
+        assert_eq!(
+            output.samples.as_ptr(),
+            input_ptr,
+            "history retention cannot replace byte-exact passthrough PCM"
+        );
+        if frame == gap_start {
+            assert_eq!(renderer.passthrough_history_head, Some(0));
+            assert_eq!(
+                renderer.pending_source.as_deref().map(<[f32]>::len),
+                Some(BLOCK_FRAMES * channels),
+                "a discontinuity resets the rolling history"
+            );
+        }
+        frame += frames;
+    }
+
+    let history = renderer
+        .pending_source
+        .as_deref()
+        .expect("passthrough history uses the prepared source buffer");
+    let head = renderer
+        .passthrough_history_head
+        .expect("rolling history has an oldest sample");
+    let expected = &source[(cue - history_frames) * channels..cue * channels];
+    let split = history.len() - head;
+    assert_eq!(&history[head..], &expected[..split]);
+    assert_eq!(&history[..head], &expected[split..]);
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some((
+            u64::try_from(cue).expect("fixture frontier fits u64"),
+            spec().sample_rate,
+        ))
+    );
+
+    controls.set_speed(0.5);
+    let cue_samples = cue * channels;
+    let probe = chunk_at(
+        &pools,
+        &source[cue_samples..(cue + ACTIVE_REMAINING) * channels],
+        u64::try_from(cue).expect("fixture cue fits u64"),
+    );
+    let input_frames = renderer
+        .prepare_quantum(probe.meta, ACTIVE_REMAINING)
+        .expect("activation quantum is prepared")
+        .get();
+    let prepared = renderer
+        .prepared_quantum
+        .as_ref()
+        .expect("activation plan stays frozen");
+    let activation = prepared.activation().expect("activation context is frozen");
+    let active_frames = WarpRenderer::prepared_source_frames(prepared)
+        .expect("prepared active source span is valid");
+    let prefix_frames = activation
+        .prefix_frames()
+        .expect("activation prefix fits usize");
+    let expected_warm_frames = (f64_of(output_frames) * f64::from(prepared.speed()))
+        .round()
+        .to_usize()
+        .unwrap_or_else(|| panic!("fixture warm source span fits usize"));
+    assert_eq!(activation.history_frames, history_frames);
+    assert_eq!(activation.warm.output_frames(), output_frames);
+    assert_eq!(
+        activation.warm.source_frames(),
+        expected_warm_frames,
+        "warm source uses the first frozen plan rate"
+    );
+    assert_eq!(input_frames, prefix_frames + active_frames);
+    drop(probe);
+
+    let activation_end = (cue + input_frames) * channels;
+    let output = renderer
+        .render_quantum(chunk_at(
+            &pools,
+            &source[cue_samples..activation_end],
+            u64::try_from(cue).expect("fixture cue fits u64"),
+        ))
+        .expect("primed engine immediately emits active output");
+    assert_eq!(
+        output.meta.frame_offset,
+        u64::try_from(cue).expect("fixture frontier fits u64"),
+        "first active output resumes at the presented passthrough frontier"
+    );
+    assert_eq!(
+        output.meta.timestamp,
+        spec()
+            .duration_for(u64::try_from(cue).expect("fixture cue fits u64"))
+            .expect("fixture cue timestamp fits")
+    );
+    let expected_end = spec()
+        .duration_for(u64::try_from(cue + active_frames).expect("fixture frontier fits u64"))
+        .expect("fixture end timestamp fits");
+    assert_eq!(output.meta.end_timestamp, expected_end);
+    assert_eq!(
+        renderer.rendered_source_end(),
+        Some((
+            u64::try_from(cue + active_frames).expect("fixture frontier fits u64"),
+            spec().sample_rate,
+        )),
+        "primed future context stays ahead of the presented source frontier"
+    );
+    assert_eq!(
+        renderer.source_frames_admitted,
+        u64::try_from(prefix_frames + active_frames).expect("fixture admission fits u64")
+    );
+    assert_eq!(
+        renderer.primed_source_debt,
+        u64::try_from(activation.warm.source_frames()).expect("fixture debt fits u64")
+    );
+    renderer.prepare(spec());
+    assert!(renderer.scratch.as_deref().is_some_and(<[f32]>::is_empty));
+    assert_eq!(renderer.passthrough_history_head, None);
+    assert!(
+        renderer
+            .pending_source
+            .as_deref()
+            .is_some_and(<[f32]>::is_empty)
+    );
+
+    renderer.reset();
+    assert!(!renderer.active);
+    assert_eq!(renderer.primed_source_debt, 0);
+    assert_eq!(renderer.source_frames_admitted, 0);
+    assert_eq!(renderer.passthrough_history_head, None);
+    assert_eq!(renderer.rendered_source_end(), None);
 }
 
 #[kithara::test]
@@ -273,7 +542,14 @@ fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend:
     const SOURCE_START: u64 = 10_000;
     const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
 
-    let mut renderer = keylocked(backend, StretchControls::MIN_SPEED);
+    let controls = StretchControls::new(StretchControls::MIN_SPEED);
+    controls.set_keylock(true);
+    controls.set_backend(backend);
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(NonZeroUsize::new(4096).expect("fixture render quantum is non-zero"))
+        .build();
+    let mut renderer = Warp::new((), &config).renderer(spec(), pools());
     let pools = renderer.pools.clone();
     let source = sine(SOURCE_FRAMES);
     let mut input = chunk(&pools, &source);
@@ -503,14 +779,18 @@ fn live_speed_change_ramps_the_first_output_block(#[case] backend: StretchKind) 
         .as_ref()
         .expect("compiled backend is available")
         .capabilities();
-    let hard_step_frames = WarpRenderer::source_block_limit(
-        0.5,
-        capabilities.max_source_frames(),
-        capabilities
-            .max_output_frames()
-            .min(fx.render_quantum_frames.get()),
-    )
-    .expect("hard-step span fits");
+    let hard_step_frames = capabilities
+        .rate_envelope()
+        .largest_request_at(
+            2.0,
+            capabilities.max_source_frames(),
+            capabilities
+                .max_output_frames()
+                .min(fx.render_quantum_frames.get()),
+        )
+        .as_ref()
+        .map(ElasticRequest::source_frames)
+        .expect("hard-step span fits");
     let end = split + next_frames.get() * channels;
     let mut input = chunk(&pools, &source[split..end]);
     input.meta.frame_offset = source_offset;

@@ -307,11 +307,12 @@ fn source_span(data: &AudioChunk, source_end: Option<SourceEnd>) -> Option<Sourc
     if source_end.sample_rate() != data.meta.spec.sample_rate {
         return None;
     }
-    SourceSpan::new(
+    let span = SourceSpan::new(
         data.meta.frame_offset,
         source_end.frame(),
         source_end.sample_rate(),
-    )
+    )?;
+    Some(span.with_render_revision(data.meta.render_revision))
 }
 
 pub(super) fn create_channels(

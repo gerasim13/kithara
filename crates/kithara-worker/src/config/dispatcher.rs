@@ -9,6 +9,8 @@ use crate::{Observer, observer::Event};
 #[derive(fieldwork::Fieldwork)]
 #[fieldwork(opt_in, with)]
 pub struct DispatcherConfig {
+    #[field(with)]
+    pub(crate) backpressure_poll_interval: Duration,
     #[field(with, option_set_some)]
     pub(crate) cancel: Option<CancelGroup>,
     #[field(with)]
@@ -32,6 +34,7 @@ impl DispatcherConfig {
     #[must_use]
     pub fn new<N: Into<String>>(name: N) -> Self {
         Self {
+            backpressure_poll_interval: Duration::from_millis(10),
             cancel: None,
             capacity: NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN),
             fairness_yield_interval: NonZeroU32::new(16).unwrap_or(NonZeroU32::MIN),

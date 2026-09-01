@@ -5,7 +5,7 @@ use kithara_platform::sync::Arc;
 
 use crate::StretchControls;
 
-const DEFAULT_RENDER_QUANTUM_FRAMES: NonZeroUsize = match NonZeroUsize::new(512) {
+const DEFAULT_RENDER_QUANTUM_FRAMES: NonZeroUsize = match NonZeroUsize::new(32) {
     Some(frames) => frames,
     None => unreachable!(),
 };
@@ -24,4 +24,18 @@ pub struct WarpConfig {
     #[builder(default = DEFAULT_RENDER_QUANTUM_FRAMES)]
     #[field(get, copy)]
     render_quantum_frames: NonZeroUsize,
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn defaults_express_the_frame_contract() {
+        let config = WarpConfig::builder().build();
+
+        assert_eq!(config.render_quantum_frames().get(), 32);
+    }
 }

@@ -199,6 +199,7 @@ where
     #[doc(hidden)]
     pub async fn prepare<B, S>(
         config: AudioConfig<T, B>,
+        audio_buffer_chunks: usize,
         wake: Arc<dyn WorkerWake>,
         pools: PoolRegion<S>,
     ) -> Result<PreparedAudio<Self, impl crate::AudioSource<Chunk = AudioChunk>>, DecodeError>
@@ -210,7 +211,7 @@ where
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
-            audio_buffer_chunks,
+            audio_buffer_chunks: _,
             observer,
             decoder,
             preload_chunks,

@@ -8,7 +8,7 @@ use kithara_bufpool::{OverallBudget, PoolConfig, testing::TestPools};
 use kithara_platform::sync::Arc;
 use kithara_play::{
     GroupState, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-    SessionDuckingMode, player::PlayerMember,
+    SessionDuckingMode, StreamShape, player::PlayerMember,
 };
 use kithara_warp::{
     BeatGridId, SessionEpoch, SyncAdmission, SyncGroup, SyncMember, SyncMemberKind, SyncOperation,
@@ -77,8 +77,16 @@ where
     where
         F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
     {
+        Self::with_stream_shape(default_stream_shape(), start_stream_fn)
+    }
+
+    #[must_use]
+    pub fn with_stream_shape<F>(requested_shape: StreamShape, start_stream_fn: F) -> Self
+    where
+        F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
+    {
         Self {
-            state: state_for(start_stream_fn),
+            state: state_for(requested_shape, start_stream_fn),
         }
     }
 
@@ -115,25 +123,30 @@ where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
-    state_for(start_stream_fn)
+    state_for(default_stream_shape(), start_stream_fn)
 }
 
-fn state_for<B, F, S>(start_stream_fn: F) -> SessionState<B, S>
+fn default_stream_shape() -> StreamShape {
+    StreamShape::new(
+        NonZeroU32::new(128).expect("fixture block size"),
+        NonZeroU32::new(44_100).expect("fixture sample rate"),
+    )
+}
+
+fn state_for<B, F, S>(requested_shape: StreamShape, start_stream_fn: F) -> SessionState<B, S>
 where
     B: AudioBackend,
     F: FnMut(&mut FirewheelCtx<B>, u32) -> Result<(), String> + Send + 'static,
 {
     let grid_id = BeatGridId::allocate().expect("fixture host grid id");
-    let sample_rate =
-        NonZeroU32::new(SessionState::<B, S>::DEFAULT_SAMPLE_RATE).expect("fixture sample rate");
     let root = GroupState::unavailable(
         grid_id,
-        sample_rate,
+        requested_shape.sample_rate,
         SessionEpoch::new(0),
         SyncMemberKind::Group,
     );
     let root_view = RootView::new(&root);
-    SessionState::new(root, root_view, sample_rate, start_stream_fn)
+    SessionState::new(root, root_view, requested_shape, start_stream_fn)
 }
 
 #[cfg(test)]

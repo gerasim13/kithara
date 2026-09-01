@@ -1,6 +1,7 @@
 use kithara_bufpool::HasPool;
 use kithara_signal::{AudioChunkInfo, FrameCount, SampleCount};
 use kithara_stretch::{ElasticError, ElasticRequest};
+use num_traits::ToPrimitive;
 
 use super::renderer::WarpRenderer;
 
@@ -79,6 +80,29 @@ where
                 .checked_add(sub)
                 .ok_or(ElasticError::SampleCountOverflow)?;
             let output_frames = FrameCount::new(output_frames);
+            let source_frames_per_output = source_frames
+                .to_f64()
+                .ok_or(ElasticError::SampleCountOverflow)?
+                / output_frames
+                    .get()
+                    .to_f64()
+                    .ok_or(ElasticError::SampleCountOverflow)?;
+            if !capabilities
+                .rate_envelope()
+                .contains_rate(source_frames_per_output)
+            {
+                self.append_pending_source(part, meta, frame)?;
+                self.output_remainder = next_remainder
+                    + output_frames
+                        .get()
+                        .to_f64()
+                        .ok_or(ElasticError::SampleCountOverflow)?;
+                consumed += sub;
+                frame = frame.saturating_add(
+                    u64::try_from(sub).map_err(|_| ElasticError::SampleCountOverflow)?,
+                );
+                continue;
+            }
             let request = ElasticRequest::new(source_frames, output_frames.get())?;
             let output_samples = output_frames
                 .get()

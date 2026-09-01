@@ -31,6 +31,10 @@ pub struct PlayWorkerConfig<S> {
     #[builder(start_fn)]
     #[field(get)]
     pub(crate) pools: PoolRegion<S>,
+    /// Poll interval for the RT-safe deferred wake while the final ring is full.
+    #[builder(default = Duration::from_millis(1))]
+    #[field(get, copy)]
+    pub(crate) backpressure_poll_interval: Duration,
     /// Parent cancellation token for this playback dispatcher lifetime.
     pub(crate) cancel: Option<CancelToken>,
     /// Optional base worker shared with other domain workers.

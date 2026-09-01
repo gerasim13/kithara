@@ -6,7 +6,7 @@
 use std::{marker::PhantomData, num::NonZeroU32};
 
 use kithara_bufpool::{HasPool, PoolRegion};
-use kithara_signal::{AudioChunk, AudioSpec};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
 
 use crate::{RenderReader, RenderSnapshot, WarpConfig};
 
@@ -40,8 +40,20 @@ where
         }
     }
 
+    pub(crate) fn new_quantum(
+        config: &WarpConfig,
+        context: RenderReader,
+        spec: AudioSpec,
+        pools: PoolRegion<S>,
+    ) -> Self {
+        Self::new(config, context, spec, pools)
+    }
+
     #[doc(hidden)]
     pub const fn prepare(&mut self, _spec: AudioSpec) {}
+
+    #[doc(hidden)]
+    pub const fn prepare_terminal(&mut self) {}
 
     #[doc(hidden)]
     pub const fn flush(&mut self) -> Option<AudioChunk> {
@@ -56,13 +68,26 @@ where
     #[doc(hidden)]
     pub fn prepare_quantum(
         &mut self,
-        _meta: kithara_signal::AudioChunkInfo,
+        _meta: AudioChunkInfo,
         remaining: usize,
-    ) -> Option<kithara_signal::FrameCount> {
+    ) -> Option<FrameCount> {
         self.prepared = None;
         (remaining > 0).then(|| {
             self.prepared = Some((remaining, self.context.load()));
-            kithara_signal::FrameCount::new(remaining)
+            FrameCount::new(remaining)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn prepare_terminal_quantum(
+        &mut self,
+        _meta: AudioChunkInfo,
+        frames: usize,
+    ) -> Option<FrameCount> {
+        let (_, context) = self.prepared.take()?;
+        (frames > 0).then(|| {
+            self.prepared = Some((frames, context));
+            FrameCount::new(frames)
         })
     }
 

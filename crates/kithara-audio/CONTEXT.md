@@ -58,9 +58,11 @@ bounded ring but deliberately bypasses that overflow.
   snapshot and park advances the gate sequence, so `wait_timeout` returns
   immediately while retaining its timed backstop. Consumer→worker wakes are an
   explicit capability: `ConsumerWakeMode::RealtimeDeferred` (the production
-  default) only arms the scheduler's coalesced level after a successful ring
-  pop, while `ImmediateOffRt` signals its `ThreadGate` immediately from a
-  consumer known to run off the real-time thread. A seek-epoch drain coalesces
+  default) only arms a coalesced atomic level after a successful ring pop. While
+  final-ring backpressure is present, the scheduler polls that level at the
+  playback worker's bounded interval and keeps its ordinary timeout as the
+  liveness backstop. `ImmediateOffRt` signals the `ThreadGate` immediately from
+  a consumer known to run off the real-time thread. A seek-epoch drain coalesces
   all discarded entries into one wake after the drain rather than signaling per
   item.
 - **Trash ring.** The RT consumer must never `free`, so spent pooled `AudioChunk`s

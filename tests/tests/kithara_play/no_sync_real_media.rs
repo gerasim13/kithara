@@ -892,7 +892,14 @@ async fn prepare_deck(
         case,
         deck_index,
         "playback",
-        player.prepare_config(playback_config),
+        player
+            .prepare_config(playback_config)
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{} deck {deck_index}: prepare playback resource: {error}",
+                    case.label
+                )
+            }),
     )
     .await;
 

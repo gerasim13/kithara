@@ -133,7 +133,7 @@ impl Resource {
     }
 
     async fn open<S, B>(
-        config: ResourceConfig<S, B>,
+        mut config: ResourceConfig<S, B>,
         observer: Option<Box<dyn AudioObserver>>,
     ) -> DecodeResult<Self>
     where
@@ -145,6 +145,7 @@ impl Resource {
         let worker = config.worker.clone().ok_or(DecodeError::InvalidData {
             detail: "ResourceConfig requires an explicit PlayWorker",
         })?;
+        config.resolve_output_geometry()?;
         let warp = config.warp.clone();
         let engine_load = config.engine_load.clone();
         // Capture the per-track cancel before `build_*_config` consumes `config`
@@ -525,8 +526,7 @@ mod tests {
         let total_frames = usize::try_from(Consts::SAMPLE_RATE).expect("sample rate fits usize");
         let resource = Resource::from_reader(EofReader::with_frames(total_frames), None);
         PlayerResource::new(resource, Arc::from(src), pools)
-            .map(Box::new)
-            .unwrap_or_else(|error| panic!("test player resource: {error}"))
+            .map_or_else(|error| panic!("test player resource: {error}"), Box::new)
     }
 
     fn process_block(processor: &mut PlayerNodeProcessor, extra: &mut ProcExtra) {

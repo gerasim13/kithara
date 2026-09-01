@@ -5,6 +5,7 @@ use kithara_abr::AbrMode;
 use kithara_assets::AssetStore;
 use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
 use kithara_bufpool::HasPool;
+use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 use kithara_hls::{KeyOptions, SizeProbeMethod};
 use kithara_net::Headers;
@@ -20,13 +21,25 @@ struct Defaults;
 
 impl Defaults {
     #[cfg(not(target_arch = "wasm32"))]
-    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(6).unwrap();
+    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = match NonZeroUsize::new(6) {
+        Some(chunks) => chunks,
+        None => unreachable!(),
+    };
     #[cfg(target_arch = "wasm32")]
-    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = NonZeroUsize::new(32).unwrap();
+    const AUDIO_BUFFER_CHUNKS: NonZeroUsize = match NonZeroUsize::new(32) {
+        Some(chunks) => chunks,
+        None => unreachable!(),
+    };
     #[cfg(not(target_arch = "wasm32"))]
-    const PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(1).unwrap();
+    const PRELOAD_CHUNKS: NonZeroUsize = match NonZeroUsize::new(1) {
+        Some(chunks) => chunks,
+        None => unreachable!(),
+    };
     #[cfg(target_arch = "wasm32")]
-    const PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+    const PRELOAD_CHUNKS: NonZeroUsize = match NonZeroUsize::new(3) {
+        Some(chunks) => chunks,
+        None => unreachable!(),
+    };
 }
 
 /// Unified configuration for opening an audio resource.
@@ -52,10 +65,12 @@ where
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
-    /// Number of chunks to buffer before signaling preload readiness.
+    /// Number of chunks buffered before preload readiness for direct resources.
+    /// Player preparation replaces this with its frame-derived geometry.
     #[builder(default = Defaults::PRELOAD_CHUNKS)]
     pub(crate) preload_chunks: NonZeroUsize,
-    /// Minimum final PCM ring depth. Preload depth raises this when larger.
+    /// Final PCM ring depth for direct resources. Player preparation replaces
+    /// this with its frame-derived geometry.
     #[builder(default = Defaults::AUDIO_BUFFER_CHUNKS)]
     pub(crate) audio_buffer_chunks: NonZeroUsize,
     /// Unified event bus for streaming, decode, and audio events.
@@ -85,6 +100,12 @@ where
     /// Resident Warp resources and live temporal controls.
     #[builder(default = WarpConfig::builder().build())]
     pub(crate) warp: WarpConfig,
+    /// Session-owned output block, copied by `ConfigPrep` for ring sizing.
+    #[builder(skip)]
+    pub(crate) output_buffer_frames: Option<NonZeroUsize>,
+    /// Player-owned native elastic response budget, copied by `ConfigPrep`.
+    #[builder(skip)]
+    pub(crate) response_budget_frames: Option<NonZeroUsize>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
@@ -136,12 +157,61 @@ where
             host_sample_rate: self.host_sample_rate,
             look_ahead_bytes: self.look_ahead_bytes,
             warp: self.warp.clone(),
+            output_buffer_frames: self.output_buffer_frames,
+            response_budget_frames: self.response_budget_frames,
             worker: self.worker.clone(),
             consumer_wake_mode: self.consumer_wake_mode,
             block_on_underrun: self.block_on_underrun,
             size_probe_method: self.size_probe_method,
             preferred_peak_bitrate: self.preferred_peak_bitrate,
         }
+    }
+}
+
+impl<S, B> ResourceConfig<S, B>
+where
+    B: Default,
+    S: HasPool<u8> + Send + Sync + 'static,
+{
+    pub(crate) fn resolve_output_geometry(&mut self) -> Result<(), DecodeError> {
+        let (Some(output_buffer_frames), Some(response_budget_frames)) =
+            (self.output_buffer_frames, self.response_budget_frames)
+        else {
+            if self.output_buffer_frames.is_some() || self.response_budget_frames.is_some() {
+                return Err(DecodeError::InvalidData {
+                    detail: "incomplete playback response contract",
+                });
+            }
+            return Ok(());
+        };
+        let quantum = self.warp.render_quantum_frames().get();
+        let preload_chunks = output_buffer_frames.get().div_ceil(quantum);
+        let ring_chunks = preload_chunks
+            .checked_add(1)
+            .ok_or(DecodeError::InvalidData {
+                detail: "playback output geometry overflow",
+            })?;
+        let stale_frames = ring_chunks
+            .checked_add(1)
+            .and_then(|chunks| chunks.checked_mul(quantum))
+            .and_then(|frames| frames.checked_sub(1))
+            .ok_or(DecodeError::InvalidData {
+                detail: "playback output geometry overflow",
+            })?;
+        if stale_frames > response_budget_frames.get() {
+            return Err(DecodeError::InvalidData {
+                detail: "playback output buffer exceeds the configured response budget",
+            });
+        }
+        self.preload_chunks =
+            NonZeroUsize::new(preload_chunks).ok_or(DecodeError::InvalidData {
+                detail: "playback preload geometry is empty",
+            })?;
+        self.audio_buffer_chunks =
+            NonZeroUsize::new(ring_chunks).ok_or(DecodeError::InvalidData {
+                detail: "playback output geometry is empty",
+            })?;
+        Ok(())
     }
 }
 
@@ -369,8 +439,8 @@ mod tests {
                 .events(EventBus::new(32))
                 .hint("mp3")
                 .discriminator("test")
-                .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
-                .audio_buffer_chunks(NonZeroUsize::new(2).expect("BUG: 2 > 0"))
+                .preload_chunks(NonZeroUsize::new(5).expect("test preload is non-zero"))
+                .audio_buffer_chunks(NonZeroUsize::new(2).expect("test ring is non-zero"))
                 .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
@@ -381,8 +451,8 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test]
-    fn config_defaults_keep_one_chunk_prefetched_in_the_native_ring() {
-        let config = test_config("https://example.com/song.mp3").unwrap();
+    fn direct_config_preserves_native_chunk_defaults() {
+        let config = test_config("https://example.com/song.mp3").expect("valid config");
 
         assert_eq!(config.preload_chunks.get(), 1);
         assert_eq!(config.audio_buffer_chunks.get(), 6);
@@ -390,11 +460,66 @@ mod tests {
 
     #[cfg(target_arch = "wasm32")]
     #[kithara::test]
-    fn config_defaults_preserve_the_wasm_buffer_horizon() {
-        let config = test_config("https://example.com/song.mp3").unwrap();
+    fn direct_config_preserves_wasm_chunk_defaults() {
+        let config = test_config("https://example.com/song.mp3").expect("valid config");
 
         assert_eq!(config.preload_chunks.get(), 3);
         assert_eq!(config.audio_buffer_chunks.get(), 32);
+    }
+
+    fn frame_contract_config(
+        quantum: usize,
+        output_buffer: usize,
+        response_budget: usize,
+    ) -> ResourceConfig<TestPools> {
+        let warp = WarpConfig::builder()
+            .render_quantum_frames(NonZeroUsize::new(quantum).expect("test quantum is non-zero"))
+            .build();
+        let mut config = ResourceConfig::for_src(valid_src("https://example.com/song.mp3"))
+            .store(store())
+            .warp(warp)
+            .build();
+        config.output_buffer_frames =
+            Some(NonZeroUsize::new(output_buffer).expect("test output buffer is non-zero"));
+        config.response_budget_frames =
+            Some(NonZeroUsize::new(response_budget).expect("test response budget is non-zero"));
+        config
+    }
+
+    #[kithara::test]
+    #[case::industry_budget(64, 128, 255, 2, 3)]
+    #[case::large_continuity_buffer(64, 512, 639, 8, 9)]
+    fn valid_frame_contract_resolves_exact_quantum_slots(
+        #[case] quantum: usize,
+        #[case] buffer: usize,
+        #[case] budget: usize,
+        #[case] expected_preload: usize,
+        #[case] expected_ring: usize,
+    ) {
+        let mut config = frame_contract_config(quantum, buffer, budget);
+
+        config.resolve_output_geometry().expect("valid geometry");
+
+        assert_eq!(config.preload_chunks.get(), expected_preload);
+        assert_eq!(config.audio_buffer_chunks.get(), expected_ring);
+    }
+
+    #[kithara::test]
+    #[case::one_frame_over_budget(64, 128, 254)]
+    #[case::large_buffer_over_industry_budget(64, 512, 441)]
+    fn invalid_frame_contract_is_rejected(
+        #[case] quantum: usize,
+        #[case] buffer: usize,
+        #[case] budget: usize,
+    ) {
+        let mut config = frame_contract_config(quantum, buffer, budget);
+
+        assert!(matches!(
+            config.resolve_output_geometry(),
+            Err(DecodeError::InvalidData {
+                detail: "playback output buffer exceeds the configured response budget"
+            })
+        ));
     }
 
     #[kithara::test]

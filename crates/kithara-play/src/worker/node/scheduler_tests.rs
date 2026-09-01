@@ -96,6 +96,8 @@ struct FailingSource {
     seek_obs: Arc<dyn SeekObserve>,
 }
 
+type NodeFixture<S, P> = (DecoderNode<S>, P, Arc<PreloadGate>);
+
 impl Default for FailingSource {
     fn default() -> Self {
         Self {
@@ -120,11 +122,7 @@ fn make_node<S>(
     source: S,
     ringbuf_capacity: usize,
     preload_chunks: usize,
-) -> (
-    DecoderNode<S>,
-    impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static,
-    Arc<PreloadGate>,
-)
+) -> NodeFixture<S, impl FnMut() -> Option<Fetch<AudioChunk>> + Send + 'static>
 where
     S: AudioSource<Chunk = AudioChunk>,
 {
@@ -195,7 +193,7 @@ impl PlaybackScheduler {
         )
     }
 
-    fn unregister(&self, task: TaskHandle) {
+    fn unregister(task: TaskHandle) {
         drop(task);
     }
 
@@ -386,7 +384,7 @@ fn worker_unregister_removes_track() {
     let id = register(&handle, node);
 
     assert!(wait_for_chunks(&mut pop, 2, Duration::from_secs(5)) >= 2);
-    handle.unregister(id);
+    PlaybackScheduler::unregister(id);
     thread_sleep(Duration::from_millis(50));
     while pop().is_some() {}
     thread_sleep(Duration::from_millis(50));
@@ -405,7 +403,7 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
     assert_eq!(wait_for_chunks(&mut pop_a, 1, Duration::from_secs(1)), 1);
     assert_eq!(wait_for_chunks(&mut pop_b, 1, Duration::from_secs(1)), 1);
 
-    handle.unregister(id_a);
+    PlaybackScheduler::unregister(id_a);
     let (node_c, _, _) = make_node(MockSource::new(pools.clone(), 1), 1, 1);
     let id_c = handle
         .register(node_c)
@@ -419,8 +417,8 @@ fn unregister_one_task_keeps_sibling_running_and_releases_capacity() {
         "unregistering one task must not stop its sibling"
     );
 
-    handle.unregister(id_b);
-    handle.unregister(id_c);
+    PlaybackScheduler::unregister(id_b);
+    PlaybackScheduler::unregister(id_c);
 }
 
 #[kithara::test]

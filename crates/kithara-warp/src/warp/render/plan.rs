@@ -1,10 +1,12 @@
 use firewheel_core::param::smoother::SmoothedParam;
 use kithara_bufpool::HasPool;
 use kithara_signal::AudioChunkInfo;
-use kithara_stretch::{ElasticCursor, ElasticError, ElasticSpan, ElasticSpanConfig};
+use kithara_stretch::{
+    ElasticCursor, ElasticError, ElasticRequest, ElasticSpan, ElasticSpanConfig,
+};
 use num_traits::ToPrimitive;
 
-use super::renderer::{PreparedExact, PreparedQuantum, WarpRenderer};
+use super::renderer::{PreparedActivation, PreparedExact, PreparedQuantum, WarpRenderer};
 use crate::temporal::RateTarget;
 
 impl<S> WarpRenderer<S>
@@ -113,9 +115,9 @@ where
         let config = ElasticSpanConfig::builder().build()?;
         let plan = kithara_stretch::ElasticSpanPlan::new([span], cursor, capabilities, config)?;
         Ok(PreparedExact {
+            activation: None,
             next_speed,
             plan,
-            #[cfg(feature = "probe")]
             rate,
             snapshot: None,
             speed,
@@ -128,6 +130,16 @@ where
         match prepared {
             PreparedQuantum::Exact(exact) => Self::exact_source_frames(exact),
             PreparedQuantum::Legacy { source_frames, .. } => Ok(*source_frames),
+        }
+    }
+
+    pub(super) fn prepared_input_frames(prepared: &PreparedQuantum) -> Result<usize, ElasticError> {
+        let source = Self::prepared_source_frames(prepared)?;
+        match prepared.activation() {
+            Some(activation) => source
+                .checked_add(activation.prefix_frames()?)
+                .ok_or(ElasticError::SampleCountOverflow),
+            None => Ok(source),
         }
     }
 
@@ -209,6 +221,7 @@ where
             Self::preview_speed_from(applied_speed, target, self.output_quantum_limit())?;
         let source_frames = self.source_frames_for_quantum(meta, remaining, speed)?;
         Ok(PreparedQuantum::Legacy {
+            activation: None,
             source_frames,
             rate,
             snapshot: None,
@@ -238,6 +251,7 @@ where
         let (_, speed, _) =
             Self::preview_speed_from(self.applied_speed, target, self.output_quantum_limit())?;
         Ok(PreparedQuantum::Legacy {
+            activation: None,
             source_frames: frames,
             rate,
             snapshot: None,
@@ -245,12 +259,12 @@ where
         })
     }
 
-    pub(super) fn scheduler_plan(
+    pub(super) fn scheduler_plan_at(
         &mut self,
         meta: AudioChunkInfo,
         remaining: usize,
+        rate: RateTarget,
     ) -> Result<PreparedQuantum, ElasticError> {
-        let rate = self.controls.rate_target();
         let target = rate.speed();
         if self.exact_plan_enabled(target)
             && let Some(exact) = self.exact_plan_for_remaining(
@@ -266,6 +280,53 @@ where
         self.legacy_quantum(meta, remaining, self.applied_speed, rate)
     }
 
+    fn prepared_activation(
+        &self,
+        prepared: &PreparedQuantum,
+    ) -> Result<Option<PreparedActivation>, ElasticError> {
+        if self.unity_passthrough(prepared.speed()) {
+            return Ok(None);
+        }
+        let Some((history_frames, output_frames)) = self.activation_latency_frames() else {
+            return Ok(None);
+        };
+        let speed = f64::from(prepared.speed());
+        if !speed.is_finite() || speed <= 0.0 {
+            return Err(ElasticError::InvalidRate(speed));
+        }
+        let source_frames = output_frames
+            .to_f64()
+            .map(|frames| (frames * speed).round())
+            .and_then(|frames| frames.to_usize())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        Ok(Some(PreparedActivation {
+            history_frames,
+            warm: ElasticRequest::new(source_frames, output_frames)?,
+        }))
+    }
+
+    pub(super) fn scheduler_plan(
+        &mut self,
+        meta: AudioChunkInfo,
+        remaining: usize,
+    ) -> Result<PreparedQuantum, ElasticError> {
+        let rate = self.controls.rate_target();
+        let preview = self.scheduler_plan_at(meta, remaining, rate)?;
+        let Some(activation) = self.prepared_activation(&preview)? else {
+            return Ok(preview);
+        };
+        let prefix = activation.prefix_frames()?;
+        let shifted = Self::meta_at_frame(
+            meta,
+            meta.frame_offset
+                .checked_add(u64::try_from(prefix).map_err(|_| ElasticError::SampleCountOverflow)?)
+                .ok_or(ElasticError::SampleCountOverflow)?,
+        );
+        let mut prepared = self.scheduler_plan_at(shifted, remaining, rate)?;
+        prepared.bind_activation(activation);
+        Ok(prepared)
+    }
+
     pub(super) fn source_block_limit(
         stretch: f64,
         max_source_frames: usize,
@@ -274,7 +335,11 @@ where
         if !stretch.is_finite() || stretch <= 0.0 {
             return Err(ElasticError::InvalidRate(stretch));
         }
+        // Legacy partitioning may carry almost one output frame from an
+        // earlier sub-frame span, so leave that frame outside this block.
         let output_limit = max_output_frames
+            .checked_sub(1)
+            .ok_or(ElasticError::InvalidOutputFrameLimit)?
             .to_f64()
             .ok_or(ElasticError::SampleCountOverflow)?;
         let source_limit = (output_limit / stretch)

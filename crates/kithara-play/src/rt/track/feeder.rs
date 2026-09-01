@@ -38,40 +38,47 @@ pub struct PlayerResource {
 
 #[derive(Clone, Copy)]
 struct MediaSpan {
+    consumed_frames: usize,
     frames: usize,
     seconds: f64,
     source: Option<SourceSpan>,
 }
 
 impl MediaSpan {
-    fn take(&mut self, frames: usize) -> (f64, Option<SourceEnd>) {
-        let source_end = match self.source {
-            Some(source) if frames >= self.frames => {
-                self.source = None;
-                Some(SourceEnd::new(source.end(), source.sample_rate()))
-            }
-            Some(source) => {
-                let split = partial_source_end(source, frames, self.frames);
-                self.source = split
-                    .and_then(|split| SourceSpan::new(split, source.end(), source.sample_rate()));
-                split.map(|split| SourceEnd::new(split, source.sample_rate()))
-            }
-            None => None,
-        };
-        if frames >= self.frames {
-            self.frames = 0;
-            return (self.seconds, source_end);
+    const fn new(frames: usize, seconds: f64, source: Option<SourceSpan>) -> Self {
+        Self {
+            consumed_frames: 0,
+            frames,
+            seconds,
+            source,
         }
-        let consumed_frames: f64 = AsPrimitive::as_(frames);
+    }
+
+    fn remaining_frames(&self) -> usize {
+        self.frames - self.consumed_frames
+    }
+
+    fn take(&mut self, frames: usize) -> (f64, Option<SourceSpan>) {
+        let start = self.consumed_frames;
+        let consumed_frames = frames.min(self.remaining_frames());
+        let end = start + consumed_frames;
+        let consumed_source = self.source.and_then(|source| {
+            let source_start = source_frame_at(source, start, self.frames)?;
+            let source_end = source_frame_at(source, end, self.frames)?;
+            SourceSpan::new(source_start, source_end, source.sample_rate())
+                .map(|span| span.with_render_revision(source.render_revision()))
+        });
+        self.consumed_frames = end;
+        let consumed_frames: f64 = AsPrimitive::as_(consumed_frames);
         let span_frames: f64 = AsPrimitive::as_(self.frames);
-        let consumed = self.seconds * consumed_frames / span_frames;
-        self.frames -= frames;
-        self.seconds -= consumed;
-        (consumed, source_end)
+        (
+            self.seconds * consumed_frames / span_frames,
+            consumed_source,
+        )
     }
 }
 
-fn partial_source_end(source: SourceSpan, frames: usize, span_frames: usize) -> Option<u64> {
+fn source_frame_at(source: SourceSpan, frames: usize, span_frames: usize) -> Option<u64> {
     let source_frames = source.end().checked_sub(source.start())?;
     let numerator = u128::from(source_frames).checked_mul(u128::try_from(frames).ok()?)?;
     let denominator = u128::try_from(span_frames).ok()?;
@@ -202,11 +209,8 @@ impl PlayerResource {
             if n == 0 {
                 break;
             }
-            self.media_spans.push_back(MediaSpan {
-                frames: n,
-                seconds: media_seconds,
-                source,
-            });
+            self.media_spans
+                .push_back(MediaSpan::new(n, media_seconds, source));
             self.write_len += n;
             self.write_pos += n;
         }
@@ -214,27 +218,32 @@ impl PlayerResource {
         eof_reached
     }
 
-    fn prefetch_target(&self, callback_frames: usize) -> usize {
-        self.write_len
-            .saturating_add(callback_frames)
-            .min(self.channel_buffers[0].len())
-    }
-
-    fn consume_media(&mut self, mut frames: usize) -> f64 {
+    fn consume_media(
+        &mut self,
+        mut frames: usize,
+        observe: &mut impl FnMut(Range<usize>, SourceSpan),
+    ) -> f64 {
         let mut seconds = 0.0;
         let mut source_end = self.last_source_end;
+        let mut output_start = 0usize;
         while frames > 0 {
             let Some(mut span) = self.media_spans.pop_front() else {
                 break;
             };
-            let consumed = frames.min(span.frames);
-            let (consumed_seconds, consumed_source_end) = span.take(consumed);
+            let consumed = frames.min(span.remaining_frames());
+            let (consumed_seconds, consumed_source) = span.take(consumed);
             seconds += consumed_seconds;
-            if consumed_source_end.is_some() {
-                source_end = consumed_source_end;
+            if let Some(consumed_source) = consumed_source {
+                let output_end = output_start.saturating_add(consumed);
+                source_end = Some(SourceEnd::new(
+                    consumed_source.end(),
+                    consumed_source.sample_rate(),
+                ));
+                observe(output_start..output_end, consumed_source);
             }
             frames -= consumed;
-            if span.frames > 0 {
+            output_start = output_start.saturating_add(consumed);
+            if span.remaining_frames() > 0 {
                 self.media_spans.push_front(span);
             }
         }
@@ -269,16 +278,26 @@ impl PlayerResource {
     /// zero-fills the requested range and reports [`ReadOutcome::Full`].
     /// That silence is not a terminal condition and must not trigger track
     /// advancement.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(
         &mut self,
         output: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
     ) -> ReadOutcome {
+        self.read_observed(output, range, metrics, |_, _| {})
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    pub(crate) fn read_observed(
+        &mut self,
+        output: &mut [&mut [f32]],
+        range: Range<usize>,
+        metrics: &RtMetrics,
+        mut observe: impl FnMut(Range<usize>, SourceSpan),
+    ) -> ReadOutcome {
         self.consumed_media_seconds = 0.0;
         let frames_to_read = range.end - range.start;
-        let mut eof_reached = self.fill_scratch(frames_to_read, metrics);
+        let eof_reached = self.fill_scratch(frames_to_read, metrics);
 
         if self.write_len == 0 && self.failed && !self.eof_seen {
             let range_len = range.len();
@@ -299,7 +318,7 @@ impl PlayerResource {
                     .copy_from_slice(&self.channel_buffers[1][..frames_to_write]);
             }
 
-            self.consumed_media_seconds = self.consume_media(frames_to_write);
+            self.consumed_media_seconds = self.consume_media(frames_to_write, &mut observe);
 
             if tail_size > 0 {
                 self.channel_buffers[0]
@@ -310,11 +329,6 @@ impl PlayerResource {
 
             self.write_len -= frames_to_write;
             self.write_pos = tail_size;
-
-            if frames_to_write == frames_to_read {
-                let target = self.prefetch_target(frames_to_read);
-                eof_reached |= self.fill_scratch(target, metrics);
-            }
 
             if frames_to_write == frames_to_read {
                 ReadOutcome::Full {
@@ -416,17 +430,35 @@ mod tests {
     #[kithara::test]
     fn partial_scratch_consumption_advances_the_exact_source_span() {
         let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
-        let mut span = MediaSpan {
-            frames: 10,
-            seconds: 10.0 / f64::from(rate.get()),
-            source: SourceSpan::new(100, 130, rate),
-        };
+        let mut span = MediaSpan::new(
+            10,
+            10.0 / f64::from(rate.get()),
+            SourceSpan::new(100, 130, rate),
+        );
 
-        let (_, partial_end) = span.take(4);
-        assert_eq!(partial_end, Some(SourceEnd::new(112, rate)));
-        assert_eq!(span.source.map(|source| source.start()), Some(112));
+        let (_, partial) = span.take(4);
+        assert_eq!(partial, SourceSpan::new(100, 112, rate));
+        assert_eq!(span.remaining_frames(), 6);
 
-        let (_, full_end) = span.take(6);
-        assert_eq!(full_end, Some(SourceEnd::new(130, rate)));
+        let (_, full) = span.take(6);
+        assert_eq!(full, SourceSpan::new(112, 130, rate));
+    }
+
+    #[kithara::test]
+    fn repeated_partial_consumption_uses_one_cumulative_source_ratio() {
+        let rate = NonZeroU32::new(48_000).expect("fixture sample rate is non-zero");
+        let mut span = MediaSpan::new(
+            6,
+            6.0 / f64::from(rate.get()),
+            SourceSpan::new(100, 110, rate),
+        );
+
+        let (_, first) = span.take(1);
+        let (_, second) = span.take(1);
+        let (_, remainder) = span.take(4);
+
+        assert_eq!(first, SourceSpan::new(100, 101, rate));
+        assert_eq!(second, SourceSpan::new(101, 103, rate));
+        assert_eq!(remainder, SourceSpan::new(103, 110, rate));
     }
 }

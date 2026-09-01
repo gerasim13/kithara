@@ -1,4 +1,4 @@
-use std::ops::RangeInclusive;
+use std::{num::NonZeroU32, ops::RangeInclusive};
 
 use kithara::{
     audio::ConsumerWakeMode,
@@ -13,7 +13,7 @@ use kithara::{
         thread::{JoinHandle, spawn_named},
         time::{Duration, Instant},
     },
-    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher},
+    play::{Cmd, MixTapWriter, PlayError, Reply, SessionDispatcher, StreamShape},
 };
 use ringbuf::{
     HeapCons, HeapRb,
@@ -243,9 +243,15 @@ fn offline_session_thread<S>(
 ) where
     S: HasPool<f32> + Send + Sync + 'static,
 {
-    let mut state = GraphSession::<OfflineBackend, S>::new(move |ctx, sample_rate| {
-        start_stream_offline(ctx, sample_rate, block_frames)
-    });
+    let requested_shape = StreamShape::new(
+        NonZeroU32::new(block_frames).expect("offline block size was validated as non-zero"),
+        NonZeroU32::new(GraphSession::<OfflineBackend, S>::DEFAULT_SAMPLE_RATE)
+            .expect("offline sample rate is non-zero"),
+    );
+    let mut state = GraphSession::<OfflineBackend, S>::with_stream_shape(
+        requested_shape,
+        move |ctx, sample_rate| start_stream_offline(ctx, sample_rate, block_frames),
+    );
     if auto_render {
         run_auto(
             &mut state,

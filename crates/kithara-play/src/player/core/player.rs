@@ -62,7 +62,7 @@ impl<S> PlayerImpl<S> {
         let cancel = CancelScope::new(config.cancel.clone()).token();
         config.cancel = Some(cancel.clone());
 
-        let engine_config = EngineConfig::builder()
+        let mut engine_config = EngineConfig::builder()
             .eq_layout(config.eq_layout.clone())
             .grid_id(config.grid_id)
             .max_slots(config.max_slots)
@@ -71,6 +71,8 @@ impl<S> PlayerImpl<S> {
             .maybe_session(config.session.clone())
             .cancel(cancel.clone())
             .build();
+        engine_config.response_budget_frames = config.response_budget_frames;
+        engine_config.render_quantum_frames = config.warp.render_quantum_frames();
         let engine = EngineImpl::new(engine_config, bus.clone());
         if config.abr.is_none() {
             let abr_settings = AbrSettings::builder().cancel(cancel.clone()).build();
@@ -86,6 +88,7 @@ impl<S> PlayerImpl<S> {
             engine_load: Arc::new(EngineLoad::default()),
             params,
             warp: config.warp,
+            response_budget_frames: config.response_budget_frames,
             gapless_mode: config.gapless_mode,
             block_on_underrun: config.block_on_underrun,
             status: Mutex::default(),

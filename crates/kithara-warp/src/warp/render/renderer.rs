@@ -4,8 +4,11 @@ use firewheel_core::param::smoother::{SmoothedParam, SmootherConfig};
 use kithara_bufpool::{HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::{sync::Arc, time::Duration};
 use kithara_signal::{AudioChunkInfo, AudioSpec};
-use kithara_stretch::{ElasticCursor, ElasticEngine, ElasticError, ElasticSpanPlan, StretchKind};
+use kithara_stretch::{
+    ElasticCursor, ElasticEngine, ElasticError, ElasticRequest, ElasticSpanPlan, StretchKind,
+};
 
+use super::renderer_target::PreparedTarget;
 use crate::{
     ActiveRegion, RegionPlan, RenderReader, RenderSnapshot, StretchControls, WarpConfig,
     temporal::RateTarget,
@@ -15,17 +18,32 @@ use crate::{
 mod tests;
 
 pub(super) struct PreparedExact {
+    pub(super) activation: Option<PreparedActivation>,
     pub(super) next_speed: SmoothedParam,
     pub(super) plan: ElasticSpanPlan,
-    #[cfg(feature = "probe")]
     pub(super) rate: RateTarget,
     pub(super) snapshot: Option<RenderSnapshot>,
     pub(super) speed: f32,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct PreparedActivation {
+    pub(super) history_frames: usize,
+    pub(super) warm: ElasticRequest,
+}
+
+impl PreparedActivation {
+    pub(super) fn prefix_frames(self) -> Result<usize, ElasticError> {
+        self.history_frames
+            .checked_add(self.warm.source_frames())
+            .ok_or(ElasticError::SampleCountOverflow)
+    }
+}
+
 pub(super) enum PreparedQuantum {
     Exact(PreparedExact),
     Legacy {
+        activation: Option<PreparedActivation>,
         source_frames: usize,
         rate: RateTarget,
         snapshot: Option<RenderSnapshot>,
@@ -50,7 +68,6 @@ impl PreparedQuantum {
         }
     }
 
-    #[cfg(feature = "probe")]
     pub(super) const fn rate(&self) -> RateTarget {
         match self {
             Self::Exact(exact) => exact.rate,
@@ -58,7 +75,22 @@ impl PreparedQuantum {
         }
     }
 
-    #[cfg(feature = "probe")]
+    pub(super) const fn activation(&self) -> Option<PreparedActivation> {
+        match self {
+            Self::Exact(exact) => exact.activation,
+            Self::Legacy { activation, .. } => *activation,
+        }
+    }
+
+    pub(super) fn bind_activation(&mut self, activation: PreparedActivation) {
+        match self {
+            Self::Exact(exact) => exact.activation = Some(activation),
+            Self::Legacy {
+                activation: bound, ..
+            } => *bound = Some(activation),
+        }
+    }
+
     pub(super) const fn speed(&self) -> f32 {
         match self {
             Self::Exact(exact) => exact.speed,
@@ -89,6 +121,10 @@ pub struct WarpRenderer<S> {
     pub(super) region: Option<ActiveRegion>,
     /// Exact rate plan paired with the source quantum prepared by the scheduler.
     pub(super) prepared_quantum: Option<PreparedQuantum>,
+    /// Rate sampled before true EOF, retained while a partial terminal input is partitioned.
+    pub(super) terminal_rate: Option<RateTarget>,
+    /// Render context sampled with `terminal_rate`.
+    pub(super) terminal_snapshot: Option<RenderSnapshot>,
     #[cfg(feature = "probe")]
     pub(super) last_committed_rate_revision: u64,
     /// Renderer-owned applied speed. Shared controls contain only the target.
@@ -99,8 +135,14 @@ pub struct WarpRenderer<S> {
     pub(super) spec: AudioSpec,
     /// Maximum output frames between samples of live temporal controls.
     pub(super) render_quantum_frames: NonZeroUsize,
+    /// Maximum source span accepted by the prepared elastic engine.
+    pub(super) source_frame_limit: usize,
+    /// Maximum interleaved output span retained by renderer scratch.
+    pub(super) scratch_frame_limit: usize,
     /// Engine kind currently prepared by the scheduler shell.
     pub(super) current_kind: StretchKind,
+    /// Latency-sized pooled output discarded while priming an inactive engine.
+    pub(super) activation_scratch: Option<SampleBuffer>,
     /// Interleaved output scratch prepared by the scheduler shell. A produced
     /// chunk takes this buffer; the consumed input becomes its replacement.
     pub(super) scratch: Option<SampleBuffer>,
@@ -119,10 +161,14 @@ pub struct WarpRenderer<S> {
     pub(super) pending_source: Option<SampleBuffer>,
     /// Earliest metadata represented by `pending_source`.
     pub(super) pending_meta: Option<AudioChunkInfo>,
+    /// Oldest sample in the rolling passthrough history stored in `pending_source`.
+    pub(super) passthrough_history_head: Option<usize>,
     /// Exact decoded-source boundary represented by the latest emitted chunk.
     pub(super) rendered_source_end: Option<(u64, NonZeroU32, Duration)>,
     /// Source frames admitted since the last renderer reset.
     pub(super) source_frames_admitted: u64,
+    /// Warm source consumed while priming but not yet represented by output.
+    pub(super) primed_source_debt: u64,
     /// Reset requested by a timeline discontinuity. The scheduler shell
     /// performs it outside the checked render core.
     pub(super) reset_pending: bool,
@@ -137,7 +183,8 @@ where
 {
     pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
     pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
-    pub(super) const RATE_SMOOTH_SECONDS: f32 = 0.002;
+    const DIRECT_SOURCE_FRAME_LIMIT: usize = Self::MAX_OUTPUT_FRAMES * 4;
+    pub(super) const RATE_SMOOTH_SECONDS: f32 = 0.00025;
     /// Re-apply pitch to the backend only when it moves this much.
     pub(super) const RATIO_EPS: f64 = 1e-4;
 
@@ -148,6 +195,40 @@ where
         spec: AudioSpec,
         pools: PoolRegion<S>,
     ) -> Self {
+        Self::new_with_limits(
+            config,
+            context,
+            spec,
+            pools,
+            Self::DIRECT_SOURCE_FRAME_LIMIT,
+            Self::MAX_OUTPUT_FRAMES,
+        )
+    }
+
+    pub(crate) fn new_quantum(
+        config: &WarpConfig,
+        context: RenderReader,
+        spec: AudioSpec,
+        pools: PoolRegion<S>,
+    ) -> Self {
+        Self::new_with_limits(
+            config,
+            context,
+            spec,
+            pools,
+            Self::MAX_SOURCE_FRAMES,
+            config.render_quantum_frames().get(),
+        )
+    }
+
+    fn new_with_limits(
+        config: &WarpConfig,
+        context: RenderReader,
+        spec: AudioSpec,
+        pools: PoolRegion<S>,
+        source_frame_limit: usize,
+        scratch_frame_limit: usize,
+    ) -> Self {
         let controls = Arc::clone(config.stretch());
         let current_kind = controls.backend();
         let plan = controls.region_plan();
@@ -156,9 +237,9 @@ where
             current_kind,
             spec,
             &pools,
-            config.render_quantum_frames(),
-            None,
-            None,
+            source_frame_limit,
+            scratch_frame_limit,
+            PreparedTarget::default(),
         );
         Self {
             context,
@@ -170,7 +251,11 @@ where
             pools,
             spec,
             render_quantum_frames: config.render_quantum_frames(),
+            source_frame_limit,
+            scratch_frame_limit,
             prepared_quantum: None,
+            terminal_rate: None,
+            terminal_snapshot: None,
             #[cfg(feature = "probe")]
             last_committed_rate_revision: 0,
             applied_speed: SmoothedParam::new(
@@ -187,12 +272,15 @@ where
             output_remainder: 0.0,
             pending_source: target.pending_source,
             pending_meta: None,
+            passthrough_history_head: None,
             rendered_source_end: None,
             source_frames_admitted: 0,
+            primed_source_debt: 0,
             reset_pending: false,
             rebuild_pending: false,
             last_input_meta: None,
             output_start_meta: None,
+            activation_scratch: target.activation_scratch,
             scratch: target.scratch,
             deferred_scratch: None,
             plan,
@@ -219,6 +307,7 @@ where
             source.clear();
         }
         self.pending_meta = None;
+        self.passthrough_history_head = None;
     }
 
     pub(super) fn retire_engine(&mut self) {
@@ -228,6 +317,9 @@ where
     }
 
     pub(super) fn clear_render_state(&mut self) {
+        if let Some(scratch) = self.activation_scratch.as_mut() {
+            scratch.clear();
+        }
         if let Some(scratch) = self.scratch.as_mut() {
             scratch.clear();
         }
@@ -237,9 +329,12 @@ where
         self.applied_pitch = f64::NAN;
         self.output_remainder = 0.0;
         self.prepared_quantum = None;
+        self.terminal_rate = None;
+        self.terminal_snapshot = None;
         self.exact_cursor = None;
         self.rendered_source_end = None;
         self.source_frames_admitted = 0;
+        self.primed_source_debt = 0;
         self.active = false;
         self.region = None;
     }
@@ -300,6 +395,9 @@ where
     }
 
     pub(super) fn pending_frames(&self, channels: usize) -> usize {
+        if self.passthrough_history_head.is_some() {
+            return 0;
+        }
         self.pending_source
             .as_deref()
             .map_or(0, |source| source.len() / channels)
@@ -327,7 +425,9 @@ where
         let backend_held = u64::try_from(latency)
             .unwrap_or(u64::MAX)
             .min(backend_admitted);
-        pending.saturating_add(backend_held)
+        pending
+            .saturating_add(backend_held)
+            .saturating_add(self.primed_source_debt)
     }
 
     pub(super) fn record_rendered_source_end(

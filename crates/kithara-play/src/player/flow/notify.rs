@@ -359,6 +359,7 @@ mod tests {
             index: 1,
             duration_seconds: 60.0,
         });
+        drop(phase);
     }
 
     fn stop_notification(

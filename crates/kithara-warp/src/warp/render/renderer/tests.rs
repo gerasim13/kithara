@@ -66,18 +66,15 @@ fn chunk(pools: &Pools, samples: &[f32]) -> AudioChunk {
 
 fn chunk_at(pools: &Pools, samples: &[f32], frame_offset: u64) -> AudioChunk {
     let mut chunk = chunk(pools, samples);
+    let frame_end = frame_offset
+        .checked_add(u64::try_from(chunk.frames()).expect("test frame count fits"))
+        .expect("test frame end fits");
     chunk.meta.frame_offset = frame_offset;
     chunk.meta.timestamp = spec()
         .duration_for(frame_offset)
         .expect("test timestamp fits");
-    chunk.meta.end_timestamp = chunk
-        .meta
-        .timestamp
-        .checked_add(
-            spec()
-                .duration_for(u64::try_from(chunk.frames()).expect("test frame count fits"))
-                .expect("test duration fits"),
-        )
+    chunk.meta.end_timestamp = spec()
+        .duration_for(frame_end)
         .expect("test end timestamp fits");
     chunk
 }
@@ -117,7 +114,13 @@ fn renderer(controls: Arc<StretchControls>) -> WarpRenderer {
 }
 
 fn renderer_with_publisher(controls: Arc<StretchControls>) -> (RenderPublisher, WarpRenderer) {
-    let config = WarpConfig::builder().stretch(controls).build();
+    let config = WarpConfig::builder()
+        .stretch(controls)
+        .render_quantum_frames(
+            NonZero::new(WarpRenderer::MAX_OUTPUT_FRAMES)
+                .expect("renderer output limit is non-zero"),
+        )
+        .build();
     let warp = Warp::new((), &config);
     let publisher = warp.publisher();
     (publisher, warp.renderer(spec(), pools()))

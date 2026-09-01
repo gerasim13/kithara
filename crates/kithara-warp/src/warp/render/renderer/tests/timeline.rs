@@ -169,6 +169,19 @@ fn exact_output_frames_do_not_drift_across_partitions() {
 }
 
 #[kithara::test]
+fn legacy_source_limit_reserves_fractional_output_carry() {
+    const OUTPUT_LIMIT: usize = 64;
+
+    let stretch = 0.5;
+    let source = WarpRenderer::source_block_limit(stretch, 8192, OUTPUT_LIMIT)
+        .expect("fixture source limit is representable");
+    let (output, _) = WarpRenderer::output_frames(source, stretch, 1.0_f64.next_down())
+        .expect("fractional carry remains representable");
+
+    assert!(output <= OUTPUT_LIMIT);
+}
+
+#[kithara::test]
 #[cfg_attr(
     feature = "stretch-signalsmith",
     case::signalsmith(StretchKind::Signalsmith)

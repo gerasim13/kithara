@@ -22,6 +22,7 @@ use crate::{
     bridge::MixTapWriter,
     session::{
         Cmd, HostCmd, HostDispatcher, HostReply, Reply, RootView, SessionError, SessionSampleRate,
+        StreamShape,
     },
 };
 
@@ -111,6 +112,7 @@ impl<S> Host<S> {
     {
         let grid_id = BeatGridId::allocate().map_err(SessionError::from)?;
         let sample_rate = config.sample_rate;
+        let requested_shape = StreamShape::new(config.output_block_frames, sample_rate);
         let root = GroupState::unavailable(
             grid_id,
             sample_rate,
@@ -119,15 +121,10 @@ impl<S> Host<S> {
         );
         let root_view = RootView::new(&root);
         #[cfg(not(target_arch = "wasm32"))]
-        let dispatcher = crate::session::native::spawn(
-            root,
-            root_view.clone(),
-            sample_rate,
-            config.output_block_frames,
-        );
+        let dispatcher = crate::session::native::spawn(root, root_view.clone(), requested_shape);
         #[cfg(target_arch = "wasm32")]
         let (dispatcher, web_state) =
-            crate::session::web::spawn(root, root_view.clone(), sample_rate)?;
+            crate::session::web::spawn(root, root_view.clone(), requested_shape)?;
         Ok(Self {
             id: grid_id,
             owns_session: true,

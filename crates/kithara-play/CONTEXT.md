@@ -104,7 +104,7 @@ that a device callback presented those frames.
 `WarpRenderer::prepare` services format/backend changes and retired engine
 state between checked ticks. `AudioEffect::service_deferred` then prepares
 post-Warp effects. With an elastic backend, live input is split into the
-fixed internal render quantum of 512 output frames; controls are sampled
+fixed internal render quantum of 64 output frames; controls are sampled
 for each quantum and `WarpSource` advances only its matching source span. The
 identity/no-backend renderer preserves whole-chunk passthrough. The elastic
 quantum bounds live control response and source processing even when the
@@ -443,7 +443,8 @@ transact pure group operations, but the producer chain does not yet consume a
 
 `SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
 consumer capability. Real-time session implementations explicitly return
-`RealtimeDeferred`, preserving the audio callback's no-syscall drain path;
+`RealtimeDeferred`, which lets the audio callback arm a coalesced atomic worker
+level without a syscall;
 off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
 their inner capability. Requiring the method keeps wrappers from silently
 erasing an off-RT capability through a trait default. `ConfigPrep` copies the
@@ -451,9 +452,10 @@ capability through an internal, builder-skipped `ResourceConfig` field into
 `AudioConfig`; an unbound direct `Resource` resolves the absent session
 capability to `ImmediateOffRt`, giving it immediate worker wakes and inline
 reader-event delivery. There is no public resource setter and therefore no
-second source of session wake policy. A real-time read only arms the scheduler's
-coalesced flag; the existing off-RT notification pump flushes that flag, while
-the scheduler timeout remains the liveness fallback.
+second source of session wake policy. A real-time read arms the coalesced worker
+level; later reads coalesce until the worker consumes it. While a final ring is
+backpressured, the dispatcher polls that level at the playback worker's bounded
+interval; its ordinary timeout remains only a liveness backstop.
 
 ### Host transport anchor
 

@@ -90,10 +90,21 @@ pub struct PlayerNodeProcessor {
 }
 
 /// Stream dimensions needed to pre-size RT scratch buffers.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct StreamShape {
     pub max_block_frames: NonZeroU32,
     pub sample_rate: NonZeroU32,
+}
+
+impl StreamShape {
+    #[must_use]
+    pub const fn new(max_block_frames: NonZeroU32, sample_rate: NonZeroU32) -> Self {
+        Self {
+            max_block_frames,
+            sample_rate,
+        }
+    }
 }
 
 impl PlayerNodeProcessor {
@@ -406,6 +417,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         let (playback_started, leading_outcome_pos_dur) =
             self.render_with_context(context, &mut buffers, info.frames, is_playing);
+        #[cfg(feature = "probe")]
         if let Some(context) = context {
             self.playback.publish_render_boundary(context);
         }

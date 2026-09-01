@@ -1,15 +1,19 @@
-use std::{
-    hint::spin_loop,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering, fence},
-};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "probe")]
+use std::{hint::spin_loop, sync::atomic::fence};
 
+#[cfg(feature = "probe")]
 use kithara_warp::{RenderContext, SessionEpoch, SessionFrame};
-use portable_atomic::{AtomicF32, AtomicF64, AtomicI64, AtomicU32};
+#[cfg(feature = "probe")]
+use portable_atomic::AtomicI64;
+use portable_atomic::{AtomicF32, AtomicF64, AtomicU32};
 
 use super::RtMetrics;
 
+#[cfg(feature = "probe")]
 const SEQLOCK_PHASES: u64 = 2;
 
+#[cfg(feature = "probe")]
 #[derive(Default)]
 struct RenderBoundaryCell {
     version: AtomicU64,
@@ -17,6 +21,7 @@ struct RenderBoundaryCell {
     output_end: AtomicI64,
 }
 
+#[cfg(feature = "probe")]
 impl RenderBoundaryCell {
     fn load(&self) -> Option<(SessionEpoch, SessionFrame)> {
         loop {
@@ -100,6 +105,7 @@ pub struct PlaybackShared {
     pub process_count: AtomicU64,
     /// Current seek epoch used to invalidate stale seek requests.
     pub seek_epoch: AtomicU64,
+    #[cfg(feature = "probe")]
     render_boundary: RenderBoundaryCell,
     metrics: RtMetrics,
 }
@@ -107,8 +113,10 @@ pub struct PlaybackShared {
 impl PlaybackShared {
     delegate::delegate! {
         to self.render_boundary {
+            #[cfg(feature = "probe")]
             #[call(publish)]
             pub(crate) fn publish_render_boundary(&self, context: &RenderContext);
+            #[cfg(feature = "probe")]
             #[call(load)]
             pub(crate) fn render_boundary(&self) -> Option<(SessionEpoch, SessionFrame)>;
         }

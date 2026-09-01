@@ -157,6 +157,8 @@ impl<S> PlayerRuntime<S> {
                 i64::from(presentation_frame),
             );
         }
+
+        self.core.worker.wake();
     }
 
     /// Set volume, clamped to `0.0..=1.0`.

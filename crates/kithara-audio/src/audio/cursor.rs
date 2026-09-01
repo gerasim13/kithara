@@ -157,6 +157,7 @@ impl ChunkCursor {
                     if let Some(next) = copied.source_span {
                         source_span = source_span.map_or(Some(next), |current| {
                             SourceSpan::new(current.start(), next.end(), current.sample_rate())
+                                .map(|span| span.with_render_revision(current.render_revision()))
                         });
                         source_output_frames = source_output_frames
                             .checked_add(copied.output_frames)
@@ -300,6 +301,7 @@ fn source_spans_coalesce(
     };
     if current.end() != next.start()
         || current.sample_rate() != next.sample_rate()
+        || current.render_revision() != next.render_revision()
         || current_output_frames == 0
         || next_output_frames == 0
     {
@@ -340,6 +342,7 @@ fn source_subspan(
         source_at(output_end)?
     };
     SourceSpan::new(start, end, span.sample_rate())
+        .map(|subspan| subspan.with_render_revision(span.render_revision()))
 }
 
 fn frames_to_samples(frames: u64, channels: u64) -> Result<usize, DecodeError> {
@@ -453,9 +456,38 @@ mod tests {
     }
 
     #[kithara::test]
+    fn render_revision_splits_identical_empty_source_spans() {
+        let rate = NonZeroU32::new(48_000).expect("test rate");
+        let first = SourceSpan::new(100, 100, rate)
+            .expect("ordered test span")
+            .with_render_revision(7);
+        let same_revision = SourceSpan::new(100, 100, rate)
+            .expect("ordered test span")
+            .with_render_revision(7);
+        let next_revision = SourceSpan::new(100, 100, rate)
+            .expect("ordered test span")
+            .with_render_revision(8);
+
+        assert!(source_spans_coalesce(
+            Some(first),
+            64,
+            Some(same_revision),
+            64
+        ));
+        assert!(!source_spans_coalesce(
+            Some(first),
+            64,
+            Some(next_revision),
+            64
+        ));
+    }
+
+    #[kithara::test]
     fn reads_preserve_each_rendered_source_span() {
         let pools = pools();
         let rate = NonZeroU32::new(48_000).expect("test rate");
+        let first_revision = 7;
+        let second_revision = 8;
         let spec = AudioSpec::new(1, rate);
         let (mut data_tx, data_rx) = connect::<Fetch<AudioChunk>>(4, None);
         let (trash_tx, _trash_rx) = connect::<AudioChunk>(8, None);
@@ -470,6 +502,7 @@ mod tests {
         ring.preloaded = true;
         let mut first = timed_chunk(&pools, spec, 3, Duration::ZERO, Duration::from_millis(3));
         first.meta.frame_offset = 100;
+        first.meta.render_revision = first_revision;
         let mut second = timed_chunk(
             &pools,
             spec,
@@ -478,6 +511,7 @@ mod tests {
             Duration::from_millis(5),
         );
         second.meta.frame_offset = 106;
+        second.meta.render_revision = first_revision;
         let mut changed = timed_chunk(
             &pools,
             spec,
@@ -486,6 +520,7 @@ mod tests {
             Duration::from_millis(7),
         );
         changed.meta.frame_offset = 110;
+        changed.meta.render_revision = second_revision;
         data_tx
             .try_push(Fetch::rendered(first, 0, SourceEnd::new(106, rate)))
             .expect("first rendered chunk reaches ring");
@@ -493,8 +528,8 @@ mod tests {
             .try_push(Fetch::rendered(second, 0, SourceEnd::new(110, rate)))
             .expect("second rendered chunk reaches ring");
         data_tx
-            .try_push(Fetch::rendered(changed, 0, SourceEnd::new(115, rate)))
-            .expect("changed-slope rendered chunk reaches ring");
+            .try_push(Fetch::rendered(changed, 0, SourceEnd::new(114, rate)))
+            .expect("changed-revision rendered chunk reaches ring");
 
         let playhead = PlayheadState::new();
         let mut cursor = ChunkCursor::new(&pools, spec).expect("cursor scratch fits test pools");
@@ -522,9 +557,12 @@ mod tests {
         assert_eq!(
             count.get(),
             5,
-            "equal-slope Fetch spans must coalesce and changed slope must split"
+            "equal-revision Fetch spans must coalesce and a new render revision must split"
         );
-        assert_eq!(source_span, SourceSpan::new(100, 110, rate));
+        assert_eq!(
+            source_span,
+            SourceSpan::new(100, 110, rate).map(|span| span.with_render_revision(first_revision))
+        );
 
         let second_read = cursor
             .read(
@@ -540,9 +578,12 @@ mod tests {
             )
             .expect("partial changed-slope read succeeds");
         let ReadOutcome::Frames { source_span, .. } = second_read.outcome else {
-            panic!("expected partial changed-slope frames");
+            panic!("expected partial changed-revision frames");
         };
-        assert_eq!(source_span, SourceSpan::new(110, 112, rate));
+        assert_eq!(
+            source_span,
+            SourceSpan::new(110, 112, rate).map(|span| span.with_render_revision(second_revision))
+        );
 
         let final_read = cursor
             .read(
@@ -562,8 +603,8 @@ mod tests {
         };
         assert_eq!(
             source_span,
-            SourceSpan::new(112, 115, rate),
-            "a full changed-slope read must land exactly at SourceEnd"
+            SourceSpan::new(112, 114, rate).map(|span| span.with_render_revision(second_revision)),
+            "a full changed-revision read must land exactly at SourceEnd"
         );
     }
 

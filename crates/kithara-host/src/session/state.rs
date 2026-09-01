@@ -8,7 +8,7 @@ use firewheel::{
 use kithara_bufpool::PoolRegion;
 use kithara_events::EventBus;
 use kithara_platform::sync::Arc;
-use kithara_play::{GroupState, player::PlayerMember};
+use kithara_play::{GroupState, StreamShape, player::PlayerMember};
 use kithara_warp::{
     BeatGrid, BeatGridId, BeatGridRevision, SyncError, SyncGroup, SyncGroupSnapshot,
     SyncStatusSnapshot,
@@ -198,7 +198,7 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
     pub(super) session_ducking: SessionDuckingMode,
     pub(super) start_stream_fn: StartStreamFn<B>,
     pub(super) stream_needs_restart: bool,
-    pub(super) sample_rate_hint: u32,
+    pub(super) requested_shape: StreamShape,
     pub(super) transport: SessionTransportState,
     pub(super) reserved_session_grid: Option<SessionGridGeneration>,
     pub(super) root: GroupState<PlayerMember>,
@@ -207,7 +207,7 @@ pub(crate) struct SessionState<B: AudioBackend, S> {
 }
 
 impl<B: AudioBackend, S> SessionState<B, S> {
-    #[cfg(any(test, feature = "probe"))]
+    #[cfg(test)]
     pub(crate) const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 
     /// Creates session state with its own musical-grid topology.
@@ -215,7 +215,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
     pub(crate) fn new<F>(
         root: GroupState<PlayerMember>,
         root_view: RootView,
-        sample_rate: NonZeroU32,
+        requested_shape: StreamShape,
         start_stream_fn: F,
     ) -> Self
     where
@@ -230,7 +230,7 @@ impl<B: AudioBackend, S> SessionState<B, S> {
             transport_control: None,
             mix_tap: None,
             next_player_id: 1,
-            sample_rate_hint: sample_rate.get(),
+            requested_shape,
             session_ducking: SessionDuckingMode::Off,
             session_output_memo: None,
             session_output_node_id: None,
@@ -314,6 +314,7 @@ fn create_firewheel_context<B: AudioBackend, S>(
     state: &mut SessionState<B, S>,
     sample_rate: u32,
 ) -> Result<(), SessionError> {
+    let sample_rate = NonZeroU32::new(sample_rate).unwrap_or(state.requested_shape.sample_rate);
     debug!(sample_rate, "[KITHARA-ROUTE] creating firewheel context");
     let config = FirewheelConfig {
         num_graph_outputs: ChannelCount::STEREO,
@@ -331,13 +332,13 @@ fn create_firewheel_context<B: AudioBackend, S>(
             return Err(SessionError::Graph(error.into()));
         }
     };
-    if let Err(error) = (state.start_stream_fn)(&mut ctx, sample_rate) {
+    if let Err(error) = (state.start_stream_fn)(&mut ctx, sample_rate.get()) {
         state.reserved_session_grid = Some(session_grid);
         return Err(SessionError::StreamStart(error));
     }
     state.ctx = Some(ctx);
     state.transport_control = Some(transport_control);
-    state.sample_rate_hint = sample_rate;
+    state.requested_shape.sample_rate = sample_rate;
     state.stream_needs_restart = false;
     trace_stream_info(state, "start-stream");
     debug!(sample_rate, "[KITHARA-ROUTE] firewheel context ready");

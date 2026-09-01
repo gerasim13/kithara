@@ -1,6 +1,8 @@
 mod lifecycle;
 mod player;
 
+use std::num::NonZeroUsize;
+
 use delegate::delegate;
 use kithara_bufpool::{HasPool, PoolRegion};
 use kithara_decode::GaplessMode;
@@ -33,6 +35,7 @@ pub(crate) struct PlayerCore<S> {
     pub(crate) engine_load: Arc<EngineLoad>,
 
     pub(crate) warp: WarpConfig,
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Undelivered resources unregister before the worker owner drops.
     pub(crate) items: ItemQueue,
     /// Host lifecycle explicitly detaches the engine session lane before the
@@ -378,7 +381,9 @@ mod tests {
         );
         let mut config = resource_config("https://example.com/song.mp3");
 
-        config = player.prepare_config(config);
+        config = player
+            .prepare_config(config)
+            .expect("bound player reads its session stream shape");
 
         assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
         assert!(
@@ -391,7 +396,9 @@ mod tests {
     fn prepare_config_per_track_cancel_is_child_of_player_master() {
         let player = player();
         let mut rc = resource_config("https://example.com/song.mp3");
-        rc = player.prepare_config(rc);
+        rc = player
+            .prepare_config(rc)
+            .expect("bound player reads its session stream shape");
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child();
@@ -415,7 +422,9 @@ mod tests {
                 .build(),
         );
         let mut rc = resource_config("https://example.com/song.mp3");
-        rc = player.prepare_config(rc);
+        rc = player
+            .prepare_config(rc)
+            .expect("bound player reads its session stream shape");
 
         let track_cancel = rc.cancel.expect("prepare_config must populate cancel");
         let observer = track_cancel.child();

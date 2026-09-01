@@ -39,6 +39,7 @@ impl<S> PlayWorker<S> {
     #[must_use]
     pub fn new(config: PlayWorkerConfig<S>) -> Self {
         let PlayWorkerConfig {
+            backpressure_poll_interval,
             cancel,
             capacity,
             fairness_yield_interval,
@@ -59,6 +60,7 @@ impl<S> PlayWorker<S> {
         };
         let id = WORKER_ID.fetch_add(1, Ordering::Relaxed);
         let mut dispatcher_config = DispatcherConfig::new(format!("kithara-play-worker-{id}"))
+            .with_backpressure_poll_interval(backpressure_poll_interval)
             .with_capacity(capacity)
             .with_fairness_yield_interval(fairness_yield_interval)
             .with_idle_timeout(idle_timeout)
@@ -83,8 +85,11 @@ impl<S> PlayWorker<S> {
         &self.0.pools
     }
 
-    pub(crate) fn flush_deferred(&self) {
-        self.0.dispatcher.wake_handle().flush_deferred();
+    delegate::delegate! {
+        to self.0.dispatcher.wake_handle() {
+            pub(crate) fn flush_deferred(&self);
+            pub(crate) fn wake(&self);
+        }
     }
 }
 
@@ -109,23 +114,30 @@ where
         B: Default + ResamplerBackend,
         C: Into<TrackConfig<T, B>>,
     {
+        let config = config.into();
+        let audio_buffer_chunks = config.resolved_audio_buffer_chunks();
         let TrackConfig {
             audio,
             effects,
             engine_load,
             warp,
-        } = config.into();
+        } = config;
         let task_cancel = audio.cancel().cloned();
         let wake = Wake::new(self.0.dispatcher.wake_handle());
-        let prepared =
-            Audio::<Stream<T>>::prepare(audio, Arc::new(wake), self.pools().clone()).await?;
+        let prepared = Audio::<Stream<T>>::prepare(
+            audio,
+            audio_buffer_chunks,
+            Arc::new(wake),
+            self.pools().clone(),
+        )
+        .await?;
         let drain = EffectDrain::new(effects.len(), self.pools())?;
         let prepared = prepared.map(|audio, source| {
             let spec = audio.spec();
             let warp = Warp::new(audio, &warp);
             let source = WarpSource::new(
                 source,
-                warp.renderer(spec, self.pools().clone()),
+                warp.quantum_renderer(spec, self.pools().clone()),
                 effects,
                 drain,
                 spec,

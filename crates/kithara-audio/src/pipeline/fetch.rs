@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 /// Exclusive decoded-source boundary represented by rendered PCM.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, fieldwork::Fieldwork)]
-#[fieldwork(opt_in, get)]
+#[fieldwork(opt_in, get, with)]
 #[non_exhaustive]
 pub struct SourceEnd {
     /// Exclusive decoded source frame.
@@ -35,6 +35,9 @@ pub struct SourceSpan {
     /// Sample rate of the decoded source coordinate.
     #[field(get, copy)]
     sample_rate: NonZeroU32,
+    /// Opaque producer render revision represented by this output span.
+    #[field(get, copy, with)]
+    render_revision: u64,
 }
 
 impl SourceSpan {
@@ -48,6 +51,7 @@ impl SourceSpan {
             start,
             end,
             sample_rate,
+            render_revision: 0,
         })
     }
 }

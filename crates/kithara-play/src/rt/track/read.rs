@@ -1,6 +1,8 @@
 use std::ops::Range;
 
 use kithara_platform::sync::Arc;
+#[cfg(feature = "probe")]
+use kithara_test_utils::kithara;
 use kithara_warp::{PresentationFrontier, RenderContext};
 use num_traits::cast::AsPrimitive;
 use ringbuf::{HeapProd, traits::Producer};
@@ -10,6 +12,25 @@ use super::{
     triggers::{TrackTriggers, TriggerInput},
 };
 use crate::bridge::{PlayerNotification, RtMetrics, TrackPlaybackStopReason, TrackState};
+
+#[cfg(feature = "probe")]
+#[kithara::probe(
+    render_revision,
+    session_epoch,
+    output_start,
+    output_end,
+    source_start,
+    source_end
+)]
+fn pcm_consumed(
+    render_revision: u64,
+    session_epoch: u64,
+    output_start: i64,
+    output_end: i64,
+    source_start: u64,
+    source_end: u64,
+) {
+}
 
 struct TrackReadContext<'a> {
     sink: RtSink<'a>,
@@ -60,7 +81,7 @@ impl PlayerTrack {
     ) -> TrackReadOutcome {
         let Some(context) = context else {
             self.resource.clear_render();
-            return self.read(scratch_bufs, mix_bufs, range, sink);
+            return self.read_with_context(None, scratch_bufs, mix_bufs, range, sink);
         };
         if context.sample_rate().get() != self.sample_rate {
             self.resource.clear_render();
@@ -78,7 +99,7 @@ impl PlayerTrack {
         } else {
             self.resource.clear_render();
         }
-        self.read(scratch_bufs, mix_bufs, range, sink)
+        self.read_with_context(Some(&context), scratch_bufs, mix_bufs, range, sink)
     }
 
     /// Advance the media clock by source time represented by consumed scratch.
@@ -272,9 +293,20 @@ impl PlayerTrack {
     }
 
     /// Read audio from this track into scratch/mix buffers.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(
         &mut self,
+        scratch_bufs: &mut [&mut [f32]],
+        mix_bufs: &mut [&mut [f32]],
+        range: Range<usize>,
+        sink: &mut RtSink<'_>,
+    ) -> TrackReadOutcome {
+        self.read_with_context(None, scratch_bufs, mix_bufs, range, sink)
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    fn read_with_context(
+        &mut self,
+        context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
@@ -284,7 +316,7 @@ impl PlayerTrack {
             return TrackReadOutcome::Eof;
         }
 
-        let read_outcome = self.read_resource(scratch_bufs, range.clone(), sink.metrics);
+        let read_outcome = self.read_resource(context, scratch_bufs, range.clone(), sink.metrics);
         match read_outcome {
             TrackReadOutcome::Full { .. } => self.handle_full_read(
                 scratch_bufs,
@@ -317,6 +349,7 @@ impl PlayerTrack {
 
     fn read_resource(
         &mut self,
+        _context: Option<&RenderContext>,
         scratch_bufs: &mut [&mut [f32]],
         range: Range<usize>,
         metrics: &RtMetrics,
@@ -328,7 +361,42 @@ impl PlayerTrack {
             &mut scratch_right[0][range.clone()],
         ];
 
-        let outcome = match resource.read(&mut scratch_window, 0..range.len(), metrics) {
+        #[cfg(feature = "probe")]
+        let read = resource.read_observed(
+            &mut scratch_window,
+            0..range.len(),
+            metrics,
+            |output, source| {
+                let Some(context) = _context else {
+                    return;
+                };
+                let start = i64::from(context.output_frames().start);
+                let Some(output_start) = i64::try_from(output.start)
+                    .ok()
+                    .and_then(|offset| start.checked_add(offset))
+                else {
+                    return;
+                };
+                let Some(output_end) = i64::try_from(output.end)
+                    .ok()
+                    .and_then(|offset| start.checked_add(offset))
+                else {
+                    return;
+                };
+                pcm_consumed(
+                    source.render_revision(),
+                    u64::from(context.session_epoch()),
+                    output_start,
+                    output_end,
+                    source.start(),
+                    source.end(),
+                );
+            },
+        );
+        #[cfg(not(feature = "probe"))]
+        let read = resource.read(&mut scratch_window, 0..range.len(), metrics);
+
+        let outcome = match read {
             ReadOutcome::Full { frames } => TrackReadOutcome::Full {
                 frames,
                 duration: resource.duration(),

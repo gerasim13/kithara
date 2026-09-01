@@ -41,10 +41,10 @@ enum TrackCommandScenario {
 const MAX_BLOCK_FRAMES: u32 = 1024;
 
 fn stream_shape(sample_rate: NonZeroU32) -> StreamShape {
-    StreamShape {
+    StreamShape::new(
+        NonZeroU32::new(MAX_BLOCK_FRAMES).expect("BUG: non-zero"),
         sample_rate,
-        max_block_frames: NonZeroU32::new(MAX_BLOCK_FRAMES).expect("BUG: non-zero"),
-    }
+    )
 }
 
 fn make_processor() -> (PlayerNodeProcessor, SlotControl) {

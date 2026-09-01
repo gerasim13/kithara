@@ -50,6 +50,17 @@ impl<S> Warp<S> {
     {
         WarpRenderer::new(&self.config, self.publisher.reader(), spec, pools)
     }
+
+    /// Creates the bounded worker-side renderer paired with this Warp facade.
+    #[cfg(feature = "render")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn quantum_renderer<P>(&self, spec: AudioSpec, pools: PoolRegion<P>) -> WarpRenderer<P>
+    where
+        P: HasPool<f32>,
+    {
+        WarpRenderer::new_quantum(&self.config, self.publisher.reader(), spec, pools)
+    }
 }
 
 #[cfg(test)]

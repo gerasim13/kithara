@@ -1,4 +1,7 @@
-use std::{fmt, num::NonZeroU32};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 
 use bon::Builder;
 use kithara_abr::AbrController;
@@ -13,10 +16,18 @@ use crate::{
     session::SessionDispatcher,
 };
 
-const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
-    Some(sample_rate) => sample_rate,
-    None => unreachable!(),
-};
+struct Consts;
+
+impl Consts {
+    const DEFAULT_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(44_100) {
+        Some(sample_rate) => sample_rate,
+        None => unreachable!(),
+    };
+    const DEFAULT_RESPONSE_BUDGET_FRAMES: NonZeroUsize = match NonZeroUsize::new(441) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+}
 
 fn allocate_grid_id() -> BeatGridId {
     let Ok(id) = BeatGridId::allocate() else {
@@ -26,8 +37,9 @@ fn allocate_grid_id() -> BeatGridId {
 }
 
 /// Configuration for the player.
-#[derive(Builder)]
+#[derive(Builder, fieldwork::Fieldwork)]
 #[builder(state_mod(vis = "pub"))]
+#[fieldwork(opt_in, get)]
 #[non_exhaustive]
 pub struct PlayerConfig<S> {
     /// Stable synchronization-group identity owned by this player.
@@ -36,6 +48,10 @@ pub struct PlayerConfig<S> {
     /// Per-deck Warp resources and live temporal controls.
     #[builder(default = WarpConfig::builder().build())]
     pub(crate) warp: WarpConfig,
+    /// Maximum accepted control-to-presented-PCM response in output frames.
+    #[builder(default = Consts::DEFAULT_RESPONSE_BUDGET_FRAMES)]
+    #[field(get, copy)]
+    pub(crate) response_budget_frames: NonZeroUsize,
     /// Explicit shared playback worker. Its pools and cancellation lifetime
     /// are configured once in [`crate::PlayWorkerConfig`].
     pub(crate) worker: PlayWorker<S>,
@@ -76,7 +92,7 @@ pub struct PlayerConfig<S> {
     /// Sample rate passed to the engine/runtime backend as a hint.
     /// Default: 44100. Offline/test harnesses set this to drive
     /// deterministic render at a known rate.
-    #[builder(default = DEFAULT_SAMPLE_RATE)]
+    #[builder(default = Consts::DEFAULT_SAMPLE_RATE)]
     pub(crate) sample_rate: NonZeroU32,
     /// Maximum concurrent slots in the engine. Default: 4.
     #[builder(default = 4)]
@@ -88,6 +104,7 @@ impl<S> Clone for PlayerConfig<S> {
         Self {
             grid_id: self.grid_id,
             warp: self.warp.clone(),
+            response_budget_frames: self.response_budget_frames,
             worker: self.worker.clone(),
             gapless_mode: self.gapless_mode,
             block_on_underrun: self.block_on_underrun,
@@ -115,9 +132,26 @@ impl<S> fmt::Debug for PlayerConfig<S> {
             .field("crossfade_duration", &self.crossfade_duration)
             .field("default_rate", &self.default_rate)
             .field("warp", &self.warp)
+            .field("response_budget_frames", &self.response_budget_frames)
             .field("prefetch_duration", &self.prefetch_duration)
             .field("max_slots", &self.max_slots)
             .field("worker", &self.worker)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+    use crate::{PlayWorker, PlayWorkerConfig, test_pools::pools};
+
+    #[kithara::test(native)]
+    fn default_response_budget_matches_the_industry_contract() {
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let config = PlayerConfig::builder().worker(worker).build();
+
+        assert_eq!(config.response_budget_frames().get(), 441);
     }
 }

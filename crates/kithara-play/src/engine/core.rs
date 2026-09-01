@@ -19,7 +19,8 @@ use crate::{
     bridge::{PlaybackShared, PlayerCmd, PlayerNotification, SharedEq, SlotControl},
     effects::eq::EqBandConfig,
     error::PlayError,
-    session::{PlayerId, SessionBinding, SessionHandle, SessionSampleRate},
+    rt::StreamShape,
+    session::{PlayerId, SessionBinding, SessionHandle},
 };
 
 type SlotHandle = SlotControl;
@@ -88,6 +89,10 @@ impl<S> EngineImpl<S> {
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
         self.session.consumer_wake_mode()
+    }
+
+    pub(crate) fn stream_shape(&self) -> Result<StreamShape, PlayError> {
+        self.session.stream_shape()
     }
 
     pub(crate) fn drain_slot_trash(&self, slot: SlotId) -> bool {
@@ -304,8 +309,8 @@ impl<S> EngineImpl<S> {
             return self.config.sample_rate;
         }
         self.session
-            .sample_rate()
-            .map_or(self.config.sample_rate, SessionSampleRate::output)
+            .stream_shape()
+            .map_or(self.config.sample_rate, |shape| shape.sample_rate.get())
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -361,8 +366,13 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session
-            .start_player(player_id, self.config.sample_rate, master_volume)?;
+        self.session.start_player(
+            player_id,
+            self.config.sample_rate,
+            master_volume,
+            self.config.render_quantum_frames,
+            self.config.response_budget_frames,
+        )?;
 
         self.running.store(true, Ordering::Release);
 

@@ -45,8 +45,8 @@ pub fn align_command_runs(
         "control contains incomplete frames"
     );
     let prefix = ALIGNMENT_FRAMES
-        .min(candidate_command_frame)
-        .min(control_command_frame);
+        .min(candidate_command_frame.div_ceil(2))
+        .min(control_command_frame.div_ceil(2));
     assert!(prefix > 0, "alignment needs pre-command PCM");
     let candidate_limit = candidate_command_frame - prefix;
     let mut anchor = (f64::NEG_INFINITY, 0);

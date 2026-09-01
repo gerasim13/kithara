@@ -10,17 +10,19 @@ use super::renderer::{PreparedQuantum, WarpRenderer};
 #[cfg(feature = "probe")]
 #[kithara::probe(
     request_revision,
-    target_rate_bits,
     applied_rate_bits,
     session_epoch,
-    session_frame
+    session_frame,
+    source_start,
+    source_end
 )]
 fn rate_applied(
     request_revision: u64,
-    target_rate_bits: u32,
     applied_rate_bits: u32,
     session_epoch: u64,
     session_frame: i64,
+    source_start: u64,
+    source_end: u64,
 ) {
 }
 
@@ -56,7 +58,11 @@ where
         let admitted = meta.frame_offset.saturating_add(u64::from(meta.frames));
         let source_end = admitted.saturating_sub(held_source_frames);
         let sample_rate = meta.spec.sample_rate;
-        let held_duration = match meta.spec.duration_for(held_source_frames) {
+        let held_duration = match meta.spec.duration_for(admitted).and_then(|admitted| {
+            meta.spec
+                .duration_for(source_end)
+                .map(|source_end| admitted.saturating_sub(source_end))
+        }) {
             Ok(duration) => duration,
             Err(error) => {
                 warn!(
@@ -185,10 +191,10 @@ where
 
         let channels = usize::from(self.spec.channels.max(1));
         let frames = samples.len() / channels;
-        if frames > Self::MAX_SOURCE_FRAMES {
+        if frames > self.source_frame_limit {
             let error = ElasticError::SourceFrameLimit {
                 frames,
-                limit: Self::MAX_SOURCE_FRAMES,
+                limit: self.source_frame_limit,
             };
             warn!(%error, "time-stretch rendering failed; dropping chunk");
             self.defer_scratch(Some(samples));
@@ -260,12 +266,18 @@ where
         } else {
             self.held_source_frames()
         };
-        self.emit(None, held_source_frames)
+        let output = self.emit(None, held_source_frames);
+        if complete {
+            self.primed_source_debt = 0;
+            self.terminal_rate = None;
+            self.terminal_snapshot = None;
+        }
+        output
     }
 
     fn render_prepared(
         &mut self,
-        chunk: AudioChunk,
+        mut chunk: AudioChunk,
         prepared: PreparedQuantum,
         direct: bool,
     ) -> Option<AudioChunk> {
@@ -278,6 +290,7 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
+        chunk.meta.render_revision = prepared.rate().revision();
         if let PreparedQuantum::Legacy { rate, speed, .. } = &prepared
             && self.can_passthrough(*speed)
         {
@@ -290,6 +303,11 @@ where
                         return None;
                     }
                 };
+            if let Err(error) = self.retain_passthrough_history(chunk.meta, &chunk.samples) {
+                warn!(%error, "time-stretch passthrough history retention failed");
+                self.retire_engine();
+                self.clear_render_state();
+            }
             self.record_rendered_source_end(chunk.meta, 0, chunk.meta.end_timestamp);
             self.applied_speed = next_speed;
             self.exact_cursor = None;
@@ -313,7 +331,7 @@ where
     }
 
     fn quantum_source_shape_matches(prepared: &PreparedQuantum, actual: usize) -> bool {
-        let expected = match Self::prepared_source_frames(prepared) {
+        let expected = match Self::prepared_input_frames(prepared) {
             Ok(expected) => expected,
             Err(error) => {
                 warn!(%error, "time-stretch prepared source sizing failed");
@@ -334,7 +352,7 @@ where
     /// [`Self::prepare_quantum`].
     #[doc(hidden)]
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub fn render_quantum(&mut self, chunk: AudioChunk) -> Option<AudioChunk> {
+    pub fn render_quantum(&mut self, mut chunk: AudioChunk) -> Option<AudioChunk> {
         let Some(prepared) = self.prepared_quantum.take() else {
             warn!("time-stretch quantum was not prepared before rendering");
             self.defer_scratch(Some(chunk.samples));
@@ -353,6 +371,13 @@ where
             self.defer_scratch(Some(chunk.samples));
             return None;
         }
+        if let Err(error) = self.activate_prepared_quantum(&mut chunk, &prepared) {
+            warn!(%error, "time-stretch activation failed; dropping chunk");
+            self.retire_engine();
+            self.clear_render_state();
+            self.defer_scratch(Some(chunk.samples));
+            return None;
+        }
         #[cfg(feature = "probe")]
         let rate = prepared.rate();
         #[cfg(feature = "probe")]
@@ -361,16 +386,23 @@ where
         if let (Some(snapshot), Some(output)) = (snapshot, output.as_ref()) {
             #[cfg(feature = "probe")]
             let session_epoch = snapshot.context().session_epoch();
+            #[cfg(feature = "probe")]
+            let source_span = self
+                .rendered_source_end()
+                .map(|(end, _)| (output.meta.frame_offset, end));
             if let Some(_session_frame) = self.commit_snapshot(snapshot, output.frames()) {
                 #[cfg(feature = "probe")]
-                if self.last_committed_rate_revision != rate.revision() {
+                if self.last_committed_rate_revision != rate.revision()
+                    && let Some((source_start, source_end)) = source_span
+                {
                     self.last_committed_rate_revision = rate.revision();
                     rate_applied(
                         rate.revision(),
-                        rate.speed().to_bits(),
                         applied_speed.to_bits(),
                         u64::from(session_epoch),
                         i64::from(_session_frame),
+                        source_start,
+                        source_end,
                     );
                 }
             } else {
