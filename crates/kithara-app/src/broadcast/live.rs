@@ -158,7 +158,7 @@ mod tests {
     use struct_patch::Patch as _;
 
     use super::*;
-    use crate::{document::schema::Document, pools::AppPools};
+    use crate::{document::Document, pools::AppPools};
 
     /// The lead every test that does not measure the ring starts on air with.
     const TAP_LEAD: Duration = Duration::from_secs(2);
