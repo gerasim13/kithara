@@ -81,6 +81,16 @@ impl Config {
     /// Returns [`LoadError`] when a named file is missing or unreadable, a
     /// document does not match the schema, or a reference resolves nowhere.
     pub fn load(explicit: Option<&Path>, beside: Option<&Path>) -> Result<Self, LoadError> {
+        Self::load_with(explicit, beside, &|name| {
+            std::env::var(name).ok().or_else(|| baked_env(name))
+        })
+    }
+
+    fn load_with(
+        explicit: Option<&Path>,
+        beside: Option<&Path>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Self, LoadError> {
         let mut source: Value =
             serde_yaml_ng::from_str(BAKED_DOCUMENT).map_err(|source| LoadError::Parse {
                 path: PathBuf::from(BAKED_PATH),
@@ -93,10 +103,7 @@ impl Config {
         }
 
         let mut expanded = source.clone();
-        expand(&mut expanded, &|name| {
-            std::env::var(name).ok().or_else(|| baked_env(name))
-        })
-        .map_err(LoadError::Env)?;
+        expand(&mut expanded, lookup).map_err(LoadError::Env)?;
 
         let reported = overlay_path.unwrap_or_else(|| PathBuf::from(BAKED_PATH));
         let document = serde_yaml_ng::from_value(expanded).map_err(|source| LoadError::Parse {
@@ -203,9 +210,22 @@ mod tests {
         path
     }
 
+    /// Answers exactly the references the baked document names, so success-path
+    /// tests do not depend on the ambient process environment.
+    fn env(name: &str) -> Option<String> {
+        match name {
+            "KITHARA_DRM_PROD_KEY"
+            | "KITHARA_DRM_PROD_AUTH_TOKEN"
+            | "KITHARA_DRM_PROD_SP_ZV_TOKEN"
+            | "KITHARA_DRM_STAGE_KEY"
+            | "KITHARA_DRM_STAGE_AUTH_TOKEN" => Some("test-value".to_string()),
+            _ => None,
+        }
+    }
+
     #[kithara::test(native, flash(false))]
     fn no_file_leaves_the_baked_document_in_force() {
-        let config = Config::load(None, None).expect("the baked document stands alone");
+        let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
         assert_eq!(
             config.size_probe_method(),
@@ -222,7 +242,7 @@ mod tests {
             "network:\n  size_probe_method: head\n",
         );
 
-        let config = Config::load(Some(&path), None).expect("the overlay loads");
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
         assert_eq!(config.size_probe_method(), SizeProbeMethod::Head);
         assert!(
@@ -244,7 +264,7 @@ mod tests {
     fn a_file_beside_the_binary_may_be_absent() {
         let absent = std::env::temp_dir().join("kithara-config-not-there.yaml");
 
-        Config::load(None, Some(&absent)).expect("an unnamed file is optional");
+        Config::load_with(None, Some(&absent), &env).expect("an unnamed file is optional");
     }
 
     #[kithara::test(native, flash(false))]
@@ -271,7 +291,7 @@ mod tests {
     fn a_malformed_file_names_its_path() {
         let path = write("malformed", "network: [not, a, mapping]\n");
 
-        let error = Config::load(Some(&path), None).expect_err("the shape is wrong");
+        let error = Config::load_with(Some(&path), None, &env).expect_err("the shape is wrong");
 
         assert!(
             error.to_string().contains("kithara-config-malformed"),
@@ -281,7 +301,7 @@ mod tests {
 
     #[kithara::test(native, flash(false))]
     fn the_dump_carries_references_not_secrets() {
-        let config = Config::load(None, None).expect("the baked document stands alone");
+        let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
         let dump = config.dump();
 
