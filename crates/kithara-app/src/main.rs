@@ -113,13 +113,16 @@ fn main() -> AppResult {
     let shutdown = CancelToken::root();
     let pools = pools::build()?;
     let compute_threads = thread::available_parallelism().unwrap_or(NonZeroUsize::MIN);
-    let base_worker = Worker::new(
-        WorkerConfig::new()
-            .with_cancel(shutdown.child())
-            .with_runtime(runtime.handle().clone())
-            .with_max_compute_tasks(compute_threads)
-            .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute")),
-    );
+    let mut worker_config = WorkerConfig::new()
+        .with_cancel(shutdown.child())
+        .with_runtime(runtime.handle().clone())
+        .with_max_compute_tasks(compute_threads)
+        .with_owned_pool(RayonConfig::new(compute_threads, "kithara-compute"));
+    worker_config.apply(document.worker());
+    if let Some(pool) = document.compute_pool() {
+        worker_config = worker_config.with_pool_settings(pool);
+    }
+    let base_worker = Worker::new(worker_config);
     let worker = AppWorker::new(
         PlayWorkerConfig::builder(pools.clone())
             .cancel(shutdown.child())

@@ -4,8 +4,11 @@ use std::{
 };
 
 use kithara::{
-    assets::AssetLayoutRegistry, hls::SizeProbeMethod, net::NetSettings,
+    assets::AssetLayoutRegistry,
+    hls::SizeProbeMethod,
+    net::NetSettings,
     play::policy::DomainKeyPolicy,
+    worker::{ComputePoolSettings, WorkerSettings},
 };
 use serde_yaml_ng::Value;
 
@@ -203,6 +206,19 @@ impl Config {
     #[must_use]
     pub fn app_settings(&self) -> AppSettings {
         self.document.app.clone()
+    }
+
+    /// Knobs the document sets on the compute worker.
+    #[must_use]
+    pub fn worker(&self) -> WorkerSettings {
+        self.document.worker.clone()
+    }
+
+    /// The compute pool the document names, when it names one. `None` leaves
+    /// the pool the caller already installed standing.
+    #[must_use]
+    pub fn compute_pool(&self) -> Option<ComputePoolSettings> {
+        self.document.compute_pool.clone()
     }
 
     /// The media-identity registry the asset store reads.

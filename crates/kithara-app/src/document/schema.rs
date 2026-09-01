@@ -3,9 +3,13 @@ use std::collections::BTreeMap;
 #[cfg(feature = "broadcast")]
 use kithara::broadcast::BroadcastSettings;
 use kithara::{
-    analysis::BeatAnalysisSettingsPatch, assets::FlushSettings, hls::SizeProbeMethod,
-    host::HostSettings, net::NetSettings, stream::dl::DownloaderSettings,
-    worker::ComputePoolSettings,
+    analysis::BeatAnalysisSettingsPatch,
+    assets::FlushSettings,
+    hls::SizeProbeMethod,
+    host::HostSettings,
+    net::NetSettings,
+    stream::dl::DownloaderSettings,
+    worker::{ComputePoolSettings, WorkerSettings},
 };
 use serde::Deserialize;
 
@@ -37,6 +41,7 @@ pub(crate) struct Document {
     pub(crate) network: Network,
     pub(crate) playback: Playback,
     pub(crate) playlist: Playlist,
+    pub(crate) worker: WorkerSettings,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -117,6 +122,8 @@ pub(crate) enum SeedAlphabet {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara::hls::SizeProbeMethod;
 
     use super::{ComputePoolSettings, Document};
@@ -158,6 +165,21 @@ mod tests {
         assert!(
             document.compute_pool.is_none(),
             "a document naming no compute pool leaves the crate default standing"
+        );
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_worker_section_names_the_compute_task_ceiling() {
+        let document: Document =
+            serde_yaml_ng::from_str("worker:\n  max_compute_tasks: 4\n").expect("a valid document");
+
+        assert_eq!(
+            document.worker.max_compute_tasks.map(NonZeroUsize::get),
+            Some(4)
+        );
+        assert!(
+            document.compute_pool.is_none(),
+            "naming the worker section does not name a pool"
         );
     }
 

@@ -60,4 +60,9 @@ fields are wiring, not settings, and carry `#[patch(skip)]` for it.
 own, reached at the app's top-level `compute_pool:` key rather than nested
 under `worker`. `Shared` is absent from it on purpose: it carries a live
 `rayon::ThreadPool` only code can hand over, and a document has no way to name
-one.
+one. `WorkerConfig::with_pool_settings` is how a decoded `ComputePoolSettings`
+reaches a real `PoolConfig`. That mapping lives here, not at the construction
+site, because `ComputePoolSettings` is `#[non_exhaustive]`: only this crate can
+match it exhaustively, so only this crate may write the conversion — anywhere
+else, the match would need a wildcard arm that silently swallows a variant
+added later.

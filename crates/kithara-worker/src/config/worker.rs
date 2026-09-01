@@ -54,6 +54,19 @@ impl WorkerConfig {
         self.pool = PoolConfig::Shared(pool);
         self
     }
+
+    /// Install the compute pool a configuration document named.
+    #[must_use]
+    pub fn with_pool_settings(mut self, settings: ComputePoolSettings) -> Self {
+        self.pool = match settings {
+            ComputePoolSettings::Disabled => PoolConfig::Disabled,
+            #[cfg(not(target_arch = "wasm32"))]
+            ComputePoolSettings::Owned { name, threads } => {
+                PoolConfig::OwnedLazy(RayonConfig::new(threads, name))
+            }
+        };
+        self
+    }
 }
 
 impl Default for WorkerConfig {
@@ -159,5 +172,47 @@ mod tests {
             .expect_err("a document cannot name a live pool it does not own");
 
         assert!(error.to_string().contains("shared"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn with_pool_settings_carries_the_documents_thread_count_and_name() {
+        let owned: ComputePoolSettings =
+            serde_yaml_ng::from_str("mode: owned\nname: analysis\nthreads: 2\n")
+                .expect("a valid owned-pool document parses");
+        let config = WorkerConfig::new()
+            .with_owned_pool(RayonConfig::new(
+                NonZeroUsize::new(5).expect("nonzero"),
+                "seed",
+            ))
+            .with_pool_settings(owned);
+
+        match &config.pool {
+            PoolConfig::OwnedLazy(pool) => {
+                assert_eq!(pool.name, "analysis");
+                assert_eq!(pool.threads.get(), 2);
+            }
+            PoolConfig::Disabled | PoolConfig::Shared(_) => {
+                panic!("expected an owned pool carrying the document's values")
+            }
+        }
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_disabled_document_replaces_the_pool_the_builder_installed() {
+        let disabled: ComputePoolSettings = serde_yaml_ng::from_str("mode: disabled\n")
+            .expect("a valid disabled-pool document parses");
+        let config = WorkerConfig::new()
+            .with_owned_pool(RayonConfig::new(
+                NonZeroUsize::new(5).expect("nonzero"),
+                "seed",
+            ))
+            .with_pool_settings(disabled);
+
+        match &config.pool {
+            PoolConfig::Disabled => {}
+            PoolConfig::OwnedLazy(_) | PoolConfig::Shared(_) => {
+                panic!("a disabled document must replace the seeded pool, not keep it")
+            }
+        }
     }
 }
