@@ -42,13 +42,15 @@ pub struct PlayerSettings {
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
     /// in so rendered output never stretches with inserted silence while the
     /// decode worker catches up. Real-time hosts must keep the default
-    /// (`false`): the audio callback can never block.
+    /// (`false`): the audio callback can never block. Not a document key:
+    /// the shipped binary is a real-time host, and only the offline test
+    /// harness sets this, from Rust.
     #[builder(default)]
+    #[patch(skip)]
     pub block_on_underrun: bool,
-    /// Built-in auto-advance handler. Every queue-driven player has this
-    /// overwritten to `false` at construction
-    /// (`crates/kithara-queue/src/queue/state.rs:202`), so it is not a
-    /// document key.
+    /// Built-in auto-advance handler. The queue overwrites this for every
+    /// queue-driven player at construction, so it is not a document key.
+    /// See `crates/kithara-play/CONTEXT.md` for the owning contract.
     #[builder(default = true)]
     #[patch(skip)]
     pub auto_advance_enabled: bool,
@@ -59,10 +61,9 @@ pub struct PlayerSettings {
     #[builder(default = 1.0)]
     pub default_rate: f32,
     /// Secondary lead time before EOF at which the next queued item is
-    /// loaded. The queue is the canonical owner of this knob and always
-    /// overwrites it at construction
-    /// (`crates/kithara-queue/src/queue/state.rs:203`), so it is not a
-    /// document key.
+    /// loaded. The queue overwrites this for every queue-driven player at
+    /// construction, so it is not a document key. See
+    /// `crates/kithara-play/CONTEXT.md` for the owning contract.
     #[builder(default = 3.5)]
     #[patch(skip)]
     pub prefetch_duration: f32,
@@ -192,14 +193,17 @@ mod document_tests {
         let patch: super::PlayerSettingsPatch =
             serde_yaml_ng::from_str("crossfade_duration: 2.0\n").expect("the document types");
         let mut settings = PlayerSettings::default();
-        let default_rate = settings.default_rate;
+        // Seeded off the default (1.0) so a whole-struct `apply` that resets
+        // every unnamed field to `Default::default()` cannot pass this
+        // assertion by coincidence.
+        settings.default_rate = 2.5;
 
         settings.apply(patch);
 
         assert!((settings.crossfade_duration - 2.0).abs() < f32::EPSILON);
         assert!(
-            (settings.default_rate - default_rate).abs() < f32::EPSILON,
-            "a silent field must keep its value"
+            (settings.default_rate - 2.5).abs() < f32::EPSILON,
+            "a silent field must keep its seeded value, not reset to default"
         );
     }
 
@@ -211,9 +215,31 @@ mod document_tests {
         let patch: super::PlayerSettingsPatch =
             serde_yaml_ng::from_str("engine:\n  sample_rate: 48000\n").expect("the document types");
         let mut settings = PlayerSettings::default();
+        // Seeded off the default (4) so a whole-struct replacement of the
+        // nested `engine` field (rather than a field-by-field merge) would
+        // go red here instead of passing by coincidence.
+        settings.engine.max_slots = 8;
 
         settings.apply(patch);
 
         assert_eq!(settings.engine.sample_rate.get(), 48_000);
+        assert_eq!(
+            settings.engine.max_slots, 8,
+            "a sibling field inside the nested settings must survive the patch"
+        );
+    }
+
+    /// `block_on_underrun` is a real field on `PlayerSettings` but must not
+    /// be document-reachable: the shipped binary is a real-time host whose
+    /// audio callback can never block (see the field's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_realtime_unsafe_block_on_underrun_field_is_not_a_document_key() {
+        let error =
+            serde_yaml_ng::from_str::<super::PlayerSettingsPatch>("block_on_underrun: true\n")
+                .expect_err(
+                    "a field that can park the audio callback must not be document-settable",
+                );
+
+        assert!(error.to_string().contains("block_on_underrun"), "{error}");
     }
 }

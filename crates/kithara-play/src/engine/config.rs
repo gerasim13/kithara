@@ -42,7 +42,10 @@ pub struct EngineSettings {
     #[patch(skip)]
     #[builder(default = generate_log_spaced_bands(10))]
     pub eq_layout: Vec<EqBandConfig>,
-    /// Number of output channels. Default: 2 (stereo).
+    /// Number of output channels. Default: 2 (stereo). Not a document key:
+    /// the only reader is a startup log line, so a document value would
+    /// change nothing the engine actually does.
+    #[patch(skip)]
     #[builder(default = 2)]
     pub channels: u16,
     /// Sample rate passed to the runtime backend as a hint. Default: 44100.
@@ -146,14 +149,17 @@ mod document_tests {
         let patch: super::EngineSettingsPatch =
             serde_yaml_ng::from_str("max_slots: 8\n").expect("the document types");
         let mut settings = EngineSettings::default();
-        let channels = settings.channels;
+        // Seeded off the default (2) so a whole-struct `apply` that resets
+        // every unnamed field to `Default::default()` cannot pass this
+        // assertion by coincidence.
+        settings.channels = 5;
 
         settings.apply(patch);
 
         assert_eq!(settings.max_slots, 8);
         assert_eq!(
-            settings.channels, channels,
-            "a silent field must keep its value"
+            settings.channels, 5,
+            "a silent field must keep its seeded value, not reset to default"
         );
     }
 
@@ -168,5 +174,17 @@ mod document_tests {
             .expect_err("a generator-owned field must not be settable from a document");
 
         assert!(error.to_string().contains("eq_layout"), "{error}");
+    }
+
+    /// `channels` is a real field on `EngineSettings` but must not be
+    /// document-reachable: its only reader is a startup log line, so a
+    /// document value would change nothing the engine actually does (see
+    /// the field's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_unread_channels_field_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<super::EngineSettingsPatch>("channels: 1\n")
+            .expect_err("a field with no consumer must not be settable from a document");
+
+        assert!(error.to_string().contains("channels"), "{error}");
     }
 }

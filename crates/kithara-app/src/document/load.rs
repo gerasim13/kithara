@@ -306,6 +306,7 @@ mod tests {
     use kithara::{
         hls::SizeProbeMethod,
         net::{Compression, NetOptions},
+        play::PlayerSettings,
         worker::ComputePoolSettings,
     };
     use struct_patch::Patch as _;
@@ -346,6 +347,13 @@ mod tests {
             "the shipped document selects range_get"
         );
         assert!(!config.tracks().is_empty());
+
+        let mut player_settings = PlayerSettings::default();
+        player_settings.apply(config.player());
+        assert!(
+            (player_settings.crossfade_duration - 5.0).abs() < f32::EPSILON,
+            "the shipped document pins the 5-second crossfade against the crate default of 1.0"
+        );
     }
 
     #[kithara::test(native, flash(false))]

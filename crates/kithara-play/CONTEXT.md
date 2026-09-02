@@ -165,6 +165,44 @@ address-stable meter, `ResourceConfig` passes the same optional `Arc` through
 `step_track` cost against emitted audio duration into lock-free EWMA atomics and
 publishes `AudioEvent::EngineLoad` at the existing telemetry interval.
 
+## Configuration Document Entry Point
+
+`PlayerSettings` and its nested `EngineSettings` are the way a configuration
+document reaches player and engine tunables: a document types into the
+generated `PlayerSettingsPatch` (`kithara-app`'s `player:` section) and its
+nested `EngineSettingsPatch` (`player.engine:`), and `apply` writes only the
+fields the document names, leaving the rest of `PlayerConfig::settings`
+standing. `PlayerConfig` builds the `EngineConfig` an engine actually runs
+from that same `PlayerSettings::engine` value (see "Engine Lifecycle"), so
+there is one settings tree behind both — never a second copy of
+`sample_rate` / `max_slots` / `eq_layout` free to drift out of step with it.
+
+`kithara-app` builds a `PlayerSettings` from the crate default plus the
+document overlay in `main.rs`, then threads it through `Deck::build`'s
+`PlayerConfig::builder().settings(...)` call — the only construction site a
+document reaches.
+
+Six fields carry `#[patch(skip)]`, so naming one in a document is refused
+rather than parsed and silently dropped:
+
+- `PlayerSettings::gapless_mode` — document-unreachable until `GaplessMode`
+  derives `Deserialize`.
+- `PlayerSettings::auto_advance_enabled` — `Queue::new` calls
+  `PlayerImpl::set_auto_advance_enabled(false)` unconditionally
+  (`crates/kithara-queue/src/queue/state.rs:202`); see "Queue Auto-Advance".
+- `PlayerSettings::prefetch_duration` — `Queue::new` calls
+  `PlayerImpl::set_prefetch_duration(...)` unconditionally
+  (`crates/kithara-queue/src/queue/state.rs:203`) from its own
+  `QueueSettings` copy; the queue is the canonical owner.
+- `PlayerSettings::block_on_underrun` — the shipped binary is a real-time
+  host and the audio callback can never block; only the offline test
+  harness sets it, from Rust.
+- `EngineSettings::eq_layout` — always a generator output at every
+  construction site; `Deck::build` derives it from `AppConfig::eq_bands` (a
+  document key of its own) and a custom layout is installed at runtime
+  through `PlayerImpl::set_eq_layout` instead (see "Live Equalizer Layout").
+- `EngineSettings::channels` — has no reader outside a startup log line.
+
 ## Live Equalizer Layout
 
 `PlayerImpl::set_eq_layout` replaces one player's master EQ while the player is
@@ -235,10 +273,12 @@ allocates a `TrackId` and hands it to the bridge, so there is no untagged item t
 
 Two near-end triggers are published: `PlayerEvent::PrefetchRequested` and
 `PlayerEvent::HandoverRequested` (emitted only when `crossfade_duration > 0`).
-`PlayerConfig::auto_advance_enabled` (default `true`) uses a built-in linear policy
-(`next = current + 1`). `kithara-queue::Queue` disables that built-in policy and reacts to
-`HandoverRequested` by selecting the loaded successor via `select_item_with_crossfade`; it does not
-call `arm_next` / `commit_next`.
+`PlayerSettings::auto_advance_enabled` (default `true`) uses a built-in linear policy
+(`next = current + 1`). `kithara-queue::Queue` disables that built-in policy at construction
+(`PlayerImpl::set_auto_advance_enabled(false)`) and reacts to `HandoverRequested` by selecting the
+loaded successor via `select_item_with_crossfade`; it does not call `arm_next` / `commit_next`.
+`auto_advance_enabled` carries `#[patch(skip)]` for exactly this reason: the queue overwrites it on
+every queue-driven player, so a document key would configure nothing in the shipped binary.
 
 `select_item_with_crossfade` fails with `PlayError::ItemConsumed` before any bookkeeping when the
 target index is neither armed, nor the already-announced current item, nor still holding a resource
@@ -605,7 +645,8 @@ reselecting-current path and never be enqueued.
 ## Invariants
 
 - `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
-- At most `EngineImpl::max_slots()` slots allocated at once (`PlayerConfig.max_slots`, default 4).
+- At most `EngineImpl::max_slots()` slots allocated at once (`EngineSettings::max_slots`, default
+  4, reached through `PlayerConfig.settings.engine`).
 - `PlayerImpl::slot()` is `None` until a slot is allocated (phases `Idle` and `Stopped`-without-
   slot); `send_to_slot` then fails with `PlayError::NoActiveSlot`.
 - Audio-thread `process()` is allocation-, free-, and lock-free.
