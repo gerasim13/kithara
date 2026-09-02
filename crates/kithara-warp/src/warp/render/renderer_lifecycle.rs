@@ -10,16 +10,13 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    #[cfg_attr(
-        feature = "probe",
-        kithara::probe(
-            request_revision,
-            applied_rate_bits,
-            session_epoch = u64::from(committed.context().session_epoch()),
-            session_frame,
-            source_start,
-            source_end
-        )
+    #[kithara::probe(
+        request_revision,
+        applied_rate_bits,
+        session_epoch = u64::from(committed.context().session_epoch()),
+        session_frame,
+        source_start,
+        source_end
     )]
     fn rate_applied(
         &mut self,

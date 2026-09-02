@@ -1,7 +1,5 @@
 use kithara_events::RouteDescription;
-#[cfg(feature = "probe")]
-use kithara_test_utils::kithara;
-#[cfg(feature = "probe")]
+use kithara_test_macros as kithara;
 use kithara_warp::RenderSnapshot;
 
 use super::super::core::PlayerRuntime;
@@ -13,7 +11,6 @@ use crate::{
 };
 
 impl<S> PlayerRuntime<S> {
-    #[cfg(feature = "probe")]
     #[kithara::probe(
         request_revision,
         target_rate_bits,
@@ -134,14 +131,12 @@ impl<S> PlayerRuntime<S> {
     /// Set the requested rate target, clamped to
     /// [`kithara_warp::StretchControls::MIN_SPEED`].
     pub fn set_rate(&self, rate: f32) {
-        #[cfg(feature = "probe")]
         let snapshot = self
             .slot()
             .and_then(|slot| self.core.engine.slot_render_snapshot(slot));
 
         let revision = self.core.warp.stretch().set_speed(rate);
 
-        #[cfg(feature = "probe")]
         if let Some(snapshot) = snapshot {
             self.rate_requested(
                 revision,

@@ -81,16 +81,13 @@ impl MediaSpan {
         )
     }
 
-    #[cfg_attr(
-        feature = "probe",
-        kithara::probe(
-            render_revision = source.render_revision(),
-            session_epoch = u64::from(context.session_epoch()),
-            output_start = i64::from(context.output_frames().start),
-            output_end = i64::from(context.output_frames().end),
-            source_start = source.start(),
-            source_end = source.end()
-        )
+    #[kithara::probe(
+        render_revision = source.render_revision(),
+        session_epoch = u64::from(context.session_epoch()),
+        output_start = i64::from(context.output_frames().start),
+        output_end = i64::from(context.output_frames().end),
+        source_start = source.start(),
+        source_end = source.end()
     )]
     fn pcm_consumed(
         &mut self,
