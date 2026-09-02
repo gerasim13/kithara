@@ -58,17 +58,17 @@ impl<S> PlayWorker<S> {
             (Worker::new(worker_config), None)
         };
         let id = WORKER_ID.fetch_add(1, Ordering::Relaxed);
-        let mut dispatcher_config = DispatcherConfig::new(format!("kithara-play-worker-{id}"))
-            .with_capacity(capacity)
-            .with_fairness_yield_interval(fairness_yield_interval)
-            .with_idle_timeout(idle_timeout)
-            .with_observer(PlaybackObserver::default())
-            .with_slow_tick_threshold(slow_tick_threshold)
-            .with_task_burst(task_burst)
-            .with_wait_timeout(wait_timeout);
-        if let Some(cancel) = dispatcher_cancel {
-            dispatcher_config = dispatcher_config.with_cancel(cancel);
-        }
+        let dispatcher_config = DispatcherConfig::builder()
+            .name(format!("kithara-play-worker-{id}"))
+            .capacity(capacity)
+            .fairness_yield_interval(fairness_yield_interval)
+            .idle_timeout(idle_timeout)
+            .observer(PlaybackObserver::default())
+            .slow_tick_threshold(slow_tick_threshold)
+            .task_burst(task_burst)
+            .wait_timeout(wait_timeout)
+            .maybe_cancel(dispatcher_cancel)
+            .build();
         let dispatcher = base.dispatcher(dispatcher_config);
         Self(Arc::new(WorkerOwner {
             dispatcher,

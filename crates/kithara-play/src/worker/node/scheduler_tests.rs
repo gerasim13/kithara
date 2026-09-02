@@ -186,9 +186,11 @@ impl PlaybackScheduler {
     fn start(name: String, cancel: CancelToken, capacity: std::num::NonZeroUsize) -> Self {
         let worker = Worker::new(WorkerConfig::new().with_cancel(cancel));
         let dispatcher = worker.dispatcher(
-            DispatcherConfig::new(name)
-                .with_capacity(capacity)
-                .with_observer(crate::worker::scheduler::PlaybackObserver::default()),
+            DispatcherConfig::builder()
+                .name(name)
+                .capacity(capacity)
+                .observer(crate::worker::scheduler::PlaybackObserver::default())
+                .build(),
         );
         Self {
             dispatcher,
