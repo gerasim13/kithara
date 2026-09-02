@@ -67,7 +67,7 @@ pub(crate) fn build_resource_config(url: &str, config: &AppConfig) -> Option<App
             .store(config.store.clone())
             .keys(keys)
             .maybe_headers(headers)
-            .size_probe_method(config.size_probe_method)
+            .settings(config.resource.clone())
             .build(),
     )
 }

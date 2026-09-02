@@ -13,7 +13,8 @@ use kithara::{
         sync::{Arc, Mutex},
     },
     play::{
-        EngineSettings, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings, ResourceSrc,
+        EngineSettings, PlayWorkerConfig, PlayerConfig, PlayerImpl, PlayerSettings,
+        ResourceSettings, ResourceSrc,
         effects::eq::generate_log_spaced_bands,
         policy::{DomainKeyPolicy, DomainKeyRule},
     },
@@ -594,7 +595,11 @@ fn build_source_for_item(
         reason: e.to_string(),
     })?;
     let config = FfiResourceConfig::for_src(src)
-        .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
+        .settings(
+            ResourceSettings::builder()
+                .preferred_peak_bitrate(item.preferred_peak_bitrate().max(0.0))
+                .build(),
+        )
         .maybe_headers(merged_headers_for_item(inner, item).map(Into::into))
         .events(scoped.clone())
         .downloader(inner.downloader.clone())

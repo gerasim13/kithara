@@ -36,13 +36,15 @@ where
             .gapless_mode(self.player.core.gapless_mode)
             .maybe_resampler(config.decoder.resampler().cloned())
             .build();
+        let mut settings = config.settings.clone();
+        settings.consumer_wake_mode = self.player.core.engine.consumer_wake_mode();
+        settings.block_on_underrun = self.player.core.block_on_underrun;
+        settings.host_sample_rate = host_sample_rate;
         ResourceConfig {
             bus,
             cancel,
             worker: Some(self.player.core.worker.clone()),
-            consumer_wake_mode: self.player.core.engine.consumer_wake_mode(),
-            block_on_underrun: self.player.core.block_on_underrun,
-            host_sample_rate,
+            settings,
             decoder,
             stretch,
             engine_load: Some(Arc::clone(&self.player.core.engine_load)),
@@ -83,7 +85,7 @@ mod tests {
     use crate::{
         PlayError, PlayWorker, PlayWorkerConfig,
         player::PlayerConfig,
-        resource::ResourceSrc,
+        resource::{ResourceSettings, ResourceSrc},
         session::{Cmd, Reply, SessionDispatcher, testing},
         test_pools::{TestPools, pools},
     };
@@ -125,7 +127,7 @@ mod tests {
 
         let prepared = player.prepare_config(resource_config("https://example.com/song.mp3"));
         assert_eq!(
-            prepared.consumer_wake_mode,
+            prepared.settings.consumer_wake_mode,
             ConsumerWakeMode::ImmediateOffRt
         );
         let audio = prepared.build_file_config(player.worker(), None);
@@ -150,12 +152,16 @@ mod tests {
         let src = ResourceSrc::parse("https://example.com/song.mp3").expect("valid test source");
         let config = ResourceConfig::<TestPools>::for_src(src)
             .store(AssetStore::builder(pools()).build())
-            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+            .settings(
+                ResourceSettings::builder()
+                    .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                    .build(),
+            )
             .build();
 
         let prepared = player.prepare_config(config);
         assert_eq!(
-            prepared.consumer_wake_mode,
+            prepared.settings.consumer_wake_mode,
             ConsumerWakeMode::RealtimeDeferred,
             "a player-managed resource cannot smuggle an off-RT capability past the session policy"
         );

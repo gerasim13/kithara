@@ -44,9 +44,10 @@ dropped. The reason is duplication, not inertness — an embedder that reaches a
 document already spells these options somewhere, and `kithara-app` spells them in its own top-level
 `net:` section. Two spellings of one value, one of them dead, is the shape a configuration document
 exists to prevent; the live one is `net:`. That a document value could not arrive anyway is the
-weaker, secondary point: `kithara-play::ResourceConfig` carries no `net_options` at all and builds
-`HlsSettings` fresh, so nothing routes one through — and `kithara-app` injects a `downloader` on
-every path besides, which is what makes `HlsSettings::net_options` unread there. It is not unread
+weaker, secondary point: `kithara-play::ResourceSettings` holds an `HlsSettings` whose own
+`net_options` no document can reach either — that field is `#[patch(skip)]` here and the whole
+`hls` field is `#[patch(skip)]` there — and `kithara-app` injects a `downloader` on every path
+besides, which is what makes `HlsSettings::net_options` unread there. It is not unread
 everywhere: `kithara-queue`'s `TrackSource::Uri` branch builds a `ResourceConfig` with no
 downloader, so the field is live for that caller. Live, but out of a document's reach.
 

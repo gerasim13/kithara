@@ -4,9 +4,8 @@ use bon::Builder;
 use kithara::{
     analysis::BeatAnalysisConfig,
     drm::KeyProcessorRegistry,
-    hls::SizeProbeMethod,
     platform::{CancelToken, sync::Arc, time::Duration},
-    play::{PlayerSettings, policy::DomainKeyPolicy},
+    play::{PlayerSettings, ResourceSettings, policy::DomainKeyPolicy},
     prelude::PlaybackResamplerBackend,
     queue::QueueSettings,
     stream::dl::Downloader,
@@ -96,11 +95,14 @@ pub struct AppConfig {
     #[builder(default)]
     #[patch(skip)]
     pub palette: Palette,
-    /// HLS size-estimation probe strategy (see
-    /// [`kithara::hls::SizeProbeMethod`]).
-    #[builder(default = SizeProbeMethod::Head)]
+    /// Resource-level knobs threaded into every track's `ResourceConfig`,
+    /// including the `HlsSettings` and `FileSettings` the built stream
+    /// carries. A document reaches these through `resource`, `hls`, and
+    /// `file` — the same as [`AppConfig::queue`] reaches [`QueueSettings`]
+    /// through `queue` — not through [`AppSettings`].
+    #[builder(default)]
     #[patch(skip)]
-    pub size_probe_method: SizeProbeMethod,
+    pub resource: ResourceSettings,
     /// Log filter directives.
     #[builder(default)]
     pub log_directives: Vec<String>,
@@ -168,7 +170,7 @@ impl fmt::Debug for AppConfig {
             .field("eq_bands", &self.eq_bands)
             .field("beat_analysis", &self.beat_analysis)
             .field("analysis_chunk_seconds", &self.analysis_chunk_seconds)
-            .field("size_probe_method", &self.size_probe_method)
+            .field("resource", &self.resource)
             .field("queue", &self.queue)
             .finish_non_exhaustive()
     }

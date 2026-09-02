@@ -60,7 +60,7 @@ where
     /// Preferred peak bitrate cap for normal networks.
     #[must_use]
     pub const fn preferred_peak_bitrate(&self) -> f64 {
-        self.preferred_peak_bitrate
+        self.settings.preferred_peak_bitrate
     }
 
     /// Replace the event bus attached to this resource.
@@ -75,7 +75,7 @@ where
 
     /// Replace the rate this resource's decoder resamples onto.
     pub const fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.host_sample_rate = Some(sample_rate);
+        self.settings.host_sample_rate = Some(sample_rate);
     }
 
     /// Source parsed for this resource.

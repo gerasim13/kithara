@@ -238,11 +238,11 @@ mod tests {
 
     use super::{AssetStore, HlsConfig, HlsSettings, HlsSettingsPatch, SizeProbeMethod};
 
-    /// The one knob `kithara-app` reads out of this patch resolves through
-    /// `SizeProbeMethod::default()` for any document that does not name it —
-    /// including a runtime overlay that blanks the baked value with `~`, which
-    /// types to `None` the same way an absent key does. The default is part of
-    /// that contract rather than an implementation detail.
+    /// A document that does not name this knob resolves through
+    /// `SizeProbeMethod::default()` — including a runtime overlay that blanks
+    /// the baked value with `~`, which types to `None` the same way an absent
+    /// key does. The default is part of that contract rather than an
+    /// implementation detail.
     #[kithara::test(native, flash(false))]
     fn a_silent_document_probes_with_head() {
         assert_eq!(

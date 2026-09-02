@@ -20,8 +20,8 @@ use kithara::{
     },
     play::{
         Cmd, EngineSettings, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl,
-        PlayerSettings, Reply, Resource, ResourceConfig, ResourceSrc, SeekOutcome,
-        SelectTransition, SessionDispatcher, apply_mix,
+        PlayerSettings, Reply, Resource, ResourceConfig, ResourceSettings, ResourceSrc,
+        SeekOutcome, SelectTransition, SessionDispatcher, apply_mix,
     },
     warp::{StretchControls, StretchKind},
 };
@@ -913,9 +913,13 @@ async fn prepare_deck(
         }))
         .store(memory_asset_store())
         .worker(player.worker().clone())
-        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+        .settings(
+            ResourceSettings::builder()
+                .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
+                .build(),
+        )
         .initial_abr_mode(AbrMode::manual(0))
-        .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
         .events(EventBus::new(16_384))
         .discriminator(format!("{}-deck-{deck_index}-reference", case.label))
         .build();

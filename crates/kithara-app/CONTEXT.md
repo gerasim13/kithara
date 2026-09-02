@@ -297,14 +297,20 @@ was the field left behind, and it has now moved to `hls` — `kithara::hls::HlsS
 ignored, which is what makes the move a move rather than a second reader going quiet. Two tests hold that refusal: one
 in `document::schema` at the type, one in `document::load` through the whole merge-expand-type pipeline.
 
-`hls` is `HlsSettingsPatch` whole, so a document may name any of the eight knobs that patch declares. This
-application reads exactly one of them today: `Config::size_probe_method` resolves `document.hls.size_probe_method`,
-an `Option<SizeProbeMethod>`, to `SizeProbeMethod::default()` when unnamed, and hands it to `AppConfig`. The other
-seven (`download_batch_size`, `acquire_attempt_budget`, the three ephemeral-cache bounds, `event_channel_capacity`,
-`look_ahead_bytes`) parse and are then dropped, because this application builds its `HlsConfig` per stream through
-`kithara-play::ResourceConfig`, which takes `size_probe_method` and `look_ahead_bytes` as separate arguments rather
-than an `HlsSettings`. **That is a staged transfer, not a resting state**: the task that gives `ResourceConfig` an
-`HlsSettings` by value closes it, and until it lands a document naming any of those seven is silently ineffective.
+`hls` is `HlsSettingsPatch` whole, and all eight knobs it declares travel. `Config::hls` hands the patch on
+untouched; `main` applies it to the `hls` field of one `ResourceSettings`, `AppConfig::resource` carries that value,
+and `sources::build_resource_config` passes it to `ResourceConfig::settings`, which hands the `HlsSettings` inside it
+straight to the per-stream `HlsConfig`. Nothing is copied field by field along the way, so a knob `kithara-hls` adds
+later reaches the built stream with no edit here. `file` is `kithara::file::FileSettingsPatch` and rides the same
+tree, into the `FileConfig` the file branch builds. `resource` is `kithara::play::ResourceSettingsPatch` — the
+resource's own two tunables, `preload_chunks` and `preferred_peak_bitrate`.
+
+`resource.hls` and `resource.file` are refused rather than parsed: both fields carry `#[patch(skip)]`, because the
+top-level `hls:` and `file:` sections are already this document's spelling for those knobs and a second path to one
+value is what a configuration document exists to prevent. `ResourceSettings` skips three more of its own —
+`consumer_wake_mode` and `block_on_underrun` because `PlayerImpl::prepare_config` overwrites both for every
+player-managed resource (and either one can put reads on, or park, the real-time render callback), and
+`host_sample_rate` because the audio host writes it at runtime. See `kithara-play`'s `CONTEXT.md` for that argument.
 
 `HlsSettings` has a ninth field the patch does not declare at all. `net_options` carries `#[patch(skip)]`, so naming
 `hls.net_options` is refused rather than dropped: `net:` is already this document's live spelling for those options,

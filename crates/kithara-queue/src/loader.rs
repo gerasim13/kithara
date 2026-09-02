@@ -272,7 +272,8 @@ mod tests {
     use kithara_events::{EventBus, QueueEvent};
     use kithara_platform::{time::Duration, tokio::sync::oneshot};
     use kithara_play::{
-        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, player::PlayerControlSource,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceSettings,
+        player::PlayerControlSource,
     };
     use kithara_test_utils::{kithara, probe::capture as probe_capture};
 
@@ -446,7 +447,11 @@ mod tests {
         };
         let given = ResourceConfig::for_src(src)
             .store(supplied_store.clone())
-            .preferred_peak_bitrate(321.0)
+            .settings(
+                ResourceSettings::builder()
+                    .preferred_peak_bitrate(321.0)
+                    .build(),
+            )
             .build();
         let Ok(returned) = loader.build_config(TrackId(1), TrackSource::Config(Box::new(given)))
         else {

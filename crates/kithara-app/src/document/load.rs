@@ -5,9 +5,10 @@ use std::{
 
 use kithara::{
     assets::{AssetLayoutRegistry, AssetStoreSettings, StorageBackend},
-    hls::SizeProbeMethod,
+    file::FileSettingsPatch,
+    hls::HlsSettingsPatch,
     net::NetSettings,
-    play::{PlayerSettingsPatch, policy::DomainKeyPolicy},
+    play::{PlayerSettingsPatch, ResourceSettingsPatch, policy::DomainKeyPolicy},
     queue::QueueSettingsPatch,
     worker::{ComputePoolSettings, WorkerSettings},
 };
@@ -189,11 +190,25 @@ impl Config {
         self.document.net.clone()
     }
 
-    /// HLS size-probe strategy. A document that names no `hls.size_probe_method`
-    /// leaves the crate default standing.
+    /// Knobs the document sets on HLS streaming, applied to the `hls` field of
+    /// the `ResourceSettings` every track is opened with.
     #[must_use]
-    pub fn size_probe_method(&self) -> SizeProbeMethod {
-        self.document.hls.size_probe_method.unwrap_or_default()
+    pub fn hls(&self) -> HlsSettingsPatch {
+        self.document.hls.clone()
+    }
+
+    /// Knobs the document sets on file streaming, applied to the `file` field
+    /// of the `ResourceSettings` every track is opened with.
+    #[must_use]
+    pub fn file(&self) -> FileSettingsPatch {
+        self.document.file.clone()
+    }
+
+    /// Knobs the document sets on the resource itself, threaded into every
+    /// track's `ResourceConfig`.
+    #[must_use]
+    pub fn resource(&self) -> ResourceSettingsPatch {
+        self.document.resource.clone()
     }
 
     /// Knobs the document sets on the player, threaded into every deck's
@@ -306,13 +321,23 @@ mod tests {
     use kithara::{
         hls::SizeProbeMethod,
         net::{Compression, NetOptions},
-        play::PlayerSettings,
+        play::{PlayerSettings, ResourceSettings},
         worker::ComputePoolSettings,
     };
     use struct_patch::Patch as _;
     use tempfile::TempDir;
 
     use super::{BAKED_PATH, Config, LoadError, StorageBackend};
+
+    /// The tree `main` composes: the crate defaults, then the document's own
+    /// `resource`, `hls`, and `file` sections laid over them.
+    fn resource_settings(config: &Config) -> ResourceSettings {
+        let mut settings = ResourceSettings::default();
+        settings.apply(config.resource());
+        settings.hls.apply(config.hls());
+        settings.file.apply(config.file());
+        settings
+    }
 
     fn tempdir() -> TempDir {
         tempfile::tempdir().expect("a temporary directory")
@@ -342,7 +367,7 @@ mod tests {
         let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
         assert_eq!(
-            config.size_probe_method(),
+            resource_settings(&config).hls.size_probe_method,
             SizeProbeMethod::RangeGet,
             "the shipped document selects range_get"
         );
@@ -367,7 +392,10 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
-        assert_eq!(config.size_probe_method(), SizeProbeMethod::Head);
+        assert_eq!(
+            resource_settings(&config).hls.size_probe_method,
+            SizeProbeMethod::Head
+        );
         assert!(
             !config.tracks().is_empty(),
             "a section the overlay never names keeps its baked value"
@@ -445,6 +473,30 @@ mod tests {
         assert!(
             config.queue().max_history_size.is_none(),
             "a knob the document does not name reaches the app empty"
+        );
+    }
+
+    /// The three sections that compose one `ResourceSettings` each write their
+    /// own part of it, and the baked `hls.size_probe_method` an overlay never
+    /// names survives the composition.
+    #[kithara::test(native, flash(false))]
+    fn the_resource_hls_and_file_sections_compose_one_settings_tree() {
+        let dir = tempdir();
+        let path = write(
+            &dir,
+            "resource-and-file",
+            "resource:\n  preload_chunks: 7\nfile:\n  reader_event_capacity: 512\n",
+        );
+
+        let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
+        let settings = resource_settings(&config);
+
+        assert_eq!(settings.preload_chunks.get(), 7);
+        assert_eq!(settings.file.reader_event_capacity, 512);
+        assert_eq!(
+            settings.hls.size_probe_method,
+            SizeProbeMethod::RangeGet,
+            "a section the overlay never names keeps its baked value"
         );
     }
 
@@ -547,7 +599,10 @@ mod tests {
 
         let config = Config::load_with(Some(&path), None, &env).expect("an empty overlay loads");
 
-        assert_eq!(config.size_probe_method(), SizeProbeMethod::RangeGet);
+        assert_eq!(
+            resource_settings(&config).hls.size_probe_method,
+            SizeProbeMethod::RangeGet
+        );
         assert!(
             !config.tracks().is_empty(),
             "a file with nothing in it overrides nothing"

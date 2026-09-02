@@ -1,8 +1,8 @@
 use kithara_audio::{AudioConfig, AudioObserver, ResamplerBackend};
 use kithara_bufpool::HasPool;
 use kithara_decode::DecodeError;
-use kithara_file::{FileConfig, FileSettings, FileSrc};
-use kithara_hls::{HlsConfig, HlsSettings};
+use kithara_file::{FileConfig, FileSrc};
+use kithara_hls::HlsConfig;
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::CancelScope;
 use kithara_stream::dl::{Downloader, DownloaderConfig};
@@ -48,7 +48,11 @@ where
                     .map(str::to_lowercase),
             ),
         };
-        let extension = self.hint.clone().or(derived_hint);
+        let extension = self
+            .hint
+            .clone()
+            .or(derived_hint)
+            .or_else(|| self.settings.file.extension.clone());
         let downloader = self.downloader.clone().unwrap_or_else(|| {
             let dl_cancel = CancelScope::new(self.cancel.clone()).token();
             let client = HttpClient::new(NetOptions::default(), pools.clone(), dl_cancel.child());
@@ -58,6 +62,8 @@ where
                     .build(),
             )
         });
+        let mut settings = self.settings.file.clone();
+        settings.extension = extension.clone();
         let file_config = FileConfig::for_src(file_src)
             .store(self.store.clone())
             .downloader(downloader)
@@ -66,22 +72,17 @@ where
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
-            .settings(
-                FileSettings::builder()
-                    .maybe_look_ahead_bytes(self.look_ahead_bytes)
-                    .maybe_extension(extension.clone())
-                    .build(),
-            )
+            .settings(settings)
             .build();
         AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
-            .maybe_host_sample_rate(self.host_sample_rate)
+            .maybe_host_sample_rate(self.settings.host_sample_rate)
             .maybe_observer(observer)
-            .preload_chunks(self.preload_chunks)
+            .preload_chunks(self.settings.preload_chunks)
             .decoder(self.decoder)
-            .consumer_wake_mode(self.consumer_wake_mode)
-            .block_on_underrun(self.block_on_underrun)
+            .consumer_wake_mode(self.settings.consumer_wake_mode)
+            .block_on_underrun(self.settings.block_on_underrun)
             .build()
     }
 
@@ -111,24 +112,104 @@ where
             .pools(pools)
             .maybe_events(self.bus.clone())
             .maybe_cancel(self.cancel.clone())
-            .settings(
-                HlsSettings::builder()
-                    .maybe_look_ahead_bytes(self.look_ahead_bytes)
-                    .size_probe_method(self.size_probe_method)
-                    .build(),
-            )
+            .settings(self.settings.hls.clone())
             .build();
         Ok(
             AudioConfig::<kithara_hls::Hls<S>, B>::for_stream(hls_config)
                 .maybe_cancel(self.cancel.clone())
                 .maybe_hint(self.hint)
-                .maybe_host_sample_rate(self.host_sample_rate)
+                .maybe_host_sample_rate(self.settings.host_sample_rate)
                 .maybe_observer(observer)
-                .preload_chunks(self.preload_chunks)
+                .preload_chunks(self.settings.preload_chunks)
                 .decoder(self.decoder)
-                .consumer_wake_mode(self.consumer_wake_mode)
-                .block_on_underrun(self.block_on_underrun)
+                .consumer_wake_mode(self.settings.consumer_wake_mode)
+                .block_on_underrun(self.settings.block_on_underrun)
                 .build(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_assets::AssetStore;
+    use kithara_test_utils::kithara;
+
+    use crate::{
+        PlayWorker, PlayWorkerConfig,
+        resource::{ResourceConfig, ResourceSettings, ResourceSrc},
+        test_pools::{TestPools, pools},
+    };
+
+    fn worker() -> PlayWorker<TestPools> {
+        PlayWorker::new(PlayWorkerConfig::builder(pools()).build())
+    }
+
+    fn config(source: &str, settings: ResourceSettings) -> ResourceConfig<TestPools> {
+        ResourceConfig::for_src(ResourceSrc::parse(source).expect("valid test source"))
+            .store(AssetStore::builder(pools()).build())
+            .settings(settings)
+            .build()
+    }
+
+    /// `download_batch_size` reached the built stream through no path while
+    /// `ResourceConfig` re-declared HLS knobs one by one: it never mirrored
+    /// this one, so a caller going through `PlayerConfig` could not set it at
+    /// all. Passing `HlsSettings` whole closes that gap for every knob the
+    /// crate declares, now and later.
+    #[kithara::test]
+    fn an_hls_knob_the_resource_never_declared_reaches_the_built_config() {
+        let mut settings = ResourceSettings::default();
+        settings.hls.download_batch_size = 6;
+
+        let built = config("https://example.com/live.m3u8", settings)
+            .build_hls_config(&worker(), None)
+            .expect("valid HLS config");
+
+        assert_eq!(built.stream().settings.download_batch_size, 6);
+    }
+
+    /// The same for the file branch: `reader_event_capacity` is a
+    /// `FileSettings` knob `ResourceConfig` never mirrored.
+    #[kithara::test]
+    fn a_file_knob_the_resource_never_declared_reaches_the_built_config() {
+        let mut settings = ResourceSettings::default();
+        settings.file.reader_event_capacity = 512;
+
+        let built =
+            config("https://example.com/song.mp3", settings).build_file_config(&worker(), None);
+
+        assert_eq!(built.stream().settings.reader_event_capacity, 512);
+    }
+
+    /// The per-call `hint` still lands as the file source's extension: it is
+    /// per-call input, read by the decoder as well, so it stays on
+    /// `ResourceConfig` and is mapped into `FileSettings::extension` once here.
+    #[kithara::test]
+    fn the_per_call_hint_becomes_the_file_extension() {
+        let built = ResourceConfig::<TestPools>::for_src(
+            ResourceSrc::parse("https://example.com/track/stream").expect("valid test source"),
+        )
+        .store(AssetStore::builder(pools()).build())
+        .hint("flac")
+        .build()
+        .build_file_config(&worker(), None);
+
+        assert_eq!(built.stream().settings.extension.as_deref(), Some("flac"));
+        assert_eq!(built.hint(), Some("flac"));
+    }
+
+    /// A document-named `extension` backs the per-call hint rather than being
+    /// dropped: nothing more specific names one for a URL that carries no
+    /// extension and no caller hint.
+    #[kithara::test]
+    fn a_settings_extension_stands_when_nothing_more_specific_names_one() {
+        let mut settings = ResourceSettings::default();
+        settings.file.extension = Some("wav".to_owned());
+
+        let built =
+            config("https://example.com/track/stream", settings).build_file_config(&worker(), None);
+
+        assert_eq!(built.stream().settings.extension.as_deref(), Some("wav"));
+        assert_eq!(built.hint(), Some("wav"));
     }
 }

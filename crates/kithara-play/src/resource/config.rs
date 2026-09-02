@@ -6,11 +6,13 @@ use kithara_assets::AssetStore;
 use kithara_audio::{AudioDecoderConfig, ConsumerWakeMode};
 use kithara_bufpool::HasPool;
 use kithara_events::EventBus;
-use kithara_hls::{KeyOptions, SizeProbeMethod};
+use kithara_file::FileSettings;
+use kithara_hls::{HlsSettings, KeyOptions};
 use kithara_net::Headers;
 use kithara_platform::{CancelToken, sync::Arc};
 use kithara_stream::dl::Downloader;
 use kithara_warp::StretchControls;
+use struct_patch::Patch;
 use url::Url;
 
 use super::{ResourceSrc, resampler::PlaybackResamplerBackend};
@@ -18,6 +20,89 @@ use crate::{EngineLoad, PlayWorker};
 
 /// Default number of preload chunks.
 const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
+/// Resource-level knobs a configuration document can override, plus the
+/// per-source settings the stream this resource builds carries. Extracted out
+/// of [`ResourceConfig`] so a document reaches exactly these tunables and
+/// never the per-call wiring (`store`, `bus`, `cancel`, `downloader`,
+/// `worker`, `engine_load`, `stretch`, `decoder`) or the per-stream input
+/// (`src`, `hint`, `hls_base_url`, `discriminator`, `headers`, `keys`,
+/// `initial_abr_mode`) that stays on [`ResourceConfig`] itself.
+///
+/// [`HlsSettings`] and [`FileSettings`] are held whole rather than re-declared
+/// field by field: a knob either crate adds then reaches the built stream with
+/// no second declaration here to keep in step.
+#[derive(Clone, Debug, Builder, Patch)]
+#[builder(state_mod(vis = "pub"))]
+#[patch(name = "ResourceSettingsPatch")]
+#[patch(attribute(derive(Clone, Debug, Default, serde::Deserialize)))]
+#[patch(attribute(serde(default, deny_unknown_fields)))]
+#[patch(attribute(non_exhaustive))]
+#[non_exhaustive]
+pub struct ResourceSettings {
+    /// HLS streaming knobs, handed whole to the [`HlsConfig`] this resource
+    /// builds. Not reachable under `resource.hls`: a configuration document's
+    /// live spelling for these is its own top-level `hls:` section, which
+    /// types into `HlsSettingsPatch` and is applied to this value directly. A
+    /// second path to one value is what a configuration document exists to
+    /// prevent, so this field carries `#[patch(skip)]`.
+    ///
+    /// [`HlsConfig`]: kithara_hls::HlsConfig
+    #[builder(default)]
+    #[patch(skip)]
+    pub hls: HlsSettings,
+    /// File streaming knobs, handed whole to the [`FileConfig`] this resource
+    /// builds. Not reachable under `resource.file`, for the same reason
+    /// [`Self::hls`] is not: the document's live spelling is its own top-level
+    /// `file:` section.
+    ///
+    /// [`FileConfig`]: kithara_file::FileConfig
+    #[builder(default)]
+    #[patch(skip)]
+    pub file: FileSettings,
+    /// Number of chunks to buffer before signaling preload readiness.
+    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
+    pub preload_chunks: NonZeroUsize,
+    /// Maximum peak bitrate in bits per second for ABR variant selection.
+    /// `0.0` leaves the choice to the ABR controller.
+    #[builder(default = 0.0)]
+    pub preferred_peak_bitrate: f64,
+    /// Audio-consumer wake capability for this resource's reader. The default
+    /// is safe for a consumer on the real-time render callback.
+    /// `PlayerImpl::prepare_config` always overwrites it with the session
+    /// policy, so a player-managed resource cannot carry a second source of
+    /// that policy. A direct reader off the real-time thread opts into
+    /// [`ConsumerWakeMode::ImmediateOffRt`] itself for immediate worker wakes
+    /// and inline reader-event delivery. Not a document key: declaring
+    /// `ImmediateOffRt` on a player-bound resource would make its reads
+    /// publish inline on the render callback, and every player-managed
+    /// resource has the value overwritten anyway.
+    #[builder(default)]
+    #[patch(skip)]
+    pub consumer_wake_mode: ConsumerWakeMode,
+    /// Make audio-thread reads block on a producer-ring underrun instead of
+    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
+    /// here; a direct reader off the real-time thread may opt in itself. Not a
+    /// document key: the shipped binary is a real-time host whose audio
+    /// callback can never block, and only the offline test harness sets this,
+    /// from Rust.
+    #[builder(default)]
+    #[patch(skip)]
+    pub block_on_underrun: bool,
+    /// Target sample rate of the audio host (for resampling). Not a document
+    /// key: this is the rate the audio host actually opened, written at
+    /// runtime by [`ResourceConfig::set_host_sample_rate`] from the render
+    /// thread's `SetSampleRate` command, so a document value would be
+    /// overwritten by the first host that disagrees with it.
+    #[patch(skip)]
+    pub host_sample_rate: Option<NonZeroU32>,
+}
+
+impl Default for ResourceSettings {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
 
 /// Unified configuration for opening an audio resource.
 #[derive(Builder)]
@@ -42,9 +127,10 @@ where
     /// Encryption key handling configuration.
     #[builder(default)]
     pub(crate) keys: KeyOptions,
-    /// Number of chunks to buffer before signaling preload readiness.
-    #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
-    pub(crate) preload_chunks: NonZeroUsize,
+    /// Resource-level knobs plus the HLS and file settings the built stream
+    /// carries. See [`ResourceSettings`].
+    #[builder(default)]
+    pub(crate) settings: ResourceSettings,
     /// Unified event bus for streaming, decode, and audio events.
     #[builder(name = events)]
     pub(crate) bus: Option<EventBus>,
@@ -61,46 +147,18 @@ where
     pub(crate) engine_load: Option<Arc<EngineLoad>>,
     /// Additional HTTP headers to include in all network requests.
     pub(crate) headers: Option<Headers>,
-    /// Optional format hint (file extension like "mp3", "wav").
+    /// Optional format hint (file extension like "mp3", "wav"). Per-call input
+    /// read twice: the file branch maps it into [`FileSettings::extension`],
+    /// and both branches pass it to the decoder as a format hint.
     pub(crate) hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     pub(crate) hls_base_url: Option<Url>,
-    /// Target sample rate of the audio host (for resampling).
-    pub(crate) host_sample_rate: Option<NonZeroU32>,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub(crate) look_ahead_bytes: Option<u64>,
     /// Live time-stretch controls shared with the resident Warp chain.
     #[builder(default = StretchControls::new(1.0))]
     pub(crate) stretch: Arc<StretchControls>,
     /// Explicit playback worker. Player preparation fills this field; direct
     /// Resource callers must configure it themselves.
     pub(crate) worker: Option<PlayWorker<S>>,
-    /// Audio-consumer wake capability for this resource's reader. The default
-    /// is safe for a consumer on the real-time render callback.
-    /// `PlayerImpl::prepare_config` always overwrites it with the session
-    /// policy, so a player-managed resource cannot carry a second source of
-    /// that policy. A direct reader off the real-time thread opts into
-    /// [`ConsumerWakeMode::ImmediateOffRt`] itself for immediate worker wakes
-    /// and inline reader-event delivery. Never declare `ImmediateOffRt` on a
-    /// resource headed into a player without `prepare_config`: its reads would
-    /// then publish inline on the render callback.
-    #[builder(default)]
-    pub(crate) consumer_wake_mode: ConsumerWakeMode,
-    /// Make audio-thread reads block on a producer-ring underrun instead of
-    /// zero-filling. `PlayerImpl::prepare_config` copies the player's policy
-    /// here; a direct reader off the real-time thread may opt in itself.
-    /// Never set on a resource consumed by a real-time callback.
-    #[builder(default)]
-    pub(crate) block_on_underrun: bool,
-    /// Method used by HLS size estimation to probe segment lengths.
-    /// Default is [`SizeProbeMethod::Head`]; switch to
-    /// [`SizeProbeMethod::RangeGet`] for upstreams that reject
-    /// `HEAD` (zvuk stage `/drm/`).
-    #[builder(default)]
-    pub(crate) size_probe_method: SizeProbeMethod,
-    /// Maximum peak bitrate in bits per second for ABR variant selection.
-    #[builder(default = 0.0)]
-    pub(crate) preferred_peak_bitrate: f64,
 }
 
 impl<S, B> Clone for ResourceConfig<S, B>
@@ -115,7 +173,7 @@ where
             store: self.store.clone(),
             decoder: self.decoder.clone(),
             keys: self.keys.clone(),
-            preload_chunks: self.preload_chunks,
+            settings: self.settings.clone(),
             bus: self.bus.clone(),
             cancel: self.cancel.clone(),
             discriminator: self.discriminator.clone(),
@@ -124,14 +182,8 @@ where
             headers: self.headers.clone(),
             hint: self.hint.clone(),
             hls_base_url: self.hls_base_url.clone(),
-            host_sample_rate: self.host_sample_rate,
-            look_ahead_bytes: self.look_ahead_bytes,
             stretch: Arc::clone(&self.stretch),
             worker: self.worker.clone(),
-            consumer_wake_mode: self.consumer_wake_mode,
-            block_on_underrun: self.block_on_underrun,
-            size_probe_method: self.size_probe_method,
-            preferred_peak_bitrate: self.preferred_peak_bitrate,
         }
     }
 }
@@ -169,7 +221,7 @@ mod tests {
     fn a_config_that_never_passed_a_player_defaults_to_realtime_deferred() {
         let config = test_config("https://example.com/track.mp3").expect("valid config");
         assert_eq!(
-            config.consumer_wake_mode,
+            config.settings.consumer_wake_mode,
             ConsumerWakeMode::RealtimeDeferred
         );
     }
@@ -339,18 +391,22 @@ mod tests {
                 .events(EventBus::new(32))
                 .hint("mp3")
                 .discriminator("test")
-                .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
+                .settings(
+                    ResourceSettings::builder()
+                        .preload_chunks(NonZeroUsize::new(5).expect("BUG: 5 > 0"))
+                        .build(),
+                )
                 .build();
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.discriminator.as_deref(), Some("test"));
-        assert_eq!(config.preload_chunks.get(), 5);
+        assert_eq!(config.settings.preload_chunks.get(), 5);
     }
 
     #[kithara::test]
     fn config_bitrate_fields_default_zero() {
         let config = test_config("https://example.com/live.m3u8").unwrap();
-        assert!((config.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
+        assert!((config.settings.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
     }
 
     #[kithara::test]
@@ -359,7 +415,11 @@ mod tests {
         let config: ResourceConfig<TestPools> =
             ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
                 .store(store())
-                .preferred_peak_bitrate(512_000.0)
+                .settings(
+                    ResourceSettings::builder()
+                        .preferred_peak_bitrate(512_000.0)
+                        .build(),
+                )
                 .build();
         let _audio_config = config.build_hls_config(&worker, None).unwrap();
     }
@@ -401,6 +461,28 @@ mod tests {
     }
 
     #[kithara::test]
+    fn defaults_match_the_documented_values() {
+        let settings = ResourceSettings::default();
+
+        assert_eq!(settings.preload_chunks.get(), 3);
+        assert!((settings.preferred_peak_bitrate - 0.0).abs() < f64::EPSILON);
+        assert_eq!(
+            settings.consumer_wake_mode,
+            ConsumerWakeMode::RealtimeDeferred
+        );
+        assert!(!settings.block_on_underrun);
+        assert!(settings.host_sample_rate.is_none());
+        assert_eq!(
+            settings.hls.download_batch_size, 3,
+            "the held HLS settings carry kithara-hls's own defaults"
+        );
+        assert_eq!(
+            settings.file.reader_event_capacity, 256,
+            "the held file settings carry kithara-file's own defaults"
+        );
+    }
+
+    #[kithara::test]
     #[case("https://example.com/song.mp3", Some("mp3"))]
     #[case("https://example.com/audio.flac", Some("flac"))]
     #[case("https://example.com/track/stream", None)]
@@ -415,5 +497,110 @@ mod tests {
             expected,
             "hint mismatch for URL: {url}"
         );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod document_tests {
+    use kithara_test_utils::kithara;
+    use struct_patch::Patch as _;
+
+    use super::{ResourceSettings, ResourceSettingsPatch};
+
+    /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`, which
+    /// emits its token stream verbatim. A typo there would generate a patch
+    /// that accepts anything, and neither the compiler nor clippy would say a
+    /// word -- only a bogus key proves the attribute survived generation.
+    /// `chunk_budget` shares no prefix with either declared field, so the
+    /// assertion cannot pass off serde's list of valid names.
+    #[kithara::test(native, flash(false))]
+    fn an_unknown_field_is_rejected_and_named() {
+        let error = serde_yaml_ng::from_str::<ResourceSettingsPatch>("chunk_budget: 8\n")
+            .expect_err("a typo must not be silently ignored");
+
+        assert!(error.to_string().contains("chunk_budget"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_patch_writes_only_the_preload_count_it_names() {
+        let patch: ResourceSettingsPatch =
+            serde_yaml_ng::from_str("preload_chunks: 8\n").expect("the document types");
+        let mut settings = ResourceSettings::default();
+        // Seeded off the defaults (0.0 and 3) so a whole-struct `apply` that
+        // resets every unnamed field to `Default::default()` cannot pass these
+        // assertions by coincidence.
+        settings.preferred_peak_bitrate = 320_000.0;
+        settings.hls.download_batch_size = 6;
+
+        settings.apply(patch);
+
+        assert_eq!(settings.preload_chunks.get(), 8);
+        assert!(
+            (settings.preferred_peak_bitrate - 320_000.0).abs() < f64::EPSILON,
+            "a silent field must keep its seeded value, not reset to default"
+        );
+        assert_eq!(
+            settings.hls.download_batch_size, 6,
+            "the held HLS settings are written by their own section, not by this patch"
+        );
+    }
+
+    /// `hls` is a real field on `ResourceSettings` but must not be reachable
+    /// under `resource.hls`: the document's live spelling for those knobs is
+    /// its own top-level `hls:` section (see the field's doc comment).
+    #[kithara::test(native, flash(false))]
+    fn the_held_hls_settings_are_not_a_document_key() {
+        let error =
+            serde_yaml_ng::from_str::<ResourceSettingsPatch>("hls:\n  download_batch_size: 6\n")
+                .expect_err("the top-level `hls:` section is the only spelling");
+
+        assert!(error.to_string().contains("hls"), "{error}");
+    }
+
+    /// `file` is a real field on `ResourceSettings` but must not be reachable
+    /// under `resource.file`, for the same reason `hls` is not.
+    #[kithara::test(native, flash(false))]
+    fn the_held_file_settings_are_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<ResourceSettingsPatch>(
+            "file:\n  reader_event_capacity: 512\n",
+        )
+        .expect_err("the top-level `file:` section is the only spelling");
+
+        assert!(error.to_string().contains("file"), "{error}");
+    }
+
+    /// `consumer_wake_mode` is overwritten for every player-managed resource,
+    /// and declaring `ImmediateOffRt` on a player-bound one would make its
+    /// reads publish inline on the render callback.
+    #[kithara::test(native, flash(false))]
+    fn the_realtime_unsafe_wake_mode_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<ResourceSettingsPatch>(
+            "consumer_wake_mode: immediate_off_rt\n",
+        )
+        .expect_err(
+            "a capability that moves reads onto the render callback is not document-settable",
+        );
+
+        assert!(error.to_string().contains("consumer_wake_mode"), "{error}");
+    }
+
+    /// `block_on_underrun` is overwritten for every player-managed resource
+    /// and can park the real-time audio callback.
+    #[kithara::test(native, flash(false))]
+    fn the_realtime_unsafe_block_on_underrun_field_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<ResourceSettingsPatch>("block_on_underrun: true\n")
+            .expect_err("a field that can park the audio callback must not be document-settable");
+
+        assert!(error.to_string().contains("block_on_underrun"), "{error}");
+    }
+
+    /// `host_sample_rate` is the rate the audio host actually opened, written
+    /// at runtime from the render thread's `SetSampleRate` command.
+    #[kithara::test(native, flash(false))]
+    fn the_runtime_owned_host_sample_rate_is_not_a_document_key() {
+        let error = serde_yaml_ng::from_str::<ResourceSettingsPatch>("host_sample_rate: 48000\n")
+            .expect_err("the audio host owns its own rate");
+
+        assert!(error.to_string().contains("host_sample_rate"), "{error}");
     }
 }

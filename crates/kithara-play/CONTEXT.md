@@ -203,6 +203,43 @@ rather than parsed and silently dropped:
   through `PlayerImpl::set_eq_layout` instead (see "Live Equalizer Layout").
 - `EngineSettings::channels` — has no reader outside a startup log line.
 
+## Configuration Document Entry Point: Resources
+
+`ResourceSettings` is how a configuration document reaches the knobs one
+opened resource runs on, and how the HLS and file settings its stream carries
+get there. `ResourceConfig` holds one by value; `resource/build.rs` hands
+`settings.hls` straight to `HlsConfig::settings` and `settings.file` straight
+to `FileConfig::settings`, so neither set is re-declared field by field and a
+knob either crate adds later needs no edit here. The one value the file branch
+overwrites is `FileSettings::extension`: `hint` is per-call input read twice —
+as the file source's extension and as the decoder's format hint — so it stays
+on `ResourceConfig` and is mapped in once.
+
+`kithara-app` composes the tree in `main.rs`: the crate default, then its
+`resource:` section, then `hls:` into `settings.hls` and `file:` into
+`settings.file`. `sources::build_resource_config` passes the whole value to
+`ResourceConfig::settings` — the only construction site a document reaches.
+
+Five fields carry `#[patch(skip)]`, so naming one in a document is refused
+rather than parsed and silently dropped:
+
+- `ResourceSettings::hls` and `ResourceSettings::file` — the document's live
+  spelling for those knobs is its own top-level `hls:` / `file:` section, which
+  is applied to these exact values. A reachable `resource.hls` would be a
+  second spelling for one value.
+- `ResourceSettings::consumer_wake_mode` — `PlayerImpl::prepare_config`
+  overwrites it with the session policy for every player-managed resource, and
+  declaring `ImmediateOffRt` on a player-bound resource would make its reads
+  publish inline on the render callback.
+- `ResourceSettings::block_on_underrun` — overwritten by `prepare_config` the
+  same way, and it can park the real-time audio callback. `PlayerSettings` skips
+  its identically-named field for that reason too.
+- `ResourceSettings::host_sample_rate` — the rate the audio host actually
+  opened, written at runtime by `ResourceConfig::set_host_sample_rate` from the
+  render thread's `SetSampleRate` command (`rt/command.rs`).
+
+The two that travel are `preload_chunks` and `preferred_peak_bitrate`.
+
 ## Live Equalizer Layout
 
 `PlayerImpl::set_eq_layout` replaces one player's master EQ while the player is

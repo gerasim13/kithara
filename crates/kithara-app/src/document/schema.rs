@@ -5,10 +5,11 @@ use kithara::broadcast::BroadcastSettings;
 use kithara::{
     analysis::BeatAnalysisSettingsPatch,
     assets::{AssetStoreSettings, FlushSettings},
+    file::FileSettingsPatch,
     hls::HlsSettingsPatch,
     host::HostSettings,
     net::NetSettings,
-    play::PlayerSettingsPatch,
+    play::{PlayerSettingsPatch, ResourceSettingsPatch},
     queue::QueueSettingsPatch,
     stream::dl::DownloaderSettings,
     worker::{ComputePoolSettings, WorkerSettings},
@@ -37,6 +38,7 @@ pub(crate) struct Document {
     pub(crate) broadcast: BroadcastSettings,
     pub(crate) downloader: DownloaderSettings,
     pub(crate) drm: Drm,
+    pub(crate) file: FileSettingsPatch,
     pub(crate) flush: FlushSettings,
     pub(crate) hls: HlsSettingsPatch,
     pub(crate) host: HostSettings,
@@ -45,6 +47,7 @@ pub(crate) struct Document {
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueSettingsPatch,
+    pub(crate) resource: ResourceSettingsPatch,
     pub(crate) worker: WorkerSettings,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
 }
@@ -175,6 +178,14 @@ mod tests {
         assert!(
             document.queue.max_concurrent_loads.is_none(),
             "a document naming no queue section leaves the crate default standing"
+        );
+        assert!(
+            document.resource.preload_chunks.is_none(),
+            "a document naming no resource section leaves the crate default standing"
+        );
+        assert!(
+            document.file.reader_event_capacity.is_none(),
+            "a document naming no file section leaves the crate default standing"
         );
     }
 

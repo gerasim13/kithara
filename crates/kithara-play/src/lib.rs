@@ -50,7 +50,10 @@ pub use kithara_warp::{
     SyncGroup, SyncGroupSnapshot, SyncOperation, SyncRejected, SyncStatusSnapshot,
 };
 pub use player::{PlayerConfig, PlayerImpl, PlayerSettings, PlayerSettingsPatch, SelectTransition};
-pub use resource::{PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSrc, SourceType};
+pub use resource::{
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSettings, ResourceSettingsPatch,
+    ResourceSrc, SourceType,
+};
 pub use rt::PlayerNode;
 pub use sync::GroupState;
 pub use worker::{

@@ -152,10 +152,14 @@ its own already-optional knobs. `tmp_claim_poll_interval` carries
 `#[patch(attribute(serde(with = "humantime_serde::option")))]`, so a document writes `25ms` rather
 than a raw millisecond count.
 
-No `file:` document section exists yet — `kithara-app` never builds a `FileConfig` today (the file
-source is built inside `kithara-play/src/resource/build.rs`), so wiring a `file:` key into
-`kithara-app`'s document schema would parse and configure nothing. A later task adds the section
-together with the reader that consumes it.
+`kithara-app`'s `file:` section is that document's spelling. It types into `FileSettingsPatch`,
+`main` applies it to the `file` field of one `kithara_play::ResourceSettings`, and every track is
+opened with that value: `ResourceConfig` carries the `FileSettings` whole and
+`kithara-play/src/resource/build.rs` hands it straight to `FileConfig::settings`. The one field the
+document does not have the last word on is `extension`: the file branch resolves it as the
+per-call format hint, then the extension derived from the source path, then whatever the document
+named — the two ahead of it identify the track being opened, which is more specific than a
+crate-wide default.
 
 `src`, `discriminator`, and `headers` are per-stream input, not crate-wide policy: they name what
 is being fetched and how, not a tunable default. `store`, `pools`, `bus`, `cancel`, and `downloader`
