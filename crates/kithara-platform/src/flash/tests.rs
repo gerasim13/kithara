@@ -462,10 +462,10 @@ fn elapsed_tracks_virtual_clock() {
     assert_eq!(start.elapsed(), Duration::from_secs(5));
 }
 
-// The two arithmetic tests below are pure `Instant` math: no ambient, so
-// `Instant::now()` is the REAL arm (a lock-free monotonic read off the
-// process clock anchor) and no engine state — global or local — is touched.
-// Instance-agnostic, hence no GUARD, no reset, no local engine.
+/// The two arithmetic tests below are pure `Instant` math: no ambient, so
+/// `Instant::now()` is the REAL arm (a lock-free monotonic read off the
+/// process clock anchor) and no engine state — global or local — is touched.
+/// Instance-agnostic, hence no GUARD, no reset, no local engine.
 #[kithara::test(native, flash(false))]
 fn arithmetic_saturates_and_orders() {
     let now = Instant::now();

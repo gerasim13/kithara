@@ -92,3 +92,49 @@ What matters for coordination:
 
 Use raw `git worktree` when multiple agents need isolated write scopes.
 Keep heavy local jobs serialized when they target the same build outputs.
+
+## Coordination Shapes
+
+These are the stable shapes for the whole repository. Do not create parallel
+template documents for them.
+
+<task_packet>
+Goal:
+Affected paths:
+Read first:
+Same-as example:
+Constraints:
+Non-goals:
+Expected output:
+Validation scope:
+Split proposal:
+</task_packet>
+
+<split_policy>
+Prefer split execution when write boundaries are explicit and independent.
+
+Every split task must define:
+
+- owned paths per agent
+- forbidden paths per agent
+- required reads per agent
+- sequencing dependencies
+- one integrator owner
+
+Do not split when two agents would contend on the same file, the same shared type, or the same unresolved design boundary.
+</split_policy>
+
+<handoff_contract>
+Done:
+Remaining:
+Touched paths:
+Decisions made:
+Validation:
+Open risks:
+</handoff_contract>
+
+<final_report>
+Changed files:
+Commands run:
+Risks or follow-ups:
+</final_report>

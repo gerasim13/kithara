@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-bufpool.svg)](https://crates.io/crates/kithara-bufpool)
 [![docs.rs](https://docs.rs/kithara-bufpool/badge.svg)](https://docs.rs/kithara-bufpool)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -61,7 +61,7 @@ fn build() -> Result<(), PoolError> {
 }
 ```
 
-## Public Types
+## Key Types
 
 <table>
 
@@ -87,17 +87,17 @@ fn build() -> Result<(), PoolError> {
 
 </table>
 
-## Role in the workspace
-
-The app and FFI composition roots own concrete schemas. Lower layers are
-generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
-Acquisition and return stay lock-free; every capacity increase is checked
-against both the region and selected-pool limits.
-
 ## Features
 
 - `perf` — enables `hotpath` instrumentation on pool hot paths.
 - `test-utils` — exposes the application-shaped `testing::TestPools` schema for
   workspace test harnesses.
+
+## Integration
+
+The app and FFI composition roots own concrete schemas. Lower layers are
+generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
+Acquisition and return stay lock-free; every capacity increase is checked
+against both the region and selected-pool limits.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

@@ -534,7 +534,7 @@ fn a_pass_fed_by_a_producer_publishes_as_it_goes() {
 fn refusal_run(reoffer: bool) -> (TrackAnalysis, FrameRange, u64) {
     const BLOCK: u64 = 8192;
     const PAST: u64 = 40;
-    // Enough stalls that the reader outlives every offer below.
+    /// Enough stalls that the reader outlives every offer below.
     const STALLS: usize = 200;
 
     let rate = super::fixtures::spec().sample_rate;

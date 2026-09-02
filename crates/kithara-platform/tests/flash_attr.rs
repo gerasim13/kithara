@@ -86,9 +86,9 @@ fn prod_flash_io_paces_virtual_clock_across_await() {
 
 #[kithara::test(native, flash(false))]
 fn prod_flash_real_without_ambient() {
-    // No ambient: `enter_dynamic(true)` gates on ambient, so `flash(true)` is a
-    // no-op and the sleep is REAL. A real `time::sleep` is a `tokio` timer, so it
-    // is driven on a tokio runtime; a SHORT real sleep keeps the test fast while
+    /// No ambient: `enter_dynamic(true)` gates on ambient, so `flash(true)` is a
+    /// no-op and the sleep is REAL. A real `time::sleep` is a `tokio` timer, so it
+    /// is driven on a tokio runtime; a SHORT real sleep keeps the test fast while
     #[kithara_test_macros::flash(true)]
     async fn short_real_sleep() {
         time::sleep(Duration::from_millis(40)).await;

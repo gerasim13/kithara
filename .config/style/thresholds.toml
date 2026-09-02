@@ -4,21 +4,12 @@
 
 [comment_hygiene]
 inline_max_lines = 3
-doc_block_max_lines = 20
+doc_block_max_lines = 12
 fn_density_threshold_pct = 30
 fn_density_min_body_lines = 6
-allowed_inline_markers = [
-  "SAFETY:",
-  "TODO:",
-  "FIXME:",
-  "XXX:",
-  "NOTE:",
-  "WHY:",
-  "HACK:",
-  "kithara:",
-  "ast-grep-ignore:",
-  "xtask-lint-ignore:",
-]
+# Machine and language markup only. Prose belongs in a doc comment, so a prose
+# marker never appears here - it would only legitimise the comment it labels.
+allowed_inline_markers = ["SAFETY:", "ast-grep-ignore:", "xtask-lint-ignore:"]
 exclude_paths = ["**/build.rs", "**/tests/**/fixtures/**"]
 
 [non_english_text]
@@ -57,3 +48,104 @@ exclude_paths = [
   "android/gradle/wrapper/**",
 ]
 allow_targets = []
+
+# Document size limits. Prose has no compiler, so an unbounded document grows
+# until it no longer fits an agent's context budget. Limits are per document
+# class because a crate contract and a crate overview carry different loads.
+# Symlinked aliases of a tracked document are excluded: they would report the
+# same content several times.
+[doc_size]
+exclude_paths = [
+  "CLAUDE.md",
+  "GEMINI.md",
+  "WARP.md",
+  "CONTEXT.md",
+  "ARCHITECTURE.md",
+  "docs/plans/**",
+  "docs/specs/**",
+  "docs/superpowers/**",
+]
+
+# Limits are bytes: a document costs an agent its size, not its line count.
+[[doc_size.limits]]
+globs = ["AGENTS.md"]
+warn = 8000
+deny = 10000
+
+[[doc_size.limits]]
+globs = ["PROGRESS.md"]
+warn = 2000
+deny = 4000
+
+[[doc_size.limits]]
+globs = ["**/CONTEXT.md"]
+warn = 24000
+deny = 48000
+
+[[doc_size.limits]]
+globs = ["docs/guides/**/*.md"]
+warn = 10000
+deny = 24000
+
+[[doc_size.limits]]
+globs = ["**/README.md"]
+warn = 8000
+deny = 16000
+
+[doc_staleness]
+# Platform, upstream, and illustrative names the workspace sources never define.
+allow_terms = [
+  "Constraints",
+  "FuturesUnordered",
+  "HTTPMaximumConnectionsPerHost",
+  "JoinSet",
+  "LICENSE",
+  "LOOM_MAX_PREEMPTIONS",
+  "LockFileEx",
+  "MediaExtractor",
+  "MpaDecoder",
+  "MyFileAssetLayout",
+  "MyHlsAssetLayout",
+  "SetGlobalDefault",
+  "StateFlow",
+  "Stretcher",
+  "inconsistent_struct_constructor",
+  "is_write_vectored",
+  "set_default",
+  "simd",
+  "unused_self",
+]
+exclude_paths = [
+  "CLAUDE.md",
+  "GEMINI.md",
+  "WARP.md",
+  "CONTEXT.md",
+  "ARCHITECTURE.md",
+  "docs/plans/**",
+  "docs/specs/**",
+  "docs/superpowers/**",
+]
+include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md", "docs/**/*.md"]
+
+# One shape for every crate README, so an agent that has read one knows where to
+# look in all of them: the shared header (centered logo, then badges keyed to
+# `publish`), a `# <package name>` title, a lead paragraph stating what the crate
+# is, then these sections. Each is optional and each may appear once. Content
+# that fits none of them is a `###` subsection of the one it belongs under - a
+# heading that fits nowhere is usually a contract, and contracts live in
+# `CONTEXT.md`.
+#
+# The header carries no path out of the package. crates.io and docs.rs render a
+# crate README where `../../logo.svg` does not exist, so the logo and the license
+# link are repository URLs. Prose below the header keeps relative links, which
+# `dead_doc_refs` can still resolve.
+#
+# The scope is the crate front pages under `crates/` and nothing else. A
+# package whose README is a guide - `tests/`, `tests/fuzz/`, `xtask/` - carries
+# headings this vocabulary cannot express (nextest profiles, troubleshooting,
+# adding a test), and forcing them into it would cost more than the uniformity
+# is worth.
+[readme_shape]
+sections = ["Usage", "Key Types", "Features", "Integration"]
+include_globs = ["crates/*/README.md"]
+exclude_paths = []

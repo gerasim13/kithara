@@ -159,6 +159,8 @@ pub(super) fn apply_seek_transition<T: StreamType>(
                     target: request.seek.target,
                 },
             );
+            src.seek_engine
+                .commit_decode_epoch(request.seek.epoch, "seek_failed");
             src.readiness
                 .finalize_seek_pending(src.seek.as_ref(), request.seek.epoch);
             src.update_state(Track::<Failed>::new(TrackFailure::Decode(error)).erase());

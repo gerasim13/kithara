@@ -1,10 +1,10 @@
 use std::sync::{OnceLock, atomic::Ordering};
 pub use std::time::Duration;
 
-// `dashmap` shards, and anything else built on `parking_lot_core`, block a
-// worker once their spin budget runs out. Without the `nightly` feature that
-// crate compiles the wasm parker whose every method panics, so the first
-// contended shard aborts the worker. See CONTEXT.md.
+/// `dashmap` shards, and anything else built on `parking_lot_core`, block a
+/// worker once their spin budget runs out. Without the `nightly` feature that
+/// crate compiles the wasm parker whose every method panics, so the first
+/// contended shard aborts the worker. See CONTEXT.md.
 use parking_lot_core as _;
 use wasm_bindgen::JsCast;
 use wasm_safe_thread::Builder as WasmThreadBuilder;

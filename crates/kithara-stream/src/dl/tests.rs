@@ -1118,8 +1118,8 @@ async fn spawn_stalled_body_server() -> Url {
     Url::parse(&format!("http://{addr}/data")).expect("url")
 }
 
-// flash(false): this assertion depends on real localhost request progress and
-// retries, not on virtual scheduler time.
+/// flash(false): this assertion depends on real localhost request progress and
+/// retries, not on virtual scheduler time.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
 async fn retry_and_first_byte_publish_on_peer_bus() {
     let url = spawn_flaky_retry_server().await;
@@ -1175,8 +1175,8 @@ async fn retry_and_first_byte_publish_on_peer_bus() {
     assert!(saw_first_byte, "peer bus must receive FirstByte");
 }
 
-// flash(false): the stalled-body fixture is a real loopback socket that must
-// deliver headers before body inactivity is measured.
+/// flash(false): the stalled-body fixture is a real loopback socket that must
+/// deliver headers before body inactivity is measured.
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(10)))]
 async fn stalled_body_publishes_resume_and_exhaustion_events() {
     let url = spawn_stalled_body_server().await;

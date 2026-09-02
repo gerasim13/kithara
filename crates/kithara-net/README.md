@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-net.svg)](https://crates.io/crates/kithara-net)
 [![docs.rs](https://docs.rs/kithara-net/badge.svg)](https://docs.rs/kithara-net)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -60,15 +60,18 @@ Decorators compose via the `NetExt` extension trait: `with_retry` adds exponenti
 
 </table>
 
-## Integration
-
-Used by `kithara-file` and `kithara-hls` for all HTTP operations. `NetMock` (behind the `mock` feature, native only) enables deterministic testing without network access.
-
-## Backend Features
+## Features
 
 - `client-reqwest` (default) — portable reqwest backend, required on wasm32.
 - `client-wreq` — native wreq backend with BoringSSL and browser fingerprint emulation; shadows reqwest when both are enabled.
 - `client-apple` — macOS/iOS `NSURLSession` backend; shadows the reqwest/wreq seam on Apple platforms when enabled.
 - `tls-rustls` (default) / `tls-native` — TLS selection for the reqwest path only.
+- `mock` — `NetMock`, a deterministic client for tests that must not reach the network (native only).
+- `probe` — enables USDT probes for tracing.
+- `perf` — enables `hotpath` instrumentation.
+
+## Integration
+
+Used by `kithara-file` and `kithara-hls` for all HTTP operations.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

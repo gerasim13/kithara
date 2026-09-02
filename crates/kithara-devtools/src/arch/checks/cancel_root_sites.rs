@@ -58,9 +58,9 @@ impl Check for CancelRootSites {
 /// line comments). Path-level allowlist / exempt-crate / test-path skips are
 /// applied by [`CancelRootSites::run`] before this is called.
 fn scan_source(content: &str) -> Vec<(usize, &'static str)> {
-    // Fresh-root minting calls denied outside the allowlist: the owning-master
-    // `CancelToken::root` and the never-cancelled sentinel `CancelToken::never`.
-    // Both root a new cancel tree; `.child()` (the sanctioned derivation) is
+    /// Fresh-root minting calls denied outside the allowlist: the owning-master
+    /// `CancelToken::root` and the never-cancelled sentinel `CancelToken::never`.
+    /// Both root a new cancel tree; `.child()` (the sanctioned derivation) is
     const PATTERNS: &[&str] = &["CancelToken::root", "CancelToken::never"];
     if !PATTERNS.iter().any(|p| content.contains(p)) {
         return Vec::new();

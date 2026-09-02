@@ -1,106 +1,104 @@
 # Kithara Agent Index
 
-This file is the canonical repo-level contract for Codex, Claude Code, Cursor, and other coding agents.
-Use it for repo-wide coding conventions, path routing, and stable coordination shapes.
+This file is the canonical repo-level contract for Codex, Claude Code, Cursor,
+and other coding agents. It carries only what must stop a wrong design before
+code is written. Everything else is routed to an owner.
 
 ## Authority
 
-- `AGENTS.md` is the canonical repo-level contract for all coding agents. It owns repo-wide invariants, coding conventions, routing, and the stable coordination shapes below.
-- `docs/workflows/rust-ai.md` is the canonical workflow for task setup, split, handoff, and integration.
-- `docs/guides/*` contains lazy-loaded reference guidance. Open only the file that matches the current task, red flag, or lint failure.
-- `docs/rules/*` contains tool-neutral entry rules used through tool-specific symlinks.
-- If two documents disagree: `AGENTS.md` wins over `docs/workflows/*`, `docs/guides/*`, and `docs/rules/*`, which win over crate `README.md` / `CONTEXT.md`, which win over tool-specific shims.
+- `AGENTS.md` owns repo-wide invariants, routing, and the red-flag gate.
+- `docs/workflows/rust-ai.md` owns task setup, split, handoff, integration, and
+  the task packet, handoff, and final report shapes.
+- `docs/guides/*` holds lazy-loaded reference guidance. `docs/README.md` maps
+  every guide to the trigger that should open it; open nothing else.
+- `docs/rules/*` holds tool-neutral entry rules used through tool shims.
+- On conflict: `AGENTS.md` wins over `docs/*`, which wins over crate
+  `README.md` / `CONTEXT.md`, which wins over tool-specific shims.
+- `docs/guides/rule-placement.md` decides where a new rule belongs.
+
+## Sources Of Truth
+
+Every fact below has one owner. Link to the owner; do not restate it.
+
+| Fact | Owner |
+| --- | --- |
+| Capability status, roadmap, blockers | [GitHub Projects board](https://github.com/users/gerasim13/projects/3) |
+| What is in flight right now | `PROGRESS.md` |
+| Project architecture | `crates/kithara/CONTEXT.md` |
+| Crate contracts, invariants, lifecycle | owning crate `CONTEXT.md` |
+| Toolchain, image, and tool versions | `.config/ci-pins.toml` |
+| Lint thresholds and baselines | `.config/arch/`, `.config/style/`, `.config/idioms/` |
+| Command surface | root `justfile` and `.config/just/` |
+| Released behavior | `CHANGELOG.md` |
 
 ## Core Principles
 
-- Minimal magic and hidden dependencies.
-- Predictability, testability, and reproducibility.
-- Components should stay loosely coupled and replaceable.
-- Code is the source of truth. Each crate keeps `README.md` as an overview; longer contracts and invariants belong in the owning crate `CONTEXT.md`, and project-wide architecture lives in `crates/kithara/CONTEXT.md` (symlinked from the root `CONTEXT.md`).
+- Minimal magic and hidden dependencies. Predictability, testability, and
+  reproducibility come first, and components stay loosely coupled.
+- Code is the only source of truth. An entry in `CONTEXT.md` is admissible only
+  when it cannot be expressed in the shape of the code or pinned by a test. An
+  explanation that exists because the code is unclear means the code is wrong,
+  and a comment survives only as documentation of the item it sits on.
 
 ## Non-Negotiables
 
-- No speculative code. Do not add helpers, branches, or abstractions that are not used by the current task.
-- Workspace-first dependencies. Add versions only in the root workspace and reuse existing crates when possible.
+- No speculative code. Do not add helpers, branches, or abstractions that the
+  current task does not use, and choose the simplest implementation that fully
+  meets the requirements.
+- Workspace-first dependencies. Add versions only in the root workspace and
+  reuse existing crates when possible.
 - Encoded/container media types live in `kithara-stream`. Do not duplicate
   `AudioCodec`, `ContainerFormat`, or `MediaInfo` elsewhere. Decoded-audio
   signal value types and pure sample/time math live in `kithara-signal`.
-- Do not use `unwrap()` or `expect()` in production code without a strong, explicit reason.
-- Name the canonical owner before changing shared state, shared types, or cross-crate contracts. If the owner is unclear, stop and clarify before implementation.
-- Do not introduce parallel mutable sources of truth without an explicit transition contract. When old and new state must coexist temporarily, use a staged ownership transfer in the task packet or plan.
-- No fallback chains (`try A, else B, else C`) to paper over state-resolution bugs. A fallback is a code smell: if the primary path has no correct answer, the underlying state contract is broken - fix the contract, not the symptom. Legitimate fallbacks (user-facing defaults, optional config, degraded-mode operation) must be explicitly justified in the owning crate `CONTEXT.md` or the task packet. Tests that codify fallback behaviour protect symptoms and should be treated as evidence of a root-cause bug.
+- Do not use `unwrap()` or `expect()` in production code without a strong,
+  explicit reason.
+- Name the canonical owner before changing shared state, shared types, or
+  cross-crate contracts. If the owner is unclear, stop and clarify.
+- Do not introduce parallel mutable sources of truth. When old and new state
+  must coexist, stage the ownership transfer in the task packet or plan.
+- No fallback chains (`try A, else B, else C`) to paper over state-resolution
+  bugs. If the primary path has no correct answer, the state contract is broken:
+  fix the contract. A legitimate fallback (user-facing default, optional config,
+  degraded mode) is justified in the owning crate `CONTEXT.md` or the task
+  packet; a test that codifies one protects a symptom.
 - Prefer generics and composition over near-duplicate protocol-specific types.
 - Use `tracing`, not `println!` or `dbg!`, in production code.
 - Do not use destructive git commands unless the user explicitly asks for them.
-- Cancel-token hierarchy is typed and propagate-down. Hard-coded `CancelToken::root()` and `CancelToken::never()` are forbidden outside sanctioned owner sites. See `docs/guides/cancel-policy.md` only when touching cancellation.
-- Zero-tolerance for lint suppressions and baseline growth. Unavoidable lint means STOP and fix the underlying code. See `docs/guides/lint-policy.md` only when touching lint policy or a lint exception.
-- Prefer clean, maintainable code over clever shortcuts or speculative abstractions.
-- Keep code readable and easy to understand.
-- Optimize for performance in hot paths.
-- Use repo harnesses for acceptance and formatting: `just test` and `just fmt`. Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped probes only, not final validation claims.
+- Cancel-token hierarchy is typed and propagate-down. Hard-coded
+  `CancelToken::root()` and `CancelToken::never()` are forbidden outside
+  sanctioned owner sites. See `docs/guides/cancel-policy.md`.
+- Zero tolerance for lint suppressions and baseline growth. An unavoidable lint
+  means STOP and fix the underlying code. See `docs/guides/lint-policy.md`.
+- Optimize for performance in hot paths. See `docs/guides/performance.md`.
+- Use repo harnesses for acceptance and formatting: `just test` and `just fmt`.
+  Raw `cargo test`, `cargo nextest`, or direct formatter commands are scoped
+  probes only, not final validation claims.
 - Do not preserve backward compatibility.
-- Choose the simplest implementation that fully meets the current requirements.
-- Prefer established, well-maintained libraries over custom implementations.
 
 ## Command Routing
 
-Use these exact Just paths. Do not spend an agent turn on `just --list` for
-routine work:
+Use these exact paths. Do not spend a turn on `just --list`; the root `justfile`
+exposes domain modules only, and recipes live under `.config/just/`.
 
-- `just fmt`; check-only: `just fmt check`.
-- `just check`; Clippy: `just check clippy`.
-- `just lint`; fast gate: `just lint fast`; full gate: `just lint full`.
-- Structural and behavioral duplication report: `just lint similarity`; scope
-  it by appending crate `src/` paths. Read
-  `target/similarity/<revision>/report.md` for the crate-level Mermaid map and
-  explainable candidates, and `report.json` for exhaustive evidence.
-- `just test`; parameterized harness: `just test run <args>`; tests plus
-  doc-tests: `just test all`.
-- Complete isolated UI suite: `just test ui` (unit and integration tests,
-  GPU renderer tests, and host-parity captures).
-- `just ci gate`; scoped audit: `just ci audit <scope>`; broad report:
-  `just ci health`; one run's archived quality artifacts consolidated into a
-  single markdown report: `just ci report --artifacts <dir>`.
-- Repeated-test evidence run: `just ci stress <args>`; independent artifact
-  verification: `just ci stress-report <args>`.
-- Architecture diagram, linked contour reports, and complexity profile:
-  `just arch viz` (workspace, automatic LOD 0 plus crate/hotspot-subsystem pages);
-  crate subsystems: `just arch viz --crate <package>` (automatic LOD 1);
-  module abstractions: `just arch viz --crate <package> --module <path>`
-  (automatic LOD 2);
-  crate boundaries/resources: `just arch viz --crate <package> --lod 3`;
-  complete module call graph: `just arch viz --crate <package> --module <path> --lod 4`. A crate view isolates the selected crate, hides Cargo dependencies
-  and incoming callers, and terminates concrete outgoing interactions at
-  compact public external ports. Use `--view ownership` for the ownership lens and
-  `--scenario <name>` for one configured runtime flow. Project defaults under
-  `[architecture.filters]` and repeatable `--exclude-crate <glob>` /
-  `--exclude-module <glob>` remove non-product contours from semantic
-  selection, diagrams, projections, and findings without disabling runtime
-  evidence producers. Read `metrics.json` for the resolved-static profile,
-  candidate comparison, per-contour metrics, and experimental ACI; runtime
-  observations are a separate overlay and do not change the stable score.
-- `just quality lab list`; manual/scheduled analyzer run:
-  `just quality lab run <profile-or-tool>`; coverage risk:
-  `just quality coverage-risk`.
-- Decision-oriented repository assessment: `just quality assess`; every source
-  surface: `just quality assess --profile complete`; heavyweight evidence:
-  `just quality assess --depth deep`; one crate:
-  `just quality assess --crate <package>`; one module:
-  `just quality assess --module <package>::<module>`. Read the printed
-  `manifest.json` before the report. For contextual interpretation follow
-  `docs/skills/quality-assessment/SKILL.md`; do not rediscover these routes.
-- Platform entrypoints are `just platform apple ...`,
-  `just platform android ...`, and `just platform wasm ...`.
-- Both UI hosts drawing the same pages, compared against a per-page budget:
-  `just test ui`. The same pages through a real window, which is the only
-  capture that needs a display: `just test ui-window`.
-- Direct cached xtask access is exceptional and uses
-  `just tooling xtask <subcommand>`. Agent hooks use the hidden
-  `just _agent-hook` transport configured in adapter JSON.
+- Format: `just fmt`; check-only `just fmt check`.
+- Compile and Clippy: `just check`; `just check clippy`.
+- Lint: `just lint`; `just lint fast`; `just lint full`.
+- Autofix: most ratchets rewrite under `--fix` (`arch` also needs `--apply`).
+  Reach for it before hand-editing; `docs/guides/tooling.md` lists them.
+- Duplication report: `just lint similarity [<crate>/src ...]`.
+- Test: `just test`; `just test run <args>`; `just test all` adds doc-tests.
+- UI suites: `just test ui`; through a real window, `just test ui-window`.
+- CI: `just ci gate`; `just ci audit <scope>`; `just ci health`;
+  `just ci report --artifacts <dir>`.
+- Repeated-run evidence: `just ci stress <args>`; `just ci stress-report <args>`.
+- Architecture: `just arch viz` and its scope flags.
+- Quality: `just quality lab list|run <profile>`; `just quality coverage-risk`;
+  `just quality assess`.
+- Platforms: `just platform apple|android|wasm ...`.
+- Cached xtask access is exceptional: `just tooling xtask <subcommand>`.
 
-The root `justfile` exposes only domain modules. Exact recipes live under
-`.config/just/`; `just --list` is an optional human overview, not an agent
-discovery requirement.
+Read the printed `manifest.json` before using `arch viz` or `quality assess` as
+evidence; `docs/guides/tooling.md` owns their flags.
 
 ## Agent Red-Flag Gate
 
@@ -116,189 +114,41 @@ Reject a design before coding when it:
   domain types, config, or builders.
 - Uses `Arc<...>`, especially `Arc<Atomic*>`, as ownership glue instead of an
   owner, command, or snapshot model.
-- Introduces shared mutable god-state, globals, god objects, callback spirals, or
-  unrelated responsibilities in one file, type, trait, or facade.
+- Introduces shared mutable god-state, globals, god objects, callback spirals,
+  or unrelated responsibilities in one file, type, trait, or facade.
 - Requires a lint suppress, new baseline entry, or "temporary" bypass to pass.
 
-## Dependency Management
+`docs/guides/red-flags.md` expands this gate for non-trivial work.
 
-### Workspace-first
+## Definition Of Done
 
-- Declare dependency versions only in the root `Cargo.toml` under `[workspace.dependencies]`.
-- Reference dependencies from crates with `{ workspace = true }`.
-- Do not add duplicate or overlapping crates when the workspace or standard library already covers the need.
+A change is done only when all of these hold:
 
-### Dependency hygiene
-
-- Do not add temporary dependencies without a real need.
-- Do not pull in a heavy crate for a small utility without checking cost first.
-- If a new dependency is unavoidable, justify it in the task, plan, or PR description and add it to `[workspace.dependencies]` first.
-
-## Coding Conventions
-
-### Imports and qualified paths
-
-- Keep production code in `src/` and substantial fixtures in `tests/`.
-- Keep `use` imports at the top of the file. Do not place `use` inside functions, methods, or blocks.
-- Prefer short readable names in the body over repeated deep qualified paths.
-- Full paths are acceptable only when they clearly improve readability, such as resolving a name conflict.
-- Default visibility is `pub(crate)`. Public named-field types exposed across crates should be `#[non_exhaustive]`.
-
-### Naming
-
-- Choose the simplest and shortest names that still describe the real meaning.
-- Prefer standard, obvious words such as `open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, and `recv` when they fit.
-- Avoid clever or overly long names that encode implementation history instead of meaning.
-
-### Comments and documentation
-
-- Keep in-code comments short and local.
-- Do not add large comment blocks at the top of files.
-- Do not restate the obvious in comments.
-- Contracts, invariants, lifecycle, protocol, or cache explanations belong in the owning crate `CONTEXT.md`; the `README.md` stays an overview that points to it.
-- No separator comments, banner comments, or ad-hoc style variants that conflict with workspace lint rules.
-
-### File size and decomposition
-
-- Do not let a single `.rs` file grow into a dump of abstractions.
-- Extract large types, big `impl` blocks, or distinct subsystems into their own files or modules.
-- Prefer `mod.rs` plus focused sibling files over one oversized source file.
-- `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
-
-### Tests and fixtures
-
-- `src/` is for production code, not for a growing fixture warehouse.
-- Large fixtures, local servers, generated content, and multi-step scenarios belong in `tests/`.
-- Small unit tests and tiny helpers under `#[cfg(test)]` are fine next to the code.
-
-## Test-Driven Development
-
-- Behavior changes should be driven by tests that describe the intended contract.
-- Tests must be deterministic.
-- Tests must not depend on the external network.
-- Tests should capture the contract, not an incidental implementation detail.
-- Test logs and generated data should stay at a reasonable size.
-
-## Generic Programming
-
-- Prefer standard and `tokio` abstractions when they fit instead of inventing near-identical custom traits.
-- Extend behavior through type parameters, traits, and composition instead of copy-paste specialization.
-- Do not create near-duplicate HLS and file types when the difference can be expressed generically.
-- Avoid large "god traits". Prefer several smaller traits with clearer ownership.
-
-## Visibility And API Surface
-
-### Default visibility
-
-- New items should be `pub(crate)` unless they are part of a documented public contract.
-- Do not use bare `pub` for internal helpers or implementation details.
-- When promoting something to `pub`, verify that it is intentional, documented, and covered by tests.
-
-### Public types
-
-- Public enums and public named-field structs exposed across crate boundaries should be `#[non_exhaustive]`.
-- Small, obviously stable exceptions are allowed when extension is unlikely and direct construction is part of the intended contract.
-
-### Shared types
-
-- Encoded/container types such as `AudioCodec`, `ContainerFormat`, and
-  `MediaInfo` live in `kithara-stream`; decoded-audio signal value types live
-  in `kithara-signal`.
-- Before introducing a new shared type, search the workspace and reuse an existing canonical type when possible.
-
-## Loose Coupling And Modularity
-
-- Keep cache, network, orchestration, decode, and playback responsibilities separate.
-- Avoid circular dependencies.
-- Dependencies should point downward toward base abstractions, not back upward into higher-level orchestration.
-- Facade layers may aggregate components, but should not hide "smart" logic that belongs lower in the stack.
-- External code must not depend on internal cache layout or a specific HTTP client unless that is explicitly part of the contract.
-
-## Linting, Formatting, And Unified Settings
-
-- Respect workspace-wide config such as `rustfmt.toml`, `clippy.toml`, `deny.toml`, `.config/tomlfmt.toml`, `.config/typos.toml`, and `sgconfig.yml`.
-- Change lint policy in the shared config files instead of creating per-crate drift unless there is a strong reason.
-- The pre-commit hook expects clean formatting, linting, and tests. If they fail after your change, assume your change caused it until proven otherwise.
-- Treat **`rustc` warnings** (for example `unused-imports`, `dead_code`, `deprecated`, unfulfilled `#[expect]`, `unreachable_pub`) the same as Clippy: fix the cause in code you touch - remove dead code, update imports and APIs, replace deprecated items - rather than leaving warnings to accumulate.
-- Prefer fixing the cause of a compiler or Clippy warning (correct types, control flow, dependency or API change) over silencing it. Do not add `#[allow(...)]`, file-level `#![allow(...)]`, or other lint suppressions unless there is no reasonable code-side fix; if you must suppress, document why in the owning crate `CONTEXT.md` or in a short comment on the same item.
-
-### Style rules enforced by tooling
-
-- No separator comments such as `// ====`.
-- Import names at the top of the file rather than using inline qualified paths in function bodies.
-- `lib.rs` and `mod.rs` should contain only module declarations and re-exports.
-- Cargo manifests stay sorted by `cargo-sort` with internal `kithara` / `kithara-*` dependencies first; non-Cargo TOML, JSON, and Markdown stay formatted by Rust-native tooling.
-
-## General Quality Rules
-
-- Errors should be typed and include context about what failed and on which resource.
-- Logs should be useful and should not leak secrets.
-- Use `tracing` fields for context such as `asset_id`, `url`, `resource`, `variant`, `segment_idx`, `bytes`, `attempt`, or `timeout_ms`.
-- Do not leave temporary prints in production code.
-- Any public API change should come with tests that capture the contract.
-
-## Coordination Shapes
-
-<task_packet>
-Goal:
-Affected paths:
-Read first:
-Same-as example:
-Constraints:
-Non-goals:
-Expected output:
-Validation scope:
-Split proposal:
-</task_packet>
-
-<split_policy>
-Prefer split execution when write boundaries are explicit and independent.
-
-Every split task must define:
-
-- owned paths per agent
-- forbidden paths per agent
-- required reads per agent
-- sequencing dependencies
-- one integrator owner
-
-Do not split when two agents would contend on the same file, the same shared type, or the same unresolved design boundary.
-</split_policy>
-
-<handoff_contract>
-Done:
-Remaining:
-Touched paths:
-Decisions made:
-Validation:
-Open risks:
-</handoff_contract>
-
-<final_report>
-Changed files:
-Commands run:
-Risks or follow-ups:
-</final_report>
+- A test that failed before the change now passes, and it pins the contract
+  rather than an incidental detail.
+- `just fmt check`, `just lint fast`, and `just lint style` are clean, with no
+  new baseline entries and no lint suppressions. No gate runs `style`; the
+  commit hook stops at `lint fast`.
+- The acceptance target named in the task packet passes, and the claim cites
+  harness output, not a scoped probe.
+- Documents describing the changed contract are updated in the same change.
+- `PROGRESS.md` names what landed and what is left.
 
 ## Working Rules
 
-- Start from a task packet when the task is non-trivial, shared, or likely to benefit from explicit coordination.
-- Small single-owner tasks with a clear boundary can proceed directly without a task packet.
-- Treat a non-trivial task packet as incomplete until `Constraints`, `Non-goals`, and `Validation scope` are filled in.
-- Keep the primary acceptance target explicit in the packet or plan and revisit it after local fixes.
-- Read only the repo docs and crate `README.md` / `CONTEXT.md` files that match the owned paths.
-- The stable task packet, handoff, and final report shapes live here. Do not create parallel template docs for them.
-- If a task needs a plan, follow `docs/workflows/rust-ai.md` and `docs/plans/_template.md`.
-- Load `docs/guides/*` files only when the task, a red flag, or a failing lint points to that topic.
-- Load `docs/guides/tooling.md` only when touching formatter, lint, dependency-audit, or external-tool policy.
-- Load `docs/guides/test-harness.md` only when adding/debugging tests or reporting validation scope.
-- Load `docs/guides/agent-hooks.md` only when touching tool adapters, hooks, or command routing.
-- Load `docs/guides/performance.md` only when optimizing a hot path, cutting allocations, or triaging a perf regression.
+- One task in flight per session. Finish it or hand it off before opening a
+  second front in the same files.
+- Start from the task packet in `docs/workflows/rust-ai.md` when the task is
+  non-trivial, shared, or coordinated; a small single-owner task goes direct.
+- Treat a non-trivial task packet as incomplete until `Constraints`,
+  `Non-goals`, and `Validation scope` are filled in.
+- Read only the docs and crate files that match the owned paths.
+- A task that needs a plan follows `docs/plans/_template.md`.
 - If shared boundaries are unclear, stop and clarify before implementation.
-- Keep debate procedures, investigation journaling, and TDD choreography out of `AGENTS.md`. Put that guidance in workflow docs or owning `CONTEXT.md` files.
-- Do not restate the same repo rule in tool-specific files. Tool-specific files should only route the agent to canonical docs and scoped domain guidance.
+- Do not restate a repo rule in tool-specific files; route to the canonical doc.
 
 ## Resolving Rule Conflicts
 
-- If a product requirement conflicts with these rules, discuss the compromise first and update `AGENTS.md`.
-- Any forced rule bypass should be explained briefly in the owning crate `CONTEXT.md`.
+- If a product requirement conflicts with these rules, discuss the compromise
+  first and update `AGENTS.md`.
+- Any forced rule bypass is explained briefly in the owning crate `CONTEXT.md`.

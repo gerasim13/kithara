@@ -488,9 +488,9 @@ mod tests {
         assert!(!empty.ring.begin_seek_epoch(1, &mut empty.cursor));
     }
 
-    // One second instead of the ambient ten: the watchdog park is the point of
-    // this test, and on the flash-off lane that park is spent in real time
-    // (measured: 10.087 s ambient vs 0.074 s under flash, where it is virtual).
+    /// One second instead of the ambient ten: the watchdog park is the point of
+    /// this test, and on the flash-off lane that park is spent in real time
+    /// (measured: 10.087 s ambient vs 0.074 s under flash, where it is virtual).
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(hang_timeout_secs(1))]
     #[should_panic(expected = "recv_outcome_blocking")]

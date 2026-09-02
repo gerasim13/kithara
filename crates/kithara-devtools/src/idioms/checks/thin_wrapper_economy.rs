@@ -51,58 +51,58 @@ impl Check for ThinWrapperEconomy {
 }
 
 struct SourceFile {
+    syntax: syn::File,
     rel: String,
     scope: String,
-    production: bool,
     source: String,
-    syntax: syn::File,
+    production: bool,
 }
 
 #[derive(Clone)]
 struct Candidate {
-    file: usize,
+    comment_refusal: Option<&'static str>,
+    params: Option<Vec<String>>,
+    substitution_refusal: Option<&'static str>,
+    body: Range<usize>,
+    definition: Range<usize>,
+    name: String,
     rel: String,
     scope: String,
     module: Vec<String>,
-    name: String,
-    line: usize,
-    definition: Range<usize>,
-    body: Range<usize>,
-    trailing_semicolon: bool,
-    params: Option<Vec<String>>,
     param_uses: Vec<ParamUse>,
-    substitution_refusal: Option<&'static str>,
-    comment_refusal: Option<&'static str>,
+    trailing_semicolon: bool,
+    file: usize,
+    line: usize,
 }
 
 #[derive(Clone)]
 struct ParamUse {
-    param: usize,
-    range: Range<usize>,
     shorthand: Option<String>,
+    range: Range<usize>,
+    param: usize,
 }
 
 #[derive(Clone)]
 struct CallSite {
-    file: usize,
-    module: Vec<String>,
     range: Range<usize>,
     args: Vec<Range<usize>>,
-    discarded: bool,
+    module: Vec<String>,
     attributed: bool,
+    discarded: bool,
+    file: usize,
 }
 
 #[derive(Clone, Copy)]
 struct Metric {
-    call_sites: usize,
     net_saved: i64,
+    call_sites: usize,
 }
 
 struct Finding {
     candidate: Candidate,
-    calls: Vec<CallSite>,
     metric: Option<Metric>,
     unknown: Option<String>,
+    calls: Vec<CallSite>,
 }
 
 impl Finding {
@@ -233,9 +233,9 @@ fn analyze(workspace_root: &Path, files: &[SourceFile]) -> Vec<Finding> {
         );
         findings.push(Finding {
             candidate,
-            calls,
             metric,
             unknown,
+            calls,
         });
     }
     findings
@@ -330,18 +330,18 @@ fn candidate(
     };
     Some(Candidate {
         file,
-        rel: rel.to_owned(),
-        scope: scope.to_owned(),
-        module: module.to_vec(),
         name,
-        line: function.sig.fn_token.span.start().line,
         definition,
-        body: body_range,
-        trailing_semicolon: semicolon.is_some(),
         params,
         param_uses,
         substitution_refusal,
         comment_refusal,
+        rel: rel.to_owned(),
+        scope: scope.to_owned(),
+        module: module.to_vec(),
+        line: function.sig.fn_token.span.start().line,
+        body: body_range,
+        trailing_semicolon: semicolon.is_some(),
     })
 }
 
@@ -565,14 +565,14 @@ fn collect_eval_events(expr: &Expr, params: &[String], out: &mut Vec<EvalEvent>)
 struct References<'a> {
     candidate_names: &'a BTreeSet<String>,
     calls: BTreeMap<SymbolKey, Vec<CallSite>>,
-    unknown: BTreeMap<SymbolKey, BTreeSet<&'static str>>,
     imports: BTreeMap<usize, BTreeSet<String>>,
+    unknown: BTreeMap<SymbolKey, BTreeSet<&'static str>>,
+    bindings: BTreeSet<String>,
     glob_files: BTreeSet<usize>,
-    file: usize,
+    discarded_root: Option<Range<usize>>,
     scope: String,
     module: Vec<String>,
-    bindings: BTreeSet<String>,
-    discarded_root: Option<Range<usize>>,
+    file: usize,
 }
 
 impl<'a> References<'a> {
@@ -618,61 +618,12 @@ impl<'a> References<'a> {
 }
 
 impl<'ast> Visit<'ast> for References<'_> {
-    fn visit_item(&mut self, item: &'ast Item) {
-        if !attrs_have_cfg_test(item_attrs(item)) {
-            for attribute in item_attrs(item) {
-                self.visit_attribute(attribute);
+    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+        let names = self.candidate_names.iter().cloned().collect::<Vec<_>>();
+        for name in names {
+            if attribute_contains_reference(attribute, &name) {
+                self.mark_unknown(&name, "attribute-token reference");
             }
-            visit::visit_item(self, item);
-        }
-    }
-
-    fn visit_item_mod(&mut self, item_mod: &'ast syn::ItemMod) {
-        if attrs_have_cfg_test(&item_mod.attrs) {
-            return;
-        }
-        if let Some((_, items)) = &item_mod.content {
-            self.module.push(item_mod.ident.to_string());
-            for item in items {
-                self.visit_item(item);
-            }
-            self.module.pop();
-        }
-    }
-
-    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
-        if !attrs_have_cfg_test(&function.attrs) {
-            self.visit_function(&function.sig.inputs, &function.block);
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if let Stmt::Expr(expr, Some(_)) = stmt {
-            let previous = self.discarded_root.replace(expr.span().byte_range());
-            self.visit_expr(expr);
-            self.discarded_root = previous;
-        } else {
-            visit::visit_stmt(self, stmt);
-        }
-    }
-
-    fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
-        if !attrs_have_cfg_test(&function.attrs) {
-            for attribute in &function.attrs {
-                self.visit_attribute(attribute);
-            }
-            self.visit_function(&function.sig.inputs, &function.block);
-        }
-    }
-
-    fn visit_trait_item_fn(&mut self, function: &'ast TraitItemFn) {
-        if !attrs_have_cfg_test(&function.attrs)
-            && let Some(block) = &function.default
-        {
-            for attribute in &function.attrs {
-                self.visit_attribute(attribute);
-            }
-            self.visit_function(&function.sig.inputs, block);
         }
     }
 
@@ -695,15 +646,15 @@ impl<'ast> Visit<'ast> for References<'_> {
                     .entry(symbol_key(&self.scope, &name))
                     .or_default()
                     .push(CallSite {
+                        range,
+                        discarded,
                         file: self.file,
                         module: self.module.clone(),
-                        range,
                         args: call
                             .args
                             .iter()
                             .map(|arg| arg.span().byte_range())
                             .collect(),
-                        discarded,
                         attributed: !call.attrs.is_empty(),
                     });
             } else {
@@ -733,6 +684,43 @@ impl<'ast> Visit<'ast> for References<'_> {
         }
     }
 
+    fn visit_impl_item_fn(&mut self, function: &'ast ImplItemFn) {
+        if !attrs_have_cfg_test(&function.attrs) {
+            for attribute in &function.attrs {
+                self.visit_attribute(attribute);
+            }
+            self.visit_function(&function.sig.inputs, &function.block);
+        }
+    }
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        if !attrs_have_cfg_test(item_attrs(item)) {
+            for attribute in item_attrs(item) {
+                self.visit_attribute(attribute);
+            }
+            visit::visit_item(self, item);
+        }
+    }
+
+    fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+        if !attrs_have_cfg_test(&function.attrs) {
+            self.visit_function(&function.sig.inputs, &function.block);
+        }
+    }
+
+    fn visit_item_mod(&mut self, item_mod: &'ast syn::ItemMod) {
+        if attrs_have_cfg_test(&item_mod.attrs) {
+            return;
+        }
+        if let Some((_, items)) = &item_mod.content {
+            self.module.push(item_mod.ident.to_string());
+            for item in items {
+                self.visit_item(item);
+            }
+            self.module.pop();
+        }
+    }
+
     fn visit_item_use(&mut self, item_use: &'ast ItemUse) {
         let mut names = Vec::new();
         let mut glob = false;
@@ -748,20 +736,32 @@ impl<'ast> Visit<'ast> for References<'_> {
         }
     }
 
-    fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
-        let names = self.candidate_names.iter().cloned().collect::<Vec<_>>();
-        for name in names {
-            if attribute_contains_reference(attribute, &name) {
-                self.mark_unknown(&name, "attribute-token reference");
-            }
-        }
-    }
-
     fn visit_macro(&mut self, mac: &'ast Macro) {
         for name in self.candidate_names {
             if macro_tokens_contain_reference(mac.tokens.clone(), name) {
                 self.mark_unknown(name, "macro-token reference");
             }
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if let Stmt::Expr(expr, Some(_)) = stmt {
+            let previous = self.discarded_root.replace(expr.span().byte_range());
+            self.visit_expr(expr);
+            self.discarded_root = previous;
+        } else {
+            visit::visit_stmt(self, stmt);
+        }
+    }
+
+    fn visit_trait_item_fn(&mut self, function: &'ast TraitItemFn) {
+        if !attrs_have_cfg_test(&function.attrs)
+            && let Some(block) = &function.default
+        {
+            for attribute in &function.attrs {
+                self.visit_attribute(attribute);
+            }
+            self.visit_function(&function.sig.inputs, block);
         }
     }
 }
@@ -772,17 +772,12 @@ struct Bindings {
 }
 
 impl<'ast> Visit<'ast> for Bindings {
-    fn visit_pat_ident(&mut self, ident: &'ast syn::PatIdent) {
-        self.names.insert(ident.ident.to_string());
-        visit::visit_pat_ident(self, ident);
+    fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
+        self.names.insert(item.ident.to_string());
     }
 
     fn visit_item_fn(&mut self, function: &'ast ItemFn) {
         self.names.insert(function.sig.ident.to_string());
-    }
-
-    fn visit_item_const(&mut self, item: &'ast syn::ItemConst) {
-        self.names.insert(item.ident.to_string());
     }
 
     fn visit_item_static(&mut self, item: &'ast syn::ItemStatic) {
@@ -791,6 +786,11 @@ impl<'ast> Visit<'ast> for Bindings {
 
     fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
         self.names.insert(item.ident.to_string());
+    }
+
+    fn visit_pat_ident(&mut self, ident: &'ast syn::PatIdent) {
+        self.names.insert(ident.ident.to_string());
+        visit::visit_pat_ident(self, ident);
     }
 }
 
@@ -937,9 +937,9 @@ fn exact_refusal<'a>(
 
 #[derive(Clone)]
 struct Edit {
-    file: usize,
     range: Range<usize>,
     text: String,
+    file: usize,
 }
 
 fn candidate_edits(
@@ -1033,8 +1033,8 @@ fn measure_candidate(
         net_saved += checked_i64(inlined)? - checked_i64(baseline)?;
     }
     Ok(Metric {
-        call_sites: calls.len(),
         net_saved,
+        call_sites: calls.len(),
     })
 }
 
