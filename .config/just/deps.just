@@ -3,7 +3,7 @@ set working-directory := "../.."
 
 deny:
     cargo deny fetch db || echo "RustSec refresh unavailable; validating the cached database" >&2
-    cargo deny check --disable-fetch
+    cargo deny --offline check
 
 machete:
     cargo machete --skip-target-dir $(find crates -maxdepth 1 -mindepth 1 -not -name kithara-workspace-hack | sort) tests xtask
