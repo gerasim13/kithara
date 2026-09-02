@@ -77,12 +77,9 @@ where
         AudioConfig::<kithara_file::File<S>, B>::for_stream(file_config)
             .maybe_cancel(self.cancel.clone())
             .maybe_hint(extension)
-            .maybe_host_sample_rate(self.settings.host_sample_rate)
             .maybe_observer(observer)
-            .preload_chunks(self.settings.preload_chunks)
+            .settings(self.settings.audio.clone())
             .decoder(self.decoder)
-            .consumer_wake_mode(self.settings.consumer_wake_mode)
-            .block_on_underrun(self.settings.block_on_underrun)
             .build()
     }
 
@@ -118,12 +115,9 @@ where
             AudioConfig::<kithara_hls::Hls<S>, B>::for_stream(hls_config)
                 .maybe_cancel(self.cancel.clone())
                 .maybe_hint(self.hint)
-                .maybe_host_sample_rate(self.settings.host_sample_rate)
                 .maybe_observer(observer)
-                .preload_chunks(self.settings.preload_chunks)
+                .settings(self.settings.audio.clone())
                 .decoder(self.decoder)
-                .consumer_wake_mode(self.settings.consumer_wake_mode)
-                .block_on_underrun(self.settings.block_on_underrun)
                 .build(),
         )
     }
@@ -134,6 +128,7 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use kithara_assets::AssetStore;
+    use kithara_audio::AudioSettings;
     use kithara_test_utils::kithara;
 
     use crate::{
@@ -217,7 +212,11 @@ mod tests {
 
     fn preload_chunks(count: usize) -> ResourceSettings {
         ResourceSettings::builder()
-            .preload_chunks(NonZeroUsize::new(count).expect("a preload count above zero"))
+            .audio(
+                AudioSettings::builder()
+                    .preload_chunks(NonZeroUsize::new(count).expect("a preload count above zero"))
+                    .build(),
+            )
             .build()
     }
 
@@ -240,5 +239,21 @@ mod tests {
             .build_file_config(&worker(), None);
 
         assert_eq!(built.preload_chunks().get(), 9);
+    }
+
+    /// `audio_buffer_chunks` reached the built `AudioConfig` through no path
+    /// while `ResourceConfig` forwarded individual audio fields one by one:
+    /// it never mirrored this one. Handing `AudioSettings` whole closes that
+    /// gap, the same collapse `hls` and `file` already went through.
+    #[kithara::test]
+    fn an_audio_knob_the_resource_never_declared_reaches_the_built_config() {
+        let mut settings = ResourceSettings::default();
+        settings.audio.audio_buffer_chunks = 24;
+
+        let built = config("https://example.com/live.m3u8", settings)
+            .build_hls_config(&worker(), None)
+            .expect("valid HLS config");
+
+        assert_eq!(built.audio_buffer_chunks(), 24);
     }
 }

@@ -42,7 +42,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioRead, AudioSession, ChunkOutcome},
+    audio::{AudioConfig, AudioRead, AudioSession, AudioSettings, ChunkOutcome},
     decode::DecoderBackend,
     hls::{Hls, HlsConfig},
     platform::{time::Duration, tokio::task::spawn_blocking},
@@ -116,7 +116,7 @@ async fn abr_escapes_stalled_initial_variant(#[case] backend: DecoderBackend) {
                 .backend(backend)
                 .build(),
         )
-        .block_on_underrun(true)
+        .settings(AudioSettings::builder().block_on_underrun(true).build())
         .build();
     let mut audio = worker.open(config).await.expect("audio creation");
 

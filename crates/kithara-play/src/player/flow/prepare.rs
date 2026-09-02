@@ -37,9 +37,9 @@ where
             .maybe_resampler(config.decoder.resampler().cloned())
             .build();
         let mut settings = config.settings.clone();
-        settings.consumer_wake_mode = self.player.core.engine.consumer_wake_mode();
-        settings.block_on_underrun = self.player.core.block_on_underrun;
-        settings.host_sample_rate = host_sample_rate;
+        settings.audio.consumer_wake_mode = self.player.core.engine.consumer_wake_mode();
+        settings.audio.block_on_underrun = self.player.core.block_on_underrun;
+        settings.audio.host_sample_rate = host_sample_rate;
         ResourceConfig {
             bus,
             cancel,
@@ -77,7 +77,7 @@ where
 #[cfg(test)]
 mod tests {
     use kithara_assets::AssetStore;
-    use kithara_audio::ConsumerWakeMode;
+    use kithara_audio::{AudioSettings, ConsumerWakeMode};
     use kithara_platform::sync::Arc;
     use kithara_test_utils::kithara;
 
@@ -127,7 +127,7 @@ mod tests {
 
         let prepared = player.prepare_config(resource_config("https://example.com/song.mp3"));
         assert_eq!(
-            prepared.settings.consumer_wake_mode,
+            prepared.settings.audio.consumer_wake_mode,
             ConsumerWakeMode::ImmediateOffRt
         );
         let audio = prepared.build_file_config(player.worker(), None);
@@ -154,14 +154,18 @@ mod tests {
             .store(AssetStore::builder(pools()).build())
             .settings(
                 ResourceSettings::builder()
-                    .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                    .audio(
+                        AudioSettings::builder()
+                            .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                            .build(),
+                    )
                     .build(),
             )
             .build();
 
         let prepared = player.prepare_config(config);
         assert_eq!(
-            prepared.settings.consumer_wake_mode,
+            prepared.settings.audio.consumer_wake_mode,
             ConsumerWakeMode::RealtimeDeferred,
             "a player-managed resource cannot smuggle an off-RT capability past the session policy"
         );

@@ -5,7 +5,7 @@ mod reader;
 mod resampler;
 mod source;
 
-pub use config::{ResourceConfig, ResourceSettings, ResourceSettingsPatch};
+pub use config::{ResourceConfig, ResourceSettings};
 pub use reader::Resource;
 pub use resampler::PlaybackResamplerBackend;
 pub use source::{ResourceSrc, SourceType};

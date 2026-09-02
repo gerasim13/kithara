@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSettings, ReadOutcome},
     hls::{Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
     play::{PlayWorker, PlayWorkerConfig},
@@ -190,7 +190,7 @@ async fn stress_seek_lifecycle_with_zero_reset(
         .build();
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .media_info(wav_info)
-        .block_on_underrun(true)
+        .settings(AudioSettings::builder().block_on_underrun(true).build())
         .build();
     let mut audio = worker.open(config).await.expect("create Audio pipeline");
 

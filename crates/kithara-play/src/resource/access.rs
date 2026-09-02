@@ -75,7 +75,7 @@ where
 
     /// Replace the rate this resource's decoder resamples onto.
     pub const fn set_host_sample_rate(&mut self, sample_rate: NonZeroU32) {
-        self.settings.host_sample_rate = Some(sample_rate);
+        self.settings.audio.host_sample_rate = Some(sample_rate);
     }
 
     /// Source parsed for this resource.

@@ -2,7 +2,7 @@ use std::{fs, num::NonZeroUsize, path::Path, sync::Mutex};
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ChunkOutcome},
     events::{DownloaderEvent, Event, FileEvent},
     file::{File, FileConfig},
     platform::{
@@ -269,7 +269,7 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
         .open(
             AudioConfig::<File<TestPools>>::for_stream(file_config)
                 .hint(("mp3").to_string())
-                .block_on_underrun(true)
+                .settings(AudioSettings::builder().block_on_underrun(true).build())
                 .build(),
         )
         .await

@@ -5,7 +5,7 @@ use std::{
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ReadOutcome},
     decode::DecoderBackend,
     events::{
         AbrEvent, AbrReason, AudioEvent, DecoderEvent, DownloaderEvent, Event, EventBus,
@@ -1486,7 +1486,7 @@ async fn runtime_manual_switch_works_when_all_segments_cached() {
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
-        .block_on_underrun(true)
+        .settings(AudioSettings::builder().block_on_underrun(true).build())
         .build();
     let audio = worker.open(config).await.expect("create audio");
 
@@ -1630,7 +1630,7 @@ async fn runtime_manual_switch_survives_outgoing_eof() {
     let config = AudioConfig::<Hls<TestPools>>::for_stream(hls_config)
         .events(bus)
         .media_info(wav_info)
-        .block_on_underrun(true)
+        .settings(AudioSettings::builder().block_on_underrun(true).build())
         .build();
     let audio = worker.open(config).await.expect("create audio");
 

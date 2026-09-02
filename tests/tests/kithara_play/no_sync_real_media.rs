@@ -11,7 +11,7 @@ mod runtime;
 use std::{num::NonZeroU32, path::PathBuf};
 
 use kithara::{
-    audio::ConsumerWakeMode,
+    audio::{AudioSettings, ConsumerWakeMode},
     events::{EventBus, TrackId},
     hls::AbrMode,
     platform::{
@@ -915,8 +915,14 @@ async fn prepare_deck(
         .worker(player.worker().clone())
         .settings(
             ResourceSettings::builder()
-                .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
-                .host_sample_rate(NonZeroU32::new(case.host_rate).expect("host rate is non-zero"))
+                .audio(
+                    AudioSettings::builder()
+                        .consumer_wake_mode(ConsumerWakeMode::ImmediateOffRt)
+                        .host_sample_rate(
+                            NonZeroU32::new(case.host_rate).expect("host rate is non-zero"),
+                        )
+                        .build(),
+                )
                 .build(),
         )
         .initial_abr_mode(AbrMode::manual(0))

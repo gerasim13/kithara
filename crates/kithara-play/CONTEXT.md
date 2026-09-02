@@ -182,11 +182,13 @@ document overlay in `main.rs`, then threads it through `Deck::build`'s
 `PlayerConfig::builder().settings(...)` call — the only construction site a
 document reaches.
 
-Six fields carry `#[patch(skip)]`, so naming one in a document is refused
+`PlayerSettings::gapless_mode` is a live key: `GaplessMode`'s adjacent tagging
+gives it `gapless_mode:` / `mode: disabled` for the unit variant, or `mode:`
+plus a nested `params:` for a data-carrying one.
+
+Five fields carry `#[patch(skip)]`, so naming one in a document is refused
 rather than parsed and silently dropped:
 
-- `PlayerSettings::gapless_mode` — document-unreachable until `GaplessMode`
-  derives `Deserialize`.
 - `PlayerSettings::auto_advance_enabled` — `Queue::new` calls
   `PlayerImpl::set_auto_advance_enabled(false)` unconditionally
   (`crates/kithara-queue/src/queue/state.rs:202`); see "Queue Auto-Advance".
@@ -206,49 +208,50 @@ rather than parsed and silently dropped:
 ## Configuration Document Entry Point: Resources
 
 `ResourceSettings` is how a configuration document reaches the knobs one
-opened resource runs on, and how the HLS and file settings its stream carries
-get there. `ResourceConfig` holds one by value; `resource/build.rs` hands
-`settings.hls` straight to `HlsConfig::settings` and `settings.file` straight
-to `FileConfig::settings`, so neither set is re-declared field by field and a
-knob either crate adds later needs no edit here. The one value the file branch
-overwrites is `FileSettings::extension`: `hint` is per-call input read twice —
-as the file source's extension and as the decoder's format hint — so it stays
-on `ResourceConfig` and is mapped in once.
+opened resource runs on, and how the HLS, file, and audio settings its stream
+carries get there. `ResourceConfig` holds one by value; `resource/build.rs`
+hands `settings.hls` straight to `HlsConfig::settings`, `settings.file`
+straight to `FileConfig::settings`, and `settings.audio` straight to
+`AudioConfig::settings` — one `.settings(...)` call each instead of forwarding
+fields individually — so none of the three sets is re-declared field by field
+and a knob either crate adds later needs no edit here. The one value the file
+branch overwrites is `FileSettings::extension`: `hint` is per-call input read
+twice — as the file source's extension and as the decoder's format hint — so
+it stays on `ResourceConfig` and is mapped in once.
 
 `kithara-app` composes the tree in `Config::resource_settings`: the crate
-default, then its `resource:` section, then `hls:` into `settings.hls` and
-`file:` into `settings.file`. `sources::build_resource_config` passes the
-whole value to `ResourceConfig::settings` — the only construction site a
-document reaches.
+default, then `audio:` into `settings.audio`, `hls:` into `settings.hls`, and
+`file:` into `settings.file`. There is no `resource:` document section.
+`sources::build_resource_config` passes the whole value to
+`ResourceConfig::settings` — the only construction site a document reaches.
 
-Six fields carry `#[patch(skip)]`, so naming one in a document is refused
-rather than parsed and silently dropped:
+`ResourceSettings` is not itself a document section and derives no `Patch`: a
+document naming `resource:` is refused by `Document`'s `deny_unknown_fields`,
+which `document/schema.rs`'s `a_resource_section_is_rejected` pins. Its four
+fields are unreachable from a document by construction, which is what each of
+them needs:
 
-- `ResourceSettings::hls` and `ResourceSettings::file` — the document's live
-  spelling for those knobs is its own top-level `hls:` / `file:` section, which
-  is applied to these exact values. A reachable `resource.hls` would be a
-  second spelling for one value.
-- `ResourceSettings::consumer_wake_mode` — `PlayerImpl::prepare_config`
-  overwrites it with the session policy for every player-managed resource, and
-  declaring `ImmediateOffRt` on a player-bound resource would make its reads
-  publish inline on the render callback.
-- `ResourceSettings::block_on_underrun` — overwritten by `prepare_config` the
-  same way, and it can park the real-time audio callback. `PlayerSettings` skips
-  its identically-named field for that reason too.
-- `ResourceSettings::host_sample_rate` — the rate the engine actually opened.
-  Every open path writes it before the resource is built:
-  `PlayerImpl::prepare_config` from the engine's master or configured rate, and
-  the analysis path in `kithara-app`'s `waveform::open_reader` through
-  `ResourceConfig::set_host_sample_rate`.
+- `ResourceSettings::hls`, `ResourceSettings::file`, and
+  `ResourceSettings::audio` — each held type's document-facing fields are
+  live only under its own top-level `hls:` / `file:` / `audio:` section, which
+  is applied to that exact value. A reachable `resource.hls` (or `.file`,
+  `.audio`) would be a second spelling for one value.
 - `ResourceSettings::preferred_peak_bitrate` — held for a reader that does not
   exist. `resource/build.rs` forwards it to neither branch, so no ABR
   controller ever sees it, and the one caller of
   `ResourceConfig::preferred_peak_bitrate` is a test asserting the value
-  survives `Loader::build_config`. Making it a document key would ship a knob
-  the binary ignores, so it stays skipped until the wiring lands.
+  survives `Loader::build_config`. A document key here would ship a knob the
+  binary ignores; it becomes one when the ABR wiring lands.
 
-`preload_chunks` is the only field that travels, and `resource/build.rs` reads
-it on both branches.
+`AudioSettings::consumer_wake_mode`, `::block_on_underrun`, and
+`::host_sample_rate` carry their own `#[patch(skip)]` one level down, inside
+`audio:`, for the same runtime-ownership reasons documented in
+`kithara-audio`'s `CONTEXT.md`: `PlayerImpl::prepare_config` overwrites all
+three for every player-managed resource, and the analysis path in
+`kithara-app`'s `waveform::open_reader` writes `host_sample_rate` through
+`ResourceConfig::set_host_sample_rate`. `preload_chunks` and
+`audio_buffer_chunks` are the two `AudioSettings` fields that travel, and
+`resource/build.rs` reads both on both branches.
 
 ## Live Equalizer Layout
 
@@ -515,8 +518,8 @@ consumer capability. Real-time session implementations explicitly return
 off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
 their inner capability. Requiring the method keeps wrappers from silently
 erasing an off-RT capability through a trait default. `ConfigPrep` copies the
-capability into `ResourceConfig::consumer_wake_mode`, unconditionally
-overwriting whatever the builder carried, so a player-managed resource has no
+capability into `ResourceConfig::settings.audio.consumer_wake_mode`,
+unconditionally overwriting whatever the builder carried, so a player-managed resource has no
 second source of session wake policy. The builder setter (default
 `RealtimeDeferred`) exists for direct `Resource` readers that never pass
 through a player: such a reader declares `ImmediateOffRt` itself to get

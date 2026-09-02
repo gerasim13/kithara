@@ -71,7 +71,7 @@ measurement, while `kithara-warp` owns the resident Warp renderer.
 
 ```rust
 use kithara_audio::{
-    AudioConfig, AudioDecoderConfig, DecoderResamplerSettings, ResamplerQuality,
+    AudioConfig, AudioDecoderConfig, AudioSettings, DecoderResamplerSettings, ResamplerQuality,
 };
 use kithara_decode::GaplessMode;
 use kithara_play::{PlayWorker, PlayWorkerConfig};
@@ -85,7 +85,7 @@ let decoder_config = AudioDecoderConfig::builder()
     )
     .build();
 let audio_config = AudioConfig::for_stream(hls_config)
-    .host_sample_rate(sample_rate)
+    .settings(AudioSettings::builder().host_sample_rate(sample_rate).build())
     .decoder(decoder_config)
     .build();
 

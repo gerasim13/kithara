@@ -4697,6 +4697,8 @@ dependencies = [
  "num-traits",
  "ringbuf 0.5.0",
  "serde",
+ "serde_yaml_ng",
+ "struct-patch",
  "tempfile",
  "thiserror 2.0.18",
  "tracing",

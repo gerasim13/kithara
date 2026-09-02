@@ -51,8 +51,7 @@ pub use kithara_warp::{
 };
 pub use player::{PlayerConfig, PlayerImpl, PlayerSettings, PlayerSettingsPatch, SelectTransition};
 pub use resource::{
-    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSettings, ResourceSettingsPatch,
-    ResourceSrc, SourceType,
+    PlaybackResamplerBackend, Resource, ResourceConfig, ResourceSettings, ResourceSrc, SourceType,
 };
 pub use rt::PlayerNode;
 pub use sync::GroupState;

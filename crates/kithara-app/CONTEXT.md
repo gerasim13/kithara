@@ -298,23 +298,25 @@ ignored, which is what makes the move a move rather than a second reader going q
 in `document::schema` at the type, one in `document::load` through the whole merge-expand-type pipeline.
 
 `hls` is `HlsSettingsPatch` whole, and all eight knobs it declares travel. `file` is
-`kithara::file::FileSettingsPatch`, and `resource` is `kithara::play::ResourceSettingsPatch`, whose one declared knob
-is `preload_chunks`. The three compose in `Config::resource_settings`: crate defaults, then `resource`, then `hls` and
-`file` into the two per-source settings the tree holds. `AppConfig::resource` carries the result and
-`sources::build_resource_config` passes it to `ResourceConfig::settings`, which hands the `HlsSettings` inside it
-straight to the per-stream `HlsConfig` and the `FileSettings` to the `FileConfig`. Nothing is copied field by field
-along the way, so a knob `kithara-hls` or `kithara-file` adds later reaches the built stream with no edit here. The
+`kithara::file::FileSettingsPatch`, and `audio` is `kithara::audio::AudioSettingsPatch`, whose two declared knobs are
+`preload_chunks` and `audio_buffer_chunks`. The three compose in `Config::resource_settings`: crate defaults, then
+`audio` into `settings.audio`, then `hls` and `file` into the two other per-source settings the tree holds.
+`AppConfig::resource` carries the result and `sources::build_resource_config` passes it to `ResourceConfig::settings`,
+which hands the `AudioSettings` inside it straight to the per-stream `AudioConfig`, the `HlsSettings` to the
+`HlsConfig`, and the `FileSettings` to the `FileConfig`. Nothing is copied field by field along the way, so a knob
+`kithara-audio`, `kithara-hls`, or `kithara-file` adds later reaches the built stream with no edit here. The
 composition lives on `Config` rather than inline in `main` for the same reason `store_backend` does — so a test reaches
-the code the binary runs, not a copy of it.
+the code the binary runs, not a copy of it. `Document` declares no `resource:` section at all; `resource.hls`,
+`resource.file`, and `resource.audio` are refused because the top-level `hls:`, `file:`, and `audio:` sections are
+already this document's spelling for those knobs and a second path to one value is what a configuration document
+exists to prevent.
 
-`resource.hls` and `resource.file` are refused rather than parsed: both fields carry `#[patch(skip)]`, because the
-top-level `hls:` and `file:` sections are already this document's spelling for those knobs and a second path to one
-value is what a configuration document exists to prevent. `ResourceSettings` skips four more of its own —
-`consumer_wake_mode` and `block_on_underrun` because `PlayerImpl::prepare_config` overwrites both for every
-player-managed resource (and either one can put reads on, or park, the real-time render callback),
-`host_sample_rate` because every open path writes the rate the engine actually opened, and `preferred_peak_bitrate`
-because nothing forwards it to an ABR controller, so a document key for it would be one the binary ignores. See
-`kithara-play`'s `CONTEXT.md` for those arguments.
+`AudioSettings` skips three more of its own fields one level under `audio:` — `consumer_wake_mode` and
+`block_on_underrun` because `PlayerImpl::prepare_config` overwrites both for every player-managed resource (and
+either one can put reads on, or park, the real-time render callback), and `host_sample_rate` because every open path
+writes the rate the engine actually opened. `ResourceSettings::preferred_peak_bitrate` stays skipped too, because
+nothing forwards it to an ABR controller, so a document key for it would be one the binary ignores. See
+`kithara-audio`'s and `kithara-play`'s `CONTEXT.md` for those arguments.
 
 `HlsSettings` has a ninth field the patch does not declare at all. `net_options` carries `#[patch(skip)]`, so naming
 `hls.net_options` is refused rather than dropped: `net:` is already this document's live spelling for those options,

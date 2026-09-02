@@ -97,7 +97,7 @@ pub struct AppConfig {
     pub palette: Palette,
     /// Resource-level knobs threaded into every track's `ResourceConfig`,
     /// including the `HlsSettings` and `FileSettings` the built stream
-    /// carries. A document reaches these through `resource`, `hls`, and
+    /// carries. A document reaches these through `audio`, `hls`, and
     /// `file` — the same as [`AppConfig::queue`] reaches [`QueueSettings`]
     /// through `queue` — not through [`AppSettings`].
     #[builder(default)]

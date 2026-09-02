@@ -190,9 +190,9 @@ impl Config {
     }
 
     /// The settings tree every track is opened with: the crate defaults, then
-    /// the document's `resource:` section, then its `hls:` and `file:`
-    /// sections into the two held per-source settings. Those three sections
-    /// are the document's only spelling for this tree -- `resource.hls` and
+    /// the document's `audio:`, `hls:`, and `file:` sections into the held
+    /// per-concern settings. Those three sections are the document's only
+    /// spelling for this tree -- `resource.audio`, `resource.hls`, and
     /// `resource.file` are refused -- so composing them is what turns the
     /// document into the value `ResourceConfig::settings` takes. The
     /// composition lives here rather than at the construction site so a test
@@ -200,7 +200,7 @@ impl Config {
     #[must_use]
     pub fn resource_settings(&self) -> ResourceSettings {
         let mut settings = ResourceSettings::default();
-        settings.apply(self.document.resource.clone());
+        settings.audio.apply(self.document.audio.clone());
         settings.hls.apply(self.document.hls.clone());
         settings.file.apply(self.document.file.clone());
         settings
@@ -465,18 +465,18 @@ mod tests {
     /// own part of it, and the baked `hls.size_probe_method` an overlay never
     /// names survives the composition.
     #[kithara::test(native, flash(false))]
-    fn the_resource_hls_and_file_sections_compose_one_settings_tree() {
+    fn the_audio_hls_and_file_sections_compose_one_settings_tree() {
         let dir = tempdir();
         let path = write(
             &dir,
-            "resource-and-file",
-            "resource:\n  preload_chunks: 7\nfile:\n  reader_event_capacity: 512\n",
+            "audio-and-file",
+            "audio:\n  preload_chunks: 7\nfile:\n  reader_event_capacity: 512\n",
         );
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
         let settings = config.resource_settings();
 
-        assert_eq!(settings.preload_chunks.get(), 7);
+        assert_eq!(settings.audio.preload_chunks.get(), 7);
         assert_eq!(settings.file.reader_event_capacity, 512);
         assert_eq!(
             settings.hls.size_probe_method,

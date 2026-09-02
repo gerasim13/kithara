@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use kithara::{
     assets::{AssetStore, StorageBackend},
-    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ReadOutcome},
+    audio::{AudioConfig, AudioControl, AudioRead, AudioSession, AudioSettings, ReadOutcome},
     decode::DecoderBackend,
     hls::{AbrMode, Hls, HlsConfig},
     platform::{CancelToken, sync::Arc, time::Duration, tokio::task::spawn_blocking},
@@ -491,7 +491,7 @@ async fn stress_seek_audio_hls(
                 .backend(backend)
                 .build(),
         )
-        .block_on_underrun(true)
+        .settings(AudioSettings::builder().block_on_underrun(true).build())
         .build();
     let recorder = install_recorder();
 

@@ -5,11 +5,12 @@ use kithara::broadcast::BroadcastSettings;
 use kithara::{
     analysis::BeatAnalysisSettingsPatch,
     assets::{AssetStoreSettings, FlushSettings},
+    audio::AudioSettingsPatch,
     file::FileSettingsPatch,
     hls::HlsSettingsPatch,
     host::HostSettings,
     net::NetSettings,
-    play::{PlayerSettingsPatch, ResourceSettingsPatch},
+    play::PlayerSettingsPatch,
     queue::QueueSettingsPatch,
     stream::dl::DownloaderSettings,
     worker::{ComputePoolSettings, WorkerSettings},
@@ -33,6 +34,7 @@ pub(crate) struct Document {
     pub(crate) app: AppSettings,
     pub(crate) assets: Assets,
     pub(crate) assets_store: AssetStoreSettings,
+    pub(crate) audio: AudioSettingsPatch,
     pub(crate) beat: BeatAnalysisSettingsPatch,
     #[cfg(feature = "broadcast")]
     pub(crate) broadcast: BroadcastSettings,
@@ -47,7 +49,6 @@ pub(crate) struct Document {
     pub(crate) playlist: Playlist,
     pub(crate) pools: PoolsSection,
     pub(crate) queue: QueueSettingsPatch,
-    pub(crate) resource: ResourceSettingsPatch,
     pub(crate) worker: WorkerSettings,
     pub(crate) worker_pool: Option<ComputePoolSettings>,
 }
@@ -180,8 +181,8 @@ mod tests {
             "a document naming no queue section leaves the crate default standing"
         );
         assert!(
-            document.resource.preload_chunks.is_none(),
-            "a document naming no resource section leaves the crate default standing"
+            document.audio.preload_chunks.is_none(),
+            "a document naming no audio section leaves the crate default standing"
         );
         assert!(
             document.file.reader_event_capacity.is_none(),
@@ -261,5 +262,13 @@ mod tests {
             .expect_err("playback was folded into player.crossfade_duration");
 
         assert!(error.to_string().contains("playback"), "{error}");
+    }
+
+    #[kithara::test(native, flash(false))]
+    fn a_resource_section_is_rejected() {
+        let error = serde_yaml_ng::from_str::<Document>("resource:\n  preload_chunks: 5\n")
+            .expect_err("resource was split into its own audio, hls, and file sections");
+
+        assert!(error.to_string().contains("resource"), "{error}");
     }
 }
