@@ -23,8 +23,8 @@ expanded dependency, so the manifest records this single scanner exception.
   compiled-in backend, which is also `Default`.
 - `ElasticConfig<S>` is the single fallible `#[non_exhaustive]` `bon` root config. It owns the
   `StretchKind` selection, sample rate, channel count, maximum source/output frame spans and the
-  practical playback-rate envelope, plus the injected pool region; the selector is not a second
-  factory argument.
+  practical playback-rate envelope, backend preparation geometry, and the injected pool region;
+  the selector is not a second factory argument.
 - `build_engine(config)` dispatches the config-owned selector to `Box<dyn ElasticEngine>`.
 - Every backend must implement priming; callers may still render a fresh unprimed stream. Nothing
   above an adapter names a concrete DSP library.

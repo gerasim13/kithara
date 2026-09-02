@@ -4,12 +4,12 @@
 //! mandatory priming lifecycle.
 //! Every observable lifecycle and audio behavior is shared; backend-specific
 //! tests cover only private preparation and storage mechanics.
-use std::{f32::consts::TAU, ops::RangeInclusive};
+use std::{f32::consts::TAU, num::NonZeroUsize, ops::RangeInclusive};
 
 use kithara_bufpool::testing::{pools as default_pools, pools_with_budget as pools};
 use kithara_stretch::{
-    ElasticCapabilities, ElasticConfig, ElasticEngine, ElasticError, ElasticRequest,
-    ElasticSpanConfig, StretchKind, build_engine,
+    BungeeConfig, ElasticBackendConfig, ElasticCapabilities, ElasticConfig, ElasticEngine,
+    ElasticError, ElasticRequest, ElasticSpanConfig, SignalsmithConfig, StretchKind, build_engine,
 };
 use kithara_test_utils::kithara;
 use num_traits::ToPrimitive;
@@ -28,6 +28,20 @@ const TERMINAL_HIGH_HZ: f64 = 6_000.0;
 const TERMINAL_LOW_HZ: f64 = 1_500.0;
 const TERMINAL_WINDOW_FRAMES: usize = 64;
 
+fn conformance_backends() -> ElasticBackendConfig {
+    let signalsmith = SignalsmithConfig::builder()
+        .block_frames(NonZeroUsize::new(416).expect("fixture block is non-zero"))
+        .interval_frames(NonZeroUsize::new(64).expect("fixture interval is non-zero"))
+        .build();
+    let bungee = BungeeConfig::builder()
+        .log2_synthesis_hop_adjust(-3)
+        .build();
+    ElasticBackendConfig::builder()
+        .signalsmith(signalsmith)
+        .bungee(bungee)
+        .build()
+}
+
 fn prepared_backend(
     backend: StretchKind,
     max_source_frames: usize,
@@ -35,6 +49,7 @@ fn prepared_backend(
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
+        .backends(conformance_backends())
         .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -53,6 +68,7 @@ fn prepared_backend_with_rate_envelope(
 ) -> Box<dyn ElasticEngine> {
     let config = ElasticConfig::builder()
         .backend(backend)
+        .backends(conformance_backends())
         .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -1149,6 +1165,7 @@ mod facade {
 
         let config = ElasticConfig::builder()
             .backend(backend)
+            .backends(conformance_backends())
             .pools(default_pools())
             .sample_rate(SAMPLE_RATE)
             .channels(1)
@@ -2094,6 +2111,7 @@ fn unprimed_render_exposes_the_declared_total_latency(#[case] backend: StretchKi
 fn prepare_uses_the_injected_pool_region_budget(#[case] backend: StretchKind) {
     let config = ElasticConfig::builder()
         .backend(backend)
+        .backends(conformance_backends())
         .pools(pools(0))
         .sample_rate(SAMPLE_RATE)
         .channels(CHANNELS)
@@ -2120,6 +2138,7 @@ fn config_rejects_channels_outside_audio_spec_range(#[case] backend: StretchKind
 
     let result = ElasticConfig::builder()
         .backend(backend)
+        .backends(conformance_backends())
         .pools(default_pools())
         .sample_rate(SAMPLE_RATE)
         .channels(channels)
@@ -2140,6 +2159,7 @@ fn bungee_pool_usage_scales_with_the_prepared_source_limit() {
         let pools = pools(usize::MAX);
         let config = ElasticConfig::builder()
             .backend(StretchKind::Bungee)
+            .backends(conformance_backends())
             .pools(pools.clone())
             .sample_rate(SAMPLE_RATE)
             .channels(CHANNELS)

@@ -1,6 +1,6 @@
-use std::ops::RangeInclusive;
+use std::{num::NonZeroUsize, ops::RangeInclusive};
 
-use bon::bon;
+use bon::{Builder, bon};
 use kithara_bufpool::PoolRegion;
 use num_traits::ToPrimitive;
 
@@ -11,10 +11,81 @@ struct Consts;
 
 impl Consts {
     const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
+    const DEFAULT_SIGNALSMITH_BLOCK_FRAMES: NonZeroUsize = match NonZeroUsize::new(224) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
+    const DEFAULT_SIGNALSMITH_INTERVAL_FRAMES: NonZeroUsize = match NonZeroUsize::new(32) {
+        Some(frames) => frames,
+        None => unreachable!(),
+    };
     const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
     const MAX_PHASE_ERROR: f64 = 1.0;
     const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
     const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.05;
+}
+
+/// Signalsmith preparation geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
+#[fieldwork(get, copy)]
+#[non_exhaustive]
+pub struct SignalsmithConfig {
+    /// Analysis block size in source frames.
+    #[builder(default = Consts::DEFAULT_SIGNALSMITH_BLOCK_FRAMES)]
+    block_frames: NonZeroUsize,
+    /// Analysis interval in source frames.
+    #[builder(default = Consts::DEFAULT_SIGNALSMITH_INTERVAL_FRAMES)]
+    interval_frames: NonZeroUsize,
+}
+
+impl SignalsmithConfig {
+    fn validate(self) -> Result<Self, ElasticError> {
+        if self.interval_frames > self.block_frames {
+            return Err(ElasticError::EnginePreparation(
+                "Signalsmith interval exceeds its analysis block",
+            ));
+        }
+        Ok(self)
+    }
+}
+
+impl Default for SignalsmithConfig {
+    fn default() -> Self {
+        Self {
+            block_frames: Consts::DEFAULT_SIGNALSMITH_BLOCK_FRAMES,
+            interval_frames: Consts::DEFAULT_SIGNALSMITH_INTERVAL_FRAMES,
+        }
+    }
+}
+
+/// Bungee native synthesis geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
+#[fieldwork(get, copy)]
+#[non_exhaustive]
+pub struct BungeeConfig {
+    /// Base-two synthesis-hop adjustment passed to the native stretcher.
+    #[builder(default = -4)]
+    log2_synthesis_hop_adjust: i32,
+}
+
+impl Default for BungeeConfig {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+/// Per-backend preparation parameters carried by the common elastic facade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Builder, fieldwork::Fieldwork)]
+#[builder(state_mod(vis = "pub"))]
+#[fieldwork(get, copy)]
+#[non_exhaustive]
+pub struct ElasticBackendConfig {
+    #[builder(default)]
+    bungee: BungeeConfig,
+    #[builder(default)]
+    signalsmith: SignalsmithConfig,
 }
 
 /// Numeric continuity policy for exact-span planning.
@@ -72,6 +143,8 @@ pub struct ElasticConfig<S> {
     #[field(get)]
     pools: PoolRegion<S>,
     #[field(get(copy), vis = "pub(crate)")]
+    backends: ElasticBackendConfig,
+    #[field(get(copy), vis = "pub(crate)")]
     shape: ElasticShape,
 }
 
@@ -90,6 +163,7 @@ impl<S> ElasticConfig<S> {
     )]
     fn new(
         #[builder(default)] backend: StretchKind,
+        #[builder(default)] backends: ElasticBackendConfig,
         pools: PoolRegion<S>,
         sample_rate: u32,
         channels: usize,
@@ -101,6 +175,7 @@ impl<S> ElasticConfig<S> {
         )]
         rate_envelope: RangeInclusive<f64>,
     ) -> Result<Self, ElasticError> {
+        backends.signalsmith.validate()?;
         if sample_rate == 0 {
             return Err(ElasticError::InvalidSampleRate);
         }
@@ -125,6 +200,7 @@ impl<S> ElasticConfig<S> {
         Ok(Self {
             backend,
             pools,
+            backends,
             shape,
         })
     }
@@ -324,6 +400,68 @@ mod tests {
         assert_eq!(config.backend(), StretchKind::default());
         assert_eq!(envelope.min_source_frames_per_output(), 0.05);
         assert_eq!(envelope.max_source_frames_per_output(), 4.0);
+    }
+
+    #[kithara::test]
+    fn backend_geometry_has_one_configured_default_owner() {
+        let backends = ElasticBackendConfig::builder().build();
+
+        assert_eq!(backends.signalsmith().block_frames().get(), 224);
+        assert_eq!(backends.signalsmith().interval_frames().get(), 32);
+        assert_eq!(backends.bungee().log2_synthesis_hop_adjust(), -4);
+    }
+
+    #[kithara::test]
+    fn elastic_config_carries_backend_geometry() {
+        let signalsmith = SignalsmithConfig::builder()
+            .block_frames(NonZeroUsize::new(512).expect("fixture block is non-zero"))
+            .interval_frames(NonZeroUsize::new(16).expect("fixture interval is non-zero"))
+            .build();
+        let bungee = BungeeConfig::builder()
+            .log2_synthesis_hop_adjust(-2)
+            .build();
+        let backends = ElasticBackendConfig::builder()
+            .signalsmith(signalsmith)
+            .bungee(bungee)
+            .build();
+        let config = ElasticConfig::builder()
+            .backends(backends)
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(960)
+            .max_output_frames(480)
+            .build()
+            .expect("fixture backend geometry is valid");
+
+        assert_eq!(config.backends(), backends);
+    }
+
+    #[kithara::test]
+    fn signalsmith_geometry_rejects_an_interval_larger_than_its_block() {
+        let signalsmith = SignalsmithConfig::builder()
+            .block_frames(NonZeroUsize::new(16).expect("fixture block is non-zero"))
+            .interval_frames(NonZeroUsize::new(32).expect("fixture interval is non-zero"))
+            .build();
+        let backends = ElasticBackendConfig::builder()
+            .signalsmith(signalsmith)
+            .build();
+
+        let result = ElasticConfig::builder()
+            .backends(backends)
+            .pools(pools())
+            .sample_rate(48_000)
+            .channels(2)
+            .max_source_frames(960)
+            .max_output_frames(480)
+            .build();
+
+        assert!(matches!(
+            result,
+            Err(ElasticError::EnginePreparation(
+                "Signalsmith interval exceeds its analysis block"
+            ))
+        ));
     }
 
     #[kithara::test]
