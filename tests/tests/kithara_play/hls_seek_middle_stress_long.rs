@@ -11,7 +11,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope, CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio::{
             sync::broadcast::error::RecvError,

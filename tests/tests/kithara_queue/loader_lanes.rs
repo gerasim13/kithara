@@ -111,7 +111,7 @@ fn build_queue_with_tick(
     );
     let cap = NonZeroUsize::new(cap).expect("BUG: cap must be > 0");
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        OfflineSessionConfig::builder(pools.clone())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(
@@ -127,7 +127,7 @@ fn build_queue_with_tick(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -146,13 +146,13 @@ fn mk_cfg(
         .build()
 }
 
-fn status_of(queue: &Queue<TestPools>, id: TrackId) -> Option<TrackStatus> {
+fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> Option<TrackStatus> {
     queue.track(id).map(|e| e.status)
 }
 
 #[kithara::flash(true)]
 async fn wait_for_status_matching(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
     what: &str,
@@ -300,7 +300,7 @@ async fn superseded_hung_selection_frees_lane_for_next_select() {
 /// Setup invariant: the hung track must still be mid-load when the fast
 /// track resolves, otherwise the scenario did not actually exercise lane
 /// isolation.
-fn assert_hung_still_loading(queue: &Queue<TestPools>, hung_id: TrackId) {
+fn assert_hung_still_loading(queue: &QueueControl<TestPools>, hung_id: TrackId) {
     assert!(
         matches!(status_of(queue, hung_id), Some(TrackStatus::Loading)),
         "setup invariant broken: hung track should still be Loading (last={:?})",

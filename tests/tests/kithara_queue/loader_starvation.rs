@@ -144,7 +144,7 @@ fn is_loading(queue: &QueueControl<TestPools>, id: TrackId) -> bool {
 }
 
 async fn wait_until_loading(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {

@@ -9,7 +9,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
@@ -140,7 +139,7 @@ fn build_queue_with_tick(
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        OfflineSessionConfig::builder(pools.clone())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(
@@ -155,7 +154,7 @@ fn build_queue_with_tick(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -353,7 +352,7 @@ enum SeekLanded {
 /// tolerance. `Failed` is surfaced; the budget caps the wait.
 async fn wait_for_seek_landed(
     rx: &mut EventReceiver,
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     target: f64,
     budget: Duration,
@@ -419,7 +418,7 @@ enum PostSeekAdvance {
 /// the wait and the timeout carries the last observed position.
 async fn wait_for_post_seek_advance(
     rx: &mut EventReceiver,
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     target: f64,
     min_advance: f64,

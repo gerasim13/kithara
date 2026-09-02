@@ -11,7 +11,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::RecvError,
@@ -127,7 +126,7 @@ fn is_variant_media_playlist(url: &Url, master_url: &Url) -> bool {
 
 async fn observe_until_loaded(
     rx: &mut EventReceiver,
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     master_url: &Url,
 ) -> Result<HashSet<u64>, String> {

@@ -20,7 +20,7 @@ use kithara::{
     play::{
         AllocatedSlot, Cmd, NodeInputs, PlayError, PlayWorker, PlayWorkerConfig, PlayerConfig,
         PlayerEvent, PlayerImpl, PlayerStatus, Reply, Resource, SeekOutcome, SessionDispatcher,
-        SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, slot_channels,
+        SessionDuckingMode, SessionSampleRate, SharedEq, SlotId, bridge::slot_channels,
     },
     signal::AudioSpec,
 };

@@ -11,7 +11,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, Instant, sleep},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
@@ -126,7 +125,7 @@ fn build_queue_with_tick(
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        OfflineSessionConfig::builder(pools.clone())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(
@@ -141,7 +140,7 @@ fn build_queue_with_tick(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .max_concurrent(Consts::MAX_CONCURRENT)

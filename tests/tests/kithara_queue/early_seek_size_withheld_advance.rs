@@ -24,7 +24,7 @@ use kithara::{
     events::{AbrMode, PlayerEvent},
     host::OfflineSessionConfig,
     net::{HttpClient, NetOptions},
-    platform::{CancelToken, sync::Arc, time::Duration},
+    platform::{CancelToken, time::Duration},
     play::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         ResourceSrc,
@@ -226,12 +226,13 @@ async fn run_case(mode: GateMode) {
     let target = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
     let target_src = target.src().clone();
     let next = build_hls_resource(&master, &downloader, &store, &harness.worker).await;
+    let player = harness.take_player();
     let queue = harness
         .host
         .insert_control(Queue::new(
             QueueConfig::builder()
                 .should_autoplay(false)
-                .player(harness.take_player())
+                .player(player)
                 .build(),
         ))
         .expect("insert queue into product offline Host");

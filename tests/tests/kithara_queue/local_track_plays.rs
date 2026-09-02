@@ -9,7 +9,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep, timeout},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},

@@ -883,7 +883,7 @@ async fn prepare_deck(
     controls.set_backend(StretchKind::Signalsmith);
     controls.set_keylock(true);
     let bus = EventBus::new(16_384);
-    let mut player = PlayerImpl::new(
+    let player = PlayerImpl::new(
         PlayerConfig::builder()
             .worker(PlayWorker::new(
                 PlayWorkerConfig::builder(pool_region.clone()).build(),

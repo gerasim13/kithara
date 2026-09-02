@@ -27,7 +27,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, sleep},
         tokio,
         tokio::sync::broadcast::error::RecvError,
@@ -241,7 +240,7 @@ where
 /// current status (so an already-terminal track returns immediately), then
 /// blocks on the event stream — no polling.
 async fn wait_for_loader_done(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -287,7 +286,7 @@ async fn wait_for_loader_done(
 /// [`QueueEvent::CurrentTrackChanged`]. Subscribes first, snapshots
 /// `current()` (catches an already-current track), then blocks on the event.
 async fn wait_for_current_id(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     expected: TrackId,
     deadline: Duration,
 ) -> Result<(), String> {
@@ -337,7 +336,7 @@ async fn wait_for_init_requested(gate: &InitGateHandle, deadline: Duration) -> R
 /// current status (catches an already-applied transition), then blocks on the
 /// event stream under `deadline` as a hard safety cap.
 async fn wait_for_status(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     expected: TrackStatus,
     deadline: Duration,
@@ -373,7 +372,10 @@ async fn wait_for_status(
 /// barge-in is itself the absence-over-the-window success. Caller must have
 /// already confirmed `fast` is current, so the only future current-change is
 /// the end-of-`fast` auto-advance this races.
-async fn assert_no_barge_in(queue: &Queue<TestPools>, slow_id: TrackId) -> Result<(), String> {
+async fn assert_no_barge_in(
+    queue: &QueueControl<TestPools>,
+    slow_id: TrackId,
+) -> Result<(), String> {
     let mut rx = queue.subscribe();
     let terminal = next_queue_event(&mut rx, Consts::POST_FAST_OBSERVE, |ev| match ev {
         QueueEvent::QueueEnded | QueueEvent::CurrentTrackChanged { id: None } => true,

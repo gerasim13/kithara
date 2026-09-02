@@ -10,7 +10,6 @@ use kithara::{
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, sleep},
         tokio,
     },
@@ -146,7 +145,7 @@ fn build_queue_with_tick_cf(
             .build(),
     );
     let queue = OfflineQueue::new(
-        OfflineSessionConfig::builder(pools)
+        OfflineSessionConfig::builder(pools.clone())
             .pacing(Duration::from_millis(10))
             .build(),
         Queue::new(
@@ -161,7 +160,7 @@ fn build_queue_with_tick_cf(
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -171,7 +170,7 @@ fn build_queue_with_tick_cf(
 
 #[kithara::flash(true)]
 async fn wait_for_loader_done(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {
@@ -295,7 +294,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 /// playing the old track".
 #[kithara::flash(true)]
 async fn wait_for_position(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
     label: &str,
     pred: impl Fn(f64) -> bool,
@@ -368,12 +367,12 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
     // The engine duration snapshot is written from the arena's sounding
     // track, so it discriminates the two fixtures: mp3 ≈ 162 s, HLS = 64 s.
-    let sounds_like_a = |queue: &Queue<TestPools>| {
+    let sounds_like_a = |queue: &QueueControl<TestPools>| {
         queue
             .duration_seconds()
             .is_some_and(|d| (d - 162.0).abs() < 20.0)
     };
-    let sounds_like_b = |queue: &Queue<TestPools>| {
+    let sounds_like_b = |queue: &QueueControl<TestPools>| {
         queue
             .duration_seconds()
             .is_some_and(|d| (d - 64.0).abs() < 20.0)
@@ -422,10 +421,10 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 /// Wait until `pred(queue)` holds, panicking past `deadline`.
 #[kithara::flash(true)]
 async fn wait_for(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
     label: &str,
-    pred: &dyn Fn(&Queue<TestPools>) -> bool,
+    pred: &dyn Fn(&QueueControl<TestPools>) -> bool,
 ) {
     let start = time::Instant::now();
     while !pred(queue) {
