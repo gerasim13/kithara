@@ -18,6 +18,7 @@ pub(crate) mod dead_doc_refs;
 pub(crate) mod doc_size;
 pub(crate) mod doc_staleness;
 pub(crate) mod non_english_text;
+pub(crate) mod readme_shape;
 pub(crate) mod struct_field_order;
 pub(crate) mod struct_init_order;
 pub(crate) mod trait_item_order;
@@ -56,6 +57,7 @@ pub(crate) fn registry() -> Vec<Box<dyn Check>> {
         Box::new(doc_size::DocSize),
         Box::new(doc_staleness::DocStaleness),
         Box::new(non_english_text::NonEnglishText),
+        Box::new(readme_shape::ReadmeShape),
         Box::new(struct_field_order::StructFieldOrder),
         Box::new(trait_item_order::TraitItemOrder),
         Box::new(struct_init_order::StructInitOrder),

@@ -126,3 +126,21 @@ exclude_paths = [
   "docs/superpowers/**",
 ]
 include_globs = ["AGENTS.md", "**/CONTEXT.md", "**/README.md", "docs/**/*.md"]
+
+# One shape for every crate README, so an agent that has read one knows where to
+# look in all of them: the shared header (centered logo, then badges keyed to
+# `publish`), a `# <package name>` title, a lead paragraph stating what the crate
+# is, then these sections. Each is optional and each may appear once. Content
+# that fits none of them is a `###` subsection of the one it belongs under - a
+# heading that fits nowhere is usually a contract, and contracts live in
+# `CONTEXT.md`.
+#
+# The scope is the crate front pages under `crates/` and nothing else. A
+# package whose README is a guide - `tests/`, `tests/fuzz/`, `xtask/` - carries
+# headings this vocabulary cannot express (nextest profiles, troubleshooting,
+# adding a test), and forcing them into it would cost more than the uniformity
+# is worth.
+[readme_shape]
+sections = ["Usage", "Key Types", "Features", "Integration"]
+include_globs = ["crates/*/README.md"]
+exclude_paths = []

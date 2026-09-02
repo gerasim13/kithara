@@ -30,6 +30,8 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) non_english_text: NonEnglishTextConfig,
     #[serde(default)]
+    pub(crate) readme_shape: ReadmeShapeConfig,
+    #[serde(default)]
     pub(crate) struct_field_order: StructFieldOrderConfig,
     #[serde(default)]
     pub(crate) struct_init_order: StructInitOrderConfig,
@@ -250,9 +252,10 @@ pub(crate) struct DocStalenessConfig {
 pub(crate) struct DocSizeLimit {
     /// Documents this rule applies to.
     pub(crate) globs: Vec<String>,
-    /// Line count above which the document is denied.
+    /// Byte count above which the document is denied. A document costs an
+    /// agent its size, not its line count.
     pub(crate) deny: usize,
-    /// Line count above which the document is reported.
+    /// Byte count above which the document is reported.
     pub(crate) warn: usize,
 }
 
@@ -276,6 +279,48 @@ impl Default for NonEnglishTextConfig {
 
 fn default_non_english_exclude_paths() -> Vec<String> {
     default_tracked_text_exclude_paths()
+}
+
+/// The one shape every crate README follows.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadmeShapeConfig {
+    /// Documents excluded from the shape contract entirely.
+    #[serde(default)]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Documents the check reads.
+    #[serde(default = "default_readme_include_globs")]
+    pub(crate) include_globs: Vec<String>,
+    /// Top-level sections a crate README may carry, in the order they must
+    /// appear. Every one is optional; anything outside this vocabulary is a
+    /// `###` subsection of one of them, so a reader who knows one README
+    /// knows where to look in all of them.
+    #[serde(default = "default_readme_sections")]
+    pub(crate) sections: Vec<String>,
+}
+
+impl Default for ReadmeShapeConfig {
+    fn default() -> Self {
+        Self {
+            include_globs: default_readme_include_globs(),
+            sections: default_readme_sections(),
+            exclude_paths: Vec::new(),
+        }
+    }
+}
+
+fn default_readme_include_globs() -> Vec<String> {
+    ["crates/*/README.md"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_readme_sections() -> Vec<String> {
+    ["Usage", "Key Types", "Features", "Integration"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]

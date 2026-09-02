@@ -6,7 +6,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use glob::Pattern;
+use glob::{MatchOptions, Pattern};
 
 use super::{project::ProjectConfig, scope::Scope};
 
@@ -63,6 +63,23 @@ pub fn compile_globs(raw: &[String]) -> Vec<Pattern> {
 pub fn matches_any(patterns: &[Pattern], rel: &Path) -> bool {
     let s = rel.to_string_lossy();
     patterns.iter().any(|p| p.matches(&s))
+}
+
+/// Match with `*` confined to a single path segment.
+///
+/// `matches_any` lets `*` cross `/`, so a pattern like `crates/*/README.md`
+/// there also selects a README nested any number of directories deeper. Use
+/// this when a pattern's depth is part of what it selects; `**` still spans
+/// segments.
+#[must_use]
+pub fn matches_any_segmented(patterns: &[Pattern], rel: &Path) -> bool {
+    const OPTIONS: MatchOptions = MatchOptions {
+        case_sensitive: true,
+        require_literal_separator: true,
+        require_literal_leading_dot: false,
+    };
+    let s = rel.to_string_lossy();
+    patterns.iter().any(|p| p.matches_with(&s, OPTIONS))
 }
 
 /// Walk `.rs` files under each root in `scope` (defaults to `<workspace>/crates`
