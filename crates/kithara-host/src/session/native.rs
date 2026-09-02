@@ -135,7 +135,7 @@ fn start_stream_cpal(
     debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
     let config = firewheel::cpal::CpalConfig {
         output: firewheel::cpal::CpalOutputConfig {
-            desired_sample_rate: Some(sample_rate),
+            desired_sample_rate: NonZeroU32::new(sample_rate).map(NonZeroU32::get),
             ..Default::default()
         },
         ..Default::default()
