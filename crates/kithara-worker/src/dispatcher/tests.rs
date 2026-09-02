@@ -323,9 +323,11 @@ fn scheduler_does_not_busy_spin_on_backpressure() {
     let (first_tick, first_tick_rx) = mpsc::channel();
     let worker = crate::Worker::new(crate::WorkerConfig::new());
     let dispatcher = worker.dispatcher(
-        DispatcherConfig::new("backpressure-park-test")
-            .with_backpressure_poll_interval(Duration::from_millis(1))
-            .with_wait_timeout(Duration::from_millis(20)),
+        DispatcherConfig::builder()
+            .name("backpressure-park-test")
+            .backpressure_poll_interval(Duration::from_millis(1))
+            .wait_timeout(Duration::from_millis(20))
+            .build(),
     );
     let handle = dispatcher
         .register(TaskConfig::new(), {
@@ -450,7 +452,11 @@ fn shutdown_recycles_cancelled_tasks_before_drop() {
 fn shutdown_cancels_and_recycles_a_queued_never_run_task_once() {
     let recorder = probe_capture::install();
     let worker = crate::Worker::new(crate::WorkerConfig::new());
-    let dispatcher = worker.dispatcher(DispatcherConfig::new("queued-shutdown-test"));
+    let dispatcher = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("queued-shutdown-test")
+            .build(),
+    );
     let (started, started_rx) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
     let blocker = dispatcher
@@ -501,7 +507,11 @@ fn shutdown_cancels_and_recycles_a_queued_never_run_task_once() {
 #[kithara::test(native, flash(false))]
 fn shutdown_closes_task_admission_before_returning() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
-    let dispatcher = worker.dispatcher(DispatcherConfig::new("closed-admission-test"));
+    let dispatcher = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("closed-admission-test")
+            .build(),
+    );
 
     dispatcher.shutdown();
 
@@ -606,9 +616,11 @@ fn backpressure_poll_slices_wait_for_a_deferred_edge_without_restarting_the_task
     let (first_tick, first_tick_rx) = mpsc::channel();
     let worker = crate::Worker::new(crate::WorkerConfig::new());
     let dispatcher = worker.dispatcher(
-        DispatcherConfig::new("backpressure-deferred-poll-test")
-            .with_backpressure_poll_interval(Duration::from_millis(2))
-            .with_wait_timeout(Duration::from_millis(500)),
+        DispatcherConfig::builder()
+            .name("backpressure-deferred-poll-test")
+            .backpressure_poll_interval(Duration::from_millis(2))
+            .wait_timeout(Duration::from_millis(500))
+            .build(),
     );
     let handle = dispatcher
         .register(TaskConfig::new(), {
@@ -647,8 +659,12 @@ fn backpressure_poll_slices_wait_for_a_deferred_edge_without_restarting_the_task
 #[kithara::test(native, flash(false))]
 fn configured_capacity_rejects_a_second_reservation() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
-    let dispatcher =
-        worker.dispatcher(DispatcherConfig::new("capacity-test").with_capacity(NonZeroUsize::MIN));
+    let dispatcher = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("capacity-test")
+            .capacity(NonZeroUsize::MIN)
+            .build(),
+    );
     let first = dispatcher
         .reserve(TaskConfig::new())
         .expect("first reserve");
@@ -664,8 +680,12 @@ fn configured_capacity_rejects_a_second_reservation() {
 #[kithara::test(native, flash(false))]
 fn task_handle_drop_releases_capacity_for_immediate_ordered_replacement() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
-    let dispatcher = worker
-        .dispatcher(DispatcherConfig::new("replacement-test").with_capacity(NonZeroUsize::MIN));
+    let dispatcher = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("replacement-test")
+            .capacity(NonZeroUsize::MIN)
+            .build(),
+    );
     let first = dispatcher
         .register(TaskConfig::new(), |_| FixedTask(TickResult::Backpressured))
         .expect("first task");
@@ -682,15 +702,31 @@ fn task_handle_drop_releases_capacity_for_immediate_ordered_replacement() {
 }
 
 #[kithara::test(native, flash(false))]
-fn non_zero_budget_types_are_accepted_by_every_budget_setter() {
-    let _ = DispatcherConfig::new("budget-test")
-        .with_backpressure_poll_interval(Duration::ZERO)
-        .with_capacity(NonZeroUsize::MIN)
-        .with_fairness_yield_interval(NonZeroU32::MIN)
-        .with_idle_timeout(Duration::ZERO)
-        .with_slow_tick_threshold(Duration::ZERO)
-        .with_task_burst(NonZeroU32::MIN)
-        .with_wait_timeout(Duration::ZERO);
+fn dispatcher_builder_uses_scheduler_defaults() {
+    let config = DispatcherConfig::builder().name("defaults-test").build();
+
+    assert_eq!(config.backpressure_poll_interval, Duration::from_millis(10));
+    assert_eq!(config.capacity.get(), 64);
+    assert_eq!(config.fairness_yield_interval.get(), 16);
+    assert_eq!(config.idle_timeout, Duration::from_millis(100));
+    assert_eq!(config.slow_tick_threshold, Duration::from_millis(10));
+    assert_eq!(config.task_burst.get(), 32);
+    assert_eq!(config.wait_timeout, Duration::from_millis(10));
+    assert!(config.cancel.is_none());
+}
+
+#[kithara::test(native, flash(false))]
+fn non_zero_budget_types_are_accepted_by_the_dispatcher_builder() {
+    let _ = DispatcherConfig::builder()
+        .name("budget-test")
+        .backpressure_poll_interval(Duration::ZERO)
+        .capacity(NonZeroUsize::MIN)
+        .fairness_yield_interval(NonZeroU32::MIN)
+        .idle_timeout(Duration::ZERO)
+        .slow_tick_threshold(Duration::ZERO)
+        .task_burst(NonZeroU32::MIN)
+        .wait_timeout(Duration::ZERO)
+        .build();
 }
 
 #[kithara::test(native, flash(false))]
@@ -698,9 +734,16 @@ fn dispatcher_cancel_group_does_not_cancel_worker_or_sibling_dispatcher() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
     let domain = CancelScope::new(None);
     let first = worker.dispatcher(
-        DispatcherConfig::new("first-dispatcher").with_cancel(CancelGroup::from(domain.token())),
+        DispatcherConfig::builder()
+            .name("first-dispatcher")
+            .cancel(CancelGroup::from(domain.token()))
+            .build(),
     );
-    let sibling = worker.dispatcher(DispatcherConfig::new("sibling-dispatcher"));
+    let sibling = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("sibling-dispatcher")
+            .build(),
+    );
 
     domain.cancel();
 
@@ -713,7 +756,10 @@ fn dispatcher_cancel_group_does_not_cancel_worker_or_sibling_dispatcher() {
 fn external_cancel_is_task_local_and_control_cancel_uses_dispatcher_thread() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
     let dispatcher = worker.dispatcher(
-        DispatcherConfig::new("task-cancel-test").with_wait_timeout(Duration::from_secs(30)),
+        DispatcherConfig::builder()
+            .name("task-cancel-test")
+            .wait_timeout(Duration::from_secs(30))
+            .build(),
     );
     let domain = CancelScope::new(None);
     let (events, received) = mpsc::channel();
@@ -789,7 +835,10 @@ fn a_panicking_task_does_not_stop_its_sibling() {
     let worker = crate::Worker::new(crate::WorkerConfig::new());
     let (panicked, observed_panic) = mpsc::channel();
     let dispatcher = worker.dispatcher(
-        DispatcherConfig::new("panic-isolation-test").with_observer(PanicObserver { panicked }),
+        DispatcherConfig::builder()
+            .name("panic-isolation-test")
+            .observer(PanicObserver { panicked })
+            .build(),
     );
     let panic_handle = dispatcher
         .register(TaskConfig::new(), |_| PanicTask)

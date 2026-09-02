@@ -37,7 +37,11 @@ impl Task for Countdown {
 
 fn bench_dispatcher(c: &mut Criterion) {
     let worker = Worker::new(WorkerConfig::new());
-    let dispatcher = worker.dispatcher(DispatcherConfig::new("kithara-worker-bench"));
+    let dispatcher = worker.dispatcher(
+        DispatcherConfig::builder()
+            .name("kithara-worker-bench")
+            .build(),
+    );
     {
         let mut group = c.benchmark_group("dispatcher");
         group.sample_size(50);
