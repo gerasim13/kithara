@@ -595,8 +595,8 @@ fn segment_end(state: &SpliceState, segment: u32) -> Duration {
     descriptor.decode_time.saturating_add(descriptor.duration)
 }
 
-// splice-continuity contract: RED = audible click on variant switch
-// (see .docs/plans/2026-07-03-resampler-native-src-design.md, S-Click)
+/// splice-continuity contract: RED = audible click on variant switch
+/// (see .docs/plans/2026-07-03-resampler-native-src-design.md, S-Click)
 #[kithara::test(tokio)]
 async fn hls_aac_lc_abr_variant_switch_splice_continuity_metric() {
     let SpliceFixture { mut source, state } = splice_source(vec![

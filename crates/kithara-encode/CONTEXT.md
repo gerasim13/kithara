@@ -38,7 +38,7 @@ The portable PCM/WAV sessions are always compiled and need no native backend. Tw
 
 `PackagedEncodeRequest::validate()` is shared by every packaged backend and rejects a zero `timescale`, a zero `packets_per_segment`, or a `PcmSource` without a finite `total_byte_len()` (packaged encoding is offline-only).
 
-Routing inside the single `InnerEncoder` implementation:
+Routing inside `OfflineEncoder`:
 
 - `AacLc` — `StreamEncoder` on the `FFmpeg` backend fed the whole source, natural frame 1024 samples.
 - `AacHe` / `AacHeV2` — in-tree fdk-aac `AacHeEncoder` (AOT SBR / PS), natural frame 2048 samples, **stereo input only**.

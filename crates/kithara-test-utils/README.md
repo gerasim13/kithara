@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,37 +8,13 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-test-utils.svg)](https://crates.io/crates/kithara-test-utils)
 [![docs.rs](https://docs.rs/kithara-test-utils/badge.svg)](https://docs.rs/kithara-test-utils)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
 # kithara-test-utils
 
-Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT probe helpers, hang-watchdog, and `unimock` glue. It carries the test runtime only — the integration-test fixtures themselves (synthetic servers, signal generators, builders) live in `kithara-integration-tests`. Probe/mock emissions are cfg-gated and hang/probe modules use feature-controlled no-op fallbacks, so production code can depend on it normally.
-
-## Modules
-
-<table>
-
-<tr><th>Module</th><th>Feature</th><th>Role</th></tr>
-
-<tr><td><code>test</code></td><td><code>cfg(any(test, feature = "probe"))</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
-
-<tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
-
-<tr><td><code>probe</code></td><td><code>probe</code></td><td>USDT probe runtime helpers consumed by code annotated with <code>#[kithara::probe(...)]</code>; <code>noop</code> fallback when disabled</td></tr>
-
-<tr><td><code>mock</code></td><td><code>mock</code></td><td><code>unimock</code> glue for trait-level mocks</td></tr>
-
-<tr><td><code>rtsan</code></td><td>always on</td><td>RealtimeSanitizer permit helper used by the RTSan macros</td></tr>
-
-<tr><td><code>kithara_platform</code></td><td>always on</td><td>Re-export used by macro expansions that need flash control paths</td></tr>
-
-<tr><td><code>kithara</code></td><td>always on</td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
-
-<tr><td><code>kithara_facade</code></td><td>always on</td><td>Facade-path flash macro re-export used by the public <code>kithara</code> crate</td></tr>
-
-</table>
+Cross-crate test-runtime support: `#[kithara::test]` macro re-exports, USDT probe helpers, hang-watchdog, and `unimock` glue. It carries the test runtime only — the integration-test fixtures themselves (synthetic servers, builders) live in `kithara-integration-tests`, and the waveforms they serve come from `kithara-test-fixtures`. Probe/mock emissions are cfg-gated and hang/probe modules use feature-controlled no-op fallbacks, so production code can depend on it normally.
 
 ## Usage
 
@@ -69,6 +45,30 @@ on the full sequence. See [CONTEXT.md](CONTEXT.md) for the tracing-layer
 rationale, the process-wide subscriber contract, and the `#[serial]`
 requirement.
 
+## Key Types
+
+<table>
+
+<tr><th>Module</th><th>Feature</th><th>Role</th></tr>
+
+<tr><td><code>test</code></td><td><code>cfg(any(test, feature = "probe"))</code></td><td>Re-exports <code>kithara_test_macros::test</code>; <code>init_tracing</code>, <code>setup_tracing</code>, <code>setup_tracing_with_filter</code> helpers</td></tr>
+
+<tr><td><code>hang</code></td><td><code>hang</code> (default)</td><td>Hang-watchdog primitives used by <code>#[kithara::test]</code>; <code>noop</code> fallback when the feature is off</td></tr>
+
+<tr><td><code>probe</code></td><td><code>probe</code></td><td>USDT probe runtime helpers consumed by code annotated with <code>#[kithara::probe(...)]</code>; <code>noop</code> fallback when disabled</td></tr>
+
+<tr><td><code>mock</code></td><td><code>mock</code></td><td><code>unimock</code> glue for trait-level mocks</td></tr>
+
+<tr><td><code>rtsan</code></td><td>always on</td><td>RealtimeSanitizer permit helper used by the RTSan macros</td></tr>
+
+<tr><td><code>kithara_platform</code></td><td>always on</td><td>Re-export used by macro expansions that need flash control paths</td></tr>
+
+<tr><td><code>kithara</code></td><td>always on</td><td>Re-exports macros from <code>kithara-test-macros</code> so consumers can write <code>#[kithara::test]</code>, <code>#[kithara::probe]</code>, <code>#[kithara::mock]</code>, <code>#[kithara::fixture]</code>, <code>#[kithara::flash]</code>, <code>#[kithara::hang_watchdog]</code>, <code>#[kithara::rtsan_allow_blocking]</code>, <code>#[kithara::rtsan_forbid_blocking]</code>, and the <code>Probe</code> derive</td></tr>
+
+<tr><td><code>kithara_facade</code></td><td>always on</td><td>Facade-path flash macro re-export used by the public <code>kithara</code> crate</td></tr>
+
+</table>
+
 ## Features
 
 <table>
@@ -95,14 +95,14 @@ requirement.
 
 Consumer crates typically enable `mock` and `probe` in their `[dev-dependencies]` while keeping the default `hang` feature on.
 
-## Integration tests live elsewhere
-
-The integration-test domain (synthetic HLS servers, signal generators, `TestHttpServer`, `TestServerHelper`, `HlsFixtureBuilder`, `PackagedTestServer`, …) lives in `kithara-integration-tests` (`tests/`). To use it from another crate's tests, depend on `kithara-integration-tests` (it is `publish = false`) rather than re-implementing fixtures here.
-
-See `tests/README.md` for the integration-test suite layout, the standalone `test_server` binary, the WASM flow, and the available fixture builders.
-
 ## Integration
 
 Consumed by every crate's `[dev-dependencies]`. The macros it re-exports work on native and `wasm32` targets transparently.
+
+### Integration tests live elsewhere
+
+The integration-test domain (synthetic HLS servers, `TestHttpServer`, `TestServerHelper`, `HlsFixtureBuilder`, `PackagedTestServer`, …) lives in `kithara-integration-tests` (`tests/`), over the waveforms and encoded assets `kithara-test-fixtures` produces. To use it from another crate's tests, depend on `kithara-integration-tests` (it is `publish = false`) rather than re-implementing fixtures here.
+
+See `tests/README.md` for the integration-test suite layout, the standalone `test_server` binary, the WASM flow, and the available fixture builders.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

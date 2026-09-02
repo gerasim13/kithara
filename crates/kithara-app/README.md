@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
 <div align="center">
 
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -14,11 +14,13 @@
 
 Workspace application crate (`publish = false`) that wires demo binaries around shared engine/UI crates.
 
-## Binary
+## Usage
+
+### Binary
 
 Single binary `kithara` — the desktop DJ app.
 
-## Run
+### Run
 
 ```bash
 cargo run -p kithara-app -- <TRACK_URL_1> <TRACK_URL_2>
@@ -38,7 +40,12 @@ and DRM-HLS examples.
 
 Defaults: `gui` + `beat-nn` + `stretch-signalsmith`.
 
-## Architecture
+## Integration
+
+- Depends on `kithara` with `file` + `hls` features.
+- The GUI frontend is gated by the `gui` Cargo feature.
+
+### Architecture
 
 ```mermaid
 flowchart LR
@@ -46,7 +53,7 @@ flowchart LR
     gui --> core["kithara::PlayerImpl"]
 ```
 
-## Track Analysis Cache
+### Track Analysis Cache
 
 The app memoizes whole-track waveform and beat/BPM analysis in memory and on
 disk. Runtime freshness is guarded by `TrackId`; cross-session cache identity is
@@ -54,10 +61,5 @@ owned by `AnalysisTarget`. The app owns the `AssetStore` cache I/O and policy;
 the pure analysis snapshot/codec comes from `kithara-analysis`. See CONTEXT.md
 for the key spaces, disk-tier lifecycle, and codec-version invalidation
 contract.
-
-## Integration
-
-- Depends on `kithara` with `file` + `hls` features.
-- The GUI frontend is gated by the `gui` Cargo feature.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

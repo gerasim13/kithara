@@ -9,7 +9,7 @@ can complete, so a transient error leaves the cursor advanced with no packet
 emitted.
 
 `kithara-decode` recovers that for every other reader by re-seeking to a
-retained timestamp (`SymphoniaDemuxer::needs_resume`). For MPEG audio that
+retained timestamp (`SymphoniaDemuxer::reseek_to_resume`). For MPEG audio that
 recovery is wrong: the retry resyncs to the *next* frame header while
 `next_packet_ts` has already counted the part-consumed frame, so every later
 timestamp shifts by one frame.
@@ -37,7 +37,7 @@ Pending from inside `MpaReader::seek` is not made resumable by this contract;
 seek transactionality remains a separate concern.
 
 `kithara-decode` pairs with this by *not* layering timestamp recovery over the
-rollback — see `needs_resume` there, keyed on `FORMAT_ID_MP1/MP2/MP3`. The two
+rollback — see `reseek_to_resume` there, keyed on `FORMAT_ID_MP1/MP2/MP3`. The two
 mechanisms are exclusive: running both discards the exact rollback.
 
 ## Relationship to upstream

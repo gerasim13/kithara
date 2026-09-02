@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-hls.svg)](https://crates.io/crates/kithara-hls)
 [![docs.rs](https://docs.rs/kithara-hls/badge.svg)](https://docs.rs/kithara-hls)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -44,7 +44,7 @@ let stream = Stream::<Hls<AppPools>>::new(config).await?;
 
 `HlsConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `HlsConfig::for_url(url)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default settings such as `look_ahead_bytes`, key options, downloader, cache discriminator, cancel token, and event bus.
 
-## Key Public Items
+## Key Types
 
 - `Hls<S>` - zero-sized `StreamType` marker for HLS streams using schema `S`.
 - `HlsConfig<S>` / `KeyOptions` - bon-builder stream configuration and DRM key-resolution options.

@@ -1,464 +1,280 @@
 # kithara-decode — Context
 
-Contracts and invariants for `kithara-decode`; the README is the overview.
+Contracts that no single file in this crate carries. The README is the overview;
+repo-wide rules belong to [`AGENTS.md`](../../AGENTS.md). Owned elsewhere and
+never re-derived here: encoded/container media types and
+`AudioCodec::encoder_priming_frames` by
+[`kithara-stream`](../kithara-stream/CONTEXT.md); decoded-signal values and pure
+sample/time math by [`kithara-signal`](../kithara-signal/CONTEXT.md); resampler
+traits, config, and backend families by
+[`kithara-resampler`](../kithara-resampler/CONTEXT.md); the MPEG-audio packet
+transaction by [`kithara-mpa`](../kithara-mpa/CONTEXT.md).
 
-## Backend selection and initialization
+## Backend selection
 
-`DecoderConfig::backend` (a `DecoderBackend`) picks exactly one backend;
-`MediaInfo` supplies codec/container, never the backend. A variant exists in the
-type only when its feature and `target_os` are active, so an impossible pick is a
-compile error, not a runtime `BackendUnavailable`. No fallback chain: a backend
-that rejects the codec/container returns terminal `DecodeError::UnsupportedCodec`.
+`DecoderConfig::backend` picks exactly one backend; `MediaInfo` supplies
+codec/container, never the backend. A `DecoderBackend` variant exists only when
+its feature and `target_os` are active, so an impossible pick is a compile error,
+not a runtime one. No fallback chain: a backend that rejects the codec/container
+returns terminal `DecodeError::UnsupportedCodec`. With `symphonia` off there is
+no software fallback at all — the compiled hardware backend is the whole surface.
 
-- `create_from_media_info` — recreate / HLS path; builds a `ProbeHint` from
-  `MediaInfo`, failures propagate verbatim. **Never runs Symphonia's probe** —
-  mid-segment bytes at a mismatched offset can silently match an unrelated codec.
-- `create_with_probe` — extension-hint path; MP4/M4A is container-only
-  (AAC/ALAC/FLAC all live there), so it sniffs the `stsd` sample-entry fourcc.
-- `dispatch_backend` fills a missing container by a bounded 12-byte prefix byte
-  sniff (`sniff_container_from_source`), rewinding to 0 on every exit path — a
-  byte sniff, not a Symphonia probe.
-- `new_direct(container)` builds the concrete Symphonia `FormatReader` with no
-  probe and **disables seek during construction** (so `IsoMp4Reader` / `WavReader`
-  cannot stall an HLS source by seeking to the tail), re-enabling seek
-  unconditionally afterwards. Standard `Mp4` is the exception — `moov` sits at the
-  tail, so it constructs seek-enabled over a materialised source.
-  `probe_with_seek(..., seek_enabled)` is auto-detection; `open_file` passes
-  `seek_enabled = false`, then re-enables.
+- `create_from_media_info` (recreate / HLS) **never runs Symphonia's probe**.
+  Mid-segment bytes at a mismatched offset can silently match an unrelated codec.
+  It builds a `ProbeHint` from `MediaInfo` and propagates failures verbatim.
+- `create_with_probe` is the extension-hint path. MP4/M4A is container-only
+  (AAC/ALAC/FLAC all live there), so it sniffs the `stsd` sample-entry fourcc. A
+  missing container falls to `sniff_container_from_source`: a bounded 12-byte
+  prefix byte sniff that rewinds to 0 on every exit path — never a Symphonia probe.
+- `SymphoniaDemuxer::open_file` constructs with `seek_enabled` false and
+  re-enables afterwards, because `IsoMp4Reader` / `WavReader` would otherwise
+  stall an HLS source by seeking to the tail during construction. Standard `Mp4`
+  is the sanctioned exception (`moov` sits at the tail); it is safe only because
+  standard-MP4 consumers pass a fully materialised source.
 
-## Reader profile contract
+## Reader profile
 
-`Fmp4SegmentDemuxer` declares `ReaderInput::InitOnly` as the *shape* of input it
-needs before construction. Other demuxers use incremental input. This is a
-reading *discipline*, not a
-byte window — the concrete init range is resolved by the byte-space owner (the
-stream layer), which alone knows the ABR virtual byte shift.
+`DecoderFactory::reader_profile` returns the reading *discipline* of the demuxer
+the factory would build. It is not a byte window: the byte-space owner —
+`kithara-audio`'s readiness gate — resolves it to a range in its own coordinate
+space, because only that layer knows the ABR virtual byte shift.
 
-- `InitOnly` — the init header (moov/esds/STREAMINFO) must be buffered before
-  construction. The landing media segment is read later by the first `next_frame`
-  and pends until it arrives, so it is *not* a build prerequisite (gating on it
-  would make build-then-pend circular).
-- `Incremental` — self-framing input (MP3/FLAC/Ogg, Apple `AudioFile`, Android
-  `MediaExtractor`): nothing gated up front.
+Under `ReaderInput::InitOnly` the init header (`moov` / `esds` / `STREAMINFO`)
+must be buffered before construction, but the landing media segment must **not**
+be. The first `next_frame` reads it and pends until it arrives, so gating the
+build on it would be circular.
 
-`DecoderFactory::reader_profile(media_info, byte_map) -> ReaderProfile` bridges to
-the kithara-audio readiness gate: it returns the contract of the demuxer the
-factory *would* build, and the gate resolves it to bytes in its own coordinate
-space. Segment-aware container **and** byte map present → `InitOnly`;
-`ContainerFormat::Wav` → `InitOnly` (header not self-framing); else `Incremental`.
-The profile also carries `ReaderWarmup::None` and a 32 KiB read-ahead.
-Segment-aware means `!kithara_stream::needs_exact_byte_sizes(codec, container)` —
-AAC (LC/HE/HEv2) or FLAC in `Fmp4` — plus `DecoderConfig::byte_map.is_some()`;
-`should_use_segment_aware` and `reader_profile` share that predicate so they
-cannot disagree.
+`should_use_segment_aware` and `reader_profile` share `segment_aware_container`,
+so the build decision and the gate's readiness decision cannot disagree.
 
-## ComposedDecoder invariants
+## ComposedDecoder
 
-`ComposedDecoder<D: Demuxer, C: FrameCodec, S>` is the single decode loop; every
-backend is a `(demuxer, codec)` pair fed through it. `DecoderRuntime` carries the
-typed pool-region facade, epoch, byte-length handle, and reader hooks; `pools`
-has no `Default` - the host threads its configured region down. Test-only
-`DecoderRuntime::for_test` (`#[cfg(test)]`) builds the crate-local closed schema.
+`ComposedDecoder<D, C, S>` is the single decode loop; every backend is a
+`(demuxer, codec)` pair fed through it.
 
-- **Frame offset is cumulative**, anchored to `landed_at` on seek and advanced by
-  each emitted chunk (per-chunk `floor(pts * rate)` loses precision).
-  `AudioSpec::frame_at` rounds half-up to agree with `frames_to_trim`; a floor would
-  disagree by one frame at a mid-playback recreate.
-- **Zero-frame budget.** After 32 consecutive zero-frame `decode_frame` calls the
-  decoder returns `Pending(NotReady(SourcePending))` instead of consuming the
-  demuxer to EOF (queue codecs absorb input without producing PCM); any positive
-  PCM output and every seek reset the counter.
-- **EOF drain** is owned by `FrameCodec::needs_eof_drain(source_sample_rate)`,
-  defaulting to "output rate differs from source rate" so fused-SRC backends keep
-  their contract. On demux EOF the decoder feeds empty frames until the codec
-  returns zero.
-- **Head strip.** `HeadStrip` counts frames dropped from the head as they are
-  dropped, measured against packet duration converted at the *output* rate (SBR:
-  a 1024-core-frame AU with 2048 output frames is measured against 2048). It
-  settles the first time a packet comes back whole; a short packet after that is
-  the stream's own tail.
-- `Decoder::timeline_gap_frames` = `max(head_strip, codec.timestamp_bias_frames() + observed forward PTS jumps)`; the maximum leaves
-  a head-start decode (strip split between modelled bias and observed jump) and a
-  mid-stream decode (resyncs on seek, no jump) with the number a splice cuts on.
-  It is **live**: caching it at construction holds the pre-strip value forever.
-- `Decoder::default_priming_frames` = `AudioCodec::encoder_priming_frames` plus
-  the codec's `decoder_algo_delay` (delegated).
-- Reader hook events resolve on the forbid-blocking decode core and publish later
-  through `Decoder::flush_reader_signals`, drained once per pass by the audio
-  worker's unchecked shell.
+- **Frame offset is cumulative**, anchored to `landed_at` on seek. `frame_at`
+  rounds half-up so it agrees with `frames_to_trim`; a floor would disagree by
+  one frame at a mid-playback recreate.
+- **Zero-frame budget** (`ZERO_FRAME_BUDGET`). Queue codecs absorb input without
+  producing PCM, so the loop reports `SourcePending` rather than consuming the
+  demuxer to EOF. Positive PCM output and every seek reset the counter.
+- `timeline_gap_frames` is `max(head_strip, timestamp_bias_frames + observed
+  forward PTS jumps)`. The maximum is what makes a head-start decode (strip split
+  between modelled bias and observed jump) and a mid-stream decode (resyncs on
+  seek, no jump) agree on the number a splice cuts on.
 
 ## Seek pre-roll and trim
 
-Two-step contract shared by the demuxer and `ComposedDecoder`.
+Two steps, split across the demuxer and `ComposedDecoder`.
 
-1. **Demuxer back-off (pre-roll).** `Demuxer::seek(target, priming)` parks the
-  cursor *before* the target; magnitude comes from `FrameCodec::priming(codec) -> CodecPriming { packets, frames, byte_margin }`, covering two needs.
+1. **Demuxer back-off.** `Demuxer::seek(target, priming)` parks the cursor before
+   the target. `CodecPriming` covers two distinct needs: MDCT/SBR/PS warm-up
+   (pre-target packets must be decoded so overlap-add and QMF state converge) and
+   at least one whole codec packet, so the trim lands on a packet boundary. The
+   second is derived from `access_unit_frames` and the track `sample_rate` — no
+   magic millisecond constants. Backends that prime internally keep
+   `CodecPriming::default()`; `AppleCodec` carries the only per-codec table, and
+   its values are pinned in `apple/codec.rs`. HE-AAC v1/v2 are seen as `AacLc` by
+   both the fMP4 init parse and the codec layer; fdk-aac auto-detects SBR.
 
-- **Codec warm-up** — MDCT/SBR/PS codecs must decode pre-target packets to
-  converge overlap-add and QMF state. `SymphoniaCodec` requests 2 packets for
-  AAC (HE-AAC v1/v2 are seen as `AacLc` by both the fMP4 init parse and the
-  codec layer; fdk-aac auto-detects SBR). `AppleCodec` per-codec table:
-  HE-AACv2 `frames 4096 / packets 3 / byte_margin 32768`, HE-AAC
-  `2048 / 2 / 16384`, AAC-LC `1024 / 2 / 8192`, MP3 `1152 / 1 / 4608`; codecs
-  that converge instantly keep `CodecPriming::default()`.
-- **At least one whole codec packet**, so the trim lands on a packet boundary.
-  Derived from codec facts (`access_unit_frames`: 1024 AAC, 1152 MP3) and the
-  track `sample_rate` — no magic millisecond constants.
-  For fMP4 the back-off can cross a segment boundary; `Fmp4SegmentDemuxer::seek`
-  then decode-and-discards the tail of the prior segment so SBR converges across
-  it. Reads stay confined to the pre-roll segment plus the target segment — never
-  a prefix walk from seg-0. `byte_margin` drives the returned `PrerollHint`.
+   For `Fmp4` the back-off may cross a segment boundary. `Fmp4SegmentDemuxer` then
+   decode-and-discards the tail of the prior segment so SBR converges across it,
+   and reads stay confined to the pre-roll segment plus the target segment —
+   never a prefix walk from segment 0. `byte_margin` drives the `PrerollHint`.
+2. **Sample-accurate trim.** `pending_seek_target` drops whole pre-target frames,
+   then trims leading samples of the straddling frame so the emitted chunk starts
+   exactly at the target rather than at the packet boundary. Queue codecs hold the
+   pending target across zero-frame decode calls and report
+   `FrameCodec::decoded_pts`, so the trim is evaluated against decoded output, not
+   the packet fed in. Without it a seek leaks up to one packet of pre-target audio.
 
-1. **Sample-accurate trim.** `ComposedDecoder::pending_seek_target` drops whole
-  pre-target frames, then trims leading samples of the straddling frame
-  (`frames_to_trim`, round-to-nearest) so the emitted chunk starts exactly at
-  `target`, not at the packet boundary. Queue codecs retain the pending target
-  across zero-frame decode calls and report the timestamp of the PCM that
-  eventually surfaces (`FrameCodec::decoded_pts`), so the trim is evaluated
-  against decoded output, not the packet fed. Without it a seek leaks up to one
-  packet of pre-target audio.
+### `landed_byte` on the Apple path — sanctioned degraded mode
 
-### `landed_byte` on the Apple path (sanctioned degraded mode)
+`DemuxSeekOutcome::Landed`'s `landed_byte` realigns the stream's byte cursor with
+where the decoder resumes (`kithara-audio` calls `stream.set_position`).
+Reporting `None` leaves the cursor at the pre-seek offset, and a reopened track
+then mis-classifies the post-seek read as EOF.
 
-`DemuxSeekOutcome::Landed { landed_byte }` is what realigns the stream's byte
-cursor with where the decoder resumes (`kithara-audio`'s `seek::emit` calls
-`stream.set_position`); reporting `None` leaves the cursor at the pre-seek
-offset, and a reopened track then mis-classifies the post-seek read as EOF.
+`AppleAudioFileDemuxer` answers it from `kAudioFilePropertyPacketToByte` when the
+open knows the total size, and otherwise from a linear estimate scaled off the
+live byte-length handle. The estimate is not papering over a state bug: measured,
+a size-less open rejects *every* packet with
+`kAudioFileInvalidPacketOffsetError`, and the offset Apple would seek to is
+exposed nowhere else at seek time. Approximating is safe because the value drives
+the byte-oriented stream's own cursor and progress events, never the decoder's
+reads, which `AudioFileServices` issues at absolute offsets through its callbacks.
 
-`AppleAudioFileDemuxer` answers it from two sources, and this is the one
-sanctioned fallback on the path:
-
-- **Exact** — `kAudioFilePropertyPacketToByte`, the same mapping Apple's own
-  packet read seeks to. Available only when the open knows the total size.
-- **Degraded** — a linear estimate from the live byte-length handle
-  (`set_byte_len_handle`) scaled by the landed time over track duration.
-
-The degraded branch is not papering over a state bug: measured, a size-less
-open (`SizeMode::Unknown`, the streamed MP3 path) rejects *every* packet with
-`kAudioFileInvalidPacketOffsetError` (`'pck?'`) — with no total, `AudioFile`
-cannot bound the packet, and the offset it would seek to is not exposed
-anywhere else at seek time. The estimate is a strict improvement over the
-`None` that caused the false EOF, and it is safe to approximate: the value
-drives the byte-oriented stream's own cursor and progress events, never the
-decoder's reads, which `AudioFileServices` issues at absolute offsets through
-its callbacks. The two branches cannot leave a gap, because one flag selects both the open
-mode and the mechanism: `factory::inner` opens `Streaming` exactly when
-`config.byte_len_handle` is `Some` and `Complete` otherwise. So a size-less
-open always has the handle the estimate needs, and a sized open always has the
-mapping Apple answers from. Both branches are pinned separately, in the same
-two combinations production uses — the degraded one by
-`size_less_mp3_seek_reports_landed_byte_from_the_length_handle`, the exact one
-by `sized_mp3_seek_reports_landed_byte_without_a_length_handle`, which attaches
-no handle so only Apple's mapping can answer.
+The two branches cannot leave a gap, because one flag selects both the open mode
+and the mechanism: `factory::inner` opens streaming exactly when
+`config.byte_len_handle` is `Some`. A size-less open therefore always has the
+handle the estimate needs, and a sized open always has the mapping Apple answers
+from. Both are pinned in the two combinations production uses —
+`size_less_mp3_seek_reports_landed_byte_from_the_length_handle`, and
+`sized_mp3_seek_reports_landed_byte_without_a_length_handle`, which attaches no
+handle so only Apple's mapping can answer.
 
 ## Read-ahead strand
 
 Over an HLS `Stream`, `next_frame` can be interrupted at a not-yet-downloaded
-segment boundary. Symphonia's `MediaSourceStream` (MSS) consumes bytes from its
+segment boundary. Symphonia's `MediaSourceStream` consumes bytes from its
 read-ahead ring *before* it knows the read can complete; on `Interrupted` the
-half-read packet is discarded but MSS's position stays advanced — those bytes are
+half-read packet is discarded but the position stays advanced. Those bytes are
 **stranded**, and byte-position-quantised readers (WAV/PCM, packet pts derived
 from stream position) then silently skip them.
 
-MSS exposes no per-call rewind through `FormatReader`, so `SymphoniaDemuxer` makes
-the **decoder's timestamp authoritative across a `Pending`** for non-transactional
-readers: it tracks `resume_ts` (native timebase units — `actual_ts` on seek,
-`pts + dur` after each emitted packet) and stores the pending reason on an
-interrupted read. The next `next_frame` re-seeks to `resume_ts`; if recovery also
-pends, the reason remains armed. An accurate seek may land one packet early, so
-recovery discards packets ending at or before `resume_ts`. The re-seek is a bare
-position restore — no pre-roll back-off and no codec flush — while a native
-`Duration` round-trip is avoided because it loses packet-boundary precision.
+`MediaSourceStream` exposes no per-call rewind through `FormatReader`, so
+`SymphoniaDemuxer` makes the **decoder's timestamp authoritative across a
+pending**: it tracks `resume_ts`, and `reseek_to_resume` restores it on the next
+call, staying armed if the recovery itself pends. The re-seek is a bare position
+restore — no pre-roll back-off, no codec flush — and stays in native timebase
+units, because a `Duration` round-trip loses packet-boundary precision. An
+accurate seek may land one packet early, so recovery discards packets ending at
+or before `resume_ts`.
 
-Native MPEG-audio readers (`FORMAT_ID_MP1`, `FORMAT_ID_MP2`, `FORMAT_ID_MP3`)
-instead own a byte-exact packet transaction. That reader is `kithara-mpa`, a
-fork of Symphonia's `MpaReader` that this crate registers in place of the
-upstream one; the contract itself is owned there. Each frame read checkpoints the MSS
-cursor, retains `MAX_MPEG_FRAME_SIZE` bytes for seekback, and on `Interrupted` or
-`WouldBlock` returns the original error only after an exact buffered rollback.
-An inexact rollback is a terminal decode error. The checkpoint is per frame, so
-discarded Xing/Info/VBRI frames commit independently, and `next_packet_ts`
-advances only after a complete frame. `SymphoniaDemuxer` detects those native
-formats and does not layer timestamp recovery over their rollback. Pending from
-inside `MpaReader::seek` is not made resumable by this packet-read contract; seek
-transactionality remains a separate concern. The strand never reaches the
-`Stream` / `wait_range` contract.
-
-Because of that substitution, `registry::get_probe` builds the format list by
-hand instead of calling `register_enabled_formats`. A probe tier resolves to the
-first candidate whose marker matches and whose score accepts, so registration
-order is load-bearing — ADTS and MPEG audio share a `0xFF` sync prefix. The list
-mirrors Symphonia's own order with the MPA reader replaced in place.
+Native MPEG audio (`FORMAT_ID_MP1` / `FORMAT_ID_MP2` / `FORMAT_ID_MP3`) is
+exempt. [`kithara-mpa`](../kithara-mpa/CONTEXT.md) — a fork of Symphonia's
+`MpaReader` that `registry::get_probe` registers in place of the upstream one —
+owns a byte-exact packet transaction, and layering timestamp recovery over it
+would double-correct. Seek transactionality remains a separate, unsolved concern:
+pending from inside `MpaReader::seek` is not made resumable by that contract. The
+strand never reaches the `Stream` / `wait_range` contract.
 
 ## Gapless playback
 
-`DecoderConfig::gapless` defaults to true. Decoders report engine-level trim
-through `DecoderTrackInfo { gapless: Option<GaplessInfo>, gapless_tail: Option<GaplessTailCompensation> }`. `leading_frames` / `trailing_frames` are
-always **decoder-output** PCM frames — the trimmer-input domain. Under Apple
-fused decode+SRC the factory scales source-rate container metadata once before
-codec open (`track_with_output_domain_gapless`, round-half-up) so
-`GaplessTrimmer` never sees mixed domains. One owner for actual trimming:
-`Some(GaplessInfo)` means the backend decoded the untrimmed PCM region and the
-`kithara-audio` pipeline must apply `GaplessTrimmer` before effects; `None` means
-no engine trim (no metadata, or a backend path that already trimmed internally).
-`GaplessTrimmer::notify_seek(retire)` drops seek-sensitive state (leading trim,
-pending fade-in, buffered tail, tail compensation); trailing trim still applies
-at EOF. Its buffered chunks go to a `ChunkRetire` rather than being dropped —
-returning a pooled `AudioChunk` to a full shard deallocates, and the caller is the
-produce core. `DropChunks` is the sink for callers free to deallocate.
+`leading_frames` / `trailing_frames` in `GaplessInfo` are always
+**decoder-output** PCM frames — the trimmer-input domain. Under Apple fused
+decode+SRC the factory scales source-rate container metadata once before codec
+open (`track_with_output_domain_gapless`), so `GaplessTrimmer` never sees mixed
+domains.
 
-`Decoder::gapless_profile(codec) -> GaplessProfile` bundles spec, gapless, tail
-compensation, and `default_priming_frames` for trimmer construction, referencing
-the existing contracts rather than duplicating frame counts.
+One owner for actual trimming. `Some` gapless on `DecoderTrackInfo` means the
+backend decoded the untrimmed PCM region and the `kithara-audio` pipeline must
+apply `GaplessTrimmer` before effects. `None` means no engine trim — either no
+metadata, or a backend path that already trimmed internally.
 
-### Fused-SRC tail compensation
+`GaplessTrimmer::notify_seek` retires buffered chunks through a `ChunkRetire`
+rather than dropping them: returning a pooled `AudioChunk` to a full shard
+deallocates, and the caller is the produce core. `DropChunks` is the sink for
+callers that are free to deallocate.
 
-`AppleCodec` publishes `GaplessTailCompensation::for_source_frames(seen, source_rate, output_rate)` — the *ideal* pre-trim output length,
-`ceil(source_frames * output_rate / source_rate)`. At EOF the trimmer reduces
-fixed trailing trim by the deficit against the decoder-output frames actually
-received, **bounded to at most one frame** (a larger deficit logs a warning and
-still clamps). Compensation is tail-side and track-local: no measured deficit
-flows to the next track's leading trim. `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES = 1`
-is the matching ceil-domain slack in the converter's output sizing — a correctness
+`GaplessTailCompensation` is tail-side and track-local — no measured deficit ever
+flows into the next track's leading trim. Both the fused Apple path and the
+standalone `ResampledDecoder` publish it. `AppleCodec::SRC_OUTPUT_MARGIN_FRAMES`
+is the matching ceil-domain slack in the converter's output sizing: a correctness
 constant, not a tunable, local to the Apple codec owner.
 
-### Heuristic fallbacks
+Heuristic fallbacks are selected by `GaplessMode` on `kithara-audio`'s
+`AudioConfig`, and every heuristic trim applies a short raised-cosine fade at the
+boundary. The metadata-driven path does not, because that boundary is sample-exact.
 
-When metadata is absent, `kithara-audio`'s `AudioConfig::gapless_mode` picks
-behaviour via `GaplessMode`: `Disabled` (passthrough, decoder `GaplessInfo`
-ignored); `MediaOnly` (default — decoder counts when present, else nothing);
-`CodecPriming` (`GaplessTrimmer::codec_priming` fed by
-`Decoder::default_priming_frames`; predictable, zero-latency); or
-`SilenceTrim(SilenceTrimParams)` (`GaplessTrimmer::silence_trim` walks the leading
-buffer to the first sample above a dB threshold — default 45 dB below full scale,
-`min_trim_frames` 256, `scan_window_frames` 4096 — and optionally trims trailing
-silence at EOF over a 10 ms energy window, never per-sample). A non-positive or
-non-finite threshold yields linear amplitude 1.0, disabling trim rather than
-eating audible content.
+### Two independent silence layers
 
-Both heuristic paths apply a ~3 ms raised-cosine fade-in at the trim boundary (and
-a matching fade-out after a heuristic trailing trim). The metadata-driven path
-does not — that boundary is sample-exact.
+Encoder-side priming/padding and decoder-side algorithmic delay are separate, and
+both must be accounted for.
 
-### Gapless probe contract
+- `probe_codec_gapless` returns `Some` only when real container metadata exists
+  (MP4 `elst` or `iTunSMPB`, Xing/Info + LAME). **No fallback chain**: absent
+  metadata returns `None` and the pipeline falls through to
+  `AudioCodec::encoder_priming_frames`. `scoped_probe` / `scoped_startup_probe`
+  rewind to 0 before and after, surfacing a failed rewind as an error instead of
+  letting the demuxer start mid-file.
+- The MP3 probe window is fixed and measured from the first audio byte. An
+  `ID3v2` tag declares its own length, so the probe skips it rather than widening
+  the window; a short read means the source ran out of ready bytes, not a long
+  tag, and the probe stays put.
+- `FrameCodec::decoder_algo_delay` carries the decoder half. Upstream trap: the
+  Symphonia `mpa` demuxer parses the LAME tag into `track.delay`, but the
+  0.6.0-alpha demuxer does not populate per-packet `trim_start` / `trim_end`, so
+  `opts.gapless` is a no-op for MP3 and the caller must apply the trim. Android
+  `MediaCodec` surfaces no priming at all.
+- Measured: raw Symphonia output of a libmp3lame sawtooth (`enc_delay` 576)
+  starts at sample 1105, raw Apple output at 576. **Both backends ignore the LAME
+  tag; only the probe reads it.** `SymphoniaCodec::open_with_config` folds its own
+  algo delay into the probed `GaplessInfo` so the audio pipeline reads one
+  fully-resolved trim, and `Decoder::default_priming_frames` exposes the same
+  combined number so `kithara_audio::pipeline::gapless` need not know the backend.
 
-Silence has two independent layers.
+## Resampler placement
 
-1. **Encoder-side priming / padding.** `probe_codec_gapless` reads container
-  metadata and returns `Some` only when real values exist: MP4 `elst` /
-  `iTunSMPB` for AAC (`probe_mp4_gapless`, `elst` wins), Xing/Info + LAME for
-  MP3. **No fallback chains** — absent metadata returns `None` and the pipeline
-  falls through `GaplessMode::CodecPriming` to
-  `AudioCodec::encoder_priming_frames` (MP3 576, AAC 1024, Opus 312,
-  FLAC/Vorbis/ALAC/PCM/ADPCM 0). `scoped_probe` / `scoped_startup_probe` wrap the
-  probe with rewind-to-0 before and after, surfacing a failed rewind as an error
-  instead of letting the demuxer start mid-file. The MP3 probe window is 16 KiB
-  from the first audio byte: an `ID3v2` tag declares its own length, so the probe
-  skips it rather than widening the window. A short read means the source ran out
-  of ready bytes, not a long tag — the probe stays put then.
-1. **Decoder-side algorithmic delay**, on `FrameCodec::decoder_algo_delay`:
+`DecoderConfig::resampler` selects between two placements. Codec-embedded: a
+backend that already owns a converter emits target-rate PCM directly (Apple), and
+`embedded_target_output_rate` decides whether the fused path is taken.
+Standalone: `resampled::wrap` wraps the decoder and owns interleaving, pooled
+planar scratch, target-rate metadata, and seek/gapless domain scaling — skipped
+when the decoder already emits the target rate. Invalid backend/config pairs fail
+at construction; nothing tries another backend.
 
-- Symphonia `mpa` (LAME convention): +529 leading, −529 trailing for MP3 (528
-  polyphase convergence + 1 sync sample). Its demuxer parses the LAME tag into
-  `track.delay`, but the 0.6.0-alpha demuxer does not populate per-packet
-  `trim_start` / `trim_end`, so `opts.gapless` is a no-op for MP3 — the caller
-  must apply the trim.
-- Apple `AudioConverter` MP3: +529 as well (the converter leaves the
-  LAME-convention delay un-compensated). AAC priming instead comes from
-  `kAudioConverterPrimeInfo`, captured at open and refreshed once after the
-  first decoded chunk because AAC populates it only after decoding starts.
-- Android `MediaCodec`: 0 — it surfaces no priming; `AndroidCodec` passes
-  `TrackInfo.gapless` through verbatim and the standalone
-  `AndroidMediaExtractorDemuxer` reports `gapless: None`.
-
-`SymphoniaCodec::open_with_config` folds its own algo delay into the probed
-`GaplessInfo` before exposing it through `track_info()`, so the audio pipeline
-reads one fully-resolved trim. `Decoder::default_priming_frames` exposes the same
-combined number for the `CodecPriming` fallback (MP3 = 576 + 529 = 1105) so
-`kithara_audio::pipeline::gapless` need not know the backend. Measured: raw
-Symphonia output of a libmp3lame sawtooth (`enc_delay` = 576) starts at sample
-1105, raw Apple output at 576; both backends ignore the LAME tag, only the probe
-reads it.
-
-## Resampler integration
-
-`kithara-resampler` owns resampler traits, config, and backend families (Rubato,
-Glide, Apple); `kithara-decode` keeps only decoder-owned placement decisions.
-`DecoderConfig::resampler` carries an optional `DecoderResamplerConfig<B>` — typed
-backend, `target_sample_rate`, options, quality. Two placements:
-
-- **Codec-embedded** — a backend that already owns a converter emits target-rate
-  PCM directly (Apple, via `AppleCodec` over `AudioConverter`);
-  `embedded_target_output_rate` decides whether the fused path is taken.
-- **Standalone** — `resampled::wrap` builds the selected `ResamplerBackend` and
-  wraps the decoder, owning interleaving, pooled planar scratch, target-rate
-  metadata, and seek/gapless domain scaling. Skipped when the decoder already
-  emits the target rate. Invalid backend/config pairs fail at construction — no
-  trying another backend.
-
-Shared AudioToolbox FFI (`AudioConverter`, `AudioFile`, `AudioBufferList`, POD
+Shared `AudioToolbox` FFI (`AudioConverter`, `AudioFile`, `AudioBufferList`, POD
 byte-copy wrappers) stays in `kithara-apple`; the standalone PCM-to-PCM Apple
-backend stays in `kithara-resampler`. `kithara-decode` owns codec planning,
-gapless policy, and the codec-embedded Apple decode path.
+backend stays in `kithara-resampler`. This crate owns codec planning, gapless
+policy, and the codec-embedded Apple decode path.
 
-`kithara-signal::FrameCount` and `SampleCount` keep the two decoded-signal lengths
-apart: planar buffers are sized in frames, interleaved ones in samples, both are
-`usize`, and a buffer sized in the wrong one is silently off by the channel count.
-Conversion takes that count explicitly (`FrameCount::samples`,
-`SampleCount::frames`). Applied where the two units meet —
-`ResampledDecoder::interleave`, `PlayerResource::scratch_frames`.
-`AudioChunkInfo.frames` stays a plain `u32`.
-
-`sanitize_sample` is the workspace's one sample guard: `NaN`, infinities and
+`sanitize_sample` is the workspace's one sample guard — `NaN`, infinities and
 denormals become silence. `ResampledDecoder::append_chunk` applies it while
-deinterleaving, so a backend only ever sees finite normal input — the adapter is
+deinterleaving, so a backend only ever sees finite normal input: the adapter is
 the last owner of the samples by value, while `Resampler::process_into_buffer`
-takes them by shared reference. `kithara-audio` reuses the function at its own
-untrusted-input stages. `kithara-play` also reuses it in the play-owned EQ and
-limiter stages. Pinned by
+takes them by shared reference. `kithara-audio` and `kithara-play` reuse the
+function at their own untrusted-input stages. Pinned by
 `resampler_never_sees_a_sample_the_file_poisoned`.
 
-## Apple AAC input format (ESDS rationale)
+## Apple AAC and FLAC cookies
 
-The Apple `AudioConverter` accepts AAC via a magic cookie laid out as an ISO/IEC
-14496-1 `ES_Descriptor`. Demuxers hand us either the raw `AudioSpecificConfig`
-body (fMP4 / HLS; first byte = 5-bit AOT << 3, e.g. `0x10`–`0x17` for AAC LC) or a
-full ESDS atom body (`AppleAudioFileDemuxer` reads
-`kAudioFilePropertyMagicCookieData`, already a complete `ES_Descriptor` for M4A;
-first byte = ESDS tag `0x03`). A single-byte sniff disambiguates without parsing:
-`build_aac_input_format` wraps raw ASC into the minimum ESDS chain Apple accepts,
-full ESDS bodies pass through unchanged, and the result mirrors
-`AudioFileGetProperty(MagicCookieData)` for an `.m4a`:
+Demuxers hand the Apple codec either a raw `AudioSpecificConfig` body (fMP4 /
+HLS) or a full `ES_Descriptor` body (`AppleAudioFileDemuxer` reads
+`kAudioFilePropertyMagicCookieData`, already complete for M4A). A single-byte
+sniff disambiguates the two without parsing, and `esds_wrap_asc` builds the
+minimum ISO/IEC 14496-1 descriptor chain Apple accepts for the raw case;
+`build_aac_input_format` documents why manual ASBD construction fails on HE-AAC.
 
-```text
-ES_Descriptor (tag 0x03):
-  ES_ID (2 bytes) = 0; Flags (1 byte) = 0
-  DecoderConfigDescriptor (tag 0x04):
-    OTI (1 byte) = 0x40 (MPEG-4 Audio)
-    StreamType (1 byte) = 0x15 (Audio << 2 | reserved bit)
-    BufferSizeDB (3 bytes) = 0
-    MaxBitrate (4 bytes) = 0
-    AvgBitrate (4 bytes) = 0
-    DecoderSpecificInfo (tag 0x05): <ASC bytes>
-  SLConfigDescriptor (tag 0x06): predefined (1 byte) = 0x02
-```
-
-After cookie installation, `AudioFormatGetProperty(FormatList)` yields the
-canonical ASBD for the first format item — that, not the demuxer's `TrackInfo`, is
-authoritative for `mSampleRate` / `mChannelsPerFrame` / `mFramesPerPacket` (HE-AAC
-v2 doubles the rate versus the container declaration; `FormatList` returns the
-upsampled rate). FLAC mirrors the problem: `apple::flac::streaminfo_body`
-normalises both carrier shapes (raw 34-byte STREAMINFO from the fMP4 `dfLa`
-demuxer, full `FLACSpecificBox` cookie from `AudioFileServices`) to the body.
+After cookie installation Apple's `FormatList` ASBD — not the demuxer's
+`TrackInfo` — is authoritative for sample rate, channel count, and frames per
+packet: HE-AAC v2 doubles the rate versus the container declaration. FLAC mirrors
+the two-carrier problem, and `apple::flac::streaminfo_body` normalises both the
+raw fMP4 `dfLa` payload and the full `FLACSpecificBox` cookie to one body.
 
 ## WebCodecs host worker
 
-Runtime initialization is main-thread owned. The doc-hidden FFI bootstrap
-`spawn_webcodecs_probe` creates one host worker and probes the five compile-time
-codec configurations through `AudioDecoder.isConfigSupported()`. The immutable
-host sender and the completed support table publish through separate `OnceLock`s;
-until the snapshot lands, the backend support check returns `false` so the
-synchronous factory takes the Symphonia path. Opening a WebCodecs codec before
-runtime initialization is a typed contract error.
-
 **A worker spawned by a blocked parent worker does not execute** — true for a
-parent blocked by spinning and by `Atomics.wait`. The play-owned producer scheduler
-is such a parked parent, so neither the codec nor the decode path may spawn the host;
-only the main-thread bootstrap, whose event loop stays live, may. The host command
-loop uses `try_recv` plus a local timer; the synchronous per-decoder reply receiver
-uses the Atomics-backed `recv_timeout` path and needs no event loop. The singleton
-host receives the app's typed `PoolRegion<S>` at spawn and owns the decoder-ID ->
-`AudioDecoder` map, reply channel, pending input queue, and generation state;
-`Open` registers a codec, `Close` removes it. `HostOut::Pcm` carries a pooled
-`SampleBuffer` that the codec moves into the caller's output buffer. JavaScript
-values never cross the Rust thread boundary.
+parent blocked by spinning and for one blocked by `Atomics.wait`. The play-owned
+producer scheduler is such a parked parent, so neither the codec nor the decode
+path may spawn the host. Only the main-thread bootstrap `spawn_webcodecs_probe`,
+whose event loop stays live, may. It creates one host worker and probes the
+compile-time codec configurations through `AudioDecoder::is_config_supported`.
+The immutable host sender and the completed support table publish through
+separate `OnceLock`s; until the snapshot lands the backend support check returns
+`false`, so the synchronous factory takes the Symphonia path. Opening a WebCodecs
+codec before runtime initialization is a typed contract error.
 
-The frame codec owns the current generation. A seek advances it, sends `Reset`,
-discards queued output, then sends `Configure` again because WebCodecs `reset()`
-returns `AudioDecoder` to the unconfigured state; commands and callbacks from
-older generations are dropped everywhere. `WebCodecsCodec::needs_eof_drain` is
-unconditionally `true` — the browser pipeline queues output at every rate. The
-first empty frame sends `Flush`; each drain call waits within one bounded budget
-for current-generation PCM, an explicit `Flushed`, or an error. Completion returns
-zero frames; budget exhaustion is a typed backend error, never synthetic EOF. Seek
-clears EOF-drain state. AAC priming and algorithmic delay stay at the `FrameCodec`
-defaults.
+The host command loop uses `try_recv` plus a local timer; the synchronous
+per-decoder reply receiver uses the Atomics-backed `recv_timeout` path and needs
+no event loop. The singleton host receives the app's typed `PoolRegion` at spawn.
+`HostOut::Pcm` carries a pooled `SampleBuffer` that the codec moves into the
+caller's output buffer — JavaScript values never cross the Rust thread boundary.
 
-Codec strings: `AacLc` → `mp4a.40.2`, `AacHe` → `mp4a.40.5`, `AacHeV2` →
-`mp4a.40.29`, `Mp3` → `mp3`, `Flac` → `flac`. AAC `description` is the raw
-`AudioSpecificConfig` from `TrackInfo::extra_data` — not an `esds` box or cookie;
-MP3 has none; FLAC description is `fLaC` + a final-block STREAMINFO metadata
-header + the 34-byte STREAMINFO payload from `TrackInfo`, and a non-34-byte
-payload is a typed error. Capability probing needs a synthetic STREAMINFO, kept in
-sync between `webcodecs/probe.rs` and `tests/webcodecs_browser.rs`.
+The frame codec owns the current generation. A seek advances it, resets, discards
+queued output, then **reconfigures**, because WebCodecs `reset()` returns
+`AudioDecoder` to the unconfigured state; commands and callbacks from older
+generations are dropped everywhere. `WebCodecsCodec::needs_eof_drain` is
+unconditionally true — the browser pipeline queues output at every rate. The
+first empty frame flushes, and each drain call waits within one bounded budget
+for current-generation PCM, an explicit flush completion, or an error. Budget
+exhaustion is a typed backend error, never a synthetic EOF.
 
-Browser lane (advisory job in CI; needs a working ChromeDriver):
+Capability probing needs a synthetic STREAMINFO, kept in sync between
+`webcodecs/probe.rs` and `tests/webcodecs_browser.rs`. The HE-AAC v1 and v2
+browser bodies are generated at build time by `kithara-test-fixtures`
+(`he_aac_v1` / `he_aac_v2`) and embedded, because wasm has no fixture store to
+read them from. The browser lane is advisory in CI and needs a working
+ChromeDriver:
 
 ```bash
 just test wasm chrome webcodecs
 ```
 
-The HE-AAC v1 and v2 browser bodies are generated at build time by
-`kithara-test-fixtures` (`he_aac_v1` / `he_aac_v2`) and embedded, because wasm
-has no fixture store to read them from.
-
-## Feature flags
-
-| Feature | Default | Effect |
-| --- | --- | --- |
-| `symphonia` | yes | Software decoder path |
-| `fdk-aac` | yes | Override Symphonia's LC-only AAC decoder with the in-tree libfdk-aac adapter for HE-AAC v1/v2 (implies `symphonia`) |
-| `resample-rubato` / `resample-glide` | rubato | Forward the resampler backend from `kithara-resampler` |
-| `apple` | no | Apple `AudioToolbox` backend (gated on `target_os = "macos" \| "ios"`) |
-| `apple-codec-embedded-resampler` | no | Select Apple codec-embedded resampling as the default placement (implies `apple`) |
-| `android` | no | Android `MediaExtractor`/`MediaCodec` backend (gated on `target_os = "android"`) |
-| `webcodecs` | no | Browser `AudioDecoder` backend (gated on `target_arch = "wasm32"`) |
-| `probe` | no | USDT probes for tracing |
-| `mock` | no | Expose `DecoderMock` (unimock) outside tests |
-| `perf` | no | `hotpath` instrumentation (non-wasm) |
-| `client-reqwest` / `client-wreq` | reqwest | Forward the HTTP backend selection to `kithara-stream` |
-| `tls-rustls` / `tls-native` | rustls | Forward TLS selection to network-reaching deps |
-
-With `symphonia` disabled (`default-features = false` plus only `apple` /
-`android`), the factory has no software fallback — it errors if the active
-hardware backend cannot handle a codec/container.
-
-## Module layout
-
-- `traits.rs` — public `Decoder`, typed outcomes, the `DecoderInput` supertrait
-  (blanket impl over `Read + Seek + Send + Sync`), internal `BoxedSource`.
-- `factory/` — `inner.rs` (config, factory, backend enum, per-backend dispatch),
-  `probe.rs` (`ProbeHint`, extension/MIME/container maps, prefix sniffing); every
-  backend is boxed into `Box<dyn Decoder>`.
-- `composed.rs`, `demuxer.rs`, `codec.rs`, `resampled.rs` — decode loop, demuxer
-  trait plus `TrackInfo`, `FrameCodec` / `CodecPriming` / `access_unit_frames`,
-  standalone-resampler wrapper.
-- `gapless/` — `info`, `heuristic`, `trimmer`, `probe`, `mp4`, `mp3` (Xing/Info +
-  LAME, `skip_id3v2`). `mp4/` — streaming `moov` scanner (`scan_mp4`,
-  `Mp4Visitor`, codec/fragmented sniffs). `fmp4/` — segment-by-segment demuxer,
-  init parsing, source IO.
-- `types.rs`, `error.rs`, `retire.rs` — decoder-only track/profile types,
-  `DecodeError` / `ErrorClass`, and chunk-retirement policy. Shared decoded-signal
-  values and pure sample/time math live in `kithara-signal`. `mock.rs` re-exports `DecoderMock` under
-  `cfg(test)` or the `mock` feature.
-- `symphonia/` — `demuxer`, `codec`, `adapter` (`ReadSeekAdapter`: `Read+Seek` →
-  `MediaSource`), `probe`, `registry`, `echain`, `aac_fdk` (feature `fdk-aac`).
-  `apple/` (macOS/iOS), `android/`, `webcodecs/` (wasm32) — backend-local codec,
-  demuxer, and platform-FFI modules.
-
-## Trait bridges
-
-- `From`: `GaplessInfo` → `GaplessTrimmer`; `GaplessProbe` → `Option<GaplessInfo>` (prefers `elst` over
-  `iTunSMPB`); `io::Error` / `TryFromIntError` / `PoolError` /
-  `AndroidBackendError` → `DecodeError`.
-- `TryFrom`: `DecoderChunkOutcome` → `AudioChunk`; `&[u8]` /
-  `&AudioCodecParameters` → `AacStreamConfig` (fdk-aac).
-- `Display`: `AudioSpec`, `DecoderBackend`.
-
 ## Tests
 
-Cross-backend tests live in `kithara-integration-tests` under
-`tests/tests/kithara_decode/` (`cargo nextest run -p kithara-integration-tests kithara_decode::`). `protocol_tests.rs` decodes the same MP3 with every available
-backend and asserts agreement on `spec()`, `duration()`, total frame count,
+Cross-backend tests live outside this crate, in `kithara-integration-tests` under
+`tests/tests/kithara_decode/`. `protocol_tests.rs` decodes the same MP3 with
+every available backend and asserts they agree on spec, duration, total frames,
 post-seek timestamp, EOF semantics, and — when `apple` is enabled on macOS/iOS —
-the full-decode PCM L2 norm within 2 %.
+full-decode PCM L2 norm.

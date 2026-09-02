@@ -1,357 +1,141 @@
-<div align="center">
-
-<img src="../logo.svg" alt="kithara" width="300">
-
-</div>
-
-<div align="center">
-
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../LICENSE-MIT)
-
-</div>
-
 # Tests
 
-`tests/` is a dedicated workspace crate (`kithara-integration-tests`) that hosts:
-
-- integration tests for workspace crates;
-- performance regression tests (`hotpath`, ignored by default);
-- RSS memory profiling tests;
-- Criterion microbenchmarks;
-- fuzz targets (`cargo-fuzz`);
-- local test binaries/fixtures (unified test server, WASM test runner).
-
-## Layout
-
-- `tests/tests/` — integration tests grouped by crate (`kithara_hls`, `kithara_file`, `kithara_decode`, ...).
-- `tests/perf/` — perf scenarios, each behind `feature = "perf"` and `#[ignore]`.
-- `tests/benches/` — Criterion benchmarks.
-- `tests/fuzz/` — `cargo-fuzz` fuzz targets.
-- `tests/bin/` — helper binaries:
-  - `test_server` — unified synthetic/static media server exposing `/assets/*`, `/signal/*`, and `/stream/*`.
-  - `wasm_test_runner` — custom WASM test runner that auto-starts `test_server`.
-
-## Cross-Platform Test Architecture
-
-Integration tests run on both **native** and **WASM (browser)** targets. The `#[kithara::test]` macro controls where tests run via flags:
-
-| Flag | Runs on native | Runs in browser (WASM) |
-|------|:-:|:-:|
-| `#[kithara::test(tokio, browser, ...)]` | yes | yes |
-| `#[kithara::test(wasm, ...)]` | yes | yes |
-| `#[kithara::test(native, ...)]` | yes | no |
-| `#[kithara::test(tokio, ...)]` (no flag) | yes | no |
-| `#[kithara::test(selenium, ...)]` | yes | no |
-
-Additional flags:
-
-| Flag | Effect |
-|------|--------|
-| `serial` | Run test exclusively (no parallel tests) |
-| `timeout(Duration::from_secs(N))` | Per-test timeout |
-| `env("KEY", "VAL")` | Set env var for test duration |
-| `soft_fail("pattern")` | Allow panics matching pattern |
-| `multi_thread` | Use multi-thread tokio runtime instead of current-thread |
-| `selenium` | Implies `native + tokio + serial + multi_thread`, adds `#[ignore = "requires selenium"]` |
-
-### Unified Test Server
-
-Tests that need HTTP media fixtures use the unified `test_server` with a cross-platform interface:
-
-- **Native**: in-process helper-backed URLs via `kithara_integration_tests::TestServerHelper` and `kithara_integration_tests::hls_server::*`
-- **WASM**: the same `test_server` binary on `http://127.0.0.1:3444`
-
-The helper contract is token-backed but transparent to tests:
-
-- complex `/signal/*` and `/stream/*` specs are registered through `POST /token`
-- the server returns a UUID
-- helper APIs return ordinary `Url`s that already point at `/signal/{token}...` or `/stream/{token}...`
-
-Canonical fixture types (`kithara_integration_tests::hls_server`):
-
-| Fixture | Purpose |
-|---------|---------|
-| `TestServer` | Fixed 3-variant HLS content |
-| `HlsTestServer` | Configurable variants, segments, delays, encryption, HEAD mismatch |
-| `AbrTestServer` | ABR bitrate switching scenarios |
-
-Synthetic HLS lives under `/stream/*`; procedural encoded audio lives under `/signal/*` (`sawtooth`, `sawtooth-desc`, `sine`, `sweep`, `silence`); repository-owned regression assets remain under `/assets/*`.
-
-### Synthetic HLS Protocol
-
-Shared synthetic HLS types live in `tests/src/fixture_protocol.rs` (`kithara-integration-tests` crate):
-
-- `DataMode` (TestPattern, SawWav, PerVariantPcm, CustomData, blob-backed payloads)
-- `InitMode` (None, WavHeader, Custom, blob-backed init payloads)
-- `DelayRule` - declarative delay rules for synthetic segment serving
-- `EncryptionRequest` - AES-128 parameters for encrypted fixture scenarios
-
-Pure generation helpers such as `generate_segment` and `expected_byte_at_test_pattern` also live in `tests/src/fixture_protocol.rs` so byte-level assertions stay deterministic across test helpers. Waveforms, PCM buffers and RIFF bodies come from `kithara_test_fixtures::signal` — the one route to a generated signal in the workspace.
-
-## Agent guardrails
-
-- Start with the smallest deterministic repro and contract test. Escalate to heavy, live, or stress coverage only after the owned contract is captured.
-- Tests should validate the owner boundary of the runtime or API. Do not make fixtures or harnesses silently compensate for production behavior.
-- Choose the suite and `#[kithara::test]` flags from the contract you are exercising, not from local convenience.
-
-## Running Tests
-
-### Native prerequisites
-
-Some native test fixtures now generate encoded audio via `ffmpeg-next` in `kithara-test-utils`.
-That path requires a system FFmpeg installation plus `pkg-config`/`pkgconf` so Rust build scripts can find the FFmpeg libraries during compilation.
-
-On macOS with Homebrew:
-
-```bash
-brew install pkgconf ffmpeg
-```
-
-If these tools are missing, native test builds that touch encoded `/signal/...{mp3,flac,aac,m4a}` fixtures will fail while building `ffmpeg-sys-next`.
-
-```bash
-# Workspace default
-cargo nextest run --workspace
-cargo test --doc --workspace
-
-# Integration-test crate only
-cargo nextest run -p kithara-integration-tests
-
-# Specific integration test target / filter
-cargo test -p kithara-integration-tests --test suite_light events::
-cargo test -p kithara-integration-tests --test suite_heavy live_stress_real_stream::
-```
-
-`just` shortcuts (from repo root):
-
-```bash
-just test                                          # default nextest run
-just test run --profile fast                           # fast profile: skips suite_heavy
-just test run --profile stress -E 'binary(suite_heavy)' # only suite_heavy, stress profile
-just test run --lane=doc                               # doc tests only
-just test all                                          # both unit and doc tests
-```
-
-## WASM Tests
-
-WASM tests run via `wasm-bindgen-test` in headless Chrome. The `wasm_test_runner` binary auto-starts `test_server` before delegating to `wasm-bindgen-test-runner`.
-
-```bash
-# Recommended entrypoint (handles everything)
-just platform wasm test
-
-# Manual run (wasm_test_runner auto-starts test_server)
-cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
-```
-
-Test categories on `cargo +nightly test --target wasm32-unknown-unknown`:
-
-- **`kithara_hls/`** — HLS integration tests with `browser` flag (unified `test_server`)
-
-`tests/tests/kithara_wasm/stress.rs` currently contains ignored regression specs:
-`PlayWorker::open` stalls during audio preparation in the `wasm-bindgen-test`
-headless runner bootstrap.
-`tests/tests/kithara_file/live_stress_real_mp3.rs` is also ignored on `wasm32`
-for the same reason.
-Active browser/player coverage lives in the Selenium suite below.
-
-The fixture server is configured via `.cargo/config.toml`:
-
-```toml
-[target.wasm32-unknown-unknown]
-runner = ["cargo", "run", "--bin", "wasm_test_runner", "-p", "kithara-integration-tests", "--"]
-```
-
-### Selenium E2E (`thirtyfour`)
-
-Exported `kithara-wasm` player scenarios run through the real `kithara-wasm.js`
-page and are implemented as ignored integration tests in:
-
-- `tests/tests/kithara_wasm/selenium.rs`
-
-Tests use the `#[kithara::test(selenium, ...)]` macro flag, which implies
-`native + tokio + serial + multi_thread` and adds `#[ignore = "requires selenium"]`.
-
-Run them explicitly:
-
-```bash
-# Single test
-cargo test -p kithara-integration-tests --test suite_heavy selenium_player_scenarios -- --ignored --nocapture
-
-# All selenium tests
-cargo test -p kithara-integration-tests --test suite_heavy selenium -- --ignored --nocapture
-```
-
-Environment knobs:
-
-- `KITHARA_SELENIUM_BROWSER=chrome|firefox` (default: `chrome`)
-- `KITHARA_SELENIUM_HEADLESS=true|false` (default: `true`)
-- `KITHARA_SELENIUM_TOOLCHAIN=nightly` (default: `nightly`)
-- `KITHARA_SELENIUM_PAGE_URL=http://...` (use external trunk page instead of auto-start)
-- `KITHARA_SELENIUM_WEBDRIVER_URL=http://...` (use external webdriver instead of auto-start)
-
-WebDriver capabilities/profile defaults are versioned in:
-
-- `tests/webdriver.json`
-
-### agent-browser status
-
-`vercel-labs/agent-browser` can be used for local exploratory browser debugging, but it is not part of the canonical test path in this project.
-
-Reasons:
-
-- current regression suite is Rust-native (`cargo test` + `thirtyfour`);
-- CI and hooks are Rust-first and deterministic around WebDriver runs;
-- adopting agent-browser as the main runner would add an extra Node.js daemon + Playwright stack in CI.
-
-Decision: keep `thirtyfour` Selenium integration tests as the required path, use `agent-browser` only as optional local tooling.
-
-## Performance Tests (`tests/perf`)
-
-Performance tests use [hotpath-rs](https://github.com/pawurb/hotpath-rs), run only with `perf` feature, and are ignored by default.
-
-```bash
-# Run all perf tests
-cargo test -p kithara-integration-tests --features perf --release -- --ignored --test-threads=1
-
-# Run one suite
-cargo test -p kithara-integration-tests --features perf --release --test suite_perf -- --ignored --nocapture
-```
-
-Perf modules in this crate:
-
-- `abr.rs` — `perf_abr_scenarios`
-- `decoder.rs` — `perf_decoder_scenarios`
-- `memory_rss.rs` — RSS memory profiling for HLS playback
-- `pool.rs` — `perf_pool_scenarios`
-- `resampler.rs` — `perf_resampler_scenarios`
-- `storage.rs` — `perf_storage_scenarios`
-
-Local compare flow:
-
-```bash
-just perf
-just perf compare perf-results.txt saved-baseline.txt --threshold 10
-```
-
-## Benchmarks (`tests/benches`)
-
-Criterion benchmark targets:
-
-- `abr_estimator.rs` — ABR throughput estimation
-- `bufpool.rs` — buffer pool allocation hot paths
-- `refactor_hotpaths.rs` — general hot path benchmarks
-
-Run manually:
-
-```bash
-cargo bench -p kithara-integration-tests --bench bufpool
-cargo bench -p kithara-integration-tests --bench refactor_hotpaths
-```
-
-Or with project shortcuts:
-
-```bash
-just perf bench               # build benches only (default mode)
-RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just perf bench ci
-```
-
-## Fuzzing (`tests/fuzz`)
-
-Fuzz targets use `cargo-fuzz` / `libfuzzer-sys`:
-
-- `aes_decrypt` — AES-128-CBC decryption with random key/iv/ciphertext
-- `hls_parsing` — HLS M3U8 playlist parsing with `arbitrary`-generated inputs
-
-Run:
-
-```bash
-# Install cargo-fuzz (once)
-cargo install cargo-fuzz
-
-# Run a fuzz target (requires nightly)
-cd tests/fuzz
-cargo +nightly fuzz run aes_decrypt -- -max_total_time=60
-cargo +nightly fuzz run hls_parsing -- -max_total_time=60
-```
-
-## Adding New Tests
-
-Integration tests:
-
-1. Add module/file under `tests/tests/` (group by crate/domain).
-1. Register light tests in `tests/tests/suite_light.rs`.
-1. Register heavy or browser-integration tests in `tests/tests/suite_heavy.rs`.
-1. Register perf-only tests in `tests/perf/suite_perf.rs`.
-1. Prefer deterministic fixtures and local servers over external network.
-1. Use `#[kithara::test(tokio, browser, ...)]` for tests that need a server — they'll run on both native and WASM.
-1. Use `#[kithara::test(wasm, ...)]` for pure logic tests that can run on WASM.
-1. Use `#[kithara::test(native, ...)]` for tests that require filesystem or OS-specific features.
-1. Use `#[kithara::test(selenium, ...)]` for Selenium E2E tests (auto-ignored, multi-thread runtime).
-1. Use `#[case::name(value)]` for parameterized test cases.
-
-### No-SYNC audio safety
-
-The default test run includes three independent guards for playback with SYNC disabled:
-
-- unity time-stretch transparency, including bounded shared-worker load;
-- real MP3 and local HLS playback through the shared session graph at 44.1/48 kHz with 1/2/4 decks;
-- the player render hot-path budget at 128/256/512/1024 frames with 1/2/4 tracks.
-
-The tests use Cochlea on final PCM and fail on decoder errors, event loss, underruns, silence,
-clipping, non-finite samples, or a p99 render cost above half of the audio period. The timing
-guard measures the player render core, not physical device xruns.
-
-The active tests keep all PCM in memory; artifact I/O is not part of their timeout or CI path.
-Their deterministic sine input is prepared once before playback through the shared,
-build-fingerprinted fixture cache. Repository MP3/HLS inputs are checked-in assets served locally.
-
-To replay the same scenarios and persist float WAV files plus JSON manifests for listening, run
-the separate opt-in recorder with an absolute output directory:
-
-```bash
-just test audio-artifacts /absolute/output
-```
-
-Repository HLS fixtures are served by the local test server; these tests do not use the external
-network.
-
-Performance tests:
-
-1. Add file in `tests/perf/`.
-1. Gate file with `#![cfg(feature = "perf")]`.
-1. Mark heavy tests as `#[test] #[ignore]`.
-1. Register test target in `tests/Cargo.toml` (`[[test]] ... required-features = ["perf"]`).
-
-Benchmarks:
-
-1. Add benchmark file in `tests/benches/`.
-1. Register `[[bench]]` target in `tests/Cargo.toml` (if new).
-
-Fuzz targets:
-
-1. Add fuzz target in `tests/fuzz/fuzz_targets/`.
-1. Register `[[bin]]` target in `tests/fuzz/Cargo.toml`.
-1. Use workspace dependencies from root `Cargo.toml`.
-
-## Nextest Profiles
-
-| Profile | Command | Description |
-|---------|---------|-------------|
-| `default` | `just test` | All tests, 4 threads |
-| `fast` | `just test run --profile fast` | Skips `suite_heavy` (stress/selenium) |
-| `stress` | `just test run --profile stress -E 'binary(suite_heavy)'` | Only `suite_heavy`, 1 thread, 60s slow-timeout |
-| `ci` | `just test run --profile ci --no-fail-fast` | CI mode, no fast-fail |
-
-Profiles are defined in `.config/nextest.toml`.
+`kithara-integration-tests` owns the workspace's integration suites, `perf`
+scenarios, benches and fuzz targets. Binaries: `test_server` serves
+`/assets/*` (checked-in regression files), `/signal/*` (procedural encoded audio)
+and `/stream/*` (synthetic HLS); `wasm_test_runner` is the `wasm32` runner in
+`.cargo/config.toml` that starts it.
+
+Command surface and harness rules: `AGENTS.md`, `docs/guides/test-harness.md`.
+This file carries what they cannot — which lane builds a suite.
+
+## Which suite runs where
+
+A suite behind `required-features` is invisible to `just test` **and**
+`just test run <filter>`: the filter matches nothing, the target was never
+built. Lanes are `just test run --lane=<name>`, from `[test.lanes.*]` in
+`.config/xtask.toml`; the gating feature is in parentheses.
+
+| Suite | Built by |
+|---|---|
+| `suite_light`, `suite_heavy`, `suite_stress` | `just test` |
+| `suite_perf`, `memory_rss` (`perf`) | `just perf`; two `[[test]]` targets |
+| `suite_harness` (`harness`) | lane `fixtures` |
+| `suite_broadcast` (`broadcast`) | lane `broadcast` |
+| `suite_e2e` (`e2e`) | lane `e2e`; needs a real output device |
+| `suite_network` (`network`) | lane `network`; needs `KITHARA_DRM_PROD_*` |
+| `suite_network_manual` (`network-manual`) | lane `network-manual`; corporate DNS + a device, so no CI runner |
+| `suite_integration_regressions` | own lane; some tests are red on purpose |
+| selenium tests (`selenium`) | lane `selenium-firefox` |
+| `loom` models | lane `loom`; `just test` builds the target, explores nothing |
+
+`just test` also covers neither `kithara-ui`, nor `kithara-app` GUI tests, nor
+this crate's own lib tests and the `flash` harness binaries: `default-filter` in
+`.config/nextest.toml` removes them; `just test ui` and lane `harness` own them.
+
+## Where a test runs: `#[kithara::test]`
+
+`browser` and `wasm` run native and in the browser; `native`, plain `tokio` and
+`selenium` are native-only. Modifiers: `serial` (exclusive), `multi_thread`
+(multi-thread tokio instead of current-thread), `timeout(...)`. `selenium`
+implies native + tokio + serial + multi_thread and auto-ignores the test.
+
+`timeout(...)` is the real per-test bound — its watchdog aborts at budget+3s. The
+default profile's 120s slow-timeout only backstops a test with no budget of its
+own.
+
+## Fixtures
+
+Native tests take in-process URLs from `TestServerHelper` and `hls_server`:
+`TestServer` (fixed 3-variant HLS), `HlsTestServer` (variants, segments, delays,
+encryption, HEAD mismatch), `AbrTestServer` (bitrate switching). WASM tests hit
+the same binary on `http://127.0.0.1:3444`, which `TEST_SERVER_URL` overrides.
+Complex `/signal` and `/stream` specs register through `POST /token`; helpers
+hand back ordinary `Url`s, so a test never sees the token.
+
+`tests/src/fixture_protocol.rs` owns the synthetic-HLS wire types (`DataMode`,
+`InitMode`, `DelayRule`, `EncryptionRequest`) and the deterministic byte oracles,
+so byte assertions agree across helpers. Every waveform, PCM buffer and RIFF
+body comes from `kithara_test_fixtures::signal`; the workspace has no second
+route to a generated signal.
+
+Encoded `/signal/*` fixtures (mp3, flac, aac, m4a) build through
+`kithara-encode`, which links system FFmpeg: without ffmpeg and pkgconf the build
+of ffmpeg-sys-next fails before any test runs. Output is cached on disk because
+nextest runs a process per test and an uncached AAC re-encode can eat a test's
+whole budget. `just test fixture-cache` locates or drops it; the opt-in `cold`
+profile uses a separate root and never touches the default one.
+
+## WASM
+
+`just test wasm [chrome|firefox|safari] [all|webcodecs]`. `just platform wasm` is
+check/build/size-check only and runs no tests.
+
+- A `wasm32` build makes no host binary and the runner looks for `test_server`
+  beside itself, so the recipe builds it first.
+- Only `suite_heavy` is built for `wasm32`, with every native module compiled
+  out — `kithara_ffi_web` is the browser-visible coverage.
+- `webcodecs` belongs to `kithara-decode`, not any integration suite, and is
+  Chromium-only.
+
+### Selenium
+
+Player scenarios drive the real page via thirtyfour:
+`tests/tests/kithara_ffi_web/selenium.rs`, auto-ignored by the macro flag.
+Capabilities are in `tests/webdriver.json`;
+`KITHARA_SELENIUM_PAGE_URL` and `KITHARA_SELENIUM_WEBDRIVER_URL` attach to an
+already-running page or driver instead of starting one.
+
+## Perf and benches
+
+Perf scenarios are `#[ignore]`d. Criterion targets in `tests/benches` set
+`harness = false` and are compiled only by `just perf bench`, which only builds
+in its default mode. No test lane touches them, so a changed signature breaks
+them silently.
+
+Fuzzing: `fuzz/README.md`.
+
+## Adding a test
+
+- Name the module in its suite root (`tests/tests/suite_*.rs`,
+  `tests/perf/suite_perf.rs`). A file nobody names compiles into nothing and
+  passes silently. A perf file also needs `#![cfg(feature = "perf")]` and a
+  `[[test]]` entry carrying `required-features = ["perf"]`.
+- Pick the suite and `#[kithara::test]` flags from the contract under test,
+  not from convenience: a feature gate takes that contract off the default run.
+- Test the owner boundary. A fixture that quietly compensates for production
+  behaviour pins the compensation, not the contract.
+
+## No-SYNC audio safety
+
+`just test` carries three independent guards for playback with SYNC disabled:
+unity time-stretch transparency under bounded shared-worker load
+(`no_sync_passthrough`), real MP3 and local HLS through the shared session graph
+at 44.1/48 kHz with 1/2/4 decks (`no_sync_real_media`), and the render hot-path
+budget at 128/256/512/1024 frames with 1/2/4 tracks. All three run
+`CochleaReport` over the final PCM and fail on decoder errors, event loss,
+underruns, silence, clipping, non-finite samples, or a p99 render cost above half
+the audio period.
+
+They do not prove device behaviour: the timing guard measures the player render
+core, not physical xruns. PCM stays in memory, so no artifact I/O sits inside
+their timeout, and the input is a deterministic sine prepared once through the
+shared fixture cache plus checked-in MP3/HLS served locally.
+`just test audio-artifacts /absolute/output` replays them through opt-in recorder
+twins, keeping float WAV and JSON manifests for listening.
+
+## Nextest profiles
+
+`.config/nextest.toml`: `default` (all threads, 120s backstop), `fast` (skips
+`suite_heavy`), `stress` (no thread cap, because a player must pass under
+contention; failure bodies land in the JUnit, not the console), `ci` (one retry),
+plus `cold`, `harness`, `support`, `perf`, `rtsan`.
+
+`default-filter` intersects with a command-line filter; a lane-level `-E` would
+union with it and silently widen the run. That is why suite exclusions live in
+`default-filter`, never in a lane's arguments.
 
 ## Troubleshooting
 
-- `hotpath not found`:
-  run with `--features perf`.
-- `test not found` for perf suites:
-  include `--ignored`.
-- noisy perf results:
-  use `--release`, `--test-threads=1`, and run on an idle machine.
-- WASM tests fail to connect:
-  `test_server` starts automatically via `wasm_test_runner`. Set `TEST_SERVER_URL` to override the default `http://127.0.0.1:3444`. Check that port 3444 is available.
+- WASM cannot connect — port 3444 taken, or no host `test_server` was built.
+- Encode timeouts in a cluster — cold fixture cache; the second run is honest.

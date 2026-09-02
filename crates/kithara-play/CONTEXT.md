@@ -1,622 +1,348 @@
 # kithara-play - Context
 
-Contracts and invariants for the kithara-play crate; the README is the overview.
+The README is the overview and the module tree is the map; repo-wide rules stay
+in `AGENTS.md`. This file carries only what neither the sources nor a named test
+can state for itself.
 
 ## Planes & Ownership
 
-- `api/` - stable public shapes; `bridge/` - cross-plane protocol and shared RT handles
-  (`NodeInputs` / `SlotControl`, `PlaybackShared`, `SharedEq`, `PlayerCmd`, `PlayerNotification`),
-  plus a re-export of the session protocol.
-- `policy/` - domain-aware cache identity and DRM key-request routing.
-- `resource/` - source detection, `ResourceConfig`, reader construction.
-- `player/` - playlist and parameter state in `state/`, transitions in `flow/`.
-- `worker/` - shared `PlayWorker`, per-track `DecoderNode`, final producer
-  admission, registration leases, and `EngineLoad`; generic dispatch lives in
-  `kithara-worker`.
-- `effects/` - the post-Warp per-track `AudioEffect` chain, terminal drain, EQ
-  primitives, and limiter primitives.
-- `engine/` - session registration, slot table, mix batch.
-- `rt/` - lock-free Firewheel nodes; per-track state under `rt/track/`.
-- `session/` - the lower object-safe protocol and Player-side binding handle;
-  concrete state, graph dispatch, and platform clients live in `kithara-host`.
-- `wasm` - target-gated browser binding surface.
-
-`player`, `engine`, and the lower session protocol are intentional orchestration planes (their
-entry files bind API state, RT controls, and session commands), so `.config/arch/thresholds.toml` raises
-`module_fan_out` to 9 for this crate; do not add re-export hops solely to lower that count.
+`player`, `engine`, and the lower session protocol are deliberate orchestration
+planes - their entry files bind API state, RT controls, and session commands -
+so `.config/arch/thresholds.toml` raises `module_fan_out` to 9 for this crate.
+Do not add re-export hops solely to lower that count.
 
 ## Buffer Pool Ownership
-
 The application composition root declares one closed schema with
-`kithara_bufpool::pool_schema!` and builds one `PoolRegion<S>`. `PlayWorker<S>`
-owns a clone of that facade; player, resource, worker, Warp, and session
-registration paths propagate the same schema instead of exposing separate byte
-and sample pools. A requested key must implement `HasPool<K>` for `S`, so an
-unregistered pool is rejected while compiling the composition root.
-
-All registered pools reserve from the region's one hard `OverallBudget`.
-Per-pool `max_share` values are additional ceilings, not partitions: giving the
-byte and sample pools `Percent::FULL` lets peak demand compete for the full
-regional cap without allowing their combined allocations to exceed it.
-`PoolConfig::initial_buffers` and `initial_capacity` own eager allocation;
-zero initial buffers leave allocation lazy without a separate warm-up API.
-
-Checked buffer growth and playback scratch construction propagate `PoolError`
-through `PlayError`. The master EQ is the deliberate degraded-mode exception:
-if its control-thread scratch allocation fails, `MasterEqProcessor` logs the
-error and remains a transparent bypass. This keeps the audio graph usable and
-does not create a second allocation path or an unpooled fallback.
+`kithara_bufpool::pool_schema!` and builds one `PoolRegion<S>`. Player,
+resource, worker, Warp, and session registration propagate that one schema
+instead of separate byte and sample pools; `HasPool<K>` makes an unregistered
+pool a compile error at the root. Budget semantics belong to
+`crates/kithara-bufpool/CONTEXT.md`. The master EQ is the one deliberate
+degraded mode: a failed control-thread scratch allocation leaves
+`MasterEqProcessor` a transparent bypass with a `warn` - a degraded mode, not a
+second allocation path.
 
 ## Domain Policies
-
-`policy` is the orchestration-level owner of domain matching - not `kithara-assets`,
-`kithara-platform`, or `kithara-drm`. `DomainPattern` supports exact hosts, `*.domain` subdomains,
-and `*`; host matching is case-insensitive, rules are ordered, first match wins.
-
-`QueryIdentityLayout` implements the ordinary `AssetLayout` contract; unmatched resources delegate
-to `DefaultLayout`. A `QueryIdentityRule` lists application-defined, **case-sensitive** query keys
-for one or more domain patterns. Configured values contribute to the asset-root identity in
-declared-key order; repeated values retain URL order; missing / empty / repeated values stay
-distinct. An existing `AssetSource::Remote` discriminator is combined with the query identity,
-never replaced. Unlisted signatures, expiry values, fragments, and query-pair ordering do not
-fragment the cache, and raw query text never reaches a path (`DefaultLayout` hashes it into the
-leaf). The same layout can be registered normally for `File`, `Hls`, or both.
-
-`DomainKeyPolicy` implements `KeyRequestResolver` and is registered normally in the DRM
-`KeyProcessorRegistry`. A matching `DomainKeyRule` merges its static headers and query parameters
-with fresh request-factory output into one `PreparedKeyRequest`; factory headers win over static
-ones. The opaque DRM registry exposes neither domain rules nor resource headers, so callers that
-also need playlist/segment headers keep the same immutable `Arc<DomainKeyPolicy>` and ask it via
-`resource_headers` - never a second policy source of truth.
+`policy` is the orchestration-level owner of domain matching - not
+`kithara-assets`, `kithara-platform`, or `kithara-drm`. Host matching is
+case-insensitive and first-match-wins over ordered rules; application-declared
+query keys stay case-sensitive. `QueryIdentityLayout` combines an existing
+`AssetSource::Remote` discriminator with the query identity rather than replacing
+it. The DRM `KeyProcessorRegistry` is opaque, so a caller that also needs
+playlist or segment headers keeps the same immutable `Arc<DomainKeyPolicy>` and
+asks it via `resource_headers` - never a second policy source of truth.
+`tests/asset_policy.rs` and `tests/drm_policy.rs` pin which query pairs fragment
+the cache, wildcard and ordering precedence, and header merge order.
 
 ## Per-track producer chain
+`PlayWorker::open` is the sole supported production composition path, and no
+workspace production code can build a second playback scheduling path:
+`PlayWorker` derives its dispatcher from `kithara-worker`, while `kithara-audio`
+exposes only the prepared source and wake contracts. One chain, one final
+output path:
+`decoded source -> WarpRenderer -> custom effects -> final output ring`. The Warp
+wrapper is resident even with synchronization off, so passthrough never selects a
+second implementation. Sync is not yet wired end to end; final-ring admission is
+rendered readiness, not proof that a device callback presented those frames.
 
-`PlayWorker::open` is the sole supported production composition path in this
-workspace. It asks
-`kithara-audio` for `PreparedAudio` plus a still-concrete `AudioSource`, wraps the
-reader as resident identity `Warp<Audio<Stream<T>>>`, creates its synchronous
-`WarpRenderer`, builds the post-Warp track effects, and wraps the source in
-`WarpSource`.
-`DecoderNode` then owns final output admission, preload completion, decoded
-frontier publication, terminal event publication, and per-track load
-measurement before the task is registered on the shared worker.
-
-`PlayWorker` derives a dedicated dispatcher from `kithara-worker` and supplies
-the play-owned node and observer. `kithara-audio` exposes only the prepared
-source and wake contracts. No workspace production code can construct a second
-playback scheduling path.
-
-There is one chain and one final output path:
-
-`decoded source -> WarpRenderer -> custom effects -> final output ring`
-
-The Warp wrapper is resident even when synchronization is off, so passthrough
-does not select a second implementation. R7 does not yet evaluate `WarpMap`,
-advance a runtime map cursor, apply non-identity alignment, or call
-`SyncGroup::acknowledge`; final-ring admission is rendered readiness, not proof
-that a device callback presented those frames.
-
-`WarpRenderer::prepare` services format/backend changes and retired engine
-state between checked ticks. `AudioEffect::service_deferred` then prepares
-post-Warp effects. At true source EOF, `WarpSource` drains the Warp tail through
-the effect chain before `EffectDrain` flushes the effects themselves, preserving
-multi-pull tails before
-`DecoderNode` publishes the decode-epoch-tagged diagnostic
-`AudioEvent::EndOfStream`. That raw event is not a user-visible playback-end
-signal: `PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`
-after the player fences the terminal marker against the live seek epoch. Seek
-or source-discontinuity revision changes reset the chain before new-generation
-decoded audio is admitted.
-
-`sanitize_sample` from `kithara-signal` runs at the input of play-owned DSP
-stages that accept untrusted samples. `IsolatorEq` flushes denormal IIR state to
-exact zero only after both input and output fall below `f32::MIN_POSITIVE`;
-finite unity/bypass samples remain bit-exact.
+At true source EOF `WarpSource` drains the Warp tail through the effect chain
+before `EffectDrain` flushes the effects, preserving multi-pull tails.
+`DecoderNode` then publishes the decode-epoch-tagged `AudioEvent::EndOfStream`.
+**That raw event is not a user-visible end of playback.**
+`PlayerEvent::ItemDidPlayToEnd` is the sole path to FFI `DidReachEnd`, and only
+after the player fences the terminal marker against the live seek epoch (see Seek
+Ownership). Seek and source-discontinuity revision changes reset the chain before
+new-generation audio is admitted. Every play-owned DSP stage guards its **input**
+with `sanitize_sample` (an output-only guard would leak the bypass and silence
+fast paths); `IsolatorEq` also flushes denormal IIR state only once both input
+and output fall below `f32::MIN_POSITIVE`, so unity and bypass stay bit-exact
+(`a_decaying_tail_never_leaks_denormals`).
 
 ## Tempo & Key-Lock
-
 `kithara_warp::StretchControls` (one `Arc` per deck, in
-`PlayerConfig.timestretch`) owns the requested playback target.
-`prepare_config` carries that handle into `ResourceConfig`; `Resource` puts the
-same allocation in `TrackConfig::warp`, and resident `Warp<S>` keeps it beside
-the reader while its `kithara-warp::WarpRenderer` reads it each chunk. It always
-carries `speed` + `region_plan`; with a native backend compiled by
-`kithara-play` (`stretch-signalsmith` / `stretch-bungee`) it also carries
-`keylock` and `backend`. `Queue` delegates the target to the player; key-lock
-and backend are set directly on the same handle.
+`PlayerConfig.timestretch`) owns the requested playback target, is seeded before
+a track loads, and threads unchanged into the resident `Warp<S>`. `Queue`
+delegates the target to the player; key-lock and backend are set on the same
+handle. There is no second cached target.
 
-The canonical controls are seeded before a track is loaded; the native
-`WarpRenderer` does not cache a second requested target. With a native backend,
-each `PlayerTrack` reads the rate its resource currently applies on every
-render block, so a direct runtime change through the shared controls updates
-its media clock as well as its DSP. The leading track publishes the deck's
-effective rate through `PlaybackShared`.
-`Player::rate()` and `PlayerEvent::RateChanged` expose only that effective
-value: fixed/no-backend resources report `1.0`, while a paused deck or a deck
-without a leading track reports `0.0`. Target controls and the effective
-observation therefore cannot silently diverge in the public surface.
-With a backend compiled in, `WarpRenderer` runs at `ratio = 1/speed`, and:
+**Target and effective rate are different surfaces and cannot silently diverge.**
+The leading track publishes the deck's effective rate through `PlaybackShared`;
+`Player::rate()` and `PlayerEvent::RateChanged` expose only that, so a fixed or
+backendless resource reports `1.0`, and a paused deck or one with no leading
+track reports `0.0`.
 
-- **key-lock off** (the constructed default): `pitch = speed` - speed shifts pitch, vinyl-style.
-- **key-lock on**: `pitch = 1.0` - speed preserves pitch.
-
-At speed 1.0 with no region plan the slot bypasses. Without a backend - including every wasm build -
-the same Warp slot remains in the producer chain as an exact identity renderer; no speed DSP is
-inserted and decoded-audio output stays pinned to 1.0. With a native backend the controls are read each chunk,
-so **speed, key-lock, and backend all apply live, mid-track - no reload.** Switching backend
-rebuilds the DSP backend; returning to unity passthrough resets buffered stretch state.
-
-Fixed-ratio sample-rate conversion is a separate stage: Apple fused builds use the codec-embedded
-placement, other builds the standalone decode-adapter resampler.
-
-`RegionPlan` lives in `kithara-warp`. Its sorted, non-overlapping segments are
-expressed in source-frame space; the renderer splits chunks at region
-boundaries and combines `1/speed` with each segment's finite positive ratio.
-A region boundary preserves backend history and is not a source
-discontinuity. Stretch changes output frame count, not `AudioSpec.sample_rate`,
-and carries source-time metadata forward.
+`WarpRenderer` runs at `ratio = 1/speed`; key-lock off (the constructed default)
+gives `pitch = speed`, vinyl-style. Speed, key-lock, and backend apply live
+mid-track with no reload, and each `PlayerTrack` re-reads the rate its resource
+applies every render block, so a runtime change moves its media clock as well as
+its DSP. **Without a backend - every wasm build - the same Warp slot stays in the
+chain as an exact identity renderer**: output stays at 1.0. A `kithara-warp`
+region boundary preserves backend history and is not a source discontinuity, and
+stretch changes output frame count, never `AudioSpec.sample_rate`.
 
 ## Engine Load
-
-`EngineLoad` and `EngineLoadSnapshot` are play-owned. `PlayerCore` creates one
-address-stable meter, `ResourceConfig` passes the same optional `Arc` through
-`TrackConfig`, and `PlayWorker` injects it directly into `DecoderNode`; neither
-`AudioConfig` nor `PreparedAudioLane` carries it. A producing node records its
-`step_track` cost against emitted audio duration into lock-free EWMA atomics and
-publishes `AudioEvent::EngineLoad` at the existing telemetry interval.
+`PlayerCore` creates one address-stable `EngineLoad` meter and passes the same
+`Arc` through `TrackConfig` into `DecoderNode`. Neither `AudioConfig` nor
+`PreparedAudioLane` carries it, so there is no second route for load to reach a
+node.
 
 ## Live Equalizer Layout
-
-`PlayerImpl::set_eq_layout` replaces one player's master EQ while the player is
-running. The session graph is the actuator: it builds the replacement node on
-the control thread, reconnects every existing slot through it to the unchanged
-master-volume node, removes the old EQ, and submits one graph update. The audio
-thread never allocates, locks, or reconstructs filters for a layout change.
-
-`EngineImpl` owns the current `EqBandConfig` vector before registration and uses
-it for `eq_band_count`; after registration the session's `PlayerState` owns the
-live graph projection. `SharedEq` is the control-plane gain mirror shared by
-the session and slot handles; no audio processor reads it, and the DSP takes its
-gains from the session's node event queue instead. Reading and writing one gain
-are lock-free atomics. Layout replacement swaps the whole band array behind the
-`ArcSwap` every handle clone points at, so existing slot handles observe the new
-band count. Gains embedded in the replacement layout become the new live gains.
+`PlayerImpl::set_eq_layout` replaces a running player's master EQ, and **the
+session graph is the actuator**: it builds the replacement on the control thread,
+reconnects every slot through it, removes the old EQ, and submits one graph
+update. The audio thread never allocates, locks, or rebuilds filters for a layout
+change. `SharedEq` is the control-plane gain mirror shared by session and slot
+handles - **no audio processor reads it**; the DSP takes gains from the session's
+node event queue. Replacement swaps the whole band array behind the `ArcSwap`
+every handle clone points at (`a_handle_clone_sees_the_replacement_band_array`).
 
 ## Events
+One `kithara_events::EventBus` per player: `player.subscribe()` and
+`engine.subscribe()` return receivers on the *same* bus. `SessionDuckingMode` is
+owned here and maps `Off` / `Soft` / `Hard` to session-output gains `1.0` / `0.4`
+/ `0.2`.
 
-One `kithara_events::EventBus` (tokio broadcast) per player. `player.subscribe()` and
-`engine.subscribe()` return receivers on the *same* bus - the player's bus **is** the engine's bus.
-The `PlayerEvent` / `ItemEvent` / `EngineEvent` / `SessionEvent` / `DjEvent` enums and the
-`PlayerStatus`, `TimeControlStatus`, `ItemStatus`, `WaitingReason`, `SlotId` types are owned by
-`kithara-events` and re-exported here.
-
-`SessionDuckingMode` is owned by this crate and maps `Off` / `Soft` / `Hard` to session-output
-gains `1.0` / `0.4` / `0.2`.
-
-**`PlaybackStarted`, `ItemDidPlayToEnd` and `ItemDidFail` name which item in the arena they are
-about.** `process_notifications` drains *every* active slot, and a slot is a processor holding an
-arena of items rather than one item — so a start or a stop says nothing on its own, and only this
-crate can say what it was. All three carry the answer as `item: ItemRole`, which holds a `TrackRef`
-*inside* the role so a consumer cannot reach the identity without first saying which item it has:
-
-- `Leading(TrackRef)` — the item the listener is hearing. The only role that drives auto-advance.
-- `Outgoing(TrackRef)` — the outgoing half of a crossfade. `commit_next` promotes the successor
-  *inside* the current slot (`CrossfadeStarted { from: slot, to: slot }`) and leaves it in the
-  phase as the activated `PendingNext`, so the faded-out item ends while its own slot is still the
-  held one. Slot identity alone would call it leading; the promoted `TrackId` under it tells them
-  apart even when both queue entries share one `src`.
-- `Background(TrackRef)` — a slot the phase no longer holds: an orphan draining the last of its
-  notifications while a different item plays. A preloaded successor or a lingering predecessor
-  decoding ahead reaches its own end this way, seconds into the current item.
-
-`TrackRef { id, slot, src }` is owned by `kithara-events`. Only `id` answers "which entry": `slot` is
-an arena, not an item, and `src` names a rendered resource two queue entries may share. The other two
-are carried so a log line reads `7@slot0 https://…` without a join. Consumers must key auto-advance
-on the role and identity on `id`, never on `src`.
-
-`Notifier::item_role` builds it once per notification in `dispatch_notification`, before
-`finalize_handover_if_armed` can move the phase, so it describes the arena as it was when the item
-started or stopped. `id` rides in from `LoadTrack`, which requires one — every insertion path
-allocates a `TrackId` and hands it to the bridge, so there is no untagged item to describe.
+**A slot is a processor holding an arena of items, not one item.**
+`process_notifications` drains every active slot, so a bare start or stop says
+nothing about what the listener is hearing, and only this crate can say. Hence
+`PlaybackStarted`, `ItemDidPlayToEnd`, and `ItemDidFail` carry an `ItemRole`
+holding the `TrackRef` *inside* the role: a consumer cannot reach the identity
+without first declaring which item it has. `Leading` alone drives auto-advance;
+`Outgoing` is the half promoted over inside the current slot, which slot identity
+alone would misread as leading; `Background` is a slot the phase no longer holds,
+reaching its own end seconds into the current item. The five cases are pinned in
+`player/flow/notify.rs`. Within `TrackRef`, **only `id` answers "which entry"**:
+`slot` is an arena and `src` names a rendered resource two entries may share.
 
 ## Queue Auto-Advance
-
-`PlayerImpl` exposes a handover API for external orchestrators and internal tests:
-
-- `arm_next(idx) -> Option<Arc<str>>` - load the next item into the audio thread, ready for gapless
-  stitch (cf=0) or parallel fade (cf>0). Idempotent per index; a differently-armed index is
-  unloaded first; `None` when the slot is empty/out of range.
-- `commit_next(idx) -> Result<(), PlayError>` - promote the armed slot (cf>0 only; the audio thread
-  handles cf=0 internally). `NotReady` when nothing is armed, `ArmIndexMismatch` on index
-  disagreement.
-- `unarm_next()` - drop the armed slot without committing; skips the unload when that slot is
-  already activated for the current index (it is the leading track).
-- `armed_next() -> Option<usize>` - the armed, not-yet-activated index.
-
-Two near-end triggers are published: `PlayerEvent::PrefetchRequested` and
-`PlayerEvent::HandoverRequested` (emitted only when `crossfade_duration > 0`).
-`PlayerConfig::auto_advance_enabled` (default `true`) uses a built-in linear policy
-(`next = current + 1`). `kithara-queue::Queue` disables that built-in policy and reacts to
-`HandoverRequested` by selecting the loaded successor via `select_item_with_crossfade`; it does not
-call `arm_next` / `commit_next`.
-
-`select_item_with_crossfade` fails with `PlayError::ItemConsumed` before any bookkeeping when the
-target index is neither armed, nor the already-announced current item, nor still holding a resource
-
-- the UI must not drift from the audio.
+`arm_next` is idempotent per index and unloads a differently-armed one;
+`commit_next` is for `cf>0` only, because the audio thread stitches `cf=0`
+internally. `PlayerConfig::auto_advance_enabled` (default `true`) applies a
+built-in linear policy. **`kithara-queue::Queue` disables that policy and reacts
+to `PlayerEvent::HandoverRequested` through `select_item_with_crossfade`; it
+never calls `arm_next` or `commit_next`.** `select_item_with_crossfade` fails
+`PlayError::ItemConsumed` *before any bookkeeping* when the target index is
+neither armed, nor the announced current item, nor still holding a resource - the
+UI must not drift from the audio
+(`select_item_on_consumed_slot_errors_without_bookkeeping`).
 
 ## Engine Lifecycle
+`EngineImpl::start` is **atomic single-start**: an internal `start_lock`
+serializes the `running` check-then-act, and `running` flips only after
+`session.start_player` fully succeeds. `ensure_engine_started` treats
+`EngineAlreadyRunning` as success, so a concurrent start is idempotent rather
+than a session desync. `stop_player` releases the output device once no player is
+started; the next `start_player` builds a fresh context.
 
-`start()` -> `allocate_slot()` -> attach `PlayerImpl` -> load the current item -> `play()`. Tear
-down with `release_slot(id)` then `stop()`.
-
-`EngineImpl::start` is **atomic single-start**: the `running` check-then-act is serialized by an
-internal `start_lock`, and `running` flips to `true` only after `session.start_player` has fully
-succeeded. Two concurrent starters cannot both dispatch `start_player`: the loser observes
-`running == true` under the lock and returns `EngineAlreadyRunning`. `ensure_engine_started` treats
-`EngineAlreadyRunning` as success, so a concurrent start is idempotent, never a session desync.
-
-`stop_player` releases the output device once no player is left started: the Firewheel context,
-session output node, and limiter are torn down and the next `start_player` builds a fresh context.
-
-Drop order is load-bearing. `PlayerImpl` declares `phase` before `core`, and `PlayerCore` declares
-`items` before `engine`, so undelivered resources (which hold worker references) release before the
-engine and resource registrations. `worker` is declared after those owners, so the final
-`PlayWorker` reference cannot shut down its thread while a track still holds a lease. Inside the
-worker, the dispatcher is declared before the base-worker clone; inside each lease, the task handle
-is declared before its worker clone. Task unregister and dispatcher shutdown therefore precede any
-possible final base-worker release.
+**Drop order is load-bearing and invisible in any one file.** `PlayerImpl`
+declares `phase` before `core`, and `PlayerCore` declares `items` before
+`engine`, so undelivered resources (which hold worker references) release before
+the engine and resource registrations. `worker` is declared after those owners,
+so the final `PlayWorker` reference cannot shut its thread down while a track
+still holds a lease; likewise the dispatcher precedes the base-worker clone, and
+each lease's task handle precedes its worker clone.
 
 ## Cancel Hierarchy
+`docs/guides/cancel-policy.md` owns the typed propagate-down tree, the
+`CancelScope` seam, and the `cancel_root_sites` allowlist (kithara-play is not on
+it). Consumer crates mint a root and pass a child in `PlayerConfig.cancel`, while
+`None` makes a fresh root; the same token goes to `EngineConfig.cancel`, and the
+playback dispatcher has its own explicit lifetime in `PlayWorkerConfig.cancel`.
+`prepare_config` gives every track a `.child()` of the player token
+(`prepare_config_per_track_cancel_is_child_of_player_master`), and
+`PlayerImpl::drop` cancels its own subtree, never the potentially foreign parent
+it was handed.
 
-Cancel is the typed propagate-down tree from `kithara-platform` (`common/cancel/`).
-
-`PlayerImpl` derives its token through `CancelScope::new(config.cancel)`: a passed `CancelToken`
-(consumer crates `Queue` / `App` / FFI mint their own root and pass a child through
-`PlayerConfig.cancel`) makes the token a child of it; `None` makes it a fresh root. The same token
-is handed to `EngineConfig.cancel`, which scopes the session engine. The playback dispatcher has
-its own explicit lifetime in `PlayWorkerConfig.cancel`. `prepare_config` gives every track a
-`.child()` of the player token, and subsystems (Downloader, AssetStore, HlsPeer, epoch cancel)
-derive further children.
-
-`CancelScope::Drop` is **passive**: dropping a scope cancels nothing. Teardown is explicit -
-`PlayerImpl::drop` calls `engine.cancel()`, cancelling the player's own subtree and never the
-potentially-foreign parent it was handed.
-
-`Resource` holds a `CancelGuard` around the per-track token, declared before `inner` so a
-mid-session unload tears down the whole track subtree (stream *and* `Audio`) before the reader
-drops. The `From<Resource>` reader unwrap disarms the guard, because the live reader then outlives
-the wrapper and rides the `kithara-analysis` run-scope cancel instead.
-
-Hard-coded `CancelToken::root()` / `CancelToken::never()` outside the `cancel_root_sites` allowlist
-are forbidden and enforced by `just lint arch`; kithara-play is not on that allowlist.
+`Resource` holds a `CancelGuard` around the per-track token, declared before
+`inner`, so a mid-session unload tears down the whole track subtree (stream *and*
+`Audio`) before the reader drops. The `From<Resource>` reader unwrap disarms that
+guard, because the live reader then outlives the wrapper and rides the
+`kithara-analysis` run-scope cancel instead.
 
 ## Real-Time Audio Thread
+`docs/guides/performance/realtime.md` owns the general callback rules. The
+play-owned `#[kithara::rtsan_forbid_blocking]` sites are
+`PlayerNodeProcessor::process`, `MasterEqProcessor::process`, and
+`DecoderNode::tick`; the session limiter and mix tap processors belong to
+`kithara-host`. Specific to this crate:
 
-Four Firewheel processors run on the audio thread and carry
-`#[kithara::rtsan_forbid_blocking]`: `PlayerNodeProcessor::process` (`rt/processor.rs`),
-`MasterEqProcessor::process` (`rt/eq.rs`), `LimiterProcessor::process` (`rt/limiter.rs`), and
-`TapProcessor::process` (`rt/tap.rs`, present while a mix tap is enabled). They stay
-allocation-, free-, and lock-free: render scratch is sized in `new_stream`
-(`RenderPass::resize`), which Firewheel calls on the main thread, and finished or evicted tracks go
-to the bounded trash ring from `bridge::slot_channels` instead of being freed on the audio thread -
-the main thread drains it in `PlayerImpl::process_notifications`. A full command ring surfaces as
-`PlayError::SlotChannelFull`, never as a block.
+- **Nothing is freed on the audio thread.** Finished or evicted tracks go to the
+  bounded trash ring from `bridge::slot_channels`, drained by the main thread in
+  `process_notifications`. A full command ring surfaces as
+  `PlayError::SlotChannelFull`, never as a block.
+- Render scratch is sized in `new_stream`, off the audio thread, and
+  `render_audio` clamps its block to it, so a host exceeding its declared
+  `max_block_frames` loses that block's tail rather than allocating. One block is
+  the whole budget, shared by every processor in the graph;
+  `tests/benches/rt_block_budget.rs` derives it and measures this node's share.
+- **Pause and resume are ramps.** The flag flips at once for
+  `Player::is_playing()` while output ramps to zero, and the media clock advances
+  by the ramp's length. A processor's first block adopts the transport state
+  rather than fading into it, and `TrackFade::play` snaps only once its mix has
+  settled, so a fade in flight keeps its ramp.
+- Facts leave the audio thread through `PlayerNotification`, rates and faults
+  through `PlaybackShared::metrics()`.
+- **Memory ordering.** Only `playing` and `seek_epoch` decide whether the audio
+  thread acts, and only they carry `SeqCst`. Everything else is `Relaxed`,
+  because `RtMetrics` counters are monotonic deltas and `PlaybackSnapshot`'s
+  scalars are independent readouts that need not agree across a block.
 
-`render_audio` clamps its block to the scratch it holds, so a host exceeding the `max_block_frames`
-it declared loses that block's tail rather than allocating in the callback.
-
-Pause and resume are ramps. `RenderPass` owns a transport gate - a smoothed `MixDSP` - open while
-`PlaybackShared::playing` is set. The flag flips at once for `Player::is_playing()` while the output
-ramps to zero, and the media clock advances by the length of that ramp. A processor's first block
-adopts the transport state rather than fading into it.
-
-`TrackFade::play` snaps only when its mix has settled, so a fade still in flight keeps its ramp.
-
-One block is the whole budget, shared by every processor in the graph.
-`tests/benches/rt_block_budget.rs` derives it from the host's block and rate, and measures the share
-`PlayerNodeProcessor` takes.
-
-The audio thread never logs. Discrete facts leave through `PlayerNotification`, rates and faults
-through `PlaybackShared::metrics()` (`bridge::RtMetrics`); `RtSink` carries both into the per-track
-read path.
-
-**Memory ordering.** `playing` and `seek_epoch` decide whether the audio thread acts and carry
-`SeqCst`; touched once per command or block, never per sample. The `fetch_add` in
-`next_seek_epoch` **is** the publication - storing its result back would let two concurrent seeks
-reinstate the older epoch. Everything else is `Relaxed`: `RtMetrics` counters are monotonic deltas,
-and `PlaybackSnapshot`'s scalars are independent readouts that need not agree across a block.
+Verification is gated by `--cfg rtsan`, so stable and production builds are
+byte-identical. A whole test body counts as a nonblocking region only in the
+`no-block` lane, where `.config/rtsan/async-suppressions.txt` narrows the check
+to genuine waits; the decoder lanes check the product's forbid regions alone.
 
 ## Seek Ownership
+**A seek is split in two**, because beginning one publishes an event and wakes
+the playback worker - both lock-taking, both forbidden on the device callback.
+`EngineImpl::begin_slot_seek` begins it on the control thread;
+`PlayerResource::reset_for_seek` re-bases on the audio thread through the
+reader's lock-free `sync_seek`. **The audio half can neither block nor fail, so
+there is no seek-failure signal.** A seek handle is bound in `send_slot_cmd` once
+its resource is accepted by the audio-thread channel, and released by exact item
+*and* resource identity when that resource returns through the trash channel, so
+replacing one item or reusing a URL cannot detach a different resident track.
 
-A seek is split in two, because beginning one publishes an event and wakes the playback worker -
-both lock-taking, both forbidden on the device callback.
+**A published seek outranks a natural end.** `seek_seconds` publishes the next
+epoch on `PlaybackShared` *before* sending the matching command, so a render
+block can drain the feeder in that window; ending the track there would hand the
+queue an `ItemDidPlayToEnd` it answers by auto-advancing out from under the
+accepted seek. Four sites carry the fence, and their own doc comments carry the
+derivation:
 
-**Control thread begins.** `EngineImpl::begin_slot_seek` walks the slot's `SeekBindings` and calls
-`kithara_audio::SeekBegin::begin` on each. A handle is bound in `send_slot_cmd` after its resource is
-accepted by the audio-thread channel. It is released by exact item and resource identity when that
-resource returns through the trash channel, so replacing one item or reusing a URL cannot detach a
-different resident track.
+- `handle_natural_end` holds while the track's epoch differs from the published
+  one, costing blocks of silence, never signal.
+- `apply_seek` re-bases *every* loaded track - including ones the seek does not
+  move, and a `Finished`-at-EOF track back to life - and a track planted later
+  starts at the published epoch, so none can be born behind.
+- `dispatch_notification` drops a stale `Eof`. The comparison is `!=`, not `<`:
+  epochs wrap, and withdrawal legally steps the published value back. `Stop` and
+  `Failed` are never fenced - a broken source stays broken across a seek.
+- `PlaybackShared::withdraw_seek_epoch` is a compare-exchange, so a failed send
+  cannot strand its own seek and a newer seek makes withdrawal a no-op
+  (`withdrawing_an_overtaken_epoch_leaves_the_newer_seek_published`).
 
-**Audio thread re-bases.** `PlayerCmd::Seek` carries only data; `PlayerResource::reset_for_seek`
-calls the reader's lock-free `sync_seek`, which adopts that epoch and recycles stale chunks into the
-trash outlet. Nothing here can block or fail, so there is no seek-failure signal. The command still
-carries `seek_epoch`, so one minted before a newer seek is dropped rather than applied.
+`PlayerResource::scratch_frames` is a per-channel **frame** count shared by
+`write_len` / `write_pos` / the `read` range, sized once off the audio thread and
+never re-zeroed, so **every mixing path must fill its whole window** - an
+underrun zero-fills rather than returning short.
 
-`AudioControl::seek` remains the one-call form for consumers off the audio thread. A reader whose
-`seek_handle` is `None` cannot be seeked from the callback at all.
-
-`PlayerResource::scratch_frames` is a per-channel **frame** count, and `write_len` / `write_pos` /
-the `read` range share that scale. Sized once per resource off the audio thread and never re-zeroed,
-so every mixing path must fill its whole window - an underrun zero-fills rather than returning short.
-
-Loaded tracks live in `rt::TrackSlots`, a fixed `[Option<PlayerTrack>; MAX_TRACKS]`. A `TrackSlot`
-stays valid while its track lives, and iteration is slot order, so cleanup and eviction are
-deterministic. `insert` hands a rejected newcomer back, since a `PlayerTrack` must not be freed on
-the audio thread.
-
-When the arena's last track ends at *natural* EOF the processor keeps it resident but inert, so a
-later in-range seek can revive it; tracks finished via stop or a faded-out crossfade are discarded.
-
-**A published seek outranks a natural end.** `seek_seconds` publishes the next epoch on
-`PlaybackShared` *before* it sends the matching `PlayerCmd::Seek`, so a render block can drain the
-feeder in the window between. Ending the track there would be reporting a position the user has
-already left: the queue takes `ItemDidPlayToEnd` as the authoritative end of track and auto-advances,
-flipping the current item out from under the seek the processor is about to apply. So each track
-carries the slot epoch it has been re-based onto, `RtSink` carries the published one, and
-`handle_natural_end` refuses to finalize while they differ. The hold costs blocks of silence, never
-the signal: `apply_seek` re-bases *every* loaded track onto the applied epoch — including the ones
-the seek does not move — and a track planted later starts at the epoch already published, so no track
-can be born behind. `Failed` is not held: a broken source stays broken across a seek.
-
-The refusal covers only ends not yet minted. An end the track finalized *honestly* — epochs equal
-at mint time — sits in the slot's notification ring until the control thread drains it, and a seek
-published in that window revives the track (`apply_seek` re-bases a `Finished`-at-EOF track back to
-life) while the stale report is still queued. So every `PlaybackStopped` carries the epoch its track
-sat at when minted, and `dispatch_notification` drops an `Eof` whose epoch is no longer the
-published one (`slot_playback().seek_epoch`). The comparison is `!=`, not `<`: epochs wrap, and
-withdrawal legally steps the published value back. `Stop` and `Failed` are never fenced, and a slot
-with no playback state delivers as-is.
-
-Publishing is a promise that a re-base is coming, and the send can fail — a full slot command ring
-answers `PlayError::SlotChannelFull`. A promise nobody carries would hold the natural end forever, so
-`seek_seconds` withdraws the epoch on a send error (`PlaybackShared::withdraw_seek_epoch`).
-Withdrawal is a compare-exchange against the published value: a newer seek having published in the
-meantime makes it a no-op, because that seek carries its own command and rolling back over it would
-strand *it* instead.
-
-`PlayWorker` owns its base-worker clone, dedicated dispatcher, and registered
-`DecoderNode`s. `DecoderNode::tick` carries the real-time attribute.
-Off-core work (pooled-buffer free, event flush, parking, symphonia allocation)
-belongs to the scheduler shell. Cross-thread wakes reached on the core are
-*armed* lock-free (`kithara_stream::DeferredWake::arm`) and delivered by the
-shell (`flush`), never on the forbid path.
-
-Verification is gated by `--cfg rtsan`, so stable/production builds are byte-identical. Lanes:
-`just test rtsan` (mock decoder), `rtsan-file` / `rtsan-hls` (real decoder, `suite_stress`), and
-`rtsan-async` (`--features no-block`). A whole test body counts
-as a nonblocking region only in the `no-block` lane, where `.config/rtsan/async-suppressions.txt`
-narrows the check to genuine waits; the decoder lanes check the product's forbid regions alone and
-their harness allocates freely. `deep:nightly` runs all four through `just ci run deep`, where a
-violation fails the job. `permit()` and the RT attribute macros live in `kithara-test-utils` /
-`kithara-test-macros`; there is no separate rtsan crate.
+`rt::TrackSlots::insert` hands a rejected newcomer back rather than freeing a
+`PlayerTrack` on the audio thread. When the arena's last track ends at *natural* EOF the processor
+keeps it resident but inert so a later in-range seek can revive it; tracks
+finished by stop or a faded-out crossfade are discarded. Off-core worker work
+(pooled-buffer free, event flush, parking, symphonia allocation) belongs to the
+scheduler shell, and cross-thread wakes reached on the core are *armed* lock-free
+and delivered by the shell, never on the forbid path.
 
 ## Session Actuator
-
 `kithara-play` owns the lower object-safe `SessionDispatcher` protocol used by
-one Player. `kithara-host` owns every concrete native/web session, the existing
-`kithara-engine` thread, the Firewheel graph, and the root synchronization
-group. A Player is constructed as an unbound instance and receives an opaque,
-one-shot `SessionBinding` only through `Host::insert`; decorators may only
-delegate the binding to their resident Player. Native insertion transfers the
-whole resident player. Wasm insertion transfers its `GroupState` and current
-desired level to the main-thread Host, which becomes their canonical
-owner, while the Worker Host retains the runtime and JS-bound resources. There
-is no standalone concrete production session constructor in this crate.
+one Player; `kithara-host` owns every concrete native or web session, the
+Firewheel graph, and the root synchronization group; `kithara-warp` owns musical
+coordinates and the `BeatGrid`, `WarpMap`, and `SyncGroup` protocols. **No concrete
+production session constructor lives in this crate.** A Player
+is constructed unbound and receives an opaque one-shot `SessionBinding` only
+through `Host::insert`; decorators may only delegate it to their resident Player.
+`TrackBinding` captures an owner-published `BeatGridSnapshot`; it neither creates
+a grid identity nor converts analysis facts into a second representation.
 
-`kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
-`SyncGroup` protocols; `kithara-play` owns one Player instance and
-`kithara-host` owns the live session that composes Players. `TrackBinding` captures an
-owner-published `BeatGridSnapshot`; it neither creates a grid identity nor
-converts analysis facts into a second representation. R7 session state may
-transact pure group operations, but the producer chain does not yet consume a
-`WarpMap` or acknowledge rendered/presented application.
-
-`SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
-consumer capability. Real-time session implementations explicitly return
-`RealtimeDeferred`, preserving the audio callback's no-syscall drain path;
-off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
-their inner capability. Requiring the method keeps wrappers from silently
-erasing an off-RT capability through a trait default. `ConfigPrep` copies the
-capability into `ResourceConfig::consumer_wake_mode`, unconditionally
-overwriting whatever the builder carried, so a player-managed resource has no
-second source of session wake policy. The builder setter (default
-`RealtimeDeferred`) exists for direct `Resource` readers that never pass
-through a player: such a reader declares `ImmediateOffRt` itself to get
-immediate worker wakes and inline reader-event delivery.
-
-### Host transport anchor
-
-The Host's `TransportCommitState` is the only owner of when the session beat-to-frame
-relation changes. Every applied transport commit creates one `SessionAnchor`
-at that exact render boundary and stores it in `SessionTransportSnapshot`. A
-stream restart removes the snapshot because the session frame axis restarted;
-the first block on the new axis reanchors the preserved beat before publishing
-another snapshot.
+`SessionDispatcher::consumer_wake_mode` is a **required** object-safe capability,
+not a trait default, so a wrapper cannot silently erase an off-RT capability by
+omission. `ConfigPrep` copies it into `ResourceConfig::consumer_wake_mode`,
+*unconditionally overwriting whatever the builder carried*, so a player-managed
+resource has no second source of wake policy; the builder setter exists only for
+direct `Resource` readers that never pass through a player
+(`prepare_config_overwrites_a_builder_declared_wake_mode` and siblings). The
+Host's `TransportCommitState` is the sole owner of when the session
+beat-to-frame relation changes: a stream restart drops the transport snapshot
+because the frame axis restarted, and the first block on the new axis reanchors
+the preserved beat before publishing another.
 
 ## Session Mixing
+**Session-input gain has two distinct owners.** Each `EngineImpl` owns its
+*desired* input level (`master_volume`); the session `SessionState` owns the
+*applied* graph gain. Production crosses that boundary only through
+`Host::apply_mix`, which validates the whole vector before mutating anything:
+omitted players are unchanged, one invalid entry voids the whole batch, and
+desired levels commit only after dispatch succeeds. There is no singular
+per-player gain command. `engine/mix.rs` pins the validation
+(`apply_rejects_duplicate_player_without_mutation` and siblings).
 
-Session-input gain has two distinct owners. Each `EngineImpl` owns its *desired* input level
-(`master_volume`). The session `SessionState` owns the *applied* graph gain (each
-`PlayerState.master_volume` and its `VolumeNode` memo). Production crosses that boundary only
-through `Host::apply_mix` / `HostCmd::ApplyMix`, which validates the whole vector - every level
-finite and in `0.0..=1.0`, every member owned by the Host, no member repeated, graph initialised for
-started players
+**Session-input levels are linear amplitudes**, so sub-ceiling session output is
+the exact weighted sum of level times signal. Firewheel's `Volume::Linear` is a
+fader taper - it squares its argument - so `master_gain` converts a level to that
+taper before the `VolumeNode`; feeding a level in directly would land `0.5` at
+`0.25` amplitude. Pure stereo gain stages never use a pan node, because a
+centered equal-power pan attenuates both channels. Slot/content volume and
+session ducking keep their own taper.
 
-- before mutating any stored volume or memo. Omitted players are unchanged; an invalid entry leaves
-  the whole batch untouched. This is the single session gain path; there is no singular per-player
-  gain command.
-
-Session-input levels are linear **amplitudes**: `0.5` halves the player's amplitude, and the
-sub-ceiling session output is the exact weighted sum `Σ levelᵢ · signalᵢ`. Firewheel's
-`Volume::Linear` is a fader taper (it squares its argument), so `master_gain` converts a level to
-that taper before it reaches the player's `VolumeNode`; feeding a level in directly would land
-`0.5` at `0.25` amplitude. Pure stereo gain stages never use a pan node because a centered
-equal-power pan attenuates both channels.
-Slot/content volume and session ducking keep their own taper; they are separate controls.
-
-`Host::apply_mix` actuates the final levels of Host-owned players in one batch.
-The Host validates every canonical grid identity, level, and duplicate before
-mutating the graph. Desired Player levels are committed only after dispatch succeeds.
-`engine/mix.rs`, `Cmd::SetPlayerMasterVolumes`, and the matching session-handle method compile only
-for tests or the `probe` feature. The probe path registers an unstarted player before storing its
-level, so the first start uses that session value. This keeps deterministic offline render tests on
-their existing lower `SessionDispatcher`; it is not a second production path. Removing that seam first
-requires the existing offline harness to exercise canonical Host ownership while preserving its
-explicit `render` API; that test migration is separate from the production cutover.
-
-The crossfader is pure Host policy (`kithara-host::crossfader_gain`), not state: consumers fold
-`trim * mute * crossfader_gain * group_master` into each member level before calling `Host::apply_mix`.
-`group_master` is folded per member, never stored as process-wide state, so one logical group
-cannot change another group's master. `crossfader_gain` rejects a non-finite or out-of-range
-position with `PlayError::MixPosition` and returns exact `0.0`/`1.0` at the endpoints.
-
-The session graph carries exactly one Host-owned peak limiter
-(`kithara-host/src/rt/limiter.rs`, wrapping `kithara_play::effects::PeakLimiter`) at the final sum,
-after session ducking and before the graph output.
-It is created once per session context in `create_session_output`; recreating the context (route
-change, idle teardown) rebuilds it with a fresh envelope. Player start/stop only connects or
-disconnects player master nodes and never creates a per-player limiter. The session constants
-(ceiling `0.98`, release `50 ms`, stereo) are const-asserted valid, so limiter construction cannot
-fail in practice and the processor holds the DSP directly.
+`Cmd::SetPlayerMasterVolumes` and the matching session-handle method compile only
+for tests or the `probe` feature, keeping deterministic offline render tests on
+the lower `SessionDispatcher`; **it is not a second production path.** The
+crossfader is likewise pure Host policy, **not state**: consumers fold trim,
+mute, crossfader gain, and group master into each member level before calling
+`Host::apply_mix`, and group master is folded per member rather than stored
+process-wide, so one logical group cannot change another's master.
 
 ## Session Mix Tap
+The tap is a Host-owned zero-output sink on the session limiter, reading the
+buffer the device receives. Three facts bind a consumer:
 
-`Cmd::QuerySampleRate` reports `Option<u32>` from Firewheel's current `stream_info`: `None` means
-the session has not measured an output yet. `sample_rate_hint` remains input to stream creation and
-restart, never an observed-rate reply. Consumers that require the device fact wait for `Some`;
-playback policy may explicitly choose its configured rate while no stream exists.
+- **The drop counter is in samples**, monotonic and `Relaxed` - it orders against
+  nothing in the ring, so a delta locates its gap no more precisely than the
+  window drained around it.
+- A stream restart keeps the tap running, but **a restart landing on a different
+  device rate ends the feed**, because the ring carries bare samples and a
+  consumer holding it would read the new rate as the old one; the way back on air
+  is `DisableMixTap` then a fresh `EnableMixTap`.
+- The node cannot resign on its own, because releasing the producer there would
+  free memory on the audio thread, so a consumer that stops reading sends
+  `DisableMixTap`. End of feed is `Observer::write_is_held() == false`.
 
-`Cmd::EnableMixTap` hangs `kithara-host/src/rt/tap.rs`'s `TapNode` off the session limiter beside `graph_out`:
-stereo in, zero outputs, `ProcessStatus::ClearAllOutputs`. Firewheel's compiler sorts every node
-topologically and keeps a sink with no outgoing edges in the schedule, so the extra
-`limiter -> tap` edge is an addition to the terminal chain: the tap reads the limiter's output
-buffer that `graph_out` interleaves into the device, and writes nothing anywhere.
-
-The processor owns the `MixTapWriter` (`bridge/channels.rs`): a `ringbuf::HeapProd<f32>` carrying
-the mix as interleaved stereo (LRLR) and an `Arc<AtomicU64>` drop counter. The ring's capacity is
-the caller's to choose, and the node keeps it as handed over. Pushes are frame-aligned, because a
-half frame lost to a full ring would swap L and R for the rest of the feed; an even capacity
-therefore accounts for every sample. **The counter is in samples** - frames x 2 - monotonic and
-`Relaxed`, which orders it against nothing in the ring: a delta locates its gap no more precisely
-than the window drained around it, and that is the resolution a consumer may claim.
-
-`SessionState.mix_tap` is the one owner of both states a tap has: `Requested` while it waits for a
-session output to hang off - enabling before the first `start_player` is allowed, and
-`create_session_output` installs it - and `Installed` once it carries a `NodeID`. A second
-`EnableMixTap` while either state holds fails with `SessionError::MixTapActive`, so the live
-consumer keeps its feed.
-
-`DisableMixTap` and idle teardown release the producer, which the consumer observes as
-`Observer::write_is_held() == false` and reads as end of feed. Removed nodes ride the returned
-schedule back to the control thread, so the writer is freed there rather than on the audio thread.
-
-A stream restart keeps the tap running: Firewheel constructs a processor once per node, so
-`stop_stream` / `start_stream` reuse the one holding the writer. **A restart that lands on a
-different device rate ends the feed instead**, because the ring carries bare samples and a consumer
-holding it would read the new rate as the old one. `new_stream` compares rates and releases the
-producer on the control thread; `state.mix_tap` still reads `Installed`, so the consumer's path
-back on air is `DisableMixTap` and a fresh `EnableMixTap`.
-
-The consumer owns the end of the tap's life: dropping its ring half leaves the node feeding a ring
-nobody reads, and the node cannot resign on its own (releasing the producer there would free memory
-on the audio thread). A consumer that stops reading sends `DisableMixTap`.
+`Cmd::QuerySampleRate` reports `None` until the session has measured an output;
+`sample_rate_hint` is stream-creation input, never an observed rate.
 
 ## Route Changes
+`PlayerNodeProcessor::new_stream` is the host-rate bridge: it updates the shared
+sample rate and, **only when the numeric rate actually changed**, propagates it
+to every loaded resource, which then enter the existing decoder recreate path
+with `RecreateCause::RouteChange`, preserving position and gapless state.
+Equal-rate notifications refresh host state and do not recreate.
 
-`PlayerNodeProcessor::new_stream` is the host-rate bridge: it updates the shared sample rate and,
-only when the numeric rate actually changed, propagates it to every loaded resource. Those
-resources then enter the existing decoder recreate path with `RecreateCause::RouteChange`, which
-preserves playback position and gapless state. Equal-rate notifications refresh host state and do
-not recreate. The recreated decoder receives the current host rate through `DecoderConfig.resampler`:
-Apple fused builds use the codec-embedded placement, other builds the standalone decoder-adapter
-placement with the selected backend.
-
-`ResourceConfig.decoder` (an `AudioDecoderConfig<B>`) is the only resource-level owner of decoder
-construction settings - backend selection, gapless mode, and resampling. Its `resampler` field
-threads the backend handle and tunables into `AudioConfig` and then `DecoderConfig.resampler`.
-`ResourceConfig` is generic over that backend, defaulting to `PlaybackResamplerBackend` (Rubato,
-else Glide, else none - by feature); leaving the field unset resolves to `B::default()` in
-`kithara-audio`, which owns that fallback. Callers wanting a platform backend such as Apple
-AudioConverter inject it through `ResourceConfig.decoder`, never through separate resource-level
-resampler fields.
+`ResourceConfig.decoder` is the only resource-level owner of decoder construction
+settings - backend selection, gapless mode, resampling. An unset resampler field
+resolves to `B::default()` in `kithara-audio`, which owns that fallback; a
+platform backend such as Apple AudioConverter is injected through
+`ResourceConfig.decoder`, never through separate resampler fields.
 
 ## Feature Flags
-
-| Feature | Default | Effect |
-| --- | --- | --- |
-| `backend-cpal` | yes | CPAL output via `firewheel/cpal` |
-| `backend-web-audio` | no | WebAudio backend (wasm32); implies `symphonia` |
-| `wasm-bindgen` | no | WASM bindings via `firewheel/wasm-bindgen` |
-| `symphonia` | yes | Software decode forwarded to `kithara-audio` / `kithara-decode` |
-| `fdk-aac` | no | FDK-AAC decode forwarding |
-| `webcodecs` | no | WebCodecs decode forwarding |
-| `apple` | no | Apple AudioToolbox decode; does not imply Rubato |
-| `apple-fused-src` | no | Apple fused decode+SRC via decoder-embedded resampler placement |
-| `resample-rubato` | yes | Default fixed-ratio Rubato backend |
-| `resample-glide` | no | Glide resampler backend for explicit config selection |
-| `stretch-signalsmith` | yes | Forward the Signalsmith engine to the warp-owned time-stretch renderer |
-| `stretch-bungee` | no | Forward the Bungee engine to the warp-owned time-stretch renderer |
-| `client-reqwest` | yes | Forward the reqwest HTTP backend to network-reaching deps |
-| `client-wreq` | no | Forward the wreq HTTP backend to network-reaching deps |
-| `tls-rustls` | yes | Forward rustls TLS selection to network-reaching deps |
-| `tls-native` | no | Forward native TLS selection to network-reaching deps |
-| `perf` | no | Native `hotpath` timing for play/audio/decode; ordinary builds compile probes out |
-| `probe` | no | USDT runtime tracing opt-in (forwards nothing on its own) |
-| `mock` | no | Exposes the `mock` module (`EqualizerMock`) |
-
-`src/guard.rs` hard-fails misconfigured builds: wasm32 requires `backend-web-audio`,
-`wasm-bindgen`, and a resampler backend (`resample-rubato` or `resample-glide`); non-wasm
-requires `backend-cpal`. The resampler is a build requirement on wasm because the web-audio
-context runs at the browser's rate and nothing downstream bridges to it: without a backend
-`PlaybackResamplerBackend` is `NoResamplerBackend` and every off-rate track fails to open.
-
-File and HLS pipelines are unconditional: `kithara-play` always links `kithara-file`,
-`kithara-hls`, `kithara-abr`, `kithara-assets`, `kithara-net`.
+`Cargo.toml` owns the list and defaults. `src/guard.rs` hard-fails misconfigured
+builds - wasm32 without `resample-rubato` or `resample-glide`, non-wasm without
+`stretch-signalsmith` or `stretch-bungee`. Decode, resampler, stretch,
+HTTP-client, and TLS features forward to a backend in a lower crate; none add
+behaviour here. File and HLS pipelines are unconditional:
+this crate always links `kithara-file`, `kithara-hls`, `kithara-abr`,
+`kithara-assets`, `kithara-net`.
 
 ## Current Item
-
-`PlayerEvent::CurrentItemChanged` means the *identity* of the current item changed - not merely
-that playback (re)started. A bare `play()` resuming the already-current item must **not** emit it:
-consumers (the queue, which re-publishes `QueueEvent::CurrentTrackChanged`, and FFI observers)
-treat it as a track switch and do real work, e.g. re-analysing the waveform.
-
-`Playlist` owns both the current index and the announce-dedup state. Its
-`last_announced: Option<usize>` starts as `None`; `mark_announced` records an index and reports
-whether it changed. `ItemQueue::announce_current_item` is the sole event publisher and emits only
-when that report is true, so first activation announces but a resume does not. Genuine track moves
-(`commit_next`, `advance_to_next_item`, the handover finaliser, and the select/jump path) route
-through that publisher. Playlist mutations that can change identity under a reused index (`clear`,
-`remove_at`, and replacement of the announced index) reset the dedup state to `None`, so the next
-`play()` re-announces. `play()` announces only when the item actually loaded - an empty slot means
-the load is still in flight, and announcing would make the arriving resource take the
-reselecting-current path and never be enqueued.
+`PlayerEvent::CurrentItemChanged` means the *identity* of the current item
+changed - **not merely that playback (re)started.** A bare `play()` resuming the
+already-current item must not emit it: consumers treat it as a track switch and
+do real work such as re-analysing the waveform. `Playlist` owns the current index
+and the announce-dedup state, and `ItemQueue::announce_current_item` is the sole
+publisher (`announce_deduplicates_current_item_event`); a mutation that can
+change identity under a reused index resets the dedup state so the next `play()`
+re-announces. `play()` announces only when the item actually loaded, since an
+empty slot means the load is still in flight and announcing would send the
+arriving resource down the reselecting-current path, never to be enqueued.
 
 ## Invariants
-
-- `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
-- At most `EngineImpl::max_slots()` slots allocated at once (`PlayerConfig.max_slots`, default 4).
-- `PlayerImpl::slot()` is `None` until a slot is allocated (phases `Idle` and `Stopped`-without-
-  slot); `send_to_slot` then fails with `PlayError::NoActiveSlot`.
 - Audio-thread `process()` is allocation-, free-, and lock-free.
-- `duration_seconds()` returns `None` while duration is unknown; the shared atomic's `0.0`
-  conflates "unknown" with "empty track", so callers must not read it directly.
+- `duration_seconds()` returns `None` while duration is unknown; the shared
+  atomic's `0.0` conflates "unknown" with "empty track", so callers must not read
+  it directly.
 
 ## Testing And Integration
+The offline render backend for deterministic engine and player tests lives in
+`kithara-integration-tests::offline`, not here.
 
-The offline render backend for deterministic engine/player tests lives in
-`kithara-integration-tests::offline` (`tests/src/offline/`), not here. Enable `mock` for the
-`Equalizer` unimock helper. `session::testing::test_session()` provides an in-process dispatcher
-for unit tests.
-
-Public failures propagate as `Result<T, PlayError>`; no `unwrap()` / `expect()` in production code.

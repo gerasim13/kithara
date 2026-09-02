@@ -8,29 +8,29 @@
 //! buffer, or a RIFF body, whether at build time or at run time. See
 //! `CONTEXT.md` for the store layout and the invalidation contract.
 
-// Every accessor that reads the store carries its own `cfg`, because the store
-// is a host filesystem the browser cannot reach; an `embed` accessor carries
-// its bytes instead and compiles everywhere. The store itself stays native, and
-// the wasm lane reaches the rest through `SignalAsset` over HTTP.
+/// Every accessor that reads the store carries its own `cfg`, because the store
+/// is a host filesystem the browser cannot reach; an `embed` accessor carries
+/// its bytes instead and compiles everywhere. The store itself stays native, and
+/// the wasm lane reaches the rest through `SignalAsset` over HTTP.
 pub mod asset;
 pub mod assets;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hls;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use hls::manifest as hls_manifest;
-pub mod signal;
-pub mod signal_asset;
-// The gapless request shape is shared with wasm; the native-only fMP4 muxer is
-// gated inside the module with the encoder types it consumes.
-pub mod fmp4;
-// Read by this crate's build script through `#[path]`, and still by the
-// integration suite's; declared here so its own tests keep running.
+/// Read by this crate's build script through `#[path]`, and still by the
+/// integration suite's; declared here so its own tests keep running.
 #[cfg(test)]
 mod context;
 #[cfg(test)]
 mod encoders;
+/// The gapless request shape is shared with wasm; the native-only fMP4 muxer is
+/// gated inside the module with the encoder types it consumes.
+pub mod fmp4;
 #[cfg(test)]
 mod graph;
+pub mod signal;
+pub mod signal_asset;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod store;
 

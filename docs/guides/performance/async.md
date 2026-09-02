@@ -78,7 +78,7 @@ inserted: AtomicBool,   // store(Release) / load(Acquire)
 
 ## Async/tokio deep
 
-**Blocking syscalls / heavy CPU on the async worker** (anchor; `E2` folds here)
+**Blocking syscalls / heavy CPU on the async worker** (anchor; E2 folds here)
 
 ```rust
 // bad: heavy CPU pinned on the shared runtime
@@ -139,7 +139,7 @@ for x in buf.drain(..n) { tiny(x); }
 One spawn per network fetch stays fine - that is bounded IO concurrency, not per-item CPU.
 *tier: warm | detector: ast-grep `arch.no-raw-tokio-task` (routes spawns, doesn't detect per-item) / manual | preventive*
 
-**Unbounded channel without backpressure** (`L11` folds here)
+**Unbounded channel without backpressure** (L11 folds here)
 
 ```rust
 // bad: unbounded producer, no backpressure
@@ -152,7 +152,7 @@ let (tx, rx) = mpsc::channel::<ResourceKey>(cap);
 Reserve `unbounded_channel` for provably rate-limited producers and justify it in a comment; at the RT edge use a fixed-capacity SPSC ring.
 *tier: warm | detector: manual (backlog `unbounded_channel(` census) | present in kithara (kithara-hls `stream/hls.rs`, kithara-stream `downloader.rs` - control-plane, uncommented)*
 
-**`tokio::sync::Mutex` for plain data** (across-await half is `E1`)
+**`tokio::sync::Mutex` for plain data** (across-await half is E1)
 
 ```rust
 // bad: async mutex guarding plain data, or a std guard held across await

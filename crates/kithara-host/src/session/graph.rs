@@ -20,8 +20,8 @@ use crate::{
 pub(super) const fn ducking_gain(mode: SessionDuckingMode) -> f32 {
     mode.gain()
 }
-// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
-// squares its argument, so it must be converted rather than passed through.
+/// A level is a linear amplitude, but `Volume::Linear` is a fader taper that
+/// squares its argument, so it must be converted rather than passed through.
 pub(super) fn master_gain(level: f32) -> Volume {
     Volume::Linear(amp_to_linear_volume_clamped(level, 0.0))
 }
@@ -441,8 +441,8 @@ pub(super) mod slots {
 pub(super) mod controls {
     use super::*;
 
-    // Validates the whole request before mutating anything, so an invalid
-    // entry leaves the batch untouched. Omitted players are unchanged.
+    /// Validates the whole request before mutating anything, so an invalid
+    /// entry leaves the batch untouched. Omitted players are unchanged.
     pub(in crate::session) fn set_player_master_volumes<B: AudioBackend, S>(
         state: &mut SessionState<B, S>,
         levels: &[PlayerLevel],

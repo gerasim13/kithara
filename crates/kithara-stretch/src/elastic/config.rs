@@ -13,7 +13,7 @@ impl Consts {
     const CONTINUITY_TOLERANCE: f64 = 1.0e-6;
     const MAX_CORRECTION_PER_BLOCK: f64 = 1.0;
     const MAX_PHASE_ERROR: f64 = 1.0;
-    // i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
+    /// i32-bounded numerators and denominators need fewer than 47 continued-fraction steps.
     const RATE_FRACTION_DEPTH: u8 = 64;
     const MAX_SOURCE_FRAMES_PER_OUTPUT: f64 = 4.0;
     const MIN_SOURCE_FRAMES_PER_OUTPUT: f64 = 0.05;

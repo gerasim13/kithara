@@ -555,12 +555,12 @@ fn normalize_signature(text: &str) -> String {
         Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]*(?:_ns|_ms)|pid|task|thread|id|dump|polls)=[^\s,;]+")
             .expect("volatile diagnostic regex")
     });
-    // A Rust panic header names the thread and its id before the location.
-    // The id changes on every attempt, which made each failure its own
-    // cluster — the one section whose purpose is to say "these are one cause"
-    // reported each of them separately. The thread NAME is the test's own,
-    // already carried by the examples column, and spending the row's width on
-    // it is what pushed the assertion's values off the end.
+    /// A Rust panic header names the thread and its id before the location.
+    /// The id changes on every attempt, which made each failure its own
+    /// cluster — the one section whose purpose is to say "these are one cause"
+    /// reported each of them separately. The thread NAME is the test's own,
+    /// already carried by the examples column, and spending the row's width on
+    /// it is what pushed the assertion's values off the end.
     static PANIC_THREAD: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"thread '[^']*' \(\d+\) panicked at").expect("panic thread identity regex")
     });

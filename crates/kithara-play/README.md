@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-play.svg)](https://crates.io/crates/kithara-play)
 [![docs.rs](https://docs.rs/kithara-play/badge.svg)](https://docs.rs/kithara-play)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -57,7 +57,7 @@ builder and inspect caller-facing values through getters such as `source()`,
 `store()`, and `bus()`. Decoder backend, gapless, and resampler settings belong
 to the single `decoder` field.
 
-## Core Surface
+## Key Types
 
 - `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
   optional shared `kithara-worker` base.
@@ -71,7 +71,7 @@ to the single `decoder` field.
   filesystem, network, and cryptography crates.
 - `Equalizer` is the remaining mockable trait surface.
 
-## Orientation
+## Integration
 
 - **Lifecycle:** start the engine, allocate a slot, attach a player item, play,
   then release the slot and stop the engine.
