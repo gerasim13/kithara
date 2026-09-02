@@ -60,7 +60,7 @@ impl Default for RealtimeSessionConfig {
 #[non_exhaustive]
 pub enum SessionConfig<S> {
     /// Device-backed platform session.
-    Realtime(RealtimeSessionConfig),
+    Realtime(RealtimeSessionConfig, PhantomData<fn() -> S>),
     /// Device-free finite renderer.
     #[cfg(feature = "offline")]
     Offline(Box<OfflineSessionConfig<S>>),
@@ -70,13 +70,13 @@ impl<S> SessionConfig<S> {
     /// Configure a platform realtime session.
     #[must_use]
     pub const fn realtime(config: RealtimeSessionConfig) -> Self {
-        Self::Realtime(config)
+        Self::Realtime(config, PhantomData)
     }
 }
 
 impl<S> Default for SessionConfig<S> {
     fn default() -> Self {
-        Self::Realtime(RealtimeSessionConfig::default())
+        Self::realtime(RealtimeSessionConfig::default())
     }
 }
 
@@ -407,7 +407,7 @@ where
     /// Returns an error when the session root or selected runtime cannot start.
     pub fn new(config: HostConfig<S>) -> Result<Self, PlayError> {
         match config.session {
-            SessionConfig::Realtime(config) => {
+            SessionConfig::Realtime(config, _) => {
                 let root = Self::session_root(config.sample_rate_hint)?;
                 let (dispatcher, platform) =
                     Platform::realtime(root.group, root.view.clone(), root.sample_rate)
