@@ -210,12 +210,6 @@ where
         #[cfg(any(test, feature = "probe"))]
         pacing,
     } = config;
-    let backend_config = BackendConfig {
-        block_frames: max_block_frames,
-        declick_frames,
-        declared_latency,
-        sample_rate,
-    };
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let pending = dispatcher.reserve(task_config).map_err(|error| {
         PlayError::Internal(format!("offline session task reservation: {error}"))
@@ -228,11 +222,13 @@ where
                                      rate: u32| {
                 let rate = NonZeroU32::new(rate)
                     .ok_or_else(|| "offline sample rate must be non-zero".to_owned())?;
-                ctx.start_stream(BackendConfig {
-                    sample_rate: rate,
-                    ..backend_config
-                })
-                .map_err(|error| error.to_string())
+                let config = BackendConfig::builder()
+                    .block_frames(max_block_frames)
+                    .declick_frames(declick_frames)
+                    .declared_latency(declared_latency)
+                    .sample_rate(rate)
+                    .build();
+                ctx.start_stream(config).map_err(|error| error.to_string())
             };
             OfflineSessionTask {
                 cmd_rx,

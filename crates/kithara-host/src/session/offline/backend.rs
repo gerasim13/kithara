@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use bon::Builder;
 use firewheel::{
     StreamInfo,
     backend::{AudioBackend, BackendProcessInfo},
@@ -10,7 +11,8 @@ use kithara_platform::time::{Duration, Instant};
 
 use super::{CHANNELS, OfflineSessionError};
 
-#[derive(Clone, Copy)]
+#[derive(Builder, Clone, Copy)]
+#[builder(state_mod(vis = "pub(crate)"))]
 pub(super) struct BackendConfig {
     pub(super) block_frames: NonZeroU32,
     pub(super) declick_frames: NonZeroU32,
@@ -20,12 +22,12 @@ pub(super) struct BackendConfig {
 
 impl Default for BackendConfig {
     fn default() -> Self {
-        Self {
-            block_frames: NonZeroU32::MIN,
-            declick_frames: NonZeroU32::MIN,
-            declared_latency: Duration::ZERO,
-            sample_rate: NonZeroU32::MIN,
-        }
+        Self::builder()
+            .block_frames(NonZeroU32::MIN)
+            .declick_frames(NonZeroU32::MIN)
+            .declared_latency(Duration::ZERO)
+            .sample_rate(NonZeroU32::MIN)
+            .build()
     }
 }
 
@@ -123,13 +125,13 @@ mod tests {
         let declared_latency = Duration::from_millis(7);
         let sample_rate = NonZeroU32::new(48_000).expect("fixture sample rate");
 
-        let (_, stream) = OfflineBackend::start_stream(BackendConfig {
-            block_frames,
-            declick_frames,
-            declared_latency,
-            sample_rate,
-        })
-        .expect("fixture backend stream");
+        let config = BackendConfig::builder()
+            .block_frames(block_frames)
+            .declick_frames(declick_frames)
+            .declared_latency(declared_latency)
+            .sample_rate(sample_rate)
+            .build();
+        let (_, stream) = OfflineBackend::start_stream(config).expect("fixture backend stream");
 
         assert_eq!(stream.max_block_frames, block_frames);
         assert_eq!(stream.declick_frames, declick_frames);
