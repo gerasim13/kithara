@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara::{
     assets::{AssetStore, StorageBackend},
     audio::{AudioConfig, AudioControl, AudioRead, AudioSession, ChunkOutcome, ReadOutcome},
@@ -5,6 +7,7 @@ use kithara::{
     events::{AbrEvent, AbrReason, Event, EventBus, EventReceiver},
     file::{File, FileConfig},
     hls::{AbrMode, Hls, HlsConfig},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -264,7 +267,9 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     while Instant::now() < deadline {
         let _ = progress_audio.preload();
         let read: usize = match progress_audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 if !switch_seen {
                     let pace = position.saturating_sub(consumed);
                     spawn_blocking(move || paced_backoff(pace))
@@ -405,8 +410,12 @@ async fn packaged_abr_switch_keeps_player_continuity(temp_dir: TestTempDir) {
     let _ = time::timeout(Duration::from_secs(5), resource.preload())
         .await
         .expect("packaged ABR preload must complete");
-    let mut player = OfflinePlayer::new(CONTINUITY_SAMPLE_RATE);
-    player.load_and_fadein(resource, "packaged_abr");
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools.clone())
+            .sample_rate(NonZeroU32::new(CONTINUITY_SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
     let _warmup = render_offline_window(
         &mut player,
         24,
@@ -993,7 +1002,9 @@ fn read_manual_cross_codec_phase(
         }
 
         match audio.read(&mut buf) {
-            Ok(ReadOutcome::Frames { count, position }) => {
+            Ok(ReadOutcome::Frames {
+                count, position, ..
+            }) => {
                 let count = u64::try_from(count.get())
                     .unwrap_or_else(|error| panic!("read count does not fit u64: {error}"));
                 if manual_applied {

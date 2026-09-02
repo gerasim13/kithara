@@ -8,7 +8,9 @@ use {
 use super::WarpConfig;
 #[cfg(feature = "render")]
 use super::WarpRenderer;
-use crate::StretchControls;
+#[cfg(feature = "render")]
+use crate::RenderReader;
+use crate::{RenderPublisher, StretchControls};
 
 /// Resident warp actuator around one decoded-audio source.
 ///
@@ -21,6 +23,9 @@ use crate::StretchControls;
 pub struct Warp<S> {
     #[field(get, deref = false)]
     stretch: Arc<StretchControls>,
+    publisher: Option<RenderPublisher>,
+    #[cfg(feature = "render")]
+    reader: RenderReader,
     #[field(get, get_mut)]
     source: S,
 }
@@ -29,10 +34,22 @@ impl<S> Warp<S> {
     /// Wraps `source` with the configured live temporal controls.
     #[must_use]
     pub fn new(source: S, config: &WarpConfig) -> Self {
+        let publisher = RenderPublisher::default();
+        #[cfg(feature = "render")]
+        let reader = publisher.reader();
         Self {
             source,
             stretch: Arc::clone(config.stretch()),
+            publisher: Some(publisher),
+            #[cfg(feature = "render")]
+            reader,
         }
+    }
+
+    /// Takes the sole callback-side publisher paired with this resident Warp.
+    #[must_use]
+    pub fn take_publisher(&mut self) -> Option<RenderPublisher> {
+        self.publisher.take()
     }
 
     /// Creates the worker-side renderer paired with this Warp facade.
@@ -42,7 +59,7 @@ impl<S> Warp<S> {
     where
         P: HasPool<f32>,
     {
-        WarpRenderer::new(Arc::clone(&self.stretch), spec, pools)
+        WarpRenderer::new(Arc::clone(&self.stretch), self.reader.clone(), spec, pools)
     }
 }
 

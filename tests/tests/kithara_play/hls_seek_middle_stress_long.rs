@@ -1,14 +1,16 @@
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroU32;
+
 use kithara::{
     abr::AbrMode,
     assets::{AssetStore, StorageBackend},
     decode::DecoderBackend,
     events::{AudioEvent, Event, EventReceiver, PlayerEvent},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope, CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio::{
             sync::broadcast::error::RecvError,
@@ -19,12 +21,12 @@ use kithara::{
         PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Resource, ResourceConfig,
         ResourceSrc,
     },
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, PackagedTestServer, SegmentGateHandle, TestServerHelper, Xorshift64,
-    offline::{OfflinePlayer, OfflineSession},
+    offline::{OfflinePlayer, OfflineQueue},
     temp_dir,
     waits::{
         render_until_position as raw_render_until_position, wait_for_loader_done_event,
@@ -41,7 +43,7 @@ use crate::{
 struct Consts;
 impl Consts {
     const SAMPLE_RATE: u32 = Shared::SAMPLE_RATE;
-    const BLOCK_FRAMES: usize = Shared::OFFLINE_BLOCK_FRAMES;
+    const BLOCK_FRAMES: usize = 512;
     const PRE_SEEK_RENDER_SECS: f64 = 1.5;
     const POST_SEEK_AUDIO_SECS: f64 = 1.5;
     const MIN_POSITION_ADVANCE_POST_SEEK_SECS: f64 = 1.0;
@@ -123,7 +125,7 @@ fn segment_for_target(target: f64) -> usize {
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -133,7 +135,7 @@ async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
 }
 
 #[kithara::flash(true)]
-async fn churn_rates(queue: Arc<Queue<TestPools>>, seed: u64, stop: CancelToken) -> usize {
+async fn churn_rates(queue: QueueControl<TestPools>, seed: u64, stop: CancelToken) -> usize {
     let mut rng = Xorshift64::new(seed);
     let mut changes = 0;
     while !stop.is_cancelled() {
@@ -191,7 +193,7 @@ async fn observe_playback(
     Ok(stats)
 }
 
-async fn seek_and_require_read(queue: &Queue<TestPools>, stage: &str, target: f64) {
+async fn seek_and_require_read(queue: &QueueControl<TestPools>, stage: &str, target: f64) {
     let mut progress_rx = queue.subscribe();
     let recorder = install_recorder();
     queue
@@ -315,8 +317,12 @@ async fn hls_seek_middle_repeated_seeks_long_stress(#[case] backend: DecoderBack
         .await
         .unwrap_or_else(|e| panic!("Resource::new failed: {e:?}"));
 
-    let mut player = OfflinePlayer::new(Consts::SAMPLE_RATE);
-    player.load_and_fadein(resource, "t0");
+    let mut player = OfflinePlayer::new(
+        HostConfig::offline(pools())
+            .sample_rate(NonZeroU32::new(Consts::SAMPLE_RATE).expect("sample rate is non-zero"))
+            .build(),
+    );
+    player.load_and_fadein(resource);
 
     let warmup_target = player.position() + Consts::PRE_SEEK_RENDER_SECS;
     render_until_position(
@@ -438,26 +444,32 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools,
+            pools.clone(),
             shutdown_token.child(),
         ))
         .build(),
     );
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(worker)
-            .session(OfflineSession::arc_auto())
             .cancel(shutdown_token.child())
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .cancel(shutdown_token.child())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
-    let tick_handle = task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .cancel(shutdown_token.child())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = task::spawn(drive_queue_ticks(queue.control()));
 
     let hls_config = ResourceConfig::for_src(
         ResourceSrc::parse(master.as_str()).expect("valid packaged HLS URL"),
@@ -499,7 +511,7 @@ async fn hls_rate_seek_stress_keeps_playback_live(#[case] backend: DecoderBacken
     ));
     let churn_stop = shutdown_token.child();
     let churn_handle = task::spawn(churn_rates(
-        Arc::clone(&queue),
+        queue.control(),
         Consts::RATE_SEED,
         churn_stop.clone(),
     ));

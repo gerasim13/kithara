@@ -652,7 +652,12 @@ mod tests {
     fn queue() -> (AppHost, AppQueueControl) {
         let worker = AppWorker::new(PlayWorkerConfig::builder(test_pools()).build());
         let mut host = AppHost::new(HostConfig::builder().build()).expect("test host");
-        let player = PlayerImpl::new(PlayerConfig::builder().worker(worker).build());
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker)
+                .sample_rate(host.requested_sample_rate())
+                .build(),
+        );
         let queue = AppQueue::new(QueueConfig::builder().player(player).build());
         let queue = host.insert(queue).expect("host accepts queue");
         let control = queue.control().clone();

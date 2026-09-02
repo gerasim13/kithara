@@ -103,6 +103,7 @@ impl Deck {
                 .cancel(cancel.clone())
                 .crossfade_duration(config.crossfade_seconds)
                 .eq_layout(generate_log_spaced_bands(config.eq_bands))
+                .sample_rate(host.requested_sample_rate())
                 .timestretch(Arc::clone(&timestretch))
                 .worker(config.worker.clone())
                 .build(),
@@ -325,6 +326,7 @@ mod tests {
         let player = PlayerImpl::new(
             PlayerConfig::builder()
                 .cancel(cancel.clone())
+                .sample_rate(host.requested_sample_rate())
                 .timestretch(Arc::clone(&timestretch))
                 .worker(worker.clone())
                 .build(),

@@ -127,6 +127,13 @@ UI must not drift from the audio
 (`select_item_on_consumed_slot_errors_without_bookkeeping`).
 
 ## Engine Lifecycle
+
+`PlayerConfig.sample_rate` is mandatory and has no playback-layer default. It
+is the Player's initial session-rate contract; Host attachment queries the
+canonical dispatcher carried by `SessionBinding`, and that dispatcher is the
+sole rate source for validation and register/start commands. Tests pass their
+fixture rate explicitly.
+
 `EngineImpl::start` is **atomic single-start**: an internal `start_lock`
 serializes the `running` check-then-act, and `running` flips only after
 `session.start_player` fully succeeds. `ensure_engine_started` treats
@@ -345,4 +352,3 @@ arriving resource down the reselecting-current path, never to be enqueued.
 ## Testing And Integration
 The offline render backend for deterministic engine and player tests lives in
 `kithara-integration-tests::offline`, not here.
-

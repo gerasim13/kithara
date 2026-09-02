@@ -121,6 +121,9 @@ fdk-aac = [
 ]
 encode = ["dep:kithara-encode"]
 ffmpeg = ["encode", "kithara-encode/ffmpeg"]
+offline = ["output", "kithara-host/offline"]
+output = ["dep:kithara-output"]
+record = ["encode", "output", "dep:kithara-record"]
 resample-glide = [
     "kithara-audio/resample-glide",
     "kithara-decode/resample-glide",
@@ -244,7 +247,7 @@ android = [
     "resample-rubato",
     "analysis-beat",
 ]
-full = ["file", "hls", "assets", "net", "bufpool"]
+full = ["file", "hls", "assets", "net", "bufpool", "offline", "record"]
 
 [dependencies]
 kithara-abr = { workspace = true, optional = true, default-features = false }
@@ -261,9 +264,11 @@ kithara-file = { workspace = true, optional = true, default-features = false }
 kithara-hls = { workspace = true, optional = true, default-features = false }
 kithara-host = { workspace = true, default-features = false }
 kithara-net = { workspace = true, optional = true, default-features = false }
+kithara-output = { workspace = true, optional = true }
 kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false }
 kithara-queue = { workspace = true, optional = true, default-features = false }
+kithara-record = { workspace = true, optional = true }
 kithara-resampler = { workspace = true, default-features = false }
 kithara-signal = { workspace = true }
 kithara-storage = { workspace = true, optional = true }

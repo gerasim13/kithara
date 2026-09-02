@@ -3,6 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{DownloaderEvent, Event},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
@@ -11,15 +12,16 @@ use kithara::{
         tokio,
     },
     play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     Content, Delivery, FixtureBehavior, TestServerHelper, TestTempDir,
     bufpool_ext::{TestPools, pools},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
+    test_defaults::Consts as Shared,
     waits::{wait_for_event, wait_for_loader_done_event},
 };
 use kithara_test_fixtures::assets::signal_mp3_track_sine440_187s;
@@ -51,7 +53,7 @@ const MIN_BUFFERED_FRACTION_PERCENT: u64 = 80;
 /// duration alone can hand back a live duration next to an unwritten window.
 /// The gate is independent of what the trap asserts.
 async fn wait_for_playing_settled_duration(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
 ) -> Result<kithara::queue::PlaybackView, String> {
     time::timeout(deadline, async {
@@ -76,7 +78,7 @@ async fn wait_for_playing_settled_duration(
     })
 }
 
-fn spawn_ticker(queue: Arc<Queue<TestPools>>) -> tokio::task::JoinHandle<()> {
+fn spawn_ticker(queue: QueueControl<TestPools>) -> tokio::task::JoinHandle<()> {
     tokio::task::spawn(async move {
         loop {
             time::sleep(Duration::from_millis(20)).await;
@@ -116,25 +118,31 @@ async fn progressive_download_fills_the_buffer_bar(temp_dir: TestTempDir) {
         .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .worker(kithara::play::PlayWorker::new(
-                kithara::play::PlayWorkerConfig::builder(pools).build(),
+                kithara::play::PlayWorkerConfig::builder(pools.clone()).build(),
             ))
-            .session(OfflineSession::arc_auto())
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
+    let queue = OfflineQueue::new(
+        HostConfig::offline(pools)
+            .pacing(Duration::from_millis(10))
             .build(),
-    ));
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid fixture URL"))
         .downloader(downloader)
         .look_ahead_bytes(LOOK_AHEAD_BYTES)
         .store(store)
         .build();
 
-    let ticker = spawn_ticker(Arc::clone(&queue));
+    let ticker = spawn_ticker(queue.control());
     let mut rx = queue.subscribe();
     // Separate subscriber: the warm-up below drains `rx`, and the body can
     // finish transferring before the pause — the completion must not be eaten

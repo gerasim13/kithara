@@ -6,22 +6,22 @@ use kithara::{
     events::{
         AbrMode, AudioEvent, Event, EventReceiver, PlayerEvent, QueueEvent, TrackId, TrackStatus,
     },
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{Duration, Instant, sleep, timeout},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
 };
 
@@ -55,7 +55,7 @@ const SEEK_OBSERVE_BUDGET: Duration = Duration::from_secs(15);
 #[kithara::flash(true)]
 async fn wait_for_status(
     rx: &mut EventReceiver,
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     id: TrackId,
     target: TrackStatus,
     budget: Duration,
@@ -103,7 +103,7 @@ enum ScrubOutcome {
 /// bug), or `budget` elapses.
 #[kithara::flash(true)]
 async fn observe_scrub_outcome(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     rx: &mut EventReceiver,
     target_src: &str,
     seek_target: f64,
@@ -178,14 +178,14 @@ async fn wait_for_playback_progress(
 }
 
 struct Harness {
-    queue: Arc<Queue<TestPools>>,
+    queue: OfflineQueue<TestPools>,
     rx: EventReceiver,
     master_url: String,
     tick: tokio::task::JoinHandle<()>,
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -261,15 +261,24 @@ impl Harness {
                 root: temp_dir.path().to_path_buf(),
             })
             .build();
+        let session = HostConfig::offline(pools.clone())
+            .pacing(Duration::from_millis(10))
+            .build();
         let player = PlayerImpl::new(
             PlayerConfig::builder()
-                .worker(PlayWorker::new(PlayWorkerConfig::builder(pools).build()))
-                .session(OfflineSession::arc_auto())
+                .sample_rate(session.sample_rate())
+                .worker(PlayWorker::new(
+                    PlayWorkerConfig::builder(pools.clone()).build(),
+                ))
                 .build(),
         );
-        let queue = Arc::new(Queue::new(QueueConfig::builder().player(player).build()));
+        let queue = OfflineQueue::new(
+            session,
+            Queue::new(QueueConfig::builder().player(player).build()),
+        )
+        .expect("create product offline queue");
 
-        let tick = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+        let tick = tokio::task::spawn(drive_queue_ticks(queue.control()));
 
         let cfg = ResourceConfig::for_src(ResourceSrc::parse(master.as_str()).expect("valid URL"))
             .downloader(downloader)

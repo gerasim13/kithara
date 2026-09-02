@@ -6,22 +6,22 @@ use std::fmt::Write;
 use kithara::{
     assets::AssetStore,
     events::{AbrMode, Event, QueueEvent, TrackId, TrackStatus},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, sleep},
         tokio,
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir,
     fixture_protocol::{DelayRule, EncryptionRequest},
     kithara,
-    offline::OfflineSession,
+    offline::OfflineQueue,
     temp_dir,
 };
 use kithara_test_fixtures::SignalAsset;
@@ -107,7 +107,7 @@ async fn build_hls(helper: &TestServerHelper, mode: FixtureMode) -> Url {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
@@ -116,7 +116,7 @@ fn build_queue_with_tick(
 }
 
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -129,30 +129,40 @@ fn build_queue_with_tick_cf(
     temp_dir: &TestTempDir,
     crossfade_seconds: f32,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .crossfade_duration(crossfade_seconds)
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .build(),
@@ -162,7 +172,7 @@ fn build_queue_with_tick_cf(
 
 #[kithara::flash(true)]
 async fn wait_for_loader_done(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<TrackStatus, String> {
@@ -286,7 +296,7 @@ async fn replay_track_after_switch_does_not_hang_loader(#[case] mode: FixtureMod
 /// playing the old track".
 #[kithara::flash(true)]
 async fn wait_for_position(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
     label: &str,
     pred: impl Fn(f64) -> bool,
@@ -359,12 +369,12 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 
     // The engine duration snapshot is written from the arena's sounding
     // track, so it discriminates the two fixtures: mp3 ≈ 162 s, HLS = 64 s.
-    let sounds_like_a = |queue: &Queue<TestPools>| {
+    let sounds_like_a = |queue: &QueueControl<TestPools>| {
         queue
             .duration_seconds()
             .is_some_and(|d| (d - 162.0).abs() < 20.0)
     };
-    let sounds_like_b = |queue: &Queue<TestPools>| {
+    let sounds_like_b = |queue: &QueueControl<TestPools>| {
         queue
             .duration_seconds()
             .is_some_and(|d| (d - 64.0).abs() < 20.0)
@@ -413,10 +423,10 @@ async fn switch_back_to_mp3_restarts_audio_not_just_ui(
 /// Wait until `pred(queue)` holds, panicking past `deadline`.
 #[kithara::flash(true)]
 async fn wait_for(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     deadline: Duration,
     label: &str,
-    pred: &dyn Fn(&Queue<TestPools>) -> bool,
+    pred: &dyn Fn(&QueueControl<TestPools>) -> bool,
 ) {
     let start = time::Instant::now();
     while !pred(queue) {

@@ -1,4 +1,7 @@
-use std::mem;
+use std::{
+    mem,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use kithara_platform::{
     CancelGroup, CancelToken, CancelWakerGuard,
@@ -13,7 +16,7 @@ use kithara_platform::{
 
 use super::{
     core::run_loop,
-    state::{Capacity, Command, Reservation, SchedulerBudgets, Slot},
+    state::{Capacity, Command, Registration, Reservation, SchedulerBudgets, TaskFactory},
 };
 use crate::{
     DispatcherConfig, Task, TaskConfig, TaskContext, TaskControl, TaskId, Wake,
@@ -55,7 +58,7 @@ impl Dispatcher {
     /// Returns a task admission or dispatcher lifecycle failure.
     pub fn register<T, F>(&self, config: TaskConfig, factory: F) -> Result<TaskHandle, TaskError>
     where
-        T: Task,
+        T: Task + Send,
         F: FnOnce(TaskContext) -> T,
     {
         self.reserve(config)?.start(factory)
@@ -156,14 +159,14 @@ enum Admission {
 }
 
 impl DispatcherInner {
-    fn register(&self, slot: Slot) -> Result<(), TaskError> {
+    fn register(&self, registration: Registration) -> Result<(), TaskError> {
         let mut admission = self.admission.lock();
         if *admission == Admission::Closed || self.cancel.is_cancelled() {
             drop(admission);
-            drop(slot);
+            drop(registration);
             return Err(TaskError::Stopped);
         }
-        let sent = self.cmd_tx.send(Command::Register(slot));
+        let sent = self.cmd_tx.send(Command::Register(registration));
         if sent.is_err() {
             *admission = Admission::Closed;
         }
@@ -274,9 +277,9 @@ impl PendingTask {
     ///
     /// Returns [`TaskError::Cancelled`] if cancellation raced construction or
     /// [`TaskError::Stopped`] if the dispatcher stopped before submission.
-    pub fn start<T, F>(mut self, factory: F) -> Result<TaskHandle, TaskError>
+    pub fn start<T, F>(self, factory: F) -> Result<TaskHandle, TaskError>
     where
-        T: Task,
+        T: Task + Send,
         F: FnOnce(TaskContext) -> T,
     {
         if self.context.cancel_group().is_cancelled() {
@@ -286,20 +289,47 @@ impl PendingTask {
         if self.context.cancel_group().is_cancelled() {
             return Err(TaskError::Cancelled);
         }
+        let factory: TaskFactory = Box::new(move || Ok(task));
+        self.submit(factory)
+    }
+
+    /// Construct and submit a thread-bound task on the dispatcher thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TaskError::Cancelled`] if cancellation raced submission or
+    /// [`TaskError::Stopped`] if the dispatcher stopped before submission.
+    pub fn start_local<T, F>(self, factory: F) -> Result<TaskHandle, TaskError>
+    where
+        T: Task,
+        F: FnOnce(TaskContext) -> T + Send + 'static,
+    {
+        let context = self.context.clone();
+        let factory: TaskFactory = Box::new(move || {
+            catch_unwind(AssertUnwindSafe(|| {
+                Box::new(factory(context)) as Box<dyn Task>
+            }))
+        });
+        self.submit(factory)
+    }
+
+    fn submit(mut self, factory: TaskFactory) -> Result<TaskHandle, TaskError> {
+        if self.context.cancel_group().is_cancelled() {
+            return Err(TaskError::Cancelled);
+        }
         let Some(reservation) = self.reservation.take() else {
             return Err(TaskError::Stopped);
         };
-        let slot = Slot {
-            task,
-            _cancel_guards: mem::take(&mut self.cancel_guards),
+        let registration = Registration {
+            factory,
+            cancel_guards: mem::take(&mut self.cancel_guards),
             cancel: self.context.cancel_group().clone(),
             control: self.context.control(),
             id: self.id,
-            is_terminal: false,
             priority: self.context.control().priority(),
             token: self.token.clone(),
         };
-        self.inner.register(slot)?;
+        self.inner.register(registration)?;
         let handle = TaskHandle {
             _reservation: reservation,
             control: self.context.control(),

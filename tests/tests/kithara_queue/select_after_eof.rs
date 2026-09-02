@@ -7,7 +7,7 @@ use kithara::{
     events::TrackStatus,
     platform::sync::Arc,
     play::Resource,
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
@@ -48,7 +48,7 @@ fn first_onset_frame(pcm: &[f32], threshold: f32) -> Option<usize> {
 }
 
 fn render_loop(
-    queue: &Queue<TestPools>,
+    queue: &QueueControl<TestPools>,
     harness: &OfflinePlayerHarness,
     block_budget: usize,
 ) -> Vec<f32> {
@@ -61,7 +61,7 @@ fn render_loop(
     pcm
 }
 
-fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
+fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -72,7 +72,7 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
         .player(harness.take_player())
         .should_autoplay(false)
         .build();
-    let queue = Queue::new(config);
+    let queue = harness.insert_control(Queue::new(config));
     (harness, queue)
 }
 

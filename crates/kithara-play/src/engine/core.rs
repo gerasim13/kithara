@@ -71,7 +71,17 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) fn attach_session(&self, binding: SessionBinding<S>) -> Result<(), PlayError> {
+        self.validate_session_sample_rate(binding.requested_sample_rate()?.get())?;
         self.session.bind(binding)
+    }
+
+    fn validate_session_sample_rate(&self, session: u32) -> Result<(), PlayError> {
+        let player = self.configured_sample_rate();
+        if player == session {
+            Ok(())
+        } else {
+            Err(PlayError::SessionSampleRateMismatch { player, session })
+        }
     }
 
     pub(crate) const fn pools(&self) -> &PoolRegion<S> {
@@ -83,7 +93,7 @@ impl<S> EngineImpl<S> {
     }
 
     pub(crate) const fn configured_sample_rate(&self) -> u32 {
-        self.config.sample_rate
+        self.config.sample_rate.get()
     }
 
     pub(crate) fn consumer_wake_mode(&self) -> ConsumerWakeMode {
@@ -119,12 +129,12 @@ impl<S> EngineImpl<S> {
             return Ok(id);
         }
 
+        self.validate_session_sample_rate(self.session.requested_sample_rate()?.get())?;
         let id = self.session.register_player(
             self.config.grid_id,
             self.bus.clone(),
             self.eq_layout.lock().clone(),
             self.pools().clone(),
-            self.config.sample_rate,
         )?;
         *player_id = Some(id);
         drop(player_id);
@@ -301,11 +311,11 @@ impl<S> EngineImpl<S> {
     /// instead of lazily on the first `step_track()` call.
     pub fn master_sample_rate(&self) -> u32 {
         if !self.running.load(Ordering::Acquire) {
-            return self.config.sample_rate;
+            return self.config.sample_rate.get();
         }
         self.session
             .sample_rate()
-            .map_or(self.config.sample_rate, SessionSampleRate::output)
+            .map_or_else(|_| self.config.sample_rate.get(), SessionSampleRate::output)
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -356,13 +366,12 @@ impl<S> EngineImpl<S> {
 
         let player_id = self.ensure_player_id()?;
         let master_volume = self.master_volume.load(Ordering::Relaxed);
-        self.session
-            .start_player(player_id, self.config.sample_rate, master_volume)?;
+        self.session.start_player(player_id, master_volume)?;
 
         self.running.store(true, Ordering::Release);
 
         info!(
-            sample_rate = self.config.sample_rate,
+            sample_rate = self.config.sample_rate.get(),
             channels = self.config.channels,
             max_slots = self.config.max_slots,
             player_id,

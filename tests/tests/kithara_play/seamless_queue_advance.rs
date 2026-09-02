@@ -302,7 +302,9 @@ fn load_queue<const N: usize>(harness: &OfflinePlayerHarness, items: [Resource; 
     harness.with_player(|player| {
         player.reserve_slots(items.len());
         for (index, resource) in items.into_iter().enumerate() {
-            player.replace_item(index, resource, TrackId::allocate());
+            player
+                .replace_item(index, resource, TrackId::allocate())
+                .expect("replace seamless fixture item");
         }
         player
             .select_item(0, true)

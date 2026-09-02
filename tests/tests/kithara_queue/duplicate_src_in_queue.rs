@@ -12,7 +12,7 @@ use kithara::{
     self,
     events::{Event, ItemRole, PlayerEvent, SlotId, TrackId, TrackRef, TrackStatus},
     platform::sync::Arc,
-    queue::{Queue, QueueConfig, Transition, test_utils::QueueProbe},
+    queue::{Queue, QueueConfig, QueueControl, Transition, test_utils::QueueProbe},
     signal::AudioSpec,
 };
 use kithara_integration_tests::{
@@ -31,7 +31,7 @@ const TRACK_SECS: f64 = 30.0;
 const LOUD: f32 = 0.80;
 const REPEATED_SRC: &str = "https://example.com/repeat.mp3";
 
-fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
+fn make_fixture() -> (OfflinePlayerHarness, QueueControl<TestPools>) {
     let harness = OfflinePlayerHarness::with_sample_rate(
         OfflinePlayerOptions::builder()
             .crossfade_duration(0.0)
@@ -42,10 +42,11 @@ fn make_fixture() -> (OfflinePlayerHarness, Queue<TestPools>) {
         .player(harness.take_player())
         .should_autoplay(false)
         .build();
-    (harness, Queue::new(config))
+    let queue = harness.insert_control(Queue::new(config));
+    (harness, queue)
 }
 
-fn load(queue: &Queue<TestPools>, id: TrackId) {
+fn load(queue: &QueueControl<TestPools>, id: TrackId) {
     let spec = AudioSpec::new(
         CHANNELS,
         NonZero::new(SAMPLE_RATE).expect("sample rate is non-zero"),
@@ -59,14 +60,18 @@ fn load(queue: &Queue<TestPools>, id: TrackId) {
     );
 }
 
-fn render_loop(queue: &Queue<TestPools>, harness: &OfflinePlayerHarness, block_budget: usize) {
+fn render_loop(
+    queue: &QueueControl<TestPools>,
+    harness: &OfflinePlayerHarness,
+    block_budget: usize,
+) {
     for _ in 0..block_budget {
         let _ = queue.tick();
         let _ = harness.render(BLOCK_FRAMES);
     }
 }
 
-fn status_of(queue: &Queue<TestPools>, id: TrackId) -> TrackStatus {
+fn status_of(queue: &QueueControl<TestPools>, id: TrackId) -> TrackStatus {
     queue
         .tracks()
         .into_iter()
@@ -76,7 +81,12 @@ fn status_of(queue: &Queue<TestPools>, id: TrackId) -> TrackStatus {
 }
 
 /// The failing track is the *second* entry carrying this URL.
-fn fixture_playing_the_second_copy() -> (OfflinePlayerHarness, Queue<TestPools>, TrackId, TrackId) {
+fn fixture_playing_the_second_copy() -> (
+    OfflinePlayerHarness,
+    QueueControl<TestPools>,
+    TrackId,
+    TrackId,
+) {
     let (harness, queue) = make_fixture();
     let first = queue.append(REPEATED_SRC).expect("append first copy");
     let playing = queue.append(REPEATED_SRC).expect("append second copy");

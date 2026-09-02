@@ -14,6 +14,7 @@ use kithara::{
         SessionDispatcher, player::Player,
     },
 };
+use kithara_integration_tests::test_defaults::Consts as Shared;
 
 use super::engine_session_contract as contract;
 use crate::bufpool_ext::{TestPools, pools};
@@ -96,6 +97,7 @@ fn run_contract(max_slots: usize, contract: impl FnOnce(&EngineImpl<TestPools>))
     let session: Arc<dyn SessionDispatcher<TestPools>> = Arc::new(CpalGraphSession::new());
     let mut player = PlayerImpl::new(
         PlayerConfig::builder()
+            .sample_rate(Shared::NON_ZERO_SAMPLE_RATE)
             .max_slots(max_slots)
             .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
             .session(session)

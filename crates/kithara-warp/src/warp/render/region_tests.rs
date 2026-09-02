@@ -7,7 +7,7 @@ use kithara_test_utils::kithara;
 
 use super::WarpRenderer as GenericWarpRenderer;
 use crate::{
-    GridSegment, RegionPlan, RegionPlanError, StretchControls,
+    GridSegment, RegionPlan, RegionPlanError, RenderPublisher, StretchControls,
     test_pools::{Pools, TestPools, pools, sample_buffer},
 };
 
@@ -104,7 +104,12 @@ fn render(backend: StretchKind, speed: f32, plan: Option<RegionPlan>, source: &[
     controls.set_keylock(true);
     controls.set_backend(backend);
     controls.set_region_plan(plan.map(Arc::new));
-    let mut fx = WarpRenderer::new(controls, spec(), pools.clone());
+    let mut fx = WarpRenderer::new(
+        controls,
+        RenderPublisher::default().reader(),
+        spec(),
+        pools.clone(),
+    );
     let mut out = Vec::new();
     let mut offset = 0_u64;
     for data in source.chunks(4096 * CH) {

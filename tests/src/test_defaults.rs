@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use kithara::platform::{sync::Arc, time::Duration};
 use kithara_test_fixtures::signal;
 
@@ -80,6 +82,11 @@ pub struct Consts;
 impl Consts {
     /// Default sample rate for generated WAV / expected streams.
     pub const SAMPLE_RATE: u32 = SawWav::DEFAULT.sample_rate;
+    /// Typed form passed explicitly into playback configuration.
+    pub const NON_ZERO_SAMPLE_RATE: NonZeroU32 = match NonZeroU32::new(Self::SAMPLE_RATE) {
+        Some(sample_rate) => sample_rate,
+        None => unreachable!(),
+    };
     /// Default channel count.
     pub const CHANNELS: u16 = SawWav::DEFAULT.channels;
     /// Default packaged HLS segment size (bytes).
@@ -92,7 +99,4 @@ impl Consts {
 
     /// Default soft read timeout for resource/decoder integration tests.
     pub const READ_TIMEOUT: Duration = Duration::from_secs(5);
-    /// Block size used by offline render harnesses (audio block budget).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub const OFFLINE_BLOCK_FRAMES: usize = crate::offline::session::OFFLINE_BLOCK_FRAMES;
 }

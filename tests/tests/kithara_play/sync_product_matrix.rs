@@ -1,24 +1,31 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::{env, num::NonZeroU32, path::Path};
+use std::{env, io, num::NonZeroU32, path::Path};
 
 use kithara::{
+    assets::{AssetResource, AssetResourceState, AssetSource, AssetStore, ReadSide, ResourceKey},
+    encode::EncodeConfig,
     events::TrackStatus,
     hls::AbrMode,
+    host::{Host, HostConfig, HostOwned, testing::HostProbe},
+    output::{OfflineRenderRequest, OfflineRenderer, RenderSink, RenderSinkError},
     platform::{
+        CancelScope,
         sync::Arc,
         time::{self, Duration, Instant},
     },
     play::{
-        Cmd, PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, Reply, ResourceConfig,
-        ResourceSrc, SessionDispatcher, Tempo, player::Player,
+        PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc, Tempo,
     },
     queue::{Queue, QueueConfig, TrackSource, Transition},
+    record::{RecordingConfig, RecordingCore, RecordingSink},
+    signal::AudioSpec,
     warp::{
-        AlignmentSource, BeatGrid, LoadGeneration, PresentationFrontier, SessionFrame,
-        SyncAdmission, SyncGroup, SyncIntent, SyncOperation,
+        AlignmentSource, LoadGeneration, PresentationFrontier, SessionFrame, SyncAdmission,
+        SyncGroup, SyncIntent, SyncOperation,
     },
 };
+use kithara_app::recording::AssetPartSink;
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper,
     bufpool_ext::{TestPools, pools},
@@ -26,7 +33,6 @@ use kithara_integration_tests::{
     fixture_protocol::EncryptionRequest,
     hls_fixture::{aes128_iv, aes128_key_bytes},
     kithara, memory_asset_store,
-    offline::OfflineSession,
 };
 use kithara_test_fixtures::{
     asset::Asset,
@@ -219,12 +225,86 @@ pub(super) enum HlsProtection {
 }
 
 pub(super) struct ProductHarness {
-    pub(super) decks: Vec<Queue<TestPools>>,
+    pub(super) decks: Vec<HostOwned<Queue<TestPools>>>,
     pub(super) failures: Vec<String>,
     block_frames: usize,
+    host: Host<TestPools>,
+    spec: AudioSpec,
     output_frames: u64,
     paced: bool,
-    session: Arc<OfflineSession<TestPools>>,
+}
+
+#[derive(Default)]
+struct VecRenderSink {
+    samples: Vec<f32>,
+}
+
+impl RenderSink for VecRenderSink {
+    fn write(&mut self, samples: &[f32]) -> Result<(), RenderSinkError> {
+        self.samples.extend_from_slice(samples);
+        Ok(())
+    }
+}
+
+struct FailingPartSink(AssetPartSink<TestPools>);
+
+impl RecordingSink for FailingPartSink {
+    type Error = io::Error;
+    type Output = ();
+
+    fn write_at(&mut self, _offset: u64, _bytes: &[u8]) -> Result<(), Self::Error> {
+        Err(io::Error::other("injected recording sink failure"))
+    }
+
+    fn commit(&mut self, _final_len: u64) -> Result<Self::Output, Self::Error> {
+        Err(io::Error::other("injected recording sink commit"))
+    }
+
+    fn abort(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct OfflineRecordingArtifact;
+
+fn recording_key(store: &AssetStore<TestPools>, name: &str) -> ResourceKey {
+    let source = AssetSource::Local {
+        path: env::temp_dir().join("kithara-offline-rendering-test"),
+    };
+    store
+        .scope::<OfflineRecordingArtifact>(&source)
+        .and_then(|scope| {
+            scope.key(&AssetResource::Named {
+                namespace: "offline-rendering".to_owned(),
+                name: name.to_owned(),
+            })
+        })
+        .unwrap_or_else(|error| panic!("offline recording key: {error}"))
+}
+
+fn recording_config(sample_rate: u32, packet_frames: usize) -> RecordingConfig {
+    RecordingConfig::builder()
+        .encode(
+            EncodeConfig::builder()
+                .sample_rate(sample_rate)
+                .channels(CHANNELS)
+                .packet_frames(packet_frames)
+                .build(),
+        )
+        .build()
+}
+
+fn offline_render(sample_rate: NonZeroU32, frames: u64) -> (Host<TestPools>, OfflineRenderRequest) {
+    let spec = AudioSpec::new(CHANNELS, sample_rate);
+    let session = HostConfig::offline(pools())
+        .sample_rate(sample_rate)
+        .build();
+    let host = Host::new(session).unwrap_or_else(|error| panic!("create offline Host: {error}"));
+    let request = OfflineRenderRequest::builder()
+        .spec(spec)
+        .frames(0..frames)
+        .build();
+    (host, request)
 }
 
 impl ProductHarness {
@@ -250,10 +330,20 @@ impl ProductHarness {
     ) -> Self {
         let server = TestServerHelper::new().await;
         let sources = sources(provider, case.decks, &server).await;
-        let session = Arc::new(OfflineSession::new_manual_with_block_frames(block_frames));
-        let dispatcher: Arc<dyn SessionDispatcher<TestPools>> = session.clone();
-        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools()).build());
+        let pools = pools();
+        let worker = PlayWorker::new(PlayWorkerConfig::builder(pools.clone()).build());
         let sample_rate = NonZeroU32::new(case.sample_rate).expect("fixture sample rate");
+        let render_block_frames = NonZeroU32::new(
+            u32::try_from(block_frames).expect("offline render block count fits u32"),
+        )
+        .expect("offline render block count is non-zero");
+        let spec = AudioSpec::new(CHANNELS, sample_rate);
+        let session = HostConfig::offline(pools)
+            .sample_rate(sample_rate)
+            .max_block_frames(render_block_frames)
+            .build();
+        let mut host = Host::new(session)
+            .unwrap_or_else(|error| panic!("{}: create offline Host: {error}", case.id));
         let mut decks = Vec::with_capacity(sources.len());
         let mut ids = Vec::with_capacity(sources.len());
         for (index, source) in sources.into_iter().enumerate() {
@@ -261,12 +351,14 @@ impl ProductHarness {
                 PlayerConfig::builder()
                     .worker(worker.clone())
                     .sample_rate(sample_rate)
-                    .session(dispatcher.clone())
                     .crossfade_duration(0.0)
                     .build(),
             );
             let queue = Queue::new(QueueConfig::builder().player(player).build());
             queue.set_muted(index != audible_deck);
+            let deck = host
+                .insert(queue)
+                .unwrap_or_else(|error| panic!("{}: insert deck {index}: {error}", case.id));
             let config = ResourceConfig::for_src(
                 ResourceSrc::parse(&source)
                     .unwrap_or_else(|error| panic!("{}: parse source {source}: {error}", case.id)),
@@ -275,19 +367,20 @@ impl ProductHarness {
             .initial_abr_mode(AbrMode::manual(0))
             .discriminator(format!("{}-{provider:?}-{index}", case.id))
             .build();
-            let id = queue
+            let id = deck
                 .append(TrackSource::Config(Box::new(config)))
                 .unwrap_or_else(|error| panic!("{}: append deck {index}: {error}", case.id));
-            decks.push(queue);
+            decks.push(deck);
             ids.push(id);
         }
         let mut harness = Self {
             decks,
             failures: Vec::new(),
             block_frames,
+            host,
             output_frames: 0,
             paced,
-            session,
+            spec,
         };
         harness.wait_loaded(case, &ids).await;
         for (index, (deck, id)) in harness.decks.iter().zip(ids).enumerate() {
@@ -338,11 +431,26 @@ impl ProductHarness {
     pub(super) async fn render(&mut self, case: SyncCase, frames: usize) -> Vec<f32> {
         let started = Instant::now();
         self.tick_all(case);
-        let pcm = self.session.render(frames);
+        let start = self.output_frames;
+        let end = start
+            .checked_add(u64::try_from(frames).expect("render frame count fits u64"))
+            .expect("offline render timeline fits u64");
+        let request = OfflineRenderRequest::builder()
+            .spec(self.spec)
+            .frames(start..end)
+            .build();
+        let cancel = CancelScope::new(None);
+        let mut sink = VecRenderSink::default();
+        let report = self
+            .host
+            .render(&request, &cancel.token(), &mut sink)
+            .unwrap_or_else(|error| panic!("{}: render offline Host: {error}", case.id));
+        assert_eq!(
+            report.frames,
+            u64::try_from(frames).expect("frame count fits u64")
+        );
         self.tick_all(case);
-        self.output_frames = self
-            .output_frames
-            .saturating_add(u64::try_from(frames).expect("render frame count fits u64"));
+        self.output_frames = end;
         let delay = if self.paced {
             Duration::from_secs_f64(frames as f64 / f64::from(case.sample_rate))
                 .saturating_sub(started.elapsed())
@@ -350,7 +458,7 @@ impl ProductHarness {
             Duration::from_millis(1)
         };
         time::sleep(delay).await;
-        pcm
+        sink.samples
     }
 
     pub(super) async fn settle(&mut self, case: SyncCase, blocks: usize) {
@@ -388,19 +496,12 @@ impl ProductHarness {
 
     pub(super) fn set_tempo(&mut self, case: SyncCase, bpm: f64, required: bool) {
         let tempo = Tempo::new(bpm).expect("fixture tempo");
-        match self.session.exec(Cmd::SetSessionTempo { tempo }) {
-            Ok(Reply::Ok) => {}
-            Ok(Reply::Err(error)) if !required => self
-                .record_tempo_failure(format!("tempo request {bpm:.6} BPM was rejected: {error}")),
-            Ok(Reply::Err(error)) => panic!("{}: set initial tempo: {error}", case.id),
-            Ok(_) if !required => self.record_tempo_failure(format!(
-                "tempo request {bpm:.6} BPM returned an unexpected reply"
-            )),
-            Ok(_) => panic!("{}: initial tempo returned an unexpected reply", case.id),
+        match self.host.set_tempo(tempo) {
+            Ok(()) => {}
             Err(error) if !required => self.record_tempo_failure(format!(
                 "tempo request {bpm:.6} BPM could not reach Host: {error}"
             )),
-            Err(error) => panic!("{}: initial tempo could not reach Host: {error}", case.id),
+            Err(error) => panic!("{}: set initial tempo: {error}", case.id),
         }
     }
 
@@ -415,12 +516,9 @@ impl ProductHarness {
     }
 
     fn transport_revision(&self, case: SyncCase) -> kithara::warp::TransportRevision {
-        match self.session.exec(Cmd::QuerySessionTransport) {
-            Ok(Reply::SessionTransport(snapshot)) => snapshot.revision(),
-            Ok(Reply::Err(error)) => panic!("{}: query Host transport: {error}", case.id),
-            Ok(_) => panic!("{}: Host transport returned an unexpected reply", case.id),
-            Err(error) => panic!("{}: query Host transport: {error}", case.id),
-        }
+        self.host
+            .transport_revision()
+            .unwrap_or_else(|error| panic!("{}: query Host transport: {error}", case.id))
     }
 
     pub(super) async fn request_sync(&mut self, case: SyncCase) {
@@ -431,9 +529,10 @@ impl ProductHarness {
         let transport = self.transport_revision(case);
         for index in 0..self.decks.len() {
             {
-                let deck = &mut self.decks[index];
-                let position = Player::playback_view(deck).position.unwrap_or(0.0);
-                let source = if Player::playback_view(deck).playing {
+                let deck = &self.decks[index];
+                let playback = deck.playback_view();
+                let position = playback.position.unwrap_or(0.0);
+                let source = if playback.playing {
                     AlignmentSource::Audible(
                         PresentationFrontier::builder()
                             .source((position * f64::from(case.sample_rate)).max(0.0) as u64)
@@ -445,7 +544,8 @@ impl ProductHarness {
                 } else {
                     AlignmentSource::Prepared
                 };
-                let admission = deck
+                let admission = self
+                    .host
                     .transact(SyncOperation::Sync {
                         target: deck.id(),
                         load: LoadGeneration::first(),
@@ -562,6 +662,90 @@ impl ProductHarness {
         }
         pcm
     }
+}
+
+#[kithara::test(native, timeout(Duration::from_secs(10)))]
+fn offline_renderer_publishes_only_complete_recordings() {
+    let sample_rate = NonZeroU32::new(48_000).expect("test sample rate");
+    let frames = 8;
+    let store = memory_asset_store();
+    let config = recording_config(sample_rate.get(), 1);
+    let success_key = recording_key(&store, "success.wav");
+    let cancelled_key = recording_key(&store, "cancelled.wav");
+    let failed_key = recording_key(&store, "failed.wav");
+
+    let (mut success_host, success_request) = offline_render(sample_rate, frames);
+    let success_sink = AssetPartSink::acquire(&store, &success_key)
+        .unwrap_or_else(|error| panic!("acquire success sink: {error}"));
+    let mut success = RecordingCore::new(&config, success_sink, Some(frames))
+        .unwrap_or_else(|error| panic!("open success recording: {error}"));
+    let success_cancel = CancelScope::new(None);
+    let report = success_host
+        .render(&success_request, &success_cancel.token(), &mut success)
+        .unwrap_or_else(|error| panic!("render success recording: {error}"));
+    assert_eq!(report.frames, frames);
+    let reader = success
+        .finish()
+        .unwrap_or_else(|error| panic!("finish success recording: {error}"));
+    let expected_len = 44 + frames * u64::from(CHANNELS) * 4;
+    assert_eq!(reader.len(), Some(expected_len));
+    let mut header = [0_u8; 44];
+    let read = reader
+        .read_at(0, &mut header)
+        .unwrap_or_else(|error| panic!("read success recording: {error}"));
+    assert_eq!(read, header.len());
+    assert_eq!(&header[0..4], b"RIFF");
+    assert_eq!(&header[8..12], b"WAVE");
+    assert_eq!(u16::from_le_bytes([header[20], header[21]]), 3);
+    assert!(matches!(
+        store.resource_state(&success_key),
+        Ok(AssetResourceState::Committed {
+            final_len: Some(len)
+        }) if len == expected_len
+    ));
+
+    let (mut cancelled_host, cancelled_request) = offline_render(sample_rate, frames);
+    let cancelled_sink = AssetPartSink::acquire(&store, &cancelled_key)
+        .unwrap_or_else(|error| panic!("acquire cancelled sink: {error}"));
+    let mut cancelled = RecordingCore::new(&config, cancelled_sink, Some(frames))
+        .unwrap_or_else(|error| panic!("open cancelled recording: {error}"));
+    let cancelled_scope = CancelScope::new(None);
+    cancelled_scope.cancel();
+    assert!(matches!(
+        cancelled_host.render(&cancelled_request, &cancelled_scope.token(), &mut cancelled),
+        Err(kithara::output::OfflineRenderError::Cancelled { rendered_frames: 0 })
+    ));
+    drop(cancelled);
+    assert_eq!(
+        store
+            .resource_state(&cancelled_key)
+            .unwrap_or_else(|error| panic!("cancelled resource state: {error}")),
+        AssetResourceState::Missing
+    );
+
+    let (mut failed_host, failed_request) = offline_render(sample_rate, frames);
+    let failed_sink = AssetPartSink::acquire(&store, &failed_key)
+        .map(FailingPartSink)
+        .unwrap_or_else(|error| panic!("acquire failing sink: {error}"));
+    let mut failed = RecordingCore::new(&config, failed_sink, Some(frames))
+        .unwrap_or_else(|error| panic!("open failing recording: {error}"));
+    assert!(matches!(
+        failed_host.render(
+            &failed_request,
+            &CancelScope::new(None).token(),
+            &mut failed
+        ),
+        Err(kithara::output::OfflineRenderError::Sink {
+            rendered_frames: 0,
+            ..
+        })
+    ));
+    assert_eq!(
+        store
+            .resource_state(&failed_key)
+            .unwrap_or_else(|error| panic!("failed resource state: {error}")),
+        AssetResourceState::Missing
+    );
 }
 
 async fn sources(provider: Provider, decks: usize, server: &TestServerHelper) -> Vec<String> {

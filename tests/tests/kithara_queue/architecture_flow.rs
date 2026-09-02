@@ -45,12 +45,12 @@ async fn queue_playback_architecture() {
             .build(),
         SAMPLE_RATE,
     );
-    let queue = Queue::new(
+    let queue = harness.insert_control(Queue::new(
         QueueConfig::builder()
             .player(harness.take_player())
             .store(store.clone())
             .build(),
-    );
+    ));
     let downloader = create_test_downloader();
     let config = resource_config(url.as_str(), downloader, store);
     let mut events = queue.subscribe();
@@ -108,13 +108,9 @@ async fn queue_playback_architecture() {
         TraceRecord::new(7, TraceRecordKind::SpanEnter, "PlayerImpl::play")
             .with_span("playback")
             .with_resource("Track", &resource_id),
-        TraceRecord::new(
-            8,
-            TraceRecordKind::ResourceTransfer,
-            "OfflineSession::render",
-        )
-        .with_parent_span("playback")
-        .with_resource("PCM", &resource_id),
+        TraceRecord::new(8, TraceRecordKind::ResourceTransfer, "Host::render")
+            .with_parent_span("playback")
+            .with_resource("PCM", &resource_id),
     ];
     architecture_trace::write(trace_path.as_ref(), records, &probes)
         .expect("write queue architecture trace");

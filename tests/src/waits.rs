@@ -17,7 +17,7 @@ use kithara::{
         time::{Duration, Instant, sleep, timeout},
         tokio::sync::broadcast::error::RecvError,
     },
-    queue::Queue,
+    queue::QueueControl,
 };
 
 use crate::offline::OfflinePlayer;
@@ -65,7 +65,7 @@ where
 /// real time under flash. The returned position is the tick-cached value at
 /// predicate-pass and is only meant for coarse "advanced past X" comparisons.
 pub async fn wait_for_position_at_least<S>(
-    queue: &Queue<S>,
+    queue: &QueueControl<S>,
     min_secs: f64,
     deadline: Duration,
 ) -> Result<f64, String>
@@ -103,7 +103,7 @@ where
 /// receiver cannot turn already-reached playback state into a timeout.
 pub async fn wait_for_position_event<S>(
     rx: &mut EventReceiver,
-    queue: &Queue<S>,
+    queue: &QueueControl<S>,
     min_secs: f64,
     deadline: Duration,
 ) -> Result<f64, String>
@@ -150,7 +150,7 @@ where
 /// return the observed position. Queue-poll variant; prefer
 /// [`wait_for_position_near_event`] when an [`EventReceiver`] is available.
 pub async fn wait_for_position_near<S>(
-    queue: &Queue<S>,
+    queue: &QueueControl<S>,
     target: f64,
     tolerance: f64,
     deadline: Duration,
@@ -193,7 +193,7 @@ where
 /// fall back to.
 pub async fn wait_for_position_near_event<S>(
     rx: &mut EventReceiver,
-    queue: &Queue<S>,
+    queue: &QueueControl<S>,
     target: f64,
     tolerance: f64,
     deadline: Duration,
@@ -273,7 +273,7 @@ fn loader_outcome(status: &TrackStatus) -> Option<Result<(), String>> {
 /// queue's track status. `Failed` resolves to `Err`. Use the event variant
 /// [`wait_for_loader_done_event`] when a receiver is available.
 pub async fn wait_for_loader_done<S>(
-    queue: &Queue<S>,
+    queue: &QueueControl<S>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String>
@@ -306,7 +306,7 @@ where
 /// event.
 pub async fn wait_for_loader_done_event<S>(
     rx: &mut EventReceiver,
-    queue: &Queue<S>,
+    queue: &QueueControl<S>,
     track_id: TrackId,
     deadline: Duration,
 ) -> Result<(), String>

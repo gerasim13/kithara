@@ -131,15 +131,10 @@ where
 fn start_stream_cpal(
     ctx: &mut FirewheelCtx<firewheel::cpal::CpalBackend>,
     sample_rate: u32,
+    output_block_frames: Option<NonZeroU32>,
 ) -> Result<(), String> {
     debug!(sample_rate, "[KITHARA-ROUTE] starting cpal stream");
-    let config = firewheel::cpal::CpalConfig {
-        output: firewheel::cpal::CpalOutputConfig {
-            desired_sample_rate: NonZeroU32::new(sample_rate).map(NonZeroU32::get),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    let config = cpal_config(sample_rate, output_block_frames);
     match ctx.start_stream(config) {
         Ok(()) => {
             debug!(sample_rate, "[KITHARA-ROUTE] cpal stream started");
@@ -156,16 +151,49 @@ fn start_stream_cpal(
     }
 }
 
+fn cpal_config(
+    sample_rate: u32,
+    output_block_frames: Option<NonZeroU32>,
+) -> firewheel::cpal::CpalConfig {
+    let mut config = firewheel::cpal::CpalConfig::default();
+    config.output.desired_sample_rate = NonZeroU32::new(sample_rate).map(NonZeroU32::get);
+    if let Some(frames) = output_block_frames {
+        config.output.desired_block_frames = Some(frames.get());
+    }
+    config
+}
+
 pub(crate) fn spawn<S: HasPool<f32> + Send + Sync + 'static>(
     root: GroupState<PlayerMember>,
     root_view: RootView,
     sample_rate: NonZeroU32,
+    output_block_frames: Option<NonZeroU32>,
 ) -> Arc<dyn HostDispatcher<S>> {
     spawn_session_client::<firewheel::cpal::CpalBackend, S>(
         "kithara-engine",
         root,
         root_view,
         sample_rate,
-        start_stream_cpal,
+        move |ctx, sample_rate| start_stream_cpal(ctx, sample_rate, output_block_frames),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use kithara_test_utils::kithara;
+
+    use super::*;
+
+    #[kithara::test]
+    fn output_block_override_preserves_the_backend_default_or_sets_128() {
+        let inherited = cpal_config(44_100, None);
+        assert_eq!(
+            inherited.output.desired_block_frames,
+            firewheel::cpal::CpalOutputConfig::default().desired_block_frames
+        );
+
+        let frames = NonZeroU32::new(128).expect("test block size is non-zero");
+        let configured = cpal_config(44_100, Some(frames));
+        assert_eq!(configured.output.desired_block_frames, Some(128));
+    }
 }

@@ -8,7 +8,7 @@ use super::{
     Consts, StretchControls, WarpRenderer, chunk, f64_of, flush_serviced, render_serviced,
     renderer, sine, spec,
 };
-use crate::{GridSegment, RegionPlan};
+use crate::{GridSegment, RegionPlan, RenderPublisher};
 
 fn finish_unity_transition(
     renderer: &mut WarpRenderer,
@@ -357,7 +357,12 @@ fn live_unity_transition_drains_active_backend_tail(#[case] backend: StretchKind
     let live_controls = StretchControls::new(0.5);
     live_controls.set_keylock(true);
     live_controls.set_backend(backend);
-    let mut live = WarpRenderer::new(Arc::clone(&live_controls), spec(), pools.clone());
+    let mut live = WarpRenderer::new(
+        Arc::clone(&live_controls),
+        RenderPublisher::default().reader(),
+        spec(),
+        pools.clone(),
+    );
     let live_active = render_serviced(&mut live, chunk(&pools, &source[..split]))
         .expect("non-unity span emits samples");
     assert_eq!(live_active.frames(), reference_active.frames());
@@ -475,7 +480,12 @@ fn negative_rounding_debt_adds_no_frame_at_unity_transition(#[case] backend: Str
         ])
         .expect("fixture regions are contiguous"),
     )));
-    let mut fx = WarpRenderer::new(Arc::clone(&controls), spec(), pools.clone());
+    let mut fx = WarpRenderer::new(
+        Arc::clone(&controls),
+        RenderPublisher::default().reader(),
+        spec(),
+        pools.clone(),
+    );
     let first = render_serviced(&mut fx, chunk(&pools, &source[..usize::from(Consts::CH)]))
         .expect("the first span rounds to two frames");
     assert_eq!(first.frames(), 2);

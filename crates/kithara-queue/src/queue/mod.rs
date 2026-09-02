@@ -27,7 +27,7 @@ pub mod test_utils;
 mod types;
 
 #[cfg(test)]
-pub(crate) use state::tests::test_session;
+pub(crate) use state::tests::{TEST_SAMPLE_RATE, test_session};
 
 pub use self::{
     state::{Queue, QueueControl},

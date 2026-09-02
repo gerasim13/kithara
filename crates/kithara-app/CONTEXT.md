@@ -10,6 +10,17 @@ client, playback worker, queues, and analysis cache. Its `u8` and `f32` slots
 compete under one 256 MiB hard cap; startup allocation is declared in the
 schema configuration rather than warmed later by a component.
 
+## Recording asset adapter
+
+`AssetPartSink` is the application composition seam between storage-neutral
+`kithara-record` and the canonical `AssetStore`. It acquires one phase-typed
+writer, maps random-access container writes directly to that writer, and
+publishes only through consuming `commit(final_len)`. Abort first closes the
+writer and then removes that exact relative resource through AssetStore's
+canonical deletion channel; a cancelled or failed recording must not leave an
+active partial asset. Encoding and recording crates never receive a filesystem
+path or an AssetStore.
+
 ## Broadcast service
 
 The crate owns only the service wiring; the packaging and the origin belong to `kithara-broadcast`. A request

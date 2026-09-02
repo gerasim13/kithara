@@ -7,21 +7,21 @@ use kithara::{
     assets::AssetStore,
     decode::DecoderBackend,
     events::{AbrMode, AudioEvent, DownloaderEvent, Event, HlsEvent, RequestId},
+    host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{
         CancelToken,
-        sync::Arc,
         time::{self, Duration, Instant, sleep},
         tokio,
         tokio::sync::broadcast::error::{RecvError, TryRecvError},
     },
     play::{PlayWorker, PlayWorkerConfig, PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
-    queue::{Queue, QueueConfig, TrackSource, Transition},
+    queue::{Queue, QueueConfig, QueueControl, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
 use kithara_integration_tests::{
     HlsFixtureBuilder, TestServerHelper, TestTempDir, fixture_protocol::DelayRule, kithara,
-    offline::OfflineSession, temp_dir, waits::wait_for_loader_done,
+    offline::OfflineQueue, temp_dir, waits::wait_for_loader_done,
 };
 use kithara_test_utils::probe::capture as probe_capture;
 use url::Url;
@@ -98,7 +98,7 @@ async fn build_hls_with_delay(helper: &TestServerHelper) -> Url {
 /// on the virtual clock, so the scheduler poll loop never cycles to observe the
 /// seek-epoch bump and `kithara_hls_probe::seek_epoch_reset` never fires.
 #[kithara::flash(true)]
-async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
+async fn drive_queue_ticks(queue: QueueControl<TestPools>) {
     loop {
         sleep(Duration::from_millis(50)).await;
         if queue.tick().is_err() {
@@ -110,29 +110,39 @@ async fn drive_queue_ticks(queue: Arc<Queue<TestPools>>) {
 fn build_queue_with_tick(
     temp_dir: &TestTempDir,
 ) -> (
-    Arc<Queue<TestPools>>,
+    OfflineQueue<TestPools>,
     Downloader,
     AssetStore<TestPools>,
     tokio::task::JoinHandle<()>,
 ) {
     let store = kithara_integration_tests::disk_asset_store(temp_dir.path());
+    let pools = pools();
+    let session = HostConfig::offline(pools.clone())
+        .pacing(Duration::from_millis(10))
+        .build();
     let player = PlayerImpl::new(
         PlayerConfig::builder()
-            .worker(PlayWorker::new(PlayWorkerConfig::builder(pools()).build()))
-            .session(OfflineSession::arc_auto())
+            .sample_rate(session.sample_rate())
+            .worker(PlayWorker::new(
+                PlayWorkerConfig::builder(pools.clone()).build(),
+            ))
             .build(),
     );
-    let queue = Arc::new(Queue::new(
-        QueueConfig::builder()
-            .player(player)
-            .store(store.clone())
-            .build(),
-    ));
-    let tick_handle = tokio::task::spawn(drive_queue_ticks(Arc::clone(&queue)));
+    let queue = OfflineQueue::new(
+        session,
+        Queue::new(
+            QueueConfig::builder()
+                .player(player)
+                .store(store.clone())
+                .build(),
+        ),
+    )
+    .expect("create product offline queue");
+    let tick_handle = tokio::task::spawn(drive_queue_ticks(queue.control()));
     let downloader = Downloader::new(
         DownloaderConfig::for_client(HttpClient::new(
             NetOptions::default(),
-            pools(),
+            pools,
             CancelToken::never(),
         ))
         .max_concurrent(Consts::MAX_CONCURRENT)
