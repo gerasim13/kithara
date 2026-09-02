@@ -117,7 +117,7 @@ fn renderer_with_publisher(controls: Arc<StretchControls>) -> (RenderPublisher, 
     let config = WarpConfig::builder()
         .stretch(controls)
         .render_quantum_frames(
-            NonZero::new(WarpRenderer::MAX_OUTPUT_FRAMES)
+            NonZero::new(WarpRenderer::DIRECT_OUTPUT_FRAME_LIMIT)
                 .expect("renderer output limit is non-zero"),
         )
         .build();

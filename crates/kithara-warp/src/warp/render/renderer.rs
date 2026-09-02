@@ -180,11 +180,11 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
-    pub(super) const MAX_OUTPUT_FRAMES: usize = 163_840;
-    pub(super) const MAX_SOURCE_FRAMES: usize = 8192;
-    const DIRECT_SOURCE_FRAME_LIMIT: usize = Self::MAX_OUTPUT_FRAMES * 4;
-    /// Re-apply pitch to the backend only when it moves this much.
-    pub(super) const RATIO_EPS: f64 = 1e-4;
+    pub(super) const DIRECT_OUTPUT_FRAME_LIMIT: usize = 163_840;
+    pub(super) const RESIDENT_SOURCE_FRAME_LIMIT: usize = 8192;
+    const DIRECT_SOURCE_FRAME_LIMIT: usize = Self::DIRECT_OUTPUT_FRAME_LIMIT * 4;
+    /// Avoids FFI updates for sub-audible floating-point noise.
+    pub(super) const PITCH_UPDATE_EPSILON: f64 = 1e-4;
 
     /// Build the slot at the source `spec`, driven by the shared `controls`.
     pub(crate) fn new(
@@ -199,7 +199,7 @@ where
             spec,
             pools,
             Self::DIRECT_SOURCE_FRAME_LIMIT,
-            Self::MAX_OUTPUT_FRAMES,
+            Self::DIRECT_OUTPUT_FRAME_LIMIT,
         )
     }
 
@@ -214,7 +214,7 @@ where
             context,
             spec,
             pools,
-            Self::MAX_SOURCE_FRAMES,
+            Self::RESIDENT_SOURCE_FRAME_LIMIT,
             config.render_quantum_frames().get(),
         )
     }
@@ -284,20 +284,6 @@ where
             plan,
             region: None,
         }
-    }
-
-    /// Push `pitch` to the backend when it moved beyond `RATIO_EPS`.
-    pub(super) fn apply_pitch(&mut self, pitch: f64) -> Result<(), ElasticError> {
-        if !self.applied_pitch.is_nan() && (pitch - self.applied_pitch).abs() <= Self::RATIO_EPS {
-            return Ok(());
-        }
-        let engine = self
-            .engine
-            .as_mut()
-            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-        engine.set_pitch(pitch)?;
-        self.applied_pitch = pitch;
-        Ok(())
     }
 
     pub(super) fn clear_pending_source(&mut self) {

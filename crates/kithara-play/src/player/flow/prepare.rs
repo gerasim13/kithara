@@ -39,6 +39,8 @@ where
             .gapless_mode(self.player.core.gapless_mode)
             .maybe_resampler(config.decoder.resampler().cloned())
             .build();
+        // Web Warp is an identity stage and does not emit bounded render quanta;
+        // keep the browser's chunk-based preload and ring geometry.
         Ok(ResourceConfig {
             bus,
             cancel,

@@ -2,6 +2,7 @@ use firewheel_core::param::smoother::SmoothedParam;
 use kithara_bufpool::HasPool;
 use kithara_signal::AudioChunkInfo;
 use kithara_stretch::{ElasticCursor, ElasticError};
+use kithara_test_macros as kithara;
 use num_traits::ToPrimitive;
 
 use super::renderer::{PreparedExact, WarpRenderer};
@@ -10,6 +11,7 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    #[kithara::measure]
     fn render_exact_plan(
         &mut self,
         meta: AudioChunkInfo,
@@ -63,46 +65,17 @@ where
                     expected: source_end_sample,
                 },
             )?;
-            let output_samples = request
-                .output_frames()
-                .checked_mul(channels)
-                .ok_or(ElasticError::SampleCountOverflow)?;
             let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
-            let end = start
-                .checked_add(output_samples)
-                .ok_or(ElasticError::SampleCountOverflow)?;
             if start == 0 {
                 self.output_start_meta = Some(Self::meta_at_frame(meta, frame_offset));
             }
-            let scratch = self
-                .scratch
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation(
-                    "output scratch is unavailable",
-                ))?;
-            if end > scratch.capacity() {
-                return Err(ElasticError::OutputFrameLimit {
-                    frames: end / channels,
-                    limit: scratch.capacity() / channels,
-                });
-            }
-            scratch
-                .ensure_len(end)
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            let engine = self
-                .engine
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-            if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
-                scratch.truncate(start);
-                return Err(error);
-            }
-            self.active = true;
+            self.process_request(request, source, channels, false)?;
             consumed = source_end;
         }
         Ok(consumed)
     }
 
+    #[kithara::measure]
     pub(super) fn render_prepared_exact(
         &mut self,
         meta: AudioChunkInfo,

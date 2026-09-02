@@ -10,6 +10,70 @@ impl<S> WarpRenderer<S>
 where
     S: HasPool<f32>,
 {
+    pub(super) fn apply_pitch(&mut self, pitch: f64) -> Result<(), ElasticError> {
+        if !self.applied_pitch.is_nan()
+            && (pitch - self.applied_pitch).abs() <= Self::PITCH_UPDATE_EPSILON
+        {
+            return Ok(());
+        }
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        engine.set_pitch(pitch)?;
+        self.applied_pitch = pitch;
+        Ok(())
+    }
+
+    #[kithara::measure]
+    pub(super) fn process_request(
+        &mut self,
+        request: ElasticRequest,
+        direct_source: &[f32],
+        channels: usize,
+        use_pending_source: bool,
+    ) -> Result<(), ElasticError> {
+        let output_samples = request
+            .output_frames()
+            .checked_mul(channels)
+            .map(SampleCount::new)
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        let scratch = self
+            .scratch
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation(
+                "output scratch is unavailable",
+            ))?;
+        let start = scratch.len();
+        let end = start
+            .checked_add(output_samples.get())
+            .ok_or(ElasticError::SampleCountOverflow)?;
+        if end > scratch.capacity() {
+            return Err(ElasticError::OutputFrameLimit {
+                frames: end / channels,
+                limit: scratch.capacity() / channels,
+            });
+        }
+        scratch
+            .ensure_len(end)
+            .map_err(|_| ElasticError::PoolCapacity)?;
+        let source = self
+            .pending_source
+            .as_deref()
+            .filter(|_| use_pending_source)
+            .unwrap_or(direct_source);
+        let engine = self
+            .engine
+            .as_mut()
+            .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
+        if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
+            scratch.truncate(start);
+            return Err(error);
+        }
+        self.active = true;
+        Ok(())
+    }
+
     #[kithara::measure]
     pub(super) fn render_active(
         &mut self,
@@ -105,15 +169,7 @@ where
                 continue;
             }
             let request = ElasticRequest::new(source_frames, output_frames.get())?;
-            let output_samples = output_frames
-                .get()
-                .checked_mul(channels)
-                .map(SampleCount::new)
-                .ok_or(ElasticError::SampleCountOverflow)?;
             let start = self.scratch.as_deref().map_or(0, <[f32]>::len);
-            let end = start
-                .checked_add(output_samples.get())
-                .ok_or(ElasticError::SampleCountOverflow)?;
             if pending_frames > 0 {
                 self.append_pending_source(part, meta, frame)?;
             }
@@ -124,39 +180,11 @@ where
                     Some(Self::meta_at_frame(meta, frame))
                 };
             }
-            let scratch = self
-                .scratch
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation(
-                    "output scratch is unavailable",
-                ))?;
-            if end > scratch.capacity() {
-                return Err(ElasticError::OutputFrameLimit {
-                    frames: end / channels,
-                    limit: scratch.capacity() / channels,
-                });
-            }
-            scratch
-                .ensure_len(end)
-                .map_err(|_| ElasticError::PoolCapacity)?;
-            let source = self
-                .pending_source
-                .as_deref()
-                .filter(|_| pending_frames > 0)
-                .unwrap_or(part);
-            let engine = self
-                .engine
-                .as_mut()
-                .ok_or(ElasticError::EnginePreparation("engine is unavailable"))?;
-            if let Err(error) = engine.process(request, source, &mut scratch[start..end]) {
-                scratch.truncate(start);
-                return Err(error);
-            }
+            self.process_request(request, part, channels, pending_frames > 0)?;
             if pending_frames > 0 {
                 self.clear_pending_source();
             }
             self.output_remainder = next_remainder;
-            self.active = true;
             consumed += sub;
             frame = frame
                 .saturating_add(u64::try_from(sub).map_err(|_| ElasticError::SampleCountOverflow)?);

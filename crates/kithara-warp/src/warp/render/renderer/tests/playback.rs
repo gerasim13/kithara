@@ -164,11 +164,11 @@ fn minimum_speed_quantum_preserves_the_declared_rate(#[case] backend: StretchKin
     let pools = pools();
     let mut renderer = Warp::new((), &config).renderer(spec(), pools.clone());
     renderer.prepare(spec());
-    let source = sine(WarpRenderer::MAX_SOURCE_FRAMES);
+    let source = sine(WarpRenderer::RESIDENT_SOURCE_FRAME_LIMIT);
     let meta = chunk_at(&pools, &source, 0).meta;
 
     let prepared = renderer
-        .prepare_quantum(meta, WarpRenderer::MAX_SOURCE_FRAMES)
+        .prepare_quantum(meta, WarpRenderer::RESIDENT_SOURCE_FRAME_LIMIT)
         .expect("minimum-speed source quantum is representable");
     assert_eq!(
         prepared.get(),
@@ -205,10 +205,10 @@ fn renderer_emits_the_configured_output_quantum(#[case] backend: StretchKind) {
     let pools = pools();
     let mut renderer = Warp::new((), &config).quantum_renderer(spec(), pools.clone());
     renderer.prepare(spec());
-    let source = sine(WarpRenderer::MAX_SOURCE_FRAMES);
+    let source = sine(WarpRenderer::RESIDENT_SOURCE_FRAME_LIMIT);
     let meta = chunk_at(&pools, &source, 0).meta;
     let source_frames = renderer
-        .prepare_quantum(meta, WarpRenderer::MAX_SOURCE_FRAMES)
+        .prepare_quantum(meta, WarpRenderer::RESIDENT_SOURCE_FRAME_LIMIT)
         .expect("active quantum is representable")
         .get();
     let channels = usize::from(Consts::CH);
@@ -558,7 +558,7 @@ fn rendered_source_frontier_excludes_backend_lookahead(#[case] backend: StretchK
 #[cfg_attr(feature = "stretch-bungee", case::bungee(StretchKind::Bungee))]
 fn rendered_source_frontier_reaches_end_only_on_completed_drain(#[case] backend: StretchKind) {
     const SOURCE_START: u64 = 10_000;
-    const SOURCE_FRAMES: usize = WarpRenderer::MAX_SOURCE_FRAMES;
+    const SOURCE_FRAMES: usize = WarpRenderer::RESIDENT_SOURCE_FRAME_LIMIT;
 
     let controls = StretchControls::new(StretchControls::MIN_SPEED);
     controls.set_keylock(true);

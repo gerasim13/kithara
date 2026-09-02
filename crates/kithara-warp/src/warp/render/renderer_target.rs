@@ -37,7 +37,7 @@ where
             .and_then(|engine| {
                 let channels = usize::from(spec.channels.max(1));
                 let pending_samples = SampleCount::new(
-                    Self::MAX_SOURCE_FRAMES
+                    Self::RESIDENT_SOURCE_FRAME_LIMIT
                         .checked_mul(channels)
                         .ok_or(ElasticError::SampleCountOverflow)?,
                 );

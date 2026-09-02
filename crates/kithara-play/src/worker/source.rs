@@ -1,7 +1,7 @@
 use kithara_audio::{AudioSource, Fetch, SourceDiscontinuity, SourceEnd, TrackStep};
 use kithara_bufpool::{BufferRing, HasPool, PoolRegion, SampleBuffer};
 use kithara_platform::sync::Arc;
-use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec, FrameCount};
+use kithara_signal::{AudioChunk, AudioChunkInfo, AudioSpec};
 use kithara_stream::SeekObserve;
 use kithara_test_macros as kithara;
 
@@ -42,6 +42,16 @@ struct PreparedQuantum {
     epoch: u64,
 }
 
+#[derive(Clone, Copy)]
+struct PreparedTerminal {
+    meta: AudioChunkInfo,
+    remaining_meta: Option<AudioChunkInfo>,
+    remaining_frames: usize,
+    remaining_samples: usize,
+    samples: usize,
+    total_samples: usize,
+}
+
 /// The sole producer-side Warp/effect stage before the play output ring.
 pub(crate) struct WarpSource<T, S> {
     source: T,
@@ -58,7 +68,7 @@ pub(crate) struct WarpSource<T, S> {
     quantum_input: Option<SampleBuffer>,
     terminal_input: Option<BufferRing<SampleBuffer>>,
     terminal_chunk: Option<SampleBuffer>,
-    terminal_frames: Option<FrameCount>,
+    prepared_terminal: Option<PreparedTerminal>,
     prepared_quantum: Option<PreparedQuantum>,
     retired_input: Option<AudioChunk>,
     quantum_failed: bool,
@@ -94,7 +104,7 @@ where
             quantum_input: None,
             terminal_input: None,
             terminal_chunk: None,
-            terminal_frames: None,
+            prepared_terminal: None,
             prepared_quantum: None,
             retired_input: None,
             quantum_failed: false,
@@ -114,8 +124,13 @@ where
         if let Some(input) = self.terminal_input.take() {
             self.quantum_input = Some(input.into_inner());
         }
-        self.terminal_frames = None;
+        self.prepared_terminal = None;
         self.prepared_quantum = None;
+    }
+
+    fn has_staged_quantum(&self) -> bool {
+        self.prepared_quantum
+            .is_some_and(|prepared| prepared.filled_frames > 0)
     }
 
     fn sync_discontinuity(&mut self) {
@@ -153,7 +168,7 @@ where
         self.spec = spec;
         if self.terminal_input.is_some() {
             self.warp.prepare_terminal();
-        } else if self.terminal_frames.is_none() {
+        } else if self.prepared_terminal.is_none() {
             self.warp.prepare(spec);
         }
         for effect in &mut self.effects {
@@ -254,6 +269,44 @@ where
         Some(meta)
     }
 
+    fn prepared_terminal(
+        original: AudioChunkInfo,
+        frames: usize,
+        total_samples: usize,
+    ) -> Option<PreparedTerminal> {
+        let channels = usize::from(original.spec.channels.max(1));
+        if total_samples == 0 || !total_samples.is_multiple_of(channels) {
+            return None;
+        }
+        let available_frames = total_samples / channels;
+        if frames == 0 || frames > available_frames {
+            return None;
+        }
+        let samples = frames.checked_mul(channels)?;
+        let remaining_samples = total_samples.checked_sub(samples)?;
+        if !remaining_samples.is_multiple_of(channels) {
+            return None;
+        }
+        let remaining_frames = remaining_samples / channels;
+        let remaining_meta = if remaining_frames > 0 {
+            Some(Self::terminal_span_meta(
+                original,
+                frames,
+                remaining_frames,
+            )?)
+        } else {
+            None
+        };
+        Some(PreparedTerminal {
+            meta: Self::terminal_span_meta(original, 0, frames)?,
+            remaining_meta,
+            remaining_frames,
+            remaining_samples,
+            samples,
+            total_samples,
+        })
+    }
+
     fn prepare_quantum_shape(&mut self) -> Option<PreparedQuantum> {
         let pending = self.pending_input.as_ref()?;
         let total_frames = pending.chunk.frames();
@@ -277,18 +330,12 @@ where
             return;
         }
         if self.pending_input.is_none() {
-            if !self
-                .prepared_quantum
-                .is_some_and(|prepared| prepared.filled_frames > 0)
-            {
+            if !self.has_staged_quantum() {
                 self.prepared_quantum = None;
             }
             return;
         }
-        if !self
-            .prepared_quantum
-            .is_some_and(|prepared| prepared.filled_frames > 0)
-        {
+        if !self.has_staged_quantum() {
             self.prepared_quantum = self.prepare_quantum_shape();
         }
         let Some(prepared) = self.prepared_quantum else {
@@ -311,7 +358,7 @@ where
     }
 
     fn prepare_terminal_chunk(&mut self) {
-        if self.terminal_frames.is_some() {
+        if self.prepared_terminal.is_some() {
             return;
         }
         let Some((prepared, available_samples)) = self
@@ -335,7 +382,9 @@ where
             self.quantum_failed = true;
             return;
         };
-        let Some(samples) = frames.get().checked_mul(channels) else {
+        let Some(terminal) =
+            Self::prepared_terminal(prepared.meta, frames.get(), available_samples)
+        else {
             self.quantum_failed = true;
             return;
         };
@@ -343,13 +392,13 @@ where
             .terminal_chunk
             .take()
             .unwrap_or_else(|| self.pools.get::<f32>());
-        if input.ensure_len(samples).is_err() {
+        if input.ensure_len(terminal.samples).is_err() {
             self.terminal_chunk = Some(input);
             self.quantum_failed = true;
             return;
         }
         self.terminal_chunk = Some(input);
-        self.terminal_frames = Some(frames);
+        self.prepared_terminal = Some(terminal);
     }
 
     fn stage_pending(
@@ -486,65 +535,27 @@ where
             return TrackStep::StateChanged;
         }
         let available_samples = self.terminal_input.as_ref().map_or(0, BufferRing::len);
-        if available_samples == 0 || !available_samples.is_multiple_of(channels) {
-            self.prepared_quantum = Some(prepared);
-            self.quantum_failed = true;
-            return TrackStep::Failed;
-        }
-        let available_frames = available_samples / channels;
-        let Some(frames) = self.terminal_frames.take().map(FrameCount::get) else {
+        let Some(terminal) = self.prepared_terminal.take() else {
             self.prepared_quantum = Some(prepared);
             return TrackStep::StateChanged;
         };
-        if frames > available_frames {
+        if available_samples != terminal.total_samples {
             self.prepared_quantum = Some(prepared);
             self.quantum_failed = true;
             return TrackStep::Failed;
         }
-        let Some(samples) = frames.checked_mul(channels) else {
-            self.prepared_quantum = Some(prepared);
-            self.quantum_failed = true;
-            return TrackStep::Failed;
-        };
-        let Some(meta) = Self::terminal_span_meta(prepared.meta, 0, frames) else {
-            self.prepared_quantum = Some(prepared);
-            self.quantum_failed = true;
-            return TrackStep::Failed;
-        };
-        let Some(remaining_samples) = available_samples.checked_sub(samples) else {
-            self.prepared_quantum = Some(prepared);
-            self.quantum_failed = true;
-            return TrackStep::Failed;
-        };
-        if !remaining_samples.is_multiple_of(channels) {
-            self.prepared_quantum = Some(prepared);
-            self.quantum_failed = true;
-            return TrackStep::Failed;
-        }
-        let remaining_frames = remaining_samples / channels;
-        let remaining_meta = if remaining_frames > 0 {
-            let Some(meta) = Self::terminal_span_meta(prepared.meta, frames, remaining_frames)
-            else {
-                self.prepared_quantum = Some(prepared);
-                self.quantum_failed = true;
-                return TrackStep::Failed;
-            };
-            Some(meta)
-        } else {
-            None
-        };
         let Some(mut input) = self.terminal_chunk.take() else {
             self.prepared_quantum = Some(prepared);
             self.quantum_failed = true;
             return TrackStep::Failed;
         };
-        if input.len() < samples {
+        if input.len() < terminal.samples {
             self.terminal_chunk = Some(input);
             self.prepared_quantum = Some(prepared);
             self.quantum_failed = true;
             return TrackStep::Failed;
         }
-        input.truncate(samples);
+        input.truncate(terminal.samples);
         if !self
             .terminal_input
             .as_mut()
@@ -555,18 +566,18 @@ where
             self.quantum_failed = true;
             return TrackStep::Failed;
         }
-        if let Some(remaining_meta) = remaining_meta {
+        if let Some(remaining_meta) = terminal.remaining_meta {
             prepared.meta = remaining_meta;
-            prepared.frames = remaining_frames;
-            prepared.filled_frames = remaining_frames;
-            prepared.samples = remaining_samples;
+            prepared.frames = terminal.remaining_frames;
+            prepared.filled_frames = terminal.remaining_frames;
+            prepared.samples = terminal.remaining_samples;
             prepared.whole_input = false;
             self.prepared_quantum = Some(prepared);
         } else if let Some(staged) = self.terminal_input.take() {
             self.quantum_input = Some(staged.into_inner());
         }
 
-        self.render(AudioChunk::new(meta, input), epoch)
+        self.render(AudioChunk::new(terminal.meta, input), epoch)
             .map_or(TrackStep::StateChanged, TrackStep::Produced)
     }
 }
@@ -602,10 +613,7 @@ where
 
     fn drain_step(&mut self) -> Option<TrackStep<AudioChunk>> {
         if let DrainState::Warp(epoch) = self.drain_state {
-            if self
-                .prepared_quantum
-                .is_some_and(|prepared| prepared.filled_frames > 0)
-            {
+            if self.has_staged_quantum() {
                 return Some(self.render_terminal_quantum());
             }
             if let Some(chunk) = self.warp.flush() {
@@ -687,9 +695,7 @@ where
         match self.source.step_track() {
             TrackStep::Produced(Fetch::Data { data, epoch, .. }) => {
                 let same_spec = data.spec() == self.spec;
-                let staging = self
-                    .prepared_quantum
-                    .is_some_and(|prepared| prepared.filled_frames > 0);
+                let staging = self.has_staged_quantum();
                 self.pending_input = Some(PendingInput {
                     chunk: data,
                     consumed_frames: 0,
@@ -712,10 +718,7 @@ where
             TrackStep::Produced(fetch) => TrackStep::Produced(fetch),
             TrackStep::Eof => {
                 self.begin_drain(self.source.decode_epoch());
-                if self
-                    .prepared_quantum
-                    .is_some_and(|prepared| prepared.filled_frames > 0)
-                {
+                if self.has_staged_quantum() {
                     self.render_terminal_quantum()
                 } else {
                     TrackStep::StateChanged
