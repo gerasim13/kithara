@@ -2,14 +2,14 @@ use std::num::NonZeroU32;
 
 use kithara::{
     self,
-    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, RingFeed},
+    broadcast::{Broadcast, BroadcastConfig, BroadcastHandle, FeedChunk, LivePcmFeed, RingFeed},
     events::TrackId,
     net::{HttpClient, NetOptions},
     platform::{
         CancelScope,
         sync::{
             Arc,
-            atomic::{AtomicU64, Ordering},
+            atomic::{AtomicBool, AtomicU64, Ordering},
         },
         time::Duration,
     },
@@ -88,8 +88,32 @@ fn left_channel(interleaved: &[f32]) -> Vec<f32> {
     interleaved.iter().step_by(2).copied().collect()
 }
 
+/// The packager's read side under the test's control. While stalled the feed
+/// hands over nothing and leaves the ring untouched, so a render longer than
+/// the ring overruns it by arithmetic instead of by winning a race against the
+/// packager thread.
+struct StallableFeed {
+    inner: RingFeed,
+    draining: Arc<AtomicBool>,
+}
+
+impl LivePcmFeed for StallableFeed {
+    fn close(&mut self) {
+        self.inner.close();
+    }
+
+    fn poll(&mut self, out: &mut Vec<f32>) -> FeedChunk {
+        if self.draining.load(Ordering::Acquire) {
+            self.inner.poll(out)
+        } else {
+            FeedChunk::default()
+        }
+    }
+}
+
 struct OnAir {
     drops: Arc<AtomicU64>,
+    draining: Arc<AtomicBool>,
     handle: BroadcastHandle,
     scope: CancelScope,
     client: HttpClient,
@@ -141,12 +165,12 @@ impl OnAir {
             .window(WINDOW)
             .build();
         let scope = CancelScope::new(None);
-        let handle = Broadcast::start(
-            &config,
-            RingFeed::new(samples, Arc::clone(&drops)),
-            Some(scope.token()),
-        )
-        .expect("go on air");
+        let draining = Arc::new(AtomicBool::new(true));
+        let feed = StallableFeed {
+            inner: RingFeed::new(samples, Arc::clone(&drops)),
+            draining: Arc::clone(&draining),
+        };
+        let handle = Broadcast::start(&config, feed, Some(scope.token())).expect("go on air");
         let base = Url::parse(handle.url()).expect("the handle reports a URL");
         let client = HttpClient::new(NetOptions::default(), pools(), scope.token());
 
@@ -156,7 +180,20 @@ impl OnAir {
             client,
             base,
             drops,
+            draining,
         }
+    }
+
+    /// Stop the packager reading the ring, so the render alone decides how far
+    /// past the ring's capacity the producer runs.
+    fn stall(&self) {
+        self.draining.store(false, Ordering::Release);
+    }
+
+    /// Let the packager read again. Its next poll hands over what survived in
+    /// the ring and reports the whole gap behind it.
+    fn resume(&self) {
+        self.draining.store(true, Ordering::Release);
     }
 
     fn tap_drops(&self) -> u64 {
@@ -244,18 +281,34 @@ async fn the_engine_mix_reaches_an_http_client_as_the_source_tone() {
 
 #[kithara::test(tokio, flash(false), timeout(Duration::from_secs(60)))]
 async fn a_ring_the_render_outruns_breaks_the_served_playlist() {
+    /// Stereo samples the ring holds. `TAIL_FRAMES` fits inside it, so the
+    /// tail cannot break the stream a second time, while `OVERRUN_FRAMES` is
+    /// ten times over.
     const TIGHT_RING: usize = 22_050;
+    const LEAD_FRAMES: usize = 8_820;
     const OVERRUN_FRAMES: usize = 110_250;
     const TAIL_FRAMES: usize = 8_820;
     const TAIL_TONE_FRAMES: usize = 4_410;
+    /// The stalled render offers at least `OVERRUN_FRAMES * 2` samples. The
+    /// ring absorbs its capacity twice at most: once into a poll already in
+    /// flight when the stall lands, once to refill behind it. The rest is lost
+    /// whatever the packager thread got scheduled to do.
+    const LOST_AT_LEAST: usize = OVERRUN_FRAMES * 2 - TIGHT_RING * 2;
 
     let harness = playing_harness();
     let on_air = OnAir::start(&harness, TIGHT_RING);
 
+    render_tone(&harness, LEAD_FRAMES);
+    let before = on_air.tap_drops();
+
+    on_air.stall();
     render_tone(&harness, OVERRUN_FRAMES);
+    on_air.resume();
+    let lost = usize::try_from(on_air.tap_drops() - before).expect("a sample count fits a usize");
     assert!(
-        on_air.tap_drops() > 0,
-        "the render must outrun a {TIGHT_RING}-sample ring"
+        lost >= LOST_AT_LEAST,
+        "{OVERRUN_FRAMES} frames against an unread {TIGHT_RING}-sample ring \
+         lose at least {LOST_AT_LEAST} samples, lost {lost}"
     );
 
     on_air.wait_until_drained().await;

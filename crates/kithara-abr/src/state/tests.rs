@@ -658,8 +658,8 @@ fn request_target_accepts_manual_pin_target() {
     );
 }
 
-// Wall-clock interval measured against the instant `AbrState` captured at
-// construction: both must come from the same clock, so this one opts out
+/// Wall-clock interval measured against the instant `AbrState` captured at
+/// construction: both must come from the same clock, so this one opts out
 #[kithara::test(flash(false))]
 fn min_switch_interval_prevents_oscillation() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -696,8 +696,8 @@ fn min_switch_interval_prevents_oscillation() {
     assert_eq!(d2.reason(), AbrReason::MinInterval);
 }
 
-// Wall-clock interval measured against the instant `AbrState` captured at
-// construction: both must come from the same clock, so this one opts out
+/// Wall-clock interval measured against the instant `AbrState` captured at
+/// construction: both must come from the same clock, so this one opts out
 #[kithara::test(flash(false))]
 fn min_switch_interval_guards_the_first_switch_of_a_session() {
     let state = AbrState::new(AbrMode::Auto(Some(VariantIndex::new(0))));
@@ -1017,13 +1017,13 @@ async fn auto_mode_without_seed_stays_on_initial_variant_on_cold_start() {
     drop(handle);
 }
 
-// The six below state the anti-oscillation interval, and none of them sleeps.
-// `switch_interval_remaining` measures from the session's start, so each names
-// that instant through `new_at` and drives the controller at instants derived
-// from it: the interval either holds or has expired by arithmetic, never by
-// how long the test's own setup took. That is what lets them run under an
-// interpreter hundreds of times slower than the machine, and it is stricter
-// besides - the retry deadline is asserted exactly rather than slept through.
+/// The six below state the anti-oscillation interval, and none of them sleeps.
+/// `switch_interval_remaining` measures from the session's start, so each names
+/// that instant through `new_at` and drives the controller at instants derived
+/// from it: the interval either holds or has expired by arithmetic, never by
+/// how long the test's own setup took. That is what lets them run under an
+/// interpreter hundreds of times slower than the machine, and it is stricter
+/// besides - the retry deadline is asserted exactly rather than slept through.
 #[kithara::test(tokio)]
 async fn min_interval_ticks_without_another_bandwidth_sample() {
     const INTERVAL: Duration = Duration::from_millis(20);
@@ -1323,8 +1323,8 @@ async fn tick_already_optimal_retracts_stale_throughput_pending() {
     drop(handle);
 }
 
-// Wall-clock interval measured against the instant `AbrState` captured at
-// construction: both must come from the same clock, so this one opts out
+/// Wall-clock interval measured against the instant `AbrState` captured at
+/// construction: both must come from the same clock, so this one opts out
 #[kithara::test(flash(false))]
 fn tick_min_interval_hold_preserves_pending() {
     let settings = AbrSettings::builder()

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-file.svg)](https://crates.io/crates/kithara-file)
 [![docs.rs](https://docs.rs/kithara-file/badge.svg)](https://docs.rs/kithara-file)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -52,7 +52,7 @@ let stream = Stream::<File<AppPools>>::new(local).await?;
 
 `FileConfig<S>` is a [`bon`](https://crates.io/crates/bon) builder. Start with `FileConfig::for_src(src)`, set the required shared asset store with `.store(store)` and its matching region with `.pools(pools)`, then call `.build()`. Both values use the same schema `S`; cloned regions retain one shared hard budget. The same chain accepts non-default wiring such as downloader, cache discriminator, and cancel token. Streaming knobs — extension hint, event and reader channel capacities, tmp-claim poll interval, look-ahead cap — live on `FileSettings` and arrive through `.settings(FileSettings::builder()...build())`.
 
-## Public Items
+## Key Types
 
 <table>
 

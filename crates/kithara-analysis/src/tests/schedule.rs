@@ -445,7 +445,7 @@ fn a_growing_duration_replaces_the_one_the_schedule_had() {
 
 #[kithara::test]
 fn a_run_starts_where_the_seek_landed_before_the_next_progressive_chunk() {
-    // The decoder snaps every seek down to a whole 30 000 frames.
+    /// The decoder snaps every seek down to a whole 30 000 frames.
     const SNAP: u64 = 30_000;
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).snapping(SNAP),
@@ -612,8 +612,8 @@ fn a_source_that_over_reports_its_length_still_ends() {
 
 #[kithara::test]
 fn a_snapshot_published_early_describes_the_whole_track() {
-    // Long enough that the pass publishes while it is still decoding: a
-    // publication is due every five covered source seconds.
+    /// Long enough that the pass publishes while it is still decoding: a
+    /// publication is due every five covered source seconds.
     const EXTENT: u64 = 20 * 44_100;
     let mut pass = Pass::open(Source::new(EXTENT), scheduled(Consts::WINDOW_SECONDS));
     pass.drive(40);
@@ -693,8 +693,8 @@ fn a_source_that_snaps_out_of_its_own_gaps_still_finishes() {
 
 #[kithara::test]
 fn a_head_the_source_cannot_reach_is_retired_after_one_chunk() {
-    // Encoder priming: the decoder's first output frame is 1000, so nothing
-    // in front of it is a position any seek can be answered with.
+    /// Encoder priming: the decoder's first output frame is 1000, so nothing
+    /// in front of it is a position any seek can be answered with.
     const FLOOR: u64 = 1000;
     let mut pass = Pass::open(
         Source::new(Consts::EXTENT).flooring(FLOOR),

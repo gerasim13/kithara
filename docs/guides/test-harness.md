@@ -52,3 +52,14 @@ validation scope.
   fit an owner suite.
 - Tests should assert contracts: state, events, bytes, positions, typed errors,
   or resource cleanup. Do not test only that nothing panicked.
+
+## Test-Driven Development
+
+- Behavior changes are driven by tests that describe the intended contract.
+- Tests are deterministic and never depend on the external network.
+- A test captures the contract, not an incidental implementation detail.
+- Test logs and generated data stay at a reasonable size.
+- `src/` is production code, not a fixture warehouse. Large fixtures, local
+  servers, generated content, and multi-step scenarios belong in `tests/`;
+  small unit tests and tiny helpers under `#[cfg(test)]` stay next to the code.
+- Any public API change comes with tests that capture the contract.

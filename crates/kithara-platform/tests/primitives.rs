@@ -9,14 +9,14 @@ mod mpsc {
     use kithara_platform::{sync::mpsc::*, time::Instant};
     use kithara_test_utils::kithara;
 
-    // `flash(false)`: these tests build a `kithara_platform::time::Instant`
-    // deadline and pass it to the crate's own `recv_timeout`. The lexical
-    // flash rewrite would retarget `Instant::now()` onto
-    // `::kithara_platform::flash::virtual_now`, whose `Instant` resolves through
-    // the dev-dep copy of `kithara_platform` (`kithara-test-utils` pulls a
-    // non-flash copy) — a different `Instant` type than the one the method
-    // expects. They do not test flash time behaviour, so opting out of the
-    // rewrite keeps a single `Instant`.
+    /// `flash(false)`: these tests build a `kithara_platform::time::Instant`
+    /// deadline and pass it to the crate's own `recv_timeout`. The lexical
+    /// flash rewrite would retarget `Instant::now()` onto
+    /// `::kithara_platform::flash::virtual_now`, whose `Instant` resolves through
+    /// the dev-dep copy of `kithara_platform` (`kithara-test-utils` pulls a
+    /// non-flash copy) — a different `Instant` type than the one the method
+    /// expects. They do not test flash time behaviour, so opting out of the
+    /// rewrite keeps a single `Instant`.
     #[kithara::test(flash(false))]
     fn recv_sync_timeout_returns_delivered_value_before_deadline() {
         let (tx, rx) = channel::<u32>();
@@ -61,11 +61,11 @@ mod thread {
         }
     }
 
-    // `flash(false)`: a real park/unpark timing test. It measures REAL
-    // wall-clock with `std::time::Instant` (not the platform clock) and asserts
-    // the unpark wakes within 250ms. The lexical flash rewrite would retarget
-    // `Instant::now()` onto the engine `virtual_now`, changing the clock
-    // and leaving the `std::time::Instant` import unused, so opt out.
+    /// `flash(false)`: a real park/unpark timing test. It measures REAL
+    /// wall-clock with `std::time::Instant` (not the platform clock) and asserts
+    /// the unpark wakes within 250ms. The lexical flash rewrite would retarget
+    /// `Instant::now()` onto the engine `virtual_now`, changing the clock
+    /// and leaving the `std::time::Instant` import unused, so opt out.
     #[kithara::test(flash(false))]
     fn park_timeout_returns_after_unpark() {
         #[cfg(not(target_arch = "wasm32"))]

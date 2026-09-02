@@ -56,10 +56,8 @@ The native cache object graph is owned in Rust:
 Registry mutation and store configuration are separate lifetimes. Registering or replacing a layout
 after a store exists does not alter that store; only a later `FfiAssetStore::new` observes the new
 snapshot. A store retains the foreign callbacks captured by its snapshot even if the registry or the
-caller's original callback reference is released. There is no `FfiCacheConfig`,
-`FfiCacheLayoutRegistration`, registration-list translation, SDK-owned registry, or per-player store
-builder in the native contract; generated bindings expose the Rust registry and store objects, and
-platform adapters only retain and forward them.
+caller's original callback reference is released. Generated bindings expose the Rust registry and
+store objects, and platform adapters only retain and forward them.
 
 ## Foreign layout callbacks
 

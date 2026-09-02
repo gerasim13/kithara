@@ -174,12 +174,12 @@ pub struct CiReportConfig {
     /// Rows of the CRAP table carried into the report. The whole table runs to
     /// five figures of lines and a step summary is capped at a megabyte.
     pub crap_rows: usize,
-    /// Contours listed under the architecture complexity index, worst first.
-    pub top_contours: usize,
     /// Lines of the duplication report carried into the report. It leads with
     /// the crate-level map and the explainable candidates, which is the part
     /// worth reading without opening the artifact.
     pub similarity_rows: usize,
+    /// Contours listed under the architecture complexity index, worst first.
+    pub top_contours: usize,
 }
 
 impl Default for CiReportConfig {
@@ -260,6 +260,23 @@ pub struct LintExcludeConfig {
     /// works if tests obey it too. Run in a second ast-grep pass per rule with
     /// no exclude globs; the rule's own `files:` / `ignores:` scope it.
     pub scan_all_rules: Vec<String>,
+    /// Build tooling, dropped by [`Self::runtime_paths`] alone: it is not a
+    /// runtime path, so architecture and idiom rules have nothing to say about
+    /// it, and their lexical rules misfire on the lint engine's own sources,
+    /// which carry the patterns they detect. `style` keeps these files.
+    pub tooling_paths: Vec<String>,
+}
+
+impl LintExcludeConfig {
+    /// What `arch`, `idioms`, and ast-grep drop: test code plus build tooling.
+    /// `style` applies [`Self::paths`] alone, so tooling source stays under the
+    /// comment, document, and ordering rules.
+    #[must_use]
+    pub fn runtime_paths(&self) -> Vec<String> {
+        let mut out = self.paths.clone();
+        out.extend(self.tooling_paths.iter().cloned());
+        out
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -362,9 +379,6 @@ fn default_perf_nextest_profile() -> String {
 #[serde(default, deny_unknown_fields)]
 pub struct TestCommandConfig {
     pub lanes: BTreeMap<String, TestLaneConfig>,
-    /// Paths that belong to no single lane: a change to one of them runs every
-    /// lane that declares `owns`, because the routing itself moved.
-    pub shared_paths: Vec<String>,
     pub net_backends: BTreeMap<String, TestNetBackendConfig>,
     pub default_backend: String,
     pub default_lane: String,
@@ -373,6 +387,9 @@ pub struct TestCommandConfig {
     pub flash: TestFlashConfig,
     pub no_block: TestNoBlockConfig,
     pub features: Vec<String>,
+    /// Paths that belong to no single lane: a change to one of them runs every
+    /// lane that declares `owns`, because the routing itself moved.
+    pub shared_paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -411,16 +428,16 @@ pub struct TestLaneConfig {
     /// the lane rather than by whatever the caller happened to export.
     pub env: BTreeMap<String, String>,
     pub default_flash: Option<bool>,
-    /// Source prefixes this lane is the test for. `just test run --touched`
-    /// runs the lane when the branch changed a path under one of them; a lane
-    /// that owns nothing is never selected that way.
-    pub owns: Vec<String>,
     /// Poll-blocking detector default for this lane, so two schedulers cannot
     /// run the same lane under different rules.
     pub default_no_block: Option<bool>,
     pub passthrough: String,
     pub program: String,
     pub default_features: Vec<String>,
+    /// Source prefixes this lane is the test for. `just test run --touched`
+    /// runs the lane when the branch changed a path under one of them; a lane
+    /// that owns nothing is never selected that way.
+    pub owns: Vec<String>,
     pub prefix_args: Vec<String>,
     pub suffix_args: Vec<String>,
 }
@@ -499,7 +516,9 @@ pub struct StressEnvironmentConfig {
 pub struct StressModeConfig {
     pub raw_path_env: BTreeMap<String, String>,
     pub set_env: BTreeMap<String, String>,
-    /// Where this command leaves a `JUnit` report, relative to `build_dir`.
+    /// Where this command leaves a `JUnit` report, relative to the checkout
+    /// root rather than to `build_dir`: the runner's store anchors on the
+    /// workspace it tests, not on the directory it builds into.
     ///
     /// An exit code names no test. When the command runs its tests under a
     /// runner that writes a report anyway, that report is what turns "something
@@ -1048,6 +1067,51 @@ complete_only = true
         let policy = &config.quality.assessment.not_applicable_tools[0];
         assert_eq!(policy.tool, "cargo-mutants");
         assert_eq!(policy.reason, "not actionable for this workspace");
+    }
+
+    #[test]
+    fn runtime_paths_carry_the_tooling_globs_and_paths_do_not() {
+        let config = load(
+            r#"
+[lint_exclude]
+paths = ["**/tests/**"]
+tooling_paths = ["crates/kithara-devtools/**"]
+"#,
+        )
+        .expect("lint exclude config");
+
+        assert_eq!(config.lint_exclude.paths, ["**/tests/**"]);
+        assert_eq!(
+            config.lint_exclude.runtime_paths(),
+            ["**/tests/**", "crates/kithara-devtools/**"]
+        );
+    }
+
+    #[test]
+    fn style_keeps_the_tooling_globs_this_repo_excludes_from_architecture() {
+        let config = ProjectConfig::load(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../..")
+                .as_path(),
+        )
+        .expect("the repo config loads");
+
+        assert!(
+            !config
+                .lint_exclude
+                .paths
+                .iter()
+                .any(|p| p.contains("kithara-devtools")),
+            "a devtools glob in `paths` would hide the crate from `style` too"
+        );
+        assert!(
+            config
+                .lint_exclude
+                .runtime_paths()
+                .iter()
+                .any(|p| p.contains("kithara-devtools")),
+            "architecture and idiom rules do not apply to build tooling"
+        );
     }
 
     #[test]

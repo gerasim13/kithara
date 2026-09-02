@@ -309,31 +309,19 @@ allocates a `TrackId` and hands it to the bridge, so there is no untagged item t
 
 ## Queue Auto-Advance
 
-`PlayerImpl` exposes a handover API for external orchestrators and internal tests:
-
-- `arm_next(idx) -> Option<Arc<str>>` - load the next item into the audio thread, ready for gapless
-  stitch (cf=0) or parallel fade (cf>0). Idempotent per index; a differently-armed index is
-  unloaded first; `None` when the slot is empty/out of range.
-- `commit_next(idx) -> Result<(), PlayError>` - promote the armed slot (cf>0 only; the audio thread
-  handles cf=0 internally). `NotReady` when nothing is armed, `ArmIndexMismatch` on index
-  disagreement.
-- `unarm_next()` - drop the armed slot without committing; skips the unload when that slot is
-  already activated for the current index (it is the leading track).
-- `armed_next() -> Option<usize>` - the armed, not-yet-activated index.
-
-Two near-end triggers are published: `PlayerEvent::PrefetchRequested` and
-`PlayerEvent::HandoverRequested` (emitted only when `crossfade_duration > 0`).
-`PlayerSettings::auto_advance_enabled` (default `true`) uses a built-in linear policy
-(`next = current + 1`). `kithara-queue::Queue` disables that built-in policy at construction
-(`PlayerImpl::set_auto_advance_enabled(false)`) and reacts to `HandoverRequested` by selecting the
-loaded successor via `select_item_with_crossfade`; it does not call `arm_next` / `commit_next`.
+`arm_next` is idempotent per index and unloads a differently-armed one;
+`commit_next` is for `cf>0` only, because the audio thread stitches `cf=0`
+internally. `PlayerSettings::auto_advance_enabled` (default `true`) applies a
+built-in linear policy. **`kithara-queue::Queue` disables that policy and reacts
+to `PlayerEvent::HandoverRequested` through `select_item_with_crossfade`; it
+never calls `arm_next` or `commit_next`.**
 `auto_advance_enabled` carries `#[patch(skip)]` for exactly this reason: the queue overwrites it on
 every queue-driven player, so a document key would configure nothing in the shipped binary.
 
-`select_item_with_crossfade` fails with `PlayError::ItemConsumed` before any bookkeeping when the
-target index is neither armed, nor the already-announced current item, nor still holding a resource
-
-- the UI must not drift from the audio.
+`select_item_with_crossfade` fails with `PlayError::ItemConsumed` before any
+bookkeeping when the target index is neither armed, nor the announced current
+item, nor still holding a resource — the UI must not drift from the audio
+(`select_item_on_consumed_slot_errors_without_bookkeeping`).
 
 ## Engine Lifecycle
 
@@ -504,26 +492,13 @@ desired level to the main-thread Host, which becomes their canonical
 owner, while the Worker Host retains the runtime and JS-bound resources. There
 is no standalone concrete production session constructor in this crate.
 
-`kithara-warp` owns musical coordinates plus the `BeatGrid`, `WarpMap`, and
-`SyncGroup` protocols; `kithara-play` owns one Player instance and
-`kithara-host` owns the live session that composes Players. `TrackBinding` captures an
-owner-published `BeatGridSnapshot`; it neither creates a grid identity nor
-converts analysis facts into a second representation. R7 session state may
-transact pure group operations, but the producer chain does not yet consume a
-`WarpMap` or acknowledge rendered/presented application.
-
-`SessionDispatcher::consumer_wake_mode` is the session's required, object-safe
-consumer capability. Real-time session implementations explicitly return
-`RealtimeDeferred`, preserving the audio callback's no-syscall drain path;
-off-RT sessions return `ImmediateOffRt`, and dispatcher wrappers must forward
-their inner capability. Requiring the method keeps wrappers from silently
-erasing an off-RT capability through a trait default. `ConfigPrep` copies the
-capability into `ResourceConfig::settings.audio.consumer_wake_mode`,
-unconditionally overwriting whatever the builder carried, so a player-managed resource has no
-second source of session wake policy. The builder setter (default
-`RealtimeDeferred`) exists for direct `Resource` readers that never pass
-through a player: such a reader declares `ImmediateOffRt` itself to get
-immediate worker wakes and inline reader-event delivery.
+`SessionDispatcher::consumer_wake_mode` is a **required** object-safe capability,
+not a trait default, so a wrapper cannot silently erase an off-RT capability by
+omission. `ConfigPrep` copies it into
+`ResourceConfig::settings.audio.consumer_wake_mode`, unconditionally
+overwriting whatever the builder carried, so a player-managed resource has no
+second source of wake policy; the builder setter exists only for direct
+`Resource` readers that never pass through a player.
 
 ### Host transport anchor
 
@@ -694,11 +669,6 @@ reselecting-current path and never be enqueued.
 
 ## Invariants
 
-- `SlotId` is valid only between `allocate_slot()` and `release_slot()`.
-- At most `EngineImpl::max_slots()` slots allocated at once (`EngineSettings::max_slots`, default
-  4, reached through `PlayerConfig.settings.engine`).
-- `PlayerImpl::slot()` is `None` until a slot is allocated (phases `Idle` and `Stopped`-without-
-  slot); `send_to_slot` then fails with `PlayError::NoActiveSlot`.
 - Audio-thread `process()` is allocation-, free-, and lock-free.
 - `duration_seconds()` returns `None` while duration is unknown; the shared atomic's `0.0`
   conflates "unknown" with "empty track", so callers must not read it directly.
