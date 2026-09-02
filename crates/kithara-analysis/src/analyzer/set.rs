@@ -311,7 +311,6 @@ mod tests {
             "a foreign rate must not move the coverage"
         );
 
-        // Already covered.
         assert_eq!(
             analyzers.push(&chunk(&pools, 8192, 0), None),
             Ingest::Covered

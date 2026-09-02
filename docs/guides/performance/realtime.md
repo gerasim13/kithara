@@ -1,19 +1,16 @@
 # Real-time callback & locking
 
-*Tiers: hot = audio/decode/resampler/stretch/beat/bufpool; warm = stream/hls/file/net/storage/assets/abr/drm/queue/events/play; cold = platform/app/apple/ffi/encode.*
+*Tier legend and the rest of the family: [performance.md](../performance.md).*
 
 ## RT-audio callback
 
-**Blocking primitive on the RT thread** (anchor - the whole section is one invariant)
-The device callback runs under a hard sub-ms deadline; any lock, `.await`, or heap op can be preempted or wait unboundedly and produce an xrun. Cross the boundary with a wait-free SPSC ring for PCM/commands and atomics/`ArcSwap` for state the callback reads.
+The device callback runs under a hard sub-millisecond deadline, and every rule
+below is one invariant: nothing reached from `process()` may block, wait
+unboundedly, touch the allocator, or call the OS. Cross the boundary with a
+wait-free SPSC ring for PCM and commands, and with atomics or `ArcSwap` for the
+state the callback reads.
 
 ```rust
-// bad: guard + async recv inside the device callback
-fn process(&mut self, out: &mut [f32]) {
-    let g = self.state.lock();       // parking_lot guard on RT thread
-    let pcm = self.rx.recv().await;  // blocking/await recv on RT thread
-}
-// good: ring pop + lock-free snapshot reads
 #[kithara::rtsan_forbid_blocking]
 fn process(&mut self, out: &mut [f32]) {
     while let Some(frame) = self.cons.pop() { /* preallocated slots */ }
@@ -21,152 +18,113 @@ fn process(&mut self, out: &mut [f32]) {
 }
 ```
 
-*tier: hot | detector: `#[kithara::rtsan_forbid_blocking]` + rtsan/no_block lanes (manual) | present in kithara*
+- **No blocking primitive** (I1). No lock guard, no `.await`, no channel `recv()`
+  in the body: each can be preempted or wait unboundedly and produce an xrun.
+  *detector: `kithara::rtsan_forbid_blocking` plus the rtsan and no_block lanes*
+- **No logging, syscall, or I/O** (I4, I5). A subscriber formats, allocates, and
+  locks on the emitting thread. `kithara::probe` (USDT) is the sanctioned RT-safe
+  trace; otherwise bump a `Relaxed` counter the UI polls. A `warn!` is tolerable
+  only on an already-lost cold branch such as panic or evict. *detector:
+  `rust.no-debug-prints` covers `println!` and `dbg!`; tracing is manual*
+- **No unbounded work or allocation** (I6). Preallocate to the declared maximum
+  in `prepare()` or `new_stream()` and reuse the storage; the body indexes into
+  it. No `Vec::new`, `Box`, `format!`, or map growth. See
+  [allocation.md](allocation.md).
+- **No std, tokio, or crossbeam channel across the boundary** (I7). mpsc
+  allocates nodes and can park. Use a fixed-capacity `ringbuf` SPSC (`HeapRb`
+  split into `HeapProd`/`HeapCons`); the RT side moves preallocated slots and
+  coalesces or drops when full. *detector: `arch.no-raw-tokio-sync` (ast-grep),
+  already-enforced*
+- **No deallocation** (I8). Never let the last `Arc`, `Vec`, or `Box` drop inside
+  `process()` - the `free()` then runs on the callback. Hand the released value
+  back over a ring to an off-RT collector (`discard_track`).
+- **No pool-miss fallback** (I9). Pre-fill the pool to a computed budget at
+  startup, size that inventory with the buffer-pool benchmarks, acquire the
+  checked guard during preparation, and count every miss so the budget can be
+  fixed. A silent alloc-on-miss escape masks a broken budget contract; keep any
+  fallback off the rtsan produce core. *detector: `perf.prefer-primitive-pool` +
+  `perf.no-component-pool-construction`*
+- **Thread priority** (I2). The device callback thread is created and
+  QoS-promoted by cpal/firewheel, not by kithara, and the decode and produce
+  threads are ring-decoupled from the callback deadline (degrade on underrun)
+  rather than workgroup-bound. Promoting those owned feed threads to RT priority
+  and joining the Apple os_workgroup is an open audit item, not current
+  behaviour. Keep the RT thread count small and fixed.
 
-**Logging / syscall / I/O on the callback** (I4 + I5)
-No `tracing`/`println!`/file/socket on the RT path - the subscriber formats, allocates, and locks on the emitting thread. `#[kithara::probe]` (USDT) is the sanctioned RT-safe trace; otherwise write a relaxed counter the UI polls. A `warn!` is tolerable only on an already-lost cold branch (panic/evict).
+*tier: hot | detector: rtsan and no_block lanes (mostly manual) | present in
+kithara: SPSC rings rather than tokio or crossbeam mpsc, and tracing-free DSP
+crates. The manual census scope is the kithara-play processor, not a workspace
+sweep.*
 
-```rust
-// bad
-fn process(&mut self, out: &mut [f32]) { info!(n = out.len(), "cb"); } // fmt+alloc+lock
-// good
-fn process(&mut self, out: &mut [f32]) { self.shared.xruns.fetch_add(1, Relaxed); }
-```
-
-*tier: hot | detector: rust.no-debug-prints (enforced ast-grep - `println!`/`dbg!` only; tracing is manual) | present in kithara*
-
-**Unbounded work / alloc per callback** (I6)
-Preallocate to max size at `prepare()`/`new_stream()` and reuse (`clear()` + refill, or bufpool). No `Vec::new`/`Box`/`format!`/HashMap-grow in the body.
-
-```rust
-// bad
-fn process(&mut self, out: &mut [f32]) { let mut s = vec![0.0; out.len()]; /* heap */ }
-// good
-fn prepare<S: HasPool<f32>>(&mut self, pools: &PoolRegion<S>, max: usize) -> Result<(), PoolError> {
-    self.scratch = pools.get_with_len::<f32>(max)?;
-    Ok(())
-}
-fn process(&mut self, out: &mut [f32]) { let s = &mut self.scratch[..out.len()]; }
-```
-
-*tier: hot | detector: rtsan + `assert_no_alloc` lane (manual) | present in kithara*
-
-**std/tokio/crossbeam channel across the RT boundary** (I7)
-Use a fixed-capacity `ringbuf` SPSC; the RT side only push/pop preallocated slots and coalesces/drops on full. mpsc allocs nodes and can park.
-
-```rust
-// bad
-let (tx, rx) = tokio::sync::mpsc::channel(N);      // alloc + park
-// good
-let (prod, cons) = ringbuf::HeapRb::new(N).split(); // HeapProd / HeapCons
-```
-
-*tier: hot | detector: arch.no-raw-tokio-sync (enforced ast-grep) | already-enforced*
-
-**Deallocation on the RT thread** (I8)
-Never let the last `Arc`/`Vec`/`Box` drop inside `process()` - `free()` runs on the callback. Hand the released value back over a ring to an off-RT collector.
-
-```rust
-// bad
-fn process(&mut self) { self.tracks.remove(i); }        // Drop -> free() on RT
-// good
-fn process(&mut self) { self.shared.discard_track(track); } // freed off-RT
-```
-
-*tier: hot | detector: rtsan + `assert_no_alloc` lane (manual) | present in kithara*
-
-**Pool-miss fallback that hides a budget bug** (I9)
-Pre-fill the pool to a computed budget at startup and count every miss so the budget can be fixed; keep the alloc-on-miss fallback off the rtsan produce core. A silent fallback masks a broken budget contract.
-
-```rust
-// bad: silent heap alloc on miss, no accounting
-let scratch = match pools.get_with_len::<f32>(max_samples) {
-    Ok(buf) => buf,
-    Err(_) => return run_with_untracked(vec![0.0; max_samples]),
-};
-// good: prepare one checked guard before the callback and retain it
-let scratch = pools.get_with_len::<f32>(max_samples)?;
-processor.install(scratch);
-```
-
-Configure `initial_buffers` and `initial_capacity` at the composition root; size that inventory with the buffer-pool benchmarks. *tier: hot | detector: `perf.prefer-primitive-pool` + `perf.no-component-pool-construction` (ast-grep) | present in kithara*
-
-**RT thread priority not promoted** (I2) - *watch:* N/A in kithara source: the device callback thread is created and QoS-promoted by cpal/firewheel, and the decode/produce threads are ring-decoupled from the callback deadline (degrade-on-underrun), not workgroup-bound. *tier: hot | detector: manual | preventive*
-
-**Mean latency hides xruns** (I3) - *watch:* assert worst-case per-callback duration and make underrun counters first-class test output; never gate a DSP kernel on criterion mean/median. Pair with the rtsan/no_block lanes so blocking is caught even when timing passes. Belongs in the bench/test-harness doc. *tier: n/a | detector: manual | preventive*
-
-**Sampling profiler perturbs the RT thread** (I10) - *watch:* for Apple-Silicon benches set explicit QoS on benched threads, reach thermal steady state (same machine/power), corroborate with instruction counts, and verify the shipping callback runs at RT priority separately. *tier: n/a | detector: manual | preventive*
+Measuring this section - worst-case duration, xrun counters, profiler
+perturbation - belongs to [benchmarking.md](benchmarking.md).
 
 ## Sync & atomics
 
-**Hot read-mostly state: ArcSwap, not `RwLock::read()`**
+**Read-mostly hot state uses `ArcSwap`, not a `RwLock` read.** `load()` is
+wait-free; `read()` still CASes a shared cacheline under contention. Writers RCU
+by storing a fresh `Arc`. Never `load_full()` per block - that is an atomic
+refcount bump on every callback; clone the `Arc` once at setup and take a `Guard`
+per block, and pre-warm the arc_swap debt node before playback so the first store
+does not allocate on the RT thread. Serialize concurrent writers behind a small
+write-side `Mutex` only when load-mutate-store must not race. Readers poll a
+`snapshot()` (Relaxed loads of position, duration, frontier) instead of a channel
+round-trip; channels carry commands and ownership transfer, not "where are we".
+*tier: warm | detector: manual | present (offsets.rs migrated RwLock -> ArcSwap)*
 
-```rust
-// bad: platform RwLock read on every audio block
-let map = self.offsets.read();          // parking_lot RwLock
-let byte = map.byte_for(frame);
-// good: lock-free load; writers RCU via store(Arc::new(next))
-let map = self.offsets.load();          // arc_swap::ArcSwap<ByteMap>
-let byte = map.byte_for(frame);
-```
+**Weakest ordering that carries the invariant, never reflexive `SeqCst`.**
+`SeqCst` is a full barrier on ARM and an independent counter needs none:
+`Relaxed` for stats, a `Release` store paired with an `Acquire` load to publish
+then consume data. Reserve `SeqCst` for a genuine total-order protocol - kithara
+keeps it on the seek and play control flags - and record why. Downgrading an
+existing `SeqCst` is bench-gated and correctness-sensitive, never a blanket
+rewrite. *tier: hot | detector: manual | present (play/seek `SeqCst`, stats
+`Relaxed`, seqlock `AcqRel`/`Release` plus fence)*
 
-`.load()` is wait-free; a `.read()` still CASes a shared cacheline under contention. Serialize concurrent writers with a small write-side `Mutex` only when load-mutate-store must not race. Corollary (no channel round-trip for a snapshot): readers poll `shared_state.snapshot()` (Relaxed atomic loads of position/duration/frontier); keep channels for commands/ownership transfer, not for asking the owner "where are we" each tick.
-*tier: warm | detector: manual (candidate M3 ast-grep: `.read()` in a per-callback fn on a platform RwLock) | present in kithara (offsets.rs migrated RwLock -> ArcSwap)*
+**One sanctioned lock: `kithara_platform::sync::Mutex`.** It wraps parking_lot
+natively, carries a wasm implementation, and centralizes poison and hang
+handling. parking_lot has no priority inheritance on Apple, so keep it off any
+lock an RT or high-QoS thread can contend; cross that boundary with atomics or
+SPSC instead. The std versus parking_lot swap debate is settled workspace-wide.
+*tier: hot | detector: `arch.no-std-sync-mutex` (ast-grep) + devtools
+platform_layer_hygiene | already-enforced*
 
-**Weakest ordering that carries the invariant, not reflexive SeqCst**
+**No priority inversion.** Without priority inheritance an RT thread that parks
+on a lock a low-priority task holds stalls behind it. The RT side pulls a
+pre-filled ring and degrades on underrun (`block_on_underrun` is offline opt-in
+only); where waiting is legitimate use the ownership-carrying platform `Mutex`
+and set explicit QoS on the producer thread. *tier: warm | detector: manual |
+present (ring-decoupled produce)*
 
-```rust
-// bad: SeqCst by habit
-stats.count.fetch_add(1, SeqCst);
-// good: match ordering to the actual handoff
-stats.count.fetch_add(1, Relaxed);      // independent counter/stat
-ready.store(true, Release);             // publish data, then flag...
-if ready.load(Acquire) { use(&data); }  // ...paired Acquire consumes it
-```
+**No thundering-herd wakeups.** `notify_waiters`, broadcast, and condition
+polling wake N threads to fight over one slot. Shard per loader lane so each item
+is handed to exactly one receiver; `notify_one` and `Semaphore` wake bounded
+waiters. mpsc means one worker per unit of work, watch means latest-value
+fan-out. *tier: warm | detector: manual | present (loader lanes isolated per
+track)*
 
-SeqCst is a full barrier on ARM; an independent counter needs none. Reserve SeqCst for genuine total-order protocols (kithara keeps it on seek/play control flags) and document why. Downgrading an existing SeqCst is bench-gated and correctness-sensitive, never a blanket rewrite.
-*tier: hot | detector: manual | present in kithara (play/seek flags SeqCst; stats Relaxed; seqlock AcqRel/Release+fence)*
+**Latest-wins state does not belong in a queue.** A gain or playhead pushed
+through mpsc leaves the consumer draining a stale backlog: store it in an atomic,
+a watch channel, a triple buffer, or `ArcSwap`. Keep queues for event streams
+where every element must be processed (the kithara-events broadcast). *tier: warm
+| detector: manual | present*
 
-**One sanctioned lock, kept off RT-adjacent paths**
+## Watch-for (absent in kithara)
 
-```rust
-// bad: raw parking_lot / std::sync sprinkled per crate
-use parking_lot::Mutex;
-// good: the platform wrapper (parking_lot native, wasm impl, poison+hang centralized)
-use kithara_platform::sync::Mutex;
-```
-
-parking_lot has no priority inheritance on Apple, so keep it off any lock an RT/high-QoS thread can contend; cross the RT boundary with atomics/SPSC instead (see RT-callback discipline). The std<->parking_lot "swap for speed" debate is already settled workspace-wide.
-*tier: hot | detector: enforced ast-grep `arch.no-std-sync-mutex` + devtools `platform_layer_hygiene` | already-enforced*
-
-**No priority inversion: high-QoS thread must not wait on a lower one**
-
-```rust
-// bad: RT/produce thread parks on a lock a low-prio task holds
-let g = shared.lock(); feed(&g);
-// good: RT pulls a pre-filled ring, degrades on underrun
-match cons.pop() { Some(frames) => play(frames), None => emit_silence() }
-```
-
-Without priority inheritance the RT thread stalls behind a preempted producer. Where waiting is legitimate, use an ownership-carrying platform `Mutex` and set explicit QoS on the producer thread.
-*tier: warm | detector: manual | present in kithara (ring-decoupled produce; `block_on_underrun` is offline-opt-in only)*
-
-**No thundering-herd wakeups**
-
-```rust
-// bad: one global Semaphore fronting all downloads
-GLOBAL_DL.acquire().await;
-// good: shard per loader lane; hand each item to exactly one receiver
-lane.permits.acquire().await;           // per-track lane
-// mpsc = one worker per unit of work; watch = latest-value fan-out
-```
-
-`notify_waiters`/broadcast/condition-poll wake N threads to fight over one slot; `notify_one`/`Semaphore` wake bounded waiters, and per-lane sharding avoids the herd entirely.
-*tier: warm | detector: manual | present in kithara (loader lanes isolated per-track)*
-
-**Watch-for (absent in kithara; no example needed)**
-
-- **Non-lock-free `AtomicCell<T>`**: crossbeam `AtomicCell` on an oversized `T` silently degrades to an internal spinlock; if ever introduced, static-assert `AtomicCell::<T>::is_lock_free()` or pack into a `u64`. None present (small state via plain atomics/ArcSwap). *tier: hot | detector: none | preventive*
-- **Naive spin-lock on the RT thread**: hand-rolled `loop { try_lock() }` or the `spin` crate busy-waiting on the audio thread. None present; RT sharing is lock-free ring/atomics/seqlock, non-RT goes through the platform `Mutex`. Existing `spin_loop()` is a bounded seqlock retry, not a busy-wait lock. *tier: hot | detector: none | preventive*
-- **Naive (non-atomic-payload) seqlock**: reading the payload with plain non-atomic loads is UB even on discarded retries; read per-word atomics (Relaxed) + `fence(Acquire)` before the version recheck. kithara's `SeqAnchorCell` (`kithara-hls/src/variant/flow/seqlock.rs`) is the correct reference form. *tier: hot | detector: none | already-correct*
-- **Single global hot atomic counter**: a many-thread `fetch_add` on one cacheline; shard with `CachePadded` or accumulate per-block and flush once with a Relaxed add. kithara's static atomics are rare ID generators (one bump per worker/bus), not contended. *tier: warm | detector: manual | preventive*
+- **Non-lock-free AtomicCell** - the crossbeam type silently degrades to an
+  internal spinlock on an oversized payload. If introduced, static-assert its
+  lock-freedom or pack the state into a `u64`. Small state goes through plain
+  atomics or `ArcSwap` today.
+- **Naive spin-lock on the RT thread** - a hand-rolled `try_lock` loop, or the
+  spin crate busy-waiting on the audio thread. RT sharing is lock-free
+  ring/atomics/seqlock and non-RT goes through the platform `Mutex`. The existing
+  `spin_loop()` is a bounded seqlock retry and the `compare_exchange()` sites are
+  bounded CAS in bufpool budget accounting - neither is a busy-wait lock.
+- **Naive seqlock** - reading the payload with plain non-atomic loads is UB even
+  on retries that are discarded. Read per-word atomics `Relaxed`, then
+  `fence()` with `Acquire` before rechecking the version. `SeqAnchorCell` in
+  crates/kithara-hls/src/variant/flow/seqlock.rs is the reference form.
+- **One global hot atomic counter** - a many-thread `fetch_add` on a single
+  cacheline; shard it with cache padding, or accumulate per block and flush once
+  with a `Relaxed` add. kithara's static atomics are rare id generators (one bump
+  per worker or bus), not contended.

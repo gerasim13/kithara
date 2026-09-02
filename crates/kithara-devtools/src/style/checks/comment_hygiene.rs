@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{collections::HashSet, ops::Range};
 
 use anyhow::Result;
 use glob::Pattern;
@@ -39,7 +39,7 @@ impl Check for CommentHygiene {
             };
             let comments = scan_comments(&src);
             let macro_spans = collect_macro_spans(&file);
-            let new_src = apply_category_fix(&src, &comments, &macro_spans, cfg);
+            let new_src = apply_category_fix(&src, &comments, &macro_spans, &file, cfg);
             if let Some(new_src) = new_src {
                 std::fs::write(&path, new_src)?;
                 outcome.writes += 1;
@@ -530,8 +530,10 @@ fn detect_category(
             CommentKind::Block => "block",
         };
         let msg = format!(
-            "{kind} comment without allowed marker (`{preview}`); add a marker \
-             ({}) or remove the comment",
+            "{kind} comment carrying prose (`{preview}`); a comment survives only \
+             as a doc comment on the item it documents - move it to `///`, fold it \
+             into the code's shape, or remove it. Inline `//` is reserved for \
+             machine markup ({})",
             cfg.allowed_inline_markers.join(", "),
         );
         out.push(Violation::warn(ID, key, msg));
@@ -671,15 +673,138 @@ const fn range_overlaps(a: &Range<usize>, b: &Range<usize>) -> bool {
     a.start < b.end && b.start < a.end
 }
 
+/// Annotations an author reached for instead of writing documentation. A block
+/// carrying one is never promoted to `///`: publishing `WHY:` as rendered docs
+/// would launder the note rather than answer it, so it stays for a human.
+const PROSE_MARKERS: &[&str] = &["WHY:", "NOTE:", "TODO:", "FIXME:", "XXX:", "HACK:"];
+
+/// Start lines of everything that can carry a doc comment. A statement cannot,
+/// which is why a comment inside a function body has no doc position to move to
+/// and has to be answered by the code instead.
+fn collect_doc_target_lines(file: &File) -> HashSet<usize> {
+    struct V {
+        lines: HashSet<usize>,
+    }
+    impl<'ast> Visit<'ast> for V {
+        fn visit_field(&mut self, f: &'ast syn::Field) {
+            self.lines.insert(f.span().start().line);
+            syn::visit::visit_field(self, f);
+        }
+        fn visit_impl_item(&mut self, i: &'ast syn::ImplItem) {
+            self.lines.insert(i.span().start().line);
+            syn::visit::visit_impl_item(self, i);
+        }
+        fn visit_item(&mut self, i: &'ast Item) {
+            self.lines.insert(i.span().start().line);
+            syn::visit::visit_item(self, i);
+        }
+        fn visit_trait_item(&mut self, i: &'ast syn::TraitItem) {
+            self.lines.insert(i.span().start().line);
+            syn::visit::visit_trait_item(self, i);
+        }
+        fn visit_variant(&mut self, v: &'ast syn::Variant) {
+            self.lines.insert(v.span().start().line);
+            syn::visit::visit_variant(self, v);
+        }
+    }
+    let mut v = V {
+        lines: HashSet::new(),
+    };
+    v.visit_file(file);
+    v.lines
+}
+
+/// Consecutive standalone plain `//` lines, grouped as one comment the way a
+/// reader sees them.
+fn standalone_blocks<'a>(src: &str, comments: &'a [Comment]) -> Vec<Vec<&'a Comment>> {
+    let mut out: Vec<Vec<&Comment>> = Vec::new();
+    for c in comments {
+        if !is_standalone_plain_line(src, c) {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last)
+                if last
+                    .last()
+                    .is_some_and(|prev| prev.line_end + 1 == c.line_start) =>
+            {
+                last.push(c);
+            }
+            _ => out.push(vec![c]),
+        }
+    }
+    out
+}
+
+/// Byte offsets at which inserting one `/` promotes a comment to a doc comment.
+fn conversion_targets(
+    src: &str,
+    comments: &[Comment],
+    file: &File,
+    macro_spans: &[Range<usize>],
+    cfg: &CommentHygieneConfig,
+) -> Vec<usize> {
+    let doc_lines = collect_doc_target_lines(file);
+    let license = leading_license_range(src, comments);
+    let mut out = Vec::new();
+    for block in standalone_blocks(src, comments) {
+        let (Some(first), Some(last)) = (block.first(), block.last()) else {
+            continue;
+        };
+        if !doc_lines.contains(&(last.line_end + 1)) {
+            continue;
+        }
+        if has_allowed_marker(&first.body_trimmed, &cfg.allowed_inline_markers) {
+            continue;
+        }
+        if PROSE_MARKERS
+            .iter()
+            .any(|m| first.body_trimmed.starts_with(m))
+        {
+            continue;
+        }
+        if block.iter().any(|c| {
+            inside_any(c.byte_range.start, macro_spans)
+                || license
+                    .as_ref()
+                    .is_some_and(|range| contains(range, &c.byte_range))
+        }) {
+            continue;
+        }
+        out.extend(block.iter().map(|c| c.byte_range.start + 2));
+    }
+    out
+}
+
+enum Edit {
+    Convert(usize),
+    Remove(Range<usize>),
+}
+
+impl Edit {
+    const fn start(&self) -> usize {
+        match self {
+            Self::Convert(at) => *at,
+            Self::Remove(range) => range.start,
+        }
+    }
+}
+
 fn apply_category_fix(
     src: &str,
     comments: &[Comment],
     macro_spans: &[Range<usize>],
+    file: &File,
     cfg: &CommentHygieneConfig,
 ) -> Option<String> {
     let license = leading_license_range(src, comments);
-    let mut targets: Vec<Range<usize>> = Vec::new();
+    let converted = conversion_targets(src, comments, file, macro_spans, cfg);
+    let promoted: HashSet<usize> = converted.iter().map(|at| at - 2).collect();
+    let mut edits: Vec<Edit> = converted.into_iter().map(Edit::Convert).collect();
     for c in comments {
+        if promoted.contains(&c.byte_range.start) {
+            continue;
+        }
         if license
             .as_ref()
             .is_some_and(|range| contains(range, &c.byte_range))
@@ -702,18 +827,25 @@ fn apply_category_fix(
         {
             continue;
         }
-        targets.push(removal_range(src, &c.byte_range));
+        edits.push(Edit::Remove(removal_range(src, &c.byte_range)));
     }
-    if targets.is_empty() {
+    if edits.is_empty() {
         return None;
     }
-    targets.sort_by_key(|r| std::cmp::Reverse(r.start));
+    edits.sort_by_key(|e| std::cmp::Reverse(e.start()));
     let mut buf = src.to_string();
     let mut last_start = usize::MAX;
-    for r in targets {
-        if r.end <= last_start {
-            buf.replace_range(r.clone(), "");
-            last_start = r.start;
+    for edit in edits {
+        match edit {
+            Edit::Convert(at) => {
+                buf.insert(at, '/');
+                last_start = at;
+            }
+            Edit::Remove(range) if range.end <= last_start => {
+                last_start = range.start;
+                buf.replace_range(range, "");
+            }
+            Edit::Remove(_) => {}
         }
     }
     Some(buf)
@@ -838,6 +970,42 @@ mod tests {
     }
 
     #[test]
+    fn a_prose_marker_no_longer_excuses_an_inline_comment() {
+        let src = "fn f() {\n    // WHY: the queue drains before the flush\n    g();\n}\n";
+
+        let found = run_all(src);
+
+        assert_eq!(keys(&found), vec!["fixture.rs:2:category".to_owned()]);
+    }
+
+    #[test]
+    fn a_safety_note_stays_allowed() {
+        let src = "fn f() {\n    // SAFETY: the pointer is owned by the caller\n    g();\n}\n";
+
+        assert!(run_all(src).is_empty());
+    }
+
+    #[test]
+    fn a_tool_directive_stays_allowed() {
+        let src = "fn f() {\n    // xtask-lint-ignore: generated\n    g();\n}\n";
+
+        assert!(run_all(src).is_empty());
+    }
+
+    #[test]
+    fn the_message_names_the_documentation_rule() {
+        let src = "fn f() {\n    // the queue drains first\n    g();\n}\n";
+
+        let found = run_all(src);
+
+        assert!(
+            found[0].message.contains("doc comment"),
+            "message should route to documentation, got: {}",
+            found[0].message
+        );
+    }
+
+    #[test]
     fn line_comment_doc_style_recognized() {
         let src = "/// outer\n//! inner\n// plain\n";
         let comments = scan_comments(src);
@@ -916,7 +1084,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        assert!(apply_category_fix(src, &comments, &macros, &cfg()).is_none());
+        assert!(apply_category_fix(src, &comments, &macros, &file, &cfg()).is_none());
     }
 
     #[test]
@@ -934,7 +1102,7 @@ mod tests {
 
     #[test]
     fn category_marker_on_first_standalone_line_covers_continuations() {
-        for marker in ["WHY: the state is shared", "SAFETY: the guard is held"] {
+        for marker in ["SAFETY: the guard is held", "xtask-lint-ignore: generated"] {
             let src = format!("fn f() {{\n    // {marker}\n    // continuation\n}}\n");
             let vs = run_all(&src);
             assert!(vs.is_empty(), "marker {marker}: {vs:?}");
@@ -1035,7 +1203,7 @@ mod tests {
     #[test]
     fn size_doc_block_at_limit_ok() {
         let mut src = String::new();
-        for i in 0..20 {
+        for i in 0..12 {
             src.push_str(&format!("/// line {i}\n"));
         }
         src.push_str("struct S;\n");
@@ -1075,13 +1243,81 @@ mod tests {
         assert!(vs.is_empty(), "got: {vs:?}");
     }
 
+    fn fixed(src: &str) -> Option<String> {
+        let comments = scan_comments(src);
+        let file = parse(src);
+        let macros = collect_macro_spans(&file);
+        apply_category_fix(src, &comments, &macros, &file, &cfg())
+    }
+
+    #[test]
+    fn a_comment_above_an_item_becomes_a_doc_comment() {
+        let out = fixed("// the queue drains first\nfn f() {}\n");
+
+        assert_eq!(
+            out.as_deref(),
+            Some("/// the queue drains first\nfn f() {}\n")
+        );
+    }
+
+    #[test]
+    fn a_comment_above_an_attribute_becomes_a_doc_comment() {
+        let out = fixed("// the queue drains first\n#[inline]\nfn f() {}\n");
+
+        assert_eq!(
+            out.as_deref(),
+            Some("/// the queue drains first\n#[inline]\nfn f() {}\n")
+        );
+    }
+
+    #[test]
+    fn every_line_of_a_block_above_an_item_converts() {
+        let out = fixed("// first\n// second\nstruct S;\n");
+
+        assert_eq!(out.as_deref(), Some("/// first\n/// second\nstruct S;\n"));
+    }
+
+    #[test]
+    fn a_comment_above_a_field_becomes_a_doc_comment() {
+        let out = fixed("struct S {\n    // the live edge\n    a: u8,\n}\n");
+
+        assert_eq!(
+            out.as_deref(),
+            Some("struct S {\n    /// the live edge\n    a: u8,\n}\n")
+        );
+    }
+
+    #[test]
+    fn a_comment_above_a_statement_is_never_converted() {
+        let out = fixed("fn f() {\n    // the queue drains first\n    g();\n}\n");
+
+        assert!(
+            out.as_deref().is_none_or(|s| !s.contains("///")),
+            "a statement cannot carry a doc comment: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_prose_marker_above_an_item_is_left_for_a_human() {
+        let out = fixed("// WHY: the queue drains first\nfn f() {}\n");
+
+        assert!(out.is_none(), "got: {out:?}");
+    }
+
+    #[test]
+    fn a_trailing_comment_is_never_converted() {
+        let out = fixed("struct S;\nfn f() { let x = 5; }\n");
+
+        assert!(out.is_none(), "got: {out:?}");
+    }
+
     #[test]
     fn fix_removes_inline_without_marker() {
         let src = "fn f() {\n    // foo\n    let x = 1;\n}\n";
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &cfg()).expect("fix");
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("fix");
         assert_eq!(out, "fn f() {\n    let x = 1;\n}\n");
     }
 
@@ -1091,7 +1327,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &cfg());
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg());
         assert!(out.is_none());
     }
 
@@ -1101,7 +1337,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &cfg()).expect("fix");
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("fix");
         assert_eq!(out, "fn f() {\n    let x = 5;\n}\n");
     }
 
@@ -1111,11 +1347,13 @@ mod tests {
         let file = parse(src);
         let macros = collect_macro_spans(&file);
         let comments = scan_comments(src);
-        let after_first = apply_category_fix(src, &comments, &macros, &cfg()).expect("first pass");
+        let after_first =
+            apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("first pass");
         let comments_2 = scan_comments(&after_first);
         let file_2 = parse(&after_first);
         let macros_2 = collect_macro_spans(&file_2);
-        let after_second = apply_category_fix(&after_first, &comments_2, &macros_2, &cfg());
+        let after_second =
+            apply_category_fix(&after_first, &comments_2, &macros_2, &file_2, &cfg());
         assert!(after_second.is_none(), "second pass should be a no-op");
     }
 
@@ -1125,7 +1363,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &cfg());
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg());
         assert!(out.is_none());
     }
 
@@ -1135,7 +1373,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        let out = apply_category_fix(src, &comments, &macros, &cfg()).expect("fix");
+        let out = apply_category_fix(src, &comments, &macros, &file, &cfg()).expect("fix");
         assert_eq!(
             out,
             "fn f() {\n    let x = 1;\n    let y = 2;\n    let z = 3;\n}\n"
@@ -1157,7 +1395,7 @@ mod tests {
         let comments = scan_comments(src);
         let file = parse(src);
         let macros = collect_macro_spans(&file);
-        apply_category_fix(src, &comments, &macros, &cfg())
+        apply_category_fix(src, &comments, &macros, &file, &cfg())
     }
 
     #[test]

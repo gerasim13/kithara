@@ -118,7 +118,7 @@ reaches it. `ViewCache` owns focus next to hover, both naming a deck by position
   answers `deck.stream.quality_hidden` and the cell leaves the row. The app supplies the rungs and owns the open
   flag per deck; a pick becomes `DeckMsg::SetQuality`, which sets the ABR mode on the deck's own
   `current_abr_handle` and mirrors it in the deck state.
-- The mixer channel keeps the EQ; `EQ_MIN_DB` / `EQ_MAX_DB` are the knob's dB travel.
+- The mixer channel keeps the EQ; `GainDb` carries the knob's dB travel.
 
 The deck module is retained-hosted, but the tempo surface stays on iced: the engine observes each decoded event first,
 and an unanswered wheel event reaches the same child unchanged. The Hero Wave and five transport buttons have engine
@@ -237,7 +237,7 @@ fingerprint, source rate, extent, and configured chunk duration before resuming 
 
 Invalidation has two levers. The composite codec version in `kithara-analysis` must be bumped whenever its framing
 or the waveform / beat-grid encodings change. Configuration changes need no bump: `analysis_fingerprint` is written
-into every blob and a mismatch is a miss, so `WAVEFORM_MAX_BUCKETS` and runtime beat-analysis tuning re-analyse
+into every blob and a mismatch is a miss, so `waveform_max_buckets` and runtime beat-analysis tuning re-analyse
 on their own. Because the identity is the source location and not the bytes, a file overwritten in place keeps
 its entry until the version is bumped — acceptable for a library of stable files.
 
@@ -363,8 +363,7 @@ variant.
 `ui` and `draw_pool`, both `#[cfg(feature = "gui")]`, are `kithara::ui::source::UiConfigPatch` and
 `DrawPoolLimitsPatch`. They are two top-level sections rather than one nested pair because
 `UiConfig.draw_buffers` is a *built* `DrawBuffers`, not a patchable field, and `DrawPoolLimits` only
-reaches one through `DrawBuffers::try_new` — see `kithara-ui`'s `CONTEXT.md`, "Configuration Document Entry
-Point". `Config::ui_settings` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
+reaches one through `DrawBuffers::try_new`. `Config::ui_settings` composes them: read `draw_pool` into a `DrawPoolLimits` off the crate
 default, build the `DrawBuffers` from it, then build `UiConfig` through
 `UiConfig::builder().draw_buffers(...)` and apply `ui` onto that value — read before build, never
 patched onto an already-built `UiConfig`, and never routed through `UiConfig::default()`, which would

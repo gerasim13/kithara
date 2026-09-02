@@ -699,8 +699,8 @@ mod tests {
             health: HealthConfig::default(),
             test: TestCommandConfig {
                 lanes,
-                shared_paths: Vec::new(),
                 net_backends,
+                shared_paths: Vec::new(),
                 default_lane: "workspace".to_owned(),
                 default_backend: "http".to_owned(),
                 feature_arg: "--features".to_owned(),

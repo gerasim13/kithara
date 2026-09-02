@@ -1,5 +1,5 @@
 use kithara_abr::{AbrMode, AbrReason, AbrState, VariantIndex};
-use kithara_decode::{DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
+use kithara_decode::{DecodeError, DecoderFactory as DecoderBuilder, GaplessInfo, GaplessMode};
 use kithara_events::{DecoderChangeCause, DecoderEvent, DeferredBus, Event, EventBus};
 use kithara_platform::{sync::Arc, time::Duration, tokio::task::yield_now};
 use kithara_signal::AudioChunk;
@@ -18,7 +18,10 @@ use crate::{
     pipeline::{
         decode::{DecoderGeneration, transition::OutgoingFrontier},
         rebuild::{DecoderBuildComplete, DecoderBuildPurpose, state::BuildId},
-        track::{AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep},
+        seek::{SeekContext, SeekRequest, engine::SeekTransition},
+        track::{
+            AtEof, CurrentFsm, Failed, Track, TrackFailure, TrackStep, fsm::apply_seek_transition,
+        },
     },
     traits::{AudioSource, AudioSourceExt},
 };
@@ -99,8 +102,8 @@ fn assert_route_signal(chunk: &AudioChunk, expected_offset: u64) {
     }
 }
 
-// Waits for the build, not for a number of yields: on a real clock the build
-// takes milliseconds while sixty-four yields take microseconds.
+/// Waits for the build, not for a number of yields: on a real clock the build
+/// takes milliseconds while sixty-four yields take microseconds.
 #[kithara::hang_watchdog]
 async fn wait_for_incoming_priming(fixture: &mut RouteFixture, transition: VariantTransition) {
     loop {
@@ -1058,4 +1061,31 @@ async fn exact_promotion_emits_variant_switch_decoder_event() {
         );
     }
     assert!(changed);
+}
+#[kithara::test(tokio)]
+async fn failed_seek_commits_its_epoch_for_the_terminal_marker() {
+    let mut fixture = route_signal_source(Consts::SAMPLE_RATE).await;
+    let request = SeekRequest {
+        seek: SeekContext {
+            target: Duration::from_secs(2),
+            epoch: 3,
+        },
+        emit_request: false,
+    };
+
+    apply_seek_transition(
+        &mut fixture.source,
+        SeekTransition::Failed {
+            request,
+            error: DecodeError::Interrupted,
+            context: "test seek failure",
+        },
+    );
+
+    // The consumer's validator already sits at the failed seek's epoch, and a
+    // terminal `Failed` track never applies another seek. The failure marker
+    // is stamped with `decode_epoch`, so the epoch must be committed here or
+    // the marker is discarded as stale and a blocking reader hangs forever.
+    assert_eq!(fixture.source.decode_epoch(), request.seek.epoch);
+    assert!(matches!(fixture.source.step_track(), TrackStep::Failed));
 }

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="../../logo.svg" alt="kithara" width="300">
+<img src="https://raw.githubusercontent.com/zvuk/kithara/main/logo.svg" alt="kithara" width="300">
 
 </div>
 
@@ -8,7 +8,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
 [![docs.rs](https://docs.rs/kithara-decode/badge.svg)](https://docs.rs/kithara-decode)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](https://github.com/zvuk/kithara/blob/main/LICENSE-MIT)
 
 </div>
 
@@ -56,17 +56,17 @@ loop {
 
 For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_info(reader, &media_info, config)` — it skips probing and uses the carried `MediaInfo` to pick the backend.
 
-## Backends
+## Features
 
 <table>
 
-<tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
+<tr><th>Feature</th><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
 
-<tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
+<tr><td><code>symphonia</code></td><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
 
-<tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
+<tr><td><code>apple</code></td><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
 
-<tr><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
+<tr><td><code>android</code></td><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
 
 </table>
 

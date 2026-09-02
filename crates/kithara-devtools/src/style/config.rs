@@ -24,7 +24,13 @@ pub(crate) struct ThresholdsConfig {
     #[serde(default)]
     pub(crate) dead_doc_refs: DeadDocRefsConfig,
     #[serde(default)]
+    pub(crate) doc_size: DocSizeConfig,
+    #[serde(default)]
+    pub(crate) doc_staleness: DocStalenessConfig,
+    #[serde(default)]
     pub(crate) non_english_text: NonEnglishTextConfig,
+    #[serde(default)]
+    pub(crate) readme_shape: ReadmeShapeConfig,
     #[serde(default)]
     pub(crate) struct_field_order: StructFieldOrderConfig,
     #[serde(default)]
@@ -139,9 +145,11 @@ const fn default_shorthand_first() -> bool {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommentHygieneConfig {
-    /// Prefixes that mark an inline `//` comment as intentional and
-    /// exempt from the `category` check. Match is case-sensitive on the
-    /// trimmed comment body.
+    /// Prefixes that keep an inline `//` comment. These are machine and
+    /// language markup, not prose: a tool directive, or the safety note the
+    /// compiler's own convention puts on an `unsafe` block. Prose belongs in a
+    /// doc comment, so no prose marker is listed here. Match is case-sensitive
+    /// on the trimmed comment body.
     #[serde(default = "default_allowed_inline_markers")]
     pub(crate) allowed_inline_markers: Vec<String>,
     /// Workspace-relative glob patterns that opt files out of every
@@ -153,8 +161,9 @@ pub(crate) struct CommentHygieneConfig {
     #[serde(default = "default_fn_density_threshold_pct")]
     pub(crate) fn_density_threshold_pct: u32,
     /// Maximum number of consecutive lines a `///` or `//!` doc-block may
-    /// span before flagging `size:doc`. Long contracts belong in the
-    /// owning crate `README.md` per AGENTS.md.
+    /// span before flagging `size:doc`. Documentation earns its place by being
+    /// dense; past a dozen lines it is a document, and a document belongs in
+    /// the owning crate `README.md` per AGENTS.md.
     #[serde(default = "default_doc_block_max_lines")]
     pub(crate) doc_block_max_lines: usize,
     /// Functions with body shorter than this many lines are exempt from
@@ -187,7 +196,7 @@ const fn default_inline_max_lines() -> usize {
 }
 
 const fn default_doc_block_max_lines() -> usize {
-    20
+    12
 }
 
 const fn default_fn_density_threshold_pct() -> u32 {
@@ -199,20 +208,10 @@ const fn default_fn_density_min_body_lines() -> usize {
 }
 
 fn default_allowed_inline_markers() -> Vec<String> {
-    [
-        "SAFETY:",
-        "TODO:",
-        "FIXME:",
-        "XXX:",
-        "NOTE:",
-        "WHY:",
-        "HACK:",
-        "ast-grep-ignore:",
-        "xtask-lint-ignore:",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect()
+    ["SAFETY:", "ast-grep-ignore:", "xtask-lint-ignore:"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 fn default_exclude_paths() -> Vec<String> {
@@ -220,6 +219,44 @@ fn default_exclude_paths() -> Vec<String> {
         .iter()
         .map(|s| (*s).to_string())
         .collect()
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocSizeConfig {
+    /// Documents excluded from the size limits entirely.
+    #[serde(default)]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Per-class limits. The first rule whose globs match the document wins.
+    #[serde(default)]
+    pub(crate) limits: Vec<DocSizeLimit>,
+}
+
+/// Documented identifiers that no longer exist in the workspace sources.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocStalenessConfig {
+    /// Backticked terms that are prose or external names, not workspace code.
+    #[serde(default)]
+    pub(crate) allow_terms: Vec<String>,
+    /// Documents excluded from the check entirely.
+    #[serde(default)]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Documents the check reads.
+    #[serde(default)]
+    pub(crate) include_globs: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocSizeLimit {
+    /// Documents this rule applies to.
+    pub(crate) globs: Vec<String>,
+    /// Byte count above which the document is denied. A document costs an
+    /// agent its size, not its line count.
+    pub(crate) deny: usize,
+    /// Byte count above which the document is reported.
+    pub(crate) warn: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,6 +279,48 @@ impl Default for NonEnglishTextConfig {
 
 fn default_non_english_exclude_paths() -> Vec<String> {
     default_tracked_text_exclude_paths()
+}
+
+/// The one shape every crate README follows.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReadmeShapeConfig {
+    /// Documents excluded from the shape contract entirely.
+    #[serde(default)]
+    pub(crate) exclude_paths: Vec<String>,
+    /// Documents the check reads.
+    #[serde(default = "default_readme_include_globs")]
+    pub(crate) include_globs: Vec<String>,
+    /// Top-level sections a crate README may carry, in the order they must
+    /// appear. Every one is optional; anything outside this vocabulary is a
+    /// `###` subsection of one of them, so a reader who knows one README
+    /// knows where to look in all of them.
+    #[serde(default = "default_readme_sections")]
+    pub(crate) sections: Vec<String>,
+}
+
+impl Default for ReadmeShapeConfig {
+    fn default() -> Self {
+        Self {
+            include_globs: default_readme_include_globs(),
+            sections: default_readme_sections(),
+            exclude_paths: Vec::new(),
+        }
+    }
+}
+
+fn default_readme_include_globs() -> Vec<String> {
+    ["crates/*/README.md"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
+}
+
+fn default_readme_sections() -> Vec<String> {
+    ["Usage", "Key Types", "Features", "Integration"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]

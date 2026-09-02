@@ -168,11 +168,9 @@ the browser lane names an asset and fetches its bytes over HTTP. Its census
 tests hold the two sides together — every declared asset is registered by a
 generator, every registered one is declarable, and the extensions agree.
 
-This is the workspace's only route to a generated signal. `tests/src/wav.rs`
-and `tests/src/signal_pcm.rs` were the other two — a `SignalFn` trait with one
-struct per waveform, a lazy renderer with an `Infinite` length nothing asked
-for, and a second RIFF writer. They are gone, and nothing may grow back beside
-`signal`: a suite that asserts on decoded samples has to know which sine it is
+This is the workspace's only route to a generated signal. Two others — a
+per-waveform trait with a lazy renderer, and a second RIFF writer — were
+removed, and nothing may grow back beside `signal`: a suite that asserts on decoded samples has to know which sine it is
 asserting against.
 
 ## One Way To Package fMP4

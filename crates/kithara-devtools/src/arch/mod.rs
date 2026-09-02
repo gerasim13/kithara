@@ -141,7 +141,7 @@ pub(crate) fn run(args: &ArchArgs) -> Result<()> {
     }
 
     let project = ProjectConfig::load(&workspace_root)?;
-    apply_path_excludes(&mut report, &project.lint_exclude.paths);
+    apply_path_excludes(&mut report, &project.lint_exclude.runtime_paths());
     apply_cfg_test_exclusion(&mut report, &workspace_root);
     apply_module_excludes(&mut report, &project.lint_exclude.modules, &workspace_root);
 

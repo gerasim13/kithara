@@ -331,19 +331,14 @@ rollback and no cross-process locking.
 
 ## Eviction subscription
 
-`EvictionRouter` is the third consumer-driven sibling: one instance per `build()`, shared across
-clones via `Arc`, so one store serves file and HLS with no protocol-owned wrapper. Subscribe with
-`let guard = store.subscribe_eviction(asset_root, tx);`.
-
-- The ephemeral build path wires the router into the cache's single `on_invalidated` hook: on
-  volatile displacement the hook clears the `AvailabilityIndex` entry and routes the evicted key by
-  its `asset_root`. Keys under another root are not delivered.
-- Every subscriber for a root receives each eviction under it. The returned `EvictionSubscription`
-  guard deregisters only its own registration on drop; absolute keys and unsubscribed roots no-op.
-- Firing is gated on volatile displacement: active for `MemAssetStore`, where displacement frees
-  bytes, and dormant for durable disk backings, where displaced bytes survive — the disk path wires
-  no hook at all. There is no public callback and no builder field; the router reaches the cache
-  only through the ephemeral path.
+- The ephemeral build path wires the router into the cache's single `on_invalidated`
+  hook: on volatile displacement the hook clears the `AvailabilityIndex` entry and
+  routes the evicted key by its `asset_root`. Every subscriber for that root receives
+  it; the returned `EvictionSubscription` guard deregisters only its own registration.
+- Firing is gated on volatile displacement: active for `MemAssetStore`, where
+  displacement frees bytes, and dormant for durable disk backings, where displaced
+  bytes survive — the disk path wires no hook at all. There is no public callback and
+  no builder field; the router reaches the cache only through the ephemeral path.
 
 ## Configuration document entry point
 

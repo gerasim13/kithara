@@ -398,7 +398,7 @@ expose_methods = [
 # render type (direct field/getter access, no `self.document.button`
 # indirection on every draw call); `document` is retained only so the doc
 # can be round-tripped (edited and saved back) without re-deriving it from
-# the resolved values. See `crates/kithara-ui/CONTEXT.md`.
+# the resolved values.
 exempt_files = ["crates/kithara-ui/src/render/skin/neutral.rs"]
 
 [single_impl_size]
