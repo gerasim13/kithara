@@ -131,6 +131,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use kithara_assets::AssetStore;
     use kithara_test_utils::kithara;
 
@@ -211,5 +213,32 @@ mod tests {
 
         assert_eq!(built.stream().settings.extension.as_deref(), Some("wav"));
         assert_eq!(built.hint(), Some("wav"));
+    }
+
+    fn preload_chunks(count: usize) -> ResourceSettings {
+        ResourceSettings::builder()
+            .preload_chunks(NonZeroUsize::new(count).expect("a preload count above zero"))
+            .build()
+    }
+
+    /// `preload_chunks` is the one `ResourceSettings` field that is both a
+    /// document key and read in production, so the value a document names has
+    /// to survive the whole way to the built HLS pipeline.
+    #[kithara::test]
+    fn the_document_preload_count_reaches_the_built_hls_config() {
+        let built = config("https://example.com/live.m3u8", preload_chunks(9))
+            .build_hls_config(&worker(), None)
+            .expect("valid HLS config");
+
+        assert_eq!(built.preload_chunks().get(), 9);
+    }
+
+    /// The file branch reads the same field from the same place.
+    #[kithara::test]
+    fn the_document_preload_count_reaches_the_built_file_config() {
+        let built = config("https://example.com/song.mp3", preload_chunks(9))
+            .build_file_config(&worker(), None);
+
+        assert_eq!(built.preload_chunks().get(), 9);
     }
 }

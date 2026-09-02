@@ -220,7 +220,7 @@ on `ResourceConfig` and is mapped in once.
 `settings.file`. `sources::build_resource_config` passes the whole value to
 `ResourceConfig::settings` — the only construction site a document reaches.
 
-Five fields carry `#[patch(skip)]`, so naming one in a document is refused
+Six fields carry `#[patch(skip)]`, so naming one in a document is refused
 rather than parsed and silently dropped:
 
 - `ResourceSettings::hls` and `ResourceSettings::file` — the document's live
@@ -234,11 +234,20 @@ rather than parsed and silently dropped:
 - `ResourceSettings::block_on_underrun` — overwritten by `prepare_config` the
   same way, and it can park the real-time audio callback. `PlayerSettings` skips
   its identically-named field for that reason too.
-- `ResourceSettings::host_sample_rate` — the rate the audio host actually
-  opened, written at runtime by `ResourceConfig::set_host_sample_rate` from the
-  render thread's `SetSampleRate` command (`rt/command.rs`).
+- `ResourceSettings::host_sample_rate` — the rate the engine actually opened.
+  Every open path writes it before the resource is built:
+  `PlayerImpl::prepare_config` from the engine's master or configured rate, and
+  the analysis path in `kithara-app`'s `waveform::open_reader` through
+  `ResourceConfig::set_host_sample_rate`.
+- `ResourceSettings::preferred_peak_bitrate` — held for a reader that does not
+  exist. `resource/build.rs` forwards it to neither branch, so no ABR
+  controller ever sees it; `ResourceConfig::preferred_peak_bitrate` is its only
+  accessor and nothing in the workspace calls it. Making it a document key
+  would ship a knob the binary ignores, so it stays skipped until the wiring
+  lands.
 
-The two that travel are `preload_chunks` and `preferred_peak_bitrate`.
+`preload_chunks` is the only field that travels, and `resource/build.rs` reads
+it on both branches.
 
 ## Live Equalizer Layout
 

@@ -5,14 +5,13 @@ use std::{
 
 use kithara::{
     assets::{AssetLayoutRegistry, AssetStoreSettings, StorageBackend},
-    file::FileSettingsPatch,
-    hls::HlsSettingsPatch,
     net::NetSettings,
-    play::{PlayerSettingsPatch, ResourceSettingsPatch, policy::DomainKeyPolicy},
+    play::{PlayerSettingsPatch, ResourceSettings, policy::DomainKeyPolicy},
     queue::QueueSettingsPatch,
     worker::{ComputePoolSettings, WorkerSettings},
 };
 use serde_yaml_ng::Value;
+use struct_patch::Patch as _;
 
 use super::{
     env::{MissingEnv, expand},
@@ -190,25 +189,21 @@ impl Config {
         self.document.net.clone()
     }
 
-    /// Knobs the document sets on HLS streaming, applied to the `hls` field of
-    /// the `ResourceSettings` every track is opened with.
+    /// The settings tree every track is opened with: the crate defaults, then
+    /// the document's `resource:` section, then its `hls:` and `file:`
+    /// sections into the two held per-source settings. Those three sections
+    /// are the document's only spelling for this tree -- `resource.hls` and
+    /// `resource.file` are refused -- so composing them is what turns the
+    /// document into the value `ResourceConfig::settings` takes. The
+    /// composition lives here rather than at the construction site so a test
+    /// can reach the same code the binary runs.
     #[must_use]
-    pub fn hls(&self) -> HlsSettingsPatch {
-        self.document.hls.clone()
-    }
-
-    /// Knobs the document sets on file streaming, applied to the `file` field
-    /// of the `ResourceSettings` every track is opened with.
-    #[must_use]
-    pub fn file(&self) -> FileSettingsPatch {
-        self.document.file.clone()
-    }
-
-    /// Knobs the document sets on the resource itself, threaded into every
-    /// track's `ResourceConfig`.
-    #[must_use]
-    pub fn resource(&self) -> ResourceSettingsPatch {
-        self.document.resource.clone()
+    pub fn resource_settings(&self) -> ResourceSettings {
+        let mut settings = ResourceSettings::default();
+        settings.apply(self.document.resource.clone());
+        settings.hls.apply(self.document.hls.clone());
+        settings.file.apply(self.document.file.clone());
+        settings
     }
 
     /// Knobs the document sets on the player, threaded into every deck's
@@ -321,23 +316,13 @@ mod tests {
     use kithara::{
         hls::SizeProbeMethod,
         net::{Compression, NetOptions},
-        play::{PlayerSettings, ResourceSettings},
+        play::PlayerSettings,
         worker::ComputePoolSettings,
     };
     use struct_patch::Patch as _;
     use tempfile::TempDir;
 
     use super::{BAKED_PATH, Config, LoadError, StorageBackend};
-
-    /// The tree `main` composes: the crate defaults, then the document's own
-    /// `resource`, `hls`, and `file` sections laid over them.
-    fn resource_settings(config: &Config) -> ResourceSettings {
-        let mut settings = ResourceSettings::default();
-        settings.apply(config.resource());
-        settings.hls.apply(config.hls());
-        settings.file.apply(config.file());
-        settings
-    }
 
     fn tempdir() -> TempDir {
         tempfile::tempdir().expect("a temporary directory")
@@ -367,7 +352,7 @@ mod tests {
         let config = Config::load_with(None, None, &env).expect("the baked document stands alone");
 
         assert_eq!(
-            resource_settings(&config).hls.size_probe_method,
+            config.resource_settings().hls.size_probe_method,
             SizeProbeMethod::RangeGet,
             "the shipped document selects range_get"
         );
@@ -393,7 +378,7 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
 
         assert_eq!(
-            resource_settings(&config).hls.size_probe_method,
+            config.resource_settings().hls.size_probe_method,
             SizeProbeMethod::Head
         );
         assert!(
@@ -489,7 +474,7 @@ mod tests {
         );
 
         let config = Config::load_with(Some(&path), None, &env).expect("the overlay loads");
-        let settings = resource_settings(&config);
+        let settings = config.resource_settings();
 
         assert_eq!(settings.preload_chunks.get(), 7);
         assert_eq!(settings.file.reader_event_capacity, 512);
@@ -600,7 +585,7 @@ mod tests {
         let config = Config::load_with(Some(&path), None, &env).expect("an empty overlay loads");
 
         assert_eq!(
-            resource_settings(&config).hls.size_probe_method,
+            config.resource_settings().hls.size_probe_method,
             SizeProbeMethod::RangeGet
         );
         assert!(

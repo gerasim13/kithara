@@ -9,7 +9,7 @@ use kithara::{
     host::HostConfig,
     net::{HttpClient, NetOptions},
     platform::{CancelToken, thread, tokio},
-    play::{PlayWorkerConfig, PlayerSettings, ResourceSettings},
+    play::{PlayWorkerConfig, PlayerSettings},
     queue::QueueSettings,
     stream::dl::{Downloader, DownloaderConfig},
     worker::{RayonConfig, Worker, WorkerConfig},
@@ -167,10 +167,6 @@ fn main() -> AppResult {
     queue_settings.apply(document.queue());
     let mut player_settings = PlayerSettings::default();
     player_settings.apply(document.player());
-    let mut resource_settings = ResourceSettings::default();
-    resource_settings.apply(document.resource());
-    resource_settings.hls.apply(document.hls());
-    resource_settings.file.apply(document.file());
     let mut config = AppConfig::builder()
         .drm(AppDrm::new(drm_policy))
         .downloader(downloader)
@@ -180,7 +176,7 @@ fn main() -> AppResult {
         .store(store)
         .queue(queue_settings)
         .player(player_settings)
-        .resource(resource_settings)
+        .resource(document.resource_settings())
         // The same value tracing is running on, so a document that names no
         // directives still leaves the built configuration agreeing with the
         // process; one that names them has `apply` put back exactly this.

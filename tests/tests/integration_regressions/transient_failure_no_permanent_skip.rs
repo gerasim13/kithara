@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event, QueueEvent, TrackId},
-    hls::AbrMode,
+    hls::{AbrMode, HlsSettings},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -11,7 +11,7 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSettings, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -129,7 +129,15 @@ async fn transient_failure_does_not_kill_the_track(temp_dir: TestTempDir) {
             )
             .downloader(downloader.clone())
             .initial_abr_mode(AbrMode::manual(0))
-            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+            .settings(
+                ResourceSettings::builder()
+                    .hls(
+                        HlsSettings::builder()
+                            .look_ahead_bytes(LOOK_AHEAD_BYTES)
+                            .build(),
+                    )
+                    .build(),
+            )
             .store(store.clone())
             .build(),
         )))

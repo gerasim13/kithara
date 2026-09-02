@@ -3,7 +3,7 @@
 use kithara::{
     assets::{AssetStore, StorageBackend},
     events::{AudioEvent, DownloaderEvent, Event},
-    hls::AbrMode,
+    hls::{AbrMode, HlsSettings},
     net::{HttpClient, NetOptions, RetryPolicy},
     platform::{
         CancelToken,
@@ -11,7 +11,7 @@ use kithara::{
         time::{self, Duration},
         tokio,
     },
-    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSrc},
+    play::{PlayerConfig, PlayerImpl, ResourceConfig, ResourceSettings, ResourceSrc},
     queue::{Queue, QueueConfig, TrackSource, Transition},
     stream::dl::{Downloader, DownloaderConfig},
 };
@@ -203,7 +203,15 @@ async fn resumes_after_outage(
     let cfg = ResourceConfig::for_src(ResourceSrc::parse(url.as_str()).expect("valid HLS URL"))
         .downloader(downloader)
         .initial_abr_mode(AbrMode::manual(0))
-        .look_ahead_bytes(look_ahead_bytes)
+        .settings(
+            ResourceSettings::builder()
+                .hls(
+                    HlsSettings::builder()
+                        .look_ahead_bytes(look_ahead_bytes)
+                        .build(),
+                )
+                .build(),
+        )
         .store(store)
         .build();
 

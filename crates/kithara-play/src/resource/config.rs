@@ -63,9 +63,15 @@ pub struct ResourceSettings {
     /// Number of chunks to buffer before signaling preload readiness.
     #[builder(default = DEFAULT_PRELOAD_CHUNKS)]
     pub preload_chunks: NonZeroUsize,
-    /// Maximum peak bitrate in bits per second for ABR variant selection.
-    /// `0.0` leaves the choice to the ABR controller.
+    /// Requested peak-bitrate ceiling in bits per second, held for an ABR
+    /// reader that does not exist yet. `resource/build.rs` forwards this to
+    /// neither branch, so no value here changes variant selection today; the
+    /// only accessor is [`ResourceConfig::preferred_peak_bitrate`] and nothing
+    /// in the workspace calls it. Not a document key for exactly that reason:
+    /// a document knob the binary ignores is worse than no knob. Make it one
+    /// when the ABR wiring lands.
     #[builder(default = 0.0)]
+    #[patch(skip)]
     pub preferred_peak_bitrate: f64,
     /// Audio-consumer wake capability for this resource's reader. The default
     /// is safe for a consumer on the real-time render callback.
@@ -90,9 +96,11 @@ pub struct ResourceSettings {
     #[patch(skip)]
     pub block_on_underrun: bool,
     /// Target sample rate of the audio host (for resampling). Not a document
-    /// key: this is the rate the audio host actually opened, written at
-    /// runtime by [`ResourceConfig::set_host_sample_rate`] from the render
-    /// thread's `SetSampleRate` command, so a document value would be
+    /// key: this is the rate the engine actually opened, and every open path
+    /// writes it before the resource is built —
+    /// `PlayerImpl::prepare_config` from the engine's master or configured
+    /// rate, and the analysis path through
+    /// [`ResourceConfig::set_host_sample_rate`]. A document value would be
     /// overwritten by the first host that disagrees with it.
     #[patch(skip)]
     pub host_sample_rate: Option<NonZeroU32>,
@@ -410,21 +418,6 @@ mod tests {
     }
 
     #[kithara::test]
-    fn config_bitrate_propagates_to_hls_abr() {
-        let worker = worker();
-        let config: ResourceConfig<TestPools> =
-            ResourceConfig::for_src(valid_src("https://example.com/live.m3u8"))
-                .store(store())
-                .settings(
-                    ResourceSettings::builder()
-                        .preferred_peak_bitrate(512_000.0)
-                        .build(),
-                )
-                .build();
-        let _audio_config = config.build_hls_config(&worker, None).unwrap();
-    }
-
-    #[kithara::test]
     fn config_worker_default_none() {
         let config = test_config("https://example.com/song.mp3").unwrap();
         assert!(config.worker.is_none());
@@ -511,7 +504,8 @@ mod document_tests {
     /// emits its token stream verbatim. A typo there would generate a patch
     /// that accepts anything, and neither the compiler nor clippy would say a
     /// word -- only a bogus key proves the attribute survived generation.
-    /// `chunk_budget` shares no prefix with either declared field, so the
+    /// `preload_chunks` is the patch's only declared field, and
+    /// `chunk_budget` is neither a substring of it nor contains it, so the
     /// assertion cannot pass off serde's list of valid names.
     #[kithara::test(native, flash(false))]
     fn an_unknown_field_is_rejected_and_named() {
@@ -526,9 +520,9 @@ mod document_tests {
         let patch: ResourceSettingsPatch =
             serde_yaml_ng::from_str("preload_chunks: 8\n").expect("the document types");
         let mut settings = ResourceSettings::default();
-        // Seeded off the defaults (0.0 and 3) so a whole-struct `apply` that
-        // resets every unnamed field to `Default::default()` cannot pass these
-        // assertions by coincidence.
+        // Seeded off their defaults (0.0 and 3) so a whole-struct `apply` that
+        // resets every field the patch does not name to `Default::default()`
+        // cannot pass these assertions by coincidence.
         settings.preferred_peak_bitrate = 320_000.0;
         settings.hls.download_batch_size = 6;
 
@@ -537,7 +531,7 @@ mod document_tests {
         assert_eq!(settings.preload_chunks.get(), 8);
         assert!(
             (settings.preferred_peak_bitrate - 320_000.0).abs() < f64::EPSILON,
-            "a silent field must keep its seeded value, not reset to default"
+            "a skipped field must keep its seeded value, not reset to default"
         );
         assert_eq!(
             settings.hls.download_batch_size, 6,
@@ -594,13 +588,28 @@ mod document_tests {
         assert!(error.to_string().contains("block_on_underrun"), "{error}");
     }
 
-    /// `host_sample_rate` is the rate the audio host actually opened, written
-    /// at runtime from the render thread's `SetSampleRate` command.
+    /// `host_sample_rate` is the rate the engine actually opened, written by
+    /// every open path before the resource is built.
     #[kithara::test(native, flash(false))]
     fn the_runtime_owned_host_sample_rate_is_not_a_document_key() {
         let error = serde_yaml_ng::from_str::<ResourceSettingsPatch>("host_sample_rate: 48000\n")
             .expect_err("the audio host owns its own rate");
 
         assert!(error.to_string().contains("host_sample_rate"), "{error}");
+    }
+
+    /// `preferred_peak_bitrate` reaches no ABR controller: `build.rs` forwards
+    /// it to neither branch. A document key the binary ignores is worse than
+    /// no key, so it stays refused until the wiring lands.
+    #[kithara::test(native, flash(false))]
+    fn the_unwired_bitrate_ceiling_is_not_a_document_key() {
+        let error =
+            serde_yaml_ng::from_str::<ResourceSettingsPatch>("preferred_peak_bitrate: 320000.0\n")
+                .expect_err("a knob nothing reads must not be document-settable");
+
+        assert!(
+            error.to_string().contains("preferred_peak_bitrate"),
+            "{error}"
+        );
     }
 }
