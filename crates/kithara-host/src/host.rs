@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, num::NonZeroU32, ops::Deref};
 
 use kithara_bufpool::HasPool;
+use kithara_output::OutputGroup;
 use kithara_platform::sync::Arc;
 #[cfg(any(test, feature = "probe"))]
 use kithara_play::TransportRevision;
@@ -285,7 +286,26 @@ impl<S> Host<S> {
     /// # Errors
     /// Returns an error when a tap is active or graph dispatch fails.
     pub fn enable_mix_tap(&self, writer: MixTapWriter) -> Result<(), PlayError> {
-        self.exec_play_ok(Cmd::EnableMixTap { writer })
+        let mut outputs = OutputGroup::new();
+        outputs.push(writer);
+        self.enable_outputs(outputs)
+    }
+
+    /// Installs one post-limiter group for simultaneous independent outputs.
+    ///
+    /// # Errors
+    /// Returns an error when an output group is active or graph dispatch fails.
+    pub fn enable_outputs(&self, outputs: OutputGroup) -> Result<(), PlayError> {
+        match self
+            .dispatcher
+            .exec_host(HostCmd::EnableOutput { outputs })?
+        {
+            HostReply::Ok => Ok(()),
+            HostReply::Err(error) => Err(error),
+            _ => Err(PlayError::Internal(
+                "unexpected host reply for output group".into(),
+            )),
+        }
     }
 
     /// Removes the post-limiter mix tap.

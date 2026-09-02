@@ -5180,6 +5180,7 @@ dependencies = [
  "kithara-file",
  "kithara-hls",
  "kithara-net",
+ "kithara-output",
  "kithara-platform",
  "kithara-play",
  "kithara-signal",
@@ -5227,9 +5228,13 @@ name = "kithara-record"
 version = "0.0.1-alpha4"
 dependencies = [
  "bon",
+ "kithara-bufpool",
  "kithara-encode",
  "kithara-output",
+ "kithara-platform",
  "kithara-test-utils",
+ "kithara-worker",
+ "ringbuf 0.5.0",
  "thiserror 2.0.18",
 ]
 

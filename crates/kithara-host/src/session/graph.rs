@@ -3,6 +3,7 @@ use firewheel::{
     dsp::volume::amp_to_linear_volume_clamped, node::NodeID, nodes::volume::VolumeNode,
 };
 use kithara_bufpool::HasPool;
+use kithara_output::OutputGroup;
 use kithara_warp::{BeatGrid, MapAxis};
 use tracing::{debug, warn};
 
@@ -13,7 +14,7 @@ use super::{
 };
 use crate::{
     api::{SessionDuckingMode, SlotId},
-    bridge::{MixTapWriter, slot_channels},
+    bridge::slot_channels,
     effects::eq::{EqBandConfig, EqConfig, GainDb},
     rt::{MasterEqNode, PlayerNode, TapNode},
 };
@@ -73,16 +74,16 @@ pub(super) mod tap {
 
     pub(in crate::session) fn enable<B: AudioBackend, S>(
         state: &mut SessionState<B, S>,
-        writer: MixTapWriter,
+        outputs: OutputGroup,
     ) -> Result<(), SessionError> {
         if state.mix_tap.is_some() {
             return Err(SessionError::MixTapActive);
         }
         let Some(limiter_id) = state.session_limiter_node_id else {
-            state.mix_tap = Some(MixTap::Requested(writer));
+            state.mix_tap = Some(MixTap::Requested(outputs));
             return Ok(());
         };
-        install(state, limiter_id, writer)
+        install(state, limiter_id, outputs)
     }
 
     pub(in crate::session) fn disable<B: AudioBackend, S>(state: &mut SessionState<B, S>) {
@@ -104,19 +105,19 @@ pub(super) mod tap {
         state: &mut SessionState<B, S>,
         limiter_id: NodeID,
     ) -> Result<(), SessionError> {
-        let Some(MixTap::Requested(writer)) = state.mix_tap.take() else {
+        let Some(MixTap::Requested(outputs)) = state.mix_tap.take() else {
             return Ok(());
         };
-        install(state, limiter_id, writer)
+        install(state, limiter_id, outputs)
     }
 
     fn install<B: AudioBackend, S>(
         state: &mut SessionState<B, S>,
         limiter_id: NodeID,
-        writer: MixTapWriter,
+        outputs: OutputGroup,
     ) -> Result<(), SessionError> {
         let fw_ctx = state.ctx.as_mut().ok_or(SessionError::NoContext)?;
-        let tap_id = fw_ctx.add_node(TapNode::new(writer), None);
+        let tap_id = fw_ctx.add_node(TapNode::new(outputs), None);
         if let Err(err) = connect_stereo(fw_ctx, limiter_id, tap_id, "connect limiter->mix_tap") {
             if let Err(remove_err) = fw_ctx.remove_node(tap_id) {
                 warn!(?remove_err, "failed to remove the unconnected mix tap node");
