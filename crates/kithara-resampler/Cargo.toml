@@ -41,6 +41,9 @@ kithara-test-utils = { workspace = true }
 
 criterion = { workspace = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+serde_yaml_ng = { workspace = true }
+
 [[bench]]
 name = "resampler_backends"
 harness = false

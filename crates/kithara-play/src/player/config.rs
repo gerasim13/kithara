@@ -34,9 +34,7 @@ fn allocate_grid_id() -> BeatGridId {
 #[non_exhaustive]
 pub struct PlayerSettings {
     /// How resources created for this player trim leading/trailing audio.
-    /// Document-unreachable until `GaplessMode` derives `Deserialize`.
     #[builder(default)]
-    #[patch(skip)]
     pub gapless_mode: GaplessMode,
     /// Make audio-thread reads block on a producer-ring underrun instead of
     /// zero-filling the block. Offline (faster-than-real-time) harnesses opt
@@ -158,7 +156,7 @@ mod document_tests {
     use kithara_test_utils::kithara;
     use struct_patch::Patch as _;
 
-    use super::PlayerSettings;
+    use super::{GaplessMode, PlayerSettings};
 
     /// `deny_unknown_fields` arrives through `#[patch(attribute(...))]`,
     /// which emits its token stream verbatim. A typo there would generate a
@@ -226,6 +224,29 @@ mod document_tests {
         assert_eq!(
             settings.engine.max_slots, 8,
             "a sibling field inside the nested settings must survive the patch"
+        );
+    }
+
+    /// `gapless_mode` was `#[patch(skip)]` until `GaplessMode` derived
+    /// `Deserialize`. Now that it does, a document naming it must reach
+    /// `PlayerSettings` without disturbing a sibling field.
+    #[kithara::test(native, flash(false))]
+    fn a_gapless_mode_patch_reaches_the_player() {
+        let patch: super::PlayerSettingsPatch =
+            serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+                .expect("the document types");
+        let mut settings = PlayerSettings::default();
+        // `disabled` differs from the `MediaOnly` default, so only the patch
+        // can produce it. The sibling is seeded off its own default (1.0) so a
+        // whole-struct reset would go red here rather than pass by coincidence.
+        settings.crossfade_duration = 2.5;
+
+        settings.apply(patch);
+
+        assert_eq!(settings.gapless_mode, GaplessMode::Disabled);
+        assert!(
+            (settings.crossfade_duration - 2.5).abs() < f32::EPSILON,
+            "a sibling field must survive the patch"
         );
     }
 

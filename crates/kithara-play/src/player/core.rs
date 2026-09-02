@@ -239,6 +239,7 @@ mod tests {
     use kithara_platform::{CancelToken, time::Duration};
     use kithara_test_utils::kithara;
     use kithara_warp::StretchControls;
+    use struct_patch::Patch as _;
 
     use super::*;
     use crate::{
@@ -246,7 +247,7 @@ mod tests {
         bridge::PlayerCmd,
         effects::eq::generate_log_spaced_bands,
         engine::EngineSettings,
-        player::{PlayerConfig, PlayerSettings},
+        player::{PlayerConfig, PlayerSettings, PlayerSettingsPatch},
         resource::{ResourceConfig, ResourceSrc},
         session::testing,
         test_pools::{TestPools, pools},
@@ -382,6 +383,33 @@ mod tests {
             config.cancel.is_some(),
             "prepare_config must inject a per-track cancel child"
         );
+    }
+
+    /// A document naming `player.gapless_mode` must reach the same prepared
+    /// decoder config as the Rust-level builder above -- riding the full
+    /// chain (`PlayerSettings` -> `PlayerCore` -> `AudioDecoderConfig`)
+    /// rather than stopping at the settings struct the patch writes into.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
+    fn a_document_named_gapless_mode_reaches_the_prepared_decoder() {
+        let patch: PlayerSettingsPatch =
+            serde_yaml_ng::from_str("gapless_mode:\n  mode: disabled\n")
+                .expect("the document types");
+        let mut settings = PlayerSettings::default();
+        settings.apply(patch);
+
+        let player = PlayerImpl::new(
+            PlayerConfig::builder()
+                .worker(worker())
+                .session(testing::test_session())
+                .settings(settings)
+                .build(),
+        );
+        let mut config = resource_config("https://example.com/song.mp3");
+
+        config = player.prepare_config(config);
+
+        assert_eq!(config.decoder.gapless_mode(), GaplessMode::Disabled);
     }
 
     #[kithara::test]
