@@ -56,17 +56,17 @@ loop {
 
 For HLS / cross-codec recreate paths, prefer `DecoderFactory::create_from_media_info(reader, &media_info, config)` — it skips probing and uses the carried `MediaInfo` to pick the backend.
 
-## Backends
+## Features
 
 <table>
 
-<tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
+<tr><th>Feature</th><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
 
-<tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
+<tr><td><code>symphonia</code></td><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
 
-<tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
+<tr><td><code>apple</code></td><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
 
-<tr><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
+<tr><td><code>android</code></td><td>Android MediaCodec</td><td>Hardware path for fMP4 AAC-LC/FLAC plus standalone WAV, MP3, and ALAC through <code>AMediaExtractor</code>; no runtime Symphonia fallback</td><td>Android</td></tr>
 
 </table>
 

@@ -1,3 +1,17 @@
+<div align="center">
+
+<img src="../../logo.svg" alt="kithara" width="300">
+
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-warp.svg)](https://crates.io/crates/kithara-warp)
+[![docs.rs](https://docs.rs/kithara-warp/badge.svg)](https://docs.rs/kithara-warp)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-warp
 
 Beat-map synchronization contracts and the source-generic resident Warp decorator for Kithara.

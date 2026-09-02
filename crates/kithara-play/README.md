@@ -57,7 +57,7 @@ builder and inspect caller-facing values through getters such as `source()`,
 `store()`, and `bus()`. Decoder backend, gapless, and resampler settings belong
 to the single `decoder` field.
 
-## Core Surface
+## Key Types
 
 - `PlayWorker` owns playback pools and a dedicated dispatcher derived from an
   optional shared `kithara-worker` base.
@@ -71,7 +71,7 @@ to the single `decoder` field.
   filesystem, network, and cryptography crates.
 - `Equalizer` is the remaining mockable trait surface.
 
-## Orientation
+## Integration
 
 - **Lifecycle:** start the engine, allocate a slot, attach a player item, play,
   then release the slot and stop the engine.

@@ -19,7 +19,21 @@ Proc-macro crate providing unified test attributes (`#[kithara::test]`,
 and mock emissions are gated behind `cfg(any(test, feature = "probe"))` and
 `cfg(any(test, feature = "mock"))`; flash is gated by the `flash` feature.
 
-## Macros
+## Usage
+
+```rust
+#[kithara::test(tokio, browser, timeout(std::time::Duration::from_secs(30)))]
+async fn plays_hls_in_browser() {
+    // test body
+}
+
+#[kithara::fixture]
+fn temp_playlist() -> String {
+    "http://127.0.0.1:3444/assets/hls/master.m3u8".to_string()
+}
+```
+
+## Key Types
 
 Attribute macros:
 
@@ -39,7 +53,7 @@ Derive macros:
 - `#[derive(Probe)]` — generate probe glue for an enum
 - `#[derive(IntoProbeArg)]` — generate the conversion required to pass a value as a probe argument
 
-## `#[kithara::test]` flags
+### `#[kithara::test]` flags
 
 A bare `#[kithara::test]` is a sync test on native + wasm; flags can be combined
 (e.g. `#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]`). Flags
@@ -52,23 +66,9 @@ without Loom exploration. Supports `#[case]` / `#[case::name]` parameterization 
 fixture injection. See [CONTEXT.md](CONTEXT.md) for per-flag semantics and the
 Flash/Loom debugging rules.
 
-## `#[kithara::probe(...)]` arguments
+### `#[kithara::probe(...)]` arguments
 
 A bare `#[kithara::probe]` is a marker probe (cheap auto-fields only); parenthesized forms record parameter idents, computed `name = expr` values, an opt-in `caller`, or `probe_return`, up to the 6-arg USDT ceiling. See [CONTEXT.md](CONTEXT.md) for the full argument contract.
-
-## Example
-
-```rust
-#[kithara::test(tokio, browser, timeout(std::time::Duration::from_secs(30)))]
-async fn plays_hls_in_browser() {
-    // test body
-}
-
-#[kithara::fixture]
-fn temp_playlist() -> String {
-    "http://127.0.0.1:3444/assets/hls/master.m3u8".to_string()
-}
-```
 
 ## Integration
 

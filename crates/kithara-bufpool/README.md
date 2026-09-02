@@ -61,7 +61,7 @@ fn build() -> Result<(), PoolError> {
 }
 ```
 
-## Public Types
+## Key Types
 
 <table>
 
@@ -85,17 +85,17 @@ fn build() -> Result<(), PoolError> {
 
 </table>
 
-## Role in the workspace
-
-The app and FFI composition roots own concrete schemas. Lower layers are
-generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
-Acquisition and return stay lock-free; every capacity increase is checked
-against both the region and selected-pool limits.
-
 ## Features
 
 - `perf` — enables `hotpath` instrumentation on pool hot paths.
 - `test-utils` — exposes the application-shaped `testing::TestPools` schema for
   workspace test harnesses.
+
+## Integration
+
+The app and FFI composition roots own concrete schemas. Lower layers are
+generic over only the `HasPool<u8>` and `HasPool<f32>` capabilities they use.
+Acquisition and return stay lock-free; every capacity increase is checked
+against both the region and selected-pool limits.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

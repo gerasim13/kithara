@@ -30,7 +30,7 @@ let lock = Mutex::new(42_u32);
 time::sleep(time::Duration::from_millis(10)).await;
 ```
 
-## Key types and entry points
+## Key Types
 
 - `Arc<T>` / atomics / `Mutex<T>` / `RwLock<T>` / `Condvar` - synchronization primitives selected from the system, Loom, or wasm backend.
 - `MaybeSend` / `MaybeSync` — conditional trait bounds (`Send`/`Sync` on native, blanket no-op on wasm32).

@@ -27,13 +27,15 @@ let encoded = encoder.encode_bytes(BytesEncodeRequest {
 })?;
 ```
 
-## Key types
+## Key Types
 
 - `StreamEncoder` — streaming AAC-LC encoder; interleaved f32 in, access units out.
 - `EncoderFactory` — entry point; encodes to complete bytes or to packaged access units.
 - `BytesEncodeRequest` / `BytesEncodeTarget` — byte-encoding inputs.
 - `PackagedEncodeRequest` — packaged access-unit encoding input.
 - `EncodedBytes` / `EncodedTrack` — encoded outputs (complete bytes and packaged access units).
+
+## Integration
 
 Consumes canonical media types from `kithara-stream`. The streaming path feeds live broadcast; the packaged and byte paths generate encoded fixtures and packaged tracks for the integration harness.
 

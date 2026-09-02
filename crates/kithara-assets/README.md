@@ -16,20 +16,6 @@
 
 Assets store (disk or in-memory) with lease/pin semantics and LRU eviction. An *asset* is a logical source containing one or more semantic *resources*. An `AssetLayout` maps those values to `<asset_root>/<resource_path>`; callers cannot inject a preformed relative cache path. One cheap, `Arc`-backed `AssetStore<S>` handle can be cloned into every file, HLS, playback, and analysis consumer while retaining one backend, layout registry, index set, eviction policy, and application-owned `PoolRegion<S>`.
 
-## Role
-
-Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore<S>` type (`Disk`/`Mem`) that internally composes decorators: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<...>>>>`.
-
-## Key types & entry points
-
-- `AssetStore<S>` - the unified shared handle over `Disk` or `Memory` storage.
-- `AssetStore::builder(pools)` - requires the application-owned `PoolRegion<S>` and configures the store and its immutable layout registry.
-- `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
-- `AssetSource` / `AssetResource` — semantic input to the selected layout.
-- `AssetScope` / `ResourceKey` — validated output used by cache operations.
-- `AssetStore::attach_pending_resource(&key, read_pos, look_ahead)` - joins or creates the canonical pending-resource acquisition used by protocol crates.
-- `ResourceAcquisition` — the Pending/Ready `AcquisitionResult<AssetWriter, AssetReader>` surfaced by the facade.
-
 ## Usage
 
 ```rust
@@ -64,14 +50,28 @@ let key = scope.key(&AssetResource::Source {
 let resource = store.acquire_resource(&key, None)?;
 ```
 
+## Key Types
+
+- `AssetStore<S>` - the unified shared handle over `Disk` or `Memory` storage.
+- `AssetStore::builder(pools)` - requires the application-owned `PoolRegion<S>` and configures the store and its immutable layout registry.
+- `AssetLayout` / `AssetLayoutRegistry` — own cache-root and resource-path policy, with optional overrides selected by protocol marker type.
+- `AssetSource` / `AssetResource` — semantic input to the selected layout.
+- `AssetScope` / `ResourceKey` — validated output used by cache operations.
+- `AssetStore::attach_pending_resource(&key, read_pos, look_ahead)` - joins or creates the canonical pending-resource acquisition used by protocol crates.
+- `ResourceAcquisition` — the Pending/Ready `AcquisitionResult<AssetWriter, AssetReader>` surfaced by the facade.
+
+### Public contract
+
+The public storage contract is `AssetStore<S>` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Define the closed pool schema at the application boundary, build its `PoolRegion<S>` once, construct the store with `AssetStore::builder(pools)`, and pass cheap clones of the store and region to consumers that share the same hard budget.
+
 ## Features
 
 - `client-reqwest` / `client-wreq` and `tls-rustls` / `tls-native` — forward network backend selection to storage/test-utils dependencies.
 - `probe` — enables USDT probes for tracing.
 - `mock` — enables generated mocks for tests.
 
-## Public contract
+## Integration
 
-The public storage contract is `AssetStore<S>` plus the source/resource/layout/key types used to mint validated keys. Decorator and backend implementation types are not configuration alternatives. Define the closed pool schema at the application boundary, build its `PoolRegion<S>` once, construct the store with `AssetStore::builder(pools)`, and pass cheap clones of the store and region to consumers that share the same hard budget.
+Sits between `kithara-storage` (low-level I/O) and protocol crates (`kithara-file`, `kithara-hls`). Provides a unified `AssetStore<S>` type (`Disk`/`Mem`) that internally composes decorators: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<...>>>>`.
 
 See [CONTEXT.md](CONTEXT.md) for detailed contracts, invariants, and internals.

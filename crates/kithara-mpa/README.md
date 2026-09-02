@@ -1,3 +1,17 @@
+<div align="center">
+
+<img src="../../logo.svg" alt="kithara" width="300">
+
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-mpa.svg)](https://crates.io/crates/kithara-mpa)
+[![docs.rs](https://docs.rs/kithara-mpa/badge.svg)](https://docs.rs/kithara-mpa)
+[![License](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
+
+</div>
+
 # kithara-mpa
 
 MPEG audio (MP1/MP2/MP3) demuxer for Symphonia, forked so a packet read is a

@@ -44,7 +44,7 @@ for unit in encoder.push(&samples)? {
 let snapshot = window.snapshot();
 ```
 
-## Key types
+## Key Types
 
 - `BroadcastConfig` — the audio, the segments, and the address the origin binds.
 - `Broadcast` / `BroadcastHandle` — the live service: URL, status, and the graceful end of the broadcast.
@@ -54,6 +54,8 @@ let snapshot = window.snapshot();
 - `Segment` — one closed segment: sequence number, bytes, duration, discontinuity flag.
 - `LiveWindow` — sole owner of the playlist window, its retention, and the playlist text.
 - `PlaylistSnapshot` — value view of the stream: playlist text, fetchable segments, end-of-stream flag.
+
+## Integration
 
 Takes access units from `kithara-encode`.
 

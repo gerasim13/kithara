@@ -21,6 +21,17 @@ source twice. It owns analysis state, scheduling, DSP, and pure versioned bytes;
 the source reader remains in `kithara-audio` and cache I/O/policy remains in the
 consumer (currently `kithara-app`).
 
+## Key Types
+
+- `AnalyzerBuilder` / `AnalysisWorkerConfig` / `AnalysisWorker` — configure
+  analysis and run progressive per-track passes on a domain dispatcher.
+- `AnalysisProducer` — non-blocking decoded-chunk ingress for an open pass.
+- `TrackAnalysis` — self-contained published snapshot: token, revision, source
+  axis, coverage, fingerprint, waveform, and beat artifact.
+- `Waveform` / `BeatArtifact` — analysis artifacts with versioned byte codecs.
+- `BlobError` - format, corruption, and pooled restore errors from the artifact
+  and composite byte codecs.
+
 ## Features
 
 <table>
@@ -41,18 +52,7 @@ consumer (currently `kithara-app`).
 
 </table>
 
-## Key types
-
-- `AnalyzerBuilder` / `AnalysisWorkerConfig` / `AnalysisWorker` — configure
-  analysis and run progressive per-track passes on a domain dispatcher.
-- `AnalysisProducer` — non-blocking decoded-chunk ingress for an open pass.
-- `TrackAnalysis` — self-contained published snapshot: token, revision, source
-  axis, coverage, fingerprint, waveform, and beat artifact.
-- `Waveform` / `BeatArtifact` — analysis artifacts with versioned byte codecs.
-- `BlobError` - format, corruption, and pooled restore errors from the artifact
-  and composite byte codecs.
-
-## Ownership
+## Integration
 
 `kithara-analysis` consumes `kithara-audio`'s `AudioReader`, `AudioObserver`,
 and decoded-signal values. It does not own decoder lifecycle, source readiness,

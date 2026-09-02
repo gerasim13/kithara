@@ -1,3 +1,17 @@
+<div align="center">
+
+<img src="../../logo.svg" alt="kithara" width="300">
+
+</div>
+
+<div align="center">
+
+[![crates.io](https://img.shields.io/crates/v/kithara-host.svg)](https://crates.io/crates/kithara-host)
+[![docs.rs](https://docs.rs/kithara-host/badge.svg)](https://docs.rs/kithara-host)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-host
 
 `kithara-host` owns Kithara's multi-player session, shared Firewheel output

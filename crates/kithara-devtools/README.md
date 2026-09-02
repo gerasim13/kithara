@@ -22,30 +22,7 @@ commands in a thin `xtask` binary.
 Contracts and invariants live in [`CONTEXT.md`](CONTEXT.md); this file is the
 overview.
 
-## What it covers
-
-`CoreCommand` groups the shared commands into a few families:
-
-- **Hygiene** — formatting, typo and ast-grep wrappers, Cargo manifest checks,
-  per-package orphan detection, and the ratcheted `arch` / `style` / `idioms`
-  lint namespaces. *(feature `lint`)*
-- **Analysis** — recursive Rust type-shape and behavior similarity, workspace
-  health, public-surface comparison, feature-powerset checking, and the
-  deterministic quality assessment plus the opt-in Quality Lab for heavyweight
-  external analyzers.
-- **Execution** — workspace tests, the test-suite performance pipeline and its
-  baseline comparison, and repeated-test evidence runs with independent
-  verification of the downloaded artifact.
-- **Reporting** — LOD-controlled Mermaid architecture views built from source,
-  runtime, and semantic evidence *(feature `viz`)*, and consolidation of one CI
-  run's archived quality artifacts into a single markdown report.
-
-Command names, flags, and output contracts are owned by the root `justfile`,
-`.config/just/`, and
-[`../../docs/guides/tooling.md`](../../docs/guides/tooling.md), not by this
-crate's docs; `just tooling xtask --help` lists the current surface.
-
-## Consuming it
+## Usage
 
 Add the dependency and flatten `CoreCommand` into your own bin's subcommand
 enum, keeping your project-specific commands alongside it:
@@ -68,7 +45,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-## Configuration
+### Configuration
 
 Everything project-specific comes from `.config/xtask.toml`, parsed once into
 the context. The file is optional: a project with none gets documented code
@@ -78,6 +55,29 @@ stages. Quality Lab intentionally keeps a separate, **required**
 `.config/quality-lab.toml` so heavyweight analyzers never reach the fast lint
 path. The ownership rules, the schema's strictness, and what each section is
 allowed to declare are in [`CONTEXT.md`](CONTEXT.md).
+
+## Key Types
+
+`CoreCommand` groups the shared commands into a few families:
+
+- **Hygiene** — formatting, typo and ast-grep wrappers, Cargo manifest checks,
+  per-package orphan detection, and the ratcheted `arch` / `style` / `idioms`
+  lint namespaces. *(feature `lint`)*
+- **Analysis** — recursive Rust type-shape and behavior similarity, workspace
+  health, public-surface comparison, feature-powerset checking, and the
+  deterministic quality assessment plus the opt-in Quality Lab for heavyweight
+  external analyzers.
+- **Execution** — workspace tests, the test-suite performance pipeline and its
+  baseline comparison, and repeated-test evidence runs with independent
+  verification of the downloaded artifact.
+- **Reporting** — LOD-controlled Mermaid architecture views built from source,
+  runtime, and semantic evidence *(feature `viz`)*, and consolidation of one CI
+  run's archived quality artifacts into a single markdown report.
+
+Command names, flags, and output contracts are owned by the root `justfile`,
+`.config/just/`, and
+[`../../docs/guides/tooling.md`](../../docs/guides/tooling.md), not by this
+crate's docs; `just tooling xtask --help` lists the current surface.
 
 ## Features
 
